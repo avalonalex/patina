@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 22:11:07  
+**Generated:** 2026-08-25 07:04:30  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 15 of 33 |
-| Assertions passed | 4258 of 4270 (99.7%) |
+| Suites fully passing | 16 of 33 |
+| Assertions passed | 4260 of 4270 (99.8%) |
 | Suites not reaching a tally | 10 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -39,14 +39,13 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Parse error in tests/scheme/base.sld: desugar error: Invalid syntax: Failed to compile macro bar: Invalid syntax: Pattern variable y at level 1 used at l` |
 
-## Assertion failures (12 in 8 suites)
+## Assertion failures (10 in 7 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### char — 2 of 139 failed
+### char — 1 of 139 failed
 
 - [char.body.scm:109](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/char.body.scm#L109) — `chars` `filter-all-chars`
-- [char.body.scm:123](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/char.body.scm#L123) — `chars` `filter-all-chars`
 
 ### charset — 2 of 93 failed
 
@@ -69,10 +68,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [list.sld:589](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L589) — `list` `cells`
 
-### vector — 1 of 103 failed
-
-- [vector.sld:118](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/vector.sld#L118) — `'#((0 . 4) (1 . 3) (2 . `
-
 ### write — 3 of 40 failed
 
 - [write.sld:368](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/write.sld#L368) — `write-data` `map`
@@ -86,7 +81,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | base | load-error | 0 | 0 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
-| char | fail | 137 | 139 |
+| char | fail | 138 | 139 |
 | charset | fail | 91 | 93 |
 | comparator | pass | 158 | 158 |
 | complex | fail | 60 | 61 |
@@ -114,5 +109,5 @@ Each entry links to the test case; the name after it is the procedure the assert
 | stream | not-bundled | 0 | 0 |
 | text | not-bundled | 0 | 0 |
 | time | pass | 2 | 2 |
-| vector | fail | 102 | 103 |
+| vector | pass | 103 | 103 |
 | write | fail | 37 | 40 |

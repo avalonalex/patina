@@ -123,26 +123,65 @@ fn a_long_delay_force_chain_runs_in_bounded_space() {
 
 /// `values` called with one argument in a non-tail position, result thrown
 /// away; the next `call-with-values` whose producer returns a plain value
-/// sees the stale one on the VM.
-///
-/// Explicit per-backend assertions rather than `assert_divergence`, because
-/// the VM returns a wrong value instead of failing.
+/// must not see it. Until 2026-08-25 the VM kept multiple values in a side
+/// buffer that a discarded `values` call left set; multiple values are now
+/// only ever a #<values> object in the result register, as on the
+/// tree-walker.
 #[test]
 fn a_discarded_values_call_does_not_leak_into_call_with_values() {
-    const PROGRAM: &str = "(define (call1 f) (f 42))
-                           (call1 values)
-                           (call-with-values (lambda () 'fresh) (lambda xs xs))";
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
+    assert_program_eval_to(
+        "(define (call1 f) (f 42))
+         (call1 values)
+         (call-with-values (lambda () 'fresh) (lambda xs xs))",
         "(fresh)",
-        "the tree-walker matches chibi; if this changed, it regressed"
     );
+}
+
+/// The shapes the removed buffer used to carry, now through the value
+/// itself: a producer that calls `values` for effect and then returns
+/// something else, several values, and a primitive that returns several.
+#[test]
+fn call_with_values_sees_only_what_its_producer_returned() {
+    assert_program_eval_to(
+        "(define (call1 f) (f 1 2 3))
+         (list (call-with-values (lambda () (call1 values) 'one) (lambda xs xs))
+               (call-with-values (lambda () (values 1 2)) list)
+               (call-with-values (lambda () (exact-integer-sqrt 17)) list))",
+        "((one) (1 2) (4 1))",
+    );
+}
+
+/// Tree-walker: a continuation invoked with other than one value. The VM
+/// delivers a #<values> object, as `(values …)` would return one, and
+/// chibi gives `(4 5)`; the tree-walker raises an arity error.
+#[test]
+fn a_continuation_invoked_with_two_values_on_the_tree_walker() {
+    assert_divergence(
+        "(call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)",
+        On::Vm,
+        "(4 5)",
+        ErrorClass::AtRuntime,
+        TRIAGE,
+    );
+}
+
+/// Tree-walker: `(values)` reaches the consumer as one unspecified value
+/// instead of none. Not `assert_divergence` — the tree-walker returns a
+/// plausible wrong answer rather than failing.
+#[test]
+fn zero_values_reach_the_consumer_as_no_arguments() {
+    const PROGRAM: &str = "(call-with-values (lambda () (values)) (lambda xs xs))";
     assert_eq!(
         eval_program_vm(PROGRAM),
-        "(42)",
-        "\n[vm] NO LONGER DIVERGES — the stale values state is gone.\n\
-         Replace both assertions with assert_program_eval_to(PROGRAM, \"(fresh)\") \
-         and update {TRIAGE} family 4."
+        "()",
+        "the VM matches chibi; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(#<unspecified>)",
+        "\n[tree-walker] NO LONGER DIVERGES — zero values now arrive as none.\n\
+         Replace both assertions with assert_program_eval_to(PROGRAM, \"()\") \
+         and update {TRIAGE} family 18."
     );
 }
 

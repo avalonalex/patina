@@ -19,7 +19,7 @@ Links below are relative to
 Baseline 2026-08-24: R7RS lane 12 of 33 suites clean (VM 4070/4100, tree-walker
 3931/3961); R6RS lane 10 of 16 (4008/4022). After #111 and #112 (same day): R7RS
 lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
-(4017/4025).
+(4017/4025). After the values fix (2026-08-25): VM 16 of 33, 4260/4270.
 
 ## Ours
 
@@ -41,8 +41,9 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 - Fix: R7RS 7.3's `force` in both places it lives — the Rust primitive (a loop) and the tree-walker's CPS `ForceCache` continuation (re-force with the *same* continuation instead of nesting one per link). When a `delay-force` thunk yields a promise, the outer takes over the inner's state and the inner is aliased to the outer's box (`Heap::promise_update`, one helper for both backends), so either forced later sees one memoized value and SRFI 45's leak tests hold. The box is looked up again *after* the thunk, by object — a nested force can re-point a promise mid-thunk, and the review of #112 showed the captured box going stale (`(1 2 2)` where the reference gives `(2 2 2)`). A promise forced re-entrantly by its own thunk keeps the value it left. `(delay e)` now wraps its value in a done promise as the reference does, so forcing a delay whose value is a promise yields that promise. A million links in 0.7 s on the VM.
 - Upstream: the SRFI 45 leak tests, [tests/scheme/lazy.sld#L313](tests/scheme/lazy.sld#L313) through [#L361](tests/scheme/lazy.sld#L361) (crash the `lazy` suite on both backends)
 
-### 4. VM: a discarded call to `values` poisons the next `call-with-values` — VM only
-- Ours: `a_discarded_values_call_does_not_leak_into_call_with_values` (per-backend pins)
+### 4. VM: a discarded call to `values` poisons the next `call-with-values` — VM only — ✅ fixed 2026-08-25
+- Ours: `a_discarded_values_call_does_not_leak_into_call_with_values`, `call_with_values_sees_only_what_its_producer_returned`
+- Fix: the VM's `value_buffer` side channel is gone. `values` already returned a `#<values>` heap object for anything but a single value, so every consumer (`call-with-values` in both its instruction-level and primitive forms) now unpacks that object from the result register and nothing else — a protocol that cannot go stale. A continuation invoked with other than one value delivers a `#<values>` object the same way.
 - Upstream: [tests/scheme/vector.sld#L117](tests/scheme/vector.sld#L117) is the cause (`vector-unfold` with `values` as the generator); [#L118](tests/scheme/vector.sld#L118) is where it shows — the next assertion's thunk evaluates to the stale `6`.
 
 ### 5. Tree-walker: SRFI 1's n-ary procedures raise a wrong-arity error — tree-walker only
@@ -99,6 +100,14 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 - Ours: `a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword` (pinned as the error it is today)
 - Upstream: [tests/scheme/base.sld#L1163](tests/scheme/base.sld#L1163) — the second of the pair; blocks `base` next, at desugar time of the library.
 - Cause: `resolve_syntax`'s shadow test is by spelling and exempts scoped (macro-introduced) references, which hygiene needs for an *outer* macro's `if`. A macro defined *inside* `(let ((if …)) …)` has that binding in its definition scopes, so its template's `if` is the variable. Making the shadow test scope-aware is the hygiene change `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` reserves — not a one-liner.
+
+### 17. Tree-walker: a continuation invoked with other than one value is an arity error — tree-walker only
+- Ours: `a_continuation_invoked_with_two_values_on_the_tree_walker` (`assert_divergence`)
+- Found 2026-08-25 while removing the VM's values buffer; chibi gives `(4 5)`, the VM now does too.
+
+### 18. Tree-walker: `(values)` reaches a consumer as one unspecified value — tree-walker only
+- Ours: `zero_values_reach_the_consumer_as_no_arguments` (per-backend pins)
+- Same discovery; chibi and the VM give `()`.
 
 ### 16. A line comment is not ended by a bare return — both backends — ✅ fixed 2026-08-24
 - Ours: `a_line_comment_ends_at_a_bare_return`

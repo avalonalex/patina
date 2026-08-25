@@ -43,7 +43,6 @@ impl GcRoots for VmState {
         // live range: they hold `NULL` or stale-but-valid values, and marking
         // a dead-but-valid slot only delays its reclamation by one cycle.
         visitor.visit_slice(&self.registers);
-        visitor.visit_slice(&self.value_buffer);
         visitor.visit_slice(&self.scratch_args);
 
         // A hidden root while it is set: between the stash in `across_reentry`

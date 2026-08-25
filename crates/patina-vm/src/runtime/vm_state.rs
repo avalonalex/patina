@@ -32,8 +32,6 @@ pub struct VmState {
     pub registers: Vec<TaggedValue>,
     /// The call stack. Currently-executing frame is `frames.last()`.
     pub frames: Vec<CallFrame>,
-    /// Side channel for multiple return values (`values` / `call-with-values`).
-    pub value_buffer: Vec<TaggedValue>,
     /// Value carried by a continuation that escaped past a re-entry boundary,
     /// parked between [`across_reentry`] and the dispatch loop that resumes
     /// with it. A field rather than a return value because the
@@ -70,7 +68,7 @@ pub struct VmState {
     /// primitives see an empty buffer and simply allocate — only nested
     /// primitive calls pay an allocation; the common depth-1 case is
     /// allocation-free. An allocation pool, never read for meaning after a
-    /// call returns (contrast `value_buffer`, which is a value channel).
+    /// call returns — never a channel for values, which travel in registers.
     pub(crate) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
     /// id inside the `VmContinuationRef(id)` handle. **Weak** (design §9.5):
@@ -120,7 +118,6 @@ impl VmState {
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
-            value_buffer: Vec::new(),
             pending_escape: None,
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
@@ -1265,17 +1262,7 @@ fn dispatch_one_instruction(
             producer_result,
         } => {
             let consumer_val = state.reg_at(base, consumer);
-            let produced_vals = if !state.value_buffer.is_empty() {
-                std::mem::take(&mut state.value_buffer)
-            } else if let Some(vals) = state
-                .heap
-                .borrow()
-                .get_values_as_tagged(state.reg_at(base, producer_result))
-            {
-                vals
-            } else {
-                vec![state.reg_at(base, producer_result)]
-            };
+            let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
             if let Some(result) = call_any(state, consumer_val, &produced_vals, dst)? {
                 state.set_reg(dst, result);
             }
@@ -1286,17 +1273,7 @@ fn dispatch_one_instruction(
             producer_result,
         } => {
             let consumer_val = state.reg_at(base, consumer);
-            let produced_vals = if !state.value_buffer.is_empty() {
-                std::mem::take(&mut state.value_buffer)
-            } else if let Some(vals) = state
-                .heap
-                .borrow()
-                .get_values_as_tagged(state.reg_at(base, producer_result))
-            {
-                vals
-            } else {
-                vec![state.reg_at(base, producer_result)]
-            };
+            let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
             // Pop current frame (tail position), then call consumer.
             let frame = state
                 .frames
@@ -2210,6 +2187,17 @@ enum ThunkOutcome {
     Escaped(TaggedValue),
 }
 
+/// The values a producer handed to `call-with-values`: the elements of a
+/// #<values> object (from `values` with other than one argument, from a
+/// primitive such as `exact-integer-sqrt`, or from a continuation invoked
+/// with several), or the single value itself.
+fn unpack_values(state: &VmState, primary: TaggedValue) -> Vec<TaggedValue> {
+    match state.heap.borrow().get_values_as_tagged(primary) {
+        Some(vals) => vals,
+        None => vec![primary],
+    }
+}
+
 /// Run a thunk (0-arg closure) to completion, reporting whether it returned.
 ///
 /// Pushes the thunk's frame, runs the execution loop until that frame returns,
@@ -2420,11 +2408,12 @@ fn handle_control_primitive(
         }
 
         VmControlPrimitive::Values => {
-            // (values v1 v2 ...) — return multiple values via value_buffer
-            // Also allocate a heap Values object so the display layer can
-            // detect and show all values (matches tree-walker behaviour).
-            state.value_buffer.clear();
-            state.value_buffer.extend_from_slice(args);
+            // (values v1 v2 ...) — one value is itself; any other count is a
+            // #<values> heap object, which is how multiple values travel
+            // everywhere (call-with-values unpacks it, the display layer
+            // shows it, the tree-walker does the same). There is no side
+            // channel: a register-only protocol cannot go stale when a
+            // `values` call is discarded.
             if args.len() == 1 {
                 state.set_reg(dst, args[0]);
             } else {
@@ -2443,10 +2432,8 @@ fn handle_control_primitive(
             }
             let producer = args[0];
             let consumer = args[1];
-            // Clear any stale value_buffer before running the producer,
-            // so we only see values produced by this thunk.
-            state.value_buffer.clear();
-            // Run producer (0 args), collect multiple values from value_buffer
+            // Run producer (0 args); its multiple values, if any, are a
+            // #<values> object in the result.
             let primary = match run_thunk_outcome(state, producer)? {
                 ThunkOutcome::Returned(v) => v,
                 // The producer escaped. Running the consumer here would run it
@@ -2455,16 +2442,7 @@ fn handle_control_primitive(
                 // abandoned, not completed.
                 ThunkOutcome::Escaped(v) => return Err(park_escape(state, v)),
             };
-            let produced_vals = if !state.value_buffer.is_empty() {
-                std::mem::take(&mut state.value_buffer)
-            } else if let Some(vals) = state.heap.borrow().get_values_as_tagged(primary) {
-                // Primitives like exact-integer-sqrt return a #<values> heap
-                // object directly (without going through the VM's `values`
-                // control intercept), so unpack it here.
-                vals
-            } else {
-                vec![primary]
-            };
+            let produced_vals = unpack_values(state, primary);
             // Consumer may be a primitive (e.g. `list`) or a VM closure.
             if let Some(result) = call_any(state, consumer, &produced_vals, dst)? {
                 state.set_reg(dst, result);
@@ -3133,7 +3111,14 @@ fn try_invoke_continuation(
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Result<bool, VmError> {
-    let deliver_val = args.first().copied().unwrap_or(TaggedValue::UNSPECIFIED);
+    // `(k v)` delivers v; `(k)` and `(k v1 v2 …)` deliver a #<values> object,
+    // exactly as `(values …)` would return one — so a producer that escapes
+    // through a continuation still hands call-with-values its values.
+    let deliver_val = if args.len() == 1 {
+        args[0]
+    } else {
+        state.heap.borrow_mut().alloc_values(args.to_vec())
+    };
 
     // Full (call/cc) continuation?
     if let Some(cc) = state.get_vm_continuation(func_val) {
@@ -3149,12 +3134,6 @@ fn try_invoke_continuation(
         if let Some(top) = state.frames.last() {
             let base = top.register_base;
             state.registers[base + cc.deliver_reg as usize] = deliver_val;
-        }
-        // When invoked with multiple values, populate value_buffer so
-        // call-with-values can unpack them.
-        state.value_buffer.clear();
-        if args.len() > 1 {
-            state.value_buffer.extend_from_slice(args);
         }
         return Ok(true);
     }
@@ -3182,11 +3161,6 @@ fn try_invoke_continuation(
                 let caller_base = state.frames[n - 2].register_base;
                 state.registers[caller_base + ret_reg as usize] = deliver_val;
             }
-        }
-        // Populate value_buffer for multi-value delivery
-        state.value_buffer.clear();
-        if args.len() > 1 {
-            state.value_buffer.extend_from_slice(args);
         }
         return Ok(true);
     }
