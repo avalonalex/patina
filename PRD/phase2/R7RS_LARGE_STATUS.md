@@ -44,7 +44,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ❌ | ❌ |
 | SRFI 135 | `(scheme text)` | Immutable texts | ❌ | ❌ |
 
-**Red status: 11 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 117, 125, 127, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (10 counting SRFI 158 standing in for the superseded 121).
+**Red status: 11 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 117, 125, 127, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (12 counting SRFI 158 standing in for the superseded 121).
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down

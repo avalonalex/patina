@@ -123,9 +123,19 @@ fn test_alias_bindings_are_usable() {
              (let ((q (list-queue 1 2))) (list-queue-add-back! q 3) (list-queue-list q))",
             "(1 2 3)",
         ),
+        // Generator-backed on purpose: a plain list exercises paths
+        // indistinguishable from SRFI 1's `take`, and it was exactly the
+        // generator path that carried the `lseq-append` defect chibi's copy
+        // shipped with.
         (
-            "(import (scheme lseq)) (lseq-realize (lseq-take '(1 2 3 4) 2))",
-            "(1 2)",
+            "(import (scheme lseq) (scheme base)) \
+             (define (gen . xs) \
+               (let ((l xs)) \
+                 (generator->lseq \
+                   (lambda () (if (null? l) (eof-object) \
+                                  (let ((x (car l))) (set! l (cdr l)) x)))))) \
+             (lseq-realize (lseq-append (gen 1 2 3) (gen 4 5)))",
+            "(1 2 3 4 5)",
         ),
     ];
     for (src, expected) in cases {

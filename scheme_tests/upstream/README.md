@@ -34,6 +34,8 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/125/test.sld` | 74 | 0 | imports |
 | `srfi/14/test.sld` | 72 | 0 | verbatim |
 | `srfi/41/test.sld` | 186 | 0 | verbatim |
+| `srfi/117/test.sld` | 34 | 1 | verbatim — the one failure is the suite's, not ours; see below |
+| `srfi/127/test.sld` | 109 | 0 | verbatim |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
@@ -196,6 +198,15 @@ caught. All are now fixed; the newest is first.
   failure — it defines its own `with-input-from-string` in exactly these terms,
   so it was a recorded Patina defect and not, as this file once said, a chibi
   extension we declined to provide.
+
+**`srfi/117/test.sld`'s one failure is the suite's own.** It calls
+`(list-queue-append! x …)` and then asserts `x` is unchanged, where SRFI 117
+says of that procedure: "it is an error to assume anything about the contents
+of the list-queues after the procedure returns". Patina ships the SRFI's
+reference implementation, which reuses the storage the specification frees it
+to reuse; Larceny's suite makes no such assumption and passes 40 of 40. This
+is the only row whose non-zero failure count is not a defect in our port, and
+`upstream_srfi_suites.rs` says so at the row.
 
 ## Suites not included, and why
 

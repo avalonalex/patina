@@ -180,4 +180,26 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 
 ~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme rlist)`, `(scheme text)`. Six of the 33 R7RS suites never load for this reason alone.
 
-Reading for whoever takes the next one. **Check what the chibi copy imports first**: SRFI 117 and 127 are plain R7RS over `(srfi 1)` and went in unchanged, while chibi's `(srfi 116)` is built on its own `(srfi 1 immutable)` and its `(srfi 134)` wants `(srfi 121)`, so neither is a copy-in. And its copy is not automatically the right source — SRFI 41 showed chibi's `stream-filter` failing to take a bounded prefix of an infinite stream where the SRFI's own reference implementation is fine. Prefer the snow-fort tarball of the reference implementation and check what its R7RS port had to drop (SRFI 41's was `stream-match`, written in `syntax-case`).
+Reading for whoever takes the next one, in the order that has actually
+mattered:
+
+1. **Start from the SRFI's own reference implementation**, not chibi's copy.
+   Twice now chibi's has been wrong where the reference is right: SRFI 41's
+   `stream-filter` cannot take a bounded prefix of an infinite stream, and
+   chibi's SRFI 117 and 127 carry four defects between them (a stale `last`
+   pointer after `list-queue-remove-back!`, `list-queue-set-list!` raising on
+   the empty list, `lseq-append` truncating a generator-backed argument,
+   `lseq-member` comparing its arguments in the wrong order). The tarballs are
+   at `https://srfi.schemers.org/srfi-N/srfi-N.tgz`.
+2. **A passing suite is not evidence.** All four of those defects pass both
+   Larceny's suite and chibi's, because neither exercises the shape. Diff the
+   candidate against a second implementation — Gauche's is in
+   `~/Project/reference` — and probe the mutators and the lazy paths by hand.
+3. **The suite can be wrong too.** chibi's SRFI 117 suite asserts that
+   `list-queue-append!` leaves its first argument alone, which SRFI 117
+   explicitly says it is an error to assume. Read the specification before
+   believing a failure.
+4. **Then check the imports**: chibi's `(srfi 116)` rests on its own
+   `(srfi 1 immutable)` and its `(srfi 134)` on `(srfi 121)`, so neither is a
+   copy-in; and a reference implementation may need a local `.sld` because
+   upstream names the library something R7RS code does not import.

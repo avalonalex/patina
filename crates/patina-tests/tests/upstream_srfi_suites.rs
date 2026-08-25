@@ -218,8 +218,17 @@ suite_tests! {
     // with, so it exercises `stream-match` too (ours is chibi's macro over
     // the reference body; see lib/srfi/PROVENANCE.md).
     (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 186),
-    (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 0, 16),
-    (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 3),
+    // The one row whose non-zero failure count is *not* ours, against the
+    // convention above. chibi's suite does `(list-queue-append! x …)` and
+    // then asserts `x` is unchanged; SRFI 117 says of that procedure "it is
+    // an error to assume anything about the contents of the list-queues
+    // after the procedure returns", so the assertion tests chibi's own
+    // choice rather than the specification. Patina ships the SRFI's
+    // reference implementation, which reuses the storage the spec frees it
+    // to reuse — and Larceny's suite, which does not make that assumption,
+    // passes 40 of 40.
+    (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 1, 34),
+    (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 109),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
