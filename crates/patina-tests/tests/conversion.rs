@@ -211,9 +211,7 @@ fn test_string_to_number_radix_prefix_overrides() {
 fn test_string_to_number_exactness_prefix() {
     assert_eval_to("(string->number \"#e100\")", "100");
     assert_eval_to("(string->number \"#i100\")", "100.0");
-    // TODO: #e with floats should convert to exact (rational)
-    // This requires implementing inexact->exact conversion
-    // assert_eval_to("(string->number \"#e1.5\")", "3/2");
+    assert_eval_to("(string->number \"#e1.5\")", "3/2");
 }
 
 #[test]

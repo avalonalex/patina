@@ -88,7 +88,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     // Create a continuation that will cache the result
                     let force_cont = ContValue::ForceCache {
-                        promise: promise_ref.clone(),
+                        promise: value_tagged,
                         original_cont: Box::new(cont),
                     };
 

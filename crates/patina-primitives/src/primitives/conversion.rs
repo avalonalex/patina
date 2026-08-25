@@ -124,8 +124,24 @@ fn string_to_number(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
         )));
     }
 
-    let string = string.to_string();
     drop(heap_ref);
+
+    // Fast path: a plain decimal integer, the common case for anything that
+    // tokenizes text, parsed without standing up a lexer. `[+-]?digits` is
+    // exactly what fits — a leading '+' is allowed by i64::from_str.
+    let plain_integer = default_radix == 10
+        && string
+            .strip_prefix(['+', '-'])
+            .unwrap_or(&string)
+            .bytes()
+            .all(|b| b.is_ascii_digit());
+    if let Some(n) = plain_integer.then(|| string.parse::<i64>().ok()).flatten() {
+        return Ok(if TaggedValue::fits_fixnum(n) {
+            TaggedValue::fixnum(n)
+        } else {
+            heap.borrow_mut().alloc_bigint(num_bigint::BigInt::from(n))
+        });
+    }
 
     // The reader's number syntax is the definition of what string->number
     // accepts (R7RS 6.2.7); a second parser here had drifted — no infinities,

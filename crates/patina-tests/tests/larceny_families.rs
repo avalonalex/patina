@@ -346,3 +346,88 @@ fn a_line_comment_ends_at_a_bare_return() {
         "(first second third #t)",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Review of #112 — the cases its review found, kept as they were verified
+// ---------------------------------------------------------------------------
+
+/// A promise's box can be re-pointed by a force nested inside its own thunk
+/// (`promise_update` aliases the inner promise to the outer's box). The
+/// outer force must then look its box up again rather than store into the
+/// one it captured before the thunk: R7RS 7.3's reference gives (2 2 2).
+#[test]
+fn a_force_reentered_through_promise_update_memoizes_once() {
+    assert_program_eval_to(
+        "(import (scheme lazy))
+         (define n 0)
+         (define q #f)
+         (define p (delay-force q))
+         (set! q (delay (let ((me (begin (set! n (+ n 1)) n)))
+                          (if (= me 1) (force p))
+                          me)))
+         (list (force q) (force q) (force p))",
+        "(2 2 2)",
+    );
+}
+
+/// `(delay e)` wraps its value in a *done* promise (R7RS 7.3), so forcing a
+/// delay whose value is a promise yields that promise, not its value —
+/// forcing through is what `delay-force` is for.
+#[test]
+fn forcing_a_delay_of_a_promise_yields_the_promise() {
+    assert_program_eval_to(
+        "(import (scheme lazy))
+         (define a (delay 7))
+         (list (promise? (force (delay (delay 5))))
+               (eq? (force (delay a)) a)
+               (force (delay-force (delay 5))))",
+        "(#t #t 5)",
+    );
+}
+
+/// `equal?` walks record fields on the same worklist as pairs and vectors,
+/// so a cycle through a record terminates too.
+#[test]
+fn equal_terminates_through_a_record_field_cycle() {
+    assert_program_eval_to(
+        "(define-record-type <box> (mk v) box? (v box-v box-set-v!))
+         (define a (mk #f)) (box-set-v! a a)
+         (define b (mk #f)) (box-set-v! b b)
+         (define c (mk 1))  (box-set-v! c (list c))
+         (list (equal? a b) (equal? a c) (equal? (mk 1) (mk 1)) (equal? (mk 1) (mk 2)))",
+        "(#t #f #t #f)",
+    );
+}
+
+/// `string->number` is the reader's number syntax and nothing more: a
+/// comment, a block comment or a `#!` line before the digits is not part
+/// of a number; an exactness prefix applies to both parts of a complex; a
+/// pure imaginary needs its sign; an exponent no bignum should hold is
+/// refused rather than computed.
+#[test]
+fn string_to_number_is_exactly_one_number_token() {
+    assert_program_eval_to(
+        "(list (string->number \"1;2\")
+               (string->number \"#|c|#1\")
+               (string->number \"#!fold-case 1\")
+               (string->number \"#e1.5+2i\")
+               (string->number \"#i1+2i\")
+               (string->number \"1i\")
+               (string->number \"+1i\")
+               (string->number \"#e1e1000000\")
+               (string->number \"#e1.00e-9223372036854775807\")
+               (string->number \"+123\")
+               (string->number \"-99999999999999999999\"))",
+        "(#f #f #f 3/2+2i 1.0+2.0i #f +i #f #f 123 -99999999999999999999)",
+    );
+}
+
+/// A shebang line, like a `;` comment, ends at a bare return.
+#[test]
+fn a_shebang_line_ends_at_a_bare_return() {
+    assert_program_eval_to(
+        "(import (scheme read))
+         (read (open-input-string \"#!/usr/bin/env patina\\r42\"))",
+        "42",
+    );
+}

@@ -14,10 +14,16 @@
 ;;   (define p (delay (+ 1 2)))
 ;;   (force p)  ; => 3
 ;;   (force p)  ; => 3 (cached, doesn't re-evaluate)
+;;
+;; R7RS 7.3: (delay e) is (delay-force (make-promise #t e)) — the value is
+;; wrapped in a *done* promise, so forcing (delay p) yields the promise p
+;; itself rather than forcing through it; forcing through is delay-force's
+;; job. %make-forced-promise is that unconditional wrap (make-promise, the
+;; procedure, returns a promise argument as-is and would collapse the two).
 (define-syntax delay
   (syntax-rules ()
     ((delay expression)
-     (%make-delayed-promise (lambda () expression)))))
+     (%make-delayed-promise (lambda () (%make-forced-promise expression))))))
 
 ;; delay-force - Create a lazy promise with proper tail recursion
 ;;

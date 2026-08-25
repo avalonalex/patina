@@ -32,13 +32,13 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 
 ### 2. `equal?` does not terminate on circular structures — both backends — ✅ fixed 2026-08-24
 - Ours: `equal_terminates_on_two_distinct_cyclic_lists`, `equal_terminates_on_two_distinct_cyclic_vectors`
-- Fix: `Heap::tagged_values_equal` walks pairs and vectors with an explicit worklist (so a long list cannot overflow either) and, once the walk is long enough to suggest a cycle, records every (a, b) pair of containers it enters and treats a revisit as equal — the coinductive reading every implementation uses. The set is allocated lazily; the acyclic case pays nothing.
+- Fix: `Heap::tagged_values_equal` walks pairs, vectors and records without recursion — the cdr spine in place, vectors and records by index, only a *nested* container on a worklist (so two flat lists allocate nothing and a long list cannot overflow either) — and, once it has entered more containers than any sane acyclic structure has (2^20), records every (a, b) container pair it enters and treats a revisit as equal, the coinductive reading every implementation uses. Review of #112 caught the first version doing this at 1024 entries with every vector copied onto the worklist (24× slower on a million-element acyclic list, 3× on `assoc` with list keys) and still recursing through record fields; both fixed.
 - Upstream: [tests/scheme/read.sld#L307](tests/scheme/read.sld#L307) (crashes the `read` suite); [tests/r6rs/mutable-pairs.sld#L18](tests/r6rs/mutable-pairs.sld#L18) (hangs the R6RS `mutable-pairs` suite to the timeout)
 - The reader was never at fault: it builds the cycles correctly.
 
 ### 3. `delay-force` is not iterative — both backends — ✅ fixed 2026-08-24
 - Ours: `a_long_delay_force_chain_runs_in_bounded_space`
-- Fix: R7RS 7.3's `force` in both places it lives — the Rust primitive (a loop) and the tree-walker's CPS `ForceCache` continuation (re-force with the *same* continuation instead of nesting one per link). When a `delay-force` thunk yields a promise, the outer takes over the inner's state and the inner is aliased to the outer's box (`Heap::set_promise_cell` — `promise-update!`), so either forced later sees one memoized value and SRFI 45's leak tests hold. A promise forced re-entrantly by its own thunk keeps the value it left (R7RS's `(1 6)`-style example gives 6). A million links in 0.7 s on the VM.
+- Fix: R7RS 7.3's `force` in both places it lives — the Rust primitive (a loop) and the tree-walker's CPS `ForceCache` continuation (re-force with the *same* continuation instead of nesting one per link). When a `delay-force` thunk yields a promise, the outer takes over the inner's state and the inner is aliased to the outer's box (`Heap::promise_update`, one helper for both backends), so either forced later sees one memoized value and SRFI 45's leak tests hold. The box is looked up again *after* the thunk, by object — a nested force can re-point a promise mid-thunk, and the review of #112 showed the captured box going stale (`(1 2 2)` where the reference gives `(2 2 2)`). A promise forced re-entrantly by its own thunk keeps the value it left. `(delay e)` now wraps its value in a done promise as the reference does, so forcing a delay whose value is a promise yields that promise. A million links in 0.7 s on the VM.
 - Upstream: the SRFI 45 leak tests, [tests/scheme/lazy.sld#L313](tests/scheme/lazy.sld#L313) through [#L361](tests/scheme/lazy.sld#L361) (crash the `lazy` suite on both backends)
 
 ### 4. VM: a discarded call to `values` poisons the next `call-with-values` — VM only
@@ -62,7 +62,8 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 
 ### 8. `string->number` rejects what the reader accepts — both backends — ✅ fixed 2026-08-24
 - Ours: `string_to_number_accepts_what_the_reader_accepts`
-- Fix: `string->number` *is* the reader's number syntax now (`Parser::number_from_str`: the whole string must lex as one number token; a radix argument becomes a prefix unless the string has its own), and `#e` on a decimal literal is the exact value of the text (`#e1.5` ⇒ 3/2, `#e1e400` ⇒ 10^400) rather than of the double — in the reader too, which used to reject those. The second number parser in `conversion.rs` is gone. Whitespace-padded strings now answer `#f`, as in Gauche and Chez.
+- Fix: `string->number` *is* the reader's number syntax now (`Parser::number_from_str`: the number token must be the entire string — not preceded by a comment or `#!` line, which the review of #112 caught; a radix argument becomes a prefix unless the string has its own), with a fast path for a plain decimal integer. `#e` on a decimal literal is the exact value of the text (`#e1.5` ⇒ 3/2, `#e1e400` ⇒ 10^400) rather than of the double — in the reader too, which used to reject those — and an exponent beyond ±20 000 is refused rather than computed or rounded. An exactness prefix now applies to both parts of a rectangular complex (`#e1.5+2i` ⇒ 3/2+2i), and an unsigned pure imaginary (`1i`) is not a number, as R7RS 7.1.1 has it. The second number parser in `conversion.rs` is gone. Whitespace-padded strings answer `#f`, as in Gauche and Chez.
+- Left for later (pre-existing): with an explicit radix of 2/8/16 the prefixed path rejects `<infnan>` and `<complex>` syntax (`(string->number "+inf.0" 16)` ⇒ `#f`; Gauche and Chez give `+inf.0`); the lexer counts lines only at `\n`, so a bare-CR file reports every datum on line 1.
 - Upstream: infinities and NaN — [tests/scheme/inexact.sld#L405](tests/scheme/inexact.sld#L405)–[#L407](tests/scheme/inexact.sld#L407); `#e` with a large exponent — [#L91](tests/scheme/inexact.sld#L91), [#L95](tests/scheme/inexact.sld#L95), [#L388](tests/scheme/inexact.sld#L388), [#L389](tests/scheme/inexact.sld#L389); complex — [tests/scheme/complex.sld#L55](tests/scheme/complex.sld#L55), [#L56](tests/scheme/complex.sld#L56)
 
 ### 9. `rationalize` at the infinities — both backends — ✅ fixed 2026-08-24
@@ -102,7 +103,7 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 ### 16. A line comment is not ended by a bare return — both backends — ✅ fixed 2026-08-24
 - Ours: `a_line_comment_ends_at_a_bare_return`
 - Upstream: [tests/scheme/read.sld#L279](tests/scheme/read.sld#L279) — the one assertion left in `read` once `equal?` terminated on cycles.
-- Fix: the lexer's `;` comment stops at `\r` as well as `\n` (R7RS 7.1.1 line endings).
+- Fix: the lexer's `;` comment and a `#!` shebang line both stop at `\r` as well as `\n` (R7RS 7.1.1 line endings), through one `skip_to_line_ending`.
 
 ## Not ours — recorded so nobody re-diagnoses them
 

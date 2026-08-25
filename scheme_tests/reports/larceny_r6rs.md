@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 20:53:29  
+**Generated:** 2026-08-24 22:11:08  
 **Backend:** VM  
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`

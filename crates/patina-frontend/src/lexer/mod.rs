@@ -358,14 +358,7 @@ impl Lexer {
                 // a stray U+00A0 into a space, where `is_identifier_start`
                 // keeps it a visible error. See that function.
                 ' ' | '\t' | '\n' | '\r' | '\x0C' => self.advance(),
-                ';' => {
-                    // Line comment: skip to the line ending. R7RS 7.1.1 makes
-                    // a bare return one as well, not only newline and
-                    // return+newline, so `;c\rnot` is a comment and a datum.
-                    while !self.is_at_end() && !matches!(self.current_char(), '\n' | '\r') {
-                        self.advance();
-                    }
-                }
+                ';' => self.skip_to_line_ending(),
                 '#' if self.peek_char() == Some('|') => {
                     // Block comment: skip nested block comment
                     self.skip_block_comment()?;
@@ -799,6 +792,17 @@ impl Lexer {
         }
     }
 
+    /// Skip to the end of the current line — the rest of a `;` comment or
+    /// a shebang line. R7RS 7.1.1's line endings are newline, return, and
+    /// return+newline, so a bare return ends the line too: `;c\rnot` is a
+    /// comment and then a datum. The ending itself is left for the
+    /// whitespace loop.
+    fn skip_to_line_ending(&mut self) {
+        while !self.is_at_end() && !matches!(self.current_char(), '\n' | '\r') {
+            self.advance();
+        }
+    }
+
     /// Read a reader directive like #!fold-case or #!no-fold-case
     /// These directives affect subsequent lexing but don't produce tokens themselves
     fn read_reader_directive(&mut self) -> Result<Token, LexError> {
@@ -807,9 +811,7 @@ impl Lexer {
         // so an installed script runs. `#!fold-case` is unaffected — a
         // directive name follows its `#!` immediately.
         if !self.is_at_end() && matches!(self.current_char(), '/' | ' ') {
-            while !self.is_at_end() && self.current_char() != '\n' {
-                self.advance();
-            }
+            self.skip_to_line_ending();
             self.skip_whitespace_and_comments()?;
             return self.lex_token();
         }

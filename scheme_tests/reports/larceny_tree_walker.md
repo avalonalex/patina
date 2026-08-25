@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-24 20:57:00  
+**Generated:** 2026-08-24 22:14:45  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`

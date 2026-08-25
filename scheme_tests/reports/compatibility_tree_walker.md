@@ -1,6 +1,6 @@
 # Patina R7RS Compatibility Report
 
-**Generated:** 2026-08-24 20:58:24
+**Generated:** 2026-08-24 22:10:50
 **Backend:** tree-walker
 **Test Suite:** chibi-scheme r7rs-tests.scm, reported by upstream `(chibi test)`
 

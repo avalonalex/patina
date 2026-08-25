@@ -48,6 +48,30 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "Internal: Create a delayed promise from a thunk. Used by delay macro.",
         make_delayed_promise,
     ));
+
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.lazy",
+        "%make-forced-promise",
+        Arity::Exact(1),
+        "Internal: a promise already holding obj — even when obj is itself a promise, \
+         unlike make-promise. What (delay e) wraps its value in (R7RS 7.3).",
+        make_forced_promise,
+    ));
+}
+
+/// `(%make-forced-promise obj)` — R7RS 7.3's `(make-promise #t obj)`: a done
+/// promise holding `obj`, wrapping a promise rather than returning it. That
+/// is what makes `(force (delay p))` yield the promise `p` itself instead of
+/// forcing through it, which `delay-force` is for.
+fn make_forced_promise(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+    let state = Rc::new(RefCell::new(PromiseState::Forced(args[0])));
+    Ok(heap.borrow_mut().alloc_promise(state))
 }
 
 /// Force evaluation of a promise
@@ -74,50 +98,41 @@ fn force(ctx: &dyn ApplyContext, args: Vec<TaggedValue>) -> Result<TaggedValue, 
 /// recursively (a Rust frame per link, so a chain of a hundred thousand —
 /// the whole reason `delay-force` exists — overflowed the stack), the outer
 /// promise takes over the inner's state and the inner is re-pointed at the
-/// outer's box (`promise-update!`), and the loop goes round again. Either
-/// promise forced later sees the one memoized value; SRFI 45's leak tests
-/// hold because nothing accumulates per link.
+/// outer's box (`Heap::promise_update`), and the loop goes round again.
+/// Either promise forced later sees the one memoized value; SRFI 45's leak
+/// tests hold because nothing accumulates per link.
 ///
-/// A thunk may force its own promise re-entrantly; if it did, the value it
-/// left is kept and the thunk's result is discarded (R7RS: "unless
+/// The promise's box is looked up afresh on every turn, by object. A thunk
+/// may force its own promise re-entrantly, and a nested force can re-point
+/// this promise at a different box while the thunk runs; a box captured
+/// before the thunk would then be an orphan, and the value stored into it
+/// never memoized. If the promise is already done when the thunk returns,
+/// that value wins and the thunk's result is dropped (R7RS: "unless
 /// (promise-done? promise)").
 fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue, EvalError> {
     let heap = ctx.heap();
-    let cell = match heap.borrow().get_promise(obj) {
-        Some(p) => p,
-        None => return Ok(obj), // Not a promise, return unchanged
-    };
-
     loop {
+        let cell = match heap.borrow().get_promise(obj) {
+            Some(p) => p,
+            None => return Ok(obj), // Not a promise, return unchanged
+        };
         let thunk = match *cell.borrow() {
             PromiseState::Forced(value) => return Ok(value),
             PromiseState::Delayed(thunk) => thunk,
         };
+        drop(cell);
 
-        let is_proc = heap.borrow().is_procedure(thunk);
-        let result = if is_proc {
-            ctx.apply_proc(thunk, vec![])?
-        } else {
-            thunk
-        };
+        let result = ctx.apply_proc(thunk, vec![])?;
 
+        let cell = heap.borrow().get_promise(obj).expect("still a promise");
         if let PromiseState::Forced(value) = *cell.borrow() {
-            return Ok(value); // forced re-entrantly while the thunk ran
+            return Ok(value);
         }
-
-        let inner = heap.borrow().get_promise(result);
-        match inner {
-            Some(inner_cell) => {
-                // promise-update!: take the inner's state, then alias the
-                // inner promise to this box.
-                let state = *inner_cell.borrow();
-                *cell.borrow_mut() = state;
-                heap.borrow_mut().set_promise_cell(result, cell.clone());
-            }
-            None => {
-                *cell.borrow_mut() = PromiseState::Forced(result);
-                return Ok(result);
-            }
+        if heap.borrow().is_promise(result) {
+            heap.borrow_mut().promise_update(obj, result);
+        } else {
+            *cell.borrow_mut() = PromiseState::Forced(result);
+            return Ok(result);
         }
     }
 }
