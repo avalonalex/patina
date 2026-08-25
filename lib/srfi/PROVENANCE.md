@@ -35,11 +35,18 @@ macro is chibi-scheme's `syntax-rules` equivalent instead — from
 `41-match.scm`, pinned post-edit, with chibi's `assert` replaced
 by the error the SRFI specifies; the `.sld` exports `stream-match` and `_`
 (the wildcard its patterns match as a literal) and includes that file. Taking
-the *port's* body rather than chibi's whole library is deliberate: chibi's
-`stream-filter` is not lazy enough to take a bounded prefix of an infinite
-stream — `(stream->list 2 (stream-filter (lambda (n) (= n (* n n))) (stream-from 0)))`
-does not terminate there — while the reference implementation, which is the
+the *port's* body rather than chibi's whole library is deliberate: under
+chibi, `(stream->list 2 (stream-filter (lambda (n) (= n (* n n))) (stream-from 0)))`
+does not terminate, while the reference implementation, which is the
 specification's own code, answers `(0 1)`.
+
+*Attribution corrected 2026-08-25, when this was reported upstream.* The
+culprit is chibi's `stream->list`, not its `stream-filter`: the loop passes
+`(stream-cdr strm)` to its next iteration, so the cdr is forced before that
+iteration tests the count, and asking for *n* elements forces *n+1*. The
+filter itself is lazy — `(stream-car (stream-cdr (stream-filter …)))` answers
+`1` there. Reported as
+[ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181).
 
 **`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
 implementations, and chibi's copies were tried first and rejected.** Both of
@@ -52,9 +59,17 @@ the empty list; `lseq-append` uses `cdr` where it needs `lseq-cdr`, so a
 generator-backed argument is truncated after one element; and `lseq-member`
 passes its comparison arguments in the order opposite to SRFI 1's. The
 reference implementations have none of these. This is the second time chibi's
-copy has been the wrong source (SRFI 41's `stream-filter` was the first) and
-the first time a *suite* was wrong too — see the note on the SRFI 117 row in
+copy has been the wrong source (SRFI 41 was the first) and the first time a
+*suite* was wrong too — see the note on the SRFI 117 row in
 `upstream_srfi_suites.rs`.
+
+All four were reproduced against `chibi-scheme` itself, not merely against
+its sources under Patina, and reported upstream:
+[#1179](https://github.com/ashinn/chibi-scheme/issues/1179) (SRFI 117) and
+[#1180](https://github.com/ashinn/chibi-scheme/issues/1180) (SRFI 127). Both
+were confirmed present on chibi master (186e0659) before filing. If they are
+fixed upstream, these bundles can go back to being a straight copy — the
+reference implementations are here for the defects, not out of preference.
 
 **One `PATINA LOCAL EDIT` in `117/list-queues-impl.scm`**, marked in place:
 `list-queue-join!` did an unguarded `(set-cdr! (get-last queue1) …)`, which
