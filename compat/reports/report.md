@@ -1,12 +1,12 @@
 # Patina third-party compatibility (vm backend)
 
-**126 of 162 packages pass.**
+**125 of 161 packages pass.**
 
-**126 of 137 in scope** — 25 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**125 of 136 in scope** — 25 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 126 | 126 |
+| pass | 125 | 125 |
 | missing-library | 11 | 7 |
 | parse-error | 13 | 3 |
 | load-error | 0 | 0 |
@@ -247,7 +247,6 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-37 | probe | pass | in scope |
 | srfi-38 | probe | pass | in scope |
 | srfi-39 | probe | pass | in scope |
-| srfi-41 | probe | pass | in scope |
 | srfi-42 | probe | pass | in scope |
 | srfi-43 | probe | pass | in scope |
 | srfi-51 | probe | pass | in scope |

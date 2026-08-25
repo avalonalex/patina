@@ -33,6 +33,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/158/test.sld` | 76 | 0 | verbatim |
 | `srfi/125/test.sld` | 74 | 0 | imports |
 | `srfi/14/test.sld` | 72 | 0 | verbatim |
+| `srfi/41/test.sld` | 186 | 0 | verbatim |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |

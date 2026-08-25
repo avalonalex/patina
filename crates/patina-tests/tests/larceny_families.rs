@@ -657,3 +657,27 @@ fn read_line_ends_at_a_bare_return() {
         "((\"abc\" \"def\") (\"abc\" \"def\") (\"abc\" \"def\") (\"abc\") (\"\" \"\"))",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Family 27 — `error` refused a message that is not a string
+// ---------------------------------------------------------------------------
+
+/// R7RS 6.11 says the message *should* be a string — advice, not a
+/// requirement — and the R6RS habit of `(error 'who "what")` runs through
+/// SRFI reference implementations, the bundled SRFI 41 among them: all 53 of
+/// its diagnostics were being replaced by a complaint about the argument
+/// (found by review of the SRFI 41 bundle, 2026-08-25). chibi and Gauche
+/// report the non-string as the message; so do we now, on both backends and
+/// in both the primitive and each backend's `error` intercept.
+#[test]
+fn error_accepts_a_message_that_is_not_a_string() {
+    assert_program_eval_to(
+        "(import (scheme stream))
+         (list (guard (e (#t (error-object-message e))) (error 'foo \"bar\" 1))
+               (guard (e (#t (error-object-irritants e))) (error 'foo \"bar\" 1))
+               (guard (e (#t (error-object-message e))) (stream-car 5))
+               (guard (e (#t (error-object-message e))) (error \"plain\" 2))
+               (guard (e (#t (error-object-irritants e))) (error \"plain\" 2)))",
+        "(\"foo\" (\"bar\" 1) \"stream-car\" \"plain\" (2))",
+    );
+}

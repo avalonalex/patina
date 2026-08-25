@@ -1,4 +1,7 @@
 ; From https://github.com/scheme-requests-for-implementation/srfi-41
+; Bundled by Patina from snow-fort's srfi-41 0.1.0 (Retropikzel's R7RS port,
+; MIT), byte-identical apart from the two lines below that export and include
+; `stream-match`; see `41-match.scm` and `PROVENANCE.md`.
 
 (define-library
   (srfi 41)
@@ -29,7 +32,8 @@
           stream-length
           stream-let
           stream-map
-          ;stream-match
+          stream-match
+          _
           stream-of
           stream-range
           stream-ref
@@ -52,4 +56,11 @@
              stream-delay
              stream-lazy))
     (else))
-  (include "41.scm"))
+  (include "41.scm")
+  ;; PATINA DEVIATION: `stream-match` in its own file — see its header. The
+  ;; rest of this library is Retropikzel's R7RS port of the SRFI's reference
+  ;; implementation, byte-identical, which comments `stream-match` out
+  ;; because the reference writes it in `syntax-case`. `_` is exported with
+  ;; it: it is the wildcard the pattern macros match as a literal, so an
+  ;; importer's own `_` must be the same identifier.
+  (include "41-match.scm"))

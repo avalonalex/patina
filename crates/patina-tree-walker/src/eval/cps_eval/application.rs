@@ -631,20 +631,17 @@ impl<'a> CpsEvaluator<'a> {
             );
         }
 
-        // First argument must be a string (the message). Extract before
-        // routing: the borrow must end before `maybe_route_error_through_cps`
-        // takes `borrow_mut()` to allocate the exception.
+        // R7RS 6.11 says the message *should* be a string — advice, not a
+        // requirement. A non-string is displayed instead of refused; see the
+        // `error` primitive in patina-primitives for why. Extracted before
+        // anything else takes `borrow_mut()` to allocate the exception.
         let heap = self.evaluator.global_env.heap();
         let message_opt = heap.borrow().get_string_contents(args[0]);
-        let Some(message) = message_opt else {
-            return self.maybe_route_error_through_cps(
-                EvalError::TypeError("error: first argument must be a string".to_string()),
-                cont,
-                cont_env,
-                prompt_stack,
-                dynamic_winds,
-                exception_handlers,
-            );
+        let message = match message_opt {
+            Some(m) => m,
+            None => patina_primitives::primitives::io::datum_writer::format_display_tagged(
+                args[0], heap,
+            ),
         };
 
         // Remaining arguments are irritants - already TaggedValue!

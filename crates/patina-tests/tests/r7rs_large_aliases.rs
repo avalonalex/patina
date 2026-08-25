@@ -20,6 +20,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("generator", 158),  // Tangerine
     ("hash-table", 125), // Red
     ("charset", 14),     // Red
+    ("stream", 41),      // Red
 ];
 
 #[test]
@@ -97,6 +98,23 @@ fn test_alias_bindings_are_usable() {
         (
             "(import (scheme generator)) (length (generator->list (make-iota-generator 4)))",
             "4",
+        ),
+        // Reaching a binding *through* the alias, not just checking the name
+        // set: a lazy prefix of an infinite stream (the shape chibi's SRFI 41
+        // cannot take — see lib/srfi/PROVENANCE.md) and `stream-match`, whose
+        // `_` the alias re-exports for the macro's sake.
+        (
+            "(import (scheme stream)) \
+             (stream->list 2 (stream-filter (lambda (n) (< n 2)) (stream-from 0)))",
+            "(0 1)",
+        ),
+        (
+            "(import (scheme stream)) (stream-match (stream 1 2) ((a b) (+ a b)) (_ 'no))",
+            "3",
+        ),
+        (
+            "(import (scheme charset)) (char-set-contains? (char-set #\\a #\\b) #\\a)",
+            "#t",
         ),
     ];
     for (src, expected) in cases {

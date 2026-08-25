@@ -19,7 +19,7 @@ use patina_runtime::SharedHeap;
 /// (error message obj ...) - Create and raise an error object
 ///
 /// Creates an error object with the given message and irritants, then raises it.
-/// The message must be a string. The irritants can be any values.
+/// The irritants can be any values.
 pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.is_empty() {
         return Err(EvalError::WrongArity {
@@ -28,15 +28,20 @@ pub(super) fn error(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
         });
     }
 
-    // First argument must be a string (the message)
+    // R7RS 6.11 says the message *should* be a string — advice, not a
+    // requirement, and code in the wild takes the latitude: the R6RS habit of
+    // `(error 'who "what")` appears throughout SRFI reference implementations,
+    // including the bundled SRFI 41. Rejecting it replaced every one of that
+    // library's 53 diagnostics with a complaint about the argument; chibi and
+    // Gauche both report the symbol as the message, and so do we now.
     let message = {
         let heap_ref = heap.borrow();
         match heap_ref.get_string_contents(args[0]) {
             Some(s) => s,
             None => {
-                return Err(EvalError::TypeError(
-                    "error: first argument must be a string".to_string(),
-                ));
+                drop(heap_ref);
+                use crate::primitives::io::datum_writer::format_display_tagged;
+                format_display_tagged(args[0], heap)
             }
         }
     };

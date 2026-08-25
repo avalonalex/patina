@@ -2,7 +2,7 @@
 
 **This directory is test data. It is not part of Patina.**
 
-184 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
+161 third-party Scheme packages from [snow-fort.org](http://snow-fort.org), vendored so Patina can be
 measured against real-world R7RS code (Track L — `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`).
 
 ## Purpose, and what this is not

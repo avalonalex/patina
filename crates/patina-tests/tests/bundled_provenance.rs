@@ -44,6 +44,16 @@ const PINNED: &[(&str, u64)] = &[
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
     ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
+    // SRFI 41's reference implementation as Retropikzel ported it,
+    // byte-identical. Its `.sld` is pinned post-edit: two lines export and
+    // include `stream-match`, which the port comments out because the
+    // reference writes it in `syntax-case` — see lib/srfi/41-match.scm and
+    // PROVENANCE.md. `41-match.scm` is chibi's, pinned post-edit for the same
+    // reason as 130.scm below: a recorded deviation must not be why a file
+    // goes unwatched.
+    ("lib/srfi/41-match.scm", 0xd3c7746a264796c7),
+    ("lib/srfi/41.scm", 0xe40e5826e7cc7130),
+    ("lib/srfi/41.sld", 0x8268bc8aba0fba5a),
     // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
     // set), recorded in lib/srfi/PROVENANCE.md.
     ("lib/srfi/14.scm", 0xb971a3e4e5280a08),

@@ -211,7 +211,7 @@ def main():
     crashed = by["crash"] + by["timeout"]
     if crashed:
         w("## Crashed or hung (%d)\n" % len(crashed))
-        w("The process died or was cut off by the timeout before reporting; the defect is in Patina's runtime, not in an assertion.\n")
+        w("No tally was reached: the process died, or the runner's timeout cut it off. A crash is a defect in Patina's runtime; a timeout may be one, or may be a suite that needs longer than the budget on this backend — the triage doc says which for each.\n")
         w("| Suite | What |\n|---|---|")
         for s, st, _, _, d, _ in crashed:
             w("| %s | %s |" % (s, d))
