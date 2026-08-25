@@ -44,6 +44,13 @@ const PINNED: &[(&str, u64)] = &[
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
     ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
+    // chibi's SRFI 117 and 127, byte-identical. Both are plain R7RS over
+    // (srfi 1) — no chibi-only dependency, unlike its SRFI 116, which builds
+    // on chibi's own (srfi 1 immutable) and is why that one is not here yet.
+    ("lib/srfi/117.sld", 0x7c392f4f351d6714),
+    ("lib/srfi/117/queue.scm", 0x54a6aa0f95b1c67b),
+    ("lib/srfi/127.scm", 0xa9cbc35c1b4823bf),
+    ("lib/srfi/127.sld", 0xf15ab8d215ee1d31),
     // SRFI 41's reference implementation as Retropikzel ported it,
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the

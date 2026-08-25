@@ -218,6 +218,8 @@ suite_tests! {
     // with, so it exercises `stream-match` too (ours is chibi's macro over
     // the reference body; see lib/srfi/PROVENANCE.md).
     (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 186),
+    (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 0, 16),
+    (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 3),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently

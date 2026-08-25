@@ -21,6 +21,8 @@ const ALIASES: &[(&str, u32)] = &[
     ("hash-table", 125), // Red
     ("charset", 14),     // Red
     ("stream", 41),      // Red
+    ("list-queue", 117), // Red
+    ("lseq", 127),       // Red
 ];
 
 #[test]
@@ -115,6 +117,15 @@ fn test_alias_bindings_are_usable() {
         (
             "(import (scheme charset)) (char-set-contains? (char-set #\\a #\\b) #\\a)",
             "#t",
+        ),
+        (
+            "(import (scheme list-queue)) \
+             (let ((q (list-queue 1 2))) (list-queue-add-back! q 3) (list-queue-list q))",
+            "(1 2 3)",
+        ),
+        (
+            "(import (scheme lseq)) (lseq-realize (lseq-take '(1 2 3 4) 2))",
+            "(1 2)",
         ),
     ];
     for (src, expected) in cases {

@@ -33,18 +33,18 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
 | SRFI 113 | `(scheme set)` | Sets and bags | ✅ shipped | ✅ shipped |
 | SRFI 116 | `(scheme ilist)` | Immutable lists | ❌ | ❌ |
-| SRFI 117 | `(scheme list-queue)` | List queues | ❌ | ❌ |
+| SRFI 117 | `(scheme list-queue)` | List queues | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 117)`, 2026-08-25) |
 | SRFI 121 | `(scheme generator)` | Generators | — superseded by SRFI 158 | — |
 | SRFI 124 | `(scheme ephemeron)` | Ephemerons | ❌ | ❌ |
 | SRFI 125 | `(scheme hash-table)` | Hash tables | ✅ | ✅ |
-| SRFI 127 | `(scheme lseq)` | Lazy sequences | ❌ | ❌ |
+| SRFI 127 | `(scheme lseq)` | Lazy sequences | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 127)`, 2026-08-25) |
 | SRFI 128 | `(scheme comparator)` | Comparators | ✅ shipped | ✅ shipped |
 | SRFI 132 | `(scheme sort)` | Sort libraries | ✅ shipped | ✅ shipped |
 | SRFI 133 | `(scheme vector)` | Vector library | ✅ shipped | ✅ shipped |
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ❌ | ❌ |
 | SRFI 135 | `(scheme text)` | Immutable texts | ❌ | ❌ |
 
-**Red status: 9 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 125, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (10 counting SRFI 158 standing in for the superseded 121).
+**Red status: 11 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 117, 125, 127, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (10 counting SRFI 158 standing in for the superseded 121).
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down
