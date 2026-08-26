@@ -87,6 +87,26 @@ use std::rc::Rc;
 ///
 /// Pairs from the original user source are already recorded by the parser; this only
 /// stamps new template-created pairs. Bounded by depth to avoid runaway recursion.
+/// Whether a desugared body contributes any definition, looking through
+/// `Begin`.
+///
+/// `begin` splices, so a definition inside one is a definition of the body
+/// however deep it sits — and that is not an exotic shape here but the usual
+/// one: `define-values` and `define-record-type` both expand to a `begin` of
+/// definitions. Testing only the top level of the body saw `(define-values (a
+/// b) …)` inside a `let-syntax` as no definition at all and let both names
+/// escape into the enclosing body.
+///
+/// `patina-vm`'s `body_defines::for_each_define` answers the same question
+/// over the same type and cannot be shared: it lives downstream of this crate.
+fn body_binds_definitions(exprs: &[CoreExpr]) -> bool {
+    exprs.iter().any(|e| match &e.kind {
+        CoreExprKind::Define { .. } => true,
+        CoreExprKind::Begin(inner) => body_binds_definitions(inner),
+        _ => false,
+    })
+}
+
 fn stamp_expansion_source(
     tv: TaggedValue,
     source: &SourceLocation,
@@ -330,7 +350,23 @@ impl Desugarer {
         // no separate shadowing rule to keep in step. The value is a marker:
         // nothing reads it, and all that matters is that it is neither core
         // syntax nor a macro, so a name bound here answers "not syntax".
-        let env = if names.is_empty() {
+        // An empty scope set would not make a narrow binding, it would make a
+        // global one: `insert_scoped` treats "no scopes" as "not scoped" and
+        // falls through to `define`. Every binding form must therefore hand a
+        // fresh scope down with its names; asserting it here is what turns a
+        // future omission into a test failure instead of a captured keyword.
+        debug_assert!(
+            names.is_empty() || !new_scopes.is_empty(),
+            "local bindings need a scope of their own: {:?}",
+            names
+        );
+        // A child environment even when this body binds no names, because the
+        // body is still a body: an internal `define-syntax` installs itself in
+        // `self.env`, so reusing the parent is what let `(define (f) (define-
+        // syntax m …) …)` leak `m` into the enclosing environment. Keeping the
+        // parent when the formals happened to be empty, and not otherwise, made
+        // that depend on an unrelated property of the lambda.
+        let env = if new_scopes.is_empty() {
             self.env.clone()
         } else {
             let child = Rc::new(Environment::with_parent(self.env.clone()));
@@ -478,20 +514,24 @@ impl Desugarer {
     /// nothing kept them in step — a binding one of them called syntax and
     /// another did not would silently reopen the `#<macro>`-as-a-value hole.
     ///
-    /// Shadowing is checked first and by spelling, which is what
-    /// `shadowed_names` records: local bindings never reach the desugarer's
-    /// environment. It applies only to a reference written *without* scopes.
-    /// A macro-introduced one carries its own, and hygiene is the whole point
-    /// — `(let ((if 'captured)) (my-cond #t 'ok))` must still see the
-    /// template's `if` as the special form, which is
-    /// `test_special_form_not_captured` in `patina-tests`' hygiene suite.
+    /// There is no shadowing rule here, and that is the point. A local variable
+    /// is an ordinary binding in the environment, recorded at the scopes of the
+    /// body that binds it, so shadowing is just resolution: the binding with
+    /// the largest scope set the reference contains wins, which orders an inner
+    /// keyword ahead of an outer variable without anything having to say so.
     ///
-    /// The spelling test is *coarser* than the resolution it guards, so an
-    /// enclosing binding that merely shares a spelling suppresses the answer —
-    /// see `test_a_shadowed_spelling_suppresses_the_check`. That direction is
-    /// safe (a missed rejection, never a wrong one) and predates this rule;
-    /// fixing it means making shadowing scope-aware, a hygiene change of its
-    /// own.
+    /// This used to be a set of *spellings* consulted before the lookup, which
+    /// had no ordering and applied only to a reference written without scopes.
+    /// Both halves were wrong, in opposite directions: an outer variable vetoed
+    /// an inner `let-syntax` keyword, and a macro-introduced reference skipped
+    /// the check entirely so a template naming a definition-site local spelled
+    /// `if` was reported as a keyword.
+    ///
+    /// Hygiene still holds, and by the same rule rather than an exemption: a
+    /// macro-introduced reference carries the scopes of the macro's definition
+    /// site, so `(let ((if 'captured)) (my-cond #t 'ok))` resolves the
+    /// template's `if` where the template was written — the special form. That
+    /// is `test_special_form_not_captured` in `patina-tests`' hygiene suite.
     fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Option<SyntaxRef> {
         // A reference written in source carries no scopes of its own, but it is
         // not therefore at top level: the scopes it stands in are the ones the
@@ -607,7 +647,14 @@ impl Desugarer {
             // `let-syntax` transformer's `(f x)` inside `(let ((f …)) …)` was
             // aliased to whatever `f` the enclosing program happened to define
             // — Larceny's `base` measured it as `number->string`.
-            if def_env.get_with_scopes(name, definition_scopes) != Some(def_value) {
+            // Skipped when the macro has no definition scopes of its own — the
+            // top-level and library case, and the common one. `get_with_scopes`
+            // returns `get` unchanged for an empty scope set, so the comparison
+            // could only ever be with itself, at the cost of a second walk of
+            // the environment chain per template symbol per expansion.
+            if !definition_scopes.is_empty()
+                && def_env.get_with_scopes(name, definition_scopes) != Some(def_value)
+            {
                 continue;
             }
             if self.env.get(name) == Some(def_value) {
@@ -1361,16 +1408,26 @@ impl Desugarer {
 
             let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
+            // Create a fresh binding scope for this lambda, and give the body
+            // the scopes that include it.
+            //
+            // The shorthand is a lambda, and its body has to be scoped like
+            // one. Taking `self.current_scopes` unchanged left the set *empty*
+            // at top level, and an empty scope set is not a narrow scope but no
+            // scope at all: `Environment::insert_scoped` routes it to a plain
+            // `define`, so `(define (f if) …)` installed a name-visible global
+            // `if` that shadowed the special form for every macro-introduced
+            // reference as well as its own body. `a_generated_macro_keeps_its_
+            // keywords_under_a_shorthand_parameter` pins it.
+            let binding_scope = ScopeId::fresh();
+            let body_scopes = self.current_scopes.with_scope(binding_scope);
+
             // Create body desugarer with shadowed names — the formals, and the
             // body's own internal definitions (see `body_definition_names`).
             let param_names = utils::formals_to_names(&params);
-            let body_scopes = self.current_scopes.clone();
             let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
             let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
             let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes);
-
-            // Create a fresh binding scope for this lambda
-            let binding_scope = ScopeId::fresh();
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()
@@ -1670,11 +1727,17 @@ impl Desugarer {
         // the fresh scope — and a sibling keyword is simply not in scope there.
         // Giving both forms the body's scopes is what made `let-syntax`
         // resolve a sibling, which is half of family 23.
-        let compile_env = if is_letrec {
-            Rc::new(Environment::with_parent(env.clone()))
-        } else {
-            env.clone()
-        };
+        // Both forms compile their transformers in the environment the form
+        // appears in. `letrec-syntax` used to get a fresh child here, but the
+        // keywords are installed into `body_env` below and never into this one,
+        // so the child was empty and looked up identically to its parent — the
+        // sibling visibility that distinguishes `letrec-syntax` comes from
+        // set-of-scopes resolution against `body_env`, which is why
+        // `rec-scope` in `let_syntax_body_definitions_and_transformer_scope`
+        // passes. Its one observable effect was that `definition_env` could
+        // never equal the use-site environment, so `link_definition_env_refs`
+        // ran its whole per-symbol loop for every `letrec-syntax` macro.
+        let compile_env = env.clone();
         let transformer_scopes = if is_letrec {
             definition_scopes.clone()
         } else {
@@ -1786,9 +1849,7 @@ impl Desugarer {
         // Still asked, rather than wrapping unconditionally: the wrapper costs a
         // closure and puts the body out of tail position, and a body with no
         // definitions needs neither.
-        let has_internal_defines = desugared_body
-            .iter()
-            .any(|e| matches!(e.kind, CoreExprKind::Define { .. }));
+        let has_internal_defines = body_binds_definitions(&desugared_body);
 
         if has_internal_defines {
             Ok(CoreExpr::new(CoreExprKind::App {

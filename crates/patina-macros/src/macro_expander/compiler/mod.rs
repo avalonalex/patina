@@ -64,7 +64,7 @@ pub struct Compiler {
     pub(super) ellipsis: Option<Rc<str>>,
 
     /// Whether that symbol was named by the macro (SRFI 46 / R7RS 4.3.2's
-    /// `(syntax-rules <ellipsis> …)`) rather than defaulted to `...`.
+    /// `(syntax-rules <ellipsis> …)`) as something other than `...`.
     ///
     /// The two are identified differently and must not be conflated. A named
     /// ellipsis is a *declaration*: `:::` is the ellipsis inside this macro
@@ -103,6 +103,18 @@ pub struct Compiler {
 
     /// Shared heap for converting Value literals to TaggedValue at compile time
     pub(super) heap: SharedHeap,
+}
+
+/// Whether an ellipsis spelling was *declared* as something other than `...`.
+///
+/// Derived from the spelling rather than from `Some`/`None`, because a caller
+/// that passes the default spelling explicitly means the default. Keying on
+/// `is_some()` made `Compiler::new(_, Some("...".into()), _)` — which is how a
+/// dozen of this module's own unit tests build a compiler — count as a
+/// declaration, and so silently disabled the R7RS 4.3.2 binding rule in
+/// exactly the tests meant to cover it.
+fn is_declared_ellipsis(ellipsis: &Option<Rc<str>>) -> bool {
+    ellipsis.as_deref().is_some_and(|e| e != ELLIPSIS)
 }
 
 impl Compiler {
@@ -199,7 +211,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
-            ellipsis_is_custom: ellipsis.is_some(),
+            ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: None,
             definition_scopes: ScopeSet::new(),
@@ -233,7 +245,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
-            ellipsis_is_custom: ellipsis.is_some(),
+            ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes,
@@ -267,7 +279,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
-            ellipsis_is_custom: ellipsis.is_some(),
+            ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
@@ -306,7 +318,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
-            ellipsis_is_custom: ellipsis.is_some(),
+            ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,

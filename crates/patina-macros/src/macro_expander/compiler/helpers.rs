@@ -96,6 +96,12 @@ impl Compiler {
         if self.ellipsis_is_custom {
             return false;
         }
+        // Without an environment there is no binding to consult, so the
+        // spelling keeps its default meaning. Only `Compiler::new` builds a
+        // compiler that way and only tests call it; every path that compiles a
+        // real macro carries the definition environment. If that stops being
+        // true this is a silent divergence, not an error, which is why it is
+        // spelled out rather than left to read as a deliberate exemption.
         let Some(env) = self.env.as_ref() else {
             return false;
         };

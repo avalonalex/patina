@@ -14,10 +14,18 @@ impl Compiler {
     ///
     /// Used for ellipsis escape: (... template)
     ///
-    /// When ellipsis is escaped, `...` symbols should become literal Symbol values,
-    /// not ScopedIdentifier/WrappedIdentifier values. This is crucial for nested
-    /// macro definitions where the inner `syntax-rules` needs to recognize `...`
-    /// as the ellipsis symbol.
+    /// When the ellipsis is escaped it becomes a literal template value, so the
+    /// inner `syntax-rules` of a nested macro definition receives it as data and
+    /// can recognize it as its own ellipsis.
+    ///
+    /// That literal is an *identifier* carrying this macro's definition scopes,
+    /// not a bare symbol. The scopes are not what the later compiler reads —
+    /// they are usually empty, since the macro escaping an ellipsis is usually
+    /// top level — being an identifier at all is: that is what marks the token
+    /// as introduced here rather than written wherever the generated macro is
+    /// compiled, which decides whether `...` still names the ellipsis under
+    /// R7RS 4.3.2. Emitting a bare symbol made `(let ((... 'dots)) (def-first
+    /// f))` generate a macro with no ellipsis.
     pub(super) fn compile_with_escaped_ellipsis(
         &mut self,
         form: TaggedValue,

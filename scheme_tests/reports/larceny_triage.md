@@ -23,7 +23,7 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 1046 of
 1064 — then the hygiene half was backed out and `base` was gated again. With families
 14, 15 and 23 fixed (2026-08-25) `base` loads for good: VM 19 of 33 suites, 5881 of
-5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1052 of 1064. The R6RS lane
+5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). The R6RS lane
 is unchanged at 12 of 16, 4017 of 4025.
 
 ## Ours
@@ -186,6 +186,12 @@ is unchanged at 12 of 16, 4017 of 4025.
 - **Three were transcription slips, fixed 2026-08-25** as `PATINA LOCAL EDIT`s in `lib/srfi/116/ilists-impl.scm`. The worst had nothing to do with comparators: n-ary `ievery` built its argument list with `ipair` and handed it to `%cars+cdrs`, which walks with `pair?`/`car`/`cdr`, so the walk ended at once and the predicate ran **zero** times — `(ievery < (ilist 5 6) (ilist 1 2))` answered `#t`. `iany`, directly below it, has the correct `cons`/`pair?` form. The other two are in `make-improper-ilist-comparator`: `improper-list-type` classified with `pair?`, so every ilist fell into the "other" bucket and the type-ordering branch never ran, and the ordering predicate returned `0` — true in Scheme — for two empty ilists, so `x < x` held.
 - **The fourth is a design fault, still open.** All 8 assertions survive the three fixes. `make-improper-ilist-comparator` compares an ipair's cdr with the *element* comparator instead of with itself, so a two-element ilist reaches `=` with an ipair argument and raises a type error where the suite records `-1`. Repairing that is a comparator redesign, not a transcription fix, and it wants the 2016 erratum and post-finalization note #2 (2020, which changed the recommended comparator SRFI) read first.
 - **The lesson, not just the bug:** #123 originally claimed "everything else in `(srfi 116)` passes" on the strength of 337 of 345. Both suites' only n-ary `ievery` assertions expect `#t` — exactly what a dead path returns — so both were green over a procedure that did nothing. What passes is what the suites exercise.
+### 30. Tree-walker: a continuation invoked from an *after* thunk skips the enclosing after thunk — tree-walker only
+- Ours: `a_continuation_from_an_after_thunk_skips_the_outer_after_on_the_tree_walker` in `backend_divergence.rs` (quarantined with explicit per-backend assertions, since the broken side returns a value rather than failing).
+- Upstream: [tests/scheme/base.sld#L2647](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2647) — the one assertion in `base` the two backends answer differently, which is why the suite reads 1054 of 1064 on the VM and 1053 on the tree-walker. The report names it `set!` because that is the first non-binding operator in it; it is a `dynamic-wind` test.
+- R7RS 6.10: the after thunk runs whenever control leaves the extent, and calling `k` from inside one is still leaving — the enclosing wind has not finished unwinding and still owes its own after thunk. The VM pays it, the tree-walker stops at the inner one. Adjacent to families 22 and 28 (both about which dynamic extent a handler or re-raise runs in) but distinct: this is the unwinder itself, with no exceptions involved.
+- chibi cannot arbitrate: re-entering `k` from an after thunk sends it into an unbounded loop. The suite's own expectation agrees with the VM.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.

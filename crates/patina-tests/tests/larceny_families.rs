@@ -370,44 +370,118 @@ fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
     assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)");
 }
 
-/// The cases the two backed-out attempts were wrong about, kept together
-/// because they are what tell a correct binding resolution from a plausible
-/// one. All verified against chibi 0.11.
-///
-/// Each is a way for a reference to *look* like it belongs to the scope it is
-/// written in when it does not, or the reverse:
-///
-/// - a declared SRFI 46 ellipsis inside `(let ((... 'dots)) …)` — `:::` is the
-///   ellipsis by declaration, and no binding of `...` has any bearing on it;
-/// - a macro defined at top level generating one used inside `(let ((if …)) …)`,
-///   whose template `if` is still the special form (#114 captured it);
-/// - `(define (f if) …)`, the shorthand that binds a parameter without a fresh
-///   scope, where an outer macro's `if` must survive (#114 captured it);
-/// - a template that introduces its *own* `(let ((if 1)) …)` around a user
-///   macro's `if`, which must not capture it either.
-///
-/// The last two are the direction that stays fixed: hygiene means a template's
-/// keyword is not captured by a binder at the use site. The family 14 and 15
-/// tests above are the other direction — a definition-site local *is* what a
-/// template naming it refers to — and one resolution has to give both.
+/// A declared SRFI 46 ellipsis is a *declaration*, so a binding of `...`
+/// around it has no bearing on it. #114 looked the binding up for the
+/// spelling `...` and broke this.
 #[test]
-fn binding_resolution_acceptance_cases_from_the_backouts() {
+fn a_declared_ellipsis_is_unaffected_by_a_binding_of_dots() {
     assert_program_eval_to(
-        "(define r3 (let ((... 'dots))
-                      (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
-                      (m3 1 2 3)))
-         (define-syntax def-mid
+        "(let ((... 'dots))
+           (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
+           (m3 1 2 3))",
+        "(2 3 1)",
+    );
+}
+
+/// A macro defined at top level generates one used inside `(let ((if …)) …)`.
+/// The generated template's `if` came from the generator, where `if` is the
+/// special form, and must stay so. #114 captured it.
+#[test]
+fn a_generated_macro_keeps_its_keywords_inside_a_binding_of_that_name() {
+    assert_program_eval_to(
+        "(define-syntax def-mid
            (syntax-rules ()
              ((_ name) (define-syntax name (syntax-rules () ((_ c) (if c 'yes 'no)))))))
-         (define r5 (let ((if 'shadowed)) (def-mid mid5) (mid5 #t)))
-         (define-syntax my-if6 (syntax-rules () ((_ c a b) (if c a b))))
+         (let ((if 'shadowed)) (def-mid mid5) (mid5 #t))",
+        "yes",
+    );
+}
+
+/// The same, with the binding coming from a `define` shorthand parameter
+/// rather than a `let`.
+///
+/// The shorthand is the case that has no `let` to give it a scope, and taking
+/// the enclosing scopes unchanged left the set *empty* at top level. An empty
+/// scope set is not a narrow scope but no scope at all — `insert_scoped`
+/// routes it to a plain `define` — so the marker for the parameter became a
+/// name-visible global that shadowed the special form for every reference,
+/// including macro-introduced ones. The internal-definition variant below it
+/// is the same fault reached through `body_definition_names`.
+#[test]
+fn a_generated_macro_keeps_its_keywords_under_a_shorthand_parameter() {
+    assert_program_eval_to(
+        "(define-syntax def-mid
+           (syntax-rules ()
+             ((_ n) (define-syntax n (syntax-rules () ((_ c) (if c 'yes 'no)))))))
+         (def-mid mid)
+         (define (fx if) (mid #t))
+         (define (fv) (define if 1) (mid #t))
+         (list (fx 'shadowed) (fv))",
+        "(yes yes)",
+    );
+}
+
+/// A parameter named `if` in the `define` shorthand, and a template that
+/// introduces its own `(let ((if 1)) …)` around a user macro's `if`. Both are
+/// the direction hygiene fixes: a binder at the use site does not capture a
+/// template's keyword. #114 broke both.
+#[test]
+fn a_use_site_binder_does_not_capture_a_templates_keyword() {
+    assert_program_eval_to(
+        "(define-syntax my-if6 (syntax-rules () ((_ c a b) (if c a b))))
          (define (f6 if) (my-if6 #t 'ok 'no))
          (define-syntax user7 (syntax-rules () ((_ e) (if #t e 'b))))
          (define-syntax wrap7 (syntax-rules () ((_ e) (let ((if 1)) (user7 e)))))
-         (define r8 (let ((f (lambda (x) (+ x 1))))
-                      (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))))
-         (list r3 r5 (f6 1) (wrap7 'a) r8)",
-        "((2 3 1) yes ok a 1)",
+         (list (f6 1) (wrap7 'a))",
+        "(ok a)",
+    );
+}
+
+/// An inner `let-syntax` keyword outranks an enclosing variable of the same
+/// spelling. The spelling veto this replaced had no ordering, so the outer
+/// variable won wherever one existed.
+#[test]
+fn an_inner_keyword_outranks_an_enclosing_variable_of_the_same_name() {
+    assert_program_eval_to(
+        "(list (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))
+               (let ((f (lambda (x) (+ x 1))))
+                 (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))))",
+        "(1 1)",
+    );
+}
+
+/// R7RS 4.3.1 again, for the definitions a macro produces indirectly.
+/// `define-values` and `define-record-type` both expand to a `begin` of
+/// definitions, so testing only the top level of the desugared body saw no
+/// definition and let the names escape into the enclosing body.
+#[test]
+fn a_let_syntax_body_keeps_definitions_a_macro_wrapped_in_begin() {
+    assert_program_eval_to(
+        "(define aa 'outer)
+         (let-syntax ((noop (syntax-rules () ((_ x) x))))
+           (define-values (aa bb) (values 1 2))
+           (noop aa))
+         aa",
+        "outer",
+    );
+}
+
+/// R7RS 5.3.2: a syntax definition inside a body is local to that body. It
+/// used to install itself in the enclosing environment, and then — once a body
+/// with bindings got an environment of its own — only when the body's lambda
+/// happened to bind nothing, which made the leak depend on the formals list.
+#[test]
+fn an_internal_define_syntax_is_local_to_its_body() {
+    assert_program_eval_to(
+        "(define (g y) (define-syntax m2 (syntax-rules () ((_ v) (list 'withargs v)))) (m2 y))
+         (define (f) (define-syntax m (syntax-rules () ((_ v) (list 'noargs v)))) (m 1))
+         (list (g 1) (f))",
+        "((withargs 1) (noargs 1))",
+    );
+    assert_program_eval_error(
+        "(define (g y) (define-syntax m2 (syntax-rules () ((_ v) v))) (m2 y))
+         (g 1)
+         (m2 3)",
     );
 }
 
