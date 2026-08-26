@@ -88,7 +88,11 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
         return;
     }
 
-    if real_is_zero {
+    // A zero real part may be omitted only when it is *exact*: R7RS 7.1.1
+    // reads a bare `<imaginary R>` as having an exact zero real part, so
+    // `+2.0i` is a different number from `0.0+2.0i` and writing the second as
+    // the first does not read back. `number->string` applies the same rule.
+    if real_is_zero && heap.get_real(real_tv).is_none() {
         // Pure imaginary
         if is_exact_one(imag_tv) {
             out.push_str("+i");

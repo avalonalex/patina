@@ -321,6 +321,19 @@ fn tagged_is_negative(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
     false
 }
 
+/// Prefix `+` unless the number already starts with a sign.
+///
+/// R7RS 7.1.1 spells an imaginary part `<sign> <ureal R> i`, so the sign is
+/// part of the syntax rather than decoration: without it the result is not a
+/// number and cannot be read back.
+fn signed(s: String) -> String {
+    if s.starts_with('+') || s.starts_with('-') {
+        s
+    } else {
+        format!("+{s}")
+    }
+}
+
 /// Convert complex number from TaggedValue parts (preserves exactness in display)
 fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::Heap) -> String {
     fn is_one(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
@@ -343,15 +356,25 @@ fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::
         false
     }
 
+    // A zero real part may be omitted only when it is *exact*: R7RS 7.1.1's
+    // `<complex R>` reads a bare `<imaginary R>` as having an exact zero real
+    // part, so writing `+2.0i` for `(make-rectangular 0.0 2.0)` reads back a
+    // different number. R7RS 6.2.6 requires `(string->number (number->string
+    // z))` to be equivalent to `z`, so the inexact zero is written out.
+    let real_zero_is_exact = tagged_is_zero(r, heap) && heap.get_real(r).is_none();
+
     if tagged_is_zero(i, heap) {
         tagged_number_str(r, heap)
-    } else if tagged_is_zero(r, heap) {
+    } else if real_zero_is_exact {
         if is_one(i, heap) {
             "+i".to_string()
         } else if is_neg_one(i, heap) {
             "-i".to_string()
         } else {
-            format!("{}i", tagged_number_str(i, heap))
+            // The imaginary part must carry an explicit sign — `2.0i` is not a
+            // number at all, and `string->number` rightly rejected what this
+            // used to produce, so `number->string` did not round-trip.
+            format!("{}i", signed(tagged_number_str(i, heap)))
         }
     } else if is_one(i, heap) {
         format!("{}+i", tagged_number_str(r, heap))

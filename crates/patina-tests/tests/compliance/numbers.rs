@@ -53,6 +53,43 @@ fn test_division_by_zero() {
     assert_eval_to("(/ -0.0)", "-inf.0");
 }
 
+/// 6.2.6: `(string->number (number->string z))` must be equivalent to `z`,
+/// which a complex with a zero real part did not satisfy.
+///
+/// R7RS 7.1.1 spells an imaginary part `<sign> <ureal R> i`, so the sign is
+/// syntax and not decoration: `number->string` produced `"2.0i"`, which is not
+/// a number at all, and Patina's own reader rightly answered `#f` for it. And
+/// a bare `<imaginary R>` reads with an *exact* zero real part, so `+2.0i`
+/// cannot stand for `(make-rectangular 0.0 2.0)` — the inexact zero has to be
+/// written. `write` and `number->string` had drifted apart on the first point
+/// and agreed wrongly on the second.
+#[test]
+fn test_complex_with_zero_real_part_round_trips() {
+    let ns = |z: &str| format!("(import (scheme base) (scheme complex)) (number->string {z})");
+    assert_program_eval_to(&ns("(make-rectangular 0.0 2.0)"), "\"0.0+2.0i\"");
+    assert_program_eval_to(&ns("(make-rectangular 0 2.0)"), "\"+2.0i\"");
+    assert_program_eval_to(&ns("(make-rectangular 0.0 -2.0)"), "\"0.0-2.0i\"");
+    assert_program_eval_to(&ns("(make-rectangular 0 -2.0)"), "\"-2.0i\"");
+
+    // The round trip R7RS actually requires, for both exactnesses.
+    assert_program_eval_to(
+        "(import (scheme base) (scheme complex)) \
+         (define (round-trips? z) (equal? z (string->number (number->string z)))) \
+         (list (round-trips? (make-rectangular 0.0 2.0)) \
+               (round-trips? (make-rectangular 0 2.0)) \
+               (round-trips? (make-rectangular 1.0 2.0)))",
+        "(#t #t #t)",
+    );
+
+    // `write` must agree with `number->string`; it used to omit the inexact
+    // zero too, which is how the `sqrt` inexactness stayed invisible.
+    assert_program_eval_to(
+        "(import (scheme base) (scheme complex) (scheme write)) \
+         (list (make-rectangular 0.0 2.0) (make-rectangular 0 2.0))",
+        "(0.0+2.0i +2.0i)",
+    );
+}
+
 /// 6.2.6: `angle` of a negative real is pi, and `-0.0` is a negative real.
 ///
 /// It is negative by its *sign bit*, not by ordering — `(negative? -0.0)` is

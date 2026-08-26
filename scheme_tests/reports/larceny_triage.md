@@ -192,6 +192,12 @@ is unchanged at 12 of 16, 4017 of 4025.
 - R7RS 6.10: the after thunk runs whenever control leaves the extent, and calling `k` from inside one is still leaving — the enclosing wind has not finished unwinding and still owes its own after thunk. The VM pays it, the tree-walker stops at the inner one. Adjacent to families 22 and 28 (both about which dynamic extent a handler or re-raise runs in) but distinct: this is the unwinder itself, with no exceptions involved.
 - chibi cannot arbitrate: re-entering `k` from an after thunk sends it into an unbounded loop. The suite's own expectation agrees with the VM.
 
+### 31. `sqrt` of an exact argument is inexact — both backends
+- Ours: `test_complex_sqrt` in `numeric_operations.rs` records the answers as they are; nothing pins the R7RS rule yet.
+- Upstream: [tests/scheme/inexact.sld](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld) — the `inexact` suite's one remaining failure, `(sqrt -inf.0)`.
+- R7RS 6.2.6: an exact argument with an exact square root gives an exact result. `(sqrt 4)` is `2.0` here and should be `2`; `(sqrt -1)` is `0.0+1.0i` and chibi gives the exact `+i`. The real part of a pure-imaginary result is inexact for the same reason, which is what the suite catches.
+- Found by fixing the complex writer (2026-08-26): until `write` stopped omitting an *inexact* zero real part, this failure printed `+inf.0i` on both sides of the report and could not be read. The writer was hiding it, not causing it.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
