@@ -234,6 +234,13 @@ suite_tests! {
     // assertions) and finds 8 failures in the comparator section — see
     // PROVENANCE.md and triage family 29.
     (srfi_116_ilist, "srfi 116", "(srfi 116 test)", 0, 196),
+    // The SRFI's own tests, from the `ideque-2list` directory of its
+    // distribution — the two-list implementation's suite, run here against the
+    // stream implementation `srfi/134.sld` ships, which is the point: it tests
+    // the interface, not the representation. Wrapped in a `(srfi 134 test)`
+    // library and otherwise unmodified; its generators come from `(srfi 158)`
+    // rather than the `(srfi 121)` its header names.
+    (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently

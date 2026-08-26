@@ -24,6 +24,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("list-queue", 117), // Red
     ("lseq", 127),       // Red
     ("ilist", 116),      // Red
+    ("ideque", 134),     // Red
 ];
 
 #[test]
@@ -136,6 +137,25 @@ fn test_alias_bindings_are_usable() {
                    (ievery < (ilist 1 2) (ilist 5 6)) \
                    (ilist->list (imap + (ilist 1 2) (ilist 10 20))))",
             "((1 4 9) #f #t (11 22))",
+        ),
+        // Both ends and the rebalance, not just construction: the
+        // implementation is a banker's deque over two streams, so the
+        // interesting behaviour is what happens when one chain runs empty and
+        // the other has to be split — which is what `ideque-remove-front` on a
+        // deque built entirely from the back reaches. `ideque=` is here because
+        // it is the one procedure the SRFI's own suite covers and Larceny's
+        // does not.
+        (
+            "(import (scheme ideque) (scheme base)) \
+             (define built-from-back \
+               (ideque-add-back (ideque-add-back (ideque-add-back (ideque) 1) 2) 3)) \
+             (list (ideque->list built-from-back) \
+                   (ideque-front built-from-back) \
+                   (ideque-back built-from-back) \
+                   (ideque->list (ideque-remove-front built-from-back)) \
+                   (ideque= = (ideque 1 2 3) built-from-back) \
+                   (ideque= = (ideque 1 2) built-from-back))",
+            "((1 2 3) 1 3 (2 3) #t #f)",
         ),
         // Generator-backed on purpose: a plain list exercises paths
         // indistinguishable from SRFI 1's `take`, and it was exactly the

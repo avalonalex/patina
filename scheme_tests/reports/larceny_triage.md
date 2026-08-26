@@ -23,7 +23,7 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 1046 of
 1064 — then the hygiene half was backed out and `base` was gated again. With families
 14, 15 and 23 fixed (2026-08-25) `base` loads for good: VM 19 of 33 suites, 5881 of
-5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). The R6RS lane
+5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). Bundling SRFI 134 as `(scheme ideque)` (2026-08-25) then took the VM lane to 20 of 33, 5995 of 6023, and the tree-walker to 18 of 33, 5774 of 5803. The R6RS lane
 is unchanged at 12 of 16, 4017 of 4025.
 
 ## Ours
@@ -206,7 +206,9 @@ is unchanged at 12 of 16, 4017 of 4025.
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
-~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), ~~`(scheme ilist)`~~ (SRFI 116, 2026-08-25; 337 of 345 — see family 29), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme rlist)`, `(scheme text)`. Five of the 33 R7RS suites never load for this reason alone.
+~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), ~~`(scheme ilist)`~~ (SRFI 116, 2026-08-25; 337 of 345 — see family 29), ~~`(scheme ideque)`~~ (SRFI 134, 2026-08-25; 114 of 114 on both backends), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme rlist)`, `(scheme text)`. Four of the 33 R7RS suites never load for this reason alone.
+
+Of the four left, `rlist` needs porting before it can be bundled at all: SRFI 101's reference implementation is R6RS (`.sls` libraries), unlike every one bundled so far. `ephemeron` needs weak references from the collector rather than a Scheme port. `flonum` and `text` ship R7RS reference implementations and should follow the recipe below.
 
 Reading for whoever takes the next one, in the order that has actually
 mattered:
