@@ -53,6 +53,50 @@ fn test_division_by_zero() {
     assert_eval_to("(/ -0.0)", "-inf.0");
 }
 
+/// 6.2.6: `angle` of a negative real is pi, and `-0.0` is a negative real.
+///
+/// It is negative by its *sign bit*, not by ordering — `(negative? -0.0)` is
+/// `#f` and must stay so — and asking the ordering question here answered
+/// `0.0`. A real is the complex number with a `+0.0` imaginary part, so the
+/// answer is the `atan2` the complex case already used: `atan2(+0.0, -0.0)`
+/// is pi (IEEE 754 §9.2), which is what C's `carg` and chibi both give.
+#[test]
+fn test_angle_of_a_negative_zero() {
+    let angle_of = |x: &str| format!("(import (scheme complex)) (angle {x})");
+
+    assert_program_eval_to(&angle_of("-0.0"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("0.0"), "0.0");
+
+    // The neighbours, so the fix cannot have been a blanket sign flip.
+    assert_program_eval_to(&angle_of("-1.0"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("1.0"), "0.0");
+    assert_program_eval_to(&angle_of("-5"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("5"), "0.0");
+    assert_program_eval_to(&angle_of("-1/2"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("-inf.0"), "3.141592653589793");
+
+    // The complex case the real one is now defined in terms of. Kept here so
+    // `angle` has one home: this replaces `numeric_operations.rs`'s
+    // tree-walker-only `test_angle`, whose other two rows are above.
+    assert_program_eval_to(&angle_of("+i"), "1.5707963267948966");
+
+    // The classes whose *mechanism* changed, which the rows above do not
+    // reach. Bignums decided their sign with `BigInt::sign()` and now go
+    // through `numeric_to_f64`; `+nan.0` used to answer `0.0`; and a
+    // non-number used to answer `0.0` too, because the predicate this
+    // replaced was documented total. All four match chibi.
+    assert_program_eval_to(&angle_of("(- (expt 2 5000))"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("(expt 2 5000)"), "0.0");
+    assert_program_eval_to(&angle_of("+inf.0"), "0.0");
+    assert_program_eval_to(&angle_of("0"), "0.0");
+    assert_program_eval_to(&angle_of("+nan.0"), "+nan.0");
+    assert_program_eval_error("(import (scheme complex)) (angle \"x\")");
+
+    // Unchanged: the ordering predicate is still an ordering predicate.
+    assert_eval_to("(negative? -0.0)", "#f");
+    assert_eval_to("(zero? -0.0)", "#t");
+}
+
 // 6.2.6 Numerical operations - Comparisons
 #[test]
 fn test_equal() {

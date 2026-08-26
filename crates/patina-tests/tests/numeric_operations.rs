@@ -262,13 +262,6 @@ fn test_magnitude() {
 }
 
 #[test]
-fn test_angle() {
-    assert_eval_to("(angle 1)", "0.0"); // Positive real
-    assert_eval_to("(angle -1)", "3.141592653589793"); // Pi
-    assert_eval_to("(angle +i)", "1.5707963267948966"); // Pi/2
-}
-
-#[test]
 fn test_make_rectangular() {
     assert_eval_to("(make-rectangular 3 4)", "3+4i");
     assert_eval_to("(make-rectangular 5 0)", "5");

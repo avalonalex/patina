@@ -247,6 +247,19 @@ suite_tests! {
     // coverage that runs: Larceny's suite is a separate lane nothing in CI
     // invokes, and this one is a cargo test.
     (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
+    // Verbatim; runnable since `(scheme flonum)` is bundled.
+    //
+    // It also costs about 27s, which is this whole binary's runtime — the
+    // other 19 suites finish in ~1s and wait for it. What costs that is 14 of
+    // its 224 assertions, drawing 131 000 random numbers between them; what
+    // they buy is the chi-squared power the suite over-provisions on purpose
+    // (alpha 1e-5), and nothing else. They are *not* what reaches
+    // `mrg32k3a-random-large` — the cheap `test-random` loop above them walks
+    // `n` to 2^204, so it takes the bignum path on ~172 of its own iterations
+    // for free. Trimming the draws would mean editing a verbatim suite and
+    // would cost only that statistical power, which is a real thing to weigh
+    // and not the coverage argument an earlier version of this comment made.
+    (srfi_27_random, "srfi 27", "(srfi 27 test)", 0, 224),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
@@ -303,10 +316,6 @@ const NO_SUITE: &[(&str, &str)] = &[
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
-    ),
-    (
-        "srfi 27",
-        "upstream suite's (scheme flonum) dependency landed 2026-08-26; porting the suite is the next thing here",
     ),
     (
         "srfi 144",
