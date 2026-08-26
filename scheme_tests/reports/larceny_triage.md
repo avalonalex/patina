@@ -175,6 +175,12 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 - Not from a suite: found 2026-08-25 while attempting family 22, which is this defect's visible symptom on the non-continuable path. R7RS 6.11 calls the handler "in the dynamic environment of the call to `raise`"; both backends unwind to the handler's own wind depth first, so `(with-exception-handler (lambda (e) (log 'handler) 'handled) (lambda () (dynamic-wind in (lambda () (raise-continuable 'x)) out)))` logs `(in out handler out)` — the after-thunk twice — where chibi and Gauche log `(in handler out)`.
 - Everything about the fix, its order, and what it reopens is under family 22 above; the two close together.
 
+### 29. SRFI 116's comparator section fails 8 of Larceny's assertions — upstream, undecided
+- Ours: none — the bundled code is the SRFI's own reference implementation, byte-identical.
+- Upstream: [tests/scheme/ilist.sld#L971](tests/scheme/ilist.sld#L971) and its neighbours. Five are `comparator-test-type` on an ipair whose elements are of the wrong type, where the reference's type test is `ipair?` alone; three are `comparator-compare` answering `-1` where `+1` is expected, an ordering that is not antisymmetric.
+- **Untested upstream**: the SRFI's own test file has no comparator tests at all, and chibi's suite (196 assertions, all passing here) does not reach them either. Larceny's suite is the first thing to exercise this section.
+- Left undecided deliberately: the comparator definition arrived in a 2016 erratum and the SRFI's post-finalization note #2 (2020) changed the recommended comparator SRFI, so which reading is right needs that history read carefully. Everything else in `(srfi 116)` passes — 337 of 345.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
@@ -189,7 +195,7 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 
 ## Not defects — bundling queue (L1 item 6, now with a suite each)
 
-~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme ilist)`, `(scheme rlist)`, `(scheme text)`. Six of the 33 R7RS suites never load for this reason alone.
+~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), ~~`(scheme ilist)`~~ (SRFI 116, 2026-08-25; 337 of 345 — see family 29), `(scheme ephemeron)`, `(scheme flonum)`/SRFI 144, `(scheme ideque)`, `(scheme rlist)`, `(scheme text)`. Five of the 33 R7RS suites never load for this reason alone.
 
 Reading for whoever takes the next one, in the order that has actually
 mattered:

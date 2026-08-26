@@ -229,6 +229,11 @@ suite_tests! {
     // passes 40 of 40.
     (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 1, 34),
     (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 109),
+    // chibi's suite, which exercises the interface and so runs against the
+    // SRFI's reference implementation unchanged. Larceny's is richer (345
+    // assertions) and finds 8 failures in the comparator section — see
+    // PROVENANCE.md and triage family 29.
+    (srfi_116_ilist, "srfi 116", "(srfi 116 test)", 0, 196),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently

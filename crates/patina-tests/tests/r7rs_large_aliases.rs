@@ -23,6 +23,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("stream", 41),      // Red
     ("list-queue", 117), // Red
     ("lseq", 127),       // Red
+    ("ilist", 116),      // Red
 ];
 
 #[test]
@@ -127,6 +128,11 @@ fn test_alias_bindings_are_usable() {
         // indistinguishable from SRFI 1's `take`, and it was exactly the
         // generator path that carried the `lseq-append` defect chibi's copy
         // shipped with.
+        (
+            "(import (scheme ilist)) \
+             (ilist->list (iappend (imap (lambda (x) (* x x)) (ilist 1 2)) (ilist 9)))",
+            "(1 4 9)",
+        ),
         (
             "(import (scheme lseq) (scheme base)) \
              (define (gen . xs) \

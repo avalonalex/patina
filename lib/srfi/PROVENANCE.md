@@ -12,6 +12,7 @@ own record. One home per tree.
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 41)` | 0.1.0 | `41.sld`, `41.scm` | snow-fort, Retropikzel's R7RS port of Philip Bewig's stream reference implementation (MIT) | `c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2` |
+| `(srfi 116)` | 1.5 | `116/ilists-base.scm`, `116/ilists-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-116/srfi-116.tgz` (John Cowan, MIT) | tarball sha256 `9b97c816dd6151b8297e8b6d0ee65fa8daf12123d018e2f46cdce87d0c0fe283` |
 | `(srfi 117)` | 1.5 | `117/list-queues-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-117/srfi-117.tgz` (John Cowan, MIT) | tarball sha256 `ffc8349567a8169eb53e818dd15f73b0485c3db9aca79e432d7e6781db2b8e46` |
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
@@ -47,6 +48,20 @@ iteration tests the count, and asking for *n* elements forces *n+1*. The
 filter itself is lazy — `(stream-car (stream-cdr (stream-filter …)))` answers
 `1` there. Reported as
 [ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181).
+
+**`(srfi 116)`'s comparator section fails 8 of Larceny's assertions**, and
+they are recorded rather than adjudicated. chibi's suite passes 196 of 196
+against this implementation and the SRFI's own test file has *no* comparator
+tests at all, so the section is untested upstream; Larceny's suite is the
+first thing to exercise it. Five failures are `comparator-test-type` on an
+ipair whose elements are of the wrong type — the reference's type test is
+`ipair?` alone, where the suite expects the element comparators to be
+consulted — and three are `comparator-compare` answering `-1` where `+1` is
+expected, i.e. an ordering that is not antisymmetric. Which reading is right
+needs the specification's post-finalization notes (the comparator definition
+arrived in a 2016 erratum, and note #2 of 2020 changed the recommended
+comparator SRFI); that is a decision, not an oversight, and it is left to
+whoever needs those procedures. Everything else in the library passes.
 
 **`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
 implementations, and chibi's copies were tried first and rejected.** Both of

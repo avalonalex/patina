@@ -44,6 +44,11 @@ const PINNED: &[(&str, u64)] = &[
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
     ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
+    // SRFI 116's own reference implementation (John Cowan, MIT),
+    // byte-identical; the `.sld` is ours, as for 117 and 127 below.
+    ("lib/srfi/116.sld", 0x35892fd1b73d9d53),
+    ("lib/srfi/116/ilists-base.scm", 0xde2e997658b2dc5b),
+    ("lib/srfi/116/ilists-impl.scm", 0xf8d5dd38dcf34e7c),
     // SRFI 117's and 127's own reference implementations (John Cowan, MIT).
     // 117's is pinned post-edit — one PATINA LOCAL EDIT to list-queue-join!,
     // marked in place and recorded in PROVENANCE.md. The two `.sld` files are
