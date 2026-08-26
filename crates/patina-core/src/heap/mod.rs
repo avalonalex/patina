@@ -188,6 +188,10 @@ pub enum HeapObjectData {
     /// SRFI 124 ephemeron: a key/datum pair whose key the collector holds
     /// *weakly*, and whose datum it keeps alive only while the key is.
     ///
+    /// Opaque to `write` and `display` (`#<ephemeron>`): SRFI 124 gives
+    /// ephemerons no external representation, and showing the key would make a
+    /// broken pair look like one holding `#f`.
+    ///
     /// `None` once the collector has *broken* the pair. That is a distinct
     /// state rather than a pair of `#f`s, because SRFI 124 lets a key
     /// legitimately be `#f` and such a pair is not broken until collected.
@@ -1030,37 +1034,28 @@ impl Heap {
         self.alloc_object(HeapObjectData::Ephemeron(RefCell::new(Some((key, datum)))))
     }
 
-    /// The contents of an ephemeron: `Some((key, datum))` while it is whole,
-    /// `None` once the collector has broken it — and `None` for a value that
-    /// is not an ephemeron at all, so callers that need to tell those apart
-    /// ask [`Heap::is_ephemeron`] first.
+    /// What `tv` is, as an ephemeron, in one lookup.
     ///
-    /// Returning the raw `Option` rather than SRFI 124's `#f`/`#f` lets a
-    /// caller answer `ephemeron-broken?` from the same lookup.
-    pub fn ephemeron_contents(&self, tv: TaggedValue) -> Option<(TaggedValue, TaggedValue)> {
+    /// Outer `None`: not an ephemeron at all. Inner `None`: an ephemeron the
+    /// collector has broken. `Some(Some((key, datum)))`: a whole one.
+    ///
+    /// Two levels rather than SRFI 124's `#f`/`#f` because a caller has to be
+    /// able to tell a broken pair from one whose key legitimately *is* `#f`,
+    /// and because answering `ephemeron-broken?` should not cost a second
+    /// walk of the object.
+    pub fn ephemeron_state(&self, tv: TaggedValue) -> Option<Option<(TaggedValue, TaggedValue)>> {
         if !tv.is_object() {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Ephemeron(cell) => *cell.borrow(),
+            HeapObjectData::Ephemeron(cell) => Some(*cell.borrow()),
             _ => None,
         }
     }
 
-    /// Whether the collector has broken this ephemeron.
-    pub fn is_ephemeron_broken(&self, tv: TaggedValue) -> bool {
-        if !tv.is_object() {
-            return false;
-        }
-        match self.get_object(tv) {
-            HeapObjectData::Ephemeron(cell) => cell.borrow().is_none(),
-            _ => false,
-        }
-    }
-
-    /// Whether `tv` is an ephemeron.
+    /// Whether `tv` is an ephemeron, broken or not.
     pub fn is_ephemeron(&self, tv: TaggedValue) -> bool {
-        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Ephemeron(_))
+        self.ephemeron_state(tv).is_some()
     }
 
     /// Break an ephemeron: clear both fields.
@@ -1068,22 +1063,14 @@ impl Heap {
     /// Called by the collector for a pair whose key it found unreachable.
     /// Takes `&self` because it runs inside the mark phase, which borrows the
     /// heap immutably; the `RefCell` is what makes that sound.
-    pub fn break_ephemeron(&self, index: HeapIndex) {
-        debug_assert!(
-            matches!(&self.objects[index as usize], HeapObjectData::Ephemeron(_)),
-            "break_ephemeron on a non-ephemeron at {index}"
-        );
-        if let HeapObjectData::Ephemeron(cell) = &self.objects[index as usize] {
-            *cell.borrow_mut() = None;
-        }
-    }
-
-    /// The key and datum of the ephemeron at `index`, for the collector's
-    /// fixpoint. `None` for a pair already broken, or a non-ephemeron.
-    pub fn ephemeron_pair_at(&self, index: HeapIndex) -> Option<(TaggedValue, TaggedValue)> {
-        match &self.objects[index as usize] {
-            HeapObjectData::Ephemeron(cell) => *cell.borrow(),
-            _ => None,
+    pub fn break_ephemeron(&self, tv: TaggedValue) {
+        match self.get_object(tv) {
+            HeapObjectData::Ephemeron(cell) => *cell.borrow_mut() = None,
+            // The collector only hands back a value it recorded while tracing
+            // an ephemeron, so anything else is a bookkeeping error — and a
+            // silent one would leave a pair unbroken with a key whose cells
+            // are about to be swept.
+            _ => debug_assert!(false, "break_ephemeron on a non-ephemeron"),
         }
     }
 

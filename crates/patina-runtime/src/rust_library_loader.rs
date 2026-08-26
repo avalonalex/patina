@@ -46,6 +46,20 @@ impl RustLibraryLoader {
     pub fn with_standard_libraries() -> Self {
         // Note: Standard libraries are registered by the backend (tree-walker, VM, etc.)
         // when initializing the evaluator. This keeps the runtime crate backend-agnostic.
+        //
+        // That rationale no longer holds, and this hook is where the fix goes.
+        // `patina-vm/src/backend.rs` and `patina-tree-walker/src/eval/mod.rs`
+        // register a byte-identical list of internal libraries — every builder
+        // is already in `patina_runtime::stdlib`, registration goes into a
+        // `HashMap` so order does not matter, and nothing in the list is
+        // backend-specific. So it is ~180 lines of duplication that each new
+        // Rust-backed library extends by two, with no guard: the reachability
+        // test builds a tree-walker only, so a library registered on one
+        // backend and forgotten on the other is caught by nothing.
+        //
+        // Moving the list here (or into a `stdlib::register_internal_libraries`)
+        // is mechanical and deliberately not done as part of an unrelated
+        // change; the backends keep the freedom to register extras.
 
         Self::new()
     }

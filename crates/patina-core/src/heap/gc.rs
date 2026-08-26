@@ -93,6 +93,27 @@ pub struct MarkBits {
 }
 
 impl MarkBits {
+    /// Whether `tv`'s cell is marked, or `None` if no arena tracks it.
+    ///
+    /// The one place the tag → arena mapping is written for *reading*.
+    /// `GcVisitor::visit` writes the same mapping but its arms differ per
+    /// arena, so the two are not one function; what this buys is that a reader
+    /// cannot disagree with a writer about which arena a tag belongs to, or
+    /// about what the fall-through means.
+    fn is_marked(&self, tv: TaggedValue) -> Option<bool> {
+        if tv.is_pair() {
+            Some(self.pairs.get(tv.heap_index() as usize))
+        } else if tv.is_vector() {
+            Some(self.vectors.get(tv.heap_index() as usize))
+        } else if tv.is_string() {
+            Some(self.strings.get(tv.heap_index() as usize))
+        } else if tv.is_object() {
+            Some(self.objects.get(tv.heap_index() as usize))
+        } else {
+            None
+        }
+    }
+
     fn for_heap(heap: &Heap) -> Self {
         Self {
             pairs: BitSet::new(heap.pairs.len()),
@@ -420,7 +441,7 @@ pub struct GcVisitor<'h> {
     /// Ephemerons reached during marking, awaiting the fixpoint in
     /// [`run_mark_phase`]. An entry leaves when its key turns out to be
     /// reachable; whatever is left at the end has a dead key and is broken.
-    pending_ephemerons: Vec<HeapIndex>,
+    pending_ephemerons: Vec<TaggedValue>,
 }
 
 impl<'h> GcVisitor<'h> {
@@ -503,21 +524,11 @@ impl<'h> GcVisitor<'h> {
     /// marked, which is the whole difference between a weak key and a strong
     /// one.
     fn value_is_live(&self, tv: TaggedValue) -> bool {
-        if tv.is_pair() {
-            self.marks.pairs.get(tv.heap_index() as usize)
-        } else if tv.is_vector() {
-            self.marks.vectors.get(tv.heap_index() as usize)
-        } else if tv.is_string() {
-            self.marks.strings.get(tv.heap_index() as usize)
-        } else if tv.is_object() {
-            self.marks.objects.get(tv.heap_index() as usize)
-        } else {
-            // Immediates have no cell to lose. A closure is not tracked by
-            // these four bit sets either, so it lands here too — which is
-            // conservative in the safe direction: the pair survives a
-            // collection it might have been broken by, and never the reverse.
-            true
-        }
+        // No arena tracks an immediate, and none tracks a closure either, so
+        // both land on the default — conservative in the safe direction: the
+        // pair survives a collection it might have been broken by, and never
+        // the reverse.
+        self.marks.is_marked(tv).unwrap_or(true)
     }
 
     /// Trace through an environment chain. Deduped by the identity of the
@@ -644,11 +655,11 @@ impl<'h> GcVisitor<'h> {
                 self.visit(element);
             }
         } else if tv.is_object() {
-            self.trace_object_children(&heap.objects[idx], tv.heap_index());
+            self.trace_object_children(&heap.objects[idx], tv);
         }
     }
 
-    fn trace_object_children(&mut self, data: &'h HeapObjectData, index: HeapIndex) {
+    fn trace_object_children(&mut self, data: &'h HeapObjectData, tv: TaggedValue) {
         match data {
             // Leaves: no embedded heap references.
             HeapObjectData::BigInt(_)
@@ -670,7 +681,7 @@ impl<'h> GcVisitor<'h> {
             // strong, and tracing the datum would let a dead key keep it
             // alive. Both wait for the ephemeron fixpoint below, which traces
             // a pair only once it knows the key is reachable some other way.
-            HeapObjectData::Ephemeron(_) => self.pending_ephemerons.push(index),
+            HeapObjectData::Ephemeron(_) => self.pending_ephemerons.push(tv),
 
             // Weak keys: the payload lives in VmState's side tables and is
             // traced only if the ref object itself is live — record the id
@@ -941,11 +952,9 @@ impl Default for MarkSweepCollector {
 ///
 /// Public so alternative collectors compose *around* it (triggering, sweep
 /// strategy) without being able to mis-order its interior. Skipping the
-/// fixpoint would sweep live continuation payloads; skipping `sweep_weak`
-/// would reinstate the §9.5 monotonic leak; and running the two weak kinds as
-/// *separate* fixpoints — which an earlier version of this did — loses a
-/// continuation payload whose ref is marked only by a late ephemeron
-/// retention, which is why they share one loop.
+/// fixpoint would sweep live continuation payloads, skipping `sweep_weak`
+/// would reinstate the §9.5 monotonic leak, and the two weak kinds share one
+/// loop for the reason the comment on it gives.
 pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
     let mut visitor = GcVisitor::new(heap);
     for provider in roots {
@@ -986,11 +995,10 @@ pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
             progressed = true;
         }
 
-        let pending = std::mem::take(&mut visitor.pending_ephemerons);
-        let mut still_pending = Vec::with_capacity(pending.len());
-        for index in pending {
-            let Some((key, datum)) = heap.ephemeron_pair_at(index) else {
-                continue;
+        let mut pending = std::mem::take(&mut visitor.pending_ephemerons);
+        pending.retain(|&tv| {
+            let Some((key, datum)) = heap.ephemeron_state(tv).flatten() else {
+                return false; // not an ephemeron, or already broken
             };
             // An immediate key has no cell that can die, so `value_is_live`
             // answers true for it; a heap key must already be marked by some
@@ -999,12 +1007,16 @@ pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
                 visitor.visit(key);
                 visitor.visit(datum);
                 progressed = true;
+                false
             } else {
-                still_pending.push(index);
+                true
             }
-        }
+        });
+        // `visit` only enqueues, so `pending_ephemerons` is still empty here
+        // and `drain` is what can refill it — hence the append rather than an
+        // assignment.
         visitor.drain();
-        visitor.pending_ephemerons.append(&mut still_pending);
+        visitor.pending_ephemerons.append(&mut pending);
 
         if !progressed {
             break;
@@ -1013,8 +1025,8 @@ pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
 
     // Whatever is still pending has an unreachable key: break it, so its datum
     // stops being a root and `ephemeron-broken?` answers #t.
-    for &index in &visitor.pending_ephemerons {
-        heap.break_ephemeron(index);
+    for &tv in &visitor.pending_ephemerons {
+        heap.break_ephemeron(tv);
     }
 
     for provider in roots {

@@ -18,7 +18,7 @@ use patina_runtime::SharedHeap;
 
 pub fn register(registry: &mut PrimitiveRegistry) {
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "make-ephemeron",
         Arity::Exact(2),
         "Returns an ephemeron with the given key and datum.",
@@ -26,7 +26,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "ephemeron?",
         Arity::Exact(1),
         "Returns #t if obj is an ephemeron, #f otherwise.",
@@ -34,7 +34,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "ephemeron-broken?",
         Arity::Exact(1),
         "Returns #t if the ephemeron's key has been collected, #f otherwise.",
@@ -42,7 +42,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "ephemeron-key",
         Arity::Exact(1),
         "Returns the ephemeron's key, or #f if it has been broken.",
@@ -50,7 +50,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "ephemeron-datum",
         Arity::Exact(1),
         "Returns the ephemeron's datum, or #f if it has been broken.",
@@ -58,7 +58,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     registry.register(PrimitiveFn::new_heap(
-        "srfi.124",
+        "patina.internal.ephemeron",
         "reference-barrier",
         Arity::Exact(1),
         "Keeps obj reachable up to this point; returns an unspecified value.",
@@ -66,11 +66,12 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 }
 
-/// The three accessors' shared guard: one arity check, one heap lookup, and
-/// one error whose text names the caller.
+/// The three accessors' shared guard: one arity check, one heap lookup, one
+/// error whose text names the caller.
 ///
-/// Returns the raw `Option` so `ephemeron-broken?` can answer from it directly
-/// rather than looking the object up a second time.
+/// The inner `Option` is `None` for a broken pair, so `ephemeron-broken?`
+/// answers from the same lookup — and a pair whose key is legitimately `#f`
+/// stays distinguishable from a broken one.
 fn as_ephemeron(
     heap: &SharedHeap,
     who: &str,
@@ -79,13 +80,12 @@ fn as_ephemeron(
     expect_arity(args, 1)?;
     let obj = args[0];
     let heap = heap.borrow();
-    if !heap.is_ephemeron(obj) {
-        return Err(EvalError::TypeError(format!(
+    heap.ephemeron_state(obj).ok_or_else(|| {
+        EvalError::TypeError(format!(
             "{who}: expected an ephemeron, got {}",
             heap.type_name(obj)
-        )));
-    }
-    Ok(heap.ephemeron_contents(obj))
+        ))
+    })
 }
 
 fn make_ephemeron(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
@@ -122,9 +122,9 @@ fn ephemeron_datum(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 ///
 /// Passing the argument through a primitive is the barrier: it is in the live
 /// argument vector across the call, which the collector traces. That is enough
-/// today for a second reason too — the VM over-retains stale registers, which
-/// `GC_STAGE5_PRD.md` §7's rooting work is meant to remove — so this should be
-/// re-examined when that lands rather than assumed to keep holding.
+/// today for a second reason too — the VM over-retains stale registers — so
+/// this should be re-examined when `GC_STAGE5_PRD.md`'s Priority 2b lands,
+/// rather than assumed to keep holding.
 fn reference_barrier(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     expect_arity(args, 1)?;
     Ok(TaggedValue::UNSPECIFIED)

@@ -202,7 +202,7 @@ is unchanged at 12 of 16, 4017 of 4025.
 - Ours: `crates/patina-tests/tests/ephemerons.rs` works around it (the shape that would trip it computes its replacement in a frame that returns); nothing pins the defect itself yet.
 - Upstream: [tests/scheme/ephemeron.sld](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ephemeron.sld) — the `ephemeron` suite's one failure, and the reason it is 5 of 6 rather than 6.
 - `(set! keys (reverse (reverse (list-tail keys 5))))` in a procedure, then a collection *in that same frame*: the old ten-element list stays reachable, because a register of the live frame still holds it. Replacing outright — `(set! keys 'gone)` — collects it, and so does doing the same computation in a helper that returns before the collection. The tree-walker gets all three right.
-- Not an ephemeron defect; ephemerons are just what made it observable, since they are the only thing in the language that reports whether a particular object was collected. It is GC precision, adjacent to `GC_STAGE5_PRD.md`'s §7 rooting work.
+- Not an ephemeron defect; ephemerons are just what made it observable, since they are the only thing in the language that reports whether a particular object was collected. It is GC precision, and it is owned by `GC_STAGE5_PRD.md`'s Priority 2b, added with this entry so the defect has somewhere to land.
 - The tree-walker cannot run this suite at all: its `force-gc` allocates 100 million pairs and exceeds the runner's timeout — family 26's slowness, not this.
 
 ## Not ours — recorded so nobody re-diagnoses them
