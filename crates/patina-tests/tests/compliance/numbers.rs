@@ -43,6 +43,14 @@ fn test_division_by_zero() {
     assert_eval_to("(/ 1 0.0)", "+inf.0");
     assert_eval_to("(/ -1 0.0)", "-inf.0");
     assert_eval_to("(/ 1.0 0)", "+inf.0");
+
+    // A zero divisor is *signed*, and IEEE 754 §6.3 makes the quotient's sign
+    // the exclusive-or of the two. `-0.0` is not less than zero, so taking the
+    // numerator's sign alone answered `+inf.0` for all four of these.
+    assert_eval_to("(/ 1.0 -0.0)", "-inf.0");
+    assert_eval_to("(/ -1.0 -0.0)", "+inf.0");
+    assert_eval_to("(/ 1 -0.0)", "-inf.0");
+    assert_eval_to("(/ -0.0)", "-inf.0");
 }
 
 // 6.2.6 Numerical operations - Comparisons

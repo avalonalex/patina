@@ -237,8 +237,19 @@ default. The non-obvious entries:
 
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
-- **SRFI 27** — its suite imports `(scheme flonum)`, i.e. SRFI 144, which
-  Patina does not bundle yet. Add the suite when SRFI 144 lands.
+- **SRFI 27** — its suite imports `(scheme flonum)`, i.e. SRFI 144. That
+  landed 2026-08-26, so the dependency is gone and porting the suite is what
+  remains.
+- **SRFI 144** — no suite here runs under `(chibi test)`. The SRFI's own is
+  1473 lines against a Larceny-family harness: `test` takes its arguments the
+  other way round, and it needs `test/approx`, `test/alts` and
+  `test/unspec-or-exn` besides, so bringing it here is a port rather than the
+  import adaptations above. chibi's suite tests chibi's API instead of the
+  SRFI's — `sign-bit` where the SRFI has `flsign-bit`, and an exact `1` where
+  `flloggamma`'s second value is `1.0` — so adapting it would mean rewriting
+  expectations to match a different implementation. What does exercise the
+  library is Larceny's lane, at 1279 of 1280 on both backends. This entry
+  retires when either suite is ported or reconciled.
 - **`(chibi filesystem)`** — its suite opens a raw file descriptor
   (`(open tmp-file open/write)`) before its directory tests, hitting the
   bundled library's FFI stub *outside any test form*, which aborts the run:

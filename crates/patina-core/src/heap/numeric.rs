@@ -962,35 +962,29 @@ impl Heap {
             return Ok(self.alloc_real(f64::NAN));
         }
 
-        // Division by zero check
+        // Division by zero.
         if self.is_numeric_zero_tv(b) {
+            // The one case with no value to return. Everything below has an
+            // inexact operand, so it has an f64 answer.
             if self.is_exact_number(a) && self.is_exact_number(b) {
                 return Err(NumericError::DivisionByZero);
             }
-            if self.is_numeric_zero_tv(a) {
-                return Ok(self.alloc_real(f64::NAN));
+
+            // Hand the rest to the hardware, which owns these rules: the
+            // quotient's sign is the exclusive-or of the operand signs (IEEE
+            // 754 §6.3, and `-0.0` carries a sign even though it is not *less
+            // than* zero), and `0/0` is NaN. Both used to be written out here,
+            // and writing the first one out is how it came to be wrong —
+            // `(/ 1.0 -0.0)` answered `+inf.0`, because a hand-rolled sign
+            // test asked `< 0` of a value whose sign is in its bit pattern.
+            if let (Ok(x), Ok(y)) = (self.numeric_to_f64(a), self.numeric_to_f64(b)) {
+                return Ok(self.alloc_real(x / y));
             }
-            // IEEE 754 §6.3: the sign of a quotient is the exclusive-or of
-            // the operand signs, and a zero divisor still carries one — `-0.0`
-            // is negative even though it is not *less than* zero, which is why
-            // the numerator's sign alone is not the answer. Taking only it
-            // made `(/ 1.0 -0.0)` answer `+inf.0`, and with it SRFI 144's
-            // `(fl/ -0.0)`.
-            let divisor_negative = self
-                .numeric_to_f64(b)
-                .map(f64::is_sign_negative)
-                .unwrap_or(false);
-            let numerator_negative = self.is_numeric_negative_tv(a)
-                || self
-                    .numeric_to_f64(a)
-                    .map(f64::is_sign_negative)
-                    .unwrap_or(false);
-            let sign = if numerator_negative != divisor_negative {
-                -1.0
-            } else {
-                1.0
-            };
-            return Ok(self.alloc_real(sign * f64::INFINITY));
+
+            // A complex operand has no single f64. It cannot fall through
+            // either: `div_impl`'s complex path divides by the exact zero it
+            // computes for the denominator, which panics in `BigRational`.
+            return Ok(self.alloc_real(f64::INFINITY));
         }
 
         let inexact = self.is_inexact_number(a) || self.is_inexact_number(b);

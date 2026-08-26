@@ -306,11 +306,11 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "srfi 27",
-        "upstream suite imports (scheme flonum) — bundled 2026-08-26, so this reason is spent; the suite is the next thing to land here",
+        "upstream suite's (scheme flonum) dependency landed 2026-08-26; porting the suite is the next thing here",
     ),
     (
         "srfi 144",
-        "no upstream suite runs under (chibi test): the SRFI's own is 1473 lines against a Larceny-family harness (reversed `test` argument order, plus test/approx, test/alts, test/unspec-or-exn) and porting it is not an adaptation, while chibi's tests chibi's API rather than the SRFI's — `sign-bit` for `flsign-bit`, and an exact 1 where flloggamma's second value is 1.0. Larceny's lane runs a newer version of the SRFI's own suite at 1279 of 1280 on both backends; this entry retires when that suite is ported or chibi's is reconciled",
+        "no upstream suite runs under (chibi test) — the SRFI's own targets a Larceny-family harness and chibi's tests chibi's API; retires when either is ported or reconciled, see scheme_tests/upstream/README.md",
     ),
     (
         "srfi 33",

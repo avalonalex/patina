@@ -178,15 +178,17 @@ fn test_alias_bindings_are_usable() {
                    (ideque= = (ideque 1 2) built-from-back))",
             "((1 2 3) 1 3 (2 3) #t #f)",
         ),
-        // A constant, an arithmetic op, a rounding op and the two things this
-        // bundle had to fix: `fl/` on a negative zero, whose sign comes from
-        // the divisor, and `flnumerator` at an infinity, which the R7RS
-        // `numerator` the reference implementation delegates to will not take.
+        // An arithmetic op, a rounding op and the two things this bundle had
+        // to fix. The two `fl/` probes are chosen to be independent: the first
+        // fails if the divisor's sign is ignored, the second if the
+        // *numerator's* is, so neither can pass for the other's reason. Then
+        // `flnumerator` at an infinity, which the R7RS `numerator` the
+        // reference implementation delegates to will not take.
         (
             "(import (scheme flonum) (scheme base)) \
-             (list (fl+ 1.0 2.0) (flfloor 2.7) (fl/ -0.0) (fl/ 1.0 -0.0) \
+             (list (fl+ 1.0 2.0) (flfloor 2.7) (fl/ -0.0) (fl/ -1.0 -0.0) \
                    (flnumerator +inf.0) (fldenominator -inf.0) (flsign-bit -1.0))",
-            "(3.0 2.0 -inf.0 -inf.0 +inf.0 1.0 1)",
+            "(3.0 2.0 -inf.0 +inf.0 +inf.0 1.0 1)",
         ),
         // Generator-backed on purpose: a plain list exercises paths
         // indistinguishable from SRFI 1's `take`, and it was exactly the
