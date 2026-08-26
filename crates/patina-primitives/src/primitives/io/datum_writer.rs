@@ -20,27 +20,13 @@ fn format_real_number(f: f64, out: &mut String) {
 /// Format a complex number from its real and imaginary TaggedValue parts.
 ///
 /// R7RS rules:
-/// - Zero real part is omitted: `0+5i` → `+5i`
+/// - A zero part is omitted only when it is *exact*: `0+5i` → `+5i`, but
+///   `0.0+5i` and `5.0+0.0i` keep the zero, because the short forms read
+///   back with exact zero parts and so name different numbers
 /// - Exact ±1 imaginary is displayed as `±i`: `3+1i` → `3+i`
 /// - Inexact ±1.0 imaginary keeps the number: `3.0+1.0i` stays `3.0+1.0i`
 fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: &mut String) {
     // Helper: check if TaggedValue is exact zero
-    let is_zero = |tv: TaggedValue| -> bool {
-        if tv.is_fixnum() {
-            return tv.as_fixnum_unchecked() == 0;
-        }
-        if let Some(f) = heap.get_real(tv) {
-            return f == 0.0;
-        }
-        if let Some(n) = heap.get_bigint(tv) {
-            return n.sign() == num_bigint::Sign::NoSign;
-        }
-        if let Some(r) = heap.get_rational(tv) {
-            use num_traits::Zero;
-            return r.is_zero();
-        }
-        false
-    };
 
     // Helper: check if TaggedValue is exact 1 (not inexact 1.0)
     let is_exact_one = |tv: TaggedValue| -> bool {
@@ -74,15 +60,18 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
         false
     };
 
-    let real_is_zero = is_zero(real_tv);
-    let imag_is_zero = is_zero(imag_tv);
+    // Exact zeros may be dropped; inexact ones may not. `0.0+2.0i` is not
+    // `+2.0i` and `1.0+0.0i` is not `1.0` — R7RS 6.2.6 has `(real? 3.0+0.0i)`
+    // answer #f, so writing it as a real is writing a different number.
+    let real_is_exact_zero = heap.is_exact_zero(real_tv);
+    let imag_is_exact_zero = heap.is_exact_zero(imag_tv);
 
-    if real_is_zero && imag_is_zero {
+    if real_is_exact_zero && imag_is_exact_zero {
         out.push('0');
         return;
     }
 
-    if imag_is_zero {
+    if imag_is_exact_zero {
         // Pure real
         format_tagged_leaf(real_tv, heap, out);
         return;
@@ -92,7 +81,7 @@ fn format_complex(real_tv: TaggedValue, imag_tv: TaggedValue, heap: &Heap, out: 
     // reads a bare `<imaginary R>` as having an exact zero real part, so
     // `+2.0i` is a different number from `0.0+2.0i` and writing the second as
     // the first does not read back. `number->string` applies the same rule.
-    if real_is_zero && heap.get_real(real_tv).is_none() {
+    if real_is_exact_zero {
         // Pure imaginary
         if is_exact_one(imag_tv) {
             out.push_str("+i");

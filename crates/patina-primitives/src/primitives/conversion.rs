@@ -285,42 +285,6 @@ fn tagged_number_str(tv: TaggedValue, heap: &patina_core::Heap) -> String {
     "???".to_string()
 }
 
-/// Check if a numeric TaggedValue is zero
-fn tagged_is_zero(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
-    use num_traits::Zero;
-    if tv.is_fixnum() {
-        return tv.as_fixnum_unchecked() == 0;
-    }
-    if let Some(n) = heap.get_bigint(tv) {
-        return n.sign() == num_bigint::Sign::NoSign;
-    }
-    if let Some(r) = heap.get_rational(tv) {
-        return r.is_zero();
-    }
-    if let Some(f) = heap.get_real(tv) {
-        return f == 0.0;
-    }
-    false
-}
-
-/// Check if a numeric TaggedValue is negative
-fn tagged_is_negative(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
-    if tv.is_fixnum() {
-        return tv.as_fixnum_unchecked() < 0;
-    }
-    if let Some(n) = heap.get_bigint(tv) {
-        return n.sign() == num_bigint::Sign::Minus;
-    }
-    if let Some(r) = heap.get_rational(tv) {
-        use num_traits::Zero;
-        return r < &BigRational::zero();
-    }
-    if let Some(f) = heap.get_real(tv) {
-        return f < 0.0;
-    }
-    false
-}
-
 /// Prefix `+` unless the number already starts with a sign.
 ///
 /// R7RS 7.1.1 spells an imaginary part `<sign> <ureal R> i`, so the sign is
@@ -336,34 +300,39 @@ fn signed(s: String) -> String {
 
 /// Convert complex number from TaggedValue parts (preserves exactness in display)
 fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::Heap) -> String {
-    fn is_one(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
+    /// Exact ±1 only: `+i` reads back with an *exact* unit imaginary part, so
+    /// spelling `(make-rectangular 0.0 1.0)` that way loses the inexactness —
+    /// the same mistake as omitting an inexact zero real part. BigInt and
+    /// Rational are included because `write` includes them, and the two
+    /// writers must agree.
+    fn is_exact_unit(tv: TaggedValue, heap: &patina_core::Heap, negative: bool) -> bool {
+        let want = if negative { -1 } else { 1 };
         if tv.is_fixnum() {
-            return tv.as_fixnum_unchecked() == 1;
+            return tv.as_fixnum_unchecked() == want as i64;
         }
-        if let Some(f) = heap.get_real(tv) {
-            return f == 1.0;
+        if let Some(n) = heap.get_bigint(tv) {
+            return n == &num_bigint::BigInt::from(want);
+        }
+        if let Some(r) = heap.get_rational(tv) {
+            return r == &BigRational::from(num_bigint::BigInt::from(want));
         }
         false
     }
-
-    fn is_neg_one(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
-        if tv.is_fixnum() {
-            return tv.as_fixnum_unchecked() == -1;
-        }
-        if let Some(f) = heap.get_real(tv) {
-            return f == -1.0;
-        }
-        false
-    }
+    let is_one = |tv: TaggedValue, heap: &patina_core::Heap| is_exact_unit(tv, heap, false);
+    let is_neg_one = |tv: TaggedValue, heap: &patina_core::Heap| is_exact_unit(tv, heap, true);
 
     // A zero real part may be omitted only when it is *exact*: R7RS 7.1.1's
     // `<complex R>` reads a bare `<imaginary R>` as having an exact zero real
     // part, so writing `+2.0i` for `(make-rectangular 0.0 2.0)` reads back a
     // different number. R7RS 6.2.6 requires `(string->number (number->string
     // z))` to be equivalent to `z`, so the inexact zero is written out.
-    let real_zero_is_exact = tagged_is_zero(r, heap) && heap.get_real(r).is_none();
+    // `Heap::is_exact_zero` is this question already, and asking it rather
+    // than "is zero and not a boxed f64" keeps working if a flonum ever
+    // becomes an immediate.
+    let real_zero_is_exact = heap.is_exact_zero(r);
+    let imag_zero_is_exact = heap.is_exact_zero(i);
 
-    if tagged_is_zero(i, heap) {
+    if imag_zero_is_exact {
         tagged_number_str(r, heap)
     } else if real_zero_is_exact {
         if is_one(i, heap) {
@@ -380,17 +349,14 @@ fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::
         format!("{}+i", tagged_number_str(r, heap))
     } else if is_neg_one(i, heap) {
         format!("{}-i", tagged_number_str(r, heap))
-    } else if tagged_is_negative(i, heap) {
+    } else {
+        // `signed` here too, not just in the pure-imaginary arm: a positive
+        // infinity or NaN formats with its own leading `+`, so concatenating
+        // another produced `1.0++inf.0i`, which is not a number.
         format!(
             "{}{}i",
             tagged_number_str(r, heap),
-            tagged_number_str(i, heap)
-        )
-    } else {
-        format!(
-            "{}+{}i",
-            tagged_number_str(r, heap),
-            tagged_number_str(i, heap)
+            signed(tagged_number_str(i, heap))
         )
     }
 }
