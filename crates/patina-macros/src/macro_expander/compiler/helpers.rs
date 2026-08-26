@@ -71,6 +71,60 @@ impl Compiler {
         self.pvars.get(&key).copied()
     }
 
+    /// Whether the default `...` names something other than the ellipsis here.
+    ///
+    /// R7RS 4.3.2 identifies the default ellipsis by its **binding**, so in a
+    /// scope that binds `...` — `(let ((... 'dots)) …)` — a `syntax-rules`
+    /// written there has no ellipsis and `(_ a b ...)` is a three-variable
+    /// pattern. chibi, Larceny, Kawa and Sagittarius agree.
+    ///
+    /// The question is asked per token, not per macro, and that is the whole
+    /// difficulty. A macro defined where `...` *is* the ellipsis can generate
+    /// one used where it is not — `(... ...)` escapes an ellipsis into a
+    /// generated `syntax-rules` — and that token must keep working. So the
+    /// scopes consulted are the token's own where it has any, which is the
+    /// case for an identifier an outer expansion introduced, and this macro's
+    /// definition scopes otherwise, which is the case for a `...` written in
+    /// source and for one substituted through a pattern variable (those
+    /// arrive bare). Deciding once for a whole macro was #111 and lost the
+    /// introduced ellipsis; deciding from the enclosing bindings' scope sets
+    /// was #114 and could not tell a token's own scopes from unioned ones.
+    ///
+    /// A declared ellipsis (SRFI 46) is exempt: it is a declaration, not a
+    /// reference, so no binding is consulted.
+    fn default_ellipsis_is_bound_away(&self, form: TaggedValue) -> bool {
+        if self.ellipsis_is_custom {
+            return false;
+        }
+        // Without an environment there is no binding to consult, so the
+        // spelling keeps its default meaning. Only `Compiler::new` builds a
+        // compiler that way and only tests call it; every path that compiles a
+        // real macro carries the definition environment. If that stops being
+        // true this is a silent divergence, not an error, which is why it is
+        // spelled out rather than left to read as a deliberate exemption.
+        let Some(env) = self.env.as_ref() else {
+            return false;
+        };
+        // Resolve the scopes before touching the environment: `get_with_scopes`
+        // borrows the heap itself when macro debugging is on.
+        let scopes = {
+            let heap = self.heap.borrow();
+            match heap.get_identifier_data_any(form) {
+                // An identifier: introduced by an expansion, and its own scopes
+                // are the context it came from — empty meaning top level, where
+                // `...` is the ellipsis. `get_identifier_data_any` answers None
+                // for a plain symbol, which is exactly the source-written case.
+                Some((_, token_scopes)) => token_scopes,
+                None => self.definition_scopes.clone(),
+            }
+        };
+        let Some(tv) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
+            return false;
+        };
+        let heap = self.heap.borrow();
+        heap.get_core_syntax(tv) != Some(patina_core::CoreForm::Ellipsis)
+    }
+
     /// Check if a TaggedValue is the ellipsis symbol
     ///
     /// Recognizes both plain Symbol and Identifier (with marks/scopes)
@@ -100,6 +154,9 @@ impl Compiler {
                         .identifier_key(form)
                         .is_some_and(|key| self.is_literal_key(&key))
                 {
+                    return false;
+                }
+                if is_ellipsis_match && self.default_ellipsis_is_bound_away(form) {
                     return false;
                 }
                 is_ellipsis_match
@@ -141,12 +198,23 @@ impl Compiler {
     /// provenance test.
     pub(super) fn is_substituted_from_outer_macro(&self, form: TaggedValue) -> bool {
         let heap = self.heap.borrow();
-        // Check identifier (native or boxed, unified)
-        if let Some((_, scopes)) = heap.get_identifier_data_any(form) {
-            return scopes.is_empty();
-        }
-        // Symbols are fresh - they should become pattern variables
-        false
+        // Any identifier at all, whatever scopes it carries.
+        //
+        // Being an identifier rather than a plain symbol is what says the token
+        // arrived from somewhere else: the reader produces symbols, and only an
+        // expansion produces identifiers. So this is the whole "not written
+        // here" test, and the scopes it carries are the context it came from,
+        // whether that is a macro defined in some inner scope (a non-empty set)
+        // or one defined at top level (an empty one).
+        //
+        // It used to hold only for the empty case, which quietly made the
+        // top-level macro the *only* one whose introduced text kept its
+        // identity. A macro defined inside a scope had its text re-tagged with
+        // the definition scopes of whatever macro it was generating, and once a
+        // local variable became a real binding that re-tagging was enough to
+        // capture it: `def-mid`'s template `if`, expanded inside
+        // `(let ((if 'shadowed)) …)`, resolved to the *variable*.
+        heap.get_identifier_data_any(form).is_some()
     }
 
     /// Collect items from a list TaggedValue

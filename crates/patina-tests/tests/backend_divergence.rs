@@ -430,3 +430,53 @@ fn call_with_port_closes_the_port_on_an_in_extent_continuation_invoke() {
         GUARD_UNWIND_ORDER,
     );
 }
+
+/// A continuation escaping from an *after* thunk skips the enclosing after
+/// thunk on the tree-walker.
+///
+/// R7RS 6.10: `dynamic-wind`'s third thunk runs whenever control leaves the
+/// dynamic extent, and calling `k` from inside one is still leaving — the
+/// outer wind has not finished unwinding, so its own after thunk is still
+/// owed. The VM pays it; the tree-walker stops at the inner one and never
+/// runs `outer-after`.
+///
+/// Found when Larceny's `base` suite began loading (families 14/15/23): it is
+/// the one assertion in that suite the two backends answer differently, and
+/// it counts the winds rather than naming them, so upstream reads 7 against
+/// the tree-walker's 3. Quarantined with explicit per-backend assertions
+/// rather than `assert_divergence` because the broken side returns a value.
+///
+/// chibi cannot arbitrate this one: re-entering `k` from an after thunk sends
+/// it into an unbounded loop. Gauche and the suite's own expectation agree
+/// with the VM.
+#[test]
+fn a_continuation_from_an_after_thunk_skips_the_outer_after_on_the_tree_walker() {
+    const PROGRAM: &str = r#"
+        (define trace '())
+        (define (note x) (set! trace (cons x trace)))
+        (define result
+          (call-with-current-continuation
+            (lambda (k)
+              (dynamic-wind
+                (lambda () (note 'outer-before))
+                (lambda ()
+                  (dynamic-wind
+                    (lambda () (note 'inner-before))
+                    (lambda () (note 'body) (k 'from-body))
+                    (lambda () (note 'inner-after) (k 'from-after))))
+                (lambda () (note 'outer-after))))))
+        (list result (reverse trace))
+    "#;
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(from-after (outer-before inner-before body inner-after outer-after))",
+        "the VM runs every after thunk it owes; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(from-after (outer-before inner-before body inner-after))",
+        "\n[tree-walker] NO LONGER DIVERGES — it now runs the outer after thunk.\n\
+         Replace both assertions with a single assert_program_eval_to on the VM's \
+         answer and close the entry in scheme_tests/reports/larceny_triage.md."
+    );
+}

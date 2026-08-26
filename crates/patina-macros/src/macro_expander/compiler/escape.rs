@@ -14,10 +14,18 @@ impl Compiler {
     ///
     /// Used for ellipsis escape: (... template)
     ///
-    /// When ellipsis is escaped, `...` symbols should become literal Symbol values,
-    /// not ScopedIdentifier/WrappedIdentifier values. This is crucial for nested
-    /// macro definitions where the inner `syntax-rules` needs to recognize `...`
-    /// as the ellipsis symbol.
+    /// When the ellipsis is escaped it becomes a literal template value, so the
+    /// inner `syntax-rules` of a nested macro definition receives it as data and
+    /// can recognize it as its own ellipsis.
+    ///
+    /// That literal is an *identifier* carrying this macro's definition scopes,
+    /// not a bare symbol. The scopes are not what the later compiler reads —
+    /// they are usually empty, since the macro escaping an ellipsis is usually
+    /// top level — being an identifier at all is: that is what marks the token
+    /// as introduced here rather than written wherever the generated macro is
+    /// compiled, which decides whether `...` still names the ellipsis under
+    /// R7RS 4.3.2. Emitting a bare symbol made `(let ((... 'dots)) (def-first
+    /// f))` generate a macro with no ellipsis.
     pub(super) fn compile_with_escaped_ellipsis(
         &mut self,
         form: TaggedValue,
@@ -50,8 +58,31 @@ impl Compiler {
         if let Some(s) = self.extract_symbol_name(form) {
             // Check if it's the ellipsis symbol that was escaped
             if escaped_ellipsis.as_ref() == Some(&s) {
-                // Produce literal Symbol value so nested macros can use it
-                return Ok(self.make_literal_template(form));
+                // Produce a literal Symbol value so nested macros can use it —
+                // carrying this macro's definition scopes, so that it stays an
+                // ellipsis where it lands.
+                //
+                // `(... ...)` exists to hand an ellipsis to a `syntax-rules`
+                // this macro generates, and that macro may be expanded
+                // somewhere `...` is bound as a variable, where the default
+                // ellipsis is not the ellipsis (R7RS 4.3.2). Emitted bare, the
+                // token would arrive with no scopes and be read against the
+                // *use* site's bindings, so `(let ((... 'dots)) (def-first f))`
+                // would silently produce a macro with no ellipsis at all.
+                // Stamped with the scopes it was written in, it keeps naming
+                // what it named here. Bare is still right when this macro has
+                // no scopes to give.
+                // Stamped even when this macro is top level and its scope set
+                // is empty: what the later compiler reads is not the scopes
+                // themselves but that the token is an *identifier* at all,
+                // which is what says it was introduced here rather than
+                // written at the site it lands in. An empty set then correctly
+                // means "top level", where `...` is the ellipsis.
+                let stamped = {
+                    let mut heap = self.heap.borrow_mut();
+                    heap.alloc_identifier(s.clone(), self.definition_scopes.clone())
+                };
+                return Ok(self.make_literal_template(stamped));
             }
 
             // Check if it's a pattern variable

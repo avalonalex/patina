@@ -55,21 +55,21 @@ impl Compiler {
 
             // Not a pattern variable - apply hygiene handling
             if !self.definition_scopes.is_empty() {
-                // Scope-based hygiene: tag with definition scopes, KEEPING any
-                // scopes the identifier already carries. Replacing them
-                // collapsed identity: when a macro-generated macro's template
-                // captures identifiers introduced by *different* expansions of
-                // the same outer rule — chibi-match's per-variable `p-ls`
-                // temporaries, spelled alike and distinguished only by their
-                // expansion scopes — stamping all of them with this macro's
-                // one definition scope set made them indistinguishable, so
-                // match-letrec bound two variables to one temporary. The union
-                // preserves the distinction and still contains everything the
-                // definition-scope resolution looks for.
-                let mut scopes = self.definition_scopes.clone();
-                for scope in key.scopes.iter() {
-                    scopes.add_scope(*scope);
-                }
+                // Only a plain symbol reaches here — text written in *this*
+                // macro — so this macro's definition scopes are the whole
+                // answer and there is nothing of the token's own to keep.
+                //
+                // What used to be kept, by unioning, was the identity of an
+                // identifier an outer expansion introduced: chibi-match's
+                // per-variable `p-ls` temporaries are spelled alike and
+                // distinguished only by their expansion scopes, and stamping
+                // them all with one definition scope set made match-letrec bind
+                // two variables to one temporary. Those tokens now return above
+                // as literals, which preserves their identity outright rather
+                // than by adding to it, so the union had nothing left to do —
+                // `test_generated_template_capture_keeps_expansions_distinct`
+                // is what holds this down.
+                let scopes = self.definition_scopes.clone();
                 return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
             } else {
                 // Fall back to marks-and-ribs hygiene (no scopes available)

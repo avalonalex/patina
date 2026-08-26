@@ -19,10 +19,13 @@
 //! caller's own macro then wraps in another.
 //!
 //! "Shared" means shared by the `CoreExpr` passes here. There is a sibling
-//! question one IR earlier — `Desugarer::is_regular_define_tagged` decides
-//! whether a body has internal definitions by looking at direct children of a
-//! *datum*, and also does not see through `begin` — which this cannot serve
-//! because it is a different type, not because anyone chose to duplicate it.
+//! question one IR earlier — the desugarer decides whether a body has internal
+//! definitions from a *datum*, before expansion, so it does not see through
+//! `begin` and cannot see a definition a macro has yet to produce — which this
+//! cannot serve because it is a different type, not because anyone chose to
+//! duplicate it. `let-syntax` no longer asks it that way, and asks of its
+//! desugared body instead, precisely because the definition it must find is
+//! usually one a macro made.
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Symbol};
 use patina_core::scope::ScopeSet;

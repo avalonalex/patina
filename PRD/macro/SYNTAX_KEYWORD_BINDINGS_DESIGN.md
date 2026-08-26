@@ -1,6 +1,8 @@
 # Binding-based syntactic keywords
 
-**Status:** designed, not started (2026-08-16). Two staged PRs.
+**Status:** stages 1, 1.5 and 2 landed as #86, #88 and #89 (2026-08-16). Stage 3 landed
+2026-08-25 — the header said "not started" long after the stages below were marked done, so
+take the per-stage marks as authoritative.
 
 Give Patina's core syntactic keywords real bindings — a marker value in the environment — so
 that export resolution, `only`, `except`, `prefix` and `rename` reach them through the ordinary
@@ -400,6 +402,39 @@ What it took:
 
 `import` and `expand` needed no work here — the stage-1 cleanup pass had already made
 `seed_top_level_syntax` real after review caught the doc claiming a seeding that did not exist.
+
+### Stage 3 — the other half of the same rule: a *local variable* is a binding too  *(done, 2026-08-25)*
+
+Stages 1 and 2 gave keywords real bindings, but left the other side of the comparison as it was:
+a local variable was a `HashSet<Rc<str>>` of **spellings** (`shadowed_names`) that vetoed syntax
+resolution outright. Nothing about that set was ordered, and it was consulted only for a
+reference written *without* scopes, so an outer variable beat an inner `let-syntax` keyword, and
+a macro-introduced reference skipped it entirely — which is why a template naming a
+definition-site local spelled `if` was reported as a keyword.
+
+Locals are now scoped bindings in the desugarer's environment, carrying a marker value that is
+neither syntax nor a macro, and a reference resolves in the scopes it stands in. Ordering then
+comes from the existing set-of-scopes rule — the binding with the largest scope set the
+reference contains — with no separate shadowing rule to keep in step. Closes Larceny triage
+families 14, 15 and 23, which together gated the `base` suite.
+
+Three things fell out of it that were not obvious from the design:
+
+- **The default ellipsis is decided per token, by binding** (R7RS 4.3.2), not per macro. A token
+  that is an *identifier* came from an expansion and is read against its own scopes; a plain
+  symbol was written here and is read against the macro's definition scopes. A declared SRFI 46
+  ellipsis is exempt — it is a declaration, not a reference.
+- **A `let-syntax` keyword is bound both scoped and unscoped.** Scoped so it can outrank an
+  enclosing variable; unscoped because a reference the expander introduced carries none of this
+  body's scopes and no scoped binding could match it.
+- **Free-identifier relinking had to become scope-aware.** A template's free identifiers are
+  linked back to the definition environment by *name*, and the name-only view of an environment
+  hides local variables — so it could not tell `(let ((f …)) …)` around a macro from a global
+  `f`, and aliased to the global. It asks with the macro's definition scopes now.
+
+`shadowed_names` survives, feeding one remaining consumer: the *literal* matcher still compares
+spellings (`is_literal_shadowed_tagged`). Deciding literal membership by binding is the last
+piece, and is recorded in the triage doc's "not ours" section rather than attempted here.
 
 ## 5. Migration cost, measured
 
