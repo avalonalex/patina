@@ -39,6 +39,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/127/test.sld` | 109 | 0 | verbatim |
 | `srfi/116/test.sld` | 196 | 0 | verbatim |
 | `srfi/134/test.sld` | 119 | 0 | imports — see below |
+| `srfi/27/test.sld` | 224 | 0 | verbatim |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
@@ -237,9 +238,6 @@ default. The non-obvious entries:
 
 - **SRFI 1, SRFI 69** — their suites import `(chibi)`, chibi's implementation
   core, which Patina does not provide.
-- **SRFI 27** — its suite imports `(scheme flonum)`, i.e. SRFI 144. That
-  landed 2026-08-26, so the dependency is gone and porting the suite is what
-  remains.
 - **SRFI 144** — no suite here runs under `(chibi test)`. The SRFI's own is
   1473 lines against a Larceny-family harness: `test` takes its arguments the
   other way round, and it needs `test/approx`, `test/alts` and

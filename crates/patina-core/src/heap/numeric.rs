@@ -1384,12 +1384,16 @@ impl Heap {
             return Ok(self.alloc_real(i.atan2(r)));
         }
 
-        // Non-complex: check if negative
-        if self.is_numeric_negative_tv(a) {
-            Ok(self.alloc_real(std::f64::consts::PI))
-        } else {
-            Ok(self.alloc_real(0.0))
-        }
+        // A real is the complex number with a `+0.0` imaginary part, so it
+        // gets the same `atan2` as the branch above rather than a second rule.
+        //
+        // The rule it replaced asked `is_numeric_negative_tv`, which is an
+        // *ordering* test: `-0.0` is not less than zero, so it answered `0.0`
+        // where the angle is pi. `atan2(+0.0, -0.0)` is pi by IEEE 754 §9.2,
+        // which is also what the complex branch has always computed for
+        // `-0.0+0.0i`, and what C's `carg` gives.
+        let x = self.numeric_to_f64(a)?;
+        Ok(self.alloc_real(0.0_f64.atan2(x)))
     }
 
     /// Construct complex from rectangular coordinates

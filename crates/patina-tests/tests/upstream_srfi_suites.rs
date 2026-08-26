@@ -247,6 +247,9 @@ suite_tests! {
     // coverage that runs: Larceny's suite is a separate lane nothing in CI
     // invokes, and this one is a cargo test.
     (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
+    // Unblocked by bundling SRFI 144: this suite imports `(scheme flonum)`,
+    // and its absence is why the `NO_SUITE` row for SRFI 27 existed.
+    (srfi_27_random, "srfi 27", "(srfi 27 test)", 0, 224),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
@@ -303,10 +306,6 @@ const NO_SUITE: &[(&str, &str)] = &[
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
-    ),
-    (
-        "srfi 27",
-        "upstream suite's (scheme flonum) dependency landed 2026-08-26; porting the suite is the next thing here",
     ),
     (
         "srfi 144",
