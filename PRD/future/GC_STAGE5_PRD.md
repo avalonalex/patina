@@ -63,6 +63,33 @@ unreclaimed. Fix: root the re-entrancy boundary explicitly (the suspended
 **Acceptance:** a nested-map churn workload shows collections > 0 *during* the
 map and a bounded arena; the defer-guard tests keep passing.
 
+## Priority 2b — VM register precision (triage family 32)
+
+A value replaced by `set!` stays reachable if the frame that computed the
+replacement is still live and a register still holds it:
+
+```scheme
+(define (drop!) (set! keys (reverse (reverse (list-tail keys 5)))))
+```
+
+collects the dropped half, while the identical `set!` written inline in a
+procedure that then triggers a collection does not — the old list is still in
+one of that frame's registers. `(set! keys 'gone)` collects either way. The
+tree-walker is unaffected.
+
+Found by SRFI 124: ephemerons are the only thing in the language that reports
+whether a particular object was collected, which is why this went unseen. It
+is why Larceny's `ephemeron` suite is 5 of 6 on the VM.
+
+Two things depend on this landing. `reference-barrier` currently holds for a
+second, accidental reason — the over-retention itself — so its comment in
+`crates/patina-primitives/src/primitives/ephemeron.rs` says to re-examine it
+here. And `crates/patina-tests/tests/ephemerons.rs` routes one `set!` through
+a helper that returns, purely to avoid this.
+
+**Acceptance:** the inline form collects; Larceny's `ephemeron` suite is 6 of
+6 on the VM; the ephemeron test no longer needs the helper indirection.
+
 ## Priority 3 — Collector upgrades (behind `Collector`)
 
 In likely order of value:

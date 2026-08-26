@@ -346,6 +346,11 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         write!(out, "#<record {}>", rtd.name).unwrap();
         return;
     }
+    // Ephemeron — opaque, see the `HeapObjectData::Ephemeron` doc.
+    if heap.is_ephemeron(tv) {
+        out.push_str("#<ephemeron>");
+        return;
+    }
     // Promise
     if heap.get_promise(tv).is_some() {
         out.push_str("#<promise>");

@@ -7,6 +7,7 @@ mod characters;
 mod continuations;
 mod conversion;
 mod debug;
+mod ephemeron;
 pub(crate) mod equality;
 mod eval;
 mod exceptions;
@@ -43,6 +44,7 @@ pub fn register_all(registry: &mut PrimitiveRegistry) {
     values::register(registry);
     io::register(registry);
     debug::register(registry);
+    ephemeron::register(registry);
     lazy::register(registry);
     parameters::register(registry);
     system::register(registry);

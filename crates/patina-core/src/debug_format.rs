@@ -143,6 +143,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::Real(r) => format_real(*r, buf),
         HeapObjectData::Complex { real, imag } => format_complex(*real, *imag, heap, buf),
         HeapObjectData::Symbol(s) => buf.push_str(s),
+        HeapObjectData::Ephemeron(_) => buf.push_str("#<ephemeron>"),
         HeapObjectData::Identifier { name, scopes } => {
             buf.push_str(name);
             if with_scopes && !scopes.is_empty() {
