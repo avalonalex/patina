@@ -23,7 +23,7 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 1046 of
 1064 — then the hygiene half was backed out and `base` was gated again. With families
 14, 15 and 23 fixed (2026-08-25) `base` loads for good: VM 19 of 33 suites, 5881 of
-5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). Bundling SRFI 134 as `(scheme ideque)` (2026-08-25) then took the VM lane to 20 of 33, 5995 of 6023, and the tree-walker to 18 of 33, 5774 of 5803; SRFI 144 as `(scheme flonum)` (2026-08-26) took them to 7274 of 7303 and 7053 of 7083, the suite counts unchanged because `flonum` keeps one failure that is not ours; SRFI 135 as `(scheme text)` (2026-08-26) took them to 21 of 33, 8358 of 8387 and 19 of 33, 8137 of 8167 — a clean 1069 of 1069 in `text`, so that one moves the suite count. SRFI 124 as `(scheme ephemeron)` (2026-08-26, implemented in Rust) took the VM to 8363 of 8393 and left the tree-walker where it was: that suite scores 5 of 6 on the VM (family 32) and times out on the tree-walker, which is asked to allocate 100 million pairs to force a collection. The lane totals rise by more than `text` alone because advertising `full-unicode-strings` alongside it un-gated non-ASCII data in other suites too: both suites had been running their ASCII-only branch. The R6RS lane
+5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). Bundling SRFI 134 as `(scheme ideque)` (2026-08-25) then took the VM lane to 20 of 33, 5995 of 6023, and the tree-walker to 18 of 33, 5774 of 5803; SRFI 144 as `(scheme flonum)` (2026-08-26) took them to 7274 of 7303 and 7053 of 7083, the suite counts unchanged because `flonum` keeps one failure that is not ours; SRFI 135 as `(scheme text)` (2026-08-26) took them to 21 of 33, 8358 of 8387 and 19 of 33, 8137 of 8167 — a clean 1069 of 1069 in `text`, so that one moves the suite count. SRFI 124 as `(scheme ephemeron)` (2026-08-26, implemented in Rust) took the VM to 8363 of 8393 and left the tree-walker where it was: that suite scores 5 of 6 on the VM (family 32) and times out on the tree-walker, which is asked to allocate 100 million pairs to force a collection. SRFI 101 as `(scheme rlist)` (2026-08-26, from chibi's R7RS adaptation) took them to 22 of 33, 8445 of 8475 and 20 of 33, 8219 of 8249 — 82 of 82, and with it **every one of the 33 suites now loads**: the report's "library under test not bundled" section is gone. The lane totals rise by more than `text` alone because advertising `full-unicode-strings` alongside it un-gated non-ASCII data in other suites too: both suites had been running their ASCII-only branch. The R6RS lane
 is unchanged at 12 of 16, 4017 of 4025.
 
 ## Ours
@@ -205,6 +205,23 @@ is unchanged at 12 of 16, 4017 of 4025.
 - Not an ephemeron defect; ephemerons are just what made it observable, since they are the only thing in the language that reports whether a particular object was collected. It is GC precision, and it is owned by `GC_STAGE5_PRD.md`'s Priority 2b, added with this entry so the defect has somewhere to land.
 - The tree-walker cannot run this suite at all: its `force-gc` allocates 100 million pairs and exceeds the runner's timeout — family 26's slowness, not this.
 
+### 33. A template's `quote` is captured by a use-site `let-syntax` of that name — both backends
+- Ours: none yet; the five-line repro below is the whole defect.
+- Blocks: chibi's `(srfi 101 test)`, whose first assertion is `(let ((f (lambda () '(x)))) (eq? (f) (f)))` under SRFI 101's shadowing `quote`. It recurses until the stack goes, which is why that suite has a `NO_SUITE` reason rather than a row.
+
+```scheme
+(define-syntax m (syntax-rules () ((m d) (write (quote d)))))
+(let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
+  (m hello))          ; chibi: hello — here: stack overflow
+```
+
+- Narrow in one direction, wide in another. A *variable* named `quote` at the use site does **not** capture it, and the same shape with `if` does not either — `(let-syntax ((if …)) (mif #t))` answers correctly, so it is specific to `quote`, which the template compiler also special-cases by spelling (`compile_template`'s `(quote datum)` check) on the path taken when the quoted datum contains a pattern variable.
+- But `let-syntax` is not the only way in. *Importing* a library that binds `quote` as a macro does it too, which is what SRFI 101 does: `(import (srfi 101)) (define x '(1 2))` overflows, because the library's own `ra:quote` template quotes and that `quote` resolves to `ra:quote` again. So `(srfi 101)`'s shadowing names are unusable for quoting until this is fixed.
+- Upstream's `ra:for-each` has a latent order bug of its own, noted here so it is not rediscovered: its n-ary arm calls `tree-map/n`, whose traversal order is the unspecified argument-evaluation order of `make-node`, where the correctly ordered `tree-for-each/n` sits defined and unused. R7RS requires `for-each` to go first-to-last. Patina evaluates left to right today, so it is latent rather than wrong, and it is upstream's code — chibi ships it too.
+- R7RS-large's `(scheme rlist)` is unaffected, because it renames every export — `rquote` and the rest — so plain `quote` is never rebound. That is why Larceny's `rlist` suite passes 82 of 82 while chibi's, which tests the shadowing names, cannot run.
+- Pre-existing, and not SRFI 101's doing: the repro imports only `(scheme base)`.
+- **How it fails is a second, separate gap.** Runaway expansion overflows the native stack and `SIGABRT`s the process — not a Scheme error, so no `guard` sees it, the REPL dies, and an embedder of `patina-interpreter` dies with it. Nothing bounds expansion depth (`grep` finds no limit constant). That is reachable from `(scheme base)` alone — `(define-syntax m (syntax-rules () ((m) (m)))) (m)` does it — so it is not something bundling SRFI 101 introduced; but shipping a library whose ordinary use trips family 33 is what makes it easy to reach. A depth limit that raises instead would be worth having on its own. It is the same family as the binding-resolution work in #124, whose acceptance cases covered a use-site *variable* shadowing a template keyword but not a use-site *macro*.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
@@ -217,11 +234,20 @@ is unchanged at 12 of 16, 4017 of 4025.
 - **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. Families 14/15 are fixed and this is not: locals became bindings for *resolution*, while the literal matcher still compares spellings (`is_literal_shadowed_tagged`), which is why `shadowed_names` survives as a spelling set feeding it alone. Deciding literal membership by binding is the remaining piece of the same project.
 - **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
 
-## Not defects — bundling queue (L1 item 6, now with a suite each)
+## Not defects — bundling queue (L1 item 6) — ✅ empty
 
-~~`(scheme charset)`~~ (aliased over the bundled `(srfi 14)` 2026-08-24; loads, 91 of 93), ~~`(scheme stream)`~~ (SRFI 41, 2026-08-25; 81 of 81), ~~`(scheme list-queue)`~~ (SRFI 117, 2026-08-25; 40 of 40), ~~`(scheme lseq)`~~ (SRFI 127, 2026-08-25; 109 of 109), ~~`(scheme ilist)`~~ (SRFI 116, 2026-08-25; 337 of 345 — see family 29), ~~`(scheme ideque)`~~ (SRFI 134, 2026-08-25; 114 of 114 on both backends), ~~`(scheme flonum)`~~ (SRFI 144, 2026-08-26; 1279 of 1280 on both backends), ~~`(scheme text)`~~ (SRFI 135, 2026-08-26; 1028 of 1028 on both backends), ~~`(scheme ephemeron)`~~ (SRFI 124, 2026-08-26 — implemented in Rust, not bundled; 5 of 6, the sixth being family 32), `(scheme rlist)`. One of the 33 R7RS suites never loads for this reason alone.
+~~`(scheme charset)`~~, ~~`(scheme stream)`~~, ~~`(scheme list-queue)`~~,
+~~`(scheme lseq)`~~, ~~`(scheme ilist)`~~, ~~`(scheme ideque)`~~,
+~~`(scheme flonum)`~~, ~~`(scheme text)`~~, ~~`(scheme ephemeron)`~~,
+~~`(scheme rlist)`~~. Every library a suite imports is now shipped, and no
+suite fails to load for want of one.
 
-Only `rlist` is left, and it is not a bundling job of the kind below: SRFI 101's reference implementation is R6RS (`.sls` libraries), unlike every one bundled so far, so it needs either a port or the treatment SRFI 124 got — implemented in Rust behind the SRFI's own API. Its suite is 2 test forms, so it is worth a *suite* in the lane count and almost nothing in assertions. The recipe below has no more straightforward customers.
+Two did not arrive by bundling Scheme, and the reasons are worth keeping. SRFI
+124 is implemented in Rust: an ephemeron's defining property is a statement
+about what the collector does, so there was nothing to vendor. SRFI 101 was
+ported from R6RS, because upstream ships `.sls` libraries and no R7RS version
+exists — the only port in the set, and small enough that every difference is
+marked in place.
 
 Reading for whoever takes the next one, in the order that has actually
 mattered:

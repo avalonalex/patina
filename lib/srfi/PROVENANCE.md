@@ -18,6 +18,7 @@ own record. One home per tree.
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
 | `(srfi 135)` | — | `135.sld`, `135.body.scm`, `135/kernel8.sld`, `135/kernel8.body.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-135/srfi-135.tgz` (William D Clinger, MIT) | tarball sha256 `f8e9cbcdfcd757ed5dc5835e152bedd621e0933dfed16c5cb815253900fb2735` |
+| `(srfi 101)` | — | `101.sld`, `101.scm` | chibi-scheme's R7RS adaptation (Alex Shinn, 2018) of the SRFI's own reference implementation (David Van Horn, MIT), byte-identical | source `~/Project/reference/chibi-scheme/lib/srfi/101.{sld,scm}` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
@@ -279,6 +280,34 @@ defined. That is a real load-time dependency of `(scheme text)` on the R6RS
 lane, and it is why `textual-titlecase` answers `"Hello-World Foo"` rather
 than the whitespace-only `"Hello-world Foo"` the fallback would give. An
 earlier version of this note said the opposite.
+
+**SRFI 101 comes from chibi, not from the SRFI, and that was a correction.**
+The SRFI's own distribution ships R6RS `.sls` libraries, so the first attempt
+here was a hand port of them. That was the wrong source: chibi's
+`lib/srfi/101.scm` is Alex Shinn's 2018 R7RS adaptation of the same Van Horn
+reference implementation, it sits in the directory this repo already takes
+suites from, and taking it means the usual byte-identical vendoring instead of
+a port with hand-marked edits — and, not incidentally, it keeps Van Horn's
+copyright and permission notice, which the hand port had dropped.
+
+Both files are byte-identical to chibi's and laid out flat, so the `.sld`'s
+`(include "101.scm")` resolves unchanged. No `PATINA LOCAL EDIT`. Its imports
+— `(srfi 1)`, `(srfi 125)`, `(srfi 151)` renamed for
+`bitwise-arithmetic-shift` — are all bundled here, and it carries its own
+`assert`, so it needs none of the `(rnrs …)` shims the R6RS original wanted.
+
+It exports one name R7RS-large does not have, `length<=?`, which is chibi's
+addition.
+
+**`(scheme rlist)` is not a plain re-export**, unlike every other alias here.
+SRFI 101 deliberately shadows the list operations it replaces — it exports
+`cons`, `car`, `list?` — so a program using it imports `(scheme base)` with
+those excluded. R7RS-large wants both importable together, so its
+`(scheme rlist)` renames all 48: `rcons`, `rcar`, `rlist?`, with `make-rlist`,
+`rlist->list` and `list->rlist` for the three that read badly with a bare
+prefix. Getting that wrong is not subtle — exporting the shadowing names under
+the alias makes Larceny's suite overflow the stack, because the suite imports
+`(scheme base)` alongside it.
 
 ## Licences
 

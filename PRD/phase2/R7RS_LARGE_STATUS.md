@@ -29,7 +29,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 1 | `(scheme list)` | List library | ✅ shipped | ✅ shipped |
 | SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
 | SRFI 41 | `(scheme stream)` | Streams (lazy lists) | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 41)`, 2026-08-25) |
-| SRFI 101 | `(scheme rlist)` | Random-access lists | ❌ | ❌ |
+| SRFI 101 | `(scheme rlist)` | Random-access lists | ✅ shipped | ✅ shipped (r-prefixed alias, 2026-08-26) |
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
 | SRFI 113 | `(scheme set)` | Sets and bags | ✅ shipped | ✅ shipped |
 | SRFI 116 | `(scheme ilist)` | Immutable lists | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 116)`, 2026-08-25) |
@@ -44,7 +44,9 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 134)`, 2026-08-25) |
 | SRFI 135 | `(scheme text)` | Immutable texts | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 135)`, 2026-08-26) |
 
-**Red status: 15 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 124, 125, 127, 128, 132, 133, 134, 135), all reachable under both `(srfi n)` and their `(scheme …)` names (16 counting SRFI 158 standing in for the superseded 121). SRFI 124 is the first implemented in Rust rather than bundled: an ephemeron's defining property is a statement about what the collector does, so there is no Scheme to vendor.
+**Red status: 16 of 17 shipped** (SRFI 1, 14, 41, 101, 111, 113, 116, 117, 124, 125, 127, 128, 132, 133, 134, 135), all reachable under both `(srfi n)` and their `(scheme …)` names (17 counting SRFI 158 standing in for the superseded 121).
+
+Two of those did not arrive by bundling Scheme. SRFI 124 is implemented in Rust, because an ephemeron's defining property is a statement about what the collector does and there is no Scheme to vendor. SRFI 101 comes from chibi's R7RS adaptation of the reference implementation rather than from the SRFI, whose own distribution is R6RS `.sls` — and note its alias renames rather than re-exports: R7RS-large's `(scheme rlist)` is `rcons`/`rcar`/`rlist?`, since SRFI 101's own names shadow `(scheme base)`.
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down
