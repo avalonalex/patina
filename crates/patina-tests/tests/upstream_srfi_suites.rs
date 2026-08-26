@@ -306,7 +306,11 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "srfi 27",
-        "upstream suite imports (scheme flonum) — SRFI 144, not bundled; add the suite when it lands",
+        "upstream suite's (scheme flonum) dependency landed 2026-08-26; porting the suite is the next thing here",
+    ),
+    (
+        "srfi 144",
+        "no upstream suite runs under (chibi test) — the SRFI's own targets a Larceny-family harness and chibi's tests chibi's API; retires when either is ported or reconciled, see scheme_tests/upstream/README.md",
     ),
     (
         "srfi 33",

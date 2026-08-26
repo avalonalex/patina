@@ -16,6 +16,7 @@ own record. One home per tree.
 | `(srfi 117)` | 1.5 | `117/list-queues-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-117/srfi-117.tgz` (John Cowan, MIT) | tarball sha256 `ffc8349567a8169eb53e818dd15f73b0485c3db9aca79e432d7e6781db2b8e46` |
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
+| `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
@@ -202,6 +203,38 @@ and `ideque=` in particular is covered by both. Different assertion counts do
 not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
+
+**SRFI 144 carries two marked local edits, and no others.**
+
+`144.sld` is upstream's own library declaration — export list, imports,
+`cond-expand`s and includes — with the *include paths* rewritten: Patina
+resolves a relative `include` against the directory of the file containing it,
+and the bodies live in `144/` beside the `.sld` rather than next to it. Nothing
+else in that file differs. Upstream's Larceny-FFI branch is kept and is simply
+never taken; its `else` is what supplies the definitions here.
+
+`144/144.r6rs.scm` is the fallback for hosts without `(rnrs arithmetic
+flonums)`, and it defines `r6rs:flnumerator` and `r6rs:fldenominator` as R7RS
+`numerator` and `denominator`. Those are not the same procedures at the
+infinities: R6RS gives `(numerator +inf.0)` as `+inf.0` and
+`(denominator +inf.0)` as `1.0`, while R7RS leaves a non-rational argument an
+error, and Patina and chibi both raise. SRFI 144 requires the R6RS answers, so
+the delegation supplies them.
+
+**No upstream suite is registered for it, and that is recorded rather than
+quiet** — see the `srfi 144` entry in `upstream_srfi_suites.rs`'s `NO_SUITE`.
+The SRFI's own suite is 1473 lines against a Larceny-family harness, and
+chibi's tests chibi's API rather than the SRFI's (`sign-bit` for `flsign-bit`;
+an exact `1` where `flloggamma`'s second value is `1.0`). What does exercise it
+is Larceny's lane, at 1279 of 1280 on both backends.
+
+The one failure there is not ours: `(fl* x x x)` for x = 1/3 is
+`0.037037037037037035` in Patina and in chibi, in either association order,
+against the suite's expected `0.03703703703703703`. Two of the four failures it
+started with were the local edit above; the third was Patina's own — `(/ 1.0
+-0.0)` answered `+inf.0`, because the sign of an infinite quotient was taken
+from the numerator alone and `-0.0` is negative without being *less than* zero.
+That fix is in `patina-core`, not here, and it applies to `/` generally.
 
 ## Licences
 
