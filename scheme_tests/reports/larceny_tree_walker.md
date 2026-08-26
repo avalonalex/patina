@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-26 13:30:41  
+**Generated:** 2026-08-26 15:55:29  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,19 +9,11 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 19 of 33 |
-| Assertions passed | 8137 of 8167 (99.6%) |
-| Suites not reaching a tally | 4 |
+| Suites fully passing | 20 of 33 |
+| Assertions passed | 8219 of 8249 (99.6%) |
+| Suites not reaching a tally | 3 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
-
-## Library under test not bundled (1)
-
-Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
-
-| Suite | Missing |
-|---|---|
-| rlist | `(scheme rlist)` |
 
 ## Crashed or hung (3)
 
@@ -126,7 +118,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | process-context | pass | 2 | 2 |
 | read | pass | 44 | 44 |
 | repl | pass | 0 | 0 |
-| rlist | not-bundled | 0 | 0 |
+| rlist | pass | 82 | 82 |
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
 | stream | timeout | 0 | 0 |

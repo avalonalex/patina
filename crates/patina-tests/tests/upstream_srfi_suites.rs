@@ -320,6 +320,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
     ),
     (
+        "srfi 101",
+        "chibi's suite (adapted from the SRFI's own R6RS tests) cannot run here yet: its first assertion trips triage family 33, where a template's `quote` is captured by a use-site `let-syntax` binding of `quote` and recurses forever. Larceny's `rlist` suite is the same tests under R7RS-large's r-prefixed names and passes 82 of 82 on both backends; this entry retires when family 33 is fixed",
+    ),
+    (
         "srfi 124",
         "the SRFI ships implementations but no tests, and chibi's (srfi 124) has none either; Larceny's `ephemeron` suite is the only upstream one and is a lane, not a cargo test. crates/patina-tests/tests/ephemerons.rs pins the behaviour on both backends, forcing collection directly rather than by allocating 100 million pairs",
     ),
