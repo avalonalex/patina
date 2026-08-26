@@ -243,27 +243,6 @@ impl Heap {
         }
     }
 
-    /// Check if a numeric value is negative (only meaningful for real numbers)
-    ///
-    /// Total: returns `false` for non-numbers. NOT a `negative?`
-    /// implementation — the primitive must raise on non-numbers (see
-    /// `numeric_lt`).
-    #[inline]
-    pub fn is_numeric_negative_tv(&self, tv: TaggedValue) -> bool {
-        if tv.is_fixnum() {
-            return tv.as_fixnum_unchecked() < 0;
-        }
-        if !tv.is_object() {
-            return false;
-        }
-        match self.get_object(tv) {
-            HeapObjectData::BigInt(n) => n.sign() == Sign::Minus,
-            HeapObjectData::Rational(r) => r.is_negative(),
-            HeapObjectData::Real(f) => *f < 0.0,
-            _ => false,
-        }
-    }
-
     /// Convert a numeric TaggedValue to f64 (rejects Complex)
     #[inline]
     pub fn numeric_to_f64(&self, tv: TaggedValue) -> Result<f64, NumericError> {
@@ -1371,29 +1350,12 @@ impl Heap {
 
     /// Compute angle (argument) in radians (always returns inexact)
     pub fn angle(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
-        if a.is_fixnum() {
-            let n = a.as_fixnum_unchecked();
-            let angle = if n >= 0 { 0.0 } else { std::f64::consts::PI };
-            return Ok(self.alloc_real(angle));
-        }
-
-        let complex = self.get_complex(a);
-        if let Some((real, imag)) = complex {
-            let r = self.numeric_to_f64(real)?;
-            let i = self.numeric_to_f64(imag)?;
-            return Ok(self.alloc_real(i.atan2(r)));
-        }
-
-        // A real is the complex number with a `+0.0` imaginary part, so it
-        // gets the same `atan2` as the branch above rather than a second rule.
-        //
-        // The rule it replaced asked `is_numeric_negative_tv`, which is an
-        // *ordering* test: `-0.0` is not less than zero, so it answered `0.0`
-        // where the angle is pi. `atan2(+0.0, -0.0)` is pi by IEEE 754 §9.2,
-        // which is also what the complex branch has always computed for
-        // `-0.0+0.0i`, and what C's `carg` gives.
-        let x = self.numeric_to_f64(a)?;
-        Ok(self.alloc_real(0.0_f64.atan2(x)))
+        // A real is the complex number with a `+0.0` imaginary part, so both
+        // cases are one `atan2` over the components. That is also what makes
+        // `-0.0` come out at pi: `atan2` reads the sign bit, where the
+        // ordering test this replaced could not see one.
+        let (real, imag) = self.get_complex(a).unwrap_or((a, TaggedValue::fixnum(0)));
+        self.numeric_atan2(imag, real)
     }
 
     /// Construct complex from rectangular coordinates

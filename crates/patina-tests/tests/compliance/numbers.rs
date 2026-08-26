@@ -62,7 +62,7 @@ fn test_division_by_zero() {
 /// is pi (IEEE 754 §9.2), which is what C's `carg` and chibi both give.
 #[test]
 fn test_angle_of_a_negative_zero() {
-    let angle_of = |x: &str| format!("(import (scheme base) (scheme complex)) (angle {x})");
+    let angle_of = |x: &str| format!("(import (scheme complex)) (angle {x})");
 
     assert_program_eval_to(&angle_of("-0.0"), "3.141592653589793");
     assert_program_eval_to(&angle_of("0.0"), "0.0");
@@ -74,6 +74,11 @@ fn test_angle_of_a_negative_zero() {
     assert_program_eval_to(&angle_of("5"), "0.0");
     assert_program_eval_to(&angle_of("-1/2"), "3.141592653589793");
     assert_program_eval_to(&angle_of("-inf.0"), "3.141592653589793");
+
+    // The complex case the real one is now defined in terms of. Kept here so
+    // `angle` has one home: this replaces `numeric_operations.rs`'s
+    // tree-walker-only `test_angle`, whose other two rows are above.
+    assert_program_eval_to(&angle_of("+i"), "1.5707963267948966");
 
     // Unchanged: the ordering predicate is still an ordering predicate.
     assert_eval_to("(negative? -0.0)", "#f");

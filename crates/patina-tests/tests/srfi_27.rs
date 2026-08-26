@@ -1,10 +1,11 @@
 //! SRFI 27 conformance, differential across both backends.
 //!
 //! The bundled implementation is Sebastian Egner's 54-bit MRG32k3a reference
-//! (see `lib/srfi/PROVENANCE.md`); the package ships no test suite, so these
-//! pin its observable behavior. The exact stream values were recorded from
-//! this implementation — MRG32k3a is fully specified, so any change to them
-//! is a generator change, not noise. (Known limit: the values pin the port's
+//! (see `lib/srfi/PROVENANCE.md`). chibi's suite, vendored at
+//! `scheme_tests/upstream/srfi/27/`, exercises the interface; what these pin
+//! and it does not are the exact stream values, recorded from this
+//! implementation — MRG32k3a is fully specified, so any change to them is a
+//! generator change, not noise. (Known limit: the values pin the port's
 //! arithmetic as-is, faithful bugs included — they were not re-derived from
 //! L'Ecuyer's matrices.) Every helper runs both backends and requires them
 //! to agree.
