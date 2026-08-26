@@ -237,23 +237,48 @@ started with were the local edit above; the third was Patina's own — `(/ 1.0
 from the numerator alone and `-0.0` is negative without being *less than* zero.
 That fix is in `patina-core`, not here, and it applies to `/` generally.
 
-**SRFI 135 has no local edit at all, which is the point of how it is laid
-out.** Upstream ships `srfi/135.sld` beside `srfi/135.body.scm`, with the
-kernel under `srfi/135/`; the four files sit here in exactly that arrangement,
-so every `(include "…")` resolves without being touched. It is the only bundle
-whose `.sld` is upstream's byte for byte — SRFI 144's needed its include paths
-rewritten because its bodies were put in a subdirectory, and 116, 117, 127 and
-134's `.sld` files are Patina's own.
+**SRFI 135's `.sld` and kernel are upstream's byte for byte; its body carries
+four marked local edits.** Upstream ships `srfi/135.sld` beside
+`srfi/135.body.scm`, with the kernel under `srfi/135/`, and the four files sit
+here in exactly that arrangement, so every `(include "…")` resolves without
+being touched. That is worth doing — SRFI 144's `.sld` needed its include
+paths rewritten because its bodies went into a subdirectory — but it is not
+unique: `27.sld`, `41.sld` and most of `lib/chibi/` are upstream's verbatim
+too, and an earlier version of this note claimed a uniqueness that does not
+hold.
 
 The library selects a kernel; `135.sld` imports `(srfi 135 kernel8)`, and that
 three-element name maps to `lib/srfi/135/kernel8.sld` under the ordinary
-loader rules, so the kernel needs nothing special either. `kernel0` and
-`kernel16` are alternative representations upstream also ships and are not
-bundled.
+loader rules. `kernel0` and `kernel16` are alternative representations
+upstream also ships and are not bundled.
 
-Its `cond-expand`s reach for `(rnrs unicode)`, `(srfi 129)` and `(rnrs base)`
-where those exist and fall back to definitions in the body otherwise; the
-fallbacks are what Patina takes, and they are upstream's.
+**The four edits are all one defect class: a procedure given a *text* where
+the code assumed a string.** Each is upstream's — chibi ships the same body
+and still has all four — and each is invisible to both suites, which is how
+they survived a 1071-of-1071 and a 1069-of-1069 run.
+
+- `%text-upcase` and `%text-downcase` pass `(subtext txt i n)`, a text, to
+  `string-upcase` / `string-caser`, which take strings. Raised a type error
+  for any text with an ASCII cased character *before* a character above
+  U+007F — the scanner starts on an all-ASCII fast path and switches to the
+  slow, broken copy at the cased character. The fast path converts; the slow
+  one did not.
+- `%text-downcase`'s fast path hardcoded `textual-downcase` instead of
+  applying the `string-caser` it was handed, so `textual-foldcase` on a text
+  returned the *downcased* text: folding `ß` gave `ß` where the string form
+  gives `ss`, and a medial sigma folded to a final one.
+- `textual-replicate` returned the string `""` for a zero-width slice where
+  SRFI 135 says text. The only literal-string return in the file.
+
+**Its `cond-expand`s do not take the fallbacks.** Patina ships
+`lib/rnrs/unicode.sld` and `lib/rnrs/base.sld`, and `cond-expand`'s `library`
+requirement finds them, so `(srfi 135)` imports `string-titlecase` from
+`(rnrs unicode)` and `div`/`mod` from `(rnrs base)`; the body's own
+`%string-titlecase` is guarded on those libraries being *absent* and is never
+defined. That is a real load-time dependency of `(scheme text)` on the R6RS
+lane, and it is why `textual-titlecase` answers `"Hello-World Foo"` rather
+than the whitespace-only `"Hello-world Foo"` the fallback would give. An
+earlier version of this note said the opposite.
 
 ## Licences
 

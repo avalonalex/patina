@@ -223,6 +223,60 @@ fn test_alias_bindings_are_usable() {
     }
 }
 
+/// The four `PATINA LOCAL EDIT`s in SRFI 135's body, which neither suite
+/// reaches.
+///
+/// All four are upstream defects — chibi ships the same code and still has
+/// them — and all four turn on the argument being a *text* rather than a
+/// string, which is why an interface suite that mostly passes strings misses
+/// them. The shape that triggers the first three is an ASCII cased character
+/// *before* a character above U+007F: the scanner starts on an all-ASCII fast
+/// path, switches to the slow one at the cased character, and the slow path
+/// was the broken copy.
+#[test]
+fn text_case_and_replicate_local_edits() {
+    // `subtext` returns a text; `string-upcase` and `string-caser` take
+    // strings. Without the conversion these raised a type error.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (textual->string (textual-upcase (string->text \"a\\xdf;\")))"
+        ),
+        "\"ASS\""
+    );
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (textual->string (textual-downcase (string->text \"A\\xdf;\")))"
+        ),
+        "\"a\u{df}\""
+    );
+
+    // `textual-foldcase` on a text applied `textual-downcase` instead of the
+    // caser it was handed, so folding degraded to downcasing. A text and a
+    // string must fold alike, and a medial sigma must not fold to a final one.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (list (textual->string (textual-foldcase (string->text \"\\xdf;\"))) \
+                   (textual->string (textual-foldcase \"\\xdf;\")) \
+                   (textual->string (textual-foldcase (string->text \"\\x39e;\\x3a3;\"))))"
+        ),
+        "(\"ss\" \"ss\" \"\u{3be}\u{3c3}\")"
+    );
+
+    // The degenerate slice returned the *string* "" where SRFI 135 says text.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (list (text? (textual-replicate \"abc\" 0 0)) \
+                   (text-length (textual-replicate \"abc\" 0 0)) \
+                   (textual->string (textual-replicate \"abc\" 2 5)))"
+        ),
+        "(#t 0 \"cab\")"
+    );
+}
+
 /// The alias and the SRFI must denote the same binding, not two copies.
 ///
 /// Checked for every alias, not just one. Comparing export *name sets*, which

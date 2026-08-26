@@ -41,6 +41,14 @@ impl FeatureRegistry {
 
         // Unicode support
         features.insert("full-unicode".to_string()); // Rust strings are UTF-8
+        // R7RS's `full-unicode` says the *reader* and char procedures cover
+        // Unicode; it does not promise strings can hold every scalar value,
+        // which is why SRFI 135's and Larceny's suites gate their non-ASCII
+        // data on this second name instead. Patina qualifies — a string is a
+        // Vec<char>, so "\x3b1;\x1F600;" is two characters and `string-ref`
+        // answers with the astral one — and until this was advertised both
+        // suites ran their ASCII-only branch and skipped 41 assertions.
+        features.insert("full-unicode-strings".to_string());
 
         // Platform detection (compile-time)
         #[cfg(target_os = "macos")]

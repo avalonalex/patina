@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-26 10:03:12  
+**Generated:** 2026-08-26 11:09:20  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,7 +10,7 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 21 of 33 |
-| Assertions passed | 8302 of 8331 (99.7%) |
+| Assertions passed | 8358 of 8387 (99.7%) |
 | Suites not reaching a tally | 2 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -28,7 +28,7 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### base — 10 of 1064 failed
+### base — 10 of 1079 failed
 
 - (not located) — `v`
 - (not located) — `v`
@@ -91,7 +91,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | fail | 1054 | 1064 |
+| base | fail | 1069 | 1079 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | fail | 138 | 139 |
@@ -120,7 +120,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
 | stream | pass | 81 | 81 |
-| text | pass | 1028 | 1028 |
+| text | pass | 1069 | 1069 |
 | time | pass | 2 | 2 |
 | vector | pass | 103 | 103 |
 | write | fail | 37 | 40 |

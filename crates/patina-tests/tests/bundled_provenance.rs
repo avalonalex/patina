@@ -82,9 +82,10 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/144/144.special.scm", 0x447d7e808fd68d38),
     // SRFI 135, laid out exactly as upstream ships it — `135.sld` beside
     // `135.body.scm`, the kernel under `135/` — so every `include` resolves
-    // unchanged and there is no local edit of any kind.
+    // unchanged and the `.sld` and kernel are upstream's byte for byte.
+    // `135.body.scm` carries four marked local edits; see PROVENANCE.md.
     ("lib/srfi/135.sld", 0x522c8b29cb4b1e59),
-    ("lib/srfi/135.body.scm", 0x23551491187747c2),
+    ("lib/srfi/135.body.scm", 0xf04196a01d1a2cf7),
     ("lib/srfi/135/kernel8.sld", 0xb2238678735d7314),
     ("lib/srfi/135/kernel8.body.scm", 0x9f9606932d824c8d),
     // SRFI 41's reference implementation as Retropikzel ported it,
@@ -158,8 +159,8 @@ const PINNED_TREES: &[&str] = &[
     "lib/srfi/127",
     "lib/srfi/132",
     "lib/srfi/134",
-    "lib/srfi/144",
     "lib/srfi/135",
+    "lib/srfi/144",
 ];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {

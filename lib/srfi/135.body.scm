@@ -1342,10 +1342,16 @@
             (else
              (let ((c (%text-ref txt i)))
                (cond ((char>? c #\delete)
+                      ;; PATINA LOCAL EDIT: `subtext` returns a *text* and
+                      ;; `string-upcase` takes a string, so this raised a type
+                      ;; error for any text with an ASCII cased character
+                      ;; before a character above U+007F. The `fastest` path
+                      ;; above converts; this one did not.
                       (textual-append (textual-concatenate-reverse texts)
                                       (reverse-list->text chars)
                                       (string->text
-                                       (string-upcase (subtext txt i n)))))
+                                       (string-upcase
+                                        (textual->string (subtext txt i n))))))
                      ((char<=? #\a c #\z)
                       (fast (+ i 1) texts (cons (char-upcase c) chars)))
                      (else
@@ -1366,7 +1372,12 @@
           txt
           (let ((c (%text-ref txt i)))
             (cond ((char>? c #\delete)
-                   (textual-downcase (textual->string txt)))
+                   ;; PATINA LOCAL EDIT: apply the `string-caser` this was
+                   ;; called with, not `textual-downcase`. Hardcoding it made
+                   ;; `textual-foldcase` on a *text* return the downcased text
+                   ;; — so folding "\xdf;" gave "\xdf;" where the string form
+                   ;; gives "ss", and "\x3a3;" folded to a final sigma.
+                   (string->text (string-caser (textual->string txt))))
                   ((char<=? #\A c #\Z)
                    (fast i (list (subtext txt 0 i)) '()))
                   (else
@@ -1389,10 +1400,14 @@
             (else
              (let ((c (%text-ref txt i)))
                (cond ((char>? c #\delete)
+                      ;; PATINA LOCAL EDIT: as in `%text-upcase` above —
+                      ;; `subtext` returns a text and `string-caser` takes a
+                      ;; string.
                       (textual-append (textual-concatenate-reverse texts)
                                       (reverse-list->text chars)
                                       (string->text
-                                       (string-caser (subtext txt i n)))))
+                                       (string-caser
+                                        (textual->string (subtext txt i n))))))
                      ((char<=? #\A c #\Z)
                       (fast (+ i 1) texts (cons (char-downcase c) chars)))
                      (else
@@ -1736,7 +1751,13 @@
            (n (- to from))
            (len (%text-length s)))
       (cond ((= n 0)
-             "")
+             ;; PATINA LOCAL EDIT: SRFI 135 says `textual-replicate` returns a
+             ;; text, and this one case returned the *string* "". It is the
+             ;; only literal-string return in the file; every sibling
+             ;; constructor answers with a text when empty, so
+             ;; `(text-length (textual-replicate t 0 0))` raised where the
+             ;; non-degenerate slice did not.
+             (text))
             ((or (< n 0)
                  (= len 0))
              (complain 'textual-replicate s from to))

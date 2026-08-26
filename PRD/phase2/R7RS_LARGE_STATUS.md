@@ -49,7 +49,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 **Notes:**
 - SRFI 129 (titlecase) was voted down
 - SRFI 13 (strings) marked for reballoting
-- The `(scheme …)` alias libraries landed in `lib/scheme/{list,box,set,comparator,sort,vector,generator}.sld`.
+- The `(scheme …)` alias libraries live in `lib/scheme/`, one file per row of the tables above; they are enumerated in `ALIASES` in `crates/patina-tests/tests/r7rs_large_aliases.rs`, which is what checks them.
   Each is a pure re-export of its backing `(srfi n)` — same bindings, not a second copy.
   `crates/patina-tests/tests/r7rs_large_aliases.rs` asserts the export sets stay identical, which is
   the drift this hand-listed approach otherwise invites.
