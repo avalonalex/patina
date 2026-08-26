@@ -29,6 +29,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("ilist", 116),      // Red
     ("ideque", 134),     // Red
     ("flonum", 144),     // Tangerine
+    ("text", 135),       // Red
 ];
 
 #[test]
@@ -189,6 +190,18 @@ fn test_alias_bindings_are_usable() {
              (list (fl+ 1.0 2.0) (flfloor 2.7) (fl/ -0.0) (fl/ -1.0 -0.0) \
                    (flnumerator +inf.0) (fldenominator -inf.0) (flsign-bit -1.0))",
             "(3.0 2.0 -inf.0 +inf.0 +inf.0 1.0 1)",
+        ),
+        // A text is not a string, so the conversions are the interesting part
+        // — and `textual-` procedures accept both, which is the distinction
+        // this case pins along with the kernel's own indexing.
+        (
+            "(import (scheme text) (scheme base)) \
+             (define t (string->text \"hello\")) \
+             (list (text? t) (text? \"hello\") (textual? \"hello\") \
+                   (text-length t) (textual->string (subtext t 1 3)) \
+                   (textual->string (textual-upcase t)) \
+                   (textual->string (textual-append t (text #\\!))))",
+            "(#t #f #t 5 \"el\" \"HELLO\" \"hello!\")",
         ),
         // Generator-backed on purpose: a plain list exercises paths
         // indistinguishable from SRFI 1's `take`, and it was exactly the

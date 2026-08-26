@@ -247,6 +247,7 @@ suite_tests! {
     // coverage that runs: Larceny's suite is a separate lane nothing in CI
     // invokes, and this one is a cargo test.
     (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
+    (srfi_135_text, "srfi 135", "(srfi 135 test)", 0, 1030),
     // Verbatim; runnable since `(scheme flonum)` is bundled.
     //
     // It also costs about 27s, which is this whole binary's runtime — the
@@ -316,6 +317,10 @@ const NO_SUITE: &[(&str, &str)] = &[
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 135 kernel8",
+        "SRFI 135's text representation, not a library anyone imports: `(srfi 135)` selects it and upstream ships no suite for it separately. `srfi/135/test.sld` exercises it through the whole of `(srfi 135)`, 1030 assertions",
     ),
     (
         "srfi 144",

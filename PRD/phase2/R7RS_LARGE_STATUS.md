@@ -42,9 +42,9 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 132 | `(scheme sort)` | Sort libraries | ✅ shipped | ✅ shipped |
 | SRFI 133 | `(scheme vector)` | Vector library | ✅ shipped | ✅ shipped |
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 134)`, 2026-08-25) |
-| SRFI 135 | `(scheme text)` | Immutable texts | ❌ | ❌ |
+| SRFI 135 | `(scheme text)` | Immutable texts | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 135)`, 2026-08-26) |
 
-**Red status: 13 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 125, 127, 128, 132, 133, 134), all reachable under both `(srfi n)` and their `(scheme …)` names (14 counting SRFI 158 standing in for the superseded 121).
+**Red status: 14 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 125, 127, 128, 132, 133, 134, 135), all reachable under both `(srfi n)` and their `(scheme …)` names (15 counting SRFI 158 standing in for the superseded 121).
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down
