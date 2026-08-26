@@ -6,8 +6,11 @@
 //! these tests check two things: that each alias loads, and that a binding
 //! reached through the alias is the *same* binding as through the SRFI.
 
-use patina_interpreter::TreeWalkInterpreter;
+use patina_interpreter::{Interpreter, TreeWalkInterpreter};
+use patina_primitives::primitives::io::datum_writer::format_write_tagged;
+use patina_runtime::Backend;
 use patina_tree_walker::Evaluator;
+use patina_vm::VmBackend;
 
 /// (alias library, backing SRFI) pairs, per PRD/phase2/R7RS_LARGE_STATUS.md.
 const ALIASES: &[(&str, u32)] = &[
@@ -67,12 +70,31 @@ fn test_alias_exports_match_backing_srfi() {
     }
 }
 
+/// Evaluate on both backends and return the answer they agree on.
+///
+/// Both, because these are library-resolution tests and the VM is the default
+/// backend: a `(scheme …)` alias that failed to resolve, or resolved to
+/// different bindings, only there would have gone unnoticed while
+/// `R7RS_LARGE_STATUS.md` recorded the library as shipped on both. This ran on
+/// the tree-walker alone until 2026-08-25.
 fn eval_to_string(src: &str) -> String {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    let value = interp
+    let tw = TreeWalkInterpreter::new_tree_walker();
+    let tw_value = tw
         .eval_program(src)
-        .unwrap_or_else(|e| panic!("eval failed for {src}: {e:?}"));
-    interp.display_tagged(value)
+        .unwrap_or_else(|e| panic!("[tree-walker] eval failed for {src}: {e:?}"));
+    let tw_out = format_write_tagged(tw_value, tw.backend().global_env().heap());
+
+    let vm = Interpreter::new(VmBackend::new());
+    let vm_value = vm
+        .eval_program(src)
+        .unwrap_or_else(|e| panic!("[vm] eval failed for {src}: {e:?}"));
+    let vm_out = format_write_tagged(vm_value, vm.backend().global_env().heap());
+
+    assert_eq!(
+        tw_out, vm_out,
+        "backends disagree for: {src}\n  tree-walker: {tw_out}\n  vm: {vm_out}"
+    );
+    vm_out
 }
 
 /// Headline forms reached through the alias name, not the SRFI name.
@@ -142,9 +164,7 @@ fn test_alias_bindings_are_usable() {
         // implementation is a banker's deque over two streams, so the
         // interesting behaviour is what happens when one chain runs empty and
         // the other has to be split — which is what `ideque-remove-front` on a
-        // deque built entirely from the back reaches. `ideque=` is here because
-        // it is the one procedure the SRFI's own suite covers and Larceny's
-        // does not.
+        // deque built entirely from the back reaches.
         (
             "(import (scheme ideque) (scheme base)) \
              (define built-from-back \
@@ -178,8 +198,25 @@ fn test_alias_bindings_are_usable() {
 }
 
 /// The alias and the SRFI must denote the same binding, not two copies.
+///
+/// Checked for every alias, not just one. Comparing export *name sets*, which
+/// is what `test_alias_exports_match_backing_srfi` does, cannot tell a
+/// re-export from a re-implementation: a `(scheme ideque)` that defined its own
+/// 48 procedures would match name for name and pass. Importing both libraries
+/// into one program is what distinguishes them — two distinct bindings for one
+/// name is a conflict, and one binding reached twice is not.
 #[test]
 fn test_alias_and_srfi_share_bindings() {
+    for (name, srfi) in ALIASES {
+        let src = format!("(import (scheme {name}) (srfi {srfi})) 'ok");
+        assert_eq!(
+            eval_to_string(&src),
+            "ok",
+            "(scheme {name}) and (srfi {srfi}) must be the same bindings, not two copies"
+        );
+    }
+    // One that also *uses* a shared binding, so the check is not only that the
+    // imports coexist.
     assert_eq!(
         eval_to_string("(import (scheme box) (srfi 111)) (unbox (box 7))"),
         "7",

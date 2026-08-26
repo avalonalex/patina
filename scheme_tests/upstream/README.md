@@ -10,10 +10,11 @@ here is the same person who wrote the implementation. `srfi/151/test.sld` alone
 is 145 assertions against the 13 in
 `crates/patina-tests/tests/srfi_151_bitwise.rs`.
 
-The SRFI suites are from chibi-scheme's `lib/`; the `chibi/` suites are from
-the same sha256-pinned snowballs the bundled libraries themselves came from
-(`lib/chibi/PROVENANCE.md`), so each suite is version-matched to the code it
-tests. Copied unmodified except where the table's note column says otherwise —
+The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
+from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`); the `chibi/`
+suites are from the same sha256-pinned snowballs the bundled libraries
+themselves came from (`lib/chibi/PROVENANCE.md`), so each suite is
+version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
 every adaptation is described under the table. All of them report through
 `(chibi test)`, which Patina bundles verbatim from the snow-fort 0.9.0
 snowball (sha256-pinned in `lib/chibi/PROVENANCE.md`, guarded by
@@ -37,6 +38,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/117/test.sld` | 34 | 1 | verbatim — the one failure is the suite's, not ours; see below |
 | `srfi/127/test.sld` | 109 | 0 | verbatim |
 | `srfi/116/test.sld` | 196 | 0 | verbatim |
+| `srfi/134/test.sld` | 119 | 0 | imports — see below |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
@@ -114,6 +116,22 @@ count is asserted exactly, in both directions — a regression fails, and so doe
 a fix until the number is lowered — and the assertion count is a floor, so a
 run that `TEST_FILTER`-skips its way to zero failures also fails. An
 expectations table, not a skip list. Every suite runs on both backends.
+
+## Adaptations
+
+`srfi/125/test.sld` and `srfi/130/test.sld` have their import lists adapted;
+the reasons are with their entries below.
+
+`srfi/134/test.sld` needed more than the others, because upstream's
+`srfi-134-tests.scm` is a bare `.scm` with no library form: the whole
+`(define-library (srfi 134 test) …)` wrapper is Patina's, and so is its import
+list. Upstream selects between Chicken's `test` and SRFI 64 with a
+`cond-expand`, and this harness runs `(chibi test)`, which is neither, so that
+block is replaced rather than extended. `(scheme char)` and `(srfi 8)` are
+added on top of upstream's own `(scheme base)`, `(srfi 1)`, `(srfi 134)` and
+`(srfi 158)`: the suite uses `char-ci=?` in its `ideque=` group and `receive`
+in its span, break and partition groups, both of which upstream gets from the
+R7RS-plus-SRFI-64 environment it assumes. Test bodies are unmodified.
 
 ## What running them found
 
@@ -241,13 +259,18 @@ test code. The directory is a library search root: `(srfi 151 test)` resolves to
 
 ## Licence
 
-Every suite here is by Alex Shinn — the SRFI suites from chibi-scheme's
-`lib/`, the `chibi/` suites from his snow-fort snowballs — under the BSD
-3-Clause licence in chibi's `COPYING`. None of the files carries an in-file
-notice — upstream's own state — and the licence's first condition requires that
-redistributions "retain the above copyright notice, this list of conditions and
-the following disclaimer". Reproduced here rather than named, verbatim from
-`COPYING` at chibi 0.12.0, because naming a licence is not retaining its notice.
+Every suite here but one is by Alex Shinn — the SRFI suites from
+chibi-scheme's `lib/`, the `chibi/` suites from his snow-fort snowballs — under
+the BSD 3-Clause licence in chibi's `COPYING`. The exception is
+`srfi/134/test.sld`, which is MIT; its notice is reproduced in its own section
+below.
+
+None of the files carries an in-file notice — upstream's own state — and the
+BSD licence's first condition requires that redistributions "retain the above
+copyright notice, this list of conditions and the following disclaimer".
+Reproduced here rather than named, verbatim from `COPYING` at chibi 0.12.0,
+because naming a licence is not retaining its notice. The MIT notice below is
+here for the same reason.
 
 ```
 Copyright (c) 2009-2021 Alex Shinn
@@ -274,4 +297,33 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+### `srfi/134/test.sld` — MIT
+
+From the SRFI 134 distribution (`srfi-134-tests.scm`), not from chibi. The
+distribution carries no per-file header on that suite; this is the notice its
+implementation carries, whose terms require it be "included in all copies".
+
+```
+Copyright (c) 2015  Shiro Kawai  <shiro@acm.org>
+Copyright (c) 2022 Wolfgang Corcoran-Mathe <wcm@sigwinch.xyz>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```

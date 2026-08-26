@@ -1,11 +1,20 @@
 (define-library (srfi 134 test)
-  (import (scheme base) (scheme char) (srfi 134) (srfi 1) (srfi 8) (srfi 158)
+  ;; Upstream's own suite for the implementation bundled here, from the top
+  ;; level of the SRFI 134 distribution (`srfi-134-tests.scm`). Test bodies
+  ;; are unmodified; only the import block is Patina's.
+  ;;
+  ;; Upstream selects between Chicken's `test` and SRFI 64 with a
+  ;; `cond-expand`; this harness runs `(chibi test)`, which is neither, so
+  ;; that block is replaced rather than extended. `(scheme char)` and
+  ;; `(srfi 8)` are added for the `char-ci=?` its `ideque=` tests use and the
+  ;; `receive` its span and partition groups use — both of which upstream gets
+  ;; from the R7RS-plus-SRFI-64 environment it assumes. `(srfi 158)` is
+  ;; upstream's own choice, not a substitution.
+  (import (scheme base) (scheme char) (srfi 1) (srfi 8) (srfi 134) (srfi 158)
           (chibi test))
   (export run-tests)
   (begin
     (define (run-tests)
-      ;; Requires srfi-1 and srfi-121 (generators)
-
       (test-group "ideque"
 
       (test-group "ideque/constructors"
@@ -19,7 +28,7 @@
              (ideque->list (ideque-unfold-right zero? values (lambda (n) (- n 1)) 10)))
        (test '(0 2 4 6 8 10)
              (ideque->list (ideque-tabulate 6 (lambda (n) (* n 2)))))
- 
+
        ;; corner cases
        (test '() (ideque->list
                   (ideque-unfold (lambda (n) #t) values (lambda (n) (+ n 1)) 0)))
@@ -63,7 +72,7 @@
         (set! id (ideque-remove-front (ideque-add-back id 1)))
         (set! id (ideque-remove-front (ideque-add-back id 1)))
         (set! id (ideque-remove-front (ideque-add-back id 1)))
-        (test #f (ideque-front (ideque-take-right id 12)))) 
+        (test #f (ideque-front (ideque-take-right id 12))))
       )
 
       (test-group "ideque/other-accessors"
@@ -71,7 +80,9 @@
          (let* ((lis (iota n))
                 (dq (list->ideque lis)))
            (for-each (lambda (i)
-                       (test (cons name i)
+                       (test (string-append (symbol->string name)
+                                            " "
+                                            (number->string i))
                              (receive xs (list-op lis i) xs)
                              (receive xs (ideque-op dq i)
                                (map ideque->list xs))))

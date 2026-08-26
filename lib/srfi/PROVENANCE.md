@@ -15,7 +15,7 @@ own record. One home per tree.
 | `(srfi 116)` | 1.5 | `116/ilists-base.scm`, `116/ilists-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-116/srfi-116.tgz` (John Cowan, MIT) | tarball sha256 `9b97c816dd6151b8297e8b6d0ee65fa8daf12123d018e2f46cdce87d0c0fe283` |
 | `(srfi 117)` | 1.5 | `117/list-queues-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-117/srfi-117.tgz` (John Cowan, MIT) | tarball sha256 `ffc8349567a8169eb53e818dd15f73b0485c3db9aca79e432d7e6781db2b8e46` |
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
-| `(srfi 134)` | — | `134/ideque-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
+| `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
 | `(srfi 27)` | 2025.12.14 | `27.sld`, `27.scm` | snow-fort, Retropikzel's R7RS port of Sebastian Egner's 54-bit MRG32k3a reference implementation (MIT) | `b8d2322e40955ccc986e9b0b10c1c36044ff5c659d33698722f9b36ec77fdea5` |
 
@@ -174,23 +174,34 @@ diffing against upstream will be standing.
    on a procedure key, and did not terminate on a circular one.
 
 **SRFI 134 is split, not edited.** Upstream ships the implementation inline in
-its `srfi/134.sld` rather than as a separate include, so `134/ideque-impl.scm`
-is that library's `(begin …)` body lifted out verbatim, and `134.sld` is ours.
-No `PATINA LOCAL EDIT` — nothing between the two files was changed.
+its `srfi/134.sld` rather than as a separate include, so
+`134/ideque-stream-impl.scm` is that library's `(begin …)` body lifted out
+verbatim, and `134.sld` is ours. No `PATINA LOCAL EDIT` — nothing between the
+two files was changed, and the import and export lists are upstream's.
 
-The distribution carries two implementations: the stream-based one at the
-canonical `srfi/134.sld`, which is what is bundled, and an older two-list one
-under `ideque-2list/`. The suite in `scheme_tests/upstream/srfi/134/` is the
-*two-list* directory's, run against the stream implementation on purpose — it
-tests the interface rather than the representation, and 119 of 119 pass. Its
-generators come from `(srfi 158)` rather than the `(srfi 121)` its header
-names, and `(scheme char)` is imported for the `char-ci=?` its `ideque=` tests
-use; the test bodies are unmodified.
+The file is named `ideque-stream-impl.scm`, not the `ideque-impl.scm` every
+sibling's naming would suggest, because upstream *has* an
+`ideque-2list/ideque-impl.scm` and it is a different implementation. The
+distribution carries two: the stream-based one at the canonical
+`srfi/134.sld`, which is what is bundled, and an older two-list one. A diff
+against the conventional name would land on the wrong file.
 
-Worth recording because it is the second time a suite disagreed with a lane:
-Larceny's `ideque` suite passes 114 of 114 against this bundle, and the SRFI's
-own tests run 119 assertions it never reaches. Neither is a superset of the
-other.
+The suite in `scheme_tests/upstream/srfi/134/` is the distribution's top-level
+`srfi-134-tests.scm`, the one matched to the bundled implementation; 119 of 119
+pass. Only its import block is Patina's — upstream `cond-expand`s between
+Chicken's `test` and SRFI 64, and this harness runs `(chibi test)` — with
+`(scheme char)` and `(srfi 8)` added for the `char-ci=?` and `receive` the test
+bodies use. `(srfi 158)` is upstream's own choice, not a substitution.
+
+**What running two suites does and does not buy.** Larceny's `ideque` suite
+passes 114 of 114 against this bundle and the SRFI's own passes 119 of 119, and
+an earlier version of this note read that difference as complementary coverage
+— "neither is a superset of the other". Measured rather than inferred, that is
+wrong: the two exercise the same 55 procedures, with nothing unique to either,
+and `ideque=` in particular is covered by both. Different assertion counts do
+not imply different reach. The second suite is worth having because it *runs*
+in CI, where the Larceny lane does not, and because the bundling guard requires
+an upstream suite per bundled library — not because it tests more.
 
 ## Licences
 

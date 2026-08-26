@@ -1,6 +1,6 @@
 ;; SRFI 134: immutable deques.
 ;;
-;; `134/ideque-impl.scm` is the body of the SRFI's own reference
+;; `134/ideque-stream-impl.scm` is the body of the SRFI's own reference
 ;; implementation, extracted unmodified from upstream's `srfi/134.sld` (Shiro
 ;; Kawai and Wolfgang Corcoran-Mathe, MIT); see `PROVENANCE.md`. Upstream ships
 ;; the implementation inline in its library declaration rather than as a
@@ -42,4 +42,4 @@
 
           list->ideque ideque->list
           generator->ideque ideque->generator)
-  (include "134/ideque-impl.scm"))
+  (include "134/ideque-stream-impl.scm"))
