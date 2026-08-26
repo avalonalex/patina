@@ -259,6 +259,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` before/after thunks, `captured_cont_bindings` (recursive), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
+| `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
 
 \* `Library` heap objects wrap `Rc<Library>` whose `exports` map and `env` are
 also reachable via `LibraryRegistry`; tracing them from the registry root
@@ -658,6 +659,14 @@ every register and frame snapshot those dead continuations pinned stayed
 unreclaimable. Worse than the pause: snapshots routinely contain *other*
 continuation refs, so the strong tables pinned themselves transitively —
 `ctak` grew to 4 GB RSS and died thrashing.
+
+The same fixpoint now also drives SRFI 124 ephemerons, which are the second
+weak-key kind in the heap. They share one loop rather than running in sequence:
+retaining an ephemeron can mark a `VmContinuationRef`, and tracing a weak
+payload can reach an ephemeron, so either order leaves one kind discovering
+work after the other has stopped. Termination is unchanged in character — an
+id enters the queue at most once, and each retaining round permanently removes
+a pair from a finite pending set.
 
 The stores are now weak tables keyed by their ref objects, resolved as an
 ephemeron-style fixpoint: `trace_roots` skips the stores; marking records the

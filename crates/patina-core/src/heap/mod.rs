@@ -107,7 +107,6 @@ pub enum HeapObjectType {
     VmClosure = 21,
     /// Mutable cell for captured variables that are `set!` after capture (patina-vm Phase 2)
     MutableCell = 22,
-    Ephemeron = 27,
     /// Opaque handle to a full VM continuation stored in VmState's side table (Phase 2 A6)
     VmContinuationRef = 23,
     /// Opaque handle to a delimited VM continuation stored in VmState's side table (Phase 2 A6)
@@ -116,6 +115,7 @@ pub enum HeapObjectType {
     Free = 25,
     /// A syntactic keyword as a binding (`begin`, `if`, `else`, …)
     CoreSyntax = 26,
+    Ephemeron = 27,
 }
 
 /// State of a promise for lazy evaluation
@@ -1030,20 +1030,19 @@ impl Heap {
         self.alloc_object(HeapObjectData::Ephemeron(RefCell::new(Some((key, datum)))))
     }
 
-    /// The key and datum of an ephemeron, or `None` if `tv` is not one.
+    /// The contents of an ephemeron: `Some((key, datum))` while it is whole,
+    /// `None` once the collector has broken it — and `None` for a value that
+    /// is not an ephemeron at all, so callers that need to tell those apart
+    /// ask [`Heap::is_ephemeron`] first.
     ///
-    /// A broken ephemeron answers `Some((#f, #f))`, which is what SRFI 124
-    /// says its key and datum read as; [`Heap::is_ephemeron_broken`] is how to
-    /// tell that from a pair whose key really is `#f`.
-    pub fn get_ephemeron(&self, tv: TaggedValue) -> Option<(TaggedValue, TaggedValue)> {
+    /// Returning the raw `Option` rather than SRFI 124's `#f`/`#f` lets a
+    /// caller answer `ephemeron-broken?` from the same lookup.
+    pub fn ephemeron_contents(&self, tv: TaggedValue) -> Option<(TaggedValue, TaggedValue)> {
         if !tv.is_object() {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Ephemeron(cell) => Some(
-                cell.borrow()
-                    .unwrap_or((TaggedValue::FALSE, TaggedValue::FALSE)),
-            ),
+            HeapObjectData::Ephemeron(cell) => *cell.borrow(),
             _ => None,
         }
     }
@@ -1070,6 +1069,10 @@ impl Heap {
     /// Takes `&self` because it runs inside the mark phase, which borrows the
     /// heap immutably; the `RefCell` is what makes that sound.
     pub fn break_ephemeron(&self, index: HeapIndex) {
+        debug_assert!(
+            matches!(&self.objects[index as usize], HeapObjectData::Ephemeron(_)),
+            "break_ephemeron on a non-ephemeron at {index}"
+        );
         if let HeapObjectData::Ephemeron(cell) = &self.objects[index as usize] {
             *cell.borrow_mut() = None;
         }

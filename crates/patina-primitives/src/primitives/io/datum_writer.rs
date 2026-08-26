@@ -347,6 +347,12 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         return;
     }
     // Promise
+    // Opaque on purpose: SRFI 124 gives ephemerons no external representation,
+    // and showing the key would make a broken pair look like one holding #f.
+    if heap.is_ephemeron(tv) {
+        out.push_str("#<ephemeron>");
+        return;
+    }
     if heap.get_promise(tv).is_some() {
         out.push_str("#<promise>");
         return;

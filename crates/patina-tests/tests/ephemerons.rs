@@ -62,6 +62,34 @@ fn only_the_pairs_whose_keys_died_are_broken() {
     );
 }
 
+/// A datum that is a *continuation* survives, which is the case where the two
+/// weak mechanisms meet.
+///
+/// The VM keeps a captured continuation's payload in a side table under a weak
+/// id, traced only once its `VmContinuationRef` has been marked. An ephemeron
+/// retained by the ephemeron fixpoint can be what marks that ref — so if the
+/// two fixpoints run in sequence rather than nested, the id is discovered
+/// after the weak-id loop has stopped, its payload is never traced, and
+/// `sweep_weak` keeps a store entry pointing at swept slots. The program below
+/// then dies with "expected a procedure, got object" on the VM while the
+/// tree-walker, which has no such side table, prints the list.
+#[test]
+fn an_ephemeron_holding_a_continuation_keeps_its_payload() {
+    assert_program_eval_to(
+        "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define kk (list 'key))
+         (define e #f)
+         (define (capture)
+           (let ((secret (list 'a 'b 'c)))
+             (let ((v (call/cc (lambda (c) (set! e (make-ephemeron kk c)) 0))))
+               (if (= v 0) 'captured secret))))
+         (capture)
+         (gc)
+         ((ephemeron-datum e) 1)",
+        "(a b c)",
+    );
+}
+
 /// An immediate key has no cell that can die, so such a pair never breaks.
 #[test]
 fn a_pair_with_an_immediate_key_never_breaks() {

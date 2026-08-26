@@ -10,7 +10,7 @@
 //! The behaviour lives in the collector (`heap::gc`'s ephemeron fixpoint);
 //! these procedures are the SRFI's surface over `HeapObjectData::Ephemeron`.
 
-use crate::registry::{PrimitiveFn, PrimitiveRegistry};
+use crate::registry::{PrimitiveFn, PrimitiveRegistry, expect_arity};
 use patina_core::TaggedValue;
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -61,34 +61,41 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         "srfi.124",
         "reference-barrier",
         Arity::Exact(1),
-        "Returns #t, having kept obj reachable up to this point.",
+        "Keeps obj reachable up to this point; returns an unspecified value.",
         reference_barrier,
     ));
 }
 
-fn arity_1(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 1 {
-        return Err(EvalError::WrongArity {
-            expected: "1".to_string(),
-            actual: args.len(),
-        });
+/// The three accessors' shared guard: one arity check, one heap lookup, and
+/// one error whose text names the caller.
+///
+/// Returns the raw `Option` so `ephemeron-broken?` can answer from it directly
+/// rather than looking the object up a second time.
+fn as_ephemeron(
+    heap: &SharedHeap,
+    who: &str,
+    args: &[TaggedValue],
+) -> Result<Option<(TaggedValue, TaggedValue)>, EvalError> {
+    expect_arity(args, 1)?;
+    let obj = args[0];
+    let heap = heap.borrow();
+    if !heap.is_ephemeron(obj) {
+        return Err(EvalError::TypeError(format!(
+            "{who}: expected an ephemeron, got {}",
+            heap.type_name(obj)
+        )));
     }
-    Ok(args[0])
+    Ok(heap.ephemeron_contents(obj))
 }
 
 fn make_ephemeron(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.len() != 2 {
-        return Err(EvalError::WrongArity {
-            expected: "2".to_string(),
-            actual: args.len(),
-        });
-    }
+    expect_arity(args, 2)?;
     Ok(heap.borrow_mut().alloc_ephemeron(args[0], args[1]))
 }
 
 fn ephemeron_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let obj = arity_1(args)?;
-    Ok(TaggedValue::boolean(heap.borrow().is_ephemeron(obj)))
+    expect_arity(args, 1)?;
+    Ok(TaggedValue::boolean(heap.borrow().is_ephemeron(args[0])))
 }
 
 /// A pair is broken exactly when the collector cleared it, which it signals by
@@ -96,49 +103,29 @@ fn ephemeron_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, E
 /// this asks the heap rather than comparing the key a caller could have
 /// supplied — a pair made with a `#f` key is not broken until collected.
 fn ephemeron_broken_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let obj = arity_1(args)?;
-    let heap = heap.borrow();
-    match heap.get_ephemeron(obj) {
-        Some(_) => Ok(TaggedValue::boolean(heap.is_ephemeron_broken(obj))),
-        None => Err(EvalError::TypeError(format!(
-            "{}: expected an ephemeron, got {}",
-            "ephemeron-broken?",
-            heap.type_name(obj)
-        ))),
-    }
+    let pair = as_ephemeron(heap, "ephemeron-broken?", args)?;
+    Ok(TaggedValue::boolean(pair.is_none()))
 }
 
 fn ephemeron_key(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let obj = arity_1(args)?;
-    let heap = heap.borrow();
-    match heap.get_ephemeron(obj) {
-        Some((key, _)) => Ok(key),
-        None => Err(EvalError::TypeError(format!(
-            "{}: expected an ephemeron, got {}",
-            "ephemeron-key",
-            heap.type_name(obj)
-        ))),
-    }
+    let pair = as_ephemeron(heap, "ephemeron-key", args)?;
+    Ok(pair.map_or(TaggedValue::FALSE, |(key, _)| key))
 }
 
 fn ephemeron_datum(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let obj = arity_1(args)?;
-    let heap = heap.borrow();
-    match heap.get_ephemeron(obj) {
-        Some((_, datum)) => Ok(datum),
-        None => Err(EvalError::TypeError(format!(
-            "{}: expected an ephemeron, got {}",
-            "ephemeron-datum",
-            heap.type_name(obj)
-        ))),
-    }
+    let pair = as_ephemeron(heap, "ephemeron-datum", args)?;
+    Ok(pair.map_or(TaggedValue::FALSE, |(_, datum)| datum))
 }
 
 /// SRFI 124: "returns an unspecified value" after ensuring `obj` is still
-/// reachable at the call. Patina's collector runs only at allocation points
-/// and traces the live argument list, so an argument that reaches here is
-/// reachable here; passing it through a primitive is the barrier.
+/// reachable at the call.
+///
+/// Passing the argument through a primitive is the barrier: it is in the live
+/// argument vector across the call, which the collector traces. That is enough
+/// today for a second reason too — the VM over-retains stale registers, which
+/// `GC_STAGE5_PRD.md` §7's rooting work is meant to remove — so this should be
+/// re-examined when that lands rather than assumed to keep holding.
 fn reference_barrier(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    arity_1(args)?;
-    Ok(TaggedValue::boolean(true))
+    expect_arity(args, 1)?;
+    Ok(TaggedValue::UNSPECIFIED)
 }
