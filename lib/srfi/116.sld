@@ -5,8 +5,17 @@
 ;; `PROVENANCE.md`. Only this library declaration is local: upstream's names
 ;; the library `(ilists ilists)`, which is not what R7RS code imports, and
 ;; carries a Gauche-only `cond-expand` branch that has no `else`.
+;;
+;; `(scheme write)` is imported because `ilists-base.scm`'s `write-ipair`
+;; calls `write`; upstream's declaration omits it and relies on the host's
+;; `(scheme base)` providing it, which Patina's happens to do.
+;;
+;; The two includes are order-dependent: both files define `imap`, which
+;; R7RS 5.3.1 forbids in one body, and the impl's definition is the live one
+;; only because it is included second. Recorded rather than edited — both
+;; files are byte-identical upstream apart from the marked edits.
 (define-library (srfi 116)
-  (import (scheme base) (srfi 128))
+  (import (scheme base) (scheme write) (srfi 128))
   (export
     iq ipair ilist xipair ipair* make-ilist ilist-copy ilist-tabulate
     iiota ipair? proper-ilist? ilist? dotted-ilist? not-ipair? null-ilist?

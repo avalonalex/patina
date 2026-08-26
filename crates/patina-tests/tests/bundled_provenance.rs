@@ -44,11 +44,13 @@ const PINNED: &[(&str, u64)] = &[
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
     ("lib/srfi/128/162-impl.scm", 0xf93547f60a36817a),
-    // SRFI 116's own reference implementation (John Cowan, MIT),
-    // byte-identical; the `.sld` is ours, as for 117 and 127 below.
-    ("lib/srfi/116.sld", 0x35892fd1b73d9d53),
+    // SRFI 116's own reference implementation (John Cowan, MIT). The impl
+    // file is pinned *post-edit* — three PATINA LOCAL EDITs, marked in place
+    // and recorded in PROVENANCE.md — and the `.sld` is ours, as for 117 and
+    // 127 below.
+    ("lib/srfi/116.sld", 0xf2edca63f4ae1e92),
     ("lib/srfi/116/ilists-base.scm", 0xde2e997658b2dc5b),
-    ("lib/srfi/116/ilists-impl.scm", 0xf8d5dd38dcf34e7c),
+    ("lib/srfi/116/ilists-impl.scm", 0x745933629d7b4e17),
     // SRFI 117's and 127's own reference implementations (John Cowan, MIT).
     // 117's is pinned post-edit — one PATINA LOCAL EDIT to list-queue-join!,
     // marked in place and recorded in PROVENANCE.md. The two `.sld` files are
@@ -110,7 +112,7 @@ const PINNED: &[(&str, u64)] = &[
 /// The trees whose `.scm`/`.sld` files must ALL appear in [`PINNED`]. The
 /// provenance records say "every file in this tree"; without this, a file
 /// *added* to a pinned tree would be unguarded while the records stay green.
-const PINNED_TREES: &[&str] = &["lib/chibi", "lib/srfi/132"];
+const PINNED_TREES: &[&str] = &["lib/chibi", "lib/srfi/116", "lib/srfi/132"];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
     for path in files_under(dir) {

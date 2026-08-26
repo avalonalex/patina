@@ -951,11 +951,19 @@
   (if (pair? lists)
 
       ;; N-ary case
-      (receive (heads tails) (%cars+cdrs (ipair lis1 lists))
-	(or (not (ipair? heads))
+      ;; PATINA LOCAL EDIT: upstream builds the argument list with `ipair`
+      ;; and tests `heads`/`next-heads` with `ipair?`. `%cars+cdrs` walks its
+      ;; argument with `pair?`/`car`/`cdr` and returns ordinary lists, so an
+      ;; immutable ipair made it return `(values '() '())` at once: n-ary
+      ;; `ievery` answered #t for every input and never called `pred`.
+      ;; `iany`, immediately below, has the `cons`/`pair?` form this now
+      ;; matches. Neither bundled suite catches it — the only n-ary `ievery`
+      ;; assertion in each expects #t, which is what the dead path returned.
+      (receive (heads tails) (%cars+cdrs (cons lis1 lists))
+	(or (not (pair? heads))
 	    (let lp ((heads heads) (tails tails))
 	      (receive (next-heads next-tails) (%cars+cdrs tails)
-		(if (ipair? next-heads)
+		(if (pair? next-heads)
 		    (and (apply pred heads) (lp next-heads next-tails))
 		    (apply pred heads)))))) ; Last PRED app is tail call.
 
@@ -1083,10 +1091,14 @@
 
   (define pair-comparison (make-ipair-comparator comparator comparator))
 
+  ;; PATINA LOCAL EDIT: `pair?` was `ipair?`'s job here — an ipair is a
+  ;; record, so upstream bucketed every ilist as "other" and the type-ordering
+  ;; branch below was dead, comparing a number against an ilist through the
+  ;; element comparator instead.
   (define (improper-list-type obj)
     (cond
       ((null? obj) 0)
-      ((pair? obj) 1)
+      ((ipair? obj) 1)
       (else 2)))
 
   (define (improper-ilist< a b)
@@ -1094,7 +1106,9 @@
            (b-type (improper-list-type b)))
          (cond
            ((not (= a-type b-type)) (< a-type b-type))
-           ((null? a) 0)
+           ;; PATINA LOCAL EDIT: upstream returns 0 here, which is true in
+           ;; Scheme, so two empty ilists compared as `a < a`.
+           ((null? a) #f)
            ((ipair? a) (<? pair-comparison a b))
            (else (<? comparator a b)))))
 

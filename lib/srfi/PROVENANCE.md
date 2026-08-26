@@ -49,21 +49,40 @@ filter itself is lazy — `(stream-car (stream-cdr (stream-filter …)))` answer
 `1` there. Reported as
 [ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181).
 
-**`(srfi 116)`'s comparator section fails 8 of Larceny's assertions**, and
-they are recorded rather than adjudicated. chibi's suite passes 196 of 196
-against this implementation and the SRFI's own test file has *no* comparator
-tests at all, so the section is untested upstream; Larceny's suite is the
-first thing to exercise it. Five failures are `comparator-test-type` on an
-ipair whose elements are of the wrong type — the reference's type test is
-`ipair?` alone, where the suite expects the element comparators to be
-consulted — and three are `comparator-compare` answering `-1` where `+1` is
-expected, i.e. an ordering that is not antisymmetric. Which reading is right
-needs the specification's post-finalization notes (the comparator definition
-arrived in a 2016 erratum, and note #2 of 2020 changed the recommended
-comparator SRFI); that is a decision, not an oversight, and it is left to
-whoever needs those procedures. Everything else in the library passes.
+**`(srfi 116)` carries three `PATINA LOCAL EDIT`s and eight recorded
+failures, and the two are different things.**
 
-**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
+*Fixed, marked in place.* `ievery` built its argument list with `ipair` and
+tested `heads` with `ipair?`, where `%cars+cdrs` walks with `pair?` and
+returns ordinary lists — so the n-ary case returned `#t` for every input
+**without ever calling the predicate**. `iany`, immediately below it, has the
+correct `cons`/`pair?` form, which is what makes this a transcription slip.
+Neither suite catches it: the only n-ary `ievery` assertion in each expects
+`#t`. Two smaller ones in `make-improper-ilist-comparator`:
+`improper-list-type` classified with `pair?`, so every ilist fell into the
+"other" bucket and the type-ordering branch was dead; and the ordering
+predicate returned `0` — true in Scheme — for two empty ilists, making
+`x < x` hold.
+
+*Still failing, and left alone.* Larceny's suite reports 8 assertions in the
+comparator section, unchanged by those edits: five `comparator-test-type`
+accepting an ipair whose elements are the wrong type, and three
+`comparator-compare` answering `-1` where `+1` is expected. The third of
+those traces further than the PR that bundled this claimed: probing
+`make-improper-ilist-comparator` directly raises a type error, because it
+compares an ipair's cdr with the *element* comparator rather than with
+itself, so a two-element ilist reaches `=` with an ipair argument. That is a
+fourth upstream bug in the same section, not a spec question — but repairing
+a comparator design by hand is a different undertaking from correcting three
+transcription slips, and the section is untested upstream (the SRFI's own
+test file has no comparator tests, and chibi's 196 assertions do not reach
+them), so it is recorded as triage family 29 rather than rewritten here.
+
+**What passes is what the suites exercise**, which is not the same as "the
+rest of the library is correct" — `ievery` is the standing proof of that,
+having been green in both suites while doing nothing at all.
+
+**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
 implementations, and chibi's copies were tried first and rejected.** Both of
 chibi's pass Larceny's suites and chibi's own, and both are wrong in ways
 neither suite reaches — found by review, each reproduced before acting:
