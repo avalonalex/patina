@@ -32,7 +32,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 101 | `(scheme rlist)` | Random-access lists | ❌ | ❌ |
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
 | SRFI 113 | `(scheme set)` | Sets and bags | ✅ shipped | ✅ shipped |
-| SRFI 116 | `(scheme ilist)` | Immutable lists | ❌ | ❌ |
+| SRFI 116 | `(scheme ilist)` | Immutable lists | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 116)`, 2026-08-25) |
 | SRFI 117 | `(scheme list-queue)` | List queues | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 117)`, 2026-08-25) |
 | SRFI 121 | `(scheme generator)` | Generators | — superseded by SRFI 158 | — |
 | SRFI 124 | `(scheme ephemeron)` | Ephemerons | ❌ | ❌ |
@@ -44,7 +44,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ❌ | ❌ |
 | SRFI 135 | `(scheme text)` | Immutable texts | ❌ | ❌ |
 
-**Red status: 11 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 117, 125, 127, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (12 counting SRFI 158 standing in for the superseded 121).
+**Red status: 12 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 125, 127, 128, 132, 133), all reachable under both `(srfi n)` and their `(scheme …)` names (13 counting SRFI 158 standing in for the superseded 121).
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down

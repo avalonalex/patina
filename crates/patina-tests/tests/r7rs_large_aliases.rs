@@ -23,6 +23,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("stream", 41),      // Red
     ("list-queue", 117), // Red
     ("lseq", 127),       // Red
+    ("ilist", 116),      // Red
 ];
 
 #[test]
@@ -122,6 +123,19 @@ fn test_alias_bindings_are_usable() {
             "(import (scheme list-queue)) \
              (let ((q (list-queue 1 2))) (list-queue-add-back! q 3) (list-queue-list q))",
             "(1 2 3)",
+        ),
+        // n-ary on purpose: the one-list paths are indistinguishable from
+        // SRFI 1's, while the multi-list ones go through `%cars+cdrs` and a
+        // continuation invoked with two values — which is where this
+        // library's one live defect was (`ievery` answered #t without ever
+        // calling its predicate).
+        (
+            "(import (scheme ilist)) \
+             (list (ilist->list (iappend (imap (lambda (x) (* x x)) (ilist 1 2)) (ilist 9))) \
+                   (ievery < (ilist 5 6) (ilist 1 2)) \
+                   (ievery < (ilist 1 2) (ilist 5 6)) \
+                   (ilist->list (imap + (ilist 1 2) (ilist 10 20))))",
+            "((1 4 9) #f #t (11 22))",
         ),
         // Generator-backed on purpose: a plain list exercises paths
         // indistinguishable from SRFI 1's `take`, and it was exactly the

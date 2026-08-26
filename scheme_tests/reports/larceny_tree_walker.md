@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 15:39:23  
+**Generated:** 2026-08-25 17:00:03  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,12 +10,12 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 17 of 33 |
-| Assertions passed | 4270 of 4280 (99.8%) |
-| Suites not reaching a tally | 9 |
+| Assertions passed | 4607 of 4625 (99.6%) |
+| Suites not reaching a tally | 8 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (6)
+## Library under test not bundled (5)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
@@ -24,7 +24,6 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 | ephemeron | `(scheme ephemeron)` |
 | flonum | `(srfi 144)` |
 | ideque | `(scheme ideque)` |
-| ilist | `(scheme ilist)` |
 | rlist | `(scheme rlist)` |
 | text | `(scheme text)` |
 
@@ -45,7 +44,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Invalid syntax: Failed to load library: Parse error in tests/scheme/base.sld: Failed to desugar expression: Invalid syntax: Failed to compile macro bar: ` |
 
-## Assertion failures (10 in 7 suites)
+## Assertion failures (18 in 8 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -61,6 +60,17 @@ Each entry links to the test case; the name after it is the procedure the assert
 ### eval — 1 of 3 failed
 
 - [eval.sld:33](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/eval.sld#L33) — `eval` `eval:car`
+
+### ilist — 8 of 345 failed
+
+- [ilist.sld:757](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L757) — `comparator-test-type` `iq`
+- [ilist.sld:882](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L882) — `comparator-test-type` `iq`
+- [ilist.sld:918](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L918) — `comparator-test-type` `iq`
+- [ilist.sld:954](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L954) — `comparator-test-type` `iq`
+- [ilist.sld:956](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L956) — `comparator-test-type` `iq`
+- [ilist.sld:971](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L971) — `comparator-compare` `iq`
+- [ilist.sld:1039](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L1039) — `comparator-compare` `iq`
+- [ilist.sld:1043](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L1043) — `comparator-compare` `iq`
 
 ### inexact — 1 of 592 failed
 
@@ -99,7 +109,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | generator | pass | 49 | 49 |
 | hash-table | pass | 82 | 82 |
 | ideque | not-bundled | 0 | 0 |
-| ilist | not-bundled | 0 | 0 |
+| ilist | fail | 337 | 345 |
 | inexact | fail | 591 | 592 |
 | lazy | pass | 33 | 33 |
 | list-queue | pass | 40 | 40 |

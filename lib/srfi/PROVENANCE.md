@@ -12,6 +12,7 @@ own record. One home per tree.
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 41)` | 0.1.0 | `41.sld`, `41.scm` | snow-fort, Retropikzel's R7RS port of Philip Bewig's stream reference implementation (MIT) | `c6bbc9b5d856f1ebdb3d9ce75d9542cc32050b13b82eb3e53fd9a8b96b67fdc2` |
+| `(srfi 116)` | 1.5 | `116/ilists-base.scm`, `116/ilists-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-116/srfi-116.tgz` (John Cowan, MIT) | tarball sha256 `9b97c816dd6151b8297e8b6d0ee65fa8daf12123d018e2f46cdce87d0c0fe283` |
 | `(srfi 117)` | 1.5 | `117/list-queues-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-117/srfi-117.tgz` (John Cowan, MIT) | tarball sha256 `ffc8349567a8169eb53e818dd15f73b0485c3db9aca79e432d7e6781db2b8e46` |
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
@@ -48,7 +49,40 @@ filter itself is lazy — `(stream-car (stream-cdr (stream-filter …)))` answer
 `1` there. Reported as
 [ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181).
 
-**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
+**`(srfi 116)` carries three `PATINA LOCAL EDIT`s and eight recorded
+failures, and the two are different things.**
+
+*Fixed, marked in place.* `ievery` built its argument list with `ipair` and
+tested `heads` with `ipair?`, where `%cars+cdrs` walks with `pair?` and
+returns ordinary lists — so the n-ary case returned `#t` for every input
+**without ever calling the predicate**. `iany`, immediately below it, has the
+correct `cons`/`pair?` form, which is what makes this a transcription slip.
+Neither suite catches it: the only n-ary `ievery` assertion in each expects
+`#t`. Two smaller ones in `make-improper-ilist-comparator`:
+`improper-list-type` classified with `pair?`, so every ilist fell into the
+"other" bucket and the type-ordering branch was dead; and the ordering
+predicate returned `0` — true in Scheme — for two empty ilists, making
+`x < x` hold.
+
+*Still failing, and left alone.* Larceny's suite reports 8 assertions in the
+comparator section, unchanged by those edits: five `comparator-test-type`
+accepting an ipair whose elements are the wrong type, and three
+`comparator-compare` answering `-1` where `+1` is expected. The third of
+those traces further than the PR that bundled this claimed: probing
+`make-improper-ilist-comparator` directly raises a type error, because it
+compares an ipair's cdr with the *element* comparator rather than with
+itself, so a two-element ilist reaches `=` with an ipair argument. That is a
+fourth upstream bug in the same section, not a spec question — but repairing
+a comparator design by hand is a different undertaking from correcting three
+transcription slips, and the section is untested upstream (the SRFI's own
+test file has no comparator tests, and chibi's 196 assertions do not reach
+them), so it is recorded as triage family 29 rather than rewritten here.
+
+**What passes is what the suites exercise**, which is not the same as "the
+rest of the library is correct" — `ievery` is the standing proof of that,
+having been green in both suites while doing nothing at all.
+
+**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference**`(srfi 117)` and `(srfi 127)` are the SRFIs' own reference
 implementations, and chibi's copies were tried first and rejected.** Both of
 chibi's pass Larceny's suites and chibi's own, and both are wrong in ways
 neither suite reaches — found by review, each reproduced before acting:
