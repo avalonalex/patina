@@ -22,8 +22,9 @@ lane 15 of 33 (VM 4258/4270, tree-walker 4113/4131); R6RS lane 12 of 16
 (4017/4025). After the values fix (2026-08-25): VM 16 of 33, 4260/4270. After `base`
 ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 1046 of
 1064 — then the hygiene half was backed out and `base` was gated again. With families
-14, 15 and 23 fixed (2026-08-25) `base` loads for good: VM 19 of 33 suites, 5879 of
-5909, `base` itself 1052 of 1064.
+14, 15 and 23 fixed (2026-08-25) `base` loads for good: VM 19 of 33 suites, 5881 of
+5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1052 of 1064. The R6RS lane
+is unchanged at 12 of 16, 4017 of 4025.
 
 ## Ours
 
