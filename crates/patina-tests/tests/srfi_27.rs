@@ -2,10 +2,12 @@
 //!
 //! The bundled implementation is Sebastian Egner's 54-bit MRG32k3a reference
 //! (see `lib/srfi/PROVENANCE.md`). chibi's suite, vendored at
-//! `scheme_tests/upstream/srfi/27/`, exercises the interface; what these pin
-//! and it does not are the exact stream values, recorded from this
+//! `scheme_tests/upstream/srfi/27/`, exercises the interface. These pin three
+//! things it does not: the exact stream values, recorded from this
 //! implementation — MRG32k3a is fully specified, so any change to them is a
-//! generator change, not noise. (Known limit: the values pin the port's
+//! generator change, not noise — that a state round-trip *replays* the tail,
+//! which upstream has commented out as "actually impl defined", and that
+//! values are exact and in range. Do not trim this to the stream values. (Known limit: the values pin the port's
 //! arithmetic as-is, faithful bugs included — they were not re-derived from
 //! L'Ecuyer's matrices.) Every helper runs both backends and requires them
 //! to agree.

@@ -250,13 +250,15 @@ suite_tests! {
     // Verbatim; runnable since `(scheme flonum)` is bundled.
     //
     // It also costs about 27s, which is this whole binary's runtime — the
-    // other 21 suites finish in ~1s and wait for it. 14 of its 224 assertions
-    // draw 131 000 random numbers, and those are the only thing anywhere that
-    // reaches `mrg32k3a-random-large`'s bignum paths, which `srfi_27.rs`'s
-    // hand-written bounds all stay below. Trimming the draw counts would mean
-    // editing a verbatim suite and would cost the chi-squared power it
-    // deliberately over-provisions, so the time is bought, not wasted — but
-    // it is why this binary is slow, and the next heavy suite should know.
+    // other 19 suites finish in ~1s and wait for it. What costs that is 14 of
+    // its 224 assertions, drawing 131 000 random numbers between them; what
+    // they buy is the chi-squared power the suite over-provisions on purpose
+    // (alpha 1e-5), and nothing else. They are *not* what reaches
+    // `mrg32k3a-random-large` — the cheap `test-random` loop above them walks
+    // `n` to 2^204, so it takes the bignum path on ~172 of its own iterations
+    // for free. Trimming the draws would mean editing a verbatim suite and
+    // would cost only that statistical power, which is a real thing to weigh
+    // and not the coverage argument an earlier version of this comment made.
     (srfi_27_random, "srfi 27", "(srfi 27 test)", 0, 224),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the

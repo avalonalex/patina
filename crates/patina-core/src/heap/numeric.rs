@@ -1349,6 +1349,11 @@ impl Heap {
     }
 
     /// Compute angle (argument) in radians (always returns inexact)
+    ///
+    /// Raises on a non-number, as `magnitude` does. It used to answer `0.0`,
+    /// because the predicate it asked was documented total; going through
+    /// `numeric_to_f64` makes it partial, which is what R7RS wants and what
+    /// chibi does.
     pub fn angle(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
         // A real is the complex number with a `+0.0` imaginary part, so both
         // cases are one `atan2` over the components. That is also what makes

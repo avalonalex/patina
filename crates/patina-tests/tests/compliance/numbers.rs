@@ -80,6 +80,18 @@ fn test_angle_of_a_negative_zero() {
     // tree-walker-only `test_angle`, whose other two rows are above.
     assert_program_eval_to(&angle_of("+i"), "1.5707963267948966");
 
+    // The classes whose *mechanism* changed, which the rows above do not
+    // reach. Bignums decided their sign with `BigInt::sign()` and now go
+    // through `numeric_to_f64`; `+nan.0` used to answer `0.0`; and a
+    // non-number used to answer `0.0` too, because the predicate this
+    // replaced was documented total. All four match chibi.
+    assert_program_eval_to(&angle_of("(- (expt 2 5000))"), "3.141592653589793");
+    assert_program_eval_to(&angle_of("(expt 2 5000)"), "0.0");
+    assert_program_eval_to(&angle_of("+inf.0"), "0.0");
+    assert_program_eval_to(&angle_of("0"), "0.0");
+    assert_program_eval_to(&angle_of("+nan.0"), "+nan.0");
+    assert_program_eval_error("(import (scheme complex)) (angle \"x\")");
+
     // Unchanged: the ordering predicate is still an ordering predicate.
     assert_eval_to("(negative? -0.0)", "#f");
     assert_eval_to("(zero? -0.0)", "#t");
