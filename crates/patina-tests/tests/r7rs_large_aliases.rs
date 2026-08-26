@@ -31,7 +31,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("flonum", 144),     // Tangerine
     ("text", 135),       // Red
     ("ephemeron", 124),  // Red
-    ("rlist", 101),      // Red
+    ("rlist", 101),      // Red — renames, see RENAMING_ALIASES
 ];
 
 #[test]
@@ -49,6 +49,16 @@ fn test_all_alias_libraries_load() {
 /// An alias must re-export exactly what its backing SRFI exports -- no more,
 /// no fewer. A mismatch means the hand-listed export set has drifted from the
 /// source library, which is the failure mode this whole approach invites.
+/// The aliases that *rename* rather than re-export.
+///
+/// Almost every `(scheme …)` alias is a pure re-export of its SRFI, so the two
+/// export the same names and the tests below compare them directly. An alias
+/// whose SRFI deliberately shadows `(scheme base)` cannot do that — R7RS-large
+/// renames those so both libraries can be imported together — so it needs its
+/// own shape of check. Keeping the list here rather than testing the name in
+/// each place means the next one is a row, not a third `if`.
+const RENAMING_ALIASES: &[&str] = &["rlist"];
+
 #[test]
 fn test_alias_exports_match_backing_srfi() {
     let eval = Evaluator::new();
@@ -68,18 +78,34 @@ fn test_alias_exports_match_backing_srfi() {
         // `(scheme rlist)` renames rather than re-exports, and is the only one
         // that does. SRFI 101's own names shadow `(scheme base)` — it exports
         // `cons`, `car`, `list?` — so R7RS-large gives every one an `r` prefix
-        // to let both libraries be imported together. Comparing name sets is
-        // therefore the wrong check for it; comparing *counts* is the drift
-        // that still matters, since a name added to one and not the other is
-        // what this test exists to catch.
-        if *name == "rlist" {
-            assert_eq!(
-                a.len(),
-                s.len(),
-                "(scheme {name}) exports {} names, (srfi {srfi}) exports {} — the \
-                 alias renames one-for-one, so a difference means one gained a name",
-                a.len(),
-                s.len()
+        // to let both libraries be imported together.
+        //
+        // Comparing name sets is therefore the wrong check, but comparing
+        // *counts* is far too weak: the alias is a hand-written 48-entry
+        // mapping, and its characteristic mistake is a wrong target — writing
+        // `(rename cddar rcdddar)` keeps both counts at 48 while shipping two
+        // names for one accessor and none for another. So reconstruct the
+        // expected names from the rule and compare those.
+        if RENAMING_ALIASES.contains(name) {
+            let expected: Vec<String> = s
+                .iter()
+                // chibi's port exports one name R7RS-large does not have.
+                .filter(|k| k.as_str() != "length<=?")
+                .map(|k| match k.as_str() {
+                    "make-list" => "make-rlist".to_string(),
+                    "random-access-list->linear-access-list" => "rlist->list".to_string(),
+                    "linear-access-list->random-access-list" => "list->rlist".to_string(),
+                    other => format!("r{other}"),
+                })
+                .collect();
+            let mut expected_sorted = expected.clone();
+            expected_sorted.sort();
+            let missing: Vec<_> = expected_sorted.iter().filter(|k| !a.contains(k)).collect();
+            let extra: Vec<_> = a.iter().filter(|k| !expected_sorted.contains(k)).collect();
+            assert!(
+                missing.is_empty() && extra.is_empty(),
+                "(scheme rlist) is not `r` + each (srfi 101) name: missing {missing:?}, \
+                 extra {extra:?}"
             );
             continue;
         }
@@ -200,6 +226,23 @@ fn test_alias_bindings_are_usable() {
                    (ideque= = (ideque 1 2) built-from-back))",
             "((1 2 3) 1 3 (2 3) #t #f)",
         ),
+        // The only cargo-test reach into `(scheme rlist)`, so it covers what a
+        // lane cannot: `rquote`, a *macro* exported through two renames
+        // (`ra:quote` -> `quote` -> `rquote`) and the likeliest thing to break
+        // silently; the higher-order arms; the update operations; and one of
+        // the 28 compound accessors, whose rename targets are hand-written.
+        (
+            "(import (scheme base) (scheme rlist)) \
+             (define l (rlist 1 2 3 4 5)) \
+             (list (rlist->list (rquote (a b c))) \
+                   (rlist->list (rmap + l (rlist 10 20 30 40 50))) \
+                   (rlist->list (rlist-set l 0 'x)) \
+                   (rcadr l) \
+                   (rlist->list (rreverse (rlist-tail l 3))) \
+                   (rlength (make-rlist 3 'z)) \
+                   (rlist->list (list->rlist '(7 8))))",
+            "((a b c) (11 22 33 44 55) (x 2 3 4 5) 2 (5 4) 3 (7 8))",
+        ),
         // An arithmetic op, a rounding op and the two things this bundle had
         // to fix. The two `fl/` probes are chosen to be independent: the first
         // fails if the divisor's sign is ignored, the second if the
@@ -312,7 +355,7 @@ fn test_alias_and_srfi_share_bindings() {
         // `(srfi 101)`'s `quote` shadows the special form, and importing it
         // alongside anything that quotes trips triage family 33 — including
         // this program's own `'ok`. The pair is checked below by name instead.
-        if *name == "rlist" {
+        if RENAMING_ALIASES.contains(name) {
             continue;
         }
         let src = format!("(import (scheme {name}) (srfi {srfi})) 'ok");
@@ -322,15 +365,22 @@ fn test_alias_and_srfi_share_bindings() {
             "(scheme {name}) and (srfi {srfi}) must be the same bindings, not two copies"
         );
     }
-    // `(scheme rlist)` renames, so co-importing is checked through the alias
-    // alone: if it were a copy rather than a re-export, these would not be the
-    // same random-access list.
+    // `(scheme rlist)` renames, so it needs its own shape — but it still has
+    // to be the *same* bindings, which means reaching one library's
+    // constructor and the other's operation in one expression. `only` is what
+    // makes that possible: importing `(srfi 101)` wholesale would rebind
+    // `quote` and trip triage family 33 on this program's own literals.
+    //
+    // A `(scheme rlist)` that re-implemented its 48 procedures would answer
+    // this with a type error, not `(1 2 3 4)` — `rappend` would be walking a
+    // kons record type that `list` never built.
     assert_eq!(
         eval_to_string(
-            "(import (scheme base) (scheme rlist)) \
-             (rlist->list (rappend (rlist 1 2) (rlist 3)))"
+            "(import (except (scheme base) length list) (scheme rlist) \
+                     (only (srfi 101) list length)) \
+             (rlist->list (rappend (rlist 1 2) (list 3 4)))"
         ),
-        "(1 2 3)"
+        "(1 2 3 4)"
     );
 
     // One that also *uses* a shared binding, so the check is not only that the

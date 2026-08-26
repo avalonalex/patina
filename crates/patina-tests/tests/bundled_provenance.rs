@@ -88,11 +88,11 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/135.body.scm", 0xf04196a01d1a2cf7),
     ("lib/srfi/135/kernel8.sld", 0xb2238678735d7314),
     ("lib/srfi/135/kernel8.body.scm", 0x9f9606932d824c8d),
-    // SRFI 101 is the only bundle that was *ported* rather than copied:
-    // upstream ships R6RS `.sls` libraries. The marked edits are the two record
-    // definitions and one bitwise name; see PROVENANCE.md.
-    ("lib/srfi/101.sld", 0xce37903462adb9d2),
-    ("lib/srfi/101/rlist-impl.scm", 0xd3e5fefd8f9ca9c2),
+    // SRFI 101, byte-identical to chibi's R7RS adaptation of the SRFI's own
+    // reference implementation — the only R7RS rendering of it that exists.
+    // Laid out flat so its `(include "101.scm")` resolves unchanged.
+    ("lib/srfi/101.sld", 0x3f16ae5f678165dd),
+    ("lib/srfi/101.scm", 0xd53cf2d050279330),
     // SRFI 41's reference implementation as Retropikzel ported it,
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the
@@ -158,7 +158,6 @@ const PINNED: &[(&str, u64)] = &[
 /// list's job to assume.
 const PINNED_TREES: &[&str] = &[
     "lib/chibi",
-    "lib/srfi/101",
     "lib/srfi/116",
     "lib/srfi/117",
     "lib/srfi/125",
