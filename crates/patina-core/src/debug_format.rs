@@ -101,8 +101,13 @@ fn format_complex(real: TaggedValue, imag: TaggedValue, heap: &Heap, buf: &mut S
     let real_str = format_tagged(real, heap);
     let imag_str = format_tagged(imag, heap);
 
-    let real_is_zero = real_str == "0" || real_str == "0.0";
-    let imag_is_zero = imag_str == "0" || imag_str == "0.0";
+    // Asked of the values, not of their spelling: `"0.0"` is a zero but an
+    // *inexact* one, and dropping it writes a different number — `+2.0i` and
+    // `1.0` read back with exact zero parts. This is the formatter the REPL
+    // prints results with, so it has to agree with `write` and
+    // `number->string`, which ask `Heap::is_exact_zero` too.
+    let real_is_zero = heap.is_exact_zero(real);
+    let imag_is_zero = heap.is_exact_zero(imag);
 
     if real_is_zero && imag_is_zero {
         buf.push('0');
@@ -308,5 +313,44 @@ fn format_tagged_list(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
             format_tagged_impl(current, heap, buf, with_scopes);
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod complex_spelling_tests {
+    use super::format_tagged;
+    use crate::heap::Heap;
+
+    /// The REPL prints results through `format_tagged`, so it has to spell a
+    /// complex number the way `write` and `number->string` do.
+    ///
+    /// A zero part may be dropped only when it is *exact*: `+2.0i` and `1.0`
+    /// read back with exact zero parts, so using them for
+    /// `(make-rectangular 0.0 2.0)` or `1.0+0.0i` names a different number.
+    /// This formatter decided by comparing the formatted string against "0.0",
+    /// which cannot see the difference, and so kept printing `+2.0i` after the
+    /// other two writers had stopped.
+    #[test]
+    fn a_zero_part_is_dropped_only_when_exact() {
+        let mut heap = Heap::new();
+        let cases = [
+            (0.0_f64, 2.0_f64, "0.0+2.0i"),
+            (1.0, 0.0, "1.0+0.0i"),
+            (1.0, 2.0, "1.0+2.0i"),
+            (0.0, -2.0, "0.0-2.0i"),
+        ];
+        for (re, im, expected) in cases {
+            let r = heap.alloc_real(re);
+            let i = heap.alloc_real(im);
+            let z = heap.alloc_complex(r, i);
+            assert_eq!(format_tagged(z, &heap), expected, "for {re}+{im}i");
+        }
+
+        // Exact zeros still drop, which is what makes the short forms mean
+        // what they say.
+        let zero = crate::TaggedValue::fixnum(0);
+        let two = heap.alloc_real(2.0);
+        let z = heap.alloc_complex(zero, two);
+        assert_eq!(format_tagged(z, &heap), "+2.0i");
     }
 }
