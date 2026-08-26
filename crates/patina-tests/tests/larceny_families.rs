@@ -319,23 +319,17 @@ fn input_port_open_on_an_output_only_port_is_false() {
 /// Where `...` is bound as a variable, a `syntax-rules` written in that scope
 /// has no ellipsis: `(_ a b ...)` is a three-variable pattern (R7RS 4.3.2
 /// identifies the ellipsis by binding). chibi, Larceny, Kawa and Sagittarius
-/// agree; Gauche rejects the definition, as Patina does. This blocks
-/// Larceny's `base` suite at load time.
+/// agree; Gauche rejects the definition, as Patina used to. Fixed 2026-08-25.
 ///
-/// Two attempts were backed out after review (#111, #114): a whole-macro
-/// sentinel ellipsis, and a per-token rule keyed on the enclosing bindings'
-/// scope sets. Both fail the same way — they cannot tell a token's *own*
-/// scopes from the ones the template compiler unions in — so a bound `...`
-/// captured an outer macro's `(... ...)` escape, a generated macro's
-/// ellipsis, or (in the second attempt) a SRFI 46 `:::`. The fix is a
-/// binding-resolution the desugarer and the macro compiler share, ordered
-/// innermost-first, which is `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`'s
-/// project; the cases in the triage doc's family 14 are its acceptance
-/// tests.
-///
-/// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(program, "((2 1 3) (1))")` and update the triage
-/// doc.**
+/// Both halves matter and pull in opposite directions. `swap-first-two` is
+/// written inside the binding, so its `...` is that variable and not an
+/// ellipsis. `first-of` is *generated* by `def-first`, which is defined
+/// outside and escapes an ellipsis into it with `(... ...)`; that one is an
+/// ellipsis, even though the macro it lands in is compiled inside the
+/// binding. Deciding once per macro (#111) got the first and lost the
+/// second. The rule now asks per token, and reads the token's own scopes
+/// when it has an identity of its own — which is what an escaped `(... ...)`
+/// now carries — and the macro's definition scopes otherwise.
 #[test]
 fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
     let program = "(define-syntax def-first
@@ -346,7 +340,7 @@ fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
                        (syntax-rules () ((_ a b ...) (list b a ...))))
                      (def-first first-of)
                      (list (swap-first-two 1 2 3) (first-of 1 2 3 4)))";
-    assert_program_eval_error(program);
+    assert_program_eval_to(program, "((2 1 3) (1))");
 }
 
 // ---------------------------------------------------------------------------
@@ -355,18 +349,17 @@ fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
 // ---------------------------------------------------------------------------
 
 /// The macro is defined *inside* the binding, so its template's free `...`
-/// (or `if`) is that local variable — the definition scopes say so. The
-/// syntax-as-a-value check is by spelling and exempts scoped references
-/// (hygiene: an *outer* macro's `if` must stay the special form), so it
-/// reports the keyword instead. A containment test on the enclosing
-/// bindings' scope sets (#114) was backed out: it also captured a parameter
-/// named `if` in a `define` shorthand, let an outer variable veto an inner
-/// `let-syntax`, and broke macro-generating macros. Same project as family
-/// 14; this is what gates Larceny's `base` suite behind it.
+/// (or `if`) is that local variable — the definition scopes say so — and a
+/// template may refer to it. Reporting it as a keyword was the second of the
+/// pair gating Larceny's `base` suite. Fixed 2026-08-25.
 ///
-/// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)")`
-/// and update the triage doc.**
+/// What made it hard is that the opposite case looks identical by spelling:
+/// an *outer* macro's `if` must stay the special form even where the use
+/// site binds `if`, which is `test_special_form_not_captured` in the hygiene
+/// suite. Both now fall out of one resolution — a local variable is an
+/// ordinary binding, and each reference resolves in the scopes it stands in
+/// — where before a spelling set vetoed the check for one and could not see
+/// the other. The third element pins that the outer `my-if` still expands.
 #[test]
 fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
     let program = "(define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
@@ -374,7 +367,74 @@ fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
                      (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
                      (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
                      (list (mention-dots 1) (mention-if 2) (my-if #t 'outer-if-is-syntax 'no)))";
-    assert_program_eval_error(program);
+    assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)");
+}
+
+/// The cases the two backed-out attempts were wrong about, kept together
+/// because they are what tell a correct binding resolution from a plausible
+/// one. All verified against chibi 0.11.
+///
+/// Each is a way for a reference to *look* like it belongs to the scope it is
+/// written in when it does not, or the reverse:
+///
+/// - a declared SRFI 46 ellipsis inside `(let ((... 'dots)) …)` — `:::` is the
+///   ellipsis by declaration, and no binding of `...` has any bearing on it;
+/// - a macro defined at top level generating one used inside `(let ((if …)) …)`,
+///   whose template `if` is still the special form (#114 captured it);
+/// - `(define (f if) …)`, the shorthand that binds a parameter without a fresh
+///   scope, where an outer macro's `if` must survive (#114 captured it);
+/// - a template that introduces its *own* `(let ((if 1)) …)` around a user
+///   macro's `if`, which must not capture it either.
+///
+/// The last two are the direction that stays fixed: hygiene means a template's
+/// keyword is not captured by a binder at the use site. The family 14 and 15
+/// tests above are the other direction — a definition-site local *is* what a
+/// template naming it refers to — and one resolution has to give both.
+#[test]
+fn binding_resolution_acceptance_cases_from_the_backouts() {
+    assert_program_eval_to(
+        "(define r3 (let ((... 'dots))
+                      (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
+                      (m3 1 2 3)))
+         (define-syntax def-mid
+           (syntax-rules ()
+             ((_ name) (define-syntax name (syntax-rules () ((_ c) (if c 'yes 'no)))))))
+         (define r5 (let ((if 'shadowed)) (def-mid mid5) (mid5 #t)))
+         (define-syntax my-if6 (syntax-rules () ((_ c a b) (if c a b))))
+         (define (f6 if) (my-if6 #t 'ok 'no))
+         (define-syntax user7 (syntax-rules () ((_ e) (if #t e 'b))))
+         (define-syntax wrap7 (syntax-rules () ((_ e) (let ((if 1)) (user7 e)))))
+         (define r8 (let ((f (lambda (x) (+ x 1))))
+                      (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))))
+         (list r3 r5 (f6 1) (wrap7 'a) r8)",
+        "((2 3 1) yes ok a 1)",
+    );
+}
+
+/// A `let-syntax` transformer's free identifier denotes the binding that
+/// encloses the *form*, even when the program also defines that name at top
+/// level. Larceny's `base` is what found this: the suite happens to define
+/// its own `f`, so the same two assertions family 23 covers still failed
+/// there after they passed in isolation — `(g 1)` answered `"1"`, the
+/// suite's `number->string` wrapper, rather than 2.
+///
+/// The cause is one IR below hygiene. A template's free identifiers are
+/// linked back to the macro's definition environment by *name*, for the sake
+/// of a template that calls a helper private to the library defining it —
+/// and the name-only view of an environment deliberately hides local
+/// variables, so it could not tell this `f` from a global one and aliased it
+/// to the global. The link is asked with the macro's definition scopes now,
+/// and skips any name something lexical shadows.
+#[test]
+fn a_transformer_free_reference_prefers_the_enclosing_binding_over_a_global() {
+    assert_program_eval_to(
+        "(define (f n) (number->string n))
+         (let ((f (lambda (x) (+ x 1))))
+           (let-syntax ((f (syntax-rules () ((f x) x)))
+                        (g (syntax-rules () ((g x) (f x)))))
+             (list (f 1) (g 1))))",
+        "(1 2)",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -582,39 +642,39 @@ fn a_guard_reraise_reenters_the_dynamic_extent() {
     );
 }
 
-/// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local
-/// to it, not spliced into the enclosing one — and the macro names it binds
-/// are visible in the transformers only under `letrec-syntax`. Ours
-/// splices the definition out (`x` becomes 56 outside) and resolves a
-/// `let-syntax` transformer's reference to a sibling keyword.
+/// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local to
+/// it, not spliced into the enclosing one — and the macro names it binds are
+/// visible in the transformers only under `letrec-syntax`. Fixed 2026-08-25.
 ///
-/// **When this converges on `((13 70) (1 2) (1 1))`, replace with
-/// `assert_program_eval_to` and update the triage doc.**
+/// Three separate mistakes, and the middle one is the interesting one. `defs`
+/// binds `x` through a *macro*, so reading the body's source forms saw no
+/// definition and let it escape. `scope`'s `(f 1)` went to the outer variable
+/// because a keyword bound unscoped could never outrank one; and its `(g 1)`
+/// reached a sibling keyword that, under `let-syntax`, is not in scope in the
+/// transformers at all. `rec-scope` is the same body under `letrec-syntax`,
+/// where the sibling *is* in scope, and pins that the two forms still differ.
 #[test]
 fn let_syntax_body_definitions_and_transformer_scope() {
-    assert_eq!(
-        eval_program(
-            "(define (defs)
-               (let ((x 13))
-                 (define y 14)
-                 (let-syntax ((def (syntax-rules () ((_ var val) (define var val)))))
-                   (def x 56)
-                   (set! y (+ x y)))
-                 (list x y)))
-             (define (scope)
-               (let ((f (lambda (x) (+ x 1))))
-                 (let-syntax ((f (syntax-rules () ((f x) x)))
-                              (g (syntax-rules () ((g x) (f x)))))
-                   (list (f 1) (g 1)))))
-             (define (rec-scope)
-               (let ((f (lambda (x) (+ x 1))))
-                 (letrec-syntax ((f (syntax-rules () ((f x) x)))
-                                 (g (syntax-rules () ((g x) (f x)))))
-                   (list (f 1) (g 1)))))
-             (list (defs) (scope) (rec-scope))"
-        ),
-        "((56 70) (2 1) (2 1))",
-        "expected the pinned wrong answer; if this is now ((13 70) (1 2) (1 1)) the defect is fixed"
+    assert_program_eval_to(
+        "(define (defs)
+           (let ((x 13))
+             (define y 14)
+             (let-syntax ((def (syntax-rules () ((_ var val) (define var val)))))
+               (def x 56)
+               (set! y (+ x y)))
+             (list x y)))
+         (define (scope)
+           (let ((f (lambda (x) (+ x 1))))
+             (let-syntax ((f (syntax-rules () ((f x) x)))
+                          (g (syntax-rules () ((g x) (f x)))))
+               (list (f 1) (g 1)))))
+         (define (rec-scope)
+           (let ((f (lambda (x) (+ x 1))))
+             (letrec-syntax ((f (syntax-rules () ((f x) x)))
+                             (g (syntax-rules () ((g x) (f x)))))
+               (list (f 1) (g 1)))))
+         (list (defs) (scope) (rec-scope))",
+        "((13 70) (1 2) (1 1))",
     );
 }
 

@@ -321,10 +321,39 @@ impl Desugarer {
         new_shadows: impl IntoIterator<Item = Rc<str>>,
         new_scopes: ScopeSet,
     ) -> Self {
+        let names: Vec<Rc<str>> = new_shadows.into_iter().collect();
+
+        // A local binding is a binding. Recording it in the environment at the
+        // body's scope set is what lets `resolve_syntax` answer by ordinary
+        // set-of-scopes resolution — innermost wins, because the innermost
+        // binder's scope set is the largest one the reference contains — with
+        // no separate shadowing rule to keep in step. The value is a marker:
+        // nothing reads it, and all that matters is that it is neither core
+        // syntax nor a macro, so a name bound here answers "not syntax".
+        let env = if names.is_empty() {
+            self.env.clone()
+        } else {
+            let child = Rc::new(Environment::with_parent(self.env.clone()));
+            for name in &names {
+                child.define_with_scopes(
+                    name.to_string(),
+                    new_scopes.clone(),
+                    TaggedValue::UNSPECIFIED,
+                );
+            }
+            child
+        };
+
+        // Still recorded by spelling for the *literal* matcher, which compares
+        // spellings rather than bindings (`is_literal_shadowed_tagged`). That
+        // is the one place shadowing has not moved to bindings yet; it is the
+        // triage doc's "spelling-based literal matching" item, and it is a
+        // separate change from this one.
         let mut shadowed = self.shadowed_names.clone();
-        shadowed.extend(new_shadows);
+        shadowed.extend(names);
+
         Self {
-            env: self.env.clone(),
+            env,
             current_scopes: new_scopes,
             shadowed_names: shadowed,
             source_map: self.source_map.clone(),
@@ -464,9 +493,17 @@ impl Desugarer {
     /// fixing it means making shadowing scope-aware, a hygiene change of its
     /// own.
     fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Option<SyntaxRef> {
-        if scopes.is_empty() && self.is_shadowed(name) {
-            return None;
-        }
+        // A reference written in source carries no scopes of its own, but it is
+        // not therefore at top level: the scopes it stands in are the ones the
+        // desugarer has accumulated on the way here. Passing those is what lets
+        // an enclosing binder be *seen* rather than merely vetoed by spelling,
+        // and so what orders an inner keyword ahead of an outer variable. A
+        // macro-introduced reference already carries its own and keeps them.
+        let scopes = if scopes.is_empty() {
+            &self.current_scopes
+        } else {
+            scopes
+        };
         let tv = self.env.get_with_scopes(name, scopes)?;
         let heap = self.env.heap().borrow();
         if let Some(form) = heap.get_core_syntax(tv) {
@@ -530,6 +567,7 @@ impl Desugarer {
         &self,
         expanded: TaggedValue,
         definition_env: Option<&Rc<Environment>>,
+        definition_scopes: &ScopeSet,
         template_symbols: &HashSet<Rc<str>>,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
@@ -556,6 +594,22 @@ impl Desugarer {
             let Some(def_value) = def_env.get(name) else {
                 continue;
             };
+            // A name the definition site bound *lexically* is not free, and
+            // aliasing it would defeat the binding it actually names.
+            //
+            // `get` is the name-only view of the environment and deliberately
+            // skips local variables, so it cannot tell `(let ((f …)) …)` around
+            // this macro from a global `f` somewhere above — it answers with the
+            // global either way. Asking again with the macro's own scopes is
+            // what distinguishes them: a different answer means something
+            // lexical shadows the by-name view here, and ordinary set-of-scopes
+            // resolution is what should decide the reference. Without this, a
+            // `let-syntax` transformer's `(f x)` inside `(let ((f …)) …)` was
+            // aliased to whatever `f` the enclosing program happened to define
+            // — Larceny's `base` measured it as `number->string`.
+            if def_env.get_with_scopes(name, definition_scopes) != Some(def_value) {
+                continue;
+            }
             if self.env.get(name) == Some(def_value) {
                 continue;
             }
@@ -902,6 +956,7 @@ impl Desugarer {
             let expanded_tagged = self.link_definition_env_refs(
                 expanded_tagged,
                 compiled_macro.definition_env.as_ref(),
+                &compiled_macro.definition_scopes,
                 &compiled_macro.template_symbols,
                 shared_heap,
             );
@@ -1605,11 +1660,37 @@ impl Desugarer {
         // Parse bindings: ((name transformer) ...)
         let bindings_list = utils::list_to_vec_tagged(args_vec[0], shared_heap)?;
 
-        // Determine compilation environment
+        // Determine compilation environment, and the scopes the transformers
+        // are written in.
+        //
+        // R7RS §4.3.1: only `letrec-syntax` makes the keywords it binds visible
+        // inside its own transformers. Under `let-syntax` a transformer is
+        // written *outside* them, so its template's free identifiers must
+        // resolve where the form appears — at `self.current_scopes`, without
+        // the fresh scope — and a sibling keyword is simply not in scope there.
+        // Giving both forms the body's scopes is what made `let-syntax`
+        // resolve a sibling, which is half of family 23.
         let compile_env = if is_letrec {
             Rc::new(Environment::with_parent(env.clone()))
         } else {
             env.clone()
+        };
+        let transformer_scopes = if is_letrec {
+            definition_scopes.clone()
+        } else {
+            // A distinct fresh scope, not the *absence* of one. What a
+            // `let-syntax` transformer must not carry is `let_syntax_scope`,
+            // which is what would let its template resolve a sibling keyword;
+            // it still needs a scope set of its own, because the template
+            // compiler treats an empty one as "no scopes available" and falls
+            // back to marks-and-ribs hygiene (`compile_template`'s symbol
+            // case), where identifiers introduced by different expansions of
+            // one rule collapse into a single identity —
+            // `test_generated_template_capture_keeps_expansions_distinct`.
+            // Extra scopes on a reference are harmless to resolution: a
+            // binding matches when its scopes are a *subset* of the
+            // reference's, so this only withholds the one binding it should.
+            self.current_scopes.with_scope(ScopeId::fresh())
         };
 
         // Compile each macro binding — pass transformer TaggedValue directly
@@ -1641,19 +1722,46 @@ impl Desugarer {
                 shared_heap,
                 name.clone(),
                 &compile_env,
-                &definition_scopes,
+                &transformer_scopes,
             )?;
 
             macro_bindings.push((name, compiled_macro));
         }
 
-        // Create environment with macro bindings
+        // Create environment with macro bindings.
+        //
+        // Bound *with* the body's scopes, not unscoped: a local variable is a
+        // scoped binding now, so a keyword left unscoped could never outrank an
+        // enclosing variable of the same spelling — set-of-scopes resolution
+        // prefers the largest scope set the reference contains, and an unscoped
+        // binding is only reached when nothing scoped matches at all. Binding
+        // the keyword at `definition_scopes` is what makes the inner
+        // `let-syntax` win over an outer `(let ((f …)) …)`, which is R7RS
+        // §4.3.1 and what `let_syntax_body_definitions_and_transformer_scope`
+        // pins.
         let body_env = Rc::new(Environment::with_parent(env.clone()));
         for (name, compiled_macro) in macro_bindings {
             let tv = body_env
                 .heap()
                 .borrow_mut()
                 .alloc_macro(Rc::new(compiled_macro));
+            // Bound twice, for two kinds of reference.
+            //
+            // Scoped, so the keyword can outrank an enclosing variable of the
+            // same spelling: set-of-scopes resolution prefers the largest scope
+            // set the reference contains, and `definition_scopes` is strictly
+            // larger than any binder outside this form.
+            //
+            // Unscoped as well, because a reference the expander introduced —
+            // the `(n z)` inside another macro's template, which is chibi's
+            // `bound-identifier=?` test — carries the scopes of the template it
+            // came from and never the ones this body accumulated, so no scoped
+            // binding can match it. `get_with_scopes` falls back to the
+            // unscoped table only when nothing scoped matched, so this is
+            // reached exactly when there is no enclosing variable to order
+            // against, which is the case where the old unscoped binding was
+            // already right.
+            body_env.define_with_scopes(name.to_string(), definition_scopes.clone(), tv);
             body_env.define(name.to_string(), tv);
         }
 
@@ -1662,19 +1770,27 @@ impl Desugarer {
         // Get body TaggedValues
         let body_tvs: Vec<TaggedValue> = args_vec[1..].to_vec();
 
-        // Check if body contains internal defines
-        let has_internal_defines = body_tvs
+        let desugared_body =
+            self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &definition_scopes)?;
+
+        // R7RS §4.3.1: the body of `let-syntax` is a ⟨body⟩, so a definition in
+        // it is local to it and does not reach the enclosing body.
+        //
+        // Asked of the *desugared* body, not the forms as written. A definition
+        // here is very often one a macro produced — that is much of the point of
+        // binding a keyword around a body — and `(def x 56)` is a macro call
+        // until it is expanded, so reading the source forms saw no definition
+        // and let the `x` it binds escape and overwrite the enclosing one. That
+        // is the first half of Larceny's family 23.
+        //
+        // Still asked, rather than wrapping unconditionally: the wrapper costs a
+        // closure and puts the body out of tail position, and a body with no
+        // definitions needs neither.
+        let has_internal_defines = desugared_body
             .iter()
-            .any(|tv| self.is_regular_define_tagged(*tv, shared_heap));
+            .any(|e| matches!(e.kind, CoreExprKind::Define { .. }));
 
         if has_internal_defines {
-            let desugared_body = self.desugar_body_tagged(
-                &body_desugarer,
-                &body_tvs,
-                shared_heap,
-                &definition_scopes,
-            )?;
-
             Ok(CoreExpr::new(CoreExprKind::App {
                 func: CoreExpr::rc(CoreExprKind::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
@@ -1683,38 +1799,11 @@ impl Desugarer {
                 }),
                 args: vec![],
             }))
+        } else if desugared_body.len() == 1 {
+            Ok(desugared_body.into_iter().next().unwrap())
         } else {
-            let desugared_body = self.desugar_body_tagged(
-                &body_desugarer,
-                &body_tvs,
-                shared_heap,
-                &definition_scopes,
-            )?;
-
-            if desugared_body.len() == 1 {
-                Ok(desugared_body.into_iter().next().unwrap())
-            } else {
-                Ok(CoreExpr::new(CoreExprKind::Begin(desugared_body)))
-            }
+            Ok(CoreExpr::new(CoreExprKind::Begin(desugared_body)))
         }
-    }
-
-    /// Check if a TaggedValue is a regular `define` form (not `define-syntax`)
-    fn is_regular_define_tagged(&self, tv: TaggedValue, shared_heap: &SharedHeap) -> bool {
-        if !tv.is_pair() {
-            return false;
-        }
-
-        let heap = shared_heap.borrow();
-        if let Some((car, _)) = heap.try_pair(tv) {
-            if let Some(s) = heap.get_symbol_name(car) {
-                return s == "define";
-            }
-            if let Some((name, _)) = heap.get_identifier_data_any(car) {
-                return name.as_ref() == "define";
-            }
-        }
-        false
     }
 
     /// Desugar cond-expand using TaggedValue: (cond-expand clause ...)

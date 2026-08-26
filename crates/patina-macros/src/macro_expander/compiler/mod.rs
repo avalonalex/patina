@@ -63,6 +63,18 @@ pub struct Compiler {
     /// None means ellipsis is disabled (inside escape)
     pub(super) ellipsis: Option<Rc<str>>,
 
+    /// Whether that symbol was named by the macro (SRFI 46 / R7RS 4.3.2's
+    /// `(syntax-rules <ellipsis> …)`) rather than defaulted to `...`.
+    ///
+    /// The two are identified differently and must not be conflated. A named
+    /// ellipsis is a *declaration*: `:::` is the ellipsis inside this macro
+    /// whatever `:::` may be bound to elsewhere. The default `...` is
+    /// identified by its **binding** — R7RS 4.3.2 — so where `...` is bound
+    /// as a variable it is an ordinary pattern variable instead. Looking the
+    /// binding up for a declared ellipsis is one of the ways the backed-out
+    /// attempt in #114 went wrong.
+    pub(super) ellipsis_is_custom: bool,
+
     /// Lexical environment where the macro is being defined (for hygiene)
     ///
     /// Free variables in templates will capture this environment.
@@ -187,6 +199,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
+            ellipsis_is_custom: ellipsis.is_some(),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: None,
             definition_scopes: ScopeSet::new(),
@@ -220,6 +233,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
+            ellipsis_is_custom: ellipsis.is_some(),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes,
@@ -253,6 +267,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
+            ellipsis_is_custom: ellipsis.is_some(),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
@@ -291,6 +306,7 @@ impl Compiler {
         Self {
             literals: literal_bindings,
             literal_keys: literals,
+            ellipsis_is_custom: ellipsis.is_some(),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
             env: Some(env),
             definition_scopes: scopes,
