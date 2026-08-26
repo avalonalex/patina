@@ -107,6 +107,7 @@ pub enum HeapObjectType {
     VmClosure = 21,
     /// Mutable cell for captured variables that are `set!` after capture (patina-vm Phase 2)
     MutableCell = 22,
+    Ephemeron = 27,
     /// Opaque handle to a full VM continuation stored in VmState's side table (Phase 2 A6)
     VmContinuationRef = 23,
     /// Opaque handle to a delimited VM continuation stored in VmState's side table (Phase 2 A6)
@@ -184,6 +185,15 @@ pub enum HeapObjectData {
     /// by a VM closure. The cell holds the current value and is shared by
     /// reference among all closures that captured the same binding.
     MutableCell(RefCell<TaggedValue>),
+    /// SRFI 124 ephemeron: a key/datum pair whose key the collector holds
+    /// *weakly*, and whose datum it keeps alive only while the key is.
+    ///
+    /// `None` once the collector has *broken* the pair. That is a distinct
+    /// state rather than a pair of `#f`s, because SRFI 124 lets a key
+    /// legitimately be `#f` and such a pair is not broken until collected.
+    /// Behind a `RefCell` because breaking happens during a collection, when
+    /// the heap is otherwise immutable to the mutator.
+    Ephemeron(RefCell<Option<(TaggedValue, TaggedValue)>>),
     /// A VM bytecode closure: code id + captured free variables + globals env.
     VmClosure {
         /// Serialised as `u32` to avoid a direct dependency on patina-vm types.
@@ -237,6 +247,7 @@ impl HeapObjectData {
             HeapObjectData::LabelPlaceholder(_) => HeapObjectType::LabelPlaceholder,
             HeapObjectData::VmClosure { .. } => HeapObjectType::VmClosure,
             HeapObjectData::MutableCell(_) => HeapObjectType::MutableCell,
+            HeapObjectData::Ephemeron(_) => HeapObjectType::Ephemeron,
             HeapObjectData::VmContinuationRef(_) => HeapObjectType::VmContinuationRef,
             HeapObjectData::VmDelimitedContinuationRef(_) => {
                 HeapObjectType::VmDelimitedContinuationRef
@@ -1005,6 +1016,75 @@ impl Heap {
     }
 
     // =========================================================================
+    // Ephemeron Operations (SRFI 124)
+    // =========================================================================
+
+    /// Allocate an ephemeron holding `key` and `datum`.
+    ///
+    /// The collector traces the key weakly: the pair survives only while the
+    /// key is reachable by some other path, and the datum is kept alive only
+    /// for as long as the key is. When the key becomes unreachable the pair is
+    /// *broken* — both fields are cleared, so the datum cannot keep anything
+    /// alive through a dead key.
+    pub fn alloc_ephemeron(&mut self, key: TaggedValue, datum: TaggedValue) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Ephemeron(RefCell::new(Some((key, datum)))))
+    }
+
+    /// The key and datum of an ephemeron, or `None` if `tv` is not one.
+    ///
+    /// A broken ephemeron answers `Some((#f, #f))`, which is what SRFI 124
+    /// says its key and datum read as; [`Heap::is_ephemeron_broken`] is how to
+    /// tell that from a pair whose key really is `#f`.
+    pub fn get_ephemeron(&self, tv: TaggedValue) -> Option<(TaggedValue, TaggedValue)> {
+        if !tv.is_object() {
+            return None;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::Ephemeron(cell) => Some(
+                cell.borrow()
+                    .unwrap_or((TaggedValue::FALSE, TaggedValue::FALSE)),
+            ),
+            _ => None,
+        }
+    }
+
+    /// Whether the collector has broken this ephemeron.
+    pub fn is_ephemeron_broken(&self, tv: TaggedValue) -> bool {
+        if !tv.is_object() {
+            return false;
+        }
+        match self.get_object(tv) {
+            HeapObjectData::Ephemeron(cell) => cell.borrow().is_none(),
+            _ => false,
+        }
+    }
+
+    /// Whether `tv` is an ephemeron.
+    pub fn is_ephemeron(&self, tv: TaggedValue) -> bool {
+        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Ephemeron(_))
+    }
+
+    /// Break an ephemeron: clear both fields.
+    ///
+    /// Called by the collector for a pair whose key it found unreachable.
+    /// Takes `&self` because it runs inside the mark phase, which borrows the
+    /// heap immutably; the `RefCell` is what makes that sound.
+    pub fn break_ephemeron(&self, index: HeapIndex) {
+        if let HeapObjectData::Ephemeron(cell) = &self.objects[index as usize] {
+            *cell.borrow_mut() = None;
+        }
+    }
+
+    /// The key and datum of the ephemeron at `index`, for the collector's
+    /// fixpoint. `None` for a pair already broken, or a non-ephemeron.
+    pub fn ephemeron_pair_at(&self, index: HeapIndex) -> Option<(TaggedValue, TaggedValue)> {
+        match &self.objects[index as usize] {
+            HeapObjectData::Ephemeron(cell) => *cell.borrow(),
+            _ => None,
+        }
+    }
+
+    // =========================================================================
     // MutableCell Operations (patina-vm Phase 2 — set! on captured variables)
     // =========================================================================
 
@@ -1668,6 +1748,7 @@ impl Heap {
                 HeapObjectData::Exception { .. } => "error-object",
                 HeapObjectData::Procedure(_) => "procedure",
                 HeapObjectData::Port(_) => "port",
+                HeapObjectData::Ephemeron(_) => "ephemeron",
                 HeapObjectData::Macro(_) => "macro",
                 HeapObjectData::CoreSyntax(_) => "syntax",
                 HeapObjectData::RecordType(_) => "record-type",

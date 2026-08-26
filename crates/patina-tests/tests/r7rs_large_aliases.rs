@@ -30,6 +30,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("ideque", 134),     // Red
     ("flonum", 144),     // Tangerine
     ("text", 135),       // Red
+    ("ephemeron", 124),  // Red
 ];
 
 #[test]

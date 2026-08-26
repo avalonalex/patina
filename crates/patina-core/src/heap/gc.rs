@@ -417,6 +417,10 @@ pub struct GcVisitor<'h> {
     /// to [`GcRoots::trace_weak_ids`].
     live_weak_ids: FxHashSet<u64>,
     new_weak_ids: Vec<u64>,
+    /// Ephemerons reached during marking, awaiting the fixpoint in
+    /// [`run_mark_phase`]. An entry leaves when its key turns out to be
+    /// reachable; whatever is left at the end has a dead key and is broken.
+    pending_ephemerons: Vec<HeapIndex>,
 }
 
 impl<'h> GcVisitor<'h> {
@@ -447,6 +451,7 @@ impl<'h> GcVisitor<'h> {
             seen_shared: FxHashSet::default(),
             live_weak_ids: FxHashSet::default(),
             new_weak_ids: Vec::new(),
+            pending_ephemerons: Vec::new(),
         }
     }
 
@@ -481,6 +486,30 @@ impl<'h> GcVisitor<'h> {
 
     /// For bare object-arena indices that are not stored as `TaggedValue`
     /// (e.g. the VM's `CallFrame.closure`).
+    /// Whether `tv` is reachable independently of the ephemeron holding it:
+    /// either it is not a heap cell at all, or marking has already reached it.
+    ///
+    /// Used only by the ephemeron fixpoint, which must not *cause* the key to
+    /// be marked — that is the whole difference between a weak key and a
+    /// strong one.
+    pub fn value_is_live(&self, tv: TaggedValue) -> bool {
+        if tv.is_pair() {
+            self.marks.pairs.get(tv.heap_index() as usize)
+        } else if tv.is_vector() {
+            self.marks.vectors.get(tv.heap_index() as usize)
+        } else if tv.is_string() {
+            self.marks.strings.get(tv.heap_index() as usize)
+        } else if tv.is_object() {
+            self.marks.objects.get(tv.heap_index() as usize)
+        } else {
+            // Immediates have no cell to lose. A closure is not tracked by
+            // these four bit sets either, so it lands here too — which is
+            // conservative in the safe direction: the pair survives a
+            // collection it might have been broken by, and never the reverse.
+            true
+        }
+    }
+
     pub fn visit_object_index(&mut self, index: HeapIndex) {
         if self.marks.objects.set(index as usize) {
             self.worklist.push(TaggedValue::object(index));
@@ -611,11 +640,11 @@ impl<'h> GcVisitor<'h> {
                 self.visit(element);
             }
         } else if tv.is_object() {
-            self.trace_object_children(&heap.objects[idx]);
+            self.trace_object_children(&heap.objects[idx], tv.heap_index());
         }
     }
 
-    fn trace_object_children(&mut self, data: &'h HeapObjectData) {
+    fn trace_object_children(&mut self, data: &'h HeapObjectData, index: HeapIndex) {
         match data {
             // Leaves: no embedded heap references.
             HeapObjectData::BigInt(_)
@@ -630,6 +659,14 @@ impl<'h> GcVisitor<'h> {
             | HeapObjectData::LabelPlaceholder(_)
             | HeapObjectData::CoreSyntax(_)
             | HeapObjectData::Free => {}
+
+            // Weak key, SRFI 124: neither field is traced here. The datum
+            // must survive only as long as the *key* does, so tracing either
+            // one now would be wrong — tracing the key would make the pair
+            // strong, and tracing the datum would let a dead key keep it
+            // alive. Both wait for the ephemeron fixpoint below, which traces
+            // a pair only once it knows the key is reachable some other way.
+            HeapObjectData::Ephemeron(_) => self.pending_ephemerons.push(index),
 
             // Weak keys: the payload lives in VmState's side tables and is
             // traced only if the ref object itself is live — record the id
@@ -921,6 +958,45 @@ pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
         }
         visitor.drain();
     }
+    // Ephemeron fixpoint (SRFI 124). A pair's datum must be kept alive only
+    // while its key is, so neither field was traced when the pair was reached.
+    // Now: any pair whose key is reachable *by some other path* is retained —
+    // trace both fields — and doing so can make further keys reachable, so
+    // this repeats until a round retains nothing new. Terminates because each
+    // round strictly shrinks `pending`.
+    //
+    // An immediate key (fixnum, char, boolean, …) has no heap cell to become
+    // unreachable, so it counts as always live.
+    loop {
+        let pending = std::mem::take(&mut visitor.pending_ephemerons);
+        let mut still_pending = Vec::with_capacity(pending.len());
+        let mut retained_any = false;
+        for index in pending {
+            let Some((key, datum)) = heap.ephemeron_pair_at(index) else {
+                continue;
+            };
+            if visitor.value_is_live(key) {
+                visitor.visit(key);
+                visitor.visit(datum);
+                retained_any = true;
+            } else {
+                still_pending.push(index);
+            }
+        }
+        visitor.drain();
+        // `drain` may have reached more ephemerons; keep them too.
+        visitor.pending_ephemerons.append(&mut still_pending);
+        if !retained_any {
+            break;
+        }
+    }
+
+    // Whatever is left has an unreachable key: break it, so its datum stops
+    // being a root and `ephemeron-broken?` answers #t.
+    for &index in &visitor.pending_ephemerons {
+        heap.break_ephemeron(index);
+    }
+
     for provider in roots {
         provider.sweep_weak(&visitor);
     }

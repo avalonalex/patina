@@ -35,7 +35,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 116 | `(scheme ilist)` | Immutable lists | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 116)`, 2026-08-25) |
 | SRFI 117 | `(scheme list-queue)` | List queues | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 117)`, 2026-08-25) |
 | SRFI 121 | `(scheme generator)` | Generators | — superseded by SRFI 158 | — |
-| SRFI 124 | `(scheme ephemeron)` | Ephemerons | ❌ | ❌ |
+| SRFI 124 | `(scheme ephemeron)` | Ephemerons | ✅ shipped | ✅ shipped (Rust-backed, 2026-08-26) |
 | SRFI 125 | `(scheme hash-table)` | Hash tables | ✅ | ✅ |
 | SRFI 127 | `(scheme lseq)` | Lazy sequences | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 127)`, 2026-08-25) |
 | SRFI 128 | `(scheme comparator)` | Comparators | ✅ shipped | ✅ shipped |
@@ -44,7 +44,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI 134 | `(scheme ideque)` | Immutable deques | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 134)`, 2026-08-25) |
 | SRFI 135 | `(scheme text)` | Immutable texts | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 135)`, 2026-08-26) |
 
-**Red status: 14 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 125, 127, 128, 132, 133, 134, 135), all reachable under both `(srfi n)` and their `(scheme …)` names (15 counting SRFI 158 standing in for the superseded 121).
+**Red status: 15 of 17 shipped** (SRFI 1, 14, 41, 111, 113, 116, 117, 124, 125, 127, 128, 132, 133, 134, 135), all reachable under both `(srfi n)` and their `(scheme …)` names (16 counting SRFI 158 standing in for the superseded 121). SRFI 124 is the first implemented in Rust rather than bundled: an ephemeron's defining property is a statement about what the collector does, so there is no Scheme to vendor.
 
 **Notes:**
 - SRFI 129 (titlecase) was voted down

@@ -316,6 +316,10 @@ impl VmBackend {
             stdlib::build_internal_lazy,
         );
         rust_loader.register(
+            vec!["patina".into(), "internal".into(), "ephemeron".into()],
+            stdlib::build_internal_ephemeron,
+        );
+        rust_loader.register(
             vec!["patina".into(), "internal".into(), "syntax".into()],
             stdlib::build_internal_syntax,
         );

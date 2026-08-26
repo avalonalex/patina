@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-26 11:09:20  
+**Generated:** 2026-08-26 13:17:18  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,21 +10,20 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 21 of 33 |
-| Assertions passed | 8358 of 8387 (99.7%) |
-| Suites not reaching a tally | 2 |
+| Assertions passed | 8363 of 8393 (99.6%) |
+| Suites not reaching a tally | 1 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (2)
+## Library under test not bundled (1)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
 | Suite | Missing |
 |---|---|
-| ephemeron | `(scheme ephemeron)` |
 | rlist | `(scheme rlist)` |
 
-## Assertion failures (29 in 10 suites)
+## Assertion failures (30 in 11 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -53,6 +52,10 @@ Each entry links to the test case; the name after it is the procedure the assert
 ### complex — 1 of 61 failed
 
 - [complex.body.scm:89](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/complex.body.scm#L89) — `log`
+
+### ephemeron — 1 of 6 failed
+
+- [ephemeron.sld:69](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ephemeron.sld#L69) — `map`
 
 ### eval — 1 of 3 failed
 
@@ -99,7 +102,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | comparator | pass | 158 | 158 |
 | complex | fail | 60 | 61 |
 | cxr | pass | 28 | 28 |
-| ephemeron | not-bundled | 0 | 0 |
+| ephemeron | fail | 5 | 6 |
 | eval | fail | 2 | 3 |
 | file | pass | 75 | 75 |
 | flonum | fail | 1279 | 1280 |

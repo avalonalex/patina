@@ -320,6 +320,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
     ),
     (
+        "srfi 124",
+        "the SRFI ships implementations but no tests, and chibi's (srfi 124) has none either; Larceny's `ephemeron` suite is the only upstream one and is a lane, not a cargo test. crates/patina-tests/tests/ephemerons.rs pins the behaviour on both backends, forcing collection directly rather than by allocating 100 million pairs",
+    ),
+    (
         "srfi 135 kernel8",
         "SRFI 135's text representation, not a library anyone imports: `(srfi 135)` selects it and upstream ships no suite for it separately. `srfi/135/test.sld` exercises it through the whole of `(srfi 135)`, 1030 assertions",
     ),
