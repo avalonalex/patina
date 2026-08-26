@@ -247,10 +247,12 @@ suite_tests! {
     // coverage that runs: Larceny's suite is a separate lane nothing in CI
     // invokes, and this one is a cargo test.
     (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
+    (srfi_135_text, "srfi 135", "(srfi 135 test)", 0, 1071),
     // Verbatim; runnable since `(scheme flonum)` is bundled.
     //
     // It also costs about 27s, which is this whole binary's runtime — the
-    // other 19 suites finish in ~1s and wait for it. What costs that is 14 of
+    // other 20 suites finish in a few seconds and wait for it — most of that
+    // few is SRFI 135, at ~3s on the tree-walker. What costs 27s is 14 of
     // its 224 assertions, drawing 131 000 random numbers between them; what
     // they buy is the chi-squared power the suite over-provisions on purpose
     // (alpha 1e-5), and nothing else. They are *not* what reaches
@@ -316,6 +318,10 @@ const NO_SUITE: &[(&str, &str)] = &[
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 135 kernel8",
+        "SRFI 135's text representation, not a library anyone imports: `(srfi 135)` selects it and upstream ships no suite for it separately. `srfi/135/test.sld` exercises it through the whole of `(srfi 135)`, 1030 assertions",
     ),
     (
         "srfi 144",

@@ -29,6 +29,7 @@ const ALIASES: &[(&str, u32)] = &[
     ("ilist", 116),      // Red
     ("ideque", 134),     // Red
     ("flonum", 144),     // Tangerine
+    ("text", 135),       // Red
 ];
 
 #[test]
@@ -190,6 +191,18 @@ fn test_alias_bindings_are_usable() {
                    (flnumerator +inf.0) (fldenominator -inf.0) (flsign-bit -1.0))",
             "(3.0 2.0 -inf.0 +inf.0 +inf.0 1.0 1)",
         ),
+        // A text is not a string, so the conversions are the interesting part
+        // — and `textual-` procedures accept both, which is the distinction
+        // this case pins along with the kernel's own indexing.
+        (
+            "(import (scheme text) (scheme base)) \
+             (define t (string->text \"hello\")) \
+             (list (text? t) (text? \"hello\") (textual? \"hello\") \
+                   (text-length t) (textual->string (subtext t 1 3)) \
+                   (textual->string (textual-upcase t)) \
+                   (textual->string (textual-append t (text #\\!))))",
+            "(#t #f #t 5 \"el\" \"HELLO\" \"hello!\")",
+        ),
         // Generator-backed on purpose: a plain list exercises paths
         // indistinguishable from SRFI 1's `take`, and it was exactly the
         // generator path that carried the `lseq-append` defect chibi's copy
@@ -208,6 +221,60 @@ fn test_alias_bindings_are_usable() {
     for (src, expected) in cases {
         assert_eq!(eval_to_string(src), expected, "for: {src}");
     }
+}
+
+/// The four `PATINA LOCAL EDIT`s in SRFI 135's body, which neither suite
+/// reaches.
+///
+/// All four are upstream defects — chibi ships the same code and still has
+/// them — and all four turn on the argument being a *text* rather than a
+/// string, which is why an interface suite that mostly passes strings misses
+/// them. The shape that triggers the first three is an ASCII cased character
+/// *before* a character above U+007F: the scanner starts on an all-ASCII fast
+/// path, switches to the slow one at the cased character, and the slow path
+/// was the broken copy.
+#[test]
+fn text_case_and_replicate_local_edits() {
+    // `subtext` returns a text; `string-upcase` and `string-caser` take
+    // strings. Without the conversion these raised a type error.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (textual->string (textual-upcase (string->text \"a\\xdf;\")))"
+        ),
+        "\"ASS\""
+    );
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (textual->string (textual-downcase (string->text \"A\\xdf;\")))"
+        ),
+        "\"a\u{df}\""
+    );
+
+    // `textual-foldcase` on a text applied `textual-downcase` instead of the
+    // caser it was handed, so folding degraded to downcasing. A text and a
+    // string must fold alike, and a medial sigma must not fold to a final one.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (list (textual->string (textual-foldcase (string->text \"\\xdf;\"))) \
+                   (textual->string (textual-foldcase \"\\xdf;\")) \
+                   (textual->string (textual-foldcase (string->text \"\\x39e;\\x3a3;\"))))"
+        ),
+        "(\"ss\" \"ss\" \"\u{3be}\u{3c3}\")"
+    );
+
+    // The degenerate slice returned the *string* "" where SRFI 135 says text.
+    assert_eq!(
+        eval_to_string(
+            "(import (scheme text) (scheme base)) \
+             (list (text? (textual-replicate \"abc\" 0 0)) \
+                   (text-length (textual-replicate \"abc\" 0 0)) \
+                   (textual->string (textual-replicate \"abc\" 2 5)))"
+        ),
+        "(#t 0 \"cab\")"
+    );
 }
 
 /// The alias and the SRFI must denote the same binding, not two copies.

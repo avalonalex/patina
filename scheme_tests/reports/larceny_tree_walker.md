@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-26 00:35:41  
+**Generated:** 2026-08-26 11:17:41  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,13 +9,13 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 18 of 33 |
-| Assertions passed | 7053 of 7083 (99.6%) |
-| Suites not reaching a tally | 5 |
+| Suites fully passing | 19 of 33 |
+| Assertions passed | 8137 of 8167 (99.6%) |
+| Suites not reaching a tally | 4 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (3)
+## Library under test not bundled (2)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
@@ -23,7 +23,6 @@ Bundling work, not defects — each is a Red-edition library Patina does not shi
 |---|---|
 | ephemeron | `(scheme ephemeron)` |
 | rlist | `(scheme rlist)` |
-| text | `(scheme text)` |
 
 ## Crashed or hung (2)
 
@@ -38,7 +37,7 @@ No tally was reached: the process died, or the runner's timeout cut it off. A cr
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### base — 11 of 1064 failed
+### base — 11 of 1079 failed
 
 - (not located) — `v`
 - (not located) — `v`
@@ -102,7 +101,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | fail | 1053 | 1064 |
+| base | fail | 1068 | 1079 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | crash | 0 | 0 |
@@ -131,7 +130,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
 | stream | timeout | 0 | 0 |
-| text | not-bundled | 0 | 0 |
+| text | pass | 1069 | 1069 |
 | time | fail | 1 | 2 |
 | vector | pass | 103 | 103 |
 | write | fail | 37 | 40 |
