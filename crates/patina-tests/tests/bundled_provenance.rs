@@ -60,6 +60,16 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/117/list-queues-impl.scm", 0x30690c9b26f3e72b),
     ("lib/srfi/127.sld", 0x6171c0c4565c6a0f),
     ("lib/srfi/127/lseqs-impl.scm", 0x13a69d50373b02fe),
+    // SRFI 134's implementation is the body of upstream's own `srfi/134.sld`,
+    // which ships it inline rather than as an include; the split into a
+    // `.sld` and an impl file is ours, the code between them is not. Named
+    // `ideque-stream-impl.scm` and not `ideque-impl.scm`, which is what every
+    // sibling's naming would suggest, because upstream *has* an
+    // `ideque-2list/ideque-impl.scm` and it is a different implementation —
+    // the name that reads as conventional here would send a diff at the wrong
+    // file.
+    ("lib/srfi/134.sld", 0x8cc0b0c42ba84809),
+    ("lib/srfi/134/ideque-stream-impl.scm", 0xeadd47dfb4dc28e8),
     // SRFI 41's reference implementation as Retropikzel ported it,
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the
@@ -112,7 +122,26 @@ const PINNED: &[(&str, u64)] = &[
 /// The trees whose `.scm`/`.sld` files must ALL appear in [`PINNED`]. The
 /// provenance records say "every file in this tree"; without this, a file
 /// *added* to a pinned tree would be unguarded while the records stay green.
-const PINNED_TREES: &[&str] = &["lib/chibi", "lib/srfi/116", "lib/srfi/132"];
+/// Directories where *every* Scheme file is vendored, so that a file added to
+/// one is caught rather than silently unguarded.
+///
+/// Listed rather than derived from the directory component of each `PINNED`
+/// path, because two of those directories are mixed and would fail: `lib/srfi`
+/// holds Patina-authored `.sld` wrappers beside the vendored subdirectories,
+/// and `lib/srfi/128` holds `128.body1.scm` and `128.body2.scm`, which are
+/// upstream (John Cowan, MIT) but have never been pinned. That second one is a
+/// real gap in this guard and is left as one deliberately: pinning those files
+/// means first establishing what they are byte-identical to, which is not this
+/// list's job to assume.
+const PINNED_TREES: &[&str] = &[
+    "lib/chibi",
+    "lib/srfi/116",
+    "lib/srfi/117",
+    "lib/srfi/125",
+    "lib/srfi/127",
+    "lib/srfi/132",
+    "lib/srfi/134",
+];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
     for path in files_under(dir) {

@@ -234,6 +234,19 @@ suite_tests! {
     // assertions) and finds 8 failures in the comparator section — see
     // PROVENANCE.md and triage family 29.
     (srfi_116_ilist, "srfi 116", "(srfi 116 test)", 0, 196),
+    // Upstream's own suite for the implementation bundled here — the
+    // distribution's top-level `srfi-134-tests.scm`, which is the one matched
+    // to `srfi/134.sld`. (The `ideque-2list` directory ships a near-identical
+    // suite for the *other* implementation; taking that one instead, as this
+    // row first did, buys nothing and breaks the version-matching this tree
+    // otherwise keeps.) Wrapped in a `(srfi 134 test)` library with its import
+    // block replaced; test bodies unmodified. See scheme_tests/upstream/README.
+    //
+    // It duplicates Larceny's `ideque` suite almost exactly — the two exercise
+    // the same 55 procedures — so this row is not extra *coverage*. It is
+    // coverage that runs: Larceny's suite is a separate lane nothing in CI
+    // invokes, and this one is a cargo test.
+    (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
     // The chibi suites are from the same pinned snowballs as the bundled
     // libraries themselves (lib/chibi/PROVENANCE.md), restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
