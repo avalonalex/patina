@@ -970,7 +970,22 @@ impl Heap {
             if self.is_numeric_zero_tv(a) {
                 return Ok(self.alloc_real(f64::NAN));
             }
-            let sign = if self.is_numeric_negative_tv(a) {
+            // IEEE 754 §6.3: the sign of a quotient is the exclusive-or of
+            // the operand signs, and a zero divisor still carries one — `-0.0`
+            // is negative even though it is not *less than* zero, which is why
+            // the numerator's sign alone is not the answer. Taking only it
+            // made `(/ 1.0 -0.0)` answer `+inf.0`, and with it SRFI 144's
+            // `(fl/ -0.0)`.
+            let divisor_negative = self
+                .numeric_to_f64(b)
+                .map(f64::is_sign_negative)
+                .unwrap_or(false);
+            let numerator_negative = self.is_numeric_negative_tv(a)
+                || self
+                    .numeric_to_f64(a)
+                    .map(f64::is_sign_negative)
+                    .unwrap_or(false);
+            let sign = if numerator_negative != divisor_negative {
                 -1.0
             } else {
                 1.0

@@ -70,6 +70,16 @@ const PINNED: &[(&str, u64)] = &[
     // file.
     ("lib/srfi/134.sld", 0x8cc0b0c42ba84809),
     ("lib/srfi/134/ideque-stream-impl.scm", 0xeadd47dfb4dc28e8),
+    // SRFI 144's own `srfi/144.sld` and its body files. The `.sld` carries a
+    // marked local edit for include paths only; `144.r6rs.scm` carries one for
+    // the infinities, which the R7RS `numerator` it delegates to does not
+    // accept. Both are described in PROVENANCE.md.
+    ("lib/srfi/144.sld", 0x6b65aaa445fe327e),
+    ("lib/srfi/144/144.body.scm", 0x21bebf04ab1f01d2),
+    ("lib/srfi/144/144.body0.scm", 0xfe113242007e0f8c),
+    ("lib/srfi/144/144.constants.scm", 0x416e0cfcce318bdc),
+    ("lib/srfi/144/144.r6rs.scm", 0xa7e1f30e6b5cac90),
+    ("lib/srfi/144/144.special.scm", 0x447d7e808fd68d38),
     // SRFI 41's reference implementation as Retropikzel ported it,
     // byte-identical. Its `.sld` is pinned post-edit: two lines export and
     // include `stream-match`, which the port comments out because the
@@ -141,6 +151,7 @@ const PINNED_TREES: &[&str] = &[
     "lib/srfi/127",
     "lib/srfi/132",
     "lib/srfi/134",
+    "lib/srfi/144",
 ];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {

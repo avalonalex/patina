@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 22:15:40  
+**Generated:** 2026-08-26 00:27:24  
 **Backend:** VM  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,23 +10,22 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 20 of 33 |
-| Assertions passed | 5995 of 6023 (99.5%) |
-| Suites not reaching a tally | 4 |
+| Assertions passed | 7274 of 7303 (99.6%) |
+| Suites not reaching a tally | 3 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Library under test not bundled (4)
+## Library under test not bundled (3)
 
 Bundling work, not defects — each is a Red-edition library Patina does not ship yet.
 
 | Suite | Missing |
 |---|---|
 | ephemeron | `(scheme ephemeron)` |
-| flonum | `(srfi 144)` |
 | rlist | `(scheme rlist)` |
 | text | `(scheme text)` |
 
-## Assertion failures (28 in 9 suites)
+## Assertion failures (29 in 10 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -59,6 +58,10 @@ Each entry links to the test case; the name after it is the procedure the assert
 ### eval — 1 of 3 failed
 
 - [eval.sld:33](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/eval.sld#L33) — `eval` `eval:car`
+
+### flonum — 1 of 1280 failed
+
+- [flonum.sld:632](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/flonum.sld#L632) — `map`
 
 ### ilist — 8 of 345 failed
 
@@ -100,7 +103,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | ephemeron | not-bundled | 0 | 0 |
 | eval | fail | 2 | 3 |
 | file | pass | 75 | 75 |
-| flonum | not-bundled | 0 | 0 |
+| flonum | fail | 1279 | 1280 |
 | generator | pass | 49 | 49 |
 | hash-table | pass | 82 | 82 |
 | ideque | pass | 114 | 114 |
