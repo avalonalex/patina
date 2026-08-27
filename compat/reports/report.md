@@ -1,14 +1,14 @@
 # Patina third-party compatibility (vm backend)
 
-**125 of 161 packages pass.**
+**127 of 161 packages pass.**
 
-**125 of 136 in scope** — 25 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**127 of 136 in scope** — 25 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 125 | 125 |
-| missing-library | 11 | 7 |
-| parse-error | 13 | 3 |
+| pass | 127 | 127 |
+| missing-library | 10 | 6 |
+| parse-error | 12 | 2 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
 | wrong-result | 1 | 0 |
@@ -21,8 +21,8 @@
 | Library | In-scope packages |
 |---|---|
 | (srfi 114 comparators) | 2 |
-| (srfi 144) | 2 |
-| (scheme flonum) | 1 |
+| (scheme mapping) | 1 |
+| (srfi 160 base) | 1 |
 | (srfi 165) | 1 |
 | (srfi 231) | 1 |
 
@@ -31,7 +31,6 @@
 | Error | In-scope packages |
 |---|---|
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `Macro expansion failed: Invalid syntax: No matching pattern for macro ssax:make-parser/positional-args` | 1 |
 | `unhandled exception: unhandled exception: #<unknown>` | 1 |
 
 ## Unbound identifiers
@@ -136,7 +135,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-voting | test | wrong-result | upstream-test-defect |
 | chibi-xgboost | test | missing-library | ffi |
 | chibi-xlib | probe | out-of-scope | ffi |
-| chrisoei-cint | test | missing-library | in scope |
+| chrisoei-cint | test | pass | in scope |
 | chrisoei-test | probe | pass | in scope |
 | comparators | test | unbound-identifier | upstream-test-defect |
 | edn | test | parse-error | upstream-source-defect |
@@ -152,7 +151,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | lassik-unpack-assoc | probe | pass | in scope |
 | lightweight-testing | probe | pass | in scope |
 | macduffie-json | probe | pass | in scope |
-| okmij-ssax | test | parse-error | in scope |
+| okmij-ssax | test | pass | in scope |
 | pfds-alist | probe | pass | in scope |
 | pfds-bitwise | probe | pass | in scope |
 | pfds-bounded-balance-tree | probe | pass | in scope |

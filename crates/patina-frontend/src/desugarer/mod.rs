@@ -689,14 +689,15 @@ impl Desugarer {
     ///
     /// Only an identifier carrying the expansion's scope qualifies. The
     /// expander puts that scope on everything the template introduced and on
-    /// nothing that arrived through a pattern variable, so the `list` a
-    /// template writes is renamed and the `(list 1 2 3)` the user wrote
-    /// inside the macro call is not — they can mean different procedures,
-    /// and under SRFI 101, where the program's `list` builds random-access
-    /// lists and `(chibi test)`'s builds pairs, they do. Renaming by
-    /// spelling alone rewrote the user's as well; that is Larceny family 35.
-    /// A plain symbol never qualifies: the expander leaves the user's symbols
-    /// as symbols, and turns what it introduces into identifiers.
+    /// nothing that arrived through a pattern variable — a user's symbol
+    /// comes out of the expansion as an identifier too, but one *without*
+    /// this scope, since the input flip put it there and the output flip
+    /// took it off. So the `list` a template writes is renamed and the
+    /// `(list 1 2 3)` the user wrote inside the macro call is not — they can
+    /// mean different procedures, and under SRFI 101, where the program's
+    /// `list` builds random-access lists and `(chibi test)`'s builds pairs,
+    /// they do. Renaming by spelling alone rewrote the user's as well; that
+    /// is Larceny family 35.
     fn introduced_alias(
         &self,
         tv: TaggedValue,
@@ -704,11 +705,34 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> Option<TaggedValue> {
         let heap = shared_heap.borrow();
-        let (name, scopes) = heap.get_identifier_data_any(tv)?;
+        let (name, scopes) = heap.get_identifier_data(tv)?;
         if !scopes.contains(&renames.expansion_scope) {
             return None;
         }
-        renames.aliases.get(&*name).copied()
+        renames.aliases.get(&**name).copied()
+    }
+
+    /// Is this list's head a `quote` — the real one, whatever it is spelled?
+    ///
+    /// Decided by what the head *resolves to*, because after relinking a
+    /// head can be spelled `quote.7` and still be `quote`, and under an
+    /// import that rebinds `quote` a head spelled `quote` can be a macro.
+    /// The spelling is only a pre-filter, so the lookup is paid for `quote`
+    /// and its aliases and for nothing else. Asked only at quasiquote depth
+    /// zero: inside a quasiquote, `(quote b)` is two symbols of data.
+    fn head_is_quote(&self, car: TaggedValue, shared_heap: &SharedHeap) -> bool {
+        let Some((name, scopes)) = self.identifier_of(car, shared_heap) else {
+            return false;
+        };
+        let spelled_quote = &*name == "quote"
+            || name
+                .strip_prefix("quote.")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        spelled_quote
+            && matches!(
+                self.resolve_syntax(&name, &scopes),
+                Some(SyntaxRef::CoreSyntax(CoreForm::Quote))
+            )
     }
 
     /// Rewrite one *form* — a list read the way the evaluator reads it, with a
@@ -728,19 +752,15 @@ impl Desugarer {
     ) -> TaggedValue {
         // Compute the depth inside the borrow: the answer is a `u32`, so
         // nothing needs to outlive it and the head name is never copied out.
-        // `is_quote` rather than an early return, so the head name is still
-        // never copied out of the borrow.
-        let (rest_depth, is_quote) = {
+        let (car, rest_depth) = {
             let heap = shared_heap.borrow();
             let (car, _) = heap.get_pair(tv);
-            match heap.get_symbol_or_identifier_name(car) {
-                Some("quote") => (quote_depth, true),
-                Some("quasiquote") => (quote_depth + 1, false),
-                Some("unquote") | Some("unquote-splicing") => {
-                    (quote_depth.saturating_sub(1), false)
-                }
-                _ => (quote_depth, false),
-            }
+            let depth = match heap.get_symbol_or_identifier_name(car) {
+                Some("quasiquote") => quote_depth + 1,
+                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
+                _ => quote_depth,
+            };
+            (car, depth)
         };
 
         // A quoted datum denotes itself, so nothing *inside* it is a reference
@@ -752,15 +772,16 @@ impl Desugarer {
         // `quote` that expanded again, without end — the import half of
         // Larceny family 33. Rewrite the head; leave the datum alone.
         //
-        // Only a `quote` the template introduced, and only when `quote` is
-        // being relinked at all — when the definition and use sites disagree
-        // about what it means. Otherwise the form is returned unchanged,
-        // exactly as before.
-        if is_quote {
-            let (car, cdr) = shared_heap.borrow().get_pair(tv);
+        // Only at depth zero. Inside a quasiquote a `(quote b)` is data —
+        // two symbols — and an `unquote` within it is still evaluated, so
+        // there the form is walked like any other list: its head is a plain
+        // symbol the leaf rule leaves alone, and its `,(helper x)` is
+        // reached.
+        if quote_depth == 0 && self.head_is_quote(car, shared_heap) {
             let Some(renamed) = self.introduced_alias(car, renames, shared_heap) else {
                 return tv;
             };
+            let cdr = shared_heap.borrow().get_pair(tv).1;
             return shared_heap.borrow_mut().alloc_pair(renamed, cdr);
         }
 
@@ -824,7 +845,7 @@ impl Desugarer {
     /// `quote_depth` tracks quasiquotation: names inside quoted data denote
     /// themselves, not bindings, so rewriting them there would corrupt the
     /// datum. Depth rises through `quasiquote` and falls through `unquote` /
-    /// `unquote-splicing`; `quote` is opaque outright.
+    /// `unquote-splicing`; a `quote` form has only its head rewritten.
     fn rewrite_refs(
         &self,
         tv: TaggedValue,
@@ -1036,10 +1057,9 @@ impl Desugarer {
             _ => (None, None),
         };
 
-        // Handle macro expansion
-        // Uses expand_macro_with_shadowed_tagged which:
-        // - Accepts TaggedValue input directly
-        // - Returns TaggedValue output directly
+        // Handle macro expansion. `expand_macro_with_scope` takes and returns
+        // TaggedValues directly, and also hands back the scope this expansion
+        // minted, which the relinker below needs.
         if let Some(compiled_macro) = macro_to_expand {
             // Save call-site source location before expansion
             let call_site_source = self.lookup_source(list);
@@ -1833,23 +1853,30 @@ impl Desugarer {
             // The binder's own scopes as written, kept beside its name: when
             // this whole `let-syntax` came out of a template, they are the
             // identity that references introduced by that same expansion carry.
-            let (name, binder_scopes): (Rc<str>, ScopeSet) = {
-                let heap = shared_heap.borrow();
-                if let Some(s) = heap.get_symbol_name(binding_vec[0]) {
-                    (Rc::from(s), ScopeSet::new())
-                } else if let Some((id_name, id_scopes)) =
-                    utils::get_identifier_info(binding_vec[0], &heap)
-                {
-                    (id_name, id_scopes)
-                } else {
-                    return Err(DesugarError::InvalidSyntax(
-                        "Macro name must be a symbol".to_string(),
-                    ));
-                }
+            let Some((name, binder_scopes)) = self.identifier_of(binding_vec[0], shared_heap)
+            else {
+                return Err(DesugarError::InvalidSyntax(
+                    "Macro name must be a symbol".to_string(),
+                ));
             };
 
+            // `letrec-syntax` puts its scope on its transformers as well as
+            // its body (Racket's `letrec-syntaxes+values` does the same), so
+            // a scoped identifier inside a transformer — a sibling keyword a
+            // template generated — can reach that keyword's binding. Under
+            // `let-syntax` the transformers are outside the form's scope and
+            // are left as written.
+            let transformer = if is_letrec {
+                patina_macros::add_scope_to_scoped_identifiers(
+                    binding_vec[1],
+                    let_syntax_scope,
+                    shared_heap,
+                )
+            } else {
+                binding_vec[1]
+            };
             let compiled_macro = self.compile_syntax_rules_tagged(
-                binding_vec[1],
+                transformer,
                 shared_heap,
                 name.clone(),
                 &compile_env,
@@ -1876,45 +1903,52 @@ impl Desugarer {
                 .heap()
                 .borrow_mut()
                 .alloc_macro(Rc::new(compiled_macro));
-            // Bound only *with* the body's scopes. Set-of-scopes resolution
-            // matches a binding when its scopes are a subset of the
-            // reference's, so this reaches exactly the references lexically
-            // inside this body — which is what R7RS §4.3.1 makes a `let-syntax`
-            // keyword visible to, and nothing else.
+            // Bound at the binder's own scopes plus this form's — Racket's
+            // rule for a binder — where a binder written in source stands in
+            // the scopes accumulated so far, exactly as a reference written
+            // in source does, so for it this is `definition_scopes`. A
+            // reference reaches the binding when the binding's scopes are a
+            // subset of its own, which is: a symbol in the body (resolved
+            // with `definition_scopes`); an empty-scoped identifier in the
+            // body, which is a user's symbol that passed through a pattern
+            // variable and resolves the same way; and a scoped identifier in
+            // the body, which `add_scope_to_scoped_identifiers` gave
+            // `let_syntax_scope` above. That last case is chibi's `(m k)`:
+            // `m`'s template binds `n` and references it as `(n z)`, binder
+            // and reference `bound-identifier=?`.
             //
-            // Not also bound unscoped, as it was. An unscoped binding is
-            // reachable from *every* reference of that spelling, including one
-            // introduced by a macro defined elsewhere, which carries only its
-            // own expansion's scopes and is supposed to resolve at that macro's
-            // definition site. That is the `let-syntax` half of Larceny family
-            // 33: `(quote d)` in a top-level macro's template was captured by a
-            // `let-syntax ((quote …))` merely surrounding the *call*, and since
-            // the captured expansion introduces `quote` again, it re-captured
-            // itself until the stack went.
-            body_env.define_with_scopes(name.to_string(), definition_scopes.clone(), tv);
-
-            // Also under the binder's own scopes, when it has any — that is,
-            // when this whole `let-syntax` was introduced by a template. Its
-            // body came from that same template, so a reference in it carries
-            // the expansion's scopes and not `let_syntax_scope`, which the
-            // desugarer minted only now; binding under the binder's set is what
-            // makes the two meet. This is `bound-identifier=?` — same spelling,
-            // same scopes — and chibi's §4.3 `(m k)` is exactly it: `m`'s
-            // template binds `n` and then references it as `(n z)`.
-            //
-            // Guarded on non-empty, which is what keeps this from being the old
-            // unscoped binding under another name: a `let-syntax` written in
-            // source has a plain symbol here, and giving *that* an
-            // empty-scoped binding is the family-33 capture removed above.
-            if !binder_scopes.is_empty() {
-                body_env.define_with_scopes(name.to_string(), binder_scopes, tv);
-            }
+            // What does *not* reach it: a reference a transformer introduces,
+            // which carries the transformer's scopes and — under `let-syntax`
+            // — never this form's, so a sibling keyword stays invisible
+            // (R7RS §4.3.1) and an outer keyword of the same spelling is
+            // found instead; and a reference another macro's template
+            // introduces into the body, which carries only that expansion's
+            // scopes. Binding the keyword unscoped as well, as #124 did,
+            // made it reachable from every reference of that spelling, and a
+            // `let-syntax ((quote …))` around a *call* captured the `(quote
+            // d)` in the callee's template until the stack went — the
+            // `let-syntax` half of Larceny family 33.
+            let binding_scopes = if binder_scopes.is_empty() {
+                definition_scopes.clone()
+            } else {
+                binder_scopes.with_scope(let_syntax_scope)
+            };
+            body_env.define_with_scopes(name.to_string(), binding_scopes, tv);
         }
 
         let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
 
-        // Get body TaggedValues
-        let body_tvs: Vec<TaggedValue> = args_vec[1..].to_vec();
+        // The body as written gets this form's scope on every identifier that
+        // carries scopes of its own — what Racket does on entering a binding
+        // form, and what lets the binding above tell a reference *in* the
+        // body from one a transformer will introduce later. A body with no
+        // such identifiers, the usual one, comes back unchanged.
+        let body_tvs: Vec<TaggedValue> = args_vec[1..]
+            .iter()
+            .map(|&tv| {
+                patina_macros::add_scope_to_scoped_identifiers(tv, let_syntax_scope, shared_heap)
+            })
+            .collect();
 
         let desugared_body =
             self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &definition_scopes)?;

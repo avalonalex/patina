@@ -155,7 +155,11 @@ had caught. All are now fixed; the newest is first.
   `test` form had been rewritten to `(chibi test)`'s `list` (the relinker
   matched by spelling). A probe of the same shape found a library template's
   literal `'(1 2)` reaching the program's `quote` too. Triage families 33–35,
-  each pinned in `crates/patina-tests/tests/larceny_families.rs`.
+  each pinned in `crates/patina-tests/tests/larceny_families.rs`; the review
+  of that fix found a second layer of the same families (a generated
+  `let-syntax`'s scoping, `quote` inside a quasiquote, the ellipsis-escape
+  compiler) and one tree-walker divergence (family 36), fixed and pinned in
+  the same PR.
 
 - **SRFI 14 `ucs-range->char-set` discarded its base set** — fixed 2026-08-19,
   found by `srfi/14/test.sld` on its first run. The port handed

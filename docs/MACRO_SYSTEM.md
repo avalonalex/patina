@@ -278,6 +278,38 @@ flip(id, scope) = if scope ∈ id.scopes
 - `tmp` in input (use-site): no `macro_scope`
 - They are distinguished by their scope sets!
 
+### Binding Forms and Introduced Identifiers
+
+Racket's expander puts a binding form's scope on the form's body when it
+enters the form. Patina's desugarer gets the same effect two ways, and which
+one applies depends on what the reference is:
+
+- A **symbol** written in source carries no scopes and is resolved with the
+  scopes the desugarer has accumulated on the way to it (`current_scopes`),
+  which include every enclosing binding form's. Nothing is added to the tree.
+- An **identifier with scopes** — one a macro introduced — carries its own
+  and nothing of where it now sits. On entering a `let-syntax` the desugarer
+  therefore walks the body as written and adds the form's scope to every such
+  identifier (`add_scope_to_scoped_identifiers`), and under `letrec-syntax`
+  to the transformer forms as well. That is what tells a reference *in* the
+  body from one a transformer will introduce later: chibi's `(m k)` binds `n`
+  and references it from the same template, and the reference gets the
+  scope; a sibling transformer's reference to `n` under `let-syntax` does not.
+- An **identifier with empty scopes** is a user's symbol that passed through
+  a pattern variable (the input flip gave it the expansion scope, the output
+  flip took it away). It resolves like a symbol. When the template compiler
+  meets one inside a transformer it compiles, it stamps the transformer's
+  definition scopes on it — what a symbol written there would get — while a
+  substituted identifier that already has scopes is emitted verbatim, since
+  its identity is the outer expansion's and adding the inner macro's context
+  would let `(let ((if …)) …)` capture a generator's `if`.
+
+A `let-syntax` binder is bound at its own scopes plus the form's, where a
+binder written in source stands in `definition_scopes`. Binding it unscoped
+as well, so that any reference of that spelling could reach it, is what let a
+`let-syntax ((quote …))` around a *call* capture the callee template's
+`quote` (Larceny triage family 33).
+
 ### Literal Matching
 
 Literals use `bound-identifier=?` semantics:

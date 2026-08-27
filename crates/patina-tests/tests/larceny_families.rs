@@ -23,7 +23,10 @@
 
 mod common;
 
-use common::{assert_program_eval_error, assert_program_eval_to, eval_program, scratch_path};
+use common::{
+    ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
+    eval_program, scratch_path,
+};
 use tempfile::TempDir;
 
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
@@ -972,5 +975,193 @@ fn relinking_leaves_the_users_code_inside_a_macro_call_alone() {
          (define v (both (list 1 2)))
          (r7:list (r7:pair? v) (r7:pair? (r7:cadr v)))",
         "(#t #f)",
+    );
+}
+
+/// The review of the first fix found what the new binding rule had left
+/// out, all fixed 2026-08-26 and pinned here: a `let-syntax` puts its scope
+/// on its body *as written* and — for `letrec-syntax` — on its transformers,
+/// which is what lets an introduced binder be bound at its own scopes plus
+/// that one; and a user's symbol that reached a transformer through a
+/// pattern variable stands in the transformer's definition context.
+///
+/// `gen6`'s keyword is referenced from inside its own transformer, which
+/// the unscoped binding used to satisfy by name; `gen7`'s from a transformer
+/// in the body. Both unbound after the first fix; `done6` and `v` in chibi.
+#[test]
+fn a_generated_keyword_is_reachable_from_a_transformer_in_its_scope() {
+    assert_program_eval_to(
+        "(define-syntax gen6
+           (syntax-rules ()
+             ((_ name) (letrec-syntax ((name (syntax-rules () ((_) 'done6) ((_ x . r) (name . r)))))
+                         (name 1)))))
+         (define-syntax gen7
+           (syntax-rules ()
+             ((_ name) (let-syntax ((name (syntax-rules () ((_) 'v))))
+                         (let-syntax ((g (syntax-rules () ((_) (name))))) (g))))))
+         (list (gen6 foo) (gen7 bar))",
+        "(done6 v)",
+    );
+}
+
+/// Under `let-syntax` a transformer does not see its siblings, and that
+/// holds when the whole form came out of a template: `a`'s `(b)` is the
+/// outer `b`, whether that is bound by `define-syntax` or by an enclosing
+/// `let-syntax`. The first fix bound the generated keyword at the
+/// template's scopes alone, which every reference from that expansion
+/// carries — the sibling's transformer included.
+#[test]
+fn a_template_generated_let_syntax_keeps_siblings_out_of_its_transformers() {
+    assert_program_eval_to(
+        "(define-syntax b (syntax-rules () ((_) 'outer-b)))
+         (define-syntax m
+           (syntax-rules ()
+             ((_) (let-syntax ((a (syntax-rules () ((_) (b))))
+                               (b (syntax-rules () ((_) 'sibling-b))))
+                    (a)))))
+         (list (m)
+               (let-syntax ((b2 (syntax-rules () ((_) 'outer-b2))))
+                 (let-syntax ((m2 (syntax-rules ()
+                                    ((_) (let-syntax ((a (syntax-rules () ((_) (b2))))
+                                                      (b2 (syntax-rules () ((_) 'sibling-b2))))
+                                           (a))))))
+                   (m2))))",
+        "(outer-b outer-b2)",
+    );
+}
+
+/// A user's `(k)` passed into a template that wraps it in a `let-syntax`
+/// binding `k` means the user's `k` — the generated keyword's binding
+/// carries the template's scope, which the user's reference never does.
+/// Pre-existing: the keyword used to be bound at the body's scopes alone,
+/// which every symbol in the body resolves with.
+#[test]
+fn a_users_symbol_is_not_captured_by_a_template_generated_keyword() {
+    assert_program_eval_to(
+        "(define (k) 'users-k)
+         (define-syntax gen
+           (syntax-rules ()
+             ((_ body) (let-syntax ((k (syntax-rules () ((_) 'captured)))) body))))
+         (gen (k))",
+        "users-k",
+    );
+}
+
+/// Inside a quasiquote, `(quote b)` is two symbols of data and an `unquote`
+/// within it is still evaluated. The first fix rewrote such a head to the
+/// relinked `quote` at any depth (a `quote.N` symbol in the data), and the
+/// template compiler had always inserted the quoted datum verbatim, so its
+/// `,(helper 7)` — a library-private reference — was never relinked.
+#[test]
+fn a_quote_inside_a_quasiquote_template_is_data_with_its_unquotes_evaluated() {
+    assert_program_eval_to(
+        "(define-library (probe qq)
+           (import (scheme base))
+           (export qq qq2 qq3)
+           (begin
+             (define (helper x) (* 6 x))
+             (define-syntax qq (syntax-rules () ((_ e) `(a (quote b) ,e))))
+             (define-syntax qq2 (syntax-rules () ((_ e) `(a '(b ,(helper 7)) ,e))))
+             (define-syntax qq3 (syntax-rules () ((_ e) `#(a 'b ,e))))))
+         (import (except (scheme base) quote car cons list list?)
+                 (prefix (scheme base) r7:)
+                 (srfi 101)
+                 (probe qq))
+         (r7:list (qq 1) (qq2 1) (qq3 1))",
+        "((a 'b 1) (a '(b 42) 1) #(a 'b 1))",
+    );
+}
+
+/// A `quote` that reached a template through a pattern variable and was
+/// then relinked is still `quote`: the relinker classifies a head by what
+/// it resolves to, not its spelling, so the datum after a `quote.N` head is
+/// left alone. Pre-existing — it walked the datum and renamed its `list`.
+#[test]
+fn a_relinked_quote_head_still_protects_its_datum() {
+    assert_program_eval_to(
+        "(define-library (probe wq)
+           (import (scheme base))
+           (export outer)
+           (begin
+             (define-syntax with-q (syntax-rules () ((_ q) (q (list 1)))))
+             (define-syntax outer (syntax-rules () ((_) (with-q quote))))))
+         (import (except (scheme base) quote car cons list list?)
+                 (prefix (scheme base) r7:)
+                 (srfi 101)
+                 (probe wq))
+         (outer)",
+        "(list 1)",
+    );
+}
+
+/// Symbols under an ellipsis escape are references like any other: a
+/// library-private `helper` inside `(... (helper 1))` resolves where the
+/// macro was written, and a generated macro's `(tag x ...)` reaches the
+/// library's `tag`. The escape compiler used to emit every non-pattern
+/// symbol as a bare literal, so nothing under `(... …)` was hygienic; the
+/// first occurrence is what the by-spelling relinker had covered by
+/// accident, the second never worked.
+#[test]
+fn references_under_an_ellipsis_escape_resolve_at_the_definition_site() {
+    assert_program_eval_to(
+        "(define-library (probe esc)
+           (import (scheme base))
+           (export mk def-tagger)
+           (begin
+             (define (helper x) (* 5 x))
+             (define (tag . xs) (cons 'tagged xs))
+             (define-syntax mk
+               (syntax-rules ()
+                 ((_) (begin (helper 0)
+                             (define-syntax g (syntax-rules () ((_) (... (helper 1)))))))))
+             (define-syntax def-tagger
+               (syntax-rules ()
+                 ((_ name) (define-syntax name (... (syntax-rules () ((_ x ...) (tag x ...))))))))))
+         (import (scheme base) (probe esc))
+         (mk)
+         (def-tagger t)
+         (list (g) (t 1 2))",
+        "(5 (tagged 1 2))",
+    );
+}
+
+/// A vector object embedded in code — `(eval (list 'outer vec) env)` — is
+/// the object the expansion mutates, not a copy. The scope flip walks
+/// vectors now (so a quasiquoted `#(,(helper x))` can be relinked) and its
+/// first version copied every vector it walked; it copies only one whose
+/// elements changed.
+#[test]
+fn a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion() {
+    assert_program_eval_to(
+        "(import (scheme base) (scheme eval) (scheme repl))
+         (define-syntax inner (syntax-rules () ((_ x) (vector-set! x 0 'changed))))
+         (define-syntax outer (syntax-rules () ((_ x) (inner x))))
+         (define vec (vector 1 2))
+         (eval (list 'outer vec) (interaction-environment))
+         vec",
+        "#(changed 2)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Family 36 — tree-walker: a local variable captures a template's reference
+// ---------------------------------------------------------------------------
+
+/// `mk`'s template references `list`; a use-site `(let ((list 1)) …)` has no
+/// bearing on it, and the VM agrees. The tree-walker binds and looks up
+/// locals by name (`application.rs` / `step.rs`), so the template's `list`
+/// finds the variable. Surfaced by the review of #132 while auditing the
+/// relinker's contract, which skips a name when the two environments'
+/// global views agree and leaves the rest to scope-aware resolution — which
+/// the tree-walker does not do for locals.
+#[test]
+fn a_use_site_local_does_not_capture_a_templates_reference() {
+    assert_divergence(
+        "(define-syntax mk (syntax-rules () ((_ a b) (list a b))))
+         (let ((list 1)) (mk 1 2))",
+        On::Vm,
+        "(1 2)",
+        ErrorClass::AtRuntime,
+        "scheme_tests/reports/larceny_triage.md, family 36",
     );
 }

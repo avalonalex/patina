@@ -257,12 +257,7 @@ impl Environment {
         library: Vec<String>,
     ) {
         let qualified_name: Rc<str> = Rc::from(format!("{}/{}", library.join("."), name));
-        let proc = Rc::new(crate::procedure::Procedure::Primitive {
-            name,
-            arity,
-            qualified_name,
-            registry_index: std::cell::Cell::new(None),
-        });
+        let proc = crate::procedure::Procedure::primitive(name, arity, qualified_name, None);
         let tv = self.heap.borrow_mut().alloc_procedure(proc);
         self.define(name.to_string(), tv);
     }

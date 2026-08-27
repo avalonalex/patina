@@ -174,12 +174,8 @@ impl VmState {
             .map(|(i, p)| (i, p.name, p.qualified_name(), p.arity.clone()))
             .collect();
         for (index, name, qualified_name, arity) in prims {
-            let proc = Rc::new(Procedure::Primitive {
-                name,
-                arity,
-                qualified_name: Rc::from(qualified_name.as_str()),
-                registry_index: std::cell::Cell::new(Some(index)),
-            });
+            let proc =
+                Procedure::primitive(name, arity, Rc::from(qualified_name.as_str()), Some(index));
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
             self.globals.define(name.to_string(), tv);
         }
@@ -1518,6 +1514,19 @@ fn dispatch_one_instruction(
             if let Some(escaped) = result? {
                 return Ok(Some(escaped));
             }
+        }
+
+        Instruction::CallPrimitiveDirect {
+            func_id,
+            ref args,
+            dst,
+        } => {
+            let mut arg_vals = std::mem::take(&mut state.scratch_args);
+            arg_vals.clear();
+            arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
+            let result = exec_call_primitive_direct(state, base, func_id, &arg_vals, dst);
+            state.scratch_args = arg_vals;
+            result?;
         }
 
         // ── Inline primitive opcodes (Track P P3) ───────────────────────
@@ -3489,6 +3498,21 @@ fn exec_call_primitive(
         }
         return call_value(state, func_val, arg_vals, dst, exit_depth);
     }
+    exec_call_primitive_direct(state, base, func_id, arg_vals, dst)
+}
+
+/// Dispatch to the registry primitive at `func_id` by index, with no
+/// shadow check: the `CallPrimitiveDirect` site names the procedure itself,
+/// not a global that could since have been rebound, so there is nothing to
+/// deoptimize to. Also the tail of [`exec_call_primitive`] once it has
+/// established the site is not shadowed.
+fn exec_call_primitive_direct(
+    state: &mut VmState,
+    base: usize,
+    func_id: PrimitiveFnId,
+    arg_vals: &[TaggedValue],
+    dst: u16,
+) -> Result<Option<TaggedValue>, VmError> {
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
         state: state as *mut VmState,

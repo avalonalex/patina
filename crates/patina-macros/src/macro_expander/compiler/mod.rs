@@ -101,6 +101,10 @@ pub struct Compiler {
     /// Maximum ellipsis level seen so far
     pub(super) max_level: usize,
 
+    /// How many quasiquotes the template being compiled is inside of; a
+    /// `(quote datum)` is only special at zero (`compile_template`).
+    pub(super) quasiquote_depth: u32,
+
     /// Shared heap for converting Value literals to TaggedValue at compile time
     pub(super) heap: SharedHeap,
 }
@@ -218,6 +222,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            quasiquote_depth: 0,
             heap,
         }
     }
@@ -252,6 +257,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            quasiquote_depth: 0,
             heap,
         }
     }
@@ -286,6 +292,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            quasiquote_depth: 0,
             heap,
         }
     }
@@ -325,6 +332,7 @@ impl Compiler {
             pvars: HashMap::new(),
             pvar_count: 0,
             max_level: 0,
+            quasiquote_depth: 0,
             heap,
         }
     }

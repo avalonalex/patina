@@ -157,6 +157,19 @@ pub enum Instruction {
         dst: Reg,
     },
 
+    /// Call a registry primitive that the *code itself* names as a value —
+    /// the quasiquote pre-pass puts `list`, `append` and `list->vector` in
+    /// operator position as `Literal` procedures, so that nothing the
+    /// program imports or defines can redirect them. There is no global
+    /// binding behind such a site, hence no `name` and no deoptimization:
+    /// it always dispatches by index. Same registry handler as
+    /// `CallPrimitive`, so results and errors are identical.
+    CallPrimitiveDirect {
+        func_id: PrimitiveFnId,
+        args: Vec<Reg>,
+        dst: Reg,
+    },
+
     // ── Inline primitive opcodes (Track P P3) ───────────────────────────────
     //
     // Fixed-arity fast paths for the hottest primitives, executed directly in

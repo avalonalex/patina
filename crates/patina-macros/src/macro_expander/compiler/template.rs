@@ -47,9 +47,26 @@ impl Compiler {
             // An identifier substituted by an outer expansion, and not this
             // rule's pattern variable, keeps the identity the outer macro gave
             // it. Emitting it verbatim preserves that; re-tagging it with this
-            // macro's definition scopes below would rebind it to the wrong
-            // context.
+            // macro's definition scopes would rebind it to the wrong context
+            // — a generator's `if` landing inside `(let ((if …)) …)` must
+            // stay the special form
+            // (`a_generated_macro_keeps_its_keywords_inside_a_binding_of_that_name`).
+            //
+            // Except when it carries no scopes at all. That is a user's
+            // symbol that passed through a pattern variable: the expander
+            // made it an identifier and the output flip left it with
+            // nothing, and what such a token stands in is the context it now
+            // sits in — exactly what a symbol written here would get below.
+            // A `letrec-syntax` a template generates, whose keyword arrived
+            // through a pattern variable and whose transformer references
+            // it, needs this: verbatim, the reference carried nothing of the
+            // `letrec-syntax`'s scope and could only ever be found by the
+            // by-name fallback the desugarer no longer has.
             if self.is_substituted_from_outer_macro(form) {
+                if key.scopes.is_empty() && !self.definition_scopes.is_empty() {
+                    let scopes = self.definition_scopes.clone();
+                    return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
+                }
                 return Ok(self.make_literal_template(form));
             }
 
@@ -91,8 +108,14 @@ impl Compiler {
         if is_pair {
             let (items, tail) = self.collect_list_items(form)?;
 
-            // Check for quote form: (quote datum)
-            if items.len() == 2
+            // Check for quote form: (quote datum). Only outside a
+            // quasiquote: within one, `(quote b)` is two symbols of data and
+            // an `unquote` inside it is still evaluated — `` `(a '(b ,x)) ``
+            // is `(a (quote (b <x>)))` — so there it is compiled as the list
+            // it is, and the datum's symbols become identifiers the
+            // quasiquote evaluators strip back to symbols.
+            if self.quasiquote_depth == 0
+                && items.len() == 2
                 && self
                     .extract_symbol_name(items[0])
                     .map(|s| s.as_ref() == "quote")
@@ -146,13 +169,20 @@ impl Compiler {
                 return self.compile_with_escaped_ellipsis(items[1], level);
             }
 
-            if let Some(tail_value) = tail {
+            // Track quasiquote nesting for the quote check above: a
+            // `quasiquote` head deepens it for its argument, an `unquote`
+            // head lifts it.
+            let step = self.quasiquote_step(&items, tail);
+            self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(step);
+            let compiled = if let Some(tail_value) = tail {
                 // Dotted list template
                 self.compile_dotted_template(&items, tail_value, level)
             } else {
                 // Regular list template
                 self.compile_list_template(&items, level)
-            }
+            };
+            self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(-step);
+            compiled
         } else if form == TaggedValue::NULL {
             Ok(Template::List(vec![]))
         } else if form.is_vector() {
@@ -168,6 +198,20 @@ impl Compiler {
         } else {
             // Literal value
             Ok(self.make_literal_template(form))
+        }
+    }
+
+    /// How a list with these items changes the quasiquote depth for its
+    /// elements: `+1` under a `quasiquote` head, `-1` under `unquote` or
+    /// `unquote-splicing` (never below zero), `0` otherwise.
+    pub(super) fn quasiquote_step(&self, items: &[TaggedValue], tail: Option<TaggedValue>) -> i32 {
+        if items.len() != 2 || tail.is_some() {
+            return 0;
+        }
+        match self.extract_symbol_name(items[0]).as_deref() {
+            Some("quasiquote") => 1,
+            Some("unquote") | Some("unquote-splicing") if self.quasiquote_depth > 0 => -1,
+            _ => 0,
         }
     }
 

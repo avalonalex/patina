@@ -85,30 +85,26 @@ impl Compiler {
                 return Ok(self.make_literal_template(stamped));
             }
 
-            // Check if it's a pattern variable
-            if let Some(pvref) = self.lookup_pvar(form) {
-                // Verify level is valid
-                if pvref.level() > level {
-                    return Err(MacroError::InvalidSyntax(format!(
-                        "Pattern variable {} at level {} used at level {}",
-                        s,
-                        pvref.level(),
-                        level
-                    )));
-                }
-                Ok(Template::Var(pvref))
-            } else {
-                // In ellipsis escape context: produce plain Symbol values.
-                Ok(self.make_literal_template(form))
-            }
+            // Anything else is a symbol like any other in a template — a
+            // pattern variable, or a reference that resolves where this
+            // macro was written — and `compile_template` already knows how
+            // to compile one. The escape only changes what `...` means. It
+            // used to emit every non-pattern-variable symbol here as a bare
+            // literal, so nothing under `(... …)` was hygienic or could be
+            // relinked: a library-private `helper` inside an escape was
+            // unbound at the use site, and a program's own `tag` captured
+            // the one a generated macro's template meant.
+            self.compile_template(form, level)
         } else {
             // Check for pair
             let is_pair = form.is_pair();
             if is_pair {
                 let (items, tail) = self.collect_list_items(form)?;
 
-                // Check for quote form
-                if items.len() == 2
+                // Check for quote form — outside a quasiquote, as in
+                // `compile_template`.
+                if self.quasiquote_depth == 0
+                    && items.len() == 2
                     && self
                         .extract_symbol_name(items[0])
                         .map(|s| s.as_ref() == "quote")
@@ -117,13 +113,21 @@ impl Compiler {
                 {
                     // Check if quoted datum contains pattern variables
                     if !self.contains_pattern_vars(items[1]) {
-                        // No pattern variables - keep as literal
-                        return Ok(self.make_literal_template(form));
+                        // No pattern variables: the datum is a literal, the
+                        // `quote` in front of it a reference — the same
+                        // split `compile_template` makes.
+                        let head = self.compile_template(items[0], level)?;
+                        return Ok(Template::List(vec![
+                            head,
+                            self.make_literal_template(items[1]),
+                        ]));
                     }
                     // Has pattern variables - compile recursively (fall through)
                 }
 
-                if let Some(tail_value) = tail {
+                let step = self.quasiquote_step(&items, tail);
+                self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(step);
+                let compiled = if let Some(tail_value) = tail {
                     // Dotted list template
                     let mut templates = Vec::new();
                     for item in items {
@@ -153,7 +157,9 @@ impl Compiler {
                         )?);
                     }
                     Ok(Template::List(templates))
-                }
+                };
+                self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(-step);
+                compiled
             } else if form == TaggedValue::NULL {
                 Ok(Template::List(vec![]))
             } else if form.is_vector() {

@@ -102,12 +102,12 @@ impl Expansion<'_> {
                     "quasiquote expansion needs the primitive {qualified_name}, which is not registered"
                 ))
             })?;
-        let proc = Rc::new(Procedure::Primitive {
-            name: prim.name,
-            arity: prim.arity.clone(),
-            qualified_name: Rc::from(qualified_name.as_str()),
-            registry_index: Cell::new(Some(index)),
-        });
+        let proc = Procedure::primitive(
+            prim.name,
+            prim.arity.clone(),
+            Rc::from(qualified_name.as_str()),
+            Some(index),
+        );
         let tv = self.heap.borrow_mut().alloc_procedure(proc);
         slot.set(Some(tv));
         Ok(tv)
@@ -438,10 +438,7 @@ fn expand_vector_template(
 ) -> Result<CoreExpr, CompileError> {
     // Convert vector to a proper list on the heap, then use pair expansion
     // which handles unquote-splicing correctly.
-    let borrowed = cx.heap.borrow();
-    let len = borrowed.vector_len(template);
-    let elements: Vec<TaggedValue> = (0..len).map(|i| borrowed.vector_ref(template, i)).collect();
-    drop(borrowed);
+    let elements = cx.heap.borrow().vector_slice(template).to_vec();
 
     // Build a heap list from the vector elements
     let list = cx.heap.borrow_mut().list_from_iter(elements);
@@ -581,11 +578,13 @@ mod tests {
                 assert_eq!(args.len(), 3);
                 match &func.kind {
                     CoreExprKind::Literal(v) => {
-                        let shown = patina_core::debug_format::format_tagged(*v, &heap.borrow());
-                        assert!(
-                            heap.borrow().is_procedure(*v) && shown.contains("list"),
-                            "expected the list primitive, got {shown}"
-                        );
+                        let proc = heap.borrow().get_procedure(*v).expect("a procedure");
+                        match proc.as_ref() {
+                            Procedure::Primitive { qualified_name, .. } => {
+                                assert_eq!(&**qualified_name, "scheme.base/list")
+                            }
+                            other => panic!("expected the list primitive, got {other:?}"),
+                        }
                     }
                     other => panic!("expected Literal(<list primitive>), got {:?}", other),
                 }

@@ -25,9 +25,19 @@ use super::pass4_registers::{AllocatedExpr, RegExpr, RegExprKind};
 use crate::types::instruction::PrimitiveFnId;
 use patina_core::core_expr::Symbol;
 
-/// Names (by env binding) that pass 5 may compile to `CallPrimitive` (or an
-/// inline opcode, when `inline` is set and the call site has the right arity).
-pub type PrimitiveCallMap = FxHashMap<Symbol, ResolvedPrimitive>;
+/// The callees pass 5 may compile to a primitive call instead of a generic
+/// `Call`.
+#[derive(Debug, Default)]
+pub struct PrimitiveCallMap {
+    /// Names (by env binding) that compile to `CallPrimitive` (or an inline
+    /// opcode, when `inline` is set and the call site has the right arity).
+    pub by_name: FxHashMap<Symbol, ResolvedPrimitive>,
+    /// Primitive procedure *values* in operator position — the quasiquote
+    /// pre-pass's constructors — keyed by the literal's raw bits; these
+    /// compile to `CallPrimitiveDirect`, which never deoptimizes because no
+    /// global binding stands behind the site.
+    pub by_value: FxHashMap<u64, PrimitiveFnId>,
+}
 
 /// A callee name resolved to a registry primitive at compile time.
 #[derive(Debug, Clone, Copy)]
@@ -144,42 +154,16 @@ pub fn resolve_primitive_calls(
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> PrimitiveCallMap {
-    let mut callees = FxHashSet::default();
+    let mut callees = Callees::default();
     collect_callee_names(&allocated.expr, &mut callees);
 
     let mut map = PrimitiveCallMap::default();
-    for name in callees {
+    for name in callees.names {
         let Some(val) = env.get(&name) else { continue };
-        let proc = heap.borrow().get_procedure(val);
-        let Some(proc) = proc else { continue };
-        let Procedure::Primitive {
-            qualified_name,
-            registry_index,
-            ..
-        } = proc.as_ref()
-        else {
+        let Some((index, canonical)) = registry_entry(val, heap, registry) else {
             continue;
         };
-        if is_excluded(qualified_name) {
-            continue;
-        }
-        let Some(index) = registry.resolve_index_cached(qualified_name, registry_index) else {
-            continue;
-        };
-        let Some(entry) = registry.get_by_index(index) else {
-            continue;
-        };
-        // The binding's qualified name may be an alias for the registry entry
-        // (e.g. "patina.internal.numbers/<" for "scheme.base/<", matched via
-        // the short-name fallback), so the inline key uses the entry's own
-        // name per the `ResolvedPrimitive::inline` contract. Both exclusion
-        // checks are needed: VM interception matches the binding's name
-        // (`vm_control_primitive`), while index dispatch reaches the entry.
-        let canonical = entry.qualified_name();
-        if is_excluded(&canonical) {
-            continue;
-        }
-        map.insert(
+        map.by_name.insert(
             name,
             ResolvedPrimitive {
                 id: PrimitiveFnId(index as u32),
@@ -187,17 +171,68 @@ pub fn resolve_primitive_calls(
             },
         );
     }
+    for val in callees.values {
+        if let Some((index, _)) = registry_entry(val, heap, registry) {
+            map.by_value
+                .insert(val.raw_bits(), PrimitiveFnId(index as u32));
+        }
+    }
     map
 }
 
-/// Collect every name used as a `GlobalRef` callee of an `App`.
-fn collect_callee_names(expr: &RegExpr, out: &mut FxHashSet<Symbol>) {
+/// The registry index and canonical qualified name of the primitive `val`
+/// is, if it is one that may be called by index.
+fn registry_entry(
+    val: patina_core::tagged_value::TaggedValue,
+    heap: &SharedHeap,
+    registry: &PrimitiveRegistry,
+) -> Option<(usize, String)> {
+    let proc = heap.borrow().get_procedure(val)?;
+    let Procedure::Primitive {
+        qualified_name,
+        registry_index,
+        ..
+    } = proc.as_ref()
+    else {
+        return None;
+    };
+    if is_excluded(qualified_name) {
+        return None;
+    }
+    let index = registry.resolve_index_cached(qualified_name, registry_index)?;
+    let entry = registry.get_by_index(index)?;
+    // The binding's qualified name may be an alias for the registry entry
+    // (e.g. "patina.internal.numbers/<" for "scheme.base/<", matched via
+    // the short-name fallback), so the inline key uses the entry's own
+    // name per the `ResolvedPrimitive::inline` contract. Both exclusion
+    // checks are needed: VM interception matches the binding's name
+    // (`vm_control_primitive`), while index dispatch reaches the entry.
+    let canonical = entry.qualified_name();
+    if is_excluded(&canonical) {
+        return None;
+    }
+    Some((index, canonical))
+}
+
+/// What `collect_callee_names` gathers: global names in operator position,
+/// and literal values there.
+#[derive(Default)]
+struct Callees {
+    names: FxHashSet<Symbol>,
+    values: Vec<patina_core::tagged_value::TaggedValue>,
+}
+
+/// Collect every `GlobalRef` name and every `Literal` value used as the
+/// callee of an `App`.
+fn collect_callee_names(expr: &RegExpr, out: &mut Callees) {
     match &expr.kind {
         RegExprKind::App { func, args, .. } => {
-            if let RegExprKind::GlobalRef { name } = &func.kind {
-                out.insert(name.clone());
-            } else {
-                collect_callee_names(func, out);
+            match &func.kind {
+                RegExprKind::GlobalRef { name } => {
+                    out.names.insert(name.clone());
+                }
+                RegExprKind::Literal(v) => out.values.push(*v),
+                _ => collect_callee_names(func, out),
             }
             for arg in args {
                 collect_callee_names(arg, out);

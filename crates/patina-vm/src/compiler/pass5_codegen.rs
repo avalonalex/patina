@@ -781,8 +781,26 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // dst` pair to recognize tail sites and keep them proper tail
             // calls when the rebound callee is a closure (PRD P8.2, see
             // `exec_call_primitive`).
+            // A primitive the code names as a value (see
+            // `Instruction::CallPrimitiveDirect`): the same skip, with
+            // nothing to deoptimize to.
+            if let RegExprKind::Literal(v) = &func.kind
+                && let Some(&func_id) = cg.prim_calls.by_value.get(&v.raw_bits())
+            {
+                let (regs, _) = primitive_operands(args, arg_tmps, None, cg)?;
+                cg.emit(Instruction::CallPrimitiveDirect {
+                    func_id,
+                    args: regs,
+                    dst: expr.dst,
+                });
+                if *is_tail {
+                    cg.emit(Instruction::Return { val: expr.dst });
+                }
+                return Ok(());
+            }
+
             if let RegExprKind::GlobalRef { name } = &func.kind
-                && let Some(&resolved) = cg.prim_calls.get(name)
+                && let Some(&resolved) = cg.prim_calls.by_name.get(name)
             {
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
