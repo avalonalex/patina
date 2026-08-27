@@ -271,6 +271,23 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 - So the fix is to make those two cells one binding — the scoped view an indirection to the plain slot, as `alias_bindings` already does for its own case — and only then align the two resolution rules. A naive collapse is not enough on its own: it takes the chibi suite to 1225/1226 on `(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))`.
 - Two further gaps measured while attempting it, both still open: the *fallback* halves of the two functions differ as well — `get_with_scopes` falls back to `self.get(name)` at the environment where resolution started, `set_with_scopes` recurses to the root and only there calls `self.set`, so `(define (g) (define c 5) (define-syntax b …(set! c (+ c 10))) (b) c)` errors on the tree-walker where chibi and the VM answer 15, and with a same-named global the write escapes the frame and clobbers it; and the within-frame tie-break disagrees with the VM's compile-time equivalent (`best_scoped_binding` keeps the earliest entry, `alpha_rename` the latest), which under exact matching was unreachable for writes.
 
+### 39. The scope model is under-determined; environment nesting covers for it — tree-walker
+- Ours: `test_let_syntax_nested_lexical_scoping` (`crates/patina-tests/tests/let_syntax.rs`) already pins the *answer*; what is new is why it is right. Reproduce the defect with `PATINA_AMBIGUITY_STRICT=1`, which refuses the program.
+
+```scheme
+(let ((x 'outer))
+  (let-syntax ((m1 (syntax-rules () ((m1) x))))
+    (let ((x 'middle))
+      (let-syntax ((m2 (syntax-rules () ((m2) x))))
+        (let ((x 'inner))
+          (list (m1) (m2)))))))   ; R7RS: (outer middle) — and Patina answers it
+```
+
+- Patina gets this right, and **not by the scope rule**: `m1`'s `x` resolves against two candidate bindings that are both *single* scopes, neither containing the other, so Flatt's rule (POPL 2016 §3) calls the reference ambiguous and Racket would raise an error. The answer comes from `collect_matches` walking child environments before parents — lexical nesting, which is outside the model.
+- Found 2026-08-27 by running the ambiguity check (PR #134) over the Rust suite. The corpus, all three Larceny lanes, both chibi suites and SRFI 101 report *zero* ambiguous references; this shape appears in none of them, which is why the sweep called `main` clean. Sweep coverage is not program-shape coverage.
+- **This is the layer beneath families 36, 37 and 38.** Each is a case where scope sets alone do not decide and something else — chain order, a by-name table, an exact-match write — supplies the missing answer. Family 37 fails precisely because it perturbs the scope sets while that extra-model rule is still load-bearing: it converts chibi-match's 33 identical-scope-set ties into 19 unordered pairs, and size then decides, wrongly.
+- The fix is not in the resolver. It is to make the scope sets carry the distinction, which is what Racket's *use-site scopes* do (Flatt §4) and what Patina has no equivalent of. Strict mode is the acceptance test for that work: when `PATINA_AMBIGUITY_STRICT=1` runs the suite clean, the model determines its own answers and families 36–38 can be fixed without guessing.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
