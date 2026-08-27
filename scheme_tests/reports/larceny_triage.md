@@ -240,8 +240,36 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 (genlam)          ; chibi: 101 — here: outer-macro
 ```
 
-- Found 2026-08-26 by the cleanup review of #132, which read the `let-syntax` fix as a special case placed at the call site rather than in the shared mechanism — and was right: the same bug class survives one binding form over. The fix is one `enter_binding_form(binders, body, scope)` used by `desugar_lambda_tagged`, the `define` shorthand, `desugar_let_syntax_impl_tagged` and the internal-define body, doing what the `let-syntax` arm now does inline: mint the scope, bind each binder at its scopes *as written* plus that one, and `add_scope_to_scoped_identifiers` the body. Four call sites.
-- Same family, same fix: `rewrite_form` decides `quote` by resolution and `quasiquote`/`unquote` by spelling three lines apart, so a relinked `quasiquote.7` head is invisible to the depth counter `head_resolves_to_quote` depends on.
+- Found 2026-08-26 by the cleanup review of #132, which read the `let-syntax` fix as a special case placed at the call site rather than in the shared mechanism — and was right: the same bug class survives one binding form over. The obvious fix is one `enter_binding_form(binders, body, scope)` used by `desugar_lambda_tagged`, the `define` shorthand, `desugar_let_syntax_impl_tagged` and the internal-define body: mint the scope, bind each binder at its scopes *as written* plus that one, and put that scope on the body as written.
+- **Attempted 2026-08-26 and backed out — read this before trying again.** All of the above works: family 37 answers as chibi does on both backends and the chibi suite stays 1226/1226. (The family-37 test above fails during the attempt, by design — it is asserted at the wrong answer so the fix trips it; the attempt updates it and the suite is then green.) It breaks chibi's `match`: `(match '(a . 1) ((x . y) (list x y)))` answers `(a a)`. The probe that explains it — instrument `get_with_scopes` to print candidates for one name — shows the user's `x` reference arriving as `x{S144, S146, S157}` and matching **two** bindings, `match`'s own `x` temporary at `{S144, S146}` and the user's `x` at `{S157}`, with the larger winning. The user's reference already carried `match`'s expansion scopes before the walk touched it; adding any further scope to it makes it ambiguous. Narrowing the walk to occurrences of the names the form binds (equivalent for resolution, since a fresh scope can only matter to bindings installed under it) fixes `do` but not this, because `x` *is* one of `match`'s binder names.
+- So the obstacle is underneath family 37: a substituted user symbol should come out of an expansion with no scopes and does not always, and once two bindings of a spelling are both subsets of a reference, "largest wins" picks by accident. That is worth measuring before another attempt — the `(a a)` repro above is the cheapest way in.
+- What the attempt surfaced is family 38, an independent defect — recorded there, and also not fixed: its own obvious fix turns loud errors into silent wrong answers for the same reason this one is hard.
+- Same family, still open: `rewrite_form` decides `quote` by resolution and `quasiquote`/`unquote` by spelling three lines apart, so a relinked `quasiquote.7` head is invisible to the depth counter `head_resolves_to_quote` depends on.
+
+### 38. A scoped write cannot reach the binding its own read can — tree-walker only
+- Ours: `an_introduced_macro_assigning_to_an_introduced_binding_diverges`, `an_introduced_macro_assigning_to_a_source_written_binder_diverges` (both quarantined with `assert_divergence`; the VM is right)
+- `Environment::get_with_scopes` resolves by subset — the largest binding scope set contained in the reference's — while `set_with_scopes` demands an *exact* match. A reference can read a binding it cannot write, and the write falls through to the root's by-name `set`.
+
+```scheme
+(define (f x)
+  (define-syntax bump (syntax-rules () ((_) (set! x (+ x 100)))))
+  (bump)
+  x)
+(f 1)             ; VM and chibi: 101 — tree-walker: Undefined variable: x
+```
+
+- The `set!` is introduced by the inner macro, so it carries that macro's definition scopes on top of the binder's — a strict superset, ordinary under set-of-scopes and fatal under exact matching. VM-only immunity: it resolves such a reference at compile time and never reaches this path.
+- **The obvious fix is worse than the defect, and this is the entry's real content.** Making `set_with_scopes` resolve like `get_with_scopes` (largest matching subset, child-first on ties) was attempted, shipped as PR #133, and backed out after review. It fixes the shape where the binder is *macro-introduced* — one cell, reads and writes trivially agree — and turns three others into **silent wrong answers** where they had been loud errors:
+
+| program | main tw | with the fix | VM & chibi |
+|---|---|---|---|
+| `(let ((v 1)) …(set! v (+ v 10))…v)` | error | **1** | 11 |
+| `(define (f x) …(set! x (+ x 100))…x)` | error | **1** | 101 |
+| inner `(lambda (v) …)` around the `set!` | error | **(99 1)** | (5 99) |
+
+- **Root cause, one layer below.** `application.rs` binds a *source-written* parameter in two independent cells — `define(name, arg)` and `define_with_scopes(name, {binding_scope}, arg)` — and nothing keeps them in sync. Exact matching was the only thing keeping `set_with_scopes` off the scoped twin; subset matching reaches it, the write lands there, and by-name reads keep the stale cell. `Environment::define_scoped_definition`'s own doc states the invariant this breaks: "It is still **one** binding. An earlier version stored the value under the bare name as well, and a `set!` through the scoped path then left the two disagreeing." The VM is immune because `alpha_rename::build_bindings` gives one location two views.
+- So the fix is to make those two cells one binding — the scoped view an indirection to the plain slot, as `alias_bindings` already does for its own case — and only then align the two resolution rules. A naive collapse is not enough on its own: it takes the chibi suite to 1225/1226 on `(let ((x 'outer)) (let-syntax ((m (syntax-rules () ((m) x)))) (let ((x 'inner)) (m))))`.
+- Two further gaps measured while attempting it, both still open: the *fallback* halves of the two functions differ as well — `get_with_scopes` falls back to `self.get(name)` at the environment where resolution started, `set_with_scopes` recurses to the root and only there calls `self.set`, so `(define (g) (define c 5) (define-syntax b …(set! c (+ c 10))) (b) c)` errors on the tree-walker where chibi and the VM answer 15, and with a same-named global the write escapes the frame and clobbers it; and the within-frame tie-break disagrees with the VM's compile-time equivalent (`best_scoped_binding` keeps the earliest entry, `alpha_rename` the latest), which under exact matching was unreachable for writes.
 
 ## Not ours — recorded so nobody re-diagnoses them
 
