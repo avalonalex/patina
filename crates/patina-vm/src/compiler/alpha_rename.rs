@@ -91,31 +91,24 @@ impl RenameEnv {
             return None;
         }
 
-        // Scoped lookup: find most specific binding where binding.scopes ⊆ ref_scopes
-        let mut best: Option<&Binding> = None;
-
+        // Scoped lookup. The rule lives in `patina_core::scope_resolve`, and
+        // the tree-walker's `Environment::get_with_scopes` calls the same
+        // function: this used to be a second copy, which disagreed with that
+        // one about which binding wins a tie and which the ambiguity check
+        // could not see at all — so a VM run reported nothing no matter how
+        // it resolved. Collecting is the only work left here, and the order
+        // is the one `resolve_scoped` documents: most recent first.
+        let mut candidates: Vec<(ScopeSet, Symbol)> = Vec::new();
         for frame in self.frames.iter().rev() {
             for binding in frame.iter().rev() {
-                if binding.name.as_ref() != name {
-                    continue;
-                }
-
-                if !binding.scopes.is_subset_of(ref_scopes) {
-                    continue;
-                }
-
-                match &best {
-                    None => best = Some(binding),
-                    Some(current_best) => {
-                        if binding.scopes.len() > current_best.scopes.len() {
-                            best = Some(binding);
-                        }
-                    }
+                if binding.name.as_ref() == name
+                    && patina_core::scope_resolve::is_candidate(&binding.scopes, ref_scopes)
+                {
+                    candidates.push((binding.scopes.clone(), binding.unique_name.clone()));
                 }
             }
         }
-
-        best.map(|b| b.unique_name.clone())
+        patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates)
     }
 
     /// A name for a *local*, unique within this compilation unit.

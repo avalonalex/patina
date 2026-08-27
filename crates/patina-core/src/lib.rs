@@ -32,6 +32,7 @@ pub mod procedure;
 pub mod pvref;
 pub mod record_type;
 pub mod scope;
+pub mod scope_resolve;
 pub mod tagged_value;
 pub mod vfs;
 
