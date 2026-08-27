@@ -558,113 +558,65 @@ impl Environment {
             return result;
         }
 
-        // Collect all matching bindings from this environment and parents
-        // Store TaggedValue internally for efficiency
+        // Every binding of this name in this environment and its parents,
+        // in the order `resolve_scoped` wants them.
         let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
 
-        // Helper to collect matching bindings recursively
-        fn collect_matches(
+        fn collect_candidates(
             env: &Environment,
             name: &str,
             ref_scopes: &ScopeSet,
             candidates: &mut Vec<(ScopeSet, TaggedValue)>,
             debug: bool,
         ) {
-            // Check scoped bindings in this environment
+            // Every binding of the name here, latest first — the order
+            // `resolve_scoped` documents. Filtering is the rule's job, not
+            // this walk's; collecting all of them is also what lets the
+            // ambiguity check see the candidates that lost.
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
-                for binding in bindings {
-                    // binding.scopes ⊆ reference.scopes
-                    let is_subset = binding.scopes.is_subset_of(ref_scopes);
+                for binding in bindings.iter().rev() {
                     if debug {
                         println!(
-                            "[ENV]   Checking binding {} ⊆ {} : {}",
+                            "[ENV]   Candidate {} ⊆ {} : {}",
                             binding.scopes,
                             ref_scopes,
-                            if is_subset { "YES" } else { "NO" }
+                            if binding.scopes.is_subset_of(ref_scopes) {
+                                "YES"
+                            } else {
+                                "NO"
+                            }
                         );
                     }
-                    if is_subset {
-                        candidates.push((binding.scopes.clone(), binding.tagged_value));
-                    }
+                    candidates.push((binding.scopes.clone(), binding.tagged_value));
                 }
             }
             drop(scoped);
 
             // Recurse to parent
             if let Some(parent) = &env.parent {
-                collect_matches(parent, name, ref_scopes, candidates, debug);
+                collect_candidates(parent, name, ref_scopes, candidates, debug);
             }
         }
 
-        collect_matches(self, name, scopes, &mut candidates, debug);
+        collect_candidates(self, name, scopes, &mut candidates, debug);
 
-        if candidates.is_empty() {
-            // No scoped binding found, fall back to unmarked bindings
-            if debug {
-                println!("[ENV]   No scoped candidates, falling back to simple lookup");
-            }
-            let result = self.get(name);
-            if debug {
-                match result {
-                    Some(tv) => {
-                        let v = crate::debug_format::format_tagged(tv, &self.heap.borrow());
-                        println!("[ENV]   Fallback result: {}", v);
-                    }
-                    None => println!("[ENV]   Fallback result: NOT FOUND"),
-                }
-            }
-            return result;
-        }
+        // One rule, shared with the VM's renamer: see
+        // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
+        // was a subset, and the unmarked binding answers instead.
+        let result = crate::scope_resolve::resolve_scoped(name, scopes, &candidates);
 
         if debug {
-            println!("[ENV]   Found {} candidate(s):", candidates.len());
-            for (ss, tv) in &candidates {
-                let v = crate::debug_format::format_tagged(*tv, &self.heap.borrow());
-                println!("[ENV]     {} -> {}", ss, v);
-            }
-        }
-
-        // Find the most specific binding (largest scope set)
-        // When scope sets have the same size, prefer the earlier candidate (closer binding)
-        // since collect_matches adds child environment bindings before parent environment bindings.
-        // We use a stable comparison that prefers earlier elements on ties.
-        //
-        // Chosen by index over a borrow, so the diagnostic below can look at
-        // the rejected candidates without the winner having been moved out.
-        let mut best_index: Option<usize> = None;
-        for (index, (scope_set, _)) in candidates.iter().enumerate() {
-            match best_index {
-                None => best_index = Some(index),
-                // Prefer strictly larger scope set, or keep existing on tie
-                Some(current) if scope_set.len() > candidates[current].0.len() => {
-                    best_index = Some(index)
-                }
-                // On tie (same length), keep the earlier candidate (child binding)
-                Some(_) => {}
-            }
-        }
-        let best = best_index.map(|i| candidates[i].clone());
-
-        if debug {
-            match &best {
-                Some((ss, tv)) => {
+            match &result {
+                Some(tv) => {
                     let v = crate::debug_format::format_tagged(*tv, &self.heap.borrow());
-                    println!("[ENV]   Best match (most specific): {} -> {}", ss, v);
+                    println!("[ENV]   Best match (most specific): {}", v);
                 }
-                None => {
-                    println!("[ENV]   No best match found");
-                }
+                None => println!("[ENV]   No scoped match; falling back to simple lookup"),
             }
         }
 
-        if ambiguity::checking()
-            && let Some(winner) = best_index
-        {
-            ambiguity::check(name, scopes, &candidates, winner);
-        }
-
-        best.map(|(_, tv)| tv).or_else(|| self.get(name))
+        result.or_else(|| self.get(name))
     }
 
     /// Does `name` have a *scoped* binding visible from `scopes`?
@@ -1002,253 +954,5 @@ mod tests {
             .get_symbol_name(result_tv)
             .map(|s| s.to_string());
         assert_eq!(name.as_deref(), Some("primitive-cons"));
-    }
-}
-
-/// Set-of-scopes resolution ambiguity — a log-only diagnostic.
-///
-/// Flatt's rule ("Binding as Sets of Scopes", POPL 2016 §3) resolves a
-/// reference to the candidate whose scope set is the largest subset of the
-/// reference's — *and requires that candidate to be a superset of every other
-/// candidate*. When two candidates are not ordered by subset, neither is more
-/// specific, the reference is **ambiguous**, and Racket raises an error.
-///
-/// [`Environment::get_with_scopes`] takes the largest by size and, on a tie,
-/// the one nearest in the environment chain. This module reports every place
-/// those rules diverge, and changes nothing.
-///
-/// Two kinds are reported, kept apart because they are different phenomena:
-///
-/// - `AMBIG` — Flatt-ambiguous: the winner is not a superset of some rival,
-///   so the *rule* does not determine the answer and size decides it.
-/// - `TIE` — a rival with the **identical** scope set, so even size does not
-///   decide and the answer comes from chain order alone. Racket cannot reach
-///   this (its binding table is keyed by scope set, one binding per key);
-///   Patina can, because `insert_scoped` dedups only within one environment
-///   while `collect_matches` walks the whole chain.
-///
-/// Enable by setting `PATINA_AMBIGUITY_LOG` to a file to append to. Records
-/// are written whole and each distinct site is written once:
-///
-/// ```text
-/// RUN pid=4711
-/// AMBIG name="x" ref=S1,S2,S3 picked=S1,S2 rivals=S3
-/// TIE name="ls" ref=S1,S2 picked=S1 equal=S1
-/// ```
-///
-/// **This instruments the tree-walker's resolution only.** The VM decides
-/// local references at compile time through its own copy of the rule
-/// (`patina-vm`'s `alpha_rename::Renamer::resolve`), which does not call
-/// here — so a VM run's silence is not evidence of the absence of ambiguity.
-/// Instrument that copy too before drawing a conclusion from one.
-mod ambiguity {
-    use super::ScopeSet;
-    use patina_core_reexport::TaggedValue;
-    use std::collections::HashSet;
-    use std::io::Write;
-    use std::sync::{Mutex, OnceLock};
-
-    mod patina_core_reexport {
-        pub use crate::tagged_value::TaggedValue;
-    }
-
-    struct Sink {
-        file: std::fs::File,
-        /// One record per distinct site. A reference inside a hot loop
-        /// resolves millions of times and says nothing new after the first.
-        seen: HashSet<String>,
-    }
-
-    fn sink() -> Option<&'static Mutex<Sink>> {
-        static SINK: OnceLock<Option<Mutex<Sink>>> = OnceLock::new();
-        SINK.get_or_init(|| {
-            // An empty value is what a shell script produces from an unset
-            // variable; treating it as a path opens nothing and would make a
-            // broken sink look like a clean result. Same guard `gc.rs` uses.
-            let path = std::env::var("PATINA_AMBIGUITY_LOG")
-                .ok()
-                .filter(|v| !v.is_empty() && v != "0")?;
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    // Proof the instrument ran: silence in the log is only
-                    // evidence when a `RUN` line says the process was watched.
-                    let _ = file.write_all(format!("RUN pid={}\n", std::process::id()).as_bytes());
-                    Some(Mutex::new(Sink {
-                        file,
-                        seen: HashSet::new(),
-                    }))
-                }
-                Err(e) => {
-                    // Loud, because a silent failure here reads as "resolution
-                    // is not guessing", which is the conclusion this exists to
-                    // make trustworthy.
-                    eprintln!("patina: PATINA_AMBIGUITY_LOG={path}: {e}");
-                    None
-                }
-            }
-        })
-        .as_ref()
-    }
-
-    /// Is the log on? A `OnceLock` read and a branch.
-    fn logging() -> bool {
-        sink().is_some()
-    }
-
-    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? An ambiguous reference
-    /// then panics instead of being reported.
-    ///
-    /// **Not the default, and that is a finding rather than a compromise.**
-    /// Enforcing Flatt's rule looked free — no workload logs an ambiguous
-    /// reference — until the check ran over the Rust suite, where
-    /// `test_let_syntax_nested_lexical_scoping` trips it:
-    ///
-    /// ```scheme
-    /// (let ((x 'outer))
-    ///   (let-syntax ((m1 (syntax-rules () ((m1) x))))
-    ///     (let ((x 'middle))
-    ///       (let-syntax ((m2 (syntax-rules () ((m2) x))))
-    ///         (let ((x 'inner))
-    ///           (list (m1) (m2)))))))   ; R7RS: (outer middle)
-    /// ```
-    ///
-    /// That answer is correct today, and it is *not* the scope rule that
-    /// produces it: the two candidate bindings are both single scopes,
-    /// neither containing the other, and the winner comes from environment
-    /// nesting. So Patina's scope sets do not carry enough information to
-    /// decide a distinction R7RS requires, and an extra-model rule is
-    /// covering for it. Asserting would fail a passing, correct test.
-    ///
-    /// Larceny triage family 39 owns that; until it is fixed, strict mode is
-    /// the tool for measuring a change against the rule rather than a gate.
-    fn strict() -> bool {
-        static STRICT: OnceLock<bool> = OnceLock::new();
-        *STRICT.get_or_init(|| {
-            std::env::var("PATINA_AMBIGUITY_STRICT")
-                .ok()
-                .is_some_and(|v| !v.is_empty() && v != "0")
-        })
-    }
-
-    /// Should the check run at all? Only when something will come of it.
-    pub(super) fn checking() -> bool {
-        logging() || strict()
-    }
-
-    /// Render a scope set without spaces, so a record stays one field.
-    fn render(scopes: &ScopeSet) -> String {
-        let mut out = String::new();
-        for (i, scope) in scopes.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&format!("{scope}"));
-        }
-        out
-    }
-
-    /// Judge one resolution: `candidates[winner]` was chosen.
-    ///
-    /// An `AMBIG` verdict panics under `PATINA_AMBIGUITY_STRICT` and is
-    /// otherwise reported. Patina is pre-alpha and unversioned, so the target
-    /// is the specification rather than compatibility with its own past
-    /// answers, and a reference the rule does not determine is a defect: it
-    /// is how Larceny triage family 37 produced `(a a)` for
-    /// `(match '(a . 1) ((x . y) (list x y)))` instead of failing. It is not
-    /// the default only because `main` cannot pass it yet — see
-    /// [`strict`] for the case that fails and why it matters.
-    ///
-    /// A `TIE` is only reported. It is a different phenomenon: two bindings
-    /// with the *same* scope set, which Flatt's model cannot express and
-    /// which chain order therefore decides. `main` has 33 of them (all `ls`,
-    /// in chibi-match), so asserting would fail today — they are a defect one
-    /// layer down, in whatever creates the duplicate, and that is the thing
-    /// to fix rather than to assert about here.
-    pub(super) fn check(
-        name: &str,
-        reference: &ScopeSet,
-        candidates: &[(ScopeSet, TaggedValue)],
-        winner: usize,
-    ) {
-        let best = &candidates[winner].0;
-        let mut rivals: Vec<&ScopeSet> = Vec::new();
-        let mut equal: Vec<&ScopeSet> = Vec::new();
-        for (index, (scopes, _)) in candidates.iter().enumerate() {
-            if index == winner {
-                continue;
-            }
-            // Equality first: `is_subset_of` is reflexive, so an identical
-            // set would otherwise be filtered out as "contained" — and that
-            // is the one pick nothing in the rule justifies.
-            if scopes == best {
-                equal.push(scopes);
-            } else if !scopes.is_subset_of(best) {
-                rivals.push(scopes);
-            }
-        }
-        if rivals.is_empty() && equal.is_empty() {
-            return;
-        }
-        assert!(
-            rivals.is_empty() || !strict(),
-            "ambiguous reference: `{}` with scopes {} resolves to {} and to {}, \
-             and neither contains the other — Flatt's rule does not determine \
-             this reference, so the answer came from scope-set size alone. \
-             See the `ambiguity` module and Larceny triage family 37.",
-            name,
-            reference,
-            best,
-            rivals
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(" and to ")
-        );
-        // `{:?}` quotes and escapes: Patina accepts `|a b|` as an identifier,
-        // and an unescaped name could forge a field or a whole record.
-        let record = if rivals.is_empty() {
-            format!(
-                "TIE name={:?} ref={} picked={} equal={}\n",
-                name,
-                render(reference),
-                render(best),
-                equal
-                    .iter()
-                    .map(|s| render(s))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            )
-        } else {
-            format!(
-                "AMBIG name={:?} ref={} picked={} rivals={}\n",
-                name,
-                render(reference),
-                render(best),
-                rivals
-                    .iter()
-                    .map(|s| render(s))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            )
-        };
-        let Some(sink) = sink() else {
-            return;
-        };
-        // Never poison-panic: this is a diagnostic, and a `File` behind a
-        // `Mutex` has no invariant a panic elsewhere can have broken.
-        let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
-        if !sink.seen.insert(record.clone()) {
-            return;
-        }
-        // One `write_all`, not `writeln!`: `O_APPEND` makes each syscall
-        // atomic, never each `write!` fragment, and the corpus harness runs
-        // up to eight patina processes appending to one file. Written a
-        // fragment at a time, their records shred each other — measured at
-        // six mangled lines per corpus sweep before this.
-        let _ = sink.file.write_all(record.as_bytes());
     }
 }
