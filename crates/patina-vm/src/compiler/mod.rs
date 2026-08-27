@@ -100,16 +100,17 @@ pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), Compile
 }
 
 /// Compile with quasiquote expansion *and* compile-time primitive resolution:
-/// `Quasiquote` nodes are first expanded into equivalent `App` calls (list,
-/// cons, append — requires heap access to walk TaggedValue templates), then
-/// callees that resolve to registry primitives in `env` emit `CallPrimitive`
-/// (see `primitive_calls`). This is the entry the VM backend uses.
+/// `Quasiquote` nodes are first expanded into equivalent `App` calls of the
+/// registry's `list`, `append` and `list->vector` (requires heap access to
+/// walk TaggedValue templates), then callees that resolve to registry
+/// primitives in `env` emit `CallPrimitive` (see `primitive_calls`). This is
+/// the entry the VM backend uses.
 pub fn compile_with_qq_resolving(
     expr: &CoreExpr,
     heap: &SharedHeap,
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env)?;
+    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env, registry)?;
     compile_pipeline(&expanded, Some((heap, env, registry)))
 }

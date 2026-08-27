@@ -248,6 +248,12 @@ suite_tests! {
     // invokes, and this one is a cargo test.
     (srfi_134_ideque, "srfi 134", "(srfi 134 test)", 0, 119),
     (srfi_135_text, "srfi 135", "(srfi 135 test)", 0, 1071),
+    // Verbatim. The suite shadows `(scheme base)`'s `quote`, `list`, `cons`
+    // and `car` with SRFI 101's, so every `(chibi test)` macro in it expands
+    // where those names mean something else — the sharpest test of
+    // referential transparency in this table, and what found triage
+    // families 33–35 (2026-08-26).
+    (srfi_101_rlist, "srfi 101", "(srfi 101 test)", 0, 56),
     // Verbatim; runnable since `(scheme flonum)` is bundled.
     //
     // It also costs about 27s, which is this whole binary's runtime — the
@@ -318,10 +324,6 @@ const NO_SUITE: &[(&str, &str)] = &[
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
-    ),
-    (
-        "srfi 101",
-        "chibi's suite (adapted from the SRFI's own R6RS tests) cannot run here yet: its first assertion trips triage family 33, where a template's `quote` is captured by a use-site `let-syntax` binding of `quote` and recurses forever. Larceny's `rlist` suite is the same tests under R7RS-large's r-prefixed names and passes 82 of 82 on both backends; this entry retires when family 33 is fixed",
     ),
     (
         "srfi 124",

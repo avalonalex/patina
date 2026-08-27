@@ -24,6 +24,27 @@ impl Compiler {
         if let Some(key) = self.identifier_key(form) {
             let s = key.name.clone();
 
+            // The spelling an enclosing `(... template)` suspended. It
+            // becomes a literal Symbol value so a nested `syntax-rules` this
+            // template generates receives it as data and can recognise it as
+            // its own ellipsis — carrying this macro's definition scopes, so
+            // it stays an ellipsis where it lands. Emitted bare, the token
+            // would be read against the *use* site's bindings, and `(let
+            // ((... 'dots)) (def-first f))` would produce a macro with no
+            // ellipsis at all. Stamped even when the scope set is empty:
+            // what the later compiler reads is that the token is an
+            // identifier at all, which is what says it was introduced here.
+            //
+            // Checked before the pattern-variable case, as the escape's own
+            // walker did.
+            if self.escaped_ellipsis.as_ref() == Some(&s) {
+                let stamped = {
+                    let mut heap = self.heap.borrow_mut();
+                    heap.alloc_identifier(s.clone(), self.definition_scopes.clone())
+                };
+                return Ok(self.make_literal_template(stamped));
+            }
+
             // Check if it's a pattern variable.
             //
             // This runs BEFORE the substituted-identifier case below. An
@@ -47,9 +68,26 @@ impl Compiler {
             // An identifier substituted by an outer expansion, and not this
             // rule's pattern variable, keeps the identity the outer macro gave
             // it. Emitting it verbatim preserves that; re-tagging it with this
-            // macro's definition scopes below would rebind it to the wrong
-            // context.
+            // macro's definition scopes would rebind it to the wrong context
+            // — a generator's `if` landing inside `(let ((if …)) …)` must
+            // stay the special form
+            // (`a_generated_macro_keeps_its_keywords_inside_a_binding_of_that_name`).
+            //
+            // Except when it carries no scopes at all. That is a user's
+            // symbol that passed through a pattern variable: the expander
+            // made it an identifier and the output flip left it with
+            // nothing, and what such a token stands in is the context it now
+            // sits in — exactly what a symbol written here would get below.
+            // A `letrec-syntax` a template generates, whose keyword arrived
+            // through a pattern variable and whose transformer references
+            // it, needs this: verbatim, the reference carried nothing of the
+            // `letrec-syntax`'s scope and could only ever be found by the
+            // by-name fallback the desugarer no longer has.
             if self.is_substituted_from_outer_macro(form) {
+                if key.scopes.is_empty() && !self.definition_scopes.is_empty() {
+                    let scopes = self.definition_scopes.clone();
+                    return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
+                }
                 return Ok(self.make_literal_template(form));
             }
 
@@ -91,8 +129,14 @@ impl Compiler {
         if is_pair {
             let (items, tail) = self.collect_list_items(form)?;
 
-            // Check for quote form: (quote datum)
-            if items.len() == 2
+            // Check for quote form: (quote datum). Only outside a
+            // quasiquote: within one, `(quote b)` is two symbols of data and
+            // an `unquote` inside it is still evaluated — `` `(a '(b ,x)) ``
+            // is `(a (quote (b <x>)))` — so there it is compiled as the list
+            // it is, and the datum's symbols become identifiers the
+            // quasiquote evaluators strip back to symbols.
+            if self.quasiquote_depth == 0
+                && items.len() == 2
                 && self
                     .extract_symbol_name(items[0])
                     .map(|s| s.as_ref() == "quote")
@@ -111,9 +155,8 @@ impl Compiler {
                         let inner_template =
                             self.compile_quote_template_escaped(inner_items[1], level)?;
 
-                        let quote_sym = self.heap.borrow_mut().intern_symbol("quote");
-                        let quote_symbol = self.make_literal_template(quote_sym);
-                        return Ok(Template::List(vec![quote_symbol, inner_template]));
+                        let head = self.compile_template(items[0], level)?;
+                        return Ok(Template::List(vec![head, inner_template]));
                     }
                 }
 
@@ -122,8 +165,22 @@ impl Compiler {
                     // Has pattern variables - compile normally so they expand
                     // Fall through to normal list compilation
                 } else {
-                    // No pattern variables - treat as literal (no hygiene renaming)
-                    return Ok(self.make_literal_template(form));
+                    // No pattern variables: the datum is inserted verbatim,
+                    // with no hygiene renaming inside it. The `quote` in
+                    // front of it is not part of the datum — it is a
+                    // reference the template makes, like any other — and is
+                    // compiled as one, so that it resolves where the macro
+                    // was *defined*. Emitted as a bare symbol with the rest,
+                    // as it used to be, it resolved where the macro was
+                    // *used*: a program importing SRFI 101, whose `quote`
+                    // builds random-access lists, got one where a library's
+                    // template wrote `'(1 2)`. The literal form of Larceny
+                    // family 33.
+                    let head = self.compile_template(items[0], level)?;
+                    return Ok(Template::List(vec![
+                        head,
+                        self.make_literal_template(items[1]),
+                    ]));
                 }
             }
 
@@ -133,21 +190,26 @@ impl Compiler {
                 return self.compile_with_escaped_ellipsis(items[1], level);
             }
 
-            if let Some(tail_value) = tail {
+            // Track quasiquote nesting for the quote check above. The old
+            // depth is saved and put back rather than re-derived by negating
+            // a delta, and the result is bound before it is put back, so no
+            // path out of the arms can leave the depth raised.
+            let saved_depth = self.quasiquote_depth;
+            self.quasiquote_depth = self.quasiquote_depth_inside(&items, tail);
+            let compiled = if let Some(tail_value) = tail {
                 // Dotted list template
                 self.compile_dotted_template(&items, tail_value, level)
             } else {
                 // Regular list template
                 self.compile_list_template(&items, level)
-            }
+            };
+            self.quasiquote_depth = saved_depth;
+            compiled
         } else if form == TaggedValue::NULL {
             Ok(Template::List(vec![]))
         } else if form.is_vector() {
             // Vector
-            let heap = self.heap.borrow();
-            let len = heap.vector_len(form);
-            let elements: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(form, i)).collect();
-            drop(heap);
+            let elements = self.heap.borrow().vector_slice(form).to_vec();
             // Vector templates carry ellipses just like list ones -- `#(x ...)`
             // is valid -- so this shares the ellipsis-aware item compiler.
             let templates = self.compile_template_items(&elements, level)?;
@@ -155,6 +217,26 @@ impl Compiler {
         } else {
             // Literal value
             Ok(self.make_literal_template(form))
+        }
+    }
+
+    /// The quasiquote depth the elements of a list with these items stand
+    /// at: one deeper under a `quasiquote` head, one shallower under
+    /// `unquote` or `unquote-splicing` (never below zero), otherwise the
+    /// depth this list stands at.
+    ///
+    /// The head name is read inside the heap borrow, so a two-element list
+    /// that is neither costs no allocation.
+    fn quasiquote_depth_inside(&self, items: &[TaggedValue], tail: Option<TaggedValue>) -> u32 {
+        let depth = self.quasiquote_depth;
+        if items.len() != 2 || tail.is_some() {
+            return depth;
+        }
+        let heap = self.heap.borrow();
+        match heap.get_symbol_or_identifier_name(items[0]) {
+            Some("quasiquote") => depth + 1,
+            Some("unquote") | Some("unquote-splicing") => depth.saturating_sub(1),
+            _ => depth,
         }
     }
 

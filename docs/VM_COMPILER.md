@@ -24,7 +24,8 @@ CoreExpr          (from patina-frontend)
     │
     ▼
  Pre-pass A: Quasiquote Expansion (quasiquote_expand.rs)
-    │  Expands Quasiquote(TaggedValue) → list/cons/append calls
+    │  Expands Quasiquote(TaggedValue) → calls of the registry's
+    │  list/append/list->vector, referenced as values
     │
     ▼
  Pre-pass B: Alpha Rename (alpha_rename.rs)
@@ -80,7 +81,15 @@ Define, Import, Expand, App, Apply
 **File:** `quasiquote_expand.rs`
 **Input:** `CoreExpr`
 **Output:** `CoreExpr` with `Quasiquote(TaggedValue)` nodes replaced by
-`App` calls to `list`, `cons`, `append`.
+`App` calls to `list`, `append` and `list->vector`.
+
+The callee is the registry's `scheme.base` primitive as a *value* — a
+`Literal` in operator position, allocated once per compilation unit that
+needs it — not a `Var` of that name. A quasiquote denotes the structure it
+writes whatever `list` means where it appears: under `(import (srfi 101))`,
+whose `list` builds random-access lists, `` `(1 ,x) `` must still be a pair,
+and looked up by name it was not (Larceny triage family 34). The
+tree-walker builds the structure directly and never had the problem.
 
 Interns plain symbols for nested `quasiquote`/`unquote`/`unquote-splicing`
 markers (not raw identifiers with scope marks).

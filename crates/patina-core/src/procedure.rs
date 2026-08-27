@@ -14,6 +14,25 @@ pub enum Arity {
     Range(usize, usize),
 }
 
+impl Procedure {
+    /// A registry primitive as a procedure value. `registry_index` is the
+    /// entry's index when the caller has it (the VM installs primitives
+    /// eagerly), `None` to resolve lazily on first call.
+    pub fn primitive(
+        name: &'static str,
+        arity: Arity,
+        qualified_name: Rc<str>,
+        registry_index: Option<usize>,
+    ) -> Rc<Self> {
+        Rc::new(Procedure::Primitive {
+            name,
+            arity,
+            qualified_name,
+            registry_index: Cell::new(registry_index),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Procedure {

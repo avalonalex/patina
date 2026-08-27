@@ -179,6 +179,10 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Return { val } => {
             format!("Return       r{}", val)
         }
+        Instruction::CallPrimitiveDirect { func_id, args, dst } => {
+            let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
+            format!("CallPrimDir  r{} ← #{}({})", dst, func_id.0, a.join(", "))
+        }
         Instruction::CallPrimitive {
             func_id,
             name,

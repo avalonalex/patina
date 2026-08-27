@@ -41,6 +41,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/134/test.sld` | 119 | 0 | imports — see below |
 | `srfi/27/test.sld` | 224 | 0 | verbatim |
 | `srfi/135/test.sld` | 1030 | 0 | verbatim |
+| `srfi/101/test.sld` | 56 | 0 | verbatim |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
@@ -137,8 +138,28 @@ R7RS-plus-SRFI-64 environment it assumes. Test bodies are unmodified.
 
 ## What running them found
 
-Eight defects, none of which the hand-written tests beside these libraries had
-caught. All are now fixed; the newest is first.
+Thirteen defects, none of which the hand-written tests beside these libraries
+had caught. All are now fixed; the newest is first.
+
+- **SRFI 101's shadowing names exposed five hygiene defects** — fixed
+  2026-08-26, found by making `srfi/101/test.sld` run at all. The suite
+  imports `(srfi 101)`'s `quote`, `list`, `cons` and `car` in place of
+  `(scheme base)`'s, which makes it the sharpest test of referential
+  transparency in this directory: every `(chibi test)` macro in it is expanded
+  where those names mean something else. It could not start — SRFI 101's own
+  `(get-cached 'datum)` template found the *exported* `quote` and expanded
+  without end, because the relinker skipped a `quote` head and a `let-syntax`
+  keyword was bound unscoped as well — then, running, it failed 28 of 56: the
+  framework's info alists came out as random-access lists (the VM's quasiquote
+  called `list` and `append` by name), and the user's `(list 1 2 3)` inside a
+  `test` form had been rewritten to `(chibi test)`'s `list` (the relinker
+  matched by spelling). A probe of the same shape found a library template's
+  literal `'(1 2)` reaching the program's `quote` too. Triage families 33–35,
+  each pinned in `crates/patina-tests/tests/larceny_families.rs`; the review
+  of that fix found a second layer of the same families (a generated
+  `let-syntax`'s scoping, `quote` inside a quasiquote, the ellipsis-escape
+  compiler) and one tree-walker divergence (family 36), fixed and pinned in
+  the same PR.
 
 - **SRFI 14 `ucs-range->char-set` discarded its base set** — fixed 2026-08-19,
   found by `srfi/14/test.sld` on its first run. The port handed
