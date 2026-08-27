@@ -65,7 +65,7 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
                 .collect(),
         ),
         body,
-        binding_scope: None,
+        binding_scopes: Default::default(),
     })
 }
 
@@ -256,7 +256,7 @@ fn tail_call_self_recursion() {
             ScopedParam::simple(n_sym.clone()),
         ]),
         body: vec![body],
-        binding_scope: None,
+        binding_scopes: Default::default(),
     });
 
     // ((lambda (f) (f f 0)) inner)
@@ -277,7 +277,7 @@ fn tail_call_self_recursion() {
     let outer = CoreExpr::new(CoreExprKind::Lambda {
         params: Formals::Fixed(vec![ScopedParam::simple(f_sym)]),
         body: vec![outer_body],
-        binding_scope: None,
+        binding_scopes: Default::default(),
     });
     let expr = app(outer, vec![inner]);
     let result = run(expr);

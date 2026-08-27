@@ -434,7 +434,7 @@ mod tests {
                     .collect(),
             ),
             body,
-            binding_scope: None,
+            binding_scopes: Default::default(),
         })
     }
 

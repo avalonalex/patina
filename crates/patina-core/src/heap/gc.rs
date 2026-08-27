@@ -1379,7 +1379,7 @@ mod tests {
             cont_param: Rc::from("k"),
             body: CpsExpr::rc(CpsExprKind::Literal(literal)),
             env,
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
         let proc_tv = shared.borrow_mut().alloc_procedure(proc);
 

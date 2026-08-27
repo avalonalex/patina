@@ -40,7 +40,7 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
                 .collect(),
         ),
         body,
-        binding_scope: None,
+        binding_scopes: Default::default(),
     })
 }
 

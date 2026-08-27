@@ -9,10 +9,10 @@ use super::types::{
     ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
 };
 use crate::eval::error::EvalError;
+use patina_core::Environment;
 use patina_core::cps_expr::CpsPrimitive;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{DynamicWindRecord, Procedure};
-use patina_core::{Environment, ScopeSet};
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -47,7 +47,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_param,
                     body,
                     env: lambda_env,
-                    binding_scope,
+                    binding_scopes,
                 } => {
                     // Create new environment for the lambda
                     let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
@@ -91,13 +91,17 @@ impl<'a> CpsEvaluator<'a> {
                                 *arg,
                             );
                         } else {
-                            // Non-macro parameter: simple binding + scoped binding if binding_scope present
+                            // A parameter written in source. Bound by name, for
+                            // the references written in source that reach it
+                            // that way, and at the scopes it stands in, for
+                            // the macro-introduced ones that resolve by scope.
                             new_env.define(param.name.to_string(), *arg);
-                            // Also add scoped binding so macro-expanded refs can find it
-                            if let Some(scope) = binding_scope {
-                                let mut scopes = ScopeSet::new();
-                                scopes.add_scope(*scope);
-                                new_env.define_with_scopes(param.name.to_string(), scopes, *arg);
+                            if !binding_scopes.is_empty() {
+                                new_env.define_with_scopes(
+                                    param.name.to_string(),
+                                    binding_scopes.clone(),
+                                    *arg,
+                                );
                             }
                         }
                     }
@@ -117,13 +121,10 @@ impl<'a> CpsEvaluator<'a> {
                             );
                         } else {
                             new_env.define(variadic_param.name.to_string(), rest_list);
-                            // Also add scoped binding so macro-expanded refs can find it
-                            if let Some(scope) = binding_scope {
-                                let mut scopes = ScopeSet::new();
-                                scopes.add_scope(*scope);
+                            if !binding_scopes.is_empty() {
                                 new_env.define_with_scopes(
                                     variadic_param.name.to_string(),
-                                    scopes,
+                                    binding_scopes.clone(),
                                     rest_list,
                                 );
                             }

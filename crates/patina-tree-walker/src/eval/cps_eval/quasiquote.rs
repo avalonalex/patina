@@ -565,7 +565,7 @@ mod tests {
                 name: Rc::from("x"),
                 scopes: ScopeSet::new(),
             })],
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
 
         let result = eval_cps(&expr, env, &evaluator).unwrap();

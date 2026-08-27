@@ -244,10 +244,11 @@ pub enum CpsExprKind {
         cont_param: ContVar,
         /// Body in CPS form
         body: Rc<CpsExpr>,
-        /// Binding scope for parameters without scopes (for hygiene)
-        /// When present, parameters without explicit scopes will also be bound
-        /// with this scope, allowing macro-expanded references to find them.
-        binding_scope: Option<crate::ScopeId>,
+        /// The scopes a parameter written in source stands in — see
+        /// [`CoreExprKind::Lambda`]'s field of the same name.
+        ///
+        /// [`CoreExprKind::Lambda`]: crate::core_expr::CoreExprKind::Lambda
+        binding_scopes: crate::ScopeSet,
     },
 
     // ==================== Serious Expressions ====================
@@ -600,7 +601,7 @@ impl std::fmt::Display for CpsExprKind {
                 variadic,
                 cont_param,
                 body,
-                binding_scope: _,
+                binding_scopes: _,
             } => {
                 write!(f, "(λ (")?;
                 for (i, p) in params.iter().enumerate() {

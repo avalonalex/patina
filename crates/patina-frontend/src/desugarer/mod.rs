@@ -1263,19 +1263,30 @@ impl Desugarer {
         let body =
             self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &body_scopes)?;
 
-        // If parameters have macro scopes, set binding_scope to None
-        // since we'll use the parameter-specific scopes at runtime.
-        // Otherwise, use the fresh scope for all parameters.
-        let binding_scope = if has_macro_scopes {
-            None // Parameters carry their own scopes
+        // The scopes a parameter written in source stands in: everything
+        // enclosing this lambda, plus the one minted for it. That is
+        // `body_scopes`, the same set the body is desugared with, so a binder
+        // and a reference in its body are scoped by the same rule.
+        //
+        // It used to be the fresh scope alone. A binder scoped `{fresh}` is
+        // unordered against its own enclosing binders, so a macro-introduced
+        // reference reaching two of them had no most specific candidate and
+        // the rule could not decide — Larceny triage family 39. Accumulating
+        // makes the nesting a chain, and a chain is always decidable.
+        //
+        // Empty when the parameters carry their own scopes: those already say
+        // where each was written, and `ScopedParam::scopes` is what both
+        // backends bind them at.
+        let binding_scopes = if has_macro_scopes {
+            ScopeSet::new()
         } else {
-            Some(binding_scope) // Use fresh scope for all
+            body_scopes.clone()
         };
 
         Ok(CoreExpr::new(CoreExprKind::Lambda {
             params,
             body,
-            binding_scope,
+            binding_scopes,
         }))
     }
 
@@ -1529,7 +1540,7 @@ impl Desugarer {
             let param_names = utils::formals_to_names(&params);
             let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
             let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
-            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes);
+            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes.clone());
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()
@@ -1542,7 +1553,7 @@ impl Desugarer {
                 value: CoreExpr::rc(CoreExprKind::Lambda {
                     params,
                     body,
-                    binding_scope: Some(binding_scope),
+                    binding_scopes: body_scopes.clone(),
                 }),
             }));
         }
@@ -1995,7 +2006,12 @@ impl Desugarer {
                 func: CoreExpr::rc(CoreExprKind::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
                     body: desugared_body,
-                    binding_scope: Some(ScopeId::fresh()),
+                    // The scopes this body was desugared with, not a fresh
+                    // scope of its own: `binding_scopes` must be the set the
+                    // body stands in, or a reference in it could not reach a
+                    // parameter bound here. Dead while the wrapper takes no
+                    // parameters, and wrong the moment one is added.
+                    binding_scopes: definition_scopes.clone(),
                 }),
                 args: vec![],
             }))

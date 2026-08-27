@@ -4,7 +4,6 @@ use std::rc::Rc;
 use crate::core_expr::ScopedParam;
 use crate::cps_expr::CpsExpr;
 use crate::environment::Environment;
-use crate::scope::ScopeId;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -66,9 +65,11 @@ pub enum Procedure {
         body: Rc<CpsExpr>,
         /// Captured environment for closures
         env: Rc<Environment>,
-        /// Binding scope for parameters without scopes (for hygiene)
-        /// When present, parameters without explicit scopes will also be bound
-        /// with this scope, allowing macro-expanded references to find them.
-        binding_scope: Option<ScopeId>,
+        /// The scopes a parameter written in source stands in — see
+        /// [`CoreExprKind::Lambda`]'s field of the same name. Empty when the
+        /// parameters carry their own scopes instead.
+        ///
+        /// [`CoreExprKind::Lambda`]: crate::core_expr::CoreExprKind::Lambda
+        binding_scopes: crate::ScopeSet,
     },
 }

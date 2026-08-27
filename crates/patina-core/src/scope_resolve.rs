@@ -193,32 +193,19 @@ mod ambiguity {
         sink().is_some()
     }
 
-    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? An ambiguous reference
-    /// then panics instead of being reported.
+    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? It adds the refusal to
+    /// a *release* build; a debug build refuses anyway.
     ///
-    /// **Not the default, and that is a finding rather than a compromise.**
-    /// Enforcing Flatt's rule looked free — no workload logs an ambiguous
-    /// reference — until the check ran over the Rust suite, where
-    /// `test_let_syntax_nested_lexical_scoping` trips it:
-    ///
-    /// ```scheme
-    /// (let ((x 'outer))
-    ///   (let-syntax ((m1 (syntax-rules () ((m1) x))))
-    ///     (let ((x 'middle))
-    ///       (let-syntax ((m2 (syntax-rules () ((m2) x))))
-    ///         (let ((x 'inner))
-    ///           (list (m1) (m2)))))))   ; R7RS: (outer middle)
-    /// ```
-    ///
-    /// That answer is correct today, and it is *not* the scope rule that
-    /// produces it: the two candidate bindings are both single scopes,
-    /// neither containing the other, and the winner comes from environment
-    /// nesting. So Patina's scope sets do not carry enough information to
-    /// decide a distinction R7RS requires, and an extra-model rule is
-    /// covering for it. Asserting would fail a passing, correct test.
-    ///
-    /// Larceny triage family 39 owns that; until it is fixed, strict mode is
-    /// the tool for measuring a change against the rule rather than a gate.
+    /// It was once the other way round. Enforcing Flatt's rule looked free —
+    /// no workload logged an ambiguous reference — until the check ran over
+    /// the Rust suite, where `test_let_syntax_nested_lexical_scoping` tripped
+    /// it: a passing, R7RS-required program whose answer came from
+    /// environment nesting rather than from scopes, because each `let` bound
+    /// its variable at one fresh scope and sibling binders were therefore
+    /// unordered. Larceny triage family 39. Fixed 2026-08-27 by scoping a
+    /// binder at the scopes it *stands in*, so nested binders form a chain
+    /// and a chain is always decidable; the suite passes the check now, and
+    /// so does every workload — 249 processes, zero ambiguous references.
     fn strict() -> bool {
         static STRICT: OnceLock<bool> = OnceLock::new();
         *STRICT.get_or_init(|| {
@@ -228,9 +215,22 @@ mod ambiguity {
         })
     }
 
-    /// Should the check run at all? Only when something will come of it.
+    /// Should the check run at all?
+    ///
+    /// Always in a debug build, where an ambiguous reference is a panic. In a
+    /// release build only when one of the two variables asks for it, so a
+    /// release interpreter pays a `OnceLock` read and a branch.
     pub(super) fn checking() -> bool {
-        logging() || strict()
+        cfg!(debug_assertions) || logging() || strict()
+    }
+
+    /// Is an ambiguous reference refused rather than reported?
+    ///
+    /// In a debug build, always — so every `cargo test` and both CI debug
+    /// lanes hold Flatt's rule without anyone opting in. A release build
+    /// refuses only when `PATINA_AMBIGUITY_STRICT` asks it to.
+    fn refusing() -> bool {
+        cfg!(debug_assertions) || strict()
     }
 
     /// Render a scope set without spaces, so a record stays one field.
@@ -294,7 +294,7 @@ mod ambiguity {
         let ambiguous = !rivals.is_empty();
         let refuse = || {
             assert!(
-                !ambiguous || !strict(),
+                !ambiguous || !refusing(),
                 "ambiguous reference: `{}` with scopes {} resolves to {} and to {}, \
              and neither contains the other — Flatt's rule does not determine \
              this reference, so the answer came from scope-set size alone. \
@@ -433,5 +433,63 @@ mod tests {
         assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), None);
         let empty: Vec<(ScopeSet, &str)> = Vec::new();
         assert_eq!(resolve_scoped("x", &set(&[1]), &empty), None);
+    }
+}
+
+#[cfg(test)]
+mod nesting {
+    use super::*;
+    use crate::scope::ScopeId;
+
+    fn set(ids: &[usize]) -> ScopeSet {
+        let mut s = ScopeSet::new();
+        for &i in ids {
+            s.add_scope(ScopeId(i));
+        }
+        s
+    }
+
+    /// Binders that accumulate their enclosing scopes form a chain, and a
+    /// chain is always decidable: for any reference, at most one candidate is
+    /// maximal, so no resolution is ambiguous.
+    ///
+    /// This is what fixes Larceny triage family 39. Scoped at one fresh scope
+    /// each — as they were — sibling binders are unordered, and a reference
+    /// reaching two of them has no most specific candidate at all.
+    #[test]
+    fn accumulated_binders_are_ordered_and_singletons_are_not() {
+        let nested = [set(&[1]), set(&[1, 2]), set(&[1, 2, 3])];
+        for (i, outer) in nested.iter().enumerate() {
+            for inner in &nested[i + 1..] {
+                assert!(
+                    outer.is_subset_of(inner),
+                    "{outer} must nest inside {inner}"
+                );
+            }
+        }
+
+        let singletons = [set(&[1]), set(&[2])];
+        assert!(
+            !singletons[0].is_subset_of(&singletons[1])
+                && !singletons[1].is_subset_of(&singletons[0]),
+            "singleton binders are unordered — the shape family 39 was"
+        );
+    }
+
+    /// A macro-introduced reference reaches the binding it was written
+    /// against, not a nearer one. `m1` is defined inside the outer `let`, so
+    /// its template's `x` carries that binder's scope plus its own expansion
+    /// scope, and only the outer binder is a subset of it.
+    #[test]
+    fn a_template_reference_reaches_its_own_definition_sites_binder() {
+        let candidates = vec![
+            (set(&[1, 2, 3]), "inner"),
+            (set(&[1, 2]), "middle"),
+            (set(&[1]), "outer"),
+        ];
+        assert_eq!(
+            resolve_scoped("x", &set(&[1, 9]), &candidates),
+            Some("outer")
+        );
     }
 }

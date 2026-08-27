@@ -127,7 +127,7 @@ impl CpsTransformer {
             CoreExprKind::Lambda {
                 params,
                 body,
-                binding_scope,
+                binding_scopes,
             } => {
                 // Transform: (lambda (x y) body)
                 // Into: (k (lambda (x y k') body'))
@@ -145,8 +145,8 @@ impl CpsTransformer {
                         variadic: cps_variadic,
                         cont_param,
                         body: Rc::new(cps_body),
-                        // Preserve binding_scope for hygiene
-                        binding_scope: *binding_scope,
+                        // Preserve binding_scopes for hygiene
+                        binding_scopes: binding_scopes.clone(),
                     }),
                 })
             }
@@ -385,7 +385,7 @@ impl CpsTransformer {
             CoreExprKind::Lambda {
                 params,
                 body,
-                binding_scope,
+                binding_scopes,
             } => {
                 let cont_param = self.gensym_cont();
                 let cps_body = self.transform_body(body, &cont_param);
@@ -396,7 +396,7 @@ impl CpsTransformer {
                     variadic: cps_variadic,
                     cont_param,
                     body: Rc::new(cps_body),
-                    binding_scope: *binding_scope,
+                    binding_scopes: binding_scopes.clone(),
                 })
             }
             _ => panic!(
@@ -685,7 +685,7 @@ mod tests {
         let expr = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("x".into())]),
             body: vec![make_var("x")],
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
 
         let cps = transformer.transform_toplevel(&expr);
@@ -759,7 +759,7 @@ mod tests {
         let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
             body: vec![lambda_body],
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
 
         let expr = CoreExpr::new(CoreExprKind::App {
@@ -796,7 +796,7 @@ mod tests {
         let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("exit".into())]),
             body: vec![exit_call],
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
 
         let expr = CoreExpr::new(CoreExprKind::App {
@@ -832,7 +832,7 @@ mod tests {
         let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
             body: vec![k_call],
-            binding_scope: None,
+            binding_scopes: Default::default(),
         });
         let callcc = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("call/cc")),

@@ -1261,3 +1261,37 @@ fn an_introduced_macro_assigning_to_a_source_written_binder_diverges() {
         "scheme_tests/reports/larceny_triage.md, family 38",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Family 39 — a binder is scoped by where it stands, not by one fresh scope
+// ---------------------------------------------------------------------------
+
+/// `m1` is defined inside the outer `let`, so its template's `x` means that
+/// binding wherever the macro is used — R7RS §4.3.2 referential
+/// transparency. `m2`, defined one `let` deeper, means the middle one.
+///
+/// The answer was right before this fix and produced for the wrong reason:
+/// each `let` bound its variable at a *single* fresh scope, so `{outer}` and
+/// `{middle}` were unordered, neither was more specific, and set-of-scopes
+/// resolution could not choose — Flatt's rule calls such a reference
+/// ambiguous and Racket raises an error. The winner came from the candidate
+/// walk visiting inner environments first, which is lexical nesting and
+/// outside the model.
+///
+/// Fixed 2026-08-27: a parameter written in source is bound at the scopes it
+/// *stands in* — every scope enclosing the form, plus the one minted for it.
+/// Nested binders then form a chain, each strictly containing the last, and a
+/// chain is always decidable. `PATINA_AMBIGUITY_STRICT=1` accepts this
+/// program on both backends now, and the whole test suite with it.
+#[test]
+fn a_binder_is_scoped_by_where_it_stands() {
+    assert_program_eval_to(
+        "(let ((x 'outer))
+           (let-syntax ((m1 (syntax-rules () ((m1) x))))
+             (let ((x 'middle))
+               (let-syntax ((m2 (syntax-rules () ((m2) x))))
+                 (let ((x 'inner))
+                   (list (m1) (m2)))))))",
+        "(outer middle)",
+    );
+}
