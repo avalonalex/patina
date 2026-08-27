@@ -111,9 +111,8 @@ impl Compiler {
                         let inner_template =
                             self.compile_quote_template_escaped(inner_items[1], level)?;
 
-                        let quote_sym = self.heap.borrow_mut().intern_symbol("quote");
-                        let quote_symbol = self.make_literal_template(quote_sym);
-                        return Ok(Template::List(vec![quote_symbol, inner_template]));
+                        let head = self.compile_template(items[0], level)?;
+                        return Ok(Template::List(vec![head, inner_template]));
                     }
                 }
 
@@ -122,8 +121,22 @@ impl Compiler {
                     // Has pattern variables - compile normally so they expand
                     // Fall through to normal list compilation
                 } else {
-                    // No pattern variables - treat as literal (no hygiene renaming)
-                    return Ok(self.make_literal_template(form));
+                    // No pattern variables: the datum is inserted verbatim,
+                    // with no hygiene renaming inside it. The `quote` in
+                    // front of it is not part of the datum — it is a
+                    // reference the template makes, like any other — and is
+                    // compiled as one, so that it resolves where the macro
+                    // was *defined*. Emitted as a bare symbol with the rest,
+                    // as it used to be, it resolved where the macro was
+                    // *used*: a program importing SRFI 101, whose `quote`
+                    // builds random-access lists, got one where a library's
+                    // template wrote `'(1 2)`. The literal form of Larceny
+                    // family 33.
+                    let head = self.compile_template(items[0], level)?;
+                    return Ok(Template::List(vec![
+                        head,
+                        self.make_literal_template(items[1]),
+                    ]));
                 }
             }
 

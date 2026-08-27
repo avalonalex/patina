@@ -861,3 +861,116 @@ fn an_exception_handler_runs_in_the_raises_dynamic_extent() {
          the defect is fixed — see {TRIAGE} families 22 and 28"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Family 33 — a template's `quote` resolved at the use site
+// ---------------------------------------------------------------------------
+
+/// `m`'s template writes `(quote d)`; a `let-syntax` binding `quote` around
+/// the *call* has nothing to do with it. Patina used to bind a `let-syntax`
+/// keyword unscoped as well as scoped, which made it reachable from every
+/// reference of that spelling — including one another macro introduced —
+/// and since the captured expansion introduces `quote` again, the capture
+/// repeated until the stack went. chibi answers `hello`.
+///
+/// Fixed 2026-08-26: the keyword is bound only under the body's scopes, plus
+/// the binder's own scopes when the `let-syntax` itself came out of a
+/// template (chibi's §4.3 `(m k)`, where binder and reference are
+/// `bound-identifier=?`).
+#[test]
+fn a_templates_quote_is_not_captured_by_a_use_site_let_syntax() {
+    assert_program_eval_to(
+        "(define-syntax m (syntax-rules () ((m d) (quote d))))
+         (let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
+           (m hello))",
+        "hello",
+    );
+}
+
+/// The import half, and the literal form. SRFI 101 exports its own `quote`,
+/// which builds random-access lists. Its own template `(get-cached 'datum)`
+/// must reach the `quote` SRFI 101 was written against — it used to reach
+/// the exported one and expand without end — and a *literal* `'(1 2)` in
+/// another library's template must be a pair, not whatever the program's
+/// `quote` builds. Both are the definition site's `quote`; only the user's
+/// own `'(1 2)` is the program's.
+///
+/// Fixed 2026-08-26: the relinker rewrites a `quote` head it used to skip,
+/// and the template compiler compiles the `quote` of a literal datum as a
+/// reference rather than emitting it verbatim with the datum.
+#[test]
+fn a_templates_quote_is_the_definition_sites_quote_under_an_imported_one() {
+    assert_program_eval_to(
+        "(define-library (probe lit)
+           (import (scheme base))
+           (export lit)
+           (begin (define-syntax lit (syntax-rules () ((_) '(1 2))))))
+         (import (except (scheme base) quote car cons list list?)
+                 (prefix (scheme base) r7:)
+                 (srfi 101)
+                 (probe lit))
+         (r7:list (let ((f (lambda () '(x)))) (eq? (f) (f)))
+                  (car '(1 2))
+                  (r7:pair? (lit)))",
+        "(#t 1 #t)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Family 34 — VM: quasiquote built its result with the use site's `list`
+// ---------------------------------------------------------------------------
+
+/// A quasiquote denotes the structure it writes, whatever `list`, `append`
+/// and `list->vector` mean where it appears. The VM's expansion called them
+/// by name, so under SRFI 101 — whose `list` builds random-access lists —
+/// `` `(1 ,x 3) `` was one too, and `` `#(1 ,x) `` failed inside
+/// `list->vector`. The tree-walker builds the structure directly and was
+/// right all along. The last element pins that the rebinding is real.
+///
+/// Fixed 2026-08-26: the expansion references the registry's primitives as
+/// values, so nothing the program imports or defines can redirect them.
+#[test]
+fn quasiquote_builds_pairs_whatever_list_means_at_the_use_site() {
+    assert_program_eval_to(
+        "(import (except (scheme base) quote car cons list list? append)
+                 (prefix (scheme base) r7:)
+                 (srfi 101))
+         (define x 2)
+         (r7:list (r7:pair? `(1 ,x 3))
+                  (r7:equal? `(1 ,@(r7:list 7 8) 3) (r7:list 1 7 8 3))
+                  (r7:vector? `#(1 ,x))
+                  (r7:pair? (list 1 2)))",
+        "(#t #t #t #f)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Family 35 — relinking rewrote the user's code inside a macro call
+// ---------------------------------------------------------------------------
+
+/// `both`'s template uses `(scheme base)`'s `list`; the program's `list` is
+/// SRFI 101's. The template's reference is relinked to the definition
+/// site's `list` — that is referential transparency — but the `(list 1 2)`
+/// the user wrote *as the argument* means the program's, and it used to be
+/// rewritten too, because the relinker matched by spelling. So `v` is a
+/// pair and its second element is not.
+///
+/// Fixed 2026-08-26: the relinker renames only identifiers carrying the
+/// expansion's own scope, which the expander puts on what a template
+/// introduces and on nothing that came in through a pattern variable.
+#[test]
+fn relinking_leaves_the_users_code_inside_a_macro_call_alone() {
+    assert_program_eval_to(
+        "(define-library (probe both)
+           (import (scheme base))
+           (export both)
+           (begin (define-syntax both (syntax-rules () ((_ e) (list 'template e))))))
+         (import (except (scheme base) quote car cons list list?)
+                 (prefix (scheme base) r7:)
+                 (srfi 101)
+                 (probe both))
+         (define v (both (list 1 2)))
+         (r7:list (r7:pair? v) (r7:pair? (r7:cadr v)))",
+        "(#t #f)",
+    );
+}

@@ -134,6 +134,14 @@ fn stamp_expansion_source(
     }
 }
 
+/// The aliases one expansion's relinking installs, keyed by spelling, and
+/// the scope that says which occurrences they apply to.
+struct Renames<'a> {
+    aliases: &'a HashMap<Rc<str>, TaggedValue>,
+    /// The expansion's own scope — see `MacroExpansion::scope`.
+    expansion_scope: ScopeId,
+}
+
 /// Monotonic counter for the unique names given to definition-environment
 /// aliases. Never reused, so an alias cannot collide with a user binding or
 /// with an alias from another expansion.
@@ -606,6 +614,7 @@ impl Desugarer {
     fn link_definition_env_refs(
         &self,
         expanded: TaggedValue,
+        expansion_scope: ScopeId,
         definition_env: Option<&Rc<Environment>>,
         definition_scopes: &ScopeSet,
         template_symbols: &HashSet<Rc<str>>,
@@ -668,7 +677,38 @@ impl Desugarer {
         if renames.is_empty() {
             return expanded;
         }
+        let renames = Renames {
+            aliases: &renames,
+            expansion_scope,
+        };
         self.rewrite_refs(expanded, &renames, 0, shared_heap)
+    }
+
+    /// The alias for `tv`, if it is a reference *this expansion introduced*
+    /// and the definition site's binding for its spelling was aliased.
+    ///
+    /// Only an identifier carrying the expansion's scope qualifies. The
+    /// expander puts that scope on everything the template introduced and on
+    /// nothing that arrived through a pattern variable, so the `list` a
+    /// template writes is renamed and the `(list 1 2 3)` the user wrote
+    /// inside the macro call is not — they can mean different procedures,
+    /// and under SRFI 101, where the program's `list` builds random-access
+    /// lists and `(chibi test)`'s builds pairs, they do. Renaming by
+    /// spelling alone rewrote the user's as well; that is Larceny family 35.
+    /// A plain symbol never qualifies: the expander leaves the user's symbols
+    /// as symbols, and turns what it introduces into identifiers.
+    fn introduced_alias(
+        &self,
+        tv: TaggedValue,
+        renames: &Renames<'_>,
+        shared_heap: &SharedHeap,
+    ) -> Option<TaggedValue> {
+        let heap = shared_heap.borrow();
+        let (name, scopes) = heap.get_identifier_data_any(tv)?;
+        if !scopes.contains(&renames.expansion_scope) {
+            return None;
+        }
+        renames.aliases.get(&*name).copied()
     }
 
     /// Rewrite one *form* — a list read the way the evaluator reads it, with a
@@ -682,22 +722,47 @@ impl Desugarer {
     fn rewrite_form(
         &self,
         tv: TaggedValue,
-        renames: &HashMap<Rc<str>, TaggedValue>,
+        renames: &Renames<'_>,
         quote_depth: u32,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
         // Compute the depth inside the borrow: the answer is a `u32`, so
         // nothing needs to outlive it and the head name is never copied out.
-        let rest_depth = {
+        // `is_quote` rather than an early return, so the head name is still
+        // never copied out of the borrow.
+        let (rest_depth, is_quote) = {
             let heap = shared_heap.borrow();
             let (car, _) = heap.get_pair(tv);
             match heap.get_symbol_or_identifier_name(car) {
-                Some("quote") => return tv,
-                Some("quasiquote") => quote_depth + 1,
-                Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
-                _ => quote_depth,
+                Some("quote") => (quote_depth, true),
+                Some("quasiquote") => (quote_depth + 1, false),
+                Some("unquote") | Some("unquote-splicing") => {
+                    (quote_depth.saturating_sub(1), false)
+                }
+                _ => (quote_depth, false),
             }
         };
+
+        // A quoted datum denotes itself, so nothing *inside* it is a reference
+        // — but the head is one, and it is the occurrence most in need of
+        // relinking. A library may export its own `quote`, as SRFI 101 does,
+        // and then the use site resolves a template's `quote` to that macro
+        // rather than to the `quote` the template meant. Returning the form
+        // untouched here is what let the expansion of `(quote x)` contain a
+        // `quote` that expanded again, without end — the import half of
+        // Larceny family 33. Rewrite the head; leave the datum alone.
+        //
+        // Only a `quote` the template introduced, and only when `quote` is
+        // being relinked at all — when the definition and use sites disagree
+        // about what it means. Otherwise the form is returned unchanged,
+        // exactly as before.
+        if is_quote {
+            let (car, cdr) = shared_heap.borrow().get_pair(tv);
+            let Some(renamed) = self.introduced_alias(car, renames, shared_heap) else {
+                return tv;
+            };
+            return shared_heap.borrow_mut().alloc_pair(renamed, cdr);
+        }
 
         // Flatten the spine so the head can be told from the arguments. The
         // tail is whatever ends the list — `()` for a proper one, an atom for
@@ -753,7 +818,8 @@ impl Desugarer {
             .list_from_iter_with_tail(elems, new_tail)
     }
 
-    /// Substitute `renames` into evaluated positions of `tv`.
+    /// Substitute `renames` into evaluated positions of `tv`, for the
+    /// identifiers this expansion introduced (`introduced_alias`).
     ///
     /// `quote_depth` tracks quasiquotation: names inside quoted data denote
     /// themselves, not bindings, so rewriting them there would corrupt the
@@ -762,7 +828,7 @@ impl Desugarer {
     fn rewrite_refs(
         &self,
         tv: TaggedValue,
-        renames: &HashMap<Rc<str>, TaggedValue>,
+        renames: &Renames<'_>,
         quote_depth: u32,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
@@ -796,14 +862,8 @@ impl Desugarer {
         if quote_depth > 0 {
             return tv;
         }
-        let name = {
-            let heap = shared_heap.borrow();
-            heap.get_symbol_or_identifier_name(tv).map(String::from)
-        };
-        match name.and_then(|n| renames.get(n.as_str()).copied()) {
-            Some(alias) => alias,
-            None => tv,
-        }
+        self.introduced_alias(tv, renames, shared_heap)
+            .unwrap_or(tv)
     }
 
     /// Look up the source location for a TaggedValue in the source map
@@ -984,7 +1044,10 @@ impl Desugarer {
             // Save call-site source location before expansion
             let call_site_source = self.lookup_source(list);
 
-            let expanded_tagged = patina_macros::expand_macro_with_shadowed_tagged(
+            let patina_macros::MacroExpansion {
+                form: expanded_tagged,
+                scope: expansion_scope,
+            } = patina_macros::expand_macro_with_scope(
                 &compiled_macro,
                 list, // Pass TaggedValue directly
                 shared_heap,
@@ -1002,6 +1065,7 @@ impl Desugarer {
             // desugaring, otherwise they become bare global loads here and fail.
             let expanded_tagged = self.link_definition_env_refs(
                 expanded_tagged,
+                expansion_scope,
                 compiled_macro.definition_env.as_ref(),
                 &compiled_macro.definition_scopes,
                 &compiled_macro.template_symbols,
@@ -1766,13 +1830,17 @@ impl Desugarer {
                 ));
             }
 
-            let name = {
+            // The binder's own scopes as written, kept beside its name: when
+            // this whole `let-syntax` came out of a template, they are the
+            // identity that references introduced by that same expansion carry.
+            let (name, binder_scopes): (Rc<str>, ScopeSet) = {
                 let heap = shared_heap.borrow();
                 if let Some(s) = heap.get_symbol_name(binding_vec[0]) {
-                    Rc::from(s)
-                } else if let Some((id_name, _)) = utils::get_identifier_info(binding_vec[0], &heap)
+                    (Rc::from(s), ScopeSet::new())
+                } else if let Some((id_name, id_scopes)) =
+                    utils::get_identifier_info(binding_vec[0], &heap)
                 {
-                    id_name
+                    (id_name, id_scopes)
                 } else {
                     return Err(DesugarError::InvalidSyntax(
                         "Macro name must be a symbol".to_string(),
@@ -1788,7 +1856,7 @@ impl Desugarer {
                 &transformer_scopes,
             )?;
 
-            macro_bindings.push((name, compiled_macro));
+            macro_bindings.push((name, binder_scopes, compiled_macro));
         }
 
         // Create environment with macro bindings.
@@ -1803,29 +1871,44 @@ impl Desugarer {
         // §4.3.1 and what `let_syntax_body_definitions_and_transformer_scope`
         // pins.
         let body_env = Rc::new(Environment::with_parent(env.clone()));
-        for (name, compiled_macro) in macro_bindings {
+        for (name, binder_scopes, compiled_macro) in macro_bindings {
             let tv = body_env
                 .heap()
                 .borrow_mut()
                 .alloc_macro(Rc::new(compiled_macro));
-            // Bound twice, for two kinds of reference.
+            // Bound only *with* the body's scopes. Set-of-scopes resolution
+            // matches a binding when its scopes are a subset of the
+            // reference's, so this reaches exactly the references lexically
+            // inside this body — which is what R7RS §4.3.1 makes a `let-syntax`
+            // keyword visible to, and nothing else.
             //
-            // Scoped, so the keyword can outrank an enclosing variable of the
-            // same spelling: set-of-scopes resolution prefers the largest scope
-            // set the reference contains, and `definition_scopes` is strictly
-            // larger than any binder outside this form.
-            //
-            // Unscoped as well, because a reference the expander introduced —
-            // the `(n z)` inside another macro's template, which is chibi's
-            // `bound-identifier=?` test — carries the scopes of the template it
-            // came from and never the ones this body accumulated, so no scoped
-            // binding can match it. `get_with_scopes` falls back to the
-            // unscoped table only when nothing scoped matched, so this is
-            // reached exactly when there is no enclosing variable to order
-            // against, which is the case where the old unscoped binding was
-            // already right.
+            // Not also bound unscoped, as it was. An unscoped binding is
+            // reachable from *every* reference of that spelling, including one
+            // introduced by a macro defined elsewhere, which carries only its
+            // own expansion's scopes and is supposed to resolve at that macro's
+            // definition site. That is the `let-syntax` half of Larceny family
+            // 33: `(quote d)` in a top-level macro's template was captured by a
+            // `let-syntax ((quote …))` merely surrounding the *call*, and since
+            // the captured expansion introduces `quote` again, it re-captured
+            // itself until the stack went.
             body_env.define_with_scopes(name.to_string(), definition_scopes.clone(), tv);
-            body_env.define(name.to_string(), tv);
+
+            // Also under the binder's own scopes, when it has any — that is,
+            // when this whole `let-syntax` was introduced by a template. Its
+            // body came from that same template, so a reference in it carries
+            // the expansion's scopes and not `let_syntax_scope`, which the
+            // desugarer minted only now; binding under the binder's set is what
+            // makes the two meet. This is `bound-identifier=?` — same spelling,
+            // same scopes — and chibi's §4.3 `(m k)` is exactly it: `m`'s
+            // template binds `n` and then references it as `(n z)`.
+            //
+            // Guarded on non-empty, which is what keeps this from being the old
+            // unscoped binding under another name: a `let-syntax` written in
+            // source has a plain symbol here, and giving *that* an
+            // empty-scoped binding is the family-33 capture removed above.
+            if !binder_scopes.is_empty() {
+                body_env.define_with_scopes(name.to_string(), binder_scopes, tv);
+            }
         }
 
         let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
