@@ -4,7 +4,7 @@
 //! - `TestExpander`: A test helper for creating and testing macros
 //!
 //! The TestExpander uses `patina_macros` for compilation and expansion,
-//! calling `expand_macro_with_shadowed_tagged` (the production TaggedValue path).
+//! calling `expand_macro_with_scope` (the production TaggedValue path).
 
 use crate::error::MacroError;
 use patina_core::TaggedValue;
@@ -106,14 +106,15 @@ impl TestExpander {
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = super::expand_macro_with_shadowed_tagged(
+        let expanded_tv = super::expand_macro_with_scope(
             &self.compiled,
             input_tv,
             heap,
             &std::collections::HashSet::new(),
             None,
         )
-        .map_err(|e| format!("Expansion failed: {}", e))?;
+        .map_err(|e| format!("Expansion failed: {}", e))?
+        .form;
 
         // Compare TaggedValues directly (ignoring gensym/hygiene differences)
         if Self::tagged_forms_equal_ignoring_gensym(expanded_tv, expected_tv, &heap.borrow()) {
@@ -148,14 +149,15 @@ impl TestExpander {
         let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = super::expand_macro_with_shadowed_tagged(
+        let expanded_tv = super::expand_macro_with_scope(
             &self.compiled,
             input_tv,
             heap,
             &std::collections::HashSet::new(),
             None,
         )
-        .map_err(|e| format!("Expansion error: {}", e))?;
+        .map_err(|e| format!("Expansion error: {}", e))?
+        .form;
 
         Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))
     }

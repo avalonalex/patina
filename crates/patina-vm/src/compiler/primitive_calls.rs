@@ -155,7 +155,7 @@ pub fn resolve_primitive_calls(
     registry: &PrimitiveRegistry,
 ) -> PrimitiveCallMap {
     let mut callees = Callees::default();
-    collect_callee_names(&allocated.expr, &mut callees);
+    collect_callees(&allocated.expr, &mut callees);
 
     let mut map = PrimitiveCallMap::default();
     for name in callees.names {
@@ -214,56 +214,60 @@ fn registry_entry(
     Some((index, canonical))
 }
 
-/// What `collect_callee_names` gathers: global names in operator position,
-/// and literal values there.
+/// What `collect_callees` gathers: global names in operator position, and
+/// literal values there. Both dedupe — one compilation unit can hold a
+/// hundred quasiquotes over the same three constructor procedures, and
+/// resolving each costs a heap borrow, a registry lookup and a `format!`.
 #[derive(Default)]
 struct Callees {
     names: FxHashSet<Symbol>,
-    values: Vec<patina_core::tagged_value::TaggedValue>,
+    values: FxHashSet<patina_core::tagged_value::TaggedValue>,
 }
 
 /// Collect every `GlobalRef` name and every `Literal` value used as the
 /// callee of an `App`.
-fn collect_callee_names(expr: &RegExpr, out: &mut Callees) {
+fn collect_callees(expr: &RegExpr, out: &mut Callees) {
     match &expr.kind {
         RegExprKind::App { func, args, .. } => {
             match &func.kind {
                 RegExprKind::GlobalRef { name } => {
                     out.names.insert(name.clone());
                 }
-                RegExprKind::Literal(v) => out.values.push(*v),
-                _ => collect_callee_names(func, out),
+                RegExprKind::Literal(v) => {
+                    out.values.insert(*v);
+                }
+                _ => collect_callees(func, out),
             }
             for arg in args {
-                collect_callee_names(arg, out);
+                collect_callees(arg, out);
             }
         }
         RegExprKind::Apply { func, args, .. } => {
-            collect_callee_names(func, out);
+            collect_callees(func, out);
             for arg in args {
-                collect_callee_names(arg, out);
+                collect_callees(arg, out);
             }
         }
         RegExprKind::Lambda(lam) => {
             for e in &lam.body {
-                collect_callee_names(e, out);
+                collect_callees(e, out);
             }
         }
         RegExprKind::If { test, then, else_ } => {
-            collect_callee_names(test, out);
-            collect_callee_names(then, out);
-            collect_callee_names(else_, out);
+            collect_callees(test, out);
+            collect_callees(then, out);
+            collect_callees(else_, out);
         }
         RegExprKind::Begin(exprs) => {
             for e in exprs {
-                collect_callee_names(e, out);
+                collect_callees(e, out);
             }
         }
         RegExprKind::SetLocal { value, .. }
         | RegExprKind::WriteLocalCell { value, .. }
         | RegExprKind::WriteClosureCell { value, .. }
         | RegExprKind::SetGlobal { value, .. }
-        | RegExprKind::Define { value, .. } => collect_callee_names(value, out),
+        | RegExprKind::Define { value, .. } => collect_callees(value, out),
         RegExprKind::Literal(_)
         | RegExprKind::Quote(_)
         | RegExprKind::Quasiquote(_)

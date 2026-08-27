@@ -23,6 +23,6 @@ pub use macro_expander::{
     CompiledMacro, CompiledRule, Compiler, ExpandError, Expander, Identifier, IdentifierKey,
     MacroExpansion, MatchError, Matcher, ParsedSyntaxRules, Pattern, SyntaxRulesParseError,
     Template, TestExpander, add_scope_to_scoped_identifiers, expand_macro_with_scope,
-    expand_macro_with_shadowed_tagged, parse_syntax_rules,
+    parse_syntax_rules,
 };
 pub use tracer::MacroTracer;

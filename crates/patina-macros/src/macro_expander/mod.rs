@@ -167,7 +167,7 @@ pub fn flip_scope_on_tagged(
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
     // Early exit: if no identifiers present, return value unchanged
-    if !contains_identifier_tagged(tv, shared_heap) {
+    if !contains_edit_target(tv, ScopeEdit::Flip, shared_heap) {
         return tv;
     }
 
@@ -192,7 +192,7 @@ pub fn add_scope_to_scoped_identifiers(
     scope: patina_runtime::ScopeId,
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
-    if !contains_identifier_tagged(tv, shared_heap) {
+    if !contains_edit_target(tv, ScopeEdit::AddToScoped, shared_heap) {
         return tv;
     }
     edit_scope_on_tagged(tv, scope, ScopeEdit::AddToScoped, shared_heap)
@@ -208,6 +208,16 @@ enum ScopeEdit {
     AddToScoped,
 }
 
+impl ScopeEdit {
+    /// Would this edit change `tv`, an identifier with `scopes`?
+    fn affects(self, scopes: &patina_runtime::ScopeSet) -> bool {
+        match self {
+            ScopeEdit::Flip => true,
+            ScopeEdit::AddToScoped => !scopes.is_empty(),
+        }
+    }
+}
+
 /// Check if a TaggedValue tree contains any Identifier nodes
 ///
 /// Fast traversal that returns true as soon as an Identifier is found. The
@@ -217,12 +227,13 @@ enum ScopeEdit {
 /// suggest a cycle and never entered twice. Cycles only come from the
 /// reader, whose data holds symbols, not identifiers, so a revisited
 /// container contributes nothing.
-fn contains_identifier_tagged(
+fn contains_edit_target(
     tv: patina_core::TaggedValue,
+    edit: ScopeEdit,
     shared_heap: &patina_core::SharedHeap,
 ) -> bool {
     let mut guard = CycleGuard::default();
-    contains_identifier_impl(tv, shared_heap, &mut guard)
+    contains_identifier_impl(tv, edit, shared_heap, &mut guard)
 }
 
 /// A revisit guard for walks over reader data that may be cyclic. Records
@@ -246,6 +257,7 @@ impl CycleGuard {
 
 fn contains_identifier_impl(
     tv: patina_core::TaggedValue,
+    edit: ScopeEdit,
     shared_heap: &patina_core::SharedHeap,
     guard: &mut CycleGuard,
 ) -> bool {
@@ -259,8 +271,8 @@ fn contains_identifier_impl(
             return false;
         }
         let (car, cdr) = shared_heap.borrow().get_pair(tv);
-        return contains_identifier_impl(car, shared_heap, guard)
-            || contains_identifier_impl(cdr, shared_heap, guard);
+        return contains_identifier_impl(car, edit, shared_heap, guard)
+            || contains_identifier_impl(cdr, edit, shared_heap, guard);
     }
 
     if tv.is_vector() {
@@ -273,7 +285,7 @@ fn contains_identifier_impl(
         return heap
             .vector_slice(tv)
             .iter()
-            .any(|&e| contains_identifier_impl(e, shared_heap, guard));
+            .any(|&e| contains_identifier_impl(e, edit, shared_heap, guard));
     }
 
     // Non-object types can't contain identifiers
@@ -281,8 +293,12 @@ fn contains_identifier_impl(
         return false;
     }
 
-    // Check for identifier (native or boxed) via unified method
-    shared_heap.borrow().get_identifier_data_any(tv).is_some()
+    // An identifier this edit would actually change. Read by borrow: the
+    // question is a `bool`, and cloning the name and scope set to answer it
+    // is what the walk used to do, twice per expansion.
+    let heap = shared_heap.borrow();
+    heap.get_identifier_data(tv)
+        .is_some_and(|(_, scopes)| edit.affects(scopes))
 }
 
 /// Implementation of the scope walks for TaggedValue
@@ -353,16 +369,28 @@ fn edit_scope_memo(
         // reader data holds no identifiers, so such a vector is never one
         // that changes.
         memo.insert(tv.raw_bits(), tv);
-        let mut elems = shared_heap.borrow().vector_slice(tv).to_vec();
-        let mut changed = false;
-        for e in elems.iter_mut() {
-            let edited = edit_scope_memo(*e, scope, edit, shared_heap, memo);
-            changed |= edited != *e;
-            *e = edited;
+        // Elements are copied out only once one of them changes: a vector of
+        // data — the common case, and the one this arm exists to return by
+        // identity — is walked with no allocation at all.
+        let len = shared_heap.borrow().vector_len(tv);
+        let mut elems: Option<Vec<patina_core::TaggedValue>> = None;
+        for i in 0..len {
+            let e = shared_heap.borrow().vector_ref(tv, i);
+            let edited = edit_scope_memo(e, scope, edit, shared_heap, memo);
+            match &mut elems {
+                Some(out) => out.push(edited),
+                None if edited != e => {
+                    let heap = shared_heap.borrow();
+                    let mut out = heap.vector_slice(tv)[..i].to_vec();
+                    out.push(edited);
+                    elems = Some(out);
+                }
+                None => {}
+            }
         }
-        if !changed {
+        let Some(elems) = elems else {
             return tv;
-        }
+        };
         let copy = shared_heap.borrow_mut().alloc_vector(elems);
         memo.insert(tv.raw_bits(), copy);
         return copy;
@@ -394,33 +422,6 @@ fn edit_scope_memo(
     tv
 }
 
-/// Expand a macro with compile-time shadowing information, returning only
-/// the expanded form. The desugarer uses [`expand_macro_with_scope`], which
-/// also hands back the expansion's scope; this wrapper serves the test
-/// interfaces.
-///
-/// # Arguments
-/// * `compiled_macro` - The compiled macro definition
-/// * `args` - The macro call arguments as TaggedValue
-/// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
-/// * `shadowed_names` - Identifiers shadowed by local bindings at use site
-pub fn expand_macro_with_shadowed_tagged(
-    compiled_macro: &CompiledMacro,
-    args: patina_core::TaggedValue,
-    shared_heap: &patina_core::SharedHeap,
-    shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
-    use_site_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
-) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
-    expand_macro_with_scope(
-        compiled_macro,
-        args,
-        shared_heap,
-        shadowed_names,
-        use_site_env,
-    )
-    .map(|expansion| expansion.form)
-}
-
 /// What one expansion produced.
 pub struct MacroExpansion {
     /// The expanded form.
@@ -433,12 +434,22 @@ pub struct MacroExpansion {
     pub scope: patina_runtime::ScopeId,
 }
 
-/// [`expand_macro_with_shadowed_tagged`], also returning the expansion's
-/// scope. The desugarer's relinker needs it: a template's free reference to
+/// Expand a macro with compile-time shadowing information, returning the
+/// expanded form and the scope this expansion minted.
+///
+/// The desugarer's relinker needs that scope: a template's free reference to
 /// `list` is aliased to the definition site's `list`, and only the
 /// references the template introduced may be — the `(list 1 2 3)` the user
 /// wrote *inside* the macro call means the use site's `list`, even when the
 /// two differ.
+///
+/// # Arguments
+/// * `compiled_macro` - The compiled macro definition
+/// * `args` - The macro call arguments as TaggedValue
+/// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
+/// * `shadowed_names` - Identifiers shadowed by local bindings at use site
+/// * `use_site_env` - The use site's environment, for R7RS §4.3.2's
+///   binding-based half of literal matching
 pub fn expand_macro_with_scope(
     compiled_macro: &CompiledMacro,
     args: patina_core::TaggedValue,

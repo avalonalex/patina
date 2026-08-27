@@ -230,6 +230,19 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 - Ours: `a_use_site_local_does_not_capture_a_templates_reference` (quarantined with `assert_divergence`; the VM is right)
 - `(define-syntax mk (syntax-rules () ((_ a b) (list a b)))) (let ((list 1)) (mk 1 2))` — tree-walker `Not a procedure: #<integer>`, VM and chibi `(1 2)`; likewise a procedure parameter named `list`, and a library-defined `mk`. Found by the review of #132 auditing the relinker's contract: it skips a name when the two environments' global views agree (`self.env.get(name) == Some(def_value)`) and leaves the rest to scope-aware resolution, which the tree-walker does not do for locals — `application.rs`/`step.rs` bind parameters by name and `Environment::get` falls back to the by-name table. Pre-existing, unrelated to #132's changes; the fix is the tree-walker resolving locals by scopes as the VM's alpha-rename does.
 
+### 37. A macro-introduced *variable* binding does not rename its scope — both backends
+- Ours: `a_macro_introduced_variable_binding_does_not_yet_rename_its_scope` (asserted at the wrong answer, so the fix trips it)
+- R7RS §4.3.2: "if a macro transformer inserts a binding for an identifier (variable or keyword), the identifier will in effect be renamed throughout its scope." Family 33's second round made that true of a `let-syntax` keyword — the desugarer puts the form's scope on the body as written — but `lambda`, `let` and the `define` shorthand still bind through `with_shadowed_names` at `current_scopes + fresh`, which a reference the same template introduced never carries.
+
+```scheme
+(define-syntax p (syntax-rules () ((_ x) 'outer-macro)))
+(define-syntax genlam (syntax-rules () ((_) ((lambda (p) (p 1)) (lambda (y) (+ y 100))))))
+(genlam)          ; chibi: 101 — here: outer-macro
+```
+
+- Found 2026-08-26 by the cleanup review of #132, which read the `let-syntax` fix as a special case placed at the call site rather than in the shared mechanism — and was right: the same bug class survives one binding form over. The fix is one `enter_binding_form(binders, body, scope)` used by `desugar_lambda_tagged`, the `define` shorthand, `desugar_let_syntax_impl_tagged` and the internal-define body, doing what the `let-syntax` arm now does inline: mint the scope, bind each binder at its scopes *as written* plus that one, and `add_scope_to_scoped_identifiers` the body. Four call sites.
+- Same family, same fix: `rewrite_form` decides `quote` by resolution and `quasiquote`/`unquote` by spelling three lines apart, so a relinked `quasiquote.7` head is invisible to the depth counter `head_resolves_to_quote` depends on.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.

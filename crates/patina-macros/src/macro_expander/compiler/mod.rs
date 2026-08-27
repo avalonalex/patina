@@ -63,6 +63,12 @@ pub struct Compiler {
     /// None means ellipsis is disabled (inside escape)
     pub(super) ellipsis: Option<Rc<str>>,
 
+    /// Inside `(... template)`, the spelling the escape suspended — the one
+    /// token in there that is not compiled as an ordinary template symbol.
+    /// `None` outside an escape. Saved and restored by
+    /// [`Compiler::compile_with_escaped_ellipsis`], like `ellipsis` itself.
+    pub(super) escaped_ellipsis: Option<Rc<str>>,
+
     /// Whether that symbol was named by the macro (SRFI 46 / R7RS 4.3.2's
     /// `(syntax-rules <ellipsis> …)`) as something other than `...`.
     ///
@@ -217,6 +223,7 @@ impl Compiler {
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            escaped_ellipsis: None,
             env: None,
             definition_scopes: ScopeSet::new(),
             pvars: HashMap::new(),
@@ -252,6 +259,7 @@ impl Compiler {
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            escaped_ellipsis: None,
             env: Some(env),
             definition_scopes,
             pvars: HashMap::new(),
@@ -287,6 +295,7 @@ impl Compiler {
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            escaped_ellipsis: None,
             env: Some(env),
             definition_scopes: scopes,
             pvars: HashMap::new(),
@@ -327,6 +336,7 @@ impl Compiler {
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
+            escaped_ellipsis: None,
             env: Some(env),
             definition_scopes: scopes,
             pvars: HashMap::new(),

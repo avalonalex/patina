@@ -43,7 +43,9 @@ pub fn expand_quasiquotes(
         desugarer: Desugarer::with_env(env.clone()),
         heap,
         registry,
-        constructors: Default::default(),
+        list: Cell::default(),
+        append: Cell::default(),
+        list_to_vector: Cell::default(),
     };
     expand_qq_expr(expr, &cx)
 }
@@ -54,10 +56,12 @@ struct Expansion<'a> {
     desugarer: Desugarer,
     heap: &'a SharedHeap,
     registry: &'a PrimitiveRegistry,
-    /// The constructor procedures, one per [`Constructor`], allocated the
-    /// first time a template needs each: most units have no quasiquote at
-    /// all, and one that has a hundred shares three objects.
-    constructors: [Cell<Option<TaggedValue>>; 3],
+    /// The constructor procedures, allocated the first time a template needs
+    /// each: most units have no quasiquote at all, and one that has a
+    /// hundred shares three objects.
+    list: Cell<Option<TaggedValue>>,
+    append: Cell<Option<TaggedValue>>,
+    list_to_vector: Cell<Option<TaggedValue>>,
 }
 
 /// The list constructors an expansion calls. `cons` is not among them: a
@@ -88,7 +92,13 @@ impl Expansion<'_> {
     /// from that global in one way only: nothing the program imports or
     /// defines can redirect it.
     fn constructor(&self, which: Constructor) -> Result<TaggedValue, CompileError> {
-        let slot = &self.constructors[which as usize];
+        // Selected by `match`, so adding a constructor is a compile error
+        // here rather than an out-of-bounds index at run time.
+        let slot = match which {
+            Constructor::List => &self.list,
+            Constructor::Append => &self.append,
+            Constructor::ListToVector => &self.list_to_vector,
+        };
         if let Some(tv) = slot.get() {
             return Ok(tv);
         }

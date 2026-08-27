@@ -151,6 +151,29 @@ fn next_alias_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
+/// The name to give an alias for `name`. Paired with [`alias_base`], which
+/// is the only reader of the shape: keeping the two together is what stops
+/// a change here from silently making relinked heads unrecognisable there.
+fn alias_name(name: &str) -> String {
+    format!("{name}.{}", next_alias_id())
+}
+
+/// The name an alias was made from, if `spelling` is one.
+fn alias_base(spelling: &str) -> Option<&str> {
+    let (base, id) = spelling.rsplit_once('.')?;
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(base)
+}
+
+/// Is this spelling `quote`, or an alias made from it?
+///
+/// The cheap half of the head test: answered from a `&str` the caller
+/// already has, so the environment lookup in
+/// [`Desugarer::head_resolves_to_quote`] is reached only for a head that
+/// could be `quote` at all.
+fn is_quote_spelling(name: &str) -> bool {
+    name == "quote" || alias_base(name) == Some("quote")
+}
+
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
 ///
 /// **Macro-Aware Design**: The desugarer can optionally take an environment
@@ -669,7 +692,7 @@ impl Desugarer {
             if self.env.get(name) == Some(def_value) {
                 continue;
             }
-            let alias = format!("{}.{}", name, next_alias_id());
+            let alias = alias_name(name);
             let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
             target_env.define_alias(alias, def_env.clone(), name.clone());
             renames.insert(name.clone(), symbol);
@@ -712,27 +735,22 @@ impl Desugarer {
         renames.aliases.get(&**name).copied()
     }
 
-    /// Is this list's head a `quote` — the real one, whatever it is spelled?
+    /// Does this list head *resolve* to `quote`?
     ///
-    /// Decided by what the head *resolves to*, because after relinking a
-    /// head can be spelled `quote.7` and still be `quote`, and under an
-    /// import that rebinds `quote` a head spelled `quote` can be a macro.
-    /// The spelling is only a pre-filter, so the lookup is paid for `quote`
-    /// and its aliases and for nothing else. Asked only at quasiquote depth
-    /// zero: inside a quasiquote, `(quote b)` is two symbols of data.
-    fn head_is_quote(&self, car: TaggedValue, shared_heap: &SharedHeap) -> bool {
+    /// Asked by resolution, not spelling, because after relinking a head can
+    /// be spelled `quote.7` and still be `quote`, and under an import that
+    /// rebinds `quote` a head spelled `quote` can be a macro. Reached only
+    /// for a head [`is_quote_spelling`] admits — that test is answered from
+    /// a `&str` the caller already holds, so an ordinary call pays neither
+    /// the name clone this makes nor the environment walk.
+    fn head_resolves_to_quote(&self, car: TaggedValue, shared_heap: &SharedHeap) -> bool {
         let Some((name, scopes)) = self.identifier_of(car, shared_heap) else {
             return false;
         };
-        let spelled_quote = &*name == "quote"
-            || name
-                .strip_prefix("quote.")
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-        spelled_quote
-            && matches!(
-                self.resolve_syntax(&name, &scopes),
-                Some(SyntaxRef::CoreSyntax(CoreForm::Quote))
-            )
+        matches!(
+            self.resolve_syntax(&name, &scopes),
+            Some(SyntaxRef::CoreSyntax(CoreForm::Quote))
+        )
     }
 
     /// Rewrite one *form* — a list read the way the evaluator reads it, with a
@@ -750,17 +768,18 @@ impl Desugarer {
         quote_depth: u32,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
-        // Compute the depth inside the borrow: the answer is a `u32`, so
+        // Read the head once, inside the borrow: both answers are `Copy`, so
         // nothing needs to outlive it and the head name is never copied out.
-        let (car, rest_depth) = {
+        let (car, cdr, rest_depth, head_spelled_quote) = {
             let heap = shared_heap.borrow();
-            let (car, _) = heap.get_pair(tv);
-            let depth = match heap.get_symbol_or_identifier_name(car) {
+            let (car, cdr) = heap.get_pair(tv);
+            let name = heap.get_symbol_or_identifier_name(car);
+            let depth = match name {
                 Some("quasiquote") => quote_depth + 1,
                 Some("unquote") | Some("unquote-splicing") => quote_depth.saturating_sub(1),
                 _ => quote_depth,
             };
-            (car, depth)
+            (car, cdr, depth, name.is_some_and(is_quote_spelling))
         };
 
         // A quoted datum denotes itself, so nothing *inside* it is a reference
@@ -777,11 +796,10 @@ impl Desugarer {
         // there the form is walked like any other list: its head is a plain
         // symbol the leaf rule leaves alone, and its `,(helper x)` is
         // reached.
-        if quote_depth == 0 && self.head_is_quote(car, shared_heap) {
+        if quote_depth == 0 && head_spelled_quote && self.head_resolves_to_quote(car, shared_heap) {
             let Some(renamed) = self.introduced_alias(car, renames, shared_heap) else {
                 return tv;
             };
-            let cdr = shared_heap.borrow().get_pair(tv).1;
             return shared_heap.borrow_mut().alloc_pair(renamed, cdr);
         }
 
@@ -1903,10 +1921,10 @@ impl Desugarer {
                 .heap()
                 .borrow_mut()
                 .alloc_macro(Rc::new(compiled_macro));
-            // Bound at the binder's own scopes plus this form's — Racket's
-            // rule for a binder — where a binder written in source stands in
-            // the scopes accumulated so far, exactly as a reference written
-            // in source does, so for it this is `definition_scopes`. A
+            // Bound at the binder's scopes *as written* plus this form's —
+            // Racket's rule for a binder — where a binder written in source
+            // carries none of its own and stands in the scopes accumulated
+            // so far, exactly as a reference written in source does. A
             // reference reaches the binding when the binding's scopes are a
             // subset of its own, which is: a symbol in the body (resolved
             // with `definition_scopes`); an empty-scoped identifier in the
@@ -1928,12 +1946,16 @@ impl Desugarer {
             // `let-syntax ((quote …))` around a *call* captured the `(quote
             // d)` in the callee's template until the stack went — the
             // `let-syntax` half of Larceny family 33.
-            let binding_scopes = if binder_scopes.is_empty() {
-                definition_scopes.clone()
+            let as_written = if binder_scopes.is_empty() {
+                &self.current_scopes
             } else {
-                binder_scopes.with_scope(let_syntax_scope)
+                &binder_scopes
             };
-            body_env.define_with_scopes(name.to_string(), binding_scopes, tv);
+            body_env.define_with_scopes(
+                name.to_string(),
+                as_written.with_scope(let_syntax_scope),
+                tv,
+            );
         }
 
         let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());

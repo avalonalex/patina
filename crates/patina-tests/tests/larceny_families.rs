@@ -1165,3 +1165,39 @@ fn a_use_site_local_does_not_capture_a_templates_reference() {
         "scheme_tests/reports/larceny_triage.md, family 36",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Family 37 — a macro-introduced variable binding does not rename its scope
+// ---------------------------------------------------------------------------
+
+/// R7RS §4.3.2: "if a macro transformer inserts a binding for an identifier
+/// (variable or keyword), the identifier will in effect be renamed
+/// throughout its scope". Patina does that for a `let-syntax` keyword —
+/// family 33's second round put the form's scope on its body as written —
+/// but `lambda` and `let` still bind through `with_shadowed_names`, at
+/// `current_scopes + fresh`, which a reference the same template introduced
+/// never carries. So the template's own `(p 1)` resolves to the outer
+/// keyword instead of the parameter it just bound.
+///
+/// Asserted as-is: both backends agree, and chibi answers
+/// `(inner-keyword 101 201)`. **When this converges, that is the fix
+/// landing** — replace the expectation with chibi's and delete this note.
+/// Recorded 2026-08-26 by the cleanup review of #132, which found the
+/// `let-syntax` fix had been placed at the call site rather than in a shared
+/// "enter a binding form" step; see the triage doc for the shape that would.
+#[test]
+fn a_macro_introduced_variable_binding_does_not_yet_rename_its_scope() {
+    assert_program_eval_to(
+        "(define-syntax p (syntax-rules () ((_ x) 'outer-macro)))
+         (define-syntax genls
+           (syntax-rules ()
+             ((_) (let-syntax ((p (syntax-rules () ((_ y) 'inner-keyword))))
+                    (p 1)))))
+         (define-syntax genlam
+           (syntax-rules () ((_) ((lambda (p) (p 1)) (lambda (y) (+ y 100))))))
+         (define-syntax genlet
+           (syntax-rules () ((_) (let ((p (lambda (y) (+ y 200)))) (p 1)))))
+         (list (genls) (genlam) (genlet))",
+        "(inner-keyword outer-macro outer-macro)",
+    );
+}

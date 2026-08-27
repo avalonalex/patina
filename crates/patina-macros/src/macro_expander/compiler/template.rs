@@ -24,6 +24,27 @@ impl Compiler {
         if let Some(key) = self.identifier_key(form) {
             let s = key.name.clone();
 
+            // The spelling an enclosing `(... template)` suspended. It
+            // becomes a literal Symbol value so a nested `syntax-rules` this
+            // template generates receives it as data and can recognise it as
+            // its own ellipsis — carrying this macro's definition scopes, so
+            // it stays an ellipsis where it lands. Emitted bare, the token
+            // would be read against the *use* site's bindings, and `(let
+            // ((... 'dots)) (def-first f))` would produce a macro with no
+            // ellipsis at all. Stamped even when the scope set is empty:
+            // what the later compiler reads is that the token is an
+            // identifier at all, which is what says it was introduced here.
+            //
+            // Checked before the pattern-variable case, as the escape's own
+            // walker did.
+            if self.escaped_ellipsis.as_ref() == Some(&s) {
+                let stamped = {
+                    let mut heap = self.heap.borrow_mut();
+                    heap.alloc_identifier(s.clone(), self.definition_scopes.clone())
+                };
+                return Ok(self.make_literal_template(stamped));
+            }
+
             // Check if it's a pattern variable.
             //
             // This runs BEFORE the substituted-identifier case below. An
@@ -169,11 +190,12 @@ impl Compiler {
                 return self.compile_with_escaped_ellipsis(items[1], level);
             }
 
-            // Track quasiquote nesting for the quote check above: a
-            // `quasiquote` head deepens it for its argument, an `unquote`
-            // head lifts it.
-            let step = self.quasiquote_step(&items, tail);
-            self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(step);
+            // Track quasiquote nesting for the quote check above. The old
+            // depth is saved and put back rather than re-derived by negating
+            // a delta, and the result is bound before it is put back, so no
+            // path out of the arms can leave the depth raised.
+            let saved_depth = self.quasiquote_depth;
+            self.quasiquote_depth = self.quasiquote_depth_inside(&items, tail);
             let compiled = if let Some(tail_value) = tail {
                 // Dotted list template
                 self.compile_dotted_template(&items, tail_value, level)
@@ -181,16 +203,13 @@ impl Compiler {
                 // Regular list template
                 self.compile_list_template(&items, level)
             };
-            self.quasiquote_depth = self.quasiquote_depth.wrapping_add_signed(-step);
+            self.quasiquote_depth = saved_depth;
             compiled
         } else if form == TaggedValue::NULL {
             Ok(Template::List(vec![]))
         } else if form.is_vector() {
             // Vector
-            let heap = self.heap.borrow();
-            let len = heap.vector_len(form);
-            let elements: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(form, i)).collect();
-            drop(heap);
+            let elements = self.heap.borrow().vector_slice(form).to_vec();
             // Vector templates carry ellipses just like list ones -- `#(x ...)`
             // is valid -- so this shares the ellipsis-aware item compiler.
             let templates = self.compile_template_items(&elements, level)?;
@@ -201,17 +220,23 @@ impl Compiler {
         }
     }
 
-    /// How a list with these items changes the quasiquote depth for its
-    /// elements: `+1` under a `quasiquote` head, `-1` under `unquote` or
-    /// `unquote-splicing` (never below zero), `0` otherwise.
-    pub(super) fn quasiquote_step(&self, items: &[TaggedValue], tail: Option<TaggedValue>) -> i32 {
+    /// The quasiquote depth the elements of a list with these items stand
+    /// at: one deeper under a `quasiquote` head, one shallower under
+    /// `unquote` or `unquote-splicing` (never below zero), otherwise the
+    /// depth this list stands at.
+    ///
+    /// The head name is read inside the heap borrow, so a two-element list
+    /// that is neither costs no allocation.
+    fn quasiquote_depth_inside(&self, items: &[TaggedValue], tail: Option<TaggedValue>) -> u32 {
+        let depth = self.quasiquote_depth;
         if items.len() != 2 || tail.is_some() {
-            return 0;
+            return depth;
         }
-        match self.extract_symbol_name(items[0]).as_deref() {
-            Some("quasiquote") => 1,
-            Some("unquote") | Some("unquote-splicing") if self.quasiquote_depth > 0 => -1,
-            _ => 0,
+        let heap = self.heap.borrow();
+        match heap.get_symbol_or_identifier_name(items[0]) {
+            Some("quasiquote") => depth + 1,
+            Some("unquote") | Some("unquote-splicing") => depth.saturating_sub(1),
+            _ => depth,
         }
     }
 
