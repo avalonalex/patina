@@ -101,7 +101,9 @@ impl RenameEnv {
         let mut candidates: Vec<(ScopeSet, Symbol)> = Vec::new();
         for frame in self.frames.iter().rev() {
             for binding in frame.iter().rev() {
-                if binding.name.as_ref() == name {
+                if binding.name.as_ref() == name
+                    && patina_core::scope_resolve::is_candidate(&binding.scopes, ref_scopes)
+                {
                     candidates.push((binding.scopes.clone(), binding.unique_name.clone()));
                 }
             }

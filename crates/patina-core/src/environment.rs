@@ -569,26 +569,28 @@ impl Environment {
             candidates: &mut Vec<(ScopeSet, TaggedValue)>,
             debug: bool,
         ) {
-            // Every binding of the name here, latest first — the order
-            // `resolve_scoped` documents. Filtering is the rule's job, not
-            // this walk's; collecting all of them is also what lets the
-            // ambiguity check see the candidates that lost.
+            // Every candidate binding of the name here, latest first — the
+            // order `resolve_scoped` documents. Candidacy is tested with the
+            // rule's own `is_candidate`, so this is a filter and not a second
+            // copy of the rule; a binding that fails it is shown neither to
+            // the resolver nor to the check, so cloning its scope set would
+            // be waste on a path the tree-walker takes per variable read.
             let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
                 for binding in bindings.iter().rev() {
+                    let is_candidate =
+                        crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
                     if debug {
                         println!(
                             "[ENV]   Candidate {} ⊆ {} : {}",
                             binding.scopes,
                             ref_scopes,
-                            if binding.scopes.is_subset_of(ref_scopes) {
-                                "YES"
-                            } else {
-                                "NO"
-                            }
+                            if is_candidate { "YES" } else { "NO" }
                         );
                     }
-                    candidates.push((binding.scopes.clone(), binding.tagged_value));
+                    if is_candidate {
+                        candidates.push((binding.scopes.clone(), binding.tagged_value));
+                    }
                 }
             }
             drop(scoped);
