@@ -44,7 +44,7 @@ pub use continuation::{CpsContinuation, DynamicWindRecord};
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
-pub use environment::{Environment, ScopedBinding};
+pub use environment::{Environment, ScopedBinding, SetError};
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;
 pub use library::Library;

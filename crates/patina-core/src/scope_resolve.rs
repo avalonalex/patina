@@ -16,12 +16,12 @@
 //! copy *for reads*, and it enforces Flatt's ambiguity condition itself, so
 //! neither backend can answer a reference the rule does not determine.
 //!
-//! Two hand-rolled copies remain, both over `Environment`'s tables and
-//! neither measured. `set_with_scopes` resolves a write by the same subset
-//! rule since triage family 38, but inline and one environment at a time
-//! rather than through this module; `has_scoped_binding` tests subset with no
-//! most-specific rule at all. So a `set!` still resolves without being
-//! checked for ambiguity, and no sweep says anything about one.
+//! `set_with_scopes` is the one copy too, since triage family 38's second
+//! half: a write collects the same candidates in the same order and calls
+//! [`resolve_scoped`], so it reaches the binding its own read reaches and an
+//! ambiguous `set!` is refused like an ambiguous reference. One hand-rolled
+//! copy remains — `has_scoped_binding` tests subset with no most-specific
+//! rule at all, which is all its one caller asks of it.
 //!
 //! Unifying the tie-break was a **behaviour change**, not a pure refactor:
 //! the tree-walker now answers a within-environment tie the way the VM
@@ -207,10 +207,10 @@ pub fn is_candidate(binding: &ScopeSet, reference: &ScopeSet) -> bool {
 /// - The fallback. [`resolve_scoped`] returns `Ok(None)` when no candidate is
 ///   a subset, and the caller then answers by name with no scope reasoning at
 ///   all. That path is neither reported nor raised.
-/// - Writes. `Environment::set_with_scopes` resolves by the same subset rule
-///   since triage family 38, but inline and one environment at a time rather
-///   than through [`resolve_scoped`], so a `set!` is logged by neither arm and
-///   an ambiguous one still picks by size instead of raising.
+/// - `has_scoped_binding`, which asks only whether *some* scoped binding is
+///   visible and never which one, so it does not go through
+///   [`resolve_scoped`] and appears in no record. Writes do go through it
+///   now, and are logged and raised like reads.
 /// - The VM's `Define` arm resolves *binding* occurrences through
 ///   [`resolve_scoped`], where the tree-walker does not, so VM records include
 ///   definitions and the two backends' counts are not like for like.

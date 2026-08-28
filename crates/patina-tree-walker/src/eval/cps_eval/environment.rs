@@ -11,7 +11,7 @@ use crate::eval::error::EvalError;
 use patina_core::Procedure;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind, CpsParam};
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{Environment, ScopeSet, ScopedParam};
+use patina_core::{Environment, ScopeSet, ScopedParam, SetError};
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -100,9 +100,15 @@ impl<'a> CpsEvaluator<'a> {
             env.set(name, value)
                 .map_err(|_| EvalError::UndefinedVariable(name.to_string()))
         } else {
-            // Scope-based set for hygienic macros
+            // Scope-based set for hygienic macros. An ambiguous target is
+            // reported as such rather than folded into "undefined": the two
+            // are opposite complaints — nothing to write versus two things —
+            // and a `|_|` here would turn the second into the first.
             env.set_with_scopes(name, scopes, value)
-                .map_err(|_| EvalError::UndefinedVariable(name.to_string()))
+                .map_err(|e| match e {
+                    SetError::Ambiguous(e) => EvalError::InvalidSyntax(e.to_string()),
+                    SetError::Undefined(_) => EvalError::UndefinedVariable(name.to_string()),
+                })
         }
     }
 

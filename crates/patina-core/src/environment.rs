@@ -7,6 +7,38 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Where a scoped binding lives: `depth` environments up from the one a
+/// lookup started in, at `index` in that environment's list for the name.
+///
+/// Resolution and assignment cannot share a borrow of `scoped_bindings`, so
+/// the walk returns this and a second, shorter walk does the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Place {
+    depth: usize,
+    index: usize,
+}
+
+/// Why a scoped write found nothing to write.
+#[derive(Debug, Clone)]
+pub enum SetError {
+    /// No binding of this name is visible — the same condition `set` reports,
+    /// carrying the name for the caller's message.
+    Undefined(String),
+    /// Two bindings are visible and neither is more specific. Reads raise
+    /// this, so writes do too: a `set!` that cannot say which binding it
+    /// means is the same defect as a reference that cannot.
+    Ambiguous(Box<AmbiguousReference>),
+}
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetError::Undefined(name) => write!(f, "{name}"),
+            SetError::Ambiguous(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// A binding with its associated scope set
 /// Used for scope-based hygiene lookup
 #[derive(Debug, Clone)]
@@ -412,11 +444,13 @@ impl Environment {
     /// public entry points differ only in `visible_by_name` and their docs.
     ///
     /// A scope set already present is *overwritten* rather than pushed
-    /// beside. `set_with_scopes` finds a binding by exact scope-set match, so
-    /// a second entry for the same set would be unreachable — and every entry
-    /// is a GC root (`for_each_local_value`), so re-evaluating a top-level
-    /// form that expands a macro would otherwise pin one dead value per
-    /// evaluation for the life of the process.
+    /// beside. Two entries under one set are a `TIE` — a case set-of-scopes
+    /// resolution cannot decide, since a set is a subset of itself, leaving
+    /// the answer to whichever the walk lists first. Overwriting means the
+    /// question never arises here. It also keeps a bound on the table: every
+    /// entry is a GC root (`for_each_local_value`), so re-evaluating a
+    /// top-level form that expands a macro would otherwise pin one dead value
+    /// per evaluation for the life of the process.
     fn insert_scoped(
         &self,
         name: String,
@@ -487,56 +521,119 @@ impl Environment {
         table.get(name)?.iter().rposition(|b| b.visible_by_name)
     }
 
-    /// Set an existing scoped binding (searches parent environments)
+    /// Set an existing scoped binding, searching parent environments.
     ///
-    /// Finds the binding matching the scope set and updates its value.
-    /// This is the primary API - accepts TaggedValue directly.
+    /// The write side of [`get_with_scopes`], and deliberately its mirror
+    /// image: the same candidates in the same order through the same
+    /// [`resolve_scoped`], then the same by-name fallback from the same
+    /// starting environment. A reference that can read a binding can write
+    /// it, and one that cannot read it writes nothing.
+    ///
+    /// Three ways it used to differ, all of them Larceny triage family 38:
+    ///
+    /// - It demanded an *exact* scope-set match, so a `set!` a macro
+    ///   introduced — carrying that macro's scopes on top of the binder's —
+    ///   found nothing. Fixed first, and not enough on its own.
+    /// - It resolved one environment at a time, taking the largest candidate
+    ///   in the innermost environment that held any. Reading takes the
+    ///   largest in the *chain*, so an inner frame's narrower binding beat an
+    ///   outer frame's wider one on a write and lost on a read.
+    /// - Its fallback ran at the **root**, because by then the recursion had
+    ///   walked there: `self.set` on the bottom environment assigns the
+    ///   global. Reading falls back at the environment the lookup started
+    ///   from. So `(define (g) (define c 5) … (set! c …) … c)` errored where
+    ///   chibi and the VM answer 15 — and with a global of the same name it
+    ///   did something worse than error, silently overwriting it and leaving
+    ///   the local untouched.
+    ///
+    /// [`get_with_scopes`]: Self::get_with_scopes
+    /// [`resolve_scoped`]: crate::scope_resolve::resolve_scoped
     pub fn set_with_scopes(
         &self,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
-    ) -> Result<(), String> {
+    ) -> Result<(), SetError> {
         if scopes.is_empty() {
             // Empty scopes - use simple lookup
-            return self.set(name, value);
+            return self.set(name, value).map_err(SetError::Undefined);
         }
 
-        // Resolve the way a read does — largest matching subset, most
-        // recent on a tie — so that a reference can write the binding it can
-        // read. Requiring an exact match meant a `set!` a macro introduced,
-        // which carries that macro's scopes on top of the binder's, found
-        // nothing and fell through to the root's by-name `set`. Larceny
-        // triage family 38.
-        let here = {
-            let scoped = self.scoped_bindings.borrow();
-            scoped.get(name).and_then(|bindings| {
-                let mut best: Option<(usize, usize)> = None;
+        // Every candidate binding of the name in this environment and its
+        // parents, most recent first — the order `resolve_scoped` documents,
+        // and the same walk `get_with_scopes` makes. What is collected is a
+        // *location* rather than a value, since this has to write there.
+        let mut candidates: Vec<(ScopeSet, Place)> = Vec::new();
+
+        fn collect_places(
+            env: &Environment,
+            name: &str,
+            ref_scopes: &ScopeSet,
+            depth: usize,
+            candidates: &mut Vec<(ScopeSet, Place)>,
+        ) {
+            let scoped = env.scoped_bindings.borrow();
+            if let Some(bindings) = scoped.get(name) {
                 for (index, binding) in bindings.iter().enumerate().rev() {
-                    if !crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                        continue;
-                    }
-                    let len = binding.scopes.len();
-                    if best.is_none_or(|(best_len, _)| len > best_len) {
-                        best = Some((len, index));
+                    if crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes) {
+                        candidates.push((binding.scopes.clone(), Place { depth, index }));
                     }
                 }
-                best
-            })
-        };
-        if let Some((_, index)) = here {
-            let mut scoped = self.scoped_bindings.borrow_mut();
-            if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
-                binding.tagged_value = value;
-                return Ok(());
+            }
+            drop(scoped);
+
+            if let Some(parent) = &env.parent {
+                collect_places(parent, name, ref_scopes, depth + 1, candidates);
             }
         }
-        // Check parent
-        if let Some(parent) = &self.parent {
-            parent.set_with_scopes(name, scopes, value)
-        } else {
-            // Fall back to unmarked binding
-            self.set(name, value)
+
+        collect_places(self, name, scopes, 0, &mut candidates);
+
+        match crate::scope_resolve::resolve_scoped(name, scopes, &candidates) {
+            Err(e) => Err(SetError::Ambiguous(e)),
+            // No candidate was a subset. Fall back by name from *here*, which
+            // is what reading does; the recursive version fell back from the
+            // root and assigned the global.
+            Ok(None) => self.set(name, value).map_err(SetError::Undefined),
+            Ok(Some(place)) => {
+                if self.write_at(name, place, value) {
+                    Ok(())
+                } else {
+                    // The binding was collected a moment ago from tables only
+                    // this call can reach, so this is unreachable rather than
+                    // a case to handle. Falling back by name would be the
+                    // wrong repair anyway: it writes a *different* binding.
+                    Err(SetError::Undefined(name.to_string()))
+                }
+            }
+        }
+    }
+
+    /// Assign to the binding `place` names, counted from this environment.
+    ///
+    /// Split from the resolution above because the borrow cannot span it: the
+    /// walk holds `scoped_bindings` immutably and this takes it mutably.
+    fn write_at(&self, name: &str, place: Place, value: TaggedValue) -> bool {
+        let Some(remaining) = place.depth.checked_sub(1) else {
+            let mut scoped = self.scoped_bindings.borrow_mut();
+            return match scoped.get_mut(name).and_then(|bs| bs.get_mut(place.index)) {
+                Some(binding) => {
+                    binding.tagged_value = value;
+                    true
+                }
+                None => false,
+            };
+        };
+        match &self.parent {
+            Some(parent) => parent.write_at(
+                name,
+                Place {
+                    depth: remaining,
+                    index: place.index,
+                },
+                value,
+            ),
+            None => false,
         }
     }
 

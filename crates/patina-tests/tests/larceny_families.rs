@@ -1281,6 +1281,48 @@ fn an_introduced_macro_can_assign_to_a_source_written_binder() {
     );
 }
 
+/// The write falls back where the read does — at the environment the lookup
+/// started in, not at the root.
+///
+/// `c` is an internal define, so the introduced `set!` finds no scoped
+/// candidate and both paths fall back by name. Reading falls back from
+/// `g`'s frame and finds `c`; writing used to recurse to the bottom of the
+/// chain first and call `set` *there*, so with no global `c` it reported the
+/// name undefined. Larceny triage family 38, the half PR #137 left open.
+#[test]
+fn an_introduced_assignment_falls_back_in_its_own_frame() {
+    assert_program_eval_to(
+        "(define (g)
+           (define c 5)
+           (define-syntax b (syntax-rules () ((b) (set! c (+ c 10)))))
+           (b)
+           c)
+         (g)",
+        "15",
+    );
+}
+
+/// The same defect with a global of the same name, which is the shape that
+/// made it worth fixing rather than the one above.
+///
+/// Falling back at the root meant the write landed on the *global* `c`: no
+/// error, the local left at 5, and an unrelated binding overwritten. The
+/// program says nothing about `c` being global, which is the point — a macro
+/// two scopes away silently reached out of the frame it was expanded in.
+#[test]
+fn an_introduced_assignment_does_not_escape_its_frame_and_clobber_a_global() {
+    assert_program_eval_to(
+        "(define c 'global)
+         (define (g)
+           (define c 5)
+           (define-syntax b (syntax-rules () ((b) (set! c (+ c 10)))))
+           (b)
+           c)
+         (list (g) c)",
+        "(15 global)",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Family 39 — a binder is scoped by where it stands, not by one fresh scope
 // ---------------------------------------------------------------------------
