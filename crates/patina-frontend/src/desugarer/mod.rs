@@ -367,12 +367,36 @@ impl Desugarer {
     /// Used when entering a lambda body where parameters shadow outer bindings.
     /// Names in `new_shadows` will not be treated as macro calls even if a
     /// macro with that name exists in the environment.
-    fn with_shadowed_names(
+    /// Put `binding_scope` on this body's references to the names `binders`
+    /// binds. A reference a template made to a name that same template binds
+    /// carries the template's scopes, never this form's, so without this the
+    /// binding installed below is unreachable from it.
+    fn scope_body(
+        binders: &[(Rc<str>, ScopeSet)],
+        body_tvs: &[TaggedValue],
+        binding_scope: ScopeId,
+        shared_heap: &SharedHeap,
+    ) -> Vec<TaggedValue> {
+        let names: HashSet<Rc<str>> = binders.iter().map(|(name, _)| name.clone()).collect();
+        if names.is_empty() {
+            return body_tvs.to_vec();
+        }
+        body_tvs
+            .iter()
+            .map(|&tv| {
+                patina_macros::add_scope_to_bound_names(tv, &names, binding_scope, shared_heap)
+            })
+            .collect()
+    }
+
+    fn enter_binding_form(
         &self,
-        new_shadows: impl IntoIterator<Item = Rc<str>>,
-        new_scopes: ScopeSet,
+        binders: impl IntoIterator<Item = (Rc<str>, ScopeSet)>,
+        binding_scope: ScopeId,
     ) -> Self {
-        let names: Vec<Rc<str>> = new_shadows.into_iter().collect();
+        let binders: Vec<(Rc<str>, ScopeSet)> = binders.into_iter().collect();
+        let new_scopes = self.current_scopes.with_scope(binding_scope);
+        let names: Vec<Rc<str>> = binders.iter().map(|(n, _)| n.clone()).collect();
 
         // A local binding is a binding. Recording it in the environment at the
         // body's scope set is what lets `resolve_syntax` answer by ordinary
@@ -401,12 +425,17 @@ impl Desugarer {
             self.env.clone()
         } else {
             let child = Rc::new(Environment::with_parent(self.env.clone()));
-            for name in &names {
-                child.define_with_scopes(
-                    name.to_string(),
-                    new_scopes.clone(),
-                    TaggedValue::UNSPECIFIED,
-                );
+            for (name, as_written) in &binders {
+                // Each binder at the scopes it was *written* with plus this
+                // form's — the rule `desugar_let_syntax_impl_tagged` states
+                // for a keyword. A binder written in source carries none of
+                // its own and stands in the accumulated scopes.
+                let scopes = if as_written.is_empty() {
+                    new_scopes.clone()
+                } else {
+                    as_written.with_scope(binding_scope)
+                };
+                child.define_with_scopes(name.to_string(), scopes, TaggedValue::UNSPECIFIED);
             }
             child
         };
@@ -453,7 +482,7 @@ impl Desugarer {
         &self,
         body_tvs: &[TaggedValue],
         shared_heap: &SharedHeap,
-    ) -> Vec<Rc<str>> {
+    ) -> Vec<(Rc<str>, ScopeSet)> {
         let mut names = Vec::new();
         for tv in body_tvs {
             self.collect_definition_names(*tv, shared_heap, &mut names);
@@ -470,7 +499,7 @@ impl Desugarer {
         &self,
         tv: TaggedValue,
         shared_heap: &SharedHeap,
-        out: &mut Vec<Rc<str>>,
+        out: &mut Vec<(Rc<str>, ScopeSet)>,
     ) {
         if !tv.is_pair() {
             return;
@@ -488,8 +517,8 @@ impl Desugarer {
                     let heap = shared_heap.borrow();
                     cdr.is_pair().then(|| heap.get_pair(cdr).0)
                 };
-                if let Some(name) = target.and_then(|t| self.define_target_name(t, shared_heap)) {
-                    out.push(name);
+                if let Some(binder) = target.and_then(|t| self.define_target(t, shared_heap)) {
+                    out.push(binder);
                 }
             }
             Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
@@ -510,11 +539,15 @@ impl Desugarer {
     /// The name a `define` target binds: the symbol itself, or — for the
     /// procedure shorthand, curried arbitrarily deep — the one at the head of
     /// the nested formals.
-    fn define_target_name(&self, tv: TaggedValue, shared_heap: &SharedHeap) -> Option<Rc<str>> {
+    fn define_target(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Option<(Rc<str>, ScopeSet)> {
         let mut current = tv;
         loop {
-            if let Some((name, _)) = self.identifier_of(current, shared_heap) {
-                return Some(name);
+            if let Some(binder) = self.identifier_of(current, shared_heap) {
+                return Some(binder);
             }
             if !current.is_pair() {
                 return None;
@@ -1239,16 +1272,17 @@ impl Desugarer {
         let binding_scope = ScopeId::fresh();
         let body_scopes = self.current_scopes.with_scope(binding_scope);
 
-        // Extract parameter names for shadowing
-        let param_names = utils::formals_to_names(&params);
-
         // Desugar body with:
         // 1. The new scope set (for hygiene)
-        // 2. Parameter names added to shadowed_names (so they don't trigger macro expansion)
+        // 2. The parameters, which shadow outer bindings of those names
         // 3. The body's own internal definitions, which bind over all of it
-        let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
+        let binders = utils::formals_to_binders(&params);
+        let body_tvs = Self::scope_body(&binders, &body_tvs, binding_scope, shared_heap);
+        let body_desugarer = self.enter_binding_form(binders, binding_scope);
+
         let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
-        let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes.clone());
+        let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, shared_heap);
+        let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
 
         // Desugar body expressions with internal define-syntax handling
         let body =
@@ -1515,10 +1549,13 @@ impl Desugarer {
 
             // Create body desugarer with shadowed names — the formals, and the
             // body's own internal definitions (see `body_definition_names`).
-            let param_names = utils::formals_to_names(&params);
-            let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
+            let binders = utils::formals_to_binders(&params);
+            let body_tvs = Self::scope_body(&binders, &body_tvs, binding_scope, shared_heap);
+            let body_desugarer = self.enter_binding_form(binders, binding_scope);
+
             let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
-            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes.clone());
+            let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, shared_heap);
+            let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()

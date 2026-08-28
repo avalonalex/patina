@@ -23,10 +23,10 @@
 //! **It is a desugar-time rule, so it has recorded residuals**, all pinned at
 //! the bottom of this file. The check asks what a name resolves to *while the
 //! form is being desugared*, and what the desugarer knows then is not
-//! everything: a name that is not syntax yet, or whose spelling is shadowed by
-//! an unrelated binding, still loads `#<macro>` or `#<syntax:…>` as a value.
+//! everything: a name that is not syntax yet still loads `#<macro>` or
+//! `#<syntax:…>` as a value.
 //!
-//! Those two are missed rejections. The third is not, and is why this
+//! That one is a missed rejection. The third is not, and is why this
 //! paragraph no longer claims the rule "never" rejects wrongly: a keyword a
 //! *macro expansion* rebinds is invisible to the body scan that
 //! `body_definition_names` performs, so the check still sees the core binding
@@ -359,23 +359,23 @@ fn test_a_definition_introduced_by_a_macro_is_not_seen_by_the_body_scan() {
     );
 }
 
-/// A binding that merely shares a spelling suppresses the check.
+/// A binding that merely shares a spelling no longer suppresses the check.
 ///
-/// `shadowed_names` is keyed by spelling, because local bindings never reach
-/// the desugarer's environment — so it is a coarser test than the scope-aware
-/// resolution it guards. Here the template binds a *scoped* `cond` while the
-/// reference is the use site's unscoped one, which resolves to the global
-/// macro; the spelling match suppresses the answer anyway.
+/// The template binds a *scoped* `cond`; the reference is the use site's own,
+/// which hygiene says that binding does not capture — so it is the global
+/// macro, and naming it as a value is the error this file is about. The
+/// spelling match in `shadowed_names` used to suppress the answer and the
+/// program evaluated to `#<macro>`.
 ///
-/// Safe in the direction it fails, and older than this rule: fixing it means
-/// making shadowing scope-aware, which is a hygiene change with its own blast
-/// radius. chibi mangles this case too.
+/// Fixed 2026-08-27 with Larceny triage family 37, which binds each name at
+/// the scopes it was *written* with plus the form's: the template's `cond` is
+/// bound where the template stands, and the use site's reference does not
+/// reach it. chibi rejects this program too.
 #[test]
-fn test_a_shadowed_spelling_suppresses_the_check() {
-    assert_program_eval_to(
+fn test_a_shadowed_spelling_no_longer_suppresses_the_check() {
+    assert_program_eval_error(
         "(import (scheme base))
          (define-syntax m (syntax-rules () ((_ body) (let ((cond 5)) body))))
          (m cond)",
-        "#<macro>",
     );
 }

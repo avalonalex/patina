@@ -187,6 +187,19 @@ pub fn flip_scope_on_tagged(
 /// it is a macro-introduced identifier, which carries its own scopes and
 /// nothing of where it now sits: the `(n z)` in chibi's `(m k)`, whose
 /// binder `n` came from the same template.
+pub fn add_scope_to_bound_names(
+    tv: patina_core::TaggedValue,
+    names: &std::collections::HashSet<std::rc::Rc<str>>,
+    scope: patina_runtime::ScopeId,
+    shared_heap: &patina_core::SharedHeap,
+) -> patina_core::TaggedValue {
+    let edit = ScopeEdit::AddToBound(names);
+    if !contains_edit_target(tv, edit, shared_heap) {
+        return tv;
+    }
+    edit_scope_on_tagged(tv, scope, edit, shared_heap)
+}
+
 pub fn add_scope_to_scoped_identifiers(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
@@ -200,7 +213,10 @@ pub fn add_scope_to_scoped_identifiers(
 
 /// What a scope walk does to each identifier it meets.
 #[derive(Clone, Copy)]
-enum ScopeEdit {
+enum ScopeEdit<'a> {
+    /// Add the scope to identifiers naming one of these that already carry
+    /// scopes of their own.
+    AddToBound(&'a std::collections::HashSet<std::rc::Rc<str>>),
     /// Toggle the scope — the expander's input/output flip.
     Flip,
     /// Add the scope to identifiers that already have scopes; leave
@@ -208,12 +224,13 @@ enum ScopeEdit {
     AddToScoped,
 }
 
-impl ScopeEdit {
+impl ScopeEdit<'_> {
     /// Would this edit change `tv`, an identifier with `scopes`?
-    fn affects(self, scopes: &patina_runtime::ScopeSet) -> bool {
+    fn affects(self, name: &str, scopes: &patina_runtime::ScopeSet) -> bool {
         match self {
             ScopeEdit::Flip => true,
             ScopeEdit::AddToScoped => !scopes.is_empty(),
+            ScopeEdit::AddToBound(names) => !scopes.is_empty() && names.contains(name),
         }
     }
 }
@@ -229,7 +246,7 @@ impl ScopeEdit {
 /// container contributes nothing.
 fn contains_edit_target(
     tv: patina_core::TaggedValue,
-    edit: ScopeEdit,
+    edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
 ) -> bool {
     let mut guard = CycleGuard::default();
@@ -257,7 +274,7 @@ impl CycleGuard {
 
 fn contains_identifier_impl(
     tv: patina_core::TaggedValue,
-    edit: ScopeEdit,
+    edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
     guard: &mut CycleGuard,
 ) -> bool {
@@ -298,7 +315,7 @@ fn contains_identifier_impl(
     // is what the walk used to do, twice per expansion.
     let heap = shared_heap.borrow();
     heap.get_identifier_data(tv)
-        .is_some_and(|(_, scopes)| edit.affects(scopes))
+        .is_some_and(|(name, scopes)| edit.affects(name, scopes))
 }
 
 /// Implementation of the scope walks for TaggedValue
@@ -325,7 +342,7 @@ fn contains_identifier_impl(
 fn edit_scope_on_tagged(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
-    edit: ScopeEdit,
+    edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
     let mut memo: std::collections::HashMap<u64, patina_core::TaggedValue> =
@@ -336,7 +353,7 @@ fn edit_scope_on_tagged(
 fn edit_scope_memo(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
-    edit: ScopeEdit,
+    edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
     memo: &mut std::collections::HashMap<u64, patina_core::TaggedValue>,
 ) -> patina_core::TaggedValue {
@@ -410,10 +427,12 @@ fn edit_scope_memo(
     // Extract to binding first to avoid RefCell borrow conflict with alloc_identifier
     let id_data = shared_heap.borrow().get_identifier_data_any(tv);
     if let Some((name, scopes)) = id_data {
+        if !edit.affects(&name, &scopes) {
+            return tv;
+        }
         let new_scopes = match edit {
             ScopeEdit::Flip => scopes.flip_scope(scope),
-            ScopeEdit::AddToScoped if scopes.is_empty() => return tv,
-            ScopeEdit::AddToScoped => scopes.with_scope(scope),
+            ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
         };
         return shared_heap.borrow_mut().alloc_identifier(name, new_scopes);
     }

@@ -22,7 +22,7 @@ pub use error::{ExpansionStep, MacroError};
 pub use macro_expander::{
     CompiledMacro, CompiledRule, Compiler, ExpandError, Expander, Identifier, IdentifierKey,
     MacroExpansion, MatchError, Matcher, ParsedSyntaxRules, Pattern, SyntaxRulesParseError,
-    Template, TestExpander, add_scope_to_scoped_identifiers, expand_macro_with_scope,
-    parse_syntax_rules,
+    Template, TestExpander, add_scope_to_bound_names, add_scope_to_scoped_identifiers,
+    expand_macro_with_scope, parse_syntax_rules,
 };
 pub use tracer::MacroTracer;

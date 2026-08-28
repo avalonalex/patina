@@ -1186,7 +1186,7 @@ fn a_use_site_local_does_not_capture_a_templates_reference() {
 /// `let-syntax` fix had been placed at the call site rather than in a shared
 /// "enter a binding form" step; see the triage doc for the shape that would.
 #[test]
-fn a_macro_introduced_variable_binding_does_not_yet_rename_its_scope() {
+fn a_macro_introduced_variable_binding_renames_its_scope() {
     assert_program_eval_to(
         "(define-syntax p (syntax-rules () ((_ x) 'outer-macro)))
          (define-syntax genls
@@ -1198,7 +1198,7 @@ fn a_macro_introduced_variable_binding_does_not_yet_rename_its_scope() {
          (define-syntax genlet
            (syntax-rules () ((_) (let ((p (lambda (y) (+ y 200)))) (p 1)))))
          (list (genls) (genlam) (genlet))",
-        "(inner-keyword outer-macro outer-macro)",
+        "(inner-keyword 101 201)",
     );
 }
 
@@ -1207,25 +1207,22 @@ fn a_macro_introduced_variable_binding_does_not_yet_rename_its_scope() {
 // ---------------------------------------------------------------------------
 
 /// `Environment::get_with_scopes` resolves by subset — the largest binding
-/// scope set contained in the reference's — while `set_with_scopes` demands
-/// an *exact* match. A reference can therefore read a binding it cannot
-/// write, and the write falls through to the root's by-name `set`.
+/// scope set contained in the reference's. `set_with_scopes` demanded an
+/// *exact* match, so a reference could read a binding it could not write and
+/// the write fell through to the root's by-name `set`. The `set!` here is
+/// introduced by the *inner* macro, so it carries that macro's definition
+/// scopes on top of the binder's — a strict superset, ordinary under
+/// set-of-scopes and fatal under exact matching.
 ///
-/// The `set!` here is introduced by the *inner* macro, so it carries that
-/// macro's definition scopes on top of the binder's — a strict superset,
-/// ordinary under set-of-scopes and fatal under exact matching. The VM
-/// resolves such a reference at compile time and never reaches this path,
-/// which is why it is a divergence rather than a shared wrong answer.
-///
-/// Quarantined, not fixed. Making `set_with_scopes` resolve like
-/// `get_with_scopes` fixes exactly this shape and makes three others
-/// *silently wrong* — see the triage doc: the tree-walker stores a
-/// source-written parameter in two independent cells, and the subset rule
-/// reaches the scoped twin while by-name reads keep the stale one. The loud
-/// error this test pins is the better failure until that layer is fixed.
+/// Fixed 2026-08-27, and only after two other things were: writes resolve
+/// the way reads do, which was unsafe while a source-written parameter lived
+/// in *two* cells — a by-name one and a scoped one — because the write
+/// reached the scoped twin and left the by-name read stale. Binding such a
+/// parameter once, with `define_scoped_definition`, removes the twin; that
+/// function's own doc had named this freeze as the reason it exists.
 #[test]
-fn an_introduced_macro_assigning_to_an_introduced_binding_diverges() {
-    assert_divergence(
+fn an_introduced_macro_can_assign_to_an_introduced_binding() {
+    assert_program_eval_to(
         "(define-syntax gen
            (syntax-rules ()
              ((_ mac)
@@ -1234,31 +1231,22 @@ fn an_introduced_macro_assigning_to_an_introduced_binding_diverges() {
                 (mac)
                 v))))
          (gen bump)",
-        On::Vm,
         "11",
-        ErrorClass::AtRuntime,
-        "scheme_tests/reports/larceny_triage.md, family 38",
     );
 }
 
-/// The same defect reached through a *source-written* binder, which is the
-/// shape that makes the obvious fix unsafe: here the tree-walker holds `x`
-/// in two cells — a by-name one and a scoped one — so a write that reaches
-/// the scoped twin leaves the by-name read stale, and `(f 1)` answers `1`
-/// instead of `101` with no error at all. Pinned as the error it currently
-/// is, so that a change turning it into a silent `1` trips here.
+/// The same defect through a *source-written* binder, which is the shape
+/// that made the naive fix unsafe: with two cells, `(f 1)` answered `1`
+/// instead of `101` with no error at all.
 #[test]
-fn an_introduced_macro_assigning_to_a_source_written_binder_diverges() {
-    assert_divergence(
+fn an_introduced_macro_can_assign_to_a_source_written_binder() {
+    assert_program_eval_to(
         "(define (f x)
            (define-syntax bump (syntax-rules () ((_) (set! x (+ x 100)))))
            (bump)
            x)
          (f 1)",
-        On::Vm,
         "101",
-        ErrorClass::AtRuntime,
-        "scheme_tests/reports/larceny_triage.md, family 38",
     );
 }
 

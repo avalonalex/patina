@@ -501,17 +501,35 @@ impl Environment {
             return self.set(name, value);
         }
 
-        // Check scoped bindings - find exact scope set match
-        let mut scoped = self.scoped_bindings.borrow_mut();
-        if let Some(bindings) = scoped.get_mut(name) {
-            for binding in bindings.iter_mut() {
-                if &binding.scopes == scopes {
-                    binding.tagged_value = value;
-                    return Ok(());
+        // Resolve the way a read does — largest matching subset, most
+        // recent on a tie — so that a reference can write the binding it can
+        // read. Requiring an exact match meant a `set!` a macro introduced,
+        // which carries that macro's scopes on top of the binder's, found
+        // nothing and fell through to the root's by-name `set`. Larceny
+        // triage family 38.
+        let here = {
+            let scoped = self.scoped_bindings.borrow();
+            scoped.get(name).and_then(|bindings| {
+                let mut best: Option<(usize, usize)> = None;
+                for (index, binding) in bindings.iter().enumerate().rev() {
+                    if !crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                        continue;
+                    }
+                    let len = binding.scopes.len();
+                    if best.is_none_or(|(best_len, _)| len > best_len) {
+                        best = Some((len, index));
+                    }
                 }
+                best
+            })
+        };
+        if let Some((_, index)) = here {
+            let mut scoped = self.scoped_bindings.borrow_mut();
+            if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
+                binding.tagged_value = value;
+                return Ok(());
             }
         }
-        drop(scoped);
         // Check parent
         if let Some(parent) = &self.parent {
             parent.set_with_scopes(name, scopes, value)
