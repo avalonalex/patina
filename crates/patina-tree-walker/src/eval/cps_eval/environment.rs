@@ -107,7 +107,7 @@ impl<'a> CpsEvaluator<'a> {
             env.set_with_scopes(name, scopes, value)
                 .map_err(|e| match e {
                     SetError::Ambiguous(e) => EvalError::InvalidSyntax(e.to_string()),
-                    SetError::Undefined(_) => EvalError::UndefinedVariable(name.to_string()),
+                    SetError::Undefined(name) => EvalError::UndefinedVariable(name),
                 })
         }
     }

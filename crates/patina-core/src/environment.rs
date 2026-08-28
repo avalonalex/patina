@@ -7,36 +7,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Where a scoped binding lives: `depth` environments up from the one a
-/// lookup started in, at `index` in that environment's list for the name.
-///
-/// Resolution and assignment cannot share a borrow of `scoped_bindings`, so
-/// the walk returns this and a second, shorter walk does the write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Place {
-    depth: usize,
-    index: usize,
-}
-
 /// Why a scoped write found nothing to write.
 #[derive(Debug, Clone)]
 pub enum SetError {
     /// No binding of this name is visible — the same condition `set` reports,
-    /// carrying the name for the caller's message.
+    /// carrying the name so the caller can report it without allocating a
+    /// second copy.
     Undefined(String),
     /// Two bindings are visible and neither is more specific. Reads raise
     /// this, so writes do too: a `set!` that cannot say which binding it
     /// means is the same defect as a reference that cannot.
     Ambiguous(Box<AmbiguousReference>),
-}
-
-impl std::fmt::Display for SetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SetError::Undefined(name) => write!(f, "{name}"),
-            SetError::Ambiguous(e) => write!(f, "{e}"),
-        }
-    }
 }
 
 /// A binding with its associated scope set
@@ -202,6 +183,61 @@ pub struct Environment {
     /// copying the value at expansion time would silently freeze.
     alias_bindings: Rc<RefCell<AliasBindings>>,
     parent: Option<Rc<Environment>>,
+}
+
+/// The table a scoped binding lives in, and its index there.
+///
+/// An owned handle rather than a `(depth, index)` address: `scoped_bindings`
+/// is already an `Rc`, so cloning one is a refcount bump and the write needs
+/// no second walk of the chain to find the frame again.
+type ScopedPlace = (Rc<RefCell<ScopedTable>>, usize);
+
+/// Every binding of `name` in `env` and its parents that a reference at
+/// `ref_scopes` can see, **most recent first** — innermost environment first,
+/// and within one of those, latest binding first. That is the order
+/// [`resolve_scoped`] documents, and collecting it in one place is what keeps
+/// reads and writes agreeing about it.
+///
+/// `select` says what to collect: a read wants the value, a write wants the
+/// location. Both are computed under the borrow taken here, which is why this
+/// is a projection rather than a returned reference.
+///
+/// Candidacy is tested with the rule's own `is_candidate`, so this filters
+/// rather than keeping a second copy of the rule. A binding that fails it is
+/// shown neither to the resolver nor to the ambiguity check, so cloning its
+/// scope set would be waste on a path the tree-walker takes per variable read.
+///
+/// [`resolve_scoped`]: crate::scope_resolve::resolve_scoped
+fn collect_scoped_candidates<T>(
+    env: &Environment,
+    name: &str,
+    ref_scopes: &ScopeSet,
+    select: &impl Fn(&Environment, &ScopedBinding, usize) -> T,
+    candidates: &mut Vec<(ScopeSet, T)>,
+    debug: bool,
+) {
+    let scoped = env.scoped_bindings.borrow();
+    if let Some(bindings) = scoped.get(name) {
+        for (index, binding) in bindings.iter().enumerate().rev() {
+            let is_candidate = crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
+            if debug {
+                println!(
+                    "[ENV]   Candidate {} ⊆ {} : {}",
+                    binding.scopes,
+                    ref_scopes,
+                    if is_candidate { "YES" } else { "NO" }
+                );
+            }
+            if is_candidate {
+                candidates.push((binding.scopes.clone(), select(env, binding, index)));
+            }
+        }
+    }
+    drop(scoped);
+
+    if let Some(parent) = &env.parent {
+        collect_scoped_candidates(parent, name, ref_scopes, select, candidates, debug);
+    }
 }
 
 impl Environment {
@@ -554,86 +590,50 @@ impl Environment {
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), SetError> {
+        use crate::macro_debug;
+
+        let debug = macro_debug::is_enabled();
+
+        if debug {
+            println!("[ENV] Assigning '{}' with scopes {}", name, scopes);
+        }
+
         if scopes.is_empty() {
             // Empty scopes - use simple lookup
+            if debug {
+                println!("[ENV]   Empty scopes -> simple assignment");
+            }
             return self.set(name, value).map_err(SetError::Undefined);
         }
 
-        // Every candidate binding of the name in this environment and its
-        // parents, most recent first — the order `resolve_scoped` documents,
-        // and the same walk `get_with_scopes` makes. What is collected is a
-        // *location* rather than a value, since this has to write there.
-        let mut candidates: Vec<(ScopeSet, Place)> = Vec::new();
-
-        fn collect_places(
-            env: &Environment,
-            name: &str,
-            ref_scopes: &ScopeSet,
-            depth: usize,
-            candidates: &mut Vec<(ScopeSet, Place)>,
-        ) {
-            let scoped = env.scoped_bindings.borrow();
-            if let Some(bindings) = scoped.get(name) {
-                for (index, binding) in bindings.iter().enumerate().rev() {
-                    if crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes) {
-                        candidates.push((binding.scopes.clone(), Place { depth, index }));
-                    }
-                }
-            }
-            drop(scoped);
-
-            if let Some(parent) = &env.parent {
-                collect_places(parent, name, ref_scopes, depth + 1, candidates);
-            }
-        }
-
-        collect_places(self, name, scopes, 0, &mut candidates);
+        // One walk, shared with `get_with_scopes`, so the two cannot drift
+        // about which candidates exist or what order they come in. A write
+        // collects the frame table and index; a read collects the value.
+        let mut candidates: Vec<(ScopeSet, ScopedPlace)> = Vec::new();
+        collect_scoped_candidates(
+            self,
+            name,
+            scopes,
+            &|env, _, index| (Rc::clone(&env.scoped_bindings), index),
+            &mut candidates,
+            debug,
+        );
 
         match crate::scope_resolve::resolve_scoped(name, scopes, &candidates) {
             Err(e) => Err(SetError::Ambiguous(e)),
-            // No candidate was a subset. Fall back by name from *here*, which
-            // is what reading does; the recursive version fell back from the
-            // root and assigned the global.
+            // No candidate was a subset. Fall back by name from *here*, as
+            // reading does.
             Ok(None) => self.set(name, value).map_err(SetError::Undefined),
-            Ok(Some(place)) => {
-                if self.write_at(name, place, value) {
-                    Ok(())
-                } else {
-                    // The binding was collected a moment ago from tables only
-                    // this call can reach, so this is unreachable rather than
-                    // a case to handle. Falling back by name would be the
-                    // wrong repair anyway: it writes a *different* binding.
-                    Err(SetError::Undefined(name.to_string()))
-                }
+            Ok(Some((table, index))) => {
+                let mut table = table.borrow_mut();
+                // Collected a moment ago from this very table, and nothing
+                // has run since that could remove it.
+                table
+                    .get_mut(name)
+                    .expect("the frame this place names still binds the name")[index]
+                    .tagged_value = value;
+                Ok(())
             }
-        }
-    }
-
-    /// Assign to the binding `place` names, counted from this environment.
-    ///
-    /// Split from the resolution above because the borrow cannot span it: the
-    /// walk holds `scoped_bindings` immutably and this takes it mutably.
-    fn write_at(&self, name: &str, place: Place, value: TaggedValue) -> bool {
-        let Some(remaining) = place.depth.checked_sub(1) else {
-            let mut scoped = self.scoped_bindings.borrow_mut();
-            return match scoped.get_mut(name).and_then(|bs| bs.get_mut(place.index)) {
-                Some(binding) => {
-                    binding.tagged_value = value;
-                    true
-                }
-                None => false,
-            };
-        };
-        match &self.parent {
-            Some(parent) => parent.write_at(
-                name,
-                Place {
-                    depth: remaining,
-                    index: place.index,
-                },
-                value,
-            ),
-            None => false,
         }
     }
 
@@ -682,50 +682,16 @@ impl Environment {
             return Ok(result);
         }
 
-        // Every binding of this name in this environment and its parents,
-        // in the order `resolve_scoped` wants them.
+        // The same walk the write takes; see `collect_scoped_candidates`.
         let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
-
-        fn collect_candidates(
-            env: &Environment,
-            name: &str,
-            ref_scopes: &ScopeSet,
-            candidates: &mut Vec<(ScopeSet, TaggedValue)>,
-            debug: bool,
-        ) {
-            // Every candidate binding of the name here, latest first — the
-            // order `resolve_scoped` documents. Candidacy is tested with the
-            // rule's own `is_candidate`, so this is a filter and not a second
-            // copy of the rule; a binding that fails it is shown neither to
-            // the resolver nor to the check, so cloning its scope set would
-            // be waste on a path the tree-walker takes per variable read.
-            let scoped = env.scoped_bindings.borrow();
-            if let Some(bindings) = scoped.get(name) {
-                for binding in bindings.iter().rev() {
-                    let is_candidate =
-                        crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
-                    if debug {
-                        println!(
-                            "[ENV]   Candidate {} ⊆ {} : {}",
-                            binding.scopes,
-                            ref_scopes,
-                            if is_candidate { "YES" } else { "NO" }
-                        );
-                    }
-                    if is_candidate {
-                        candidates.push((binding.scopes.clone(), binding.tagged_value));
-                    }
-                }
-            }
-            drop(scoped);
-
-            // Recurse to parent
-            if let Some(parent) = &env.parent {
-                collect_candidates(parent, name, ref_scopes, candidates, debug);
-            }
-        }
-
-        collect_candidates(self, name, scopes, &mut candidates, debug);
+        collect_scoped_candidates(
+            self,
+            name,
+            scopes,
+            &|_, binding, _| binding.tagged_value,
+            &mut candidates,
+            debug,
+        );
 
         // One rule, shared with the VM's renamer: see
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
@@ -761,7 +727,11 @@ impl Environment {
         self.scoped_bindings
             .borrow()
             .get(name)
-            .is_some_and(|bindings| bindings.iter().any(|b| b.scopes.is_subset_of(scopes)))
+            .is_some_and(|bindings| {
+                bindings
+                    .iter()
+                    .any(|b| crate::scope_resolve::is_candidate(&b.scopes, scopes))
+            })
             || self
                 .parent
                 .as_ref()
@@ -1080,6 +1050,56 @@ mod tests {
             .get_symbol_name(result_tv)
             .map(|s| s.to_string());
         assert_eq!(name.as_deref(), Some("primitive-cons"));
+    }
+
+    /// A write lands on the binding the read returns, across the whole chain.
+    ///
+    /// The property `set_with_scopes` exists to have, asserted directly
+    /// rather than through a Scheme program. The outer environment holds the
+    /// *wider* scope set, so a rule that stopped at the innermost environment
+    /// holding any candidate — as the write once did — assigns the inner one
+    /// and disagrees with the read sitting next to it.
+    #[test]
+    fn a_scoped_write_lands_where_the_read_looks() {
+        use crate::scope::ScopeId;
+
+        let (s1, s2) = (ScopeId(1), ScopeId(2));
+        let outer = Environment::new();
+        outer.define_with_scopes(
+            "x".to_string(),
+            ScopeSet::from_iter([s1, s2]),
+            TaggedValue::fixnum(1),
+        );
+        let inner = Environment::with_parent(Rc::new(outer));
+        inner.define_with_scopes(
+            "x".to_string(),
+            ScopeSet::singleton(s1),
+            TaggedValue::fixnum(2),
+        );
+
+        let reference = ScopeSet::from_iter([s1, s2]);
+        // The read picks the outer, wider binding over the nearer one.
+        assert_eq!(
+            inner.get_with_scopes("x", &reference).unwrap(),
+            Some(TaggedValue::fixnum(1))
+        );
+
+        inner
+            .set_with_scopes("x", &reference, TaggedValue::fixnum(99))
+            .expect("the reference resolves, so the write has a target");
+
+        // Same binding, so the read sees the write...
+        assert_eq!(
+            inner.get_with_scopes("x", &reference).unwrap(),
+            Some(TaggedValue::fixnum(99))
+        );
+        // ...and the nearer binding was not the one written.
+        assert_eq!(
+            inner
+                .get_with_scopes("x", &ScopeSet::singleton(s1))
+                .unwrap(),
+            Some(TaggedValue::fixnum(2))
+        );
     }
 
     /// Two bindings of one name, neither visible-from the other, are not
