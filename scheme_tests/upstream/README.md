@@ -158,8 +158,10 @@ had caught. All are now fixed; the newest is first.
   each pinned in `crates/patina-tests/tests/larceny_families.rs`; the review
   of that fix found a second layer of the same families (a generated
   `let-syntax`'s scoping, `quote` inside a quasiquote, the ellipsis-escape
-  compiler) and one tree-walker divergence (family 36), fixed and pinned in
-  the same PR.
+  compiler), all fixed and pinned in the same PR. It also surfaced family 36 —
+  a use-site binding capturing a template's reference — which is **open**: it
+  was quarantined, not fixed, and is wider than the tree-walker divergence it
+  first looked like (an internal define captures on both backends).
 
 - **SRFI 14 `ucs-range->char-set` discarded its base set** — fixed 2026-08-19,
   found by `srfi/14/test.sld` on its first run. The port handed

@@ -1144,7 +1144,9 @@ fn a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion() {
 }
 
 // ---------------------------------------------------------------------------
-// Family 36 — tree-walker: a local variable captures a template's reference
+// Family 36 — a use-site binding captures a template's reference.
+// Tree-walker only for parameters and `let`; BOTH backends for internal
+// defines (see the last two tests in this section).
 // ---------------------------------------------------------------------------
 
 /// `mk`'s template references `list`; a use-site `(let ((list 1)) …)` has no
@@ -1194,6 +1196,117 @@ fn a_use_site_local_silently_captures_a_templates_reference() {
         "5",
         "tree-walker, quarantined: the use-site `let` captures it — \
          scheme_tests/reports/larceny_triage.md, family 36"
+    );
+}
+
+/// A same-named *parameter* does **not** capture a macro-introduced `set!`,
+/// on either backend — and this is a regression guard, not a defect pin.
+///
+/// `b` is defined at top level, so its `c` means the global: `(5 99)`, which
+/// chibi and Racket both give and both backends already produce. It is here
+/// because nothing pinned it, and PR #138 broke exactly this shape while
+/// every test in the repo stayed green. The `let` form below it is the same
+/// program with a `let` binder instead of a parameter; #138 broke that too.
+///
+/// The direction being guarded is the one the family-38 tests do not cover:
+/// a macro defined **outside** the frame must not reach **inward** to a
+/// same-named binder. See {TRIAGE} families 36 and 38.
+#[test]
+fn a_macro_introduced_reference_is_not_captured_by_a_same_named_parameter() {
+    let expected = "(5 99)";
+    for binder in [
+        "(define r ((lambda (c) (b) c) 5))",
+        "(define (g) (let ((c 5)) (b) c))\n(define r (g))",
+    ] {
+        let code = format!(
+            "(define c 'global)
+             (define-syntax b (syntax-rules () ((b) (set! c 99))))
+             {binder}
+             (list r c)"
+        );
+        assert_eq!(
+            eval_program(&code),
+            expected,
+            "the template's `c` is the definition-site global, so the binder \
+             keeps 5 and the global becomes 99 — see {TRIAGE} families 36 \
+             and 38"
+        );
+    }
+}
+
+/// An *internal define* captures a template's reference on **both** backends,
+/// which is wider than this family was recorded as covering.
+///
+/// `rd` is defined at top level, so its `c` means the global by R7RS §4.3.2
+/// referential transparency — chibi and Racket both answer `global`. Patina
+/// answers `5` on the VM and on the tree-walker: `g`'s internal define
+/// captures it. Measured 2026-08-28.
+///
+/// Asserted at the *wrong* answer so the fix trips it, the way family 37's
+/// test was before it was fixed. It is green today and turns red when the
+/// defect is fixed; at that point both assertions become `"global"` and this
+/// comment goes away.
+#[test]
+fn an_internal_define_captures_a_templates_reference_on_both_backends() {
+    // `(list r c)` rather than a bare `(g)`: ending at `(g)` would answer 5
+    // whether `(define c 5)` bound fresh in `g`'s frame — the defect here —
+    // or leaked out and clobbered the global, which is a different and worse
+    // one. Observing both distinguishes them. Order is forced with `r` since
+    // R7RS §4.1.3 leaves operand order unspecified.
+    let code = "(define c 'global)
+                (define-syntax rd (syntax-rules () ((rd) c)))
+                (define (g) (define c 5) (rd))
+                (define r (g))
+                (list r c)";
+    let wrong = "(5 global)"; // correct is (global global)
+    assert_eq!(
+        eval_program_vm(code),
+        wrong,
+        "VM: expected the pinned wrong answer; if this is now (global global) the \
+         defect is fixed — see {TRIAGE} family 36"
+    );
+    assert_eq!(
+        eval_program_tree_walker(code),
+        wrong,
+        "tree-walker: expected the pinned wrong answer; if this is now \
+         `global` the defect is fixed — see {TRIAGE} family 36"
+    );
+}
+
+/// The same capture through a macro-introduced `set!`, where the two backends
+/// disagree and the tree-walker is the one that is right.
+///
+/// chibi and Racket answer `(5 99)`: the template's `c` is the global, so
+/// `g`'s local keeps 5 and the global becomes 99. The VM captures the
+/// internal define — writing 5 to 99 and leaving the global alone. The
+/// tree-walker is correct here only by accident: its scoped write finds no
+/// candidate and falls back at the *root*, which is where the intended target
+/// happens to live.
+///
+/// Recorded because that accident is load-bearing. PR #138 moved the fallback
+/// to the starting environment — defensible on its own terms, and it put the
+/// tree-walker on the VM's wrong answer here.
+#[test]
+fn a_macro_introduced_assignment_captures_an_internal_define_on_the_vm() {
+    let code = "(define c 'global)
+                (define-syntax b (syntax-rules () ((b) (set! c 99))))
+                (define (g) (define c 5) (b) c)
+                (define r (g))
+                (list r c)";
+    assert_eq!(
+        eval_program_vm(code),
+        "(99 global)",
+        "VM: expected the pinned wrong answer — it captures `g`'s internal \
+         define; if this is now (5 99) the defect is fixed — see {TRIAGE} \
+         family 36"
+    );
+    assert_eq!(
+        eval_program_tree_walker(code),
+        "(5 99)",
+        "tree-walker: this one is CORRECT and must stay so. It holds only \
+         because the scoped write falls back at the root; PR #138 moved that \
+         inward and broke it. Do not \"un-quarantine\" this half — see \
+         {TRIAGE} families 36 and 38"
     );
 }
 
