@@ -107,6 +107,10 @@ to learn what a push would have told you anyway.
 **Do not create new markdown files without user approval.**
 
 **Active planning docs:**
+- `scheme_tests/reports/larceny_triage.md` — **the open defect queue.** Start here
+  for macro/hygiene work: it opens with an ordered plan (families 36 and 38),
+  what each step fixes, its acceptance criterion, and the approaches already
+  measured and rejected. Two PRs were closed for skipping it.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker (Priorities 1–5 status)
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
@@ -116,7 +120,11 @@ to learn what a push would have told you anyway.
 - `PRD/ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 
 **Feature docs:**
-- `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope algorithm)
+- `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope
+  algorithm), and the two instruments for hygiene work: `PATINA_SCOPE_TRACE`
+  (what scopes a binding actually gets, and how a reference resolved) and
+  `crates/patina-tests/tests/hygiene_matrix.rs` (28 shapes scored against chibi
+  and Racket — the scoreboard a hygiene fix is measured by)
 - `docs/TEST_ORGANIZATION.md` — test structure and categories
 - `docs/reference_impls/` — notes on Chibi, Chez, Gauche reference implementations
 

@@ -28,6 +28,112 @@ is unchanged at 12 of 16, 4017 of 4025. Running chibi's own `(srfi 101 test)`
 against the shadowing names (2026-08-26) then found families 33–35; with them
 fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 
+## The hygiene queue — ordered, with acceptance criteria
+
+Families 36 and 38 are the open hygiene work, and they are one problem in two
+places. This is the order to take them in and how to know each step is done.
+Written down because two attempts (PRs #133 and #138) were closed for fixing
+one direction and breaking the other, and neither had a stated definition of
+done.
+
+**The scoreboard is `crates/patina-tests/tests/hygiene_matrix.rs`** — 28 shapes
+(7 binder forms × macro-defined-inside/outside × read/write), scored against
+chibi 0.12 and Racket 9.3, which agree on all 28. Patina is wrong on 9 of them.
+The test fails in *both* directions, so it catches a fix that regresses a
+working shape, which is what the chibi suite structurally cannot do: that has
+read 1226/1226 on both backends through every defect below.
+
+**The instrument is `PATINA_SCOPE_TRACE`** (see `docs/MACRO_SYSTEM.md`). Every
+wrong turn in this queue came from reasoning about code that *computes* a scope
+set and being wrong about the value that arrives. Trace one small program
+before believing anything about scopes.
+
+Counting *cells* (a row can be wrong on one backend or both): 9 rows, 10 cells
+— VM 2, tree-walker 8.
+
+| step | work | fixes | matrix cells wrong after |
+|---|---|---|---|
+| — | today | — | **10** (VM 2, tw 8) |
+| 1 | the by-name fallback must not resurrect a binding the rule rejected | the 6 tree-walker read rows that are not `internal-def` | 4 |
+| 2 | internal defines carry their scopes to runtime | the 3 `internal-def` rows (4 cells), and with them family 38's remaining half | **0** |
+| 3 | a `do` result clause is not a definition context | — it is not a matrix row; it has its own test | 0 |
+
+Step 3 does not change the count because it is not a hygiene defect and is
+deliberately not scored with them. Steps 1 and 2 close the queue.
+
+### Step 1 — measured, not proposed
+
+Prototyped and scored 2026-08-28: **six rows fixed, none regressed**, chibi
+1226/1226 on both backends, corpus 127 of 161 unchanged. The only other red
+tests were family 36's own quarantine pins reporting the defect gone.
+
+The change is to `Environment::get_with_scopes`'s fallback. Today it ends
+`Ok(result.or_else(|| self.get(name)))`, and `get` walks by name from the
+starting environment — so it reaches a binding set-of-scopes resolution just
+*rejected*, overriding the rule with the spelling-based capture set-of-scopes
+exists to replace. Replace it with a walk that, at each frame, skips the
+name-only view when this resolution rejected a scoped binding there:
+
+```rust
+fn get_scoped_fallback(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+    // plain bindings and aliases first, exactly as `get` does …
+    let rejected = /* this frame has a visible_by_name scoped binding of
+                      `name` that `is_candidate` rejects for `scopes` */;
+    if !rejected && let Some(i) = self.visible_scoped_index(name) { /* … */ }
+    self.parent.as_ref().and_then(|p| p.get_scoped_fallback(name, scopes))
+}
+```
+
+Only the *scoped* table is skipped. A plain binding was never a candidate for
+anything — the tree-walker files internal definitions by name alone — so
+falling back to one is the fallback doing its job rather than overriding a
+decision, which is why this step cannot reach the `internal-def` rows.
+
+Before landing: it touches the tree-walker's hottest path, so A/B it
+interleaved rather than trusting a green suite — benches drift several percent
+between runs, so a single before/after is not evidence — and the write path
+needs the same predicate for symmetry (`set_with_scopes`).
+
+### Step 2 — the one real piece of engineering left
+
+An internal define reaches the runtime with an **empty** scope set on both
+backends, so there is nothing for step 1's predicate to reject. Two lines of
+trace state it:
+
+```text
+BIND phase=desugar name="c" scopes={S136} byname=false
+BIND phase=run     name="c" scopes={}     byname=true
+```
+
+The desugarer stamps the binder (`scope_body` over `body_definition_names`) and
+the stamp does not survive to `step.rs`'s `CpsExprKind::Define` arm. Carry it
+through, on both backends. It must keep `visible_by_name = true`: the relinker
+resolves macro-generated definitions by name, which is what the R7RS suite's
+`jabberwocky` test needs — `define_scoped_definition`'s own doc explains why.
+
+Do **not** try to fix this by taking the by-name path away. Measured and
+rejected: binding source-written parameters through `define_with_scopes`
+instead fixes two of this family's repros and breaks lambda evaluation
+outright — `test_eval_lambda` fails and the chibi tree-walker suite aborts
+before reporting a score.
+
+### Step 3 — not a hygiene defect
+
+Patina accepts `define-syntax` in a `do` result clause; R7RS §5.3.2 admits
+definitions in a `⟨body⟩` and a result clause is a sequence of expressions.
+chibi and Racket both reject it. Pinned by
+`a_do_result_clause_is_not_a_definition_context`. Independent of the above and
+should not be bundled with it.
+
+### What the matrix does not cover yet
+
+In rough order of expected value: a macro generated by another macro; a macro
+imported across a library boundary; expansion nested more than one level;
+ellipsis depth greater than one; `define-record-type` and other derived binding
+forms; literals in the pattern. Each is a new `Binder` or `Site`, not a new
+file — and an axis must move exactly one thing, which the `do-var` case in that
+file's header explains the hard way.
+
 ## Ours
 
 ### 1. A nested `include` resolves against the wrong directory — both backends — ✅ fixed 2026-08-24
