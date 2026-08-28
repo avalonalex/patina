@@ -1,5 +1,5 @@
 use crate::error::SourceLocation;
-use crate::scope::{ScopeId, ScopeSet};
+use crate::scope::ScopeSet;
 use crate::tagged_value::TaggedValue;
 use std::rc::Rc;
 
@@ -170,11 +170,21 @@ pub enum CoreExprKind {
     Lambda {
         params: Formals,
         body: Vec<CoreExpr>,
-        /// Optional scope for parameter bindings (for scope-based hygiene)
-        /// If Some, parameters are bound with this scope added to current scope set.
-        /// This enables scope-based hygiene: free variables with matching scopes
-        /// can see these bindings, while others cannot.
-        binding_scope: Option<ScopeId>,
+        /// The scopes a parameter written in source stands in: every scope
+        /// enclosing this lambda, plus one minted for it. Empty when there is
+        /// no scope information (a hand-built tree).
+        ///
+        /// Accumulated, not a single fresh scope. A binder scoped `{fresh}`
+        /// alone is unordered against its own enclosing binders, so a
+        /// macro-introduced reference that reaches two of them has no most
+        /// specific candidate and set-of-scopes resolution cannot decide —
+        /// Larceny triage family 39. Accumulating makes the nesting a chain:
+        /// an inner binder's scopes strictly contain an outer's, which is
+        /// what lets the rule answer on its own.
+        ///
+        /// A parameter a macro introduced keeps its own scopes instead
+        /// (`ScopedParam::scopes`); those already say where it was written.
+        binding_scopes: Rc<ScopeSet>,
     },
 
     /// Conditional (always ternary after desugaring)
@@ -289,11 +299,11 @@ impl CoreExprKind {
             CoreExprKind::Lambda {
                 params,
                 body,
-                binding_scope,
+                binding_scopes,
             } => CoreExprKind::Lambda {
                 params: params.clone(),
                 body: body.iter().map(f).collect(),
-                binding_scope: *binding_scope,
+                binding_scopes: binding_scopes.clone(),
             },
 
             CoreExprKind::If { test, then, else_ } => CoreExprKind::If {

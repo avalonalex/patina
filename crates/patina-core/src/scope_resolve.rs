@@ -49,9 +49,9 @@ pub fn resolve_scoped<T: Clone>(
     reference: &ScopeSet,
     candidates: &[(ScopeSet, T)],
 ) -> Option<T> {
-    // One pass, no allocation: the candidate list is materialised only when
-    // the check is on, which is off by default. Building it unconditionally
-    // put a `Vec` on every scoped variable read the tree-walker performs.
+    // One pass, no allocation on the release path: the candidate list is
+    // materialised only when the check is on, which in release means only
+    // when asked for. A debug build always checks, and pays for it there.
     let mut best: Option<usize> = None;
     for (index, (scopes, _)) in candidates.iter().enumerate() {
         if !is_candidate(scopes, reference) {
@@ -193,32 +193,19 @@ mod ambiguity {
         sink().is_some()
     }
 
-    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? An ambiguous reference
-    /// then panics instead of being reported.
+    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? It adds the refusal to
+    /// a *release* build; a debug build refuses anyway.
     ///
-    /// **Not the default, and that is a finding rather than a compromise.**
-    /// Enforcing Flatt's rule looked free — no workload logs an ambiguous
-    /// reference — until the check ran over the Rust suite, where
-    /// `test_let_syntax_nested_lexical_scoping` trips it:
-    ///
-    /// ```scheme
-    /// (let ((x 'outer))
-    ///   (let-syntax ((m1 (syntax-rules () ((m1) x))))
-    ///     (let ((x 'middle))
-    ///       (let-syntax ((m2 (syntax-rules () ((m2) x))))
-    ///         (let ((x 'inner))
-    ///           (list (m1) (m2)))))))   ; R7RS: (outer middle)
-    /// ```
-    ///
-    /// That answer is correct today, and it is *not* the scope rule that
-    /// produces it: the two candidate bindings are both single scopes,
-    /// neither containing the other, and the winner comes from environment
-    /// nesting. So Patina's scope sets do not carry enough information to
-    /// decide a distinction R7RS requires, and an extra-model rule is
-    /// covering for it. Asserting would fail a passing, correct test.
-    ///
-    /// Larceny triage family 39 owns that; until it is fixed, strict mode is
-    /// the tool for measuring a change against the rule rather than a gate.
+    /// It was once the other way round. Enforcing Flatt's rule looked free —
+    /// no workload logged an ambiguous reference — until the check ran over
+    /// the Rust suite, where `test_let_syntax_nested_lexical_scoping` tripped
+    /// it: a passing, R7RS-required program whose answer came from
+    /// environment nesting rather than from scopes, because each `let` bound
+    /// its variable at one fresh scope and sibling binders were therefore
+    /// unordered. Larceny triage family 39. Fixed 2026-08-27 by scoping a
+    /// binder at the scopes it *stands in*, so nested binders form a chain
+    /// and a chain is always decidable; the suite passes the check now, and
+    /// so does every workload — 249 processes, zero ambiguous references.
     fn strict() -> bool {
         static STRICT: OnceLock<bool> = OnceLock::new();
         *STRICT.get_or_init(|| {
@@ -228,9 +215,22 @@ mod ambiguity {
         })
     }
 
-    /// Should the check run at all? Only when something will come of it.
+    /// Should the check run at all?
+    ///
+    /// Always in a debug build, where an ambiguous reference is a panic. In a
+    /// release build only when one of the two variables asks for it, so a
+    /// release interpreter pays a `OnceLock` read and a branch.
     pub(super) fn checking() -> bool {
-        logging() || strict()
+        refusing() || logging()
+    }
+
+    /// Is an ambiguous reference refused rather than reported?
+    ///
+    /// In a debug build, always — so every `cargo test` and both CI debug
+    /// lanes hold Flatt's rule without anyone opting in. A release build
+    /// refuses only when `PATINA_AMBIGUITY_STRICT` asks it to.
+    fn refusing() -> bool {
+        cfg!(debug_assertions) || strict()
     }
 
     /// Render a scope set without spaces, so a record stays one field.
@@ -294,7 +294,7 @@ mod ambiguity {
         let ambiguous = !rivals.is_empty();
         let refuse = || {
             assert!(
-                !ambiguous || !strict(),
+                !ambiguous || !refusing(),
                 "ambiguous reference: `{}` with scopes {} resolves to {} and to {}, \
              and neither contains the other — Flatt's rule does not determine \
              this reference, so the answer came from scope-set size alone. \
@@ -423,6 +423,28 @@ mod tests {
     fn an_unscoped_candidate_loses_to_any_scoped_one() {
         let candidates = vec![(set(&[]), "unscoped"), (set(&[1]), "scoped")];
         assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), Some("scoped"));
+    }
+
+    /// A macro-introduced reference reaches the binding it was written
+    /// against, not a nearer one — the property Larceny triage family 39
+    /// turns on. `m1` is defined inside the outer `let`, so its template's
+    /// `x` carries that binder's scope plus its own expansion scope, and of
+    /// the three nested binders only the outer one is a subset of it.
+    ///
+    /// This is decidable *because* binders accumulate: `{1} ⊂ {1,2} ⊂
+    /// {1,2,3}` is a chain. Scoped at one fresh scope each, as they were,
+    /// the three would be mutually unordered and the rule could not choose.
+    #[test]
+    fn a_template_reference_reaches_its_own_definition_sites_binder() {
+        let candidates = vec![
+            (set(&[1, 2, 3]), "inner"),
+            (set(&[1, 2]), "middle"),
+            (set(&[1]), "outer"),
+        ];
+        assert_eq!(
+            resolve_scoped("x", &set(&[1, 9]), &candidates),
+            Some("outer")
+        );
     }
 
     /// No candidate matching means the caller falls back to its own by-name

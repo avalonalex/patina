@@ -96,7 +96,7 @@ impl<'a> CpsEvaluator<'a> {
                     variadic,
                     cont_param,
                     body,
-                    binding_scope,
+                    binding_scopes,
                 } => {
                     let tagged = self.make_cps_closure_tagged(
                         params,
@@ -104,7 +104,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_param,
                         body,
                         &current_env,
-                        *binding_scope,
+                        binding_scopes.clone(),
                     );
                     return Ok(StepResult::Done(tagged));
                 }

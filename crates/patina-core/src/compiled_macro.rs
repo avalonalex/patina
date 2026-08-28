@@ -59,7 +59,7 @@ pub struct LiteralBinding {
     /// Scope set of the literal's binding at macro definition time.
     /// - `None` = the literal was unbound (free identifier) at definition time
     /// - `Some(scopes)` = the literal was bound with these scopes at definition time
-    pub binding_scopes: Option<ScopeSet>,
+    pub binding_scope: Option<ScopeSet>,
 }
 
 // ============================================================================

@@ -151,7 +151,7 @@ impl Compiler {
                 let name = &key.name;
                 // Check if this literal is "bound" - either in the environment
                 // OR in shadowed_names (e.g., lambda parameters not yet evaluated)
-                let binding_scopes = if shadowed_names.contains(name) {
+                let binding_scope = if shadowed_names.contains(name) {
                     // The literal is in shadowed_names - this means it's a lambda parameter
                     // that will be bound when the lambda is called. Treat it as bound
                     // with the current definition scopes.
@@ -203,7 +203,7 @@ impl Compiler {
 
                 LiteralBinding {
                     name: name.clone(),
-                    binding_scopes,
+                    binding_scope,
                 }
             })
             .collect()

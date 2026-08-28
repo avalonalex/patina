@@ -138,11 +138,11 @@ fn expand_qq_expr(expr: &CoreExpr, cx: &Expansion<'_>) -> Result<CoreExpr, Compi
         CoreExprKind::Lambda {
             params,
             body,
-            binding_scope,
+            binding_scopes,
         } => CoreExprKind::Lambda {
             params: params.clone(),
             body: each(body)?,
-            binding_scope: *binding_scope,
+            binding_scopes: binding_scopes.clone(),
         },
 
         CoreExprKind::If { test, then, else_ } => CoreExprKind::If {

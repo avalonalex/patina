@@ -91,7 +91,7 @@ pub fn is_literal_shadowed_tagged(
     let shadowed_at_use_site = shadows_can_reach_input && shadowed_names.contains(&input_name);
 
     // Apply bound-identifier=? semantics
-    match &literal_binding.binding_scopes {
+    match &literal_binding.binding_scope {
         None => {
             // Literal was unbound at macro definition time
             if shadowed_at_use_site {

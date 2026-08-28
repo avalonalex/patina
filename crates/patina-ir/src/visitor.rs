@@ -1,4 +1,4 @@
-use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeId, ScopeSet, Symbol, TaggedValue};
+use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeSet, Symbol, TaggedValue};
 
 /// Visitor trait for walking `CoreExpr` trees.
 ///
@@ -25,7 +25,7 @@ use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeId, ScopeSet, Symbol, Ta
 ///     }
 ///
 ///     fn visit_lambda(&mut self, params: &Formals, body: &[CoreExpr],
-///                     _binding_scope: Option<ScopeId>) {
+///                     _binding_scopes: &ScopeSet) {
 ///         let prev = self.bound.len();
 ///         // push params as bound names
 ///         self.bound.truncate(prev); // restore after visiting body
@@ -77,12 +77,7 @@ pub trait ExprVisitor {
     // ── Interior nodes (default recurses into children) ───────────────────
 
     /// Visit a lambda abstraction.  Default recurses into the body.
-    fn visit_lambda(
-        &mut self,
-        _params: &Formals,
-        body: &[CoreExpr],
-        _binding_scope: Option<ScopeId>,
-    ) {
+    fn visit_lambda(&mut self, _params: &Formals, body: &[CoreExpr], _binding_scopes: &ScopeSet) {
         for expr in body {
             self.visit_expr(expr);
         }
@@ -163,8 +158,8 @@ pub trait ExprVisitor {
             CoreExprKind::Lambda {
                 params,
                 body,
-                binding_scope,
-            } => self.visit_lambda(params, body, *binding_scope),
+                binding_scopes,
+            } => self.visit_lambda(params, body, binding_scopes),
             CoreExprKind::If { test, then, else_ } => self.visit_if(test, then, else_),
             CoreExprKind::Set { var, scopes, value } => self.visit_set(var, scopes, value),
             CoreExprKind::Begin(exprs) => self.visit_begin(exprs),
@@ -224,7 +219,7 @@ mod tests {
                     .collect(),
             ),
             body,
-            binding_scope: None,
+            binding_scopes: std::rc::Rc::new(ScopeSet::new()),
         })
     }
 
@@ -288,7 +283,7 @@ mod tests {
             &mut self,
             params: &Formals,
             body: &[CoreExpr],
-            _binding_scope: Option<ScopeId>,
+            _binding_scopes: &ScopeSet,
         ) {
             let prev_len = self.bound.len();
             match params {

@@ -1232,15 +1232,6 @@ impl Desugarer {
 
         let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
-        // Check if any parameter has scopes from macro expansion
-        let has_macro_scopes = match &params {
-            patina_ir::Formals::Fixed(ps) => ps.iter().any(|p| !p.scopes.is_empty()),
-            patina_ir::Formals::Variadic(p) => !p.scopes.is_empty(),
-            patina_ir::Formals::Mixed { fixed, rest } => {
-                fixed.iter().any(|p| !p.scopes.is_empty()) || !rest.scopes.is_empty()
-            }
-        };
-
         // Create a fresh scope for this lambda's bindings
         // This is used for:
         // 1. Non-macro parameters (they have no scopes, need fresh scope)
@@ -1263,19 +1254,17 @@ impl Desugarer {
         let body =
             self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &body_scopes)?;
 
-        // If parameters have macro scopes, set binding_scope to None
-        // since we'll use the parameter-specific scopes at runtime.
-        // Otherwise, use the fresh scope for all parameters.
-        let binding_scope = if has_macro_scopes {
-            None // Parameters carry their own scopes
-        } else {
-            Some(binding_scope) // Use fresh scope for all
-        };
-
         Ok(CoreExpr::new(CoreExprKind::Lambda {
             params,
             body,
-            binding_scope,
+            // The set the body was desugared with, unconditionally — the
+            // `define` shorthand says the same thing at its own `Lambda`.
+            // There used to be a whole-lambda `has_macro_scopes` gate that
+            // zeroed this when *any* parameter carried scopes, but both
+            // readers already dispatch per parameter on `ScopedParam::scopes`
+            // before looking here, so the gate only ever spoke for the mixed
+            // case — and there it silently disagreed with the shorthand.
+            binding_scopes: Rc::new(body_scopes),
         }))
     }
 
@@ -1529,7 +1518,7 @@ impl Desugarer {
             let param_names = utils::formals_to_names(&params);
             let body_desugarer = self.with_shadowed_names(param_names, body_scopes.clone());
             let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
-            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes);
+            let body_desugarer = body_desugarer.with_shadowed_names(defined, body_scopes.clone());
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()
@@ -1542,7 +1531,7 @@ impl Desugarer {
                 value: CoreExpr::rc(CoreExprKind::Lambda {
                     params,
                     body,
-                    binding_scope: Some(binding_scope),
+                    binding_scopes: Rc::new(body_scopes.clone()),
                 }),
             }));
         }
@@ -1995,7 +1984,10 @@ impl Desugarer {
                 func: CoreExpr::rc(CoreExprKind::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
                     body: desugared_body,
-                    binding_scope: Some(ScopeId::fresh()),
+                    // The set this body was desugared with. Nothing reads it
+                    // while the wrapper takes no parameters, but it is the
+                    // answer that stays right if one is ever added.
+                    binding_scopes: Rc::new(definition_scopes.clone()),
                 }),
                 args: vec![],
             }))

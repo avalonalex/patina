@@ -12,7 +12,7 @@ use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsPrimitive;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{DynamicWindRecord, Procedure};
-use patina_core::{Environment, ScopeSet};
+use patina_core::{Environment, ScopedParam};
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -47,7 +47,7 @@ impl<'a> CpsEvaluator<'a> {
                     cont_param,
                     body,
                     env: lambda_env,
-                    binding_scope,
+                    binding_scopes,
                 } => {
                     // Create new environment for the lambda
                     let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
@@ -81,53 +81,42 @@ impl<'a> CpsEvaluator<'a> {
                         );
                     }
 
-                    // Bind fixed parameters with proper hygiene support
-                    for (param, arg) in params.iter().zip(args.iter()) {
+                    // One rule for every parameter, fixed or variadic. A
+                    // parameter a macro introduced binds at its own scopes,
+                    // which already say where it was written. One written in
+                    // source binds by name, for the source references that
+                    // reach it that way, and at the scopes it stands in, for
+                    // the macro-introduced ones that resolve by scope.
+                    let bind = |param: &ScopedParam, value: TaggedValue| {
                         if !param.scopes.is_empty() {
-                            // Macro-introduced parameter: use its explicit scopes
                             new_env.define_with_scopes(
                                 param.name.to_string(),
                                 param.scopes.clone(),
-                                *arg,
+                                value,
                             );
                         } else {
-                            // Non-macro parameter: simple binding + scoped binding if binding_scope present
-                            new_env.define(param.name.to_string(), *arg);
-                            // Also add scoped binding so macro-expanded refs can find it
-                            if let Some(scope) = binding_scope {
-                                let mut scopes = ScopeSet::new();
-                                scopes.add_scope(*scope);
-                                new_env.define_with_scopes(param.name.to_string(), scopes, *arg);
+                            new_env.define(param.name.to_string(), value);
+                            if !binding_scopes.is_empty() {
+                                new_env.define_with_scopes(
+                                    param.name.to_string(),
+                                    (**binding_scopes).clone(),
+                                    value,
+                                );
                             }
                         }
+                    };
+
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        bind(param, *arg);
                     }
 
-                    // Bind variadic parameter if present
                     if let Some(variadic_param) = variadic {
                         // Build rest list directly as TaggedValue (no conversion needed)
                         let heap = new_env.heap();
                         let rest_list = heap
                             .borrow_mut()
                             .list_from_iter(args[params.len()..].iter().copied());
-                        if !variadic_param.scopes.is_empty() {
-                            new_env.define_with_scopes(
-                                variadic_param.name.to_string(),
-                                variadic_param.scopes.clone(),
-                                rest_list,
-                            );
-                        } else {
-                            new_env.define(variadic_param.name.to_string(), rest_list);
-                            // Also add scoped binding so macro-expanded refs can find it
-                            if let Some(scope) = binding_scope {
-                                let mut scopes = ScopeSet::new();
-                                scopes.add_scope(*scope);
-                                new_env.define_with_scopes(
-                                    variadic_param.name.to_string(),
-                                    scopes,
-                                    rest_list,
-                                );
-                            }
-                        }
+                        bind(variadic_param, rest_list);
                     }
 
                     // CRITICAL: Start with a FRESH continuation environment for the lambda body!

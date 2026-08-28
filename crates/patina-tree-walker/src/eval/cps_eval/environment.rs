@@ -43,14 +43,14 @@ impl<'a> CpsEvaluator<'a> {
                 variadic,
                 cont_param,
                 body,
-                binding_scope,
+                binding_scopes,
             } => Ok(self.make_cps_closure_tagged(
                 params,
                 variadic.as_ref(),
                 cont_param,
                 body,
                 env,
-                *binding_scope,
+                binding_scopes.clone(),
             )),
 
             _ => Err(EvalError::InternalError(format!(
@@ -109,7 +109,7 @@ impl<'a> CpsEvaluator<'a> {
         cont_param: &Rc<str>,
         body: &Rc<CpsExpr>,
         env: &Rc<Environment>,
-        binding_scope: Option<patina_core::ScopeId>,
+        binding_scopes: std::rc::Rc<patina_core::ScopeSet>,
     ) -> TaggedValue {
         // Convert CpsParams to ScopedParams
         let scoped_params: Vec<ScopedParam> = params
@@ -136,7 +136,7 @@ impl<'a> CpsEvaluator<'a> {
                 cont_param: cont_param.clone(),
                 body: body.clone(),
                 env: env.clone(),
-                binding_scope,
+                binding_scopes,
             }))
     }
 }

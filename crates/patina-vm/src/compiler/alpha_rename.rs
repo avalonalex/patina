@@ -17,7 +17,7 @@
 
 use crate::compiler::for_each_define;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
-use patina_core::scope::{ScopeId, ScopeSet};
+use patina_core::scope::ScopeSet;
 use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
@@ -352,9 +352,9 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
         CoreExprKind::Lambda {
             params,
             body,
-            binding_scope,
+            binding_scopes,
         } => {
-            let mut bindings = build_bindings(params, *binding_scope, env);
+            let mut bindings = build_bindings(params, binding_scopes, env);
 
             // Add bindings for the body's internal defines. Each keeps the
             // scopes of the identifier it defines: they were forced to
@@ -373,7 +373,7 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             CoreExprKind::Lambda {
                 params: renamed_params,
                 body: renamed_body,
-                binding_scope: *binding_scope,
+                binding_scopes: binding_scopes.clone(),
             }
         }
 
@@ -426,13 +426,13 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
 /// Build bindings for lambda parameters.
 ///
 /// Mirrors the tree-walker's parameter binding logic:
-/// - Non-macro params (empty scopes) → `is_simple = true`, scopes from `binding_scope`
+/// - Non-macro params (empty scopes) → `is_simple = true`, scopes from `binding_scopes`
 ///   (visible to both simple and scoped lookups)
 /// - Macro params (non-empty scopes) → `is_simple = false`, use param's own scopes
 ///   (visible only to scoped lookups)
 fn build_bindings(
     formals: &Formals,
-    binding_scope: Option<ScopeId>,
+    binding_scopes: &std::rc::Rc<ScopeSet>,
     env: &mut RenameEnv,
 ) -> Vec<Binding> {
     let params: Vec<&ScopedParam> = match formals {
@@ -450,30 +450,22 @@ fn build_bindings(
         .map(|p| {
             let unique_name = env.make_unique_name(&p.name);
 
-            if !p.scopes.is_empty() {
-                // Macro-introduced param: only visible to scoped lookups
-                Binding {
-                    name: p.name.clone(),
-                    scopes: p.scopes.clone(),
-                    is_simple: false,
-                    unique_name,
-                }
-            } else if let Some(scope) = binding_scope {
-                // Non-macro param with binding_scope: visible to both
-                Binding {
-                    name: p.name.clone(),
-                    scopes: ScopeSet::singleton(scope),
-                    is_simple: true,
-                    unique_name,
-                }
+            // One rule: a parameter a macro introduced binds at its own
+            // scopes and is invisible to by-name lookups; one written in
+            // source binds at the scopes it stands in — see
+            // `CoreExprKind::Lambda`'s `binding_scopes` and Larceny triage
+            // family 39 — and is visible to both. "No scope information" is
+            // the empty set, so it needs no arm of its own.
+            let (scopes, is_simple) = if p.scopes.is_empty() {
+                ((**binding_scopes).clone(), true)
             } else {
-                // No scope info (rare): simple binding only
-                Binding {
-                    name: p.name.clone(),
-                    scopes: ScopeSet::new(),
-                    is_simple: true,
-                    unique_name,
-                }
+                (p.scopes.clone(), false)
+            };
+            Binding {
+                name: p.name.clone(),
+                scopes,
+                is_simple,
+                unique_name,
             }
         })
         .collect()
@@ -520,6 +512,7 @@ fn build_renamed_formals(formals: &Formals, bindings: &[Binding]) -> Formals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::scope::ScopeId;
     use patina_core::tagged_value::TaggedValue;
 
     fn var(name: &str) -> CoreExpr {
@@ -539,7 +532,7 @@ mod tests {
     fn lambda_with_scope(
         params: Vec<(&str, ScopeSet)>,
         body: Vec<CoreExpr>,
-        binding_scope: Option<ScopeId>,
+        binding_scopes: ScopeSet,
     ) -> CoreExpr {
         CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(
@@ -552,13 +545,17 @@ mod tests {
                     .collect(),
             ),
             body,
-            binding_scope,
+            binding_scopes: Rc::new(binding_scopes),
         })
     }
 
     #[test]
     fn no_scopes_resolves_innermost() {
-        let expr = lambda_with_scope(vec![("x", ScopeSet::new())], vec![var("x")], None);
+        let expr = lambda_with_scope(
+            vec![("x", ScopeSet::new())],
+            vec![var("x")],
+            ScopeSet::new(),
+        );
         let renamed = alpha_rename(&expr).expr;
         match &renamed.kind {
             CoreExprKind::Lambda { body, params, .. } => {
@@ -576,11 +573,12 @@ mod tests {
     }
 
     #[test]
-    fn hygiene_with_binding_scope() {
-        // outer lambda: x, binding_scope=S1
-        // inner lambda: x, binding_scope=S3
+    fn hygiene_with_binding_scopes() {
+        // outer lambda: x, binding_scopes={S1}
+        // inner lambda: x, binding_scopes={S1,S3} — accumulated, as the
+        //   desugarer now builds them, so the two are ordered
         // var ref: x with scopes {S1, S2}
-        // → should resolve to outer x
+        // → should resolve to outer x: {S1} ⊆ {S1,S2}, {S1,S3} ⊄
 
         let s1 = ScopeId(100);
         let s2 = ScopeId(101);
@@ -591,7 +589,7 @@ mod tests {
         let inner_lambda = lambda_with_scope(
             vec![("x", ScopeSet::new())],
             vec![var_scoped("x", ref_scopes)],
-            Some(s3),
+            ScopeSet::from_iter([s1, s3]),
         );
 
         let outer_lambda = lambda_with_scope(
@@ -600,7 +598,7 @@ mod tests {
                 func: Rc::new(inner_lambda),
                 args: vec![CoreExpr::new(CoreExprKind::Quote(TaggedValue::fixnum(2)))],
             })],
-            Some(s1),
+            ScopeSet::singleton(s1),
         );
 
         let app = CoreExpr::new(CoreExprKind::App {
@@ -661,12 +659,13 @@ mod tests {
         // Simulates my-or: macro introduces temp (with scopes), user has temp (no scopes)
         // User's temp ref (empty scopes) should find user's temp, not macro's
 
-        let s1 = ScopeId(200); // user let's binding_scope
+        let s1 = ScopeId(200); // user let's binding_scopes
         let s2 = ScopeId(201); // macro scope
-        let s3 = ScopeId(202); // macro let's binding_scope
+        let s3 = ScopeId(202); // macro let's binding_scopes
 
-        // User lambda: (lambda (temp) ...)  with binding_scope=S1
-        // Inside it, macro lambda: (lambda (temp{S2,S3}) ...) with binding_scope=None
+        // User lambda: (lambda (temp) ...)  with binding_scopes=S1
+        // Inside it, macro lambda: (lambda (temp{S2,S3}) ...) with empty
+        // binding_scopes — its parameter carries its own scopes instead
         // Reference: temp with empty scopes
 
         let macro_temp_scopes = ScopeSet::from_iter([s2, s3]);
@@ -674,7 +673,7 @@ mod tests {
         let inner_lambda = lambda_with_scope(
             vec![("temp", macro_temp_scopes)],
             vec![var("temp")], // user's temp ref (empty scopes)
-            None,
+            ScopeSet::new(),
         );
 
         let outer_lambda = lambda_with_scope(
@@ -683,7 +682,7 @@ mod tests {
                 func: Rc::new(inner_lambda),
                 args: vec![var("temp")], // also user's temp
             })],
-            Some(s1),
+            ScopeSet::singleton(s1),
         );
 
         let renamed = alpha_rename(&outer_lambda).expr;
