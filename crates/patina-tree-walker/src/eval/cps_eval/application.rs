@@ -94,15 +94,23 @@ impl<'a> CpsEvaluator<'a> {
                                 param.scopes.clone(),
                                 value,
                             );
-                        } else {
+                        } else if binding_scopes.is_empty() {
                             new_env.define(param.name.to_string(), value);
-                            if !binding_scopes.is_empty() {
-                                new_env.define_with_scopes(
-                                    param.name.to_string(),
-                                    (**binding_scopes).clone(),
-                                    value,
-                                );
-                            }
+                        } else {
+                            // One cell, reachable both ways: by name for the
+                            // references written in source, and under the
+                            // scopes it stands in for the macro-introduced
+                            // ones. Two cells — a `define` *and* a
+                            // `define_with_scopes` — is the freeze
+                            // `define_scoped_definition`'s own doc warns
+                            // about, where a `set!` through one path leaves
+                            // the other stale. That is Larceny triage family
+                            // 38's obstacle, and this is what removes it.
+                            new_env.define_scoped_definition(
+                                param.name.to_string(),
+                                (**binding_scopes).clone(),
+                                value,
+                            );
                         }
                     };
 

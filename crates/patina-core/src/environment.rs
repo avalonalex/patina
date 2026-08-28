@@ -1,5 +1,6 @@
 use crate::heap::SharedHeap;
 use crate::scope::ScopeSet;
+use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -501,17 +502,35 @@ impl Environment {
             return self.set(name, value);
         }
 
-        // Check scoped bindings - find exact scope set match
-        let mut scoped = self.scoped_bindings.borrow_mut();
-        if let Some(bindings) = scoped.get_mut(name) {
-            for binding in bindings.iter_mut() {
-                if &binding.scopes == scopes {
-                    binding.tagged_value = value;
-                    return Ok(());
+        // Resolve the way a read does — largest matching subset, most
+        // recent on a tie — so that a reference can write the binding it can
+        // read. Requiring an exact match meant a `set!` a macro introduced,
+        // which carries that macro's scopes on top of the binder's, found
+        // nothing and fell through to the root's by-name `set`. Larceny
+        // triage family 38.
+        let here = {
+            let scoped = self.scoped_bindings.borrow();
+            scoped.get(name).and_then(|bindings| {
+                let mut best: Option<(usize, usize)> = None;
+                for (index, binding) in bindings.iter().enumerate().rev() {
+                    if !crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                        continue;
+                    }
+                    let len = binding.scopes.len();
+                    if best.is_none_or(|(best_len, _)| len > best_len) {
+                        best = Some((len, index));
+                    }
                 }
+                best
+            })
+        };
+        if let Some((_, index)) = here {
+            let mut scoped = self.scoped_bindings.borrow_mut();
+            if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
+                binding.tagged_value = value;
+                return Ok(());
             }
         }
-        drop(scoped);
         // Check parent
         if let Some(parent) = &self.parent {
             parent.set_with_scopes(name, scopes, value)
@@ -530,8 +549,16 @@ impl Environment {
     ///
     /// The "most specific" rule ensures that inner bindings shadow outer ones
     /// when their scopes are a subset of the reference's scopes.
-    /// This is the primary API - returns TaggedValue directly.
-    pub fn get_with_scopes(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+    ///
+    /// `Err` when step 2 has no most specific match to return: two candidates
+    /// neither of which contains the other. The caller reports it — a
+    /// `DesugarError` in the desugarer, an `EvalError` here at runtime — since
+    /// no answer would be better than a guess. See [`AmbiguousReference`].
+    pub fn get_with_scopes(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<Option<TaggedValue>, Box<AmbiguousReference>> {
         use crate::macro_debug;
 
         let debug = macro_debug::is_enabled();
@@ -555,7 +582,7 @@ impl Environment {
                     None => println!("[ENV]   Result: NOT FOUND"),
                 }
             }
-            return result;
+            return Ok(result);
         }
 
         // Every binding of this name in this environment and its parents,
@@ -606,7 +633,7 @@ impl Environment {
         // One rule, shared with the VM's renamer: see
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
         // was a subset, and the unmarked binding answers instead.
-        let result = crate::scope_resolve::resolve_scoped(name, scopes, &candidates);
+        let result = crate::scope_resolve::resolve_scoped(name, scopes, &candidates)?;
 
         if debug {
             match &result {
@@ -618,7 +645,7 @@ impl Environment {
             }
         }
 
-        result.or_else(|| self.get(name))
+        Ok(result.or_else(|| self.get(name)))
     }
 
     /// Does `name` have a *scoped* binding visible from `scopes`?
@@ -851,13 +878,13 @@ mod tests {
         env.define_with_scopes("x".to_string(), scopes.clone(), TaggedValue::fixnum(42));
 
         // Lookup with matching scopes should find the binding
-        let result = env.get_with_scopes("x", &scopes);
+        let result = env.get_with_scopes("x", &scopes).unwrap();
         assert_eq!(result, Some(TaggedValue::fixnum(42)));
 
         // Lookup with superset scopes should also find it (binding.scopes ⊆ ref.scopes)
         let s2 = ScopeId(2);
         let larger_scopes = ScopeSet::from_iter([s1, s2]);
-        let result = env.get_with_scopes("x", &larger_scopes);
+        let result = env.get_with_scopes("x", &larger_scopes).unwrap();
         assert_eq!(result, Some(TaggedValue::fixnum(42)));
     }
 
@@ -890,7 +917,7 @@ mod tests {
         let macro_x_scopes = ScopeSet::from_iter([s1, s2]);
 
         // Lookup should find outer x, NOT inner x
-        let result_tv = env.get_with_scopes("x", &macro_x_scopes).unwrap();
+        let result_tv = env.get_with_scopes("x", &macro_x_scopes).unwrap().unwrap();
         let name = env
             .heap()
             .borrow()
@@ -924,14 +951,14 @@ mod tests {
         // Lookup with {S1, S2} should find the more specific binding
         let lookup_scopes = ScopeSet::from_iter([s1, s2]);
         assert_eq!(
-            env.get_with_scopes("x", &lookup_scopes),
+            env.get_with_scopes("x", &lookup_scopes).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
 
         // Lookup with just {S1} should find the less specific binding
         let lookup_scopes_s1 = ScopeSet::singleton(s1);
         assert_eq!(
-            env.get_with_scopes("x", &lookup_scopes_s1),
+            env.get_with_scopes("x", &lookup_scopes_s1).unwrap(),
             Some(TaggedValue::fixnum(1))
         );
     }
@@ -949,12 +976,56 @@ mod tests {
         // Lookup with scopes should fall back to unmarked binding
         let s1 = ScopeId(1);
         let scopes = ScopeSet::singleton(s1);
-        let result_tv = env.get_with_scopes("cons", &scopes).unwrap();
+        let result_tv = env.get_with_scopes("cons", &scopes).unwrap().unwrap();
         let name = env
             .heap()
             .borrow()
             .get_symbol_name(result_tv)
             .map(|s| s.to_string());
         assert_eq!(name.as_deref(), Some("primitive-cons"));
+    }
+
+    /// Two bindings of one name, neither visible-from the other, are not
+    /// resolved to either — they are reported.
+    ///
+    /// `{S1}` and `{S2}` are both subsets of a `{S1,S2}` reference and are
+    /// unordered against each other, so no candidate is the most specific and
+    /// there is nothing to return. The old rule broke the tie by scope-set
+    /// size and, at equal size, by which environment was walked first: an
+    /// answer that depended on insertion order rather than on the program.
+    #[test]
+    fn two_unordered_bindings_do_not_resolve() {
+        use crate::scope::ScopeId;
+
+        let env = Environment::new();
+        let (s1, s2) = (ScopeId(1), ScopeId(2));
+
+        env.define_with_scopes(
+            "x".to_string(),
+            ScopeSet::singleton(s1),
+            TaggedValue::fixnum(1),
+        );
+        env.define_with_scopes(
+            "x".to_string(),
+            ScopeSet::singleton(s2),
+            TaggedValue::fixnum(2),
+        );
+
+        let both = ScopeSet::from_iter([s1, s2]);
+        let err = env
+            .get_with_scopes("x", &both)
+            .expect_err("neither binding contains the other");
+        assert_eq!(err.name, "x");
+
+        // Each is still reachable on its own: ambiguity is a property of the
+        // reference, not of the bindings.
+        assert_eq!(
+            env.get_with_scopes("x", &ScopeSet::singleton(s1)).unwrap(),
+            Some(TaggedValue::fixnum(1))
+        );
+        assert_eq!(
+            env.get_with_scopes("x", &ScopeSet::singleton(s2)).unwrap(),
+            Some(TaggedValue::fixnum(2))
+        );
     }
 }

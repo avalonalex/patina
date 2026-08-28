@@ -72,8 +72,17 @@ impl<'a> CpsEvaluator<'a> {
             env.get(name)
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
         } else {
-            // Scope-based lookup for hygienic macros
+            // Scope-based lookup for hygienic macros.
+            //
+            // The desugarer resolves the same reference through the same
+            // rule and reports an ambiguous one as a `DesugarError` before
+            // execution starts, so this arm is a backstop: it fires where the
+            // runtime environment disagrees with the one desugaring built.
+            // The tree-walker is the backend that can — it carries scope sets
+            // to runtime and re-resolves per read, where the VM resolves once
+            // and is done.
             env.get_with_scopes(name, scopes)
+                .map_err(|e| EvalError::InvalidSyntax(e.to_string()))?
                 .ok_or_else(|| EvalError::UndefinedVariable(name.to_string()))
         }
     }

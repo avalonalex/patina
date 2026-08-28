@@ -118,7 +118,15 @@ impl Compiler {
                 None => self.definition_scopes.clone(),
             }
         };
-        let Some(tv) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
+        // An ambiguous `...` keeps its default meaning. This asks whether a
+        // *binding* displaces the ellipsis, and an ambiguous reference has
+        // not identified one; treating it as bound away would silence the
+        // ellipsis on the strength of a binding we cannot name. Nothing
+        // raises it later either — `...` is a marker in a template, never
+        // resolved as a variable — so it is a guess in only this direction,
+        // and this is the direction that leaves the spelling alone. It takes
+        // two unordered `let-syntax` binders of `...` to reach.
+        let Ok(Some(tv)) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
             return false;
         };
         let heap = self.heap.borrow();

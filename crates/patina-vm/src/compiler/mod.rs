@@ -45,7 +45,7 @@ fn compile_pipeline(
     let alpha_rename::Renamed {
         expr: renamed,
         global_aliases,
-    } = alpha_rename::alpha_rename(expr);
+    } = alpha_rename::alpha_rename(expr)?;
 
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
     let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);

@@ -16,9 +16,12 @@
 //!   with fallback to simple bindings
 
 use crate::compiler::for_each_define;
+use crate::error::CompileError;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
 use patina_core::scope::ScopeSet;
+use patina_core::scope_resolve::AmbiguousReference;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// A binding in the rename environment.
@@ -53,6 +56,28 @@ struct RenameEnv {
     /// walk rather than an argument to one function: `begin` is reached
     /// through `rename_expr`, which would otherwise have to carry it too.
     at_top_level: bool,
+    /// The first reference resolution could not determine, if any.
+    ///
+    /// Recorded rather than raised because [`resolve`] is called from sixteen
+    /// places inside a `&mut self` tree walk that returns a `CoreExpr`, and
+    /// making all of them fallible to carry a diagnostic that ends the
+    /// compilation anyway would be churn for nothing. The pass finishes, its
+    /// output is thrown away, and [`alpha_rename`] returns this instead.
+    ///
+    /// First and not all of them: a later name may resolve against a binding
+    /// this one would have renamed, so anything after the first is suspect.
+    ///
+    /// A backstop rather than the first line of defence. The desugarer
+    /// resolves every head and every value-position name through the same
+    /// rule before the VM compiler runs, and it reports an ambiguous one as a
+    /// `DesugarError`; measured, it catches the shapes reachable today. This
+    /// arm fires only where the frames built here disagree with the
+    /// environment built there about which bindings are visible — which is
+    /// the kind of drift two tables of one fact acquire, and the reason to
+    /// keep it.
+    ///
+    /// [`resolve`]: RenameEnv::resolve
+    ambiguous: RefCell<Option<Box<AmbiguousReference>>>,
 }
 
 impl RenameEnv {
@@ -62,6 +87,7 @@ impl RenameEnv {
             counter: 0,
             global_aliases: FxHashMap::default(),
             at_top_level: true,
+            ambiguous: RefCell::new(None),
         }
     }
 
@@ -108,7 +134,19 @@ impl RenameEnv {
                 }
             }
         }
-        patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates)
+        match patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates) {
+            Ok(found) => found,
+            Err(e) => {
+                let mut slot = self.ambiguous.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(e);
+                }
+                // No answer is right, so the walk continues with the one that
+                // changes least: leave the name alone. Whatever it produces is
+                // discarded when `alpha_rename` reports the error.
+                None
+            }
+        }
     }
 
     /// A name for a *local*, unique within this compilation unit.
@@ -179,7 +217,7 @@ pub(crate) struct Renamed {
 }
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
-pub(crate) fn alpha_rename(expr: &CoreExpr) -> Renamed {
+pub(crate) fn alpha_rename(expr: &CoreExpr) -> Result<Renamed, CompileError> {
     let mut env = RenameEnv::new();
 
     // Without this frame a recursive macro's per-element temporaries all define
@@ -198,10 +236,14 @@ pub(crate) fn alpha_rename(expr: &CoreExpr) -> Renamed {
     } else {
         CoreExpr::new(CoreExprKind::Begin(out))
     };
-    Renamed {
+    // Checked after the walk, not during it: see `RenameEnv::ambiguous`.
+    if let Some(e) = env.ambiguous.into_inner() {
+        return Err(CompileError::AmbiguousReference(e.to_string()));
+    }
+    Ok(Renamed {
         expr,
         global_aliases: env.global_aliases,
-    }
+    })
 }
 
 /// Bindings for the *top-level* definitions `exprs` contributes: the
@@ -556,7 +598,7 @@ mod tests {
             vec![var("x")],
             ScopeSet::new(),
         );
-        let renamed = alpha_rename(&expr).expr;
+        let renamed = alpha_rename(&expr).expect("no ambiguous reference").expr;
         match &renamed.kind {
             CoreExprKind::Lambda { body, params, .. } => {
                 let Formals::Fixed(ps) = params else {
@@ -606,7 +648,7 @@ mod tests {
             args: vec![CoreExpr::new(CoreExprKind::Quote(TaggedValue::fixnum(1)))],
         });
 
-        let renamed = alpha_rename(&app).expr;
+        let renamed = alpha_rename(&app).expect("no ambiguous reference").expr;
 
         fn find_param(expr: &CoreExpr, depth: usize) -> Option<String> {
             match &expr.kind {
@@ -685,7 +727,9 @@ mod tests {
             ScopeSet::singleton(s1),
         );
 
-        let renamed = alpha_rename(&outer_lambda).expr;
+        let renamed = alpha_rename(&outer_lambda)
+            .expect("no ambiguous reference")
+            .expr;
 
         // The body var inside inner lambda should resolve to outer's temp
         fn find_inner_body_var(expr: &CoreExpr) -> Option<String> {

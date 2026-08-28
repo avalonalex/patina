@@ -22,6 +22,12 @@ pub enum CompileError {
     #[error("internal compiler error: {0}")]
     Internal(String),
 
+    /// A reference set-of-scopes resolution does not determine: two bindings
+    /// are visible and neither is more specific. The message is the rule's
+    /// own, from `patina_core::scope_resolve::AmbiguousReference`.
+    #[error("{0}")]
+    AmbiguousReference(String),
+
     /// A sub-expression the compiler had to desugar itself failed to desugar
     /// — the unquotes inside a quasiquote template are the only such site.
     /// The message is the desugarer's own, and `VmBackendError` reports it as

@@ -31,6 +31,14 @@ pub enum DesugarError {
     /// Invalid formal parameter syntax
     InvalidFormals(String),
 
+    /// A reference set-of-scopes resolution does not determine.
+    ///
+    /// Two bindings are visible and neither is more specific than the other,
+    /// so no answer is justified. Raised here rather than at runtime because
+    /// it is a property of the program's binding structure, which is settled
+    /// once expansion is done. See `patina_core::scope_resolve`.
+    AmbiguousReference(String),
+
     /// Generic error with message
     Other(String),
 }
@@ -46,6 +54,7 @@ impl DesugarError {
             DesugarError::ExpectedProperList(_) => ErrorKind::Syntax,
             DesugarError::DuplicateParameter { .. } => ErrorKind::Syntax,
             DesugarError::InvalidFormals(_) => ErrorKind::Syntax,
+            DesugarError::AmbiguousReference(_) => ErrorKind::Syntax,
             DesugarError::Other(_) => ErrorKind::Internal,
         }
     }
@@ -63,6 +72,9 @@ impl fmt::Display for DesugarError {
         match self {
             DesugarError::InvalidSyntax(msg) => {
                 write!(f, "Invalid syntax: {}", msg)
+            }
+            DesugarError::AmbiguousReference(msg) => {
+                write!(f, "{}", msg)
             }
             DesugarError::WrongArgCount {
                 form,

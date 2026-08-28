@@ -320,14 +320,15 @@ fn binds_identifier(params: &[ScopedParam], name: &str, scopes: &ScopeSet) -> bo
 ///
 /// Used for tracking which names are shadowed by lambda parameters,
 /// so they are not treated as macro calls.
-pub fn formals_to_names(formals: &Formals) -> Vec<Rc<str>> {
+pub fn formals_to_binders(formals: &Formals) -> Vec<(Rc<str>, ScopeSet)> {
+    let binder = |p: &patina_ir::ScopedParam| (p.name.clone(), p.scopes.clone());
     match formals {
-        Formals::Fixed(params) => params.iter().map(|p| p.name.clone()).collect(),
-        Formals::Variadic(p) => vec![p.name.clone()],
+        Formals::Fixed(params) => params.iter().map(binder).collect(),
+        Formals::Variadic(p) => vec![binder(p)],
         Formals::Mixed { fixed, rest } => {
-            let mut names: Vec<Rc<str>> = fixed.iter().map(|p| p.name.clone()).collect();
-            names.push(rest.name.clone());
-            names
+            let mut binders: Vec<(Rc<str>, ScopeSet)> = fixed.iter().map(binder).collect();
+            binders.push(binder(rest));
+            binders
         }
     }
 }
