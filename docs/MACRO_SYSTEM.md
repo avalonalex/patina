@@ -575,6 +575,61 @@ patina_runtime::macro_debug::disable();
 [SCOPE-SETS] Free variable 'my-or' with scopes {}
 ```
 
+### Scope trace — what bindings actually get bound at
+
+`macro-debug-mode` narrates *expansion*. When the question is instead "what
+scope set does this binding actually carry, and how was that reference
+answered", use `PATINA_SCOPE_TRACE`:
+
+```bash
+PATINA_SCOPE_TRACE=/tmp/trace.txt ./target/release/patina --tree-walker prog.scm
+```
+
+**Use an absolute path** — the compat harness and the Larceny runner both `cd`
+into a scratch directory they then delete.
+
+**Trace one program, not a suite.** There is no sampling and no deduplication,
+so cost scales with work done, not code size: a 300 000-iteration loop measured
+**14x slower and 352 MB of trace**. Shrink the program first.
+
+```text
+RUN pid=4711
+BIND    phase=desugar name="c" scopes={S136} byname=false
+BIND    phase=run name="c" scopes={} byname=true
+RESOLVE phase=run name="c" ref={S137} cands=0 picked=- via=byname op=set
+WROTE   phase=run name="c" ref={S137} landed=byname
+```
+
+Those four lines are triage family 36. The desugarer stamps the internal define
+with `{S136}`; the binding that reaches the runtime carries nothing, so a
+reference at `{S137}` has no candidate, falls back to spelling, and the write
+lands somewhere the rule never chose. A `let` binder traced the same way keeps
+its scopes at `phase=run` — that contrast is the axis the family turns on.
+
+| field | meaning |
+|---|---|
+| `phase` | `desugar` / `compile` (the VM's renamer) / `run`. Without it the desugarer's lookups and the evaluator's interleave indistinguishably. |
+| `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
+| `byname` | `visible_by_name` — whether a name-only lookup may also reach it. The difference between a parameter and a definition. |
+| `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
+| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined, spelling answered), `ambiguous` (two candidates, neither more specific). |
+| `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |
+| `landed` | on `WROTE`: where a scoped write finally went. A write walks environment by environment, so its trace is a sequence; this is its conclusion. |
+
+`via=byname` is common — every reference to a global from a scoped context is
+one — so treat it as a filter, not a verdict. What is worth grepping is a
+`via=byname` on a name that *has* a scoped binding two lines above: resolution
+saw a candidate, rejected it, and spelling answered anyway.
+
+Records are **not** deduplicated (unlike `PATINA_AMBIGUITY_LOG`) because order
+and repetition are the signal. Off, the trace costs a `OnceLock` read and a
+branch — measured on the tree-walker's hot path, interleaved, at no detectable
+cost.
+
+The paired instrument is `crates/patina-tests/tests/hygiene_matrix.rs`, which
+enumerates hygiene *shapes* and scores both backends against chibi and Racket.
+The trace explains a row; the matrix says which rows exist.
+
 ---
 
 ## Future: syntax-case
