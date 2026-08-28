@@ -226,7 +226,7 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 - Fix: the expander already marks exactly what a template introduced — after the output flip, the expansion's fresh scope is on every introduced identifier and on nothing that came in through a pattern variable — so `expand_macro_with_scope` returns that scope and the relinker renames only identifiers carrying it. A plain symbol never qualifies. That needed the scope flip to walk vectors (a quasiquoted `#(,(helper x))` in a template had relied on the spelling match); review found the first version copying every vector it walked, which made a vector object embedded in code via `eval` a copy the expansion mutated instead — it copies only a vector whose elements changed now (`a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion`).
 - Left as recorded, from the same review: `for_each_symbol` skips `Template::Literal`, so an identifier an outer expansion introduced into a generated macro's template never enters `template_symbols` — under SRFI 101 the generated form works because the outer expansion's own relinking already aliased it, but a program-level `(define (list . xs) …)` (an error in R7RS terms) still reaches it; the relinker walks with no cycle guard, so a cyclic datum reached outside a quote — a self-evaluating cyclic vector literal — overflows once relinking is active (both backends' quasiquote walkers already hang on cyclic templates); and a literal `'datum` template is now rebuilt per expansion where it used to insert one shared pair, about +20% on a template of five literals and `(eq? (m) (m))` `#f` where it was `#t` (unspecified; chibi answers `#f`).
 
-### 36. Tree-walker: a use-site local captures a template's reference — tree-walker only
+### 36. A use-site binding captures a template's reference — tree-walker for locals, **both backends** for internal defines
 - Ours: `a_use_site_local_does_not_capture_a_templates_reference` (quarantined with `assert_divergence`; the VM is right)
 - `(define-syntax mk (syntax-rules () ((_ a b) (list a b)))) (let ((list 1)) (mk 1 2))` — tree-walker `Not a procedure: #<integer>`, VM and chibi `(1 2)`; likewise a procedure parameter named `list`, and a library-defined `mk`. Found by the review of #132 auditing the relinker's contract: it skips a name when the two environments' global views agree (`self.env.get(name) == Some(def_value)`) and leaves the rest to scope-aware resolution, which the tree-walker does not do for locals — `application.rs`/`step.rs` bind parameters by name and `Environment::get` falls back to the by-name table. Pre-existing, unrelated to #132's changes; the fix is the tree-walker resolving locals by scopes as the VM's alpha-rename does.
 - **A silent version of the same defect, measured 2026-08-27 — this is the shape to fix against.** The repro above at least *errors*; two lines shorter it returns a wrong answer to the plainest statement of §4.3.2 there is, and says nothing:
@@ -238,6 +238,26 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 ```
 
 - Pinned by `a_use_site_local_silently_captures_a_templates_reference`, which asserts *both* backends' answers rather than using `assert_divergence` — that helper assumes the wrong backend fails, and here it does not. Either answer moving trips the test.
+- **Wider than "tree-walker only" — measured 2026-08-28.** An *internal define* captures the reference on **both** backends. chibi and Racket both answer `global`:
+
+```scheme
+(define c 'global)
+(define-syntax rd (syntax-rules () ((rd) c)))
+(define (g) (define c 5) (rd))
+(g)              ; chibi, Racket: global — VM and tree-walker: 5
+```
+
+- With a macro-introduced `set!` instead of a read, the two backends split and **the tree-walker is the one that is right** — by accident. Its scoped write finds no candidate and falls back at the *root*, which is where the intended target happens to live; the VM captures the internal define.
+
+```scheme
+(define-syntax b (syntax-rules () ((b) (set! c 99))))
+(define (g) (define c 5) (b) c)
+(define r (g)) (list r c)   ; chibi, Racket, tw: (5 99) — VM: (99 global)
+```
+
+- Both pinned, asserted at the wrong answer so a fix trips them: `an_internal_define_captures_a_templates_reference_on_both_backends` and `a_macro_introduced_assignment_captures_an_internal_define_on_the_vm`.
+- **This family is the prerequisite for family 38's remaining half**, not a neighbour. Family 38's fallback question — where a scoped write falls back when no candidate matches — has no right answer while locals carry no scopes: reaching inward is correct when the macro is defined *inside* the frame and wrong when it is defined outside, and the two shapes are distinguishable only by scopes the tree-walker never records. PR #138 chose one position, fixed two programs and regressed three, and was closed for that reason.
+- **One lead measured and rejected, so nobody repeats it.** Source-written parameters are bound through `define_scoped_definition`, which sets `visible_by_name` — so a name-only lookup reaches them, which is the capture. Switching that one call to `define_with_scopes` **fixes both repros above** (the `list` one and the silent `x` one) and is not viable: the tree-walker's runtime references to a parameter depend on that name path, so `cargo test` fails `test_eval_lambda` and the chibi tree-walker suite aborts early rather than reporting a score. The fix has to give those references scopes, not take the name path away.
 
 ### 37. A macro-introduced *variable* binding does not rename its scope — both backends — ✅ fixed 2026-08-27
 - Ours: `a_macro_introduced_variable_binding_does_not_yet_rename_its_scope` (asserted at the wrong answer, so the fix trips it)
@@ -290,6 +310,18 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 ```
 
 - `get_with_scopes` falls back to `self.get(name)` at the environment where resolution started; `set_with_scopes` recurses to the root and only calls `self.set` there. With a same-named global the write escapes the frame and clobbers it instead of erroring, which is the worse half. `set_with_scopes` also still carries its own copy of the most-specific rule — inline, one environment at a time, not through `patina_core::scope_resolve` — so an ambiguous write picks by size where an ambiguous read is now refused.
+- **Attempted as PR #138 and closed unmerged 2026-08-28. Read this before trying again.** Making the write fall back where the read falls back — at the starting environment — fixes the two programs above and regresses three that `main` gets right, because it is only sound if the *read* is sound and the read is not (family 36). A macro defined **outside** a frame with a same-named binder in between then has its `set!` captured by that binder:
+
+```scheme
+(define c 'global)
+(define-syntax b (syntax-rules () ((b) (set! c 99))))
+(define r ((lambda (c) (b) c) 5))
+(list r c)      ; chibi and main: (5 99) — with the relocation: (99 global)
+```
+
+- Two of the three are fixable inside that approach: have the by-name fallback skip a frame whose scoped binding *this resolution just rejected*, since reaching it by spelling afterwards overrides the rule with the capture set-of-scopes exists to prevent. The third is not — there the binder is an internal define, which the tree-walker records by name with no scopes at all, so there is nothing to reject.
+- **So the fallback position is not the decision it looks like.** `main`'s root fallback is right for those three only because the intended target happens to live at the root, and wrong for the two this entry opens with. Reaching inward is correct when the macro is defined *inside* the frame and wrong when it is defined outside, and nothing distinguishes those two shapes except scopes the tree-walker does not record. **Fix family 36 first**; this half then follows from it rather than being chosen.
+- The rest of #138 is worth recovering when it returns: resolving the write across the whole chain through `patina_core::scope_resolve` rather than one environment at a time, so an ambiguous `set!` is refused like an ambiguous reference, and a candidate walk shared with the read so the two cannot drift about order.
 
 ### 39. The scope model is under-determined; nesting order covers for it — both backends — ✅ fixed 2026-08-27
 - Ours: `test_let_syntax_nested_lexical_scoping` (`crates/patina-tests/tests/let_syntax.rs`) already pins the *answer*; what is new is why it is right. The defect was reproducible by enforcing Flatt's rule, which refused this program.

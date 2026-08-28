@@ -1197,6 +1197,64 @@ fn a_use_site_local_silently_captures_a_templates_reference() {
     );
 }
 
+/// An *internal define* captures a template's reference on **both** backends,
+/// which is wider than this family was recorded as covering.
+///
+/// `rd` is defined at top level, so its `c` means the global by R7RS §4.3.2
+/// referential transparency — chibi and Racket both answer `global`. Patina
+/// answers `5` on the VM and on the tree-walker: `g`'s internal define
+/// captures it. Measured 2026-08-28.
+///
+/// Asserted at the *wrong* answer so the fix trips it, the way family 37's
+/// test was before it was fixed. When this goes green the assertion becomes
+/// `"global"` and this comment goes away.
+#[test]
+fn an_internal_define_captures_a_templates_reference_on_both_backends() {
+    let code = "(define c 'global)
+                (define-syntax rd (syntax-rules () ((rd) c)))
+                (define (g) (define c 5) (rd))
+                (g)";
+    let wrong = "5"; // chibi and Racket: global
+    assert_eq!(eval_program_vm(code), wrong, "VM, quarantined — family 36");
+    assert_eq!(
+        eval_program_tree_walker(code),
+        wrong,
+        "tree-walker, quarantined — family 36"
+    );
+}
+
+/// The same capture through a macro-introduced `set!`, where the two backends
+/// disagree and the tree-walker is the one that is right.
+///
+/// chibi and Racket answer `(5 99)`: the template's `c` is the global, so
+/// `g`'s local keeps 5 and the global becomes 99. The VM captures the
+/// internal define — writing 5 to 99 and leaving the global alone. The
+/// tree-walker is correct here only by accident: its scoped write finds no
+/// candidate and falls back at the *root*, which is where the intended target
+/// happens to live.
+///
+/// Recorded because that accident is load-bearing. PR #138 moved the fallback
+/// to the starting environment — defensible on its own terms, and it put the
+/// tree-walker on the VM's wrong answer here.
+#[test]
+fn a_macro_introduced_assignment_captures_an_internal_define_on_the_vm() {
+    let code = "(define c 'global)
+                (define-syntax b (syntax-rules () ((b) (set! c 99))))
+                (define (g) (define c 5) (b) c)
+                (define r (g))
+                (list r c)";
+    assert_eq!(
+        eval_program_vm(code),
+        "(99 global)",
+        "VM, quarantined: captures `g`'s internal define — family 36"
+    );
+    assert_eq!(
+        eval_program_tree_walker(code),
+        "(5 99)",
+        "tree-walker, correct — and only because its fallback runs at the root"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Family 37 — a macro-introduced variable binding does not rename its scope
 // ---------------------------------------------------------------------------
