@@ -987,6 +987,7 @@ impl Desugarer {
         tagged: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
+        let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Desugar);
         // Immediate values - no heap access needed
         if tagged.is_fixnum() {
             return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));

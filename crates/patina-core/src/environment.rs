@@ -239,6 +239,7 @@ impl Environment {
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
     pub fn define(&self, name: String, value: TaggedValue) {
+        crate::scope_trace::bind(&name, &ScopeSet::new(), true);
         self.bindings.borrow_mut().insert(name, value);
     }
 
@@ -428,6 +429,7 @@ impl Environment {
             self.define(name, value);
             return;
         }
+        crate::scope_trace::bind(&name, &scopes, visible_by_name);
         let mut table = self.scoped_bindings.borrow_mut();
         table.any_visible_by_name |= visible_by_name;
         let bindings = table.entry(name).or_default();
@@ -524,6 +526,22 @@ impl Environment {
                 best
             })
         };
+        if crate::scope_trace::enabled() {
+            // One record per environment, because this walk resolves per
+            // environment rather than over the whole chain — so the trace of a
+            // write is a sequence where a read's is a single line. That
+            // asymmetry is triage family 38, visible rather than argued.
+            let scoped = self.scoped_bindings.borrow();
+            let (count, picked) = match scoped.get(name) {
+                Some(bindings) => (
+                    bindings.len(),
+                    here.map(|(_, index)| bindings[index].scopes.clone()),
+                ),
+                None => (0, None),
+            };
+            drop(scoped);
+            crate::scope_trace::resolve(name, scopes, count, picked.as_ref(), true);
+        }
         if let Some((_, index)) = here {
             let mut scoped = self.scoped_bindings.borrow_mut();
             if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
@@ -634,6 +652,17 @@ impl Environment {
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
         // was a subset, and the unmarked binding answers instead.
         let result = crate::scope_resolve::resolve_scoped(name, scopes, &candidates)?;
+        if crate::scope_trace::enabled() {
+            // The winner's *scope set*, not its value: this records how the
+            // rule decided, and a value would say nothing about that.
+            let picked = result.and_then(|found| {
+                candidates
+                    .iter()
+                    .find(|(_, value)| *value == found)
+                    .map(|(scopes, _)| scopes.clone())
+            });
+            crate::scope_trace::resolve(name, scopes, candidates.len(), picked.as_ref(), false);
+        }
 
         if debug {
             match &result {

@@ -52,9 +52,15 @@ pub enum On {
     Vm,
 }
 
-/// Which backends one run covers. Private — tests never select backends
-/// directly, they either use a plain both-backends helper or declare a
-/// divergence with [`assert_divergence`].
+/// Which backends one run covers. Private: it is an implementation detail of
+/// the helpers below, not a knob tests turn.
+///
+/// Selecting a single backend is a real need — a divergence where the wrong
+/// side returns a *value* rather than failing cannot go through
+/// [`assert_divergence`], and there are several such pins. Those use the named
+/// per-backend helpers (`eval_program_vm`, `try_eval_program_tree_walker`, …),
+/// which say in their name what they do; threading this enum out would give
+/// the same capability a second, vaguer spelling.
 #[derive(Clone, Copy)]
 enum Which {
     Both,
@@ -472,6 +478,22 @@ pub fn eval_program(code: &str) -> String {
     );
 
     tw.expect("checked non-error above")
+}
+
+/// Evaluate on the VM, returning `Err` with the message instead of panicking.
+///
+/// The panicking `eval_program_vm` cannot express "this program should have
+/// been *rejected* and was not", which the hygiene matrix pins on two shapes:
+/// Patina accepts a `define-syntax` in a `do` result clause where chibi and
+/// Racket both refuse it. Named per backend to match the panicking pair
+/// beside it, so one idiom covers both.
+pub fn try_eval_program_vm(code: &str) -> Result<String, String> {
+    run_on(Interpreter::new(VmBackend::new()), code, Mode::Program).map_err(|e| e.message)
+}
+
+/// The tree-walker half of [`try_eval_program_vm`].
+pub fn try_eval_program_tree_walker(code: &str) -> Result<String, String> {
+    run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program).map_err(|e| e.message)
 }
 
 /// Evaluate a program on the tree-walker only and `write` the result. For

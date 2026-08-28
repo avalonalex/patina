@@ -134,6 +134,27 @@ impl RenameEnv {
                 }
             }
         }
+        if patina_core::scope_trace::enabled() {
+            // The VM's last sight of scopes: past this a reference is a unique
+            // name and the sets are gone, so a VM hygiene question has to be
+            // asked at `phase=compile`.
+            let picked = patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates)
+                .ok()
+                .flatten()
+                .and_then(|unique| {
+                    candidates
+                        .iter()
+                        .find(|(_, sym)| *sym == unique)
+                        .map(|(scopes, _)| scopes.clone())
+                });
+            patina_core::scope_trace::resolve(
+                name,
+                ref_scopes,
+                candidates.len(),
+                picked.as_ref(),
+                false,
+            );
+        }
         match patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates) {
             Ok(found) => found,
             Err(e) => {
@@ -218,6 +239,7 @@ pub(crate) struct Renamed {
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
 pub(crate) fn alpha_rename(expr: &CoreExpr) -> Result<Renamed, CompileError> {
+    let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Compile);
     let mut env = RenameEnv::new();
 
     // Without this frame a recursive macro's per-element temporaries all define

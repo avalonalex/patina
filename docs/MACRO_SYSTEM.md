@@ -575,6 +575,53 @@ patina_runtime::macro_debug::disable();
 [SCOPE-SETS] Free variable 'my-or' with scopes {}
 ```
 
+### Scope trace — what bindings actually get bound at
+
+`macro-debug-mode` narrates *expansion*. When the question is instead "what
+scope set does this binding actually carry, and how was that reference
+answered", use `PATINA_SCOPE_TRACE`:
+
+```bash
+PATINA_SCOPE_TRACE=/tmp/trace.txt ./target/release/patina --tree-walker prog.scm
+```
+
+**Use an absolute path** — the compat harness and the Larceny runner both `cd`
+into a scratch directory they then delete.
+
+```text
+RUN pid=4711
+BIND    phase=desugar name="c" scopes={S136} byname=false
+BIND    phase=run     name="c" scopes={}     byname=true
+RESOLVE phase=run     name="c" ref={S137} cands=0 picked=-      via=byname op=set
+```
+
+Those three lines are triage family 36. The desugarer stamps the internal
+define with `{S136}`; the value that reaches the runtime is **empty**, so a
+reference carrying `{S137}` has no candidate to resolve against and falls back
+to spelling. A `let` binder, traced the same way, keeps its scopes at `run`.
+
+The fields:
+
+| field | meaning |
+|---|---|
+| `phase` | `desugar` / `compile` (the VM's renamer) / `run`. Without it the desugarer's lookups and the evaluator's interleave indistinguishably. |
+| `scopes` | what the binding is *filed under*. `{}` means it went to the plain by-name table. |
+| `byname` | `visible_by_name` — whether a name-only lookup may also reach it. The difference between a parameter and a definition. |
+| `cands` / `picked` / `via` | how many bindings the rule considered, which won, and whether scopes decided at all. |
+
+`via=byname` is the grep worth knowing: it means set-of-scopes resolution
+declined and the caller answered by spelling instead. A hygiene defect is
+usually a `via=byname` that should have been `via=scoped`.
+
+Records are **not** deduplicated (unlike `PATINA_AMBIGUITY_LOG`) because order
+and repetition are the signal — the usual question is which of two things
+happened first. The trace costs a `OnceLock` read and a branch when off;
+measured on the tree-walker's hot path, interleaved, at no detectable cost.
+
+The paired instrument is `crates/patina-tests/tests/hygiene_matrix.rs`, which
+enumerates hygiene *shapes* and scores both backends against chibi and Racket.
+The trace explains a row; the matrix says which rows exist.
+
 ---
 
 ## Future: syntax-case
