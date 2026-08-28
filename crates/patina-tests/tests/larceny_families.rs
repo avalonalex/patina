@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program, scratch_path,
+    eval_program, eval_program_tree_walker, eval_program_vm, scratch_path,
 };
 use tempfile::TempDir;
 
@@ -1163,6 +1163,37 @@ fn a_use_site_local_does_not_capture_a_templates_reference() {
         "(1 2)",
         ErrorClass::AtRuntime,
         "scheme_tests/reports/larceny_triage.md, family 36",
+    );
+}
+
+/// The same defect, silent instead of loud — and this is the shape worth
+/// keeping. `assert_divergence` above pins a case where the tree-walker
+/// *errors*, which is at least visible; here it returns a wrong answer to
+/// the plainest statement of R7RS §4.3.2 there is, and nothing says so.
+///
+/// Measured 2026-08-27 against three implementations: chibi, Racket 8.x and
+/// the VM all answer `1`. Two lines, no `list`, no arity change — if the
+/// tree-walker is ever taught to bind locals by scopes, this is the test
+/// that should go green first.
+///
+/// Not `assert_divergence`, which assumes the wrong backend fails. Both
+/// answers are asserted so that *either* moving trips the test: a fix flips
+/// the tree-walker's, and a regression flips the VM's.
+#[test]
+fn a_use_site_local_silently_captures_a_templates_reference() {
+    let code = "(define x 1)
+                (define-syntax m (syntax-rules () ((m) x)))
+                (let ((x 5)) (m))";
+    assert_eq!(
+        eval_program_vm(code),
+        "1",
+        "VM: the template's `x` means the definition-site binding"
+    );
+    assert_eq!(
+        eval_program_tree_walker(code),
+        "5",
+        "tree-walker, quarantined: the use-site `let` captures it — \
+         scheme_tests/reports/larceny_triage.md, family 36"
     );
 }
 
