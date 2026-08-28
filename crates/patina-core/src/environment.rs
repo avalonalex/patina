@@ -239,6 +239,8 @@ impl Environment {
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
     pub fn define(&self, name: String, value: TaggedValue) {
+        // A plain binding is reachable by name and by nothing else, so
+        // `byname=true` here is a property of the table, not a decision.
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
         self.bindings.borrow_mut().insert(name, value);
     }
@@ -532,20 +534,34 @@ impl Environment {
             // write is a sequence where a read's is a single line. That
             // asymmetry is triage family 38, visible rather than argued.
             let scoped = self.scoped_bindings.borrow();
+            // Candidates, not bindings: `cands` has to mean the same thing
+            // here as on the read path or the two cannot be compared, which is
+            // the whole reason to record both.
             let (count, picked) = match scoped.get(name) {
                 Some(bindings) => (
-                    bindings.len(),
+                    bindings
+                        .iter()
+                        .filter(|b| crate::scope_resolve::is_candidate(&b.scopes, scopes))
+                        .count(),
                     here.map(|(_, index)| bindings[index].scopes.clone()),
                 ),
                 None => (0, None),
             };
             drop(scoped);
-            crate::scope_trace::resolve(name, scopes, count, picked.as_ref(), true);
+            use crate::scope_trace::{Op, Outcome};
+            let outcome = if picked.is_some() {
+                Outcome::Scoped
+            } else {
+                Outcome::ByName
+            };
+            crate::scope_trace::resolve(name, scopes, count, picked.as_ref(), Op::Set, outcome);
         }
         if let Some((_, index)) = here {
             let mut scoped = self.scoped_bindings.borrow_mut();
             if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
                 binding.tagged_value = value;
+                drop(scoped);
+                crate::scope_trace::wrote(name, scopes, "scoped");
                 return Ok(());
             }
         }
@@ -553,8 +569,20 @@ impl Environment {
         if let Some(parent) = &self.parent {
             parent.set_with_scopes(name, scopes, value)
         } else {
-            // Fall back to unmarked binding
-            self.set(name, value)
+            // Fall back to unmarked binding. This is the *root*, the recursion
+            // having walked here — triage family 38's open half — so the
+            // terminal record says which of the two ways the walk ended.
+            let landed = self.set(name, value);
+            crate::scope_trace::wrote(
+                name,
+                scopes,
+                if landed.is_ok() {
+                    "byname"
+                } else {
+                    "undefined"
+                },
+            );
+            landed
         }
     }
 
@@ -651,18 +679,31 @@ impl Environment {
         // One rule, shared with the VM's renamer: see
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
         // was a subset, and the unmarked binding answers instead.
-        let result = crate::scope_resolve::resolve_scoped(name, scopes, &candidates)?;
+        // The rule hands back *which* candidate won, so the trace names the
+        // binding it actually chose. Searching `candidates` for the winning
+        // value instead named whichever came first when two held the same one
+        // — and at `phase=desugar` every binder is the same placeholder.
+        let chosen = crate::scope_resolve::resolve_index(name, scopes, &candidates);
         if crate::scope_trace::enabled() {
-            // The winner's *scope set*, not its value: this records how the
-            // rule decided, and a value would say nothing about that.
-            let picked = result.and_then(|found| {
-                candidates
-                    .iter()
-                    .find(|(_, value)| *value == found)
-                    .map(|(scopes, _)| scopes.clone())
-            });
-            crate::scope_trace::resolve(name, scopes, candidates.len(), picked.as_ref(), false);
+            use crate::scope_trace::{Op, Outcome};
+            let (picked, outcome) = match &chosen {
+                Ok(Some(i)) => (Some(candidates[*i].0.clone()), Outcome::Scoped),
+                Ok(None) => (None, Outcome::ByName),
+                // Recorded before it propagates: an ambiguous reference is the
+                // most interesting thing that can happen here and used to leave
+                // no record at all, the `?` having carried it away.
+                Err(_) => (None, Outcome::Ambiguous),
+            };
+            crate::scope_trace::resolve(
+                name,
+                scopes,
+                candidates.len(),
+                picked.as_ref(),
+                Op::Get,
+                outcome,
+            );
         }
+        let result = chosen?.map(|i| candidates[i].1);
 
         if debug {
             match &result {

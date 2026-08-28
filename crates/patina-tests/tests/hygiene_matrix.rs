@@ -19,8 +19,15 @@
 //!
 //! The `correct` column is what **chibi 0.12 and Racket 9.3 both** answer,
 //! measured 2026-08-28. They agree on all 28 shapes, which is why a single
-//! column can stand for "correct". Where they say a program is *ill-formed*
-//! the column is [`ERROR`].
+//! column can stand for "correct". Patina gets **9** of the 28 wrong — two on
+//! the VM, eight on the tree-walker, one of them on both.
+//!
+//! Every shape is a program both oracles *accept*: see the note in
+//! **Adding axes** about why a row pinned at "both reject it" is not coverage.
+//! The one shape Patina accepts and both oracles reject has its own test,
+//! [`a_do_result_clause_is_not_a_definition_context`], because it is a
+//! definition-context defect rather than a hygiene one and should not be
+//! counted with these.
 //!
 //! Two independent implementations agreeing is the strongest oracle available
 //! here; R7RS §4.3.2 states referential transparency but does not work these
@@ -47,6 +54,16 @@
 //! expansion nested more than one level; ellipsis depth greater than one;
 //! `define-record-type` and other derived binding forms; and literals in the
 //! pattern. Each is a new `Site` or `Binder`, not a new file.
+//!
+//! **An axis must move one thing.** `Site::Inside` originally placed the
+//! macro definition wherever the binder's body went, which for `do` is the
+//! result clause — a sequence of expressions, not a `⟨body⟩` (R7RS §5.3.2).
+//! That moved the definition *and* made the program ill-formed, so both
+//! oracles rejected it, two of the 28 cells measured a definition-context
+//! defect instead of hygiene, and `do-var` had no inside-direction hygiene
+//! coverage at all. Agreement on *rejection* is not agreement on an answer.
+//! The definition-context defect has its own test; the matrix supplies a
+//! `(let () …)` so the axis moves one thing again.
 
 mod common;
 
@@ -81,10 +98,41 @@ enum Action {
     Write,
 }
 
+/// How the use site binds `X`.
+///
+/// An enum rather than a string key, so a typo is a compile error as it
+/// already is for [`Site`] and [`Action`]. As a `&str` matched with a
+/// `panic!` default, a misspelled binder still produced a row that two of the
+/// tests counted as valid before the third panicked on it.
+#[derive(Clone, Copy, PartialEq)]
+enum Binder {
+    LambdaParam,
+    Let,
+    LetStar,
+    Letrec,
+    NamedLet,
+    InternalDef,
+    DoVar,
+}
+
+impl Binder {
+    fn name(self) -> &'static str {
+        match self {
+            Binder::LambdaParam => "lambda-param",
+            Binder::Let => "let",
+            Binder::LetStar => "let*",
+            Binder::Letrec => "letrec",
+            Binder::NamedLet => "named-let",
+            Binder::InternalDef => "internal-def",
+            Binder::DoVar => "do-var",
+        }
+    }
+}
+
 /// One point in the space.
 struct Shape {
-    /// How the use site binds `X`. Keyed into [`binder_expr`].
-    binder: &'static str,
+    /// How the use site binds `X`.
+    binder: Binder,
     site: Site,
     action: Action,
     /// What chibi 0.12 and Racket 9.3 both answer.
@@ -103,16 +151,15 @@ struct Shape {
 /// question "does a template's reference get captured" is about the *binding*,
 /// not about which surface form produced it — and the answer turned out to
 /// differ between them (an internal define behaves unlike a `let`).
-fn binder_expr(binder: &str, body: &str) -> String {
+fn binder_expr(binder: Binder, body: &str) -> String {
     match binder {
-        "lambda-param" => format!("((lambda (X) {body}) 5)"),
-        "let" => format!("(let ((X 5)) {body})"),
-        "let*" => format!("(let* ((X 5)) {body})"),
-        "letrec" => format!("(letrec ((X 5)) {body})"),
-        "named-let" => format!("(let lp ((X 5)) {body})"),
-        "internal-def" => format!("((lambda () (define X 5) {body}))"),
-        "do-var" => format!("(do ((X 5 X)) (#t {body}))"),
-        other => panic!("unknown binder {other}"),
+        Binder::LambdaParam => format!("((lambda (X) {body}) 5)"),
+        Binder::Let => format!("(let ((X 5)) {body})"),
+        Binder::LetStar => format!("(let* ((X 5)) {body})"),
+        Binder::Letrec => format!("(letrec ((X 5)) {body})"),
+        Binder::NamedLet => format!("(let lp ((X 5)) {body})"),
+        Binder::InternalDef => format!("((lambda () (define X 5) {body}))"),
+        Binder::DoVar => format!("(do ((X 5 X)) (#t {body}))"),
     }
 }
 
@@ -137,6 +184,17 @@ fn program(shape: &Shape) -> String {
     };
     let inner = match shape.site {
         Site::Outside => binder_expr(shape.binder, &body),
+        // `Site::Inside` must move the macro definition and nothing else. A
+        // `do` result clause is a sequence of expressions, not a `⟨body⟩`
+        // (R7RS §5.3.2), so putting a `define-syntax` there changes *two*
+        // things and both oracles reject the program — which cost `do-var`
+        // its inside-direction hygiene coverage entirely, two of 28 cells
+        // measuring a definition-context defect instead. `(let () …)` supplies
+        // the definition context without binding anything, so the axis moves
+        // one thing again. The definition-context defect keeps its own test.
+        Site::Inside if shape.binder == Binder::DoVar => {
+            binder_expr(shape.binder, &format!("(let () {macro_def} {body})"))
+        }
         Site::Inside => binder_expr(shape.binder, &format!("{macro_def} {body}")),
     };
     match shape.site {
@@ -156,83 +214,80 @@ const MATRIX: &[Shape] = &[
     // The template's `X` is the global; a use-site binder must not capture
     // it. The tree-walker captures on every binder — family 36, and this is
     // its true extent. The VM captures only through an internal define.
-    Shape { binder: "lambda-param", site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::LambdaParam, site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
-    Shape { binder: "let",          site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::Let,         site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
-    Shape { binder: "let*",         site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::LetStar,         site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
-    Shape { binder: "letrec",       site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::Letrec,       site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
-    Shape { binder: "named-let",    site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::NamedLet,    site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
-    Shape { binder: "do-var",       site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::DoVar,       site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
     // The one binder the VM gets wrong too: an internal define reaches the
     // runtime with an empty scope set on both backends.
-    Shape { binder: "internal-def", site: Site::Outside, action: Action::Read,
+    Shape { binder: Binder::InternalDef, site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(5 global)", tw: "(5 global)", family: "36" },
 
     // ---- macro defined OUTSIDE, template WRITES X -----------------------
     // The write must reach past the use-site binder to the global. These are
     // the rows PR #138 broke while every other gate stayed green; they are
     // correct today and are a regression guard, not a defect pin.
-    Shape { binder: "lambda-param", site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::LambdaParam, site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    Shape { binder: "let",          site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::Let,         site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    Shape { binder: "let*",         site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::LetStar,         site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    Shape { binder: "letrec",       site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::Letrec,       site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    Shape { binder: "named-let",    site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::NamedLet,    site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    Shape { binder: "do-var",       site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::DoVar,       site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
     // The VM captures the internal define and never touches the global.
-    Shape { binder: "internal-def", site: Site::Outside, action: Action::Write,
+    Shape { binder: Binder::InternalDef, site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(99 global)", tw: "(5 99)", family: "36" },
 
     // ---- macro defined INSIDE, template READS X -------------------------
     // The template's `X` *is* the binder's, so reading it must yield 5.
     // Everything passes: reaching inward is the direction both backends have.
-    Shape { binder: "lambda-param", site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::LambdaParam, site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    Shape { binder: "let",          site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::Let,         site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    Shape { binder: "let*",         site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::LetStar,         site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    Shape { binder: "letrec",       site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::Letrec,       site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    Shape { binder: "named-let",    site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::NamedLet,    site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    Shape { binder: "internal-def", site: Site::Inside, action: Action::Read,
+    Shape { binder: Binder::InternalDef, site: Site::Inside, action: Action::Read,
             correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
-    // Both oracles reject a `define-syntax` in a `do` result clause — it is
-    // not a definition context (R7RS §5.3.2). Patina accepts it. Not a
-    // hygiene defect; found by this matrix and unrecorded before it.
-    Shape { binder: "do-var",       site: Site::Inside, action: Action::Read,
-            correct: ERROR, vm: "(5 global)", tw: "(5 global)", family: "def-context" },
+    Shape { binder: Binder::DoVar,       site: Site::Inside, action: Action::Read,
+            correct: "(5 global)", vm: "(5 global)", tw: "(5 global)", family: "" },
 
     // ---- macro defined INSIDE, template WRITES X ------------------------
     // The write must land on the binder, leaving the global alone.
-    Shape { binder: "lambda-param", site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::LambdaParam, site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
-    Shape { binder: "let",          site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::Let,         site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
-    Shape { binder: "let*",         site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::LetStar,         site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
-    Shape { binder: "letrec",       site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::Letrec,       site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
-    Shape { binder: "named-let",    site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::NamedLet,    site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
     // The tree-walker's scoped write finds no candidate — an internal define
     // has no scopes — and falls back at the *root*, so it assigns the global
     // and leaves the binder at 5. Triage family 38's remaining half.
-    Shape { binder: "internal-def", site: Site::Inside, action: Action::Write,
+    Shape { binder: Binder::InternalDef, site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(5 99)", family: "38" },
-    Shape { binder: "do-var",       site: Site::Inside, action: Action::Write,
-            correct: ERROR, vm: "(99 global)", tw: "(99 global)", family: "def-context" },
+    Shape { binder: Binder::DoVar,       site: Site::Inside, action: Action::Write,
+            correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
 ];
 
 impl Shape {
@@ -247,7 +302,7 @@ impl Shape {
         } else {
             "write"
         };
-        format!("{}/{site}/{action}", self.binder)
+        format!("{}/{site}/{action}", self.binder.name())
     }
 }
 
@@ -258,7 +313,10 @@ fn answer(code: &str, vm: bool) -> String {
     } else {
         try_eval_program_tree_walker(code)
     };
-    ok.unwrap_or_else(|_| ERROR.to_string())
+    // The message is kept rather than collapsed to a token: no row expects an
+    // error, so one appearing is a surprise, and a bare `<error>` in the
+    // failure output would say nothing about which.
+    ok.unwrap_or_else(|e| format!("{ERROR}: {}", e.lines().next().unwrap_or("").trim()))
 }
 
 /// Every shape answers what the table says it answers, on both backends.
@@ -322,13 +380,12 @@ fn the_defect_count_is_what_the_roadmap_says() {
     let vm = wrong(|s| s.vm);
     let tw = wrong(|s| s.tw);
 
-    // VM: an internal define captures a template's reference either way
-    // (family 36), plus the two `do` result-clause rows that are a
-    // definition-context defect rather than a hygiene one.
-    assert_eq!(vm.len(), 4, "VM shapes wrong: {vm:?}");
-    // Tree-walker: the same two `do` rows, family 36 on all seven binders in
-    // the read direction, and family 38's fallback on the internal define.
-    assert_eq!(tw.len(), 10, "tree-walker shapes wrong: {tw:?}");
+    // VM: an internal define captures a template's reference in both
+    // directions — family 36's only VM surface.
+    assert_eq!(vm.len(), 2, "VM shapes wrong: {vm:?}");
+    // Tree-walker: family 36 on all seven binders in the read direction, and
+    // family 38's fallback on the internal define.
+    assert_eq!(tw.len(), 8, "tree-walker shapes wrong: {tw:?}");
 
     // Every wrong row names the family it belongs to, so the table doubles as
     // the index from defect to surface count.

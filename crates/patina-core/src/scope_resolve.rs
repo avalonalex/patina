@@ -99,6 +99,25 @@ pub fn resolve_scoped<T: Clone>(
     reference: &ScopeSet,
     candidates: &[(ScopeSet, T)],
 ) -> Result<Option<T>, Box<AmbiguousReference>> {
+    Ok(resolve_index(name, reference, candidates)?.map(|i| candidates[i].1.clone()))
+}
+
+/// [`resolve_scoped`], returning *which* candidate won rather than its value.
+///
+/// The same rule; the index is what a caller needs when it has to act on the
+/// binding rather than read it — `set_with_scopes` writes through it — and
+/// what `scope_trace` needs to name the winner.
+///
+/// Deriving the index from the value instead does not work, and shipped
+/// broken once: two bindings of a name can hold the *same* value, and at
+/// `phase=desugar` every binder is a placeholder, so a search by value named
+/// whichever came first regardless of which the rule chose. The rule knows the
+/// answer; handing it back beats re-deriving it.
+pub fn resolve_index<T>(
+    name: &str,
+    reference: &ScopeSet,
+    candidates: &[(ScopeSet, T)],
+) -> Result<Option<usize>, Box<AmbiguousReference>> {
     // One pass, and it allocates nothing unless the reference is actually
     // ambiguous — which is why the check can run always rather than behind a
     // switch. Only *reporting* needs the candidate list.
@@ -156,7 +175,7 @@ pub fn resolve_scoped<T: Clone>(
     if matching > 1 {
         ambiguity::log_ties(name, reference, winner, candidates, best);
     }
-    Ok(Some(candidates[best].1.clone()))
+    Ok(Some(best))
 }
 
 /// Is a binding with these scopes in the running for a reference with those?

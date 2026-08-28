@@ -20,6 +20,7 @@ use crate::error::CompileError;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
 use patina_core::scope::ScopeSet;
 use patina_core::scope_resolve::AmbiguousReference;
+use patina_core::scope_trace;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -104,7 +105,7 @@ impl RenameEnv {
     /// - Empty ref_scopes → simple lookup: innermost `is_simple` binding
     /// - Non-empty ref_scopes → scoped lookup: most specific subset match,
     ///   falling back to simple bindings
-    fn resolve(&self, name: &str, ref_scopes: &ScopeSet) -> Option<Symbol> {
+    fn resolve(&self, name: &str, ref_scopes: &ScopeSet, op: scope_trace::Op) -> Option<Symbol> {
         if ref_scopes.is_empty() {
             // Simple lookup: find innermost binding visible to simple lookups
             for frame in self.frames.iter().rev() {
@@ -134,28 +135,30 @@ impl RenameEnv {
                 }
             }
         }
-        if patina_core::scope_trace::enabled() {
-            // The VM's last sight of scopes: past this a reference is a unique
-            // name and the sets are gone, so a VM hygiene question has to be
-            // asked at `phase=compile`.
-            let picked = patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates)
-                .ok()
-                .flatten()
-                .and_then(|unique| {
-                    candidates
-                        .iter()
-                        .find(|(_, sym)| *sym == unique)
-                        .map(|(scopes, _)| scopes.clone())
-                });
-            patina_core::scope_trace::resolve(
+        // The VM's last sight of scopes: past this a reference is a unique name
+        // and the sets are gone, so a VM hygiene question has to be asked at
+        // `phase=compile`. Resolved once, by index, and the caller says what
+        // the occurrence was for — this function serves a read, a `set!`
+        // target and a binding occurrence alike, and recording all three as
+        // reads meant a VM trace could never show a write.
+        let chosen = patina_core::scope_resolve::resolve_index(name, ref_scopes, &candidates);
+        if scope_trace::enabled() {
+            use scope_trace::Outcome;
+            let (picked, outcome) = match &chosen {
+                Ok(Some(i)) => (Some(candidates[*i].0.clone()), Outcome::Scoped),
+                Ok(None) => (None, Outcome::ByName),
+                Err(_) => (None, Outcome::Ambiguous),
+            };
+            scope_trace::resolve(
                 name,
                 ref_scopes,
                 candidates.len(),
                 picked.as_ref(),
-                false,
+                op,
+                outcome,
             );
         }
-        match patina_core::scope_resolve::resolve_scoped(name, ref_scopes, &candidates) {
+        match chosen.map(|i| i.map(|i| candidates[i].1.clone())) {
             Ok(found) => found,
             Err(e) => {
                 let mut slot = self.ambiguous.borrow_mut();
@@ -239,7 +242,7 @@ pub(crate) struct Renamed {
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
 pub(crate) fn alpha_rename(expr: &CoreExpr) -> Result<Renamed, CompileError> {
-    let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Compile);
+    let _phase = scope_trace::enter(scope_trace::Phase::Compile);
     let mut env = RenameEnv::new();
 
     // Without this frame a recursive macro's per-element temporaries all define
@@ -383,7 +386,7 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
         CoreExprKind::Quasiquote(v) => CoreExprKind::Quasiquote(*v),
 
         CoreExprKind::Var { name, scopes } => {
-            if let Some(unique_name) = env.resolve(name, scopes) {
+            if let Some(unique_name) = env.resolve(name, scopes, scope_trace::Op::Get) {
                 CoreExprKind::Var {
                     name: unique_name,
                     scopes: ScopeSet::new(),
@@ -398,7 +401,7 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
 
         CoreExprKind::Set { var, scopes, value } => {
             let renamed_value = rename_expr(value, env);
-            if let Some(unique_name) = env.resolve(var, scopes) {
+            if let Some(unique_name) = env.resolve(var, scopes, scope_trace::Op::Set) {
                 CoreExprKind::Set {
                     var: unique_name,
                     scopes: ScopeSet::new(),
@@ -454,7 +457,9 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
             scopes,
             value,
         } => {
-            let renamed_name = env.resolve(name, scopes).unwrap_or_else(|| name.clone());
+            let renamed_name = env
+                .resolve(name, scopes, scope_trace::Op::Bind)
+                .unwrap_or_else(|| name.clone());
             CoreExprKind::Define {
                 name: renamed_name,
                 // Consumed: the pass exists so everything downstream can
