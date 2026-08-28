@@ -109,7 +109,7 @@ impl<'a> CpsEvaluator<'a> {
         cont_param: &Rc<str>,
         body: &Rc<CpsExpr>,
         env: &Rc<Environment>,
-        binding_scopes: patina_core::ScopeSet,
+        binding_scopes: std::rc::Rc<patina_core::ScopeSet>,
     ) -> TaggedValue {
         // Convert CpsParams to ScopedParams
         let scoped_params: Vec<ScopedParam> = params

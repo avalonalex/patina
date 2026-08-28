@@ -49,9 +49,9 @@ pub fn resolve_scoped<T: Clone>(
     reference: &ScopeSet,
     candidates: &[(ScopeSet, T)],
 ) -> Option<T> {
-    // One pass, no allocation: the candidate list is materialised only when
-    // the check is on, which is off by default. Building it unconditionally
-    // put a `Vec` on every scoped variable read the tree-walker performs.
+    // One pass, no allocation on the release path: the candidate list is
+    // materialised only when the check is on, which in release means only
+    // when asked for. A debug build always checks, and pays for it there.
     let mut best: Option<usize> = None;
     for (index, (scopes, _)) in candidates.iter().enumerate() {
         if !is_candidate(scopes, reference) {
@@ -221,7 +221,7 @@ mod ambiguity {
     /// release build only when one of the two variables asks for it, so a
     /// release interpreter pays a `OnceLock` read and a branch.
     pub(super) fn checking() -> bool {
-        cfg!(debug_assertions) || logging() || strict()
+        refusing() || logging()
     }
 
     /// Is an ambiguous reference refused rather than reported?
@@ -425,61 +425,15 @@ mod tests {
         assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), Some("scoped"));
     }
 
-    /// No candidate matching means the caller falls back to its own by-name
-    /// lookup, so the answer is `None` rather than a guess.
-    #[test]
-    fn nothing_matching_resolves_to_nothing() {
-        let candidates = vec![(set(&[2]), "elsewhere")];
-        assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), None);
-        let empty: Vec<(ScopeSet, &str)> = Vec::new();
-        assert_eq!(resolve_scoped("x", &set(&[1]), &empty), None);
-    }
-}
-
-#[cfg(test)]
-mod nesting {
-    use super::*;
-    use crate::scope::ScopeId;
-
-    fn set(ids: &[usize]) -> ScopeSet {
-        let mut s = ScopeSet::new();
-        for &i in ids {
-            s.add_scope(ScopeId(i));
-        }
-        s
-    }
-
-    /// Binders that accumulate their enclosing scopes form a chain, and a
-    /// chain is always decidable: for any reference, at most one candidate is
-    /// maximal, so no resolution is ambiguous.
-    ///
-    /// This is what fixes Larceny triage family 39. Scoped at one fresh scope
-    /// each — as they were — sibling binders are unordered, and a reference
-    /// reaching two of them has no most specific candidate at all.
-    #[test]
-    fn accumulated_binders_are_ordered_and_singletons_are_not() {
-        let nested = [set(&[1]), set(&[1, 2]), set(&[1, 2, 3])];
-        for (i, outer) in nested.iter().enumerate() {
-            for inner in &nested[i + 1..] {
-                assert!(
-                    outer.is_subset_of(inner),
-                    "{outer} must nest inside {inner}"
-                );
-            }
-        }
-
-        let singletons = [set(&[1]), set(&[2])];
-        assert!(
-            !singletons[0].is_subset_of(&singletons[1])
-                && !singletons[1].is_subset_of(&singletons[0]),
-            "singleton binders are unordered — the shape family 39 was"
-        );
-    }
-
     /// A macro-introduced reference reaches the binding it was written
-    /// against, not a nearer one. `m1` is defined inside the outer `let`, so
-    /// its template's `x` carries that binder's scope plus its own expansion
-    /// scope, and only the outer binder is a subset of it.
+    /// against, not a nearer one — the property Larceny triage family 39
+    /// turns on. `m1` is defined inside the outer `let`, so its template's
+    /// `x` carries that binder's scope plus its own expansion scope, and of
+    /// the three nested binders only the outer one is a subset of it.
+    ///
+    /// This is decidable *because* binders accumulate: `{1} ⊂ {1,2} ⊂
+    /// {1,2,3}` is a chain. Scoped at one fresh scope each, as they were,
+    /// the three would be mutually unordered and the rule could not choose.
     #[test]
     fn a_template_reference_reaches_its_own_definition_sites_binder() {
         let candidates = vec![
@@ -491,5 +445,15 @@ mod nesting {
             resolve_scoped("x", &set(&[1, 9]), &candidates),
             Some("outer")
         );
+    }
+
+    /// No candidate matching means the caller falls back to its own by-name
+    /// lookup, so the answer is `None` rather than a guess.
+    #[test]
+    fn nothing_matching_resolves_to_nothing() {
+        let candidates = vec![(set(&[2]), "elsewhere")];
+        assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), None);
+        let empty: Vec<(ScopeSet, &str)> = Vec::new();
+        assert_eq!(resolve_scoped("x", &set(&[1]), &empty), None);
     }
 }

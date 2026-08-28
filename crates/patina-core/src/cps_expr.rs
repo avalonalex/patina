@@ -248,7 +248,7 @@ pub enum CpsExprKind {
         /// [`CoreExprKind::Lambda`]'s field of the same name.
         ///
         /// [`CoreExprKind::Lambda`]: crate::core_expr::CoreExprKind::Lambda
-        binding_scopes: crate::ScopeSet,
+        binding_scopes: std::rc::Rc<crate::ScopeSet>,
     },
 
     // ==================== Serious Expressions ====================

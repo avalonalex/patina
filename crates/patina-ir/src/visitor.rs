@@ -219,7 +219,7 @@ mod tests {
                     .collect(),
             ),
             body,
-            binding_scopes: Default::default(),
+            binding_scopes: std::rc::Rc::new(ScopeSet::new()),
         })
     }
 

@@ -184,7 +184,7 @@ pub enum CoreExprKind {
         ///
         /// A parameter a macro introduced keeps its own scopes instead
         /// (`ScopedParam::scopes`); those already say where it was written.
-        binding_scopes: ScopeSet,
+        binding_scopes: Rc<ScopeSet>,
     },
 
     /// Conditional (always ternary after desugaring)

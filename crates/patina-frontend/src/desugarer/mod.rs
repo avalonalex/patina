@@ -1232,15 +1232,6 @@ impl Desugarer {
 
         let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
 
-        // Check if any parameter has scopes from macro expansion
-        let has_macro_scopes = match &params {
-            patina_ir::Formals::Fixed(ps) => ps.iter().any(|p| !p.scopes.is_empty()),
-            patina_ir::Formals::Variadic(p) => !p.scopes.is_empty(),
-            patina_ir::Formals::Mixed { fixed, rest } => {
-                fixed.iter().any(|p| !p.scopes.is_empty()) || !rest.scopes.is_empty()
-            }
-        };
-
         // Create a fresh scope for this lambda's bindings
         // This is used for:
         // 1. Non-macro parameters (they have no scopes, need fresh scope)
@@ -1263,30 +1254,17 @@ impl Desugarer {
         let body =
             self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &body_scopes)?;
 
-        // The scopes a parameter written in source stands in: everything
-        // enclosing this lambda, plus the one minted for it. That is
-        // `body_scopes`, the same set the body is desugared with, so a binder
-        // and a reference in its body are scoped by the same rule.
-        //
-        // It used to be the fresh scope alone. A binder scoped `{fresh}` is
-        // unordered against its own enclosing binders, so a macro-introduced
-        // reference reaching two of them had no most specific candidate and
-        // the rule could not decide — Larceny triage family 39. Accumulating
-        // makes the nesting a chain, and a chain is always decidable.
-        //
-        // Empty when the parameters carry their own scopes: those already say
-        // where each was written, and `ScopedParam::scopes` is what both
-        // backends bind them at.
-        let binding_scopes = if has_macro_scopes {
-            ScopeSet::new()
-        } else {
-            body_scopes.clone()
-        };
-
         Ok(CoreExpr::new(CoreExprKind::Lambda {
             params,
             body,
-            binding_scopes,
+            // The set the body was desugared with, unconditionally — the
+            // `define` shorthand says the same thing at its own `Lambda`.
+            // There used to be a whole-lambda `has_macro_scopes` gate that
+            // zeroed this when *any* parameter carried scopes, but both
+            // readers already dispatch per parameter on `ScopedParam::scopes`
+            // before looking here, so the gate only ever spoke for the mixed
+            // case — and there it silently disagreed with the shorthand.
+            binding_scopes: Rc::new(body_scopes),
         }))
     }
 
@@ -1553,7 +1531,7 @@ impl Desugarer {
                 value: CoreExpr::rc(CoreExprKind::Lambda {
                     params,
                     body,
-                    binding_scopes: body_scopes.clone(),
+                    binding_scopes: Rc::new(body_scopes.clone()),
                 }),
             }));
         }
@@ -2006,12 +1984,10 @@ impl Desugarer {
                 func: CoreExpr::rc(CoreExprKind::Lambda {
                     params: patina_ir::Formals::Fixed(vec![]),
                     body: desugared_body,
-                    // The scopes this body was desugared with, not a fresh
-                    // scope of its own: `binding_scopes` must be the set the
-                    // body stands in, or a reference in it could not reach a
-                    // parameter bound here. Dead while the wrapper takes no
-                    // parameters, and wrong the moment one is added.
-                    binding_scopes: definition_scopes.clone(),
+                    // The set this body was desugared with. Nothing reads it
+                    // while the wrapper takes no parameters, but it is the
+                    // answer that stays right if one is ever added.
+                    binding_scopes: Rc::new(definition_scopes.clone()),
                 }),
                 args: vec![],
             }))

@@ -17,8 +17,6 @@
 
 use crate::compiler::for_each_define;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
-#[cfg(test)]
-use patina_core::scope::ScopeId;
 use patina_core::scope::ScopeSet;
 use rustc_hash::FxHashMap;
 use std::rc::Rc;
@@ -434,7 +432,7 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
 ///   (visible only to scoped lookups)
 fn build_bindings(
     formals: &Formals,
-    binding_scopes: &ScopeSet,
+    binding_scopes: &std::rc::Rc<ScopeSet>,
     env: &mut RenameEnv,
 ) -> Vec<Binding> {
     let params: Vec<&ScopedParam> = match formals {
@@ -452,33 +450,22 @@ fn build_bindings(
         .map(|p| {
             let unique_name = env.make_unique_name(&p.name);
 
-            if !p.scopes.is_empty() {
-                // Macro-introduced param: only visible to scoped lookups
-                Binding {
-                    name: p.name.clone(),
-                    scopes: p.scopes.clone(),
-                    is_simple: false,
-                    unique_name,
-                }
-            } else if !binding_scopes.is_empty() {
-                // A parameter written in source: visible to both by-name and
-                // scoped lookups, and scoped at the set it stands in rather
-                // than at one fresh scope — see `CoreExprKind::Lambda`'s
-                // `binding_scopes` and Larceny triage family 39.
-                Binding {
-                    name: p.name.clone(),
-                    scopes: binding_scopes.clone(),
-                    is_simple: true,
-                    unique_name,
-                }
+            // One rule: a parameter a macro introduced binds at its own
+            // scopes and is invisible to by-name lookups; one written in
+            // source binds at the scopes it stands in — see
+            // `CoreExprKind::Lambda`'s `binding_scopes` and Larceny triage
+            // family 39 — and is visible to both. "No scope information" is
+            // the empty set, so it needs no arm of its own.
+            let (scopes, is_simple) = if p.scopes.is_empty() {
+                ((**binding_scopes).clone(), true)
             } else {
-                // No scope info (rare): simple binding only
-                Binding {
-                    name: p.name.clone(),
-                    scopes: ScopeSet::new(),
-                    is_simple: true,
-                    unique_name,
-                }
+                (p.scopes.clone(), false)
+            };
+            Binding {
+                name: p.name.clone(),
+                scopes,
+                is_simple,
+                unique_name,
             }
         })
         .collect()
@@ -525,6 +512,7 @@ fn build_renamed_formals(formals: &Formals, bindings: &[Binding]) -> Formals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use patina_core::scope::ScopeId;
     use patina_core::tagged_value::TaggedValue;
 
     fn var(name: &str) -> CoreExpr {
@@ -557,7 +545,7 @@ mod tests {
                     .collect(),
             ),
             body,
-            binding_scopes,
+            binding_scopes: Rc::new(binding_scopes),
         })
     }
 

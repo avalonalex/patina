@@ -40,7 +40,7 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
                 .collect(),
         ),
         body,
-        binding_scopes: Default::default(),
+        binding_scopes: std::rc::Rc::new(patina_core::ScopeSet::new()),
     })
 }
 

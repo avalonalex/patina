@@ -70,6 +70,6 @@ pub enum Procedure {
         /// parameters carry their own scopes instead.
         ///
         /// [`CoreExprKind::Lambda`]: crate::core_expr::CoreExprKind::Lambda
-        binding_scopes: crate::ScopeSet,
+        binding_scopes: Rc<crate::ScopeSet>,
     },
 }
