@@ -13,14 +13,15 @@
 //! a tie — the tree-walker kept the first in its list, the VM's renamer the
 //! last in its frame — and the ambiguity check could only see one of them, so
 //! a VM run reported nothing however it resolved. This module is now the one
-//! copy *for reads*, and it checks itself, so both backends' reads are
-//! measured by construction.
+//! copy *for reads*, and it enforces Flatt's ambiguity condition itself, so
+//! neither backend can answer a reference the rule does not determine.
 //!
 //! Two hand-rolled copies remain, both over `Environment`'s tables and
-//! neither measured: `set_with_scopes` resolves a write by exact scope-set
-//! match, and `has_scoped_binding` by a bare subset test with no
-//! most-specific rule. Merging them is triage family 38's work; until then no
-//! sweep says anything about `set!`.
+//! neither measured. `set_with_scopes` resolves a write by the same subset
+//! rule since triage family 38, but inline and one environment at a time
+//! rather than through this module; `has_scoped_binding` tests subset with no
+//! most-specific rule at all. So a `set!` still resolves without being
+//! checked for ambiguity, and no sweep says anything about one.
 //!
 //! Unifying the tie-break was a **behaviour change**, not a pure refactor:
 //! the tree-walker now answers a within-environment tie the way the VM
@@ -31,6 +32,53 @@
 
 use crate::scope::ScopeSet;
 
+/// A reference the rule does not determine.
+///
+/// Flatt's rule requires the winning candidate to be a superset of every
+/// other; when two are not ordered by subset, neither is more specific and
+/// the reference is ambiguous. Racket reports this at expansion time, and so
+/// does Patina: the desugarer resolves every head and every value-position
+/// name and turns this into a `DesugarError` before either backend runs. The
+/// VM's renamer raises a `CompileError` and the tree-walker's runtime lookup
+/// an `EvalError`, but those are backstops — they fire only where their own
+/// tables disagree with the one the desugarer built.
+///
+/// It used to be answered by scope-set size instead, which is how Larceny
+/// triage family 39 produced a correct answer for the wrong reason and
+/// family 37's first attempts produced wrong ones. Nothing in the repo or in
+/// any measured workload reaches it now: 249 processes, zero ambiguous
+/// references. That is the claim this type exists to keep true.
+#[derive(Debug, Clone)]
+pub struct AmbiguousReference {
+    /// The identifier that could not be resolved.
+    pub name: String,
+    /// The scopes the reference carried.
+    pub reference: ScopeSet,
+    /// The candidate the size rule would have picked.
+    pub picked: ScopeSet,
+    /// The candidates it does not contain — the reason it is not decisive.
+    pub rivals: Vec<ScopeSet>,
+}
+
+impl std::fmt::Display for AmbiguousReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ambiguous reference: `{}` at {} is bound at {}",
+            self.name, self.reference, self.picked
+        )?;
+        for rival in &self.rivals {
+            write!(f, " and at {rival}")?;
+        }
+        // Two calls rather than one continued literal: a `\` continuation is
+        // fragile to reflow and this message is the whole diagnostic.
+        f.write_str(", and neither binding contains the other")?;
+        f.write_str(" — set-of-scopes resolution does not determine which it names")
+    }
+}
+
+impl std::error::Error for AmbiguousReference {}
+
 /// Resolve `reference` against `candidates`, which must be every binding of
 /// `name` visible here, ordered **most recent first** — innermost
 /// environment or frame first, and within one of those, latest binding
@@ -38,25 +86,29 @@ use crate::scope::ScopeSet;
 ///
 /// The rule: keep the candidates whose scope set is a subset of the
 /// reference's, and answer with the one whose scope set is largest. A tie
-/// goes to the first, which is the most recent. `None` means no candidate
-/// was a subset, and the caller falls back to its own by-name lookup.
+/// goes to the first, which is the most recent. `Ok(None)` means no
+/// candidate was a subset, and the caller falls back to its own by-name
+/// lookup.
 ///
-/// Every call is checked against Flatt's ambiguity condition — see the
-/// `ambiguity` module — so this is also where a resolution the rule does not
-/// determine is reported or refused.
+/// `Err` is Flatt's ambiguity condition failing: the largest is not a
+/// superset of every other candidate, so it is not the most specific one and
+/// there is no answer to give. Checked on every call, not behind a switch —
+/// see [`AmbiguousReference`] and the `ambiguity` module.
 pub fn resolve_scoped<T: Clone>(
     name: &str,
     reference: &ScopeSet,
     candidates: &[(ScopeSet, T)],
-) -> Option<T> {
-    // One pass, no allocation on the release path: the candidate list is
-    // materialised only when the check is on, which in release means only
-    // when asked for. A debug build always checks, and pays for it there.
+) -> Result<Option<T>, Box<AmbiguousReference>> {
+    // One pass, and it allocates nothing unless the reference is actually
+    // ambiguous — which is why the check can run always rather than behind a
+    // switch. Only *reporting* needs the candidate list.
     let mut best: Option<usize> = None;
+    let mut matching = 0usize;
     for (index, (scopes, _)) in candidates.iter().enumerate() {
         if !is_candidate(scopes, reference) {
             continue;
         }
+        matching += 1;
         match best {
             None => best = Some(index),
             // Strictly larger wins; a tie keeps the earlier, most recent one.
@@ -64,20 +116,47 @@ pub fn resolve_scoped<T: Clone>(
             Some(_) => {}
         }
     }
-    let best = best?;
-    if ambiguity::checking() {
-        let matched: Vec<&ScopeSet> = candidates
+    let Some(best) = best else {
+        return Ok(None);
+    };
+    let winner = &candidates[best].0;
+
+    // Flatt's condition: the winner must contain every other candidate.
+    // A scan over sets already in hand, and skipped outright for a lone
+    // candidate, which is a superset of the empty rest of the field — the
+    // case nearly every variable read in a program takes, and one the
+    // tree-walker takes per read rather than once at compile time.
+    let decisive = matching < 2
+        || candidates
             .iter()
-            .map(|(scopes, _)| scopes)
-            .filter(|scopes| is_candidate(scopes, reference))
+            .enumerate()
+            .filter(|(index, (scopes, _))| *index != best && is_candidate(scopes, reference))
+            .all(|(_, (scopes, _))| is_candidate(scopes, winner));
+    if !decisive {
+        let rivals: Vec<ScopeSet> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(index, (scopes, _))| {
+                *index != best && is_candidate(scopes, reference) && !is_candidate(scopes, winner)
+            })
+            .map(|(_, (scopes, _))| scopes.clone())
             .collect();
-        let winner = candidates[..best]
-            .iter()
-            .filter(|(scopes, _)| is_candidate(scopes, reference))
-            .count();
-        ambiguity::check(name, reference, &matched, winner);
+        ambiguity::log(name, reference, winner, &rivals);
+        // Boxed: `get_with_scopes` returns this `Result` from the
+        // tree-walker's per-read path, where a by-value error four times the
+        // size of the success payload is paid for on every read that never
+        // fails. `-D clippy::result_large_err` catches it.
+        return Err(Box::new(AmbiguousReference {
+            name: name.to_string(),
+            reference: reference.clone(),
+            picked: winner.clone(),
+            rivals,
+        }));
     }
-    Some(candidates[best].1.clone())
+    if matching > 1 {
+        ambiguity::log_ties(name, reference, winner, candidates, best);
+    }
+    Ok(Some(candidates[best].1.clone()))
 }
 
 /// Is a binding with these scopes in the running for a reference with those?
@@ -91,34 +170,28 @@ pub fn is_candidate(binding: &ScopeSet, reference: &ScopeSet) -> bool {
     binding.is_subset_of(reference)
 }
 
-/// Reports a resolution that the rule in this module does not determine.
+/// Leaves a trail of resolutions the rule in this module does not determine.
 ///
-/// Flatt's rule ("Binding as Sets of Scopes", POPL 2016 §3) resolves a
-/// reference to the candidate whose scope set is the largest subset of the
-/// reference's — *and requires that candidate to be a superset of every other
-/// candidate*. When two candidates are not ordered by subset, neither is more
-/// specific, the reference is **ambiguous**, and Racket raises an error.
-///
-/// [`resolve_scoped`] takes the largest by size and, on a tie, the first —
-/// which callers order most recent first. This module reports every place
-/// those two disagree, in two kinds, kept apart because they are different
-/// phenomena:
+/// The ambiguous ones are *raised*, by [`resolve_scoped`] itself — this only
+/// writes them down, plus a second kind the rule cannot see. The two are kept
+/// apart because they are different phenomena:
 ///
 /// - `AMBIG` — Flatt-ambiguous: the winner is not a superset of some rival,
-///   so the *rule* does not determine the answer and size decides it.
-/// - `TIE` — a rival with the **identical** scope set, so even size does not
-///   decide and the answer comes from the caller's ordering alone. Racket
-///   cannot reach this (its binding table is keyed by scope set, one binding
-///   per key); Patina can, because `Environment::insert_scoped` dedups only
-///   within one environment while the walk covers the whole chain.
+///   so neither is more specific and no answer is justified. Raised as an
+///   [`AmbiguousReference`], and logged on its way out.
+/// - `TIE` — a rival with the **identical** scope set. The rule calls this
+///   decisive (a set is a subset of itself) but it is not: the answer comes
+///   from the caller's ordering alone. Racket cannot reach this — its binding
+///   table is keyed by scope set, one binding per key — while Patina can,
+///   because `Environment::insert_scoped` dedups within one environment and
+///   the walk covers the whole chain. Reported only; see [`log_ties`].
 ///
-/// Two environment variables, both off by default:
+/// One environment variable, off by default:
 ///
 /// - `PATINA_AMBIGUITY_LOG=<file>` appends a record per distinct site.
 ///   **Use an absolute path.** The compat harness and the Larceny runner both
 ///   `cd` into a scratch directory that they then delete, so a relative path
 ///   writes 249 logs into directories that no longer exist.
-/// - `PATINA_AMBIGUITY_STRICT=1` panics on `AMBIG` instead of accepting it.
 ///
 /// The record grammar — fields never contain spaces, and an empty scope set
 /// renders as `{}` so every field is present:
@@ -131,12 +204,13 @@ pub fn is_candidate(binding: &ScopeSet, reference: &ScopeSet) -> bool {
 ///
 /// **What it does not see**, so that a silent log is read for what it is:
 ///
-/// - The fallback. [`resolve_scoped`] returns `None` when no candidate is a
-///   subset, and the caller then answers by name with no scope reasoning at
-///   all. That path is neither reported nor refused.
-/// - Writes. `Environment::set_with_scopes` still resolves by exact scope-set
-///   match and `has_scoped_binding` by a bare subset test; neither calls this
-///   module, so every `set!` is excluded (triage family 38).
+/// - The fallback. [`resolve_scoped`] returns `Ok(None)` when no candidate is
+///   a subset, and the caller then answers by name with no scope reasoning at
+///   all. That path is neither reported nor raised.
+/// - Writes. `Environment::set_with_scopes` resolves by the same subset rule
+///   since triage family 38, but inline and one environment at a time rather
+///   than through [`resolve_scoped`], so a `set!` is logged by neither arm and
+///   an ambiguous one still picks by size instead of raising.
 /// - The VM's `Define` arm resolves *binding* occurrences through
 ///   [`resolve_scoped`], where the tree-walker does not, so VM records include
 ///   definitions and the two backends' counts are not like for like.
@@ -189,48 +263,15 @@ mod ambiguity {
     }
 
     /// Is the log on? A `OnceLock` read and a branch.
+    ///
+    /// The log is a diagnostic only. Whether an ambiguous reference is
+    /// *refused* is not a switch: [`super::resolve_scoped`] returns an error
+    /// for one either way, and the caller reports it. Refusal was briefly
+    /// opt-in, from when `main` could not yet pass it — one test, triage
+    /// family 39 — and once that was fixed the variable only offered a way to
+    /// ask for the wrong answer.
     fn logging() -> bool {
         sink().is_some()
-    }
-
-    /// Is strict mode on (`PATINA_AMBIGUITY_STRICT`)? It adds the refusal to
-    /// a *release* build; a debug build refuses anyway.
-    ///
-    /// It was once the other way round. Enforcing Flatt's rule looked free —
-    /// no workload logged an ambiguous reference — until the check ran over
-    /// the Rust suite, where `test_let_syntax_nested_lexical_scoping` tripped
-    /// it: a passing, R7RS-required program whose answer came from
-    /// environment nesting rather than from scopes, because each `let` bound
-    /// its variable at one fresh scope and sibling binders were therefore
-    /// unordered. Larceny triage family 39. Fixed 2026-08-27 by scoping a
-    /// binder at the scopes it *stands in*, so nested binders form a chain
-    /// and a chain is always decidable; the suite passes the check now, and
-    /// so does every workload — 249 processes, zero ambiguous references.
-    fn strict() -> bool {
-        static STRICT: OnceLock<bool> = OnceLock::new();
-        *STRICT.get_or_init(|| {
-            std::env::var("PATINA_AMBIGUITY_STRICT")
-                .ok()
-                .is_some_and(|v| !v.is_empty() && v != "0")
-        })
-    }
-
-    /// Should the check run at all?
-    ///
-    /// Always in a debug build, where an ambiguous reference is a panic. In a
-    /// release build only when one of the two variables asks for it, so a
-    /// release interpreter pays a `OnceLock` read and a branch.
-    pub(super) fn checking() -> bool {
-        refusing() || logging()
-    }
-
-    /// Is an ambiguous reference refused rather than reported?
-    ///
-    /// In a debug build, always — so every `cargo test` and both CI debug
-    /// lanes hold Flatt's rule without anyone opting in. A release build
-    /// refuses only when `PATINA_AMBIGUITY_STRICT` asks it to.
-    fn refusing() -> bool {
-        cfg!(debug_assertions) || strict()
     }
 
     /// Render a scope set without spaces, so a record stays one field.
@@ -250,103 +291,15 @@ mod ambiguity {
         out
     }
 
-    /// Judge one resolution: `candidates[winner]` was chosen.
-    ///
-    /// An `AMBIG` verdict panics under `PATINA_AMBIGUITY_STRICT` and is
-    /// otherwise reported. Patina is pre-alpha and unversioned, so the target
-    /// is the specification rather than compatibility with its own past
-    /// answers, and a reference the rule does not determine is a defect: it
-    /// is how Larceny triage family 37 produced `(a a)` for
-    /// `(match '(a . 1) ((x . y) (list x y)))` instead of failing. It is not
-    /// the default only because `main` cannot pass it yet — see
-    /// [`strict`] for the case that fails and why it matters.
-    ///
-    /// A `TIE` is only reported. It is a different phenomenon: two bindings
-    /// with the *same* scope set, which Flatt's model cannot express and
-    /// which the caller's ordering therefore decides. They are common — 371
-    /// across the sweep once both backends are measured — and not all are
-    /// defects: a VM `is_simple` binding carries an *empty* scope set, so
-    /// nested internal defines of one name tie legitimately. Asserting on a
-    /// `TIE` would fail ordinary programs; what is worth fixing is whatever
-    /// creates a duplicate that is not of that kind.
-    pub(super) fn check(name: &str, reference: &ScopeSet, candidates: &[&ScopeSet], winner: usize) {
-        let best = candidates[winner];
-        let mut rivals: Vec<&ScopeSet> = Vec::new();
-        let mut equal: Vec<&ScopeSet> = Vec::new();
-        for (index, scopes) in candidates.iter().copied().enumerate() {
-            if index == winner {
-                continue;
-            }
-            // Equality first: `is_subset_of` is reflexive, so an identical
-            // set would otherwise be filtered out as "contained" — and that
-            // is the one pick nothing in the rule justifies.
-            if scopes == best {
-                equal.push(scopes);
-            } else if !scopes.is_subset_of(best) {
-                rivals.push(scopes);
-            }
-        }
-        if rivals.is_empty() && equal.is_empty() {
-            // Nothing to report, and nothing to refuse: no rivals means the
-            // rule decided this reference on its own.
-            return;
-        }
-        let ambiguous = !rivals.is_empty();
-        let refuse = || {
-            assert!(
-                !ambiguous || !refusing(),
-                "ambiguous reference: `{}` with scopes {} resolves to {} and to {}, \
-             and neither contains the other — Flatt's rule does not determine \
-             this reference, so the answer came from scope-set size alone. \
-             See the `ambiguity` module and Larceny triage family 39.",
-                name,
-                reference,
-                best,
-                rivals
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" and to ")
-            )
-        };
-        // `{:?}` quotes and escapes: Patina accepts `|a b|` as an identifier,
-        // and an unescaped name could forge a field or a whole record.
-        let record = if rivals.is_empty() {
-            format!(
-                "TIE name={:?} ref={} picked={} equal={}\n",
-                name,
-                render(reference),
-                render(best),
-                equal
-                    .iter()
-                    .map(|s| render(s))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            )
-        } else {
-            format!(
-                "AMBIG name={:?} ref={} picked={} rivals={}\n",
-                name,
-                render(reference),
-                render(best),
-                rivals
-                    .iter()
-                    .map(|s| render(s))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            )
-        };
+    /// Append one record, once per distinct site.
+    fn emit(record: String) {
         let Some(sink) = sink() else {
-            // Strict without a log: nothing to write, but still refuse.
-            refuse();
             return;
         };
         // Never poison-panic: this is a diagnostic, and a `File` behind a
         // `Mutex` has no invariant a panic elsewhere can have broken.
         let mut sink = sink.lock().unwrap_or_else(|e| e.into_inner());
         if !sink.seen.insert(record.clone()) {
-            drop(sink);
-            refuse();
             return;
         }
         // One `write_all`, not `writeln!`: `O_APPEND` makes each syscall
@@ -355,13 +308,71 @@ mod ambiguity {
         // fragment at a time, their records shred each other — measured at
         // six mangled lines per corpus sweep before this.
         let _ = sink.file.write_all(record.as_bytes());
-        drop(sink);
+    }
 
-        // Refused only after the record is on disk. Panicking first left a
-        // strict run's log holding just its `RUN` line — which a sweep reads
-        // as "this process was watched and found nothing", the exact
-        // conclusion the `RUN` line exists to license.
-        refuse();
+    /// Record a reference the rule does not determine, on its way to becoming
+    /// a [`super::AmbiguousReference`].
+    ///
+    /// The error is what stops the program; this only leaves the trail, so a
+    /// sweep over many workloads can say where such references arise without
+    /// reading every failure by hand. It is how Larceny triage family 37 was
+    /// traced to `(match '(a . 1) ((x . y) (list x y)))` answering `(a a)`.
+    pub(super) fn log(name: &str, reference: &ScopeSet, picked: &ScopeSet, rivals: &[ScopeSet]) {
+        if !logging() {
+            return;
+        }
+        // `{:?}` quotes and escapes: Patina accepts `|a b|` as an identifier,
+        // and an unescaped name could forge a field or a whole record.
+        emit(format!(
+            "AMBIG name={:?} ref={} picked={} rivals={}\n",
+            name,
+            render(reference),
+            render(picked),
+            rivals.iter().map(render).collect::<Vec<_>>().join("|")
+        ));
+    }
+
+    /// Record two bindings with the *same* scope set, where the caller's
+    /// ordering decided which won.
+    ///
+    /// A different phenomenon from ambiguity, and not an error. Flatt's model
+    /// cannot express a tie — an identical set is a subset of itself, so the
+    /// rule calls the pick decisive — and ties are common: 371 across the
+    /// sweep. Not all are defects. A VM `is_simple` binding carries an empty
+    /// scope set, so nested internal defines of one name tie legitimately.
+    /// Refusing them would fail ordinary programs; what is worth fixing is
+    /// whatever creates a duplicate that is not of that kind, which is why
+    /// this is reported and never raised.
+    pub(super) fn log_ties<T>(
+        name: &str,
+        reference: &ScopeSet,
+        picked: &ScopeSet,
+        candidates: &[(ScopeSet, T)],
+        best: usize,
+    ) {
+        if !logging() {
+            return;
+        }
+        let equal: Vec<&ScopeSet> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(index, (scopes, _))| *index != best && scopes == picked)
+            .map(|(_, (scopes, _))| scopes)
+            .collect();
+        if equal.is_empty() {
+            return;
+        }
+        emit(format!(
+            "TIE name={:?} ref={} picked={} equal={}\n",
+            name,
+            render(reference),
+            render(picked),
+            equal
+                .iter()
+                .map(|s| render(s))
+                .collect::<Vec<_>>()
+                .join("|")
+        ));
     }
 }
 
@@ -387,7 +398,7 @@ mod tests {
     fn the_most_specific_candidate_wins() {
         let candidates = vec![(set(&[1]), "outer"), (set(&[1, 2]), "inner")];
         assert_eq!(
-            resolve_scoped("x", &set(&[1, 2]), &candidates),
+            resolve_scoped("x", &set(&[1, 2]), &candidates).unwrap(),
             Some("inner")
         );
     }
@@ -397,7 +408,7 @@ mod tests {
     fn a_candidate_that_is_not_a_subset_is_ignored() {
         let candidates = vec![(set(&[2, 3]), "unrelated"), (set(&[1]), "visible")];
         assert_eq!(
-            resolve_scoped("x", &set(&[1, 2]), &candidates),
+            resolve_scoped("x", &set(&[1, 2]), &candidates).unwrap(),
             Some("visible")
         );
     }
@@ -412,7 +423,7 @@ mod tests {
     fn a_tie_goes_to_the_most_recent_candidate() {
         let candidates = vec![(set(&[1]), "recent"), (set(&[1]), "older")];
         assert_eq!(
-            resolve_scoped("x", &set(&[1, 2]), &candidates),
+            resolve_scoped("x", &set(&[1, 2]), &candidates).unwrap(),
             Some("recent")
         );
     }
@@ -422,7 +433,10 @@ mod tests {
     #[test]
     fn an_unscoped_candidate_loses_to_any_scoped_one() {
         let candidates = vec![(set(&[]), "unscoped"), (set(&[1]), "scoped")];
-        assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), Some("scoped"));
+        assert_eq!(
+            resolve_scoped("x", &set(&[1]), &candidates).unwrap(),
+            Some("scoped")
+        );
     }
 
     /// A macro-introduced reference reaches the binding it was written
@@ -442,7 +456,7 @@ mod tests {
             (set(&[1]), "outer"),
         ];
         assert_eq!(
-            resolve_scoped("x", &set(&[1, 9]), &candidates),
+            resolve_scoped("x", &set(&[1, 9]), &candidates).unwrap(),
             Some("outer")
         );
     }
@@ -452,8 +466,61 @@ mod tests {
     #[test]
     fn nothing_matching_resolves_to_nothing() {
         let candidates = vec![(set(&[2]), "elsewhere")];
-        assert_eq!(resolve_scoped("x", &set(&[1]), &candidates), None);
+        assert_eq!(resolve_scoped("x", &set(&[1]), &candidates).unwrap(), None);
         let empty: Vec<(ScopeSet, &str)> = Vec::new();
-        assert_eq!(resolve_scoped("x", &set(&[1]), &empty), None);
+        assert_eq!(resolve_scoped("x", &set(&[1]), &empty).unwrap(), None);
+    }
+
+    /// Two candidates, neither containing the other: the rule does not
+    /// determine this reference, so nothing is returned. Size would have
+    /// picked `{1,2}` for being larger, which is the guess this replaces.
+    #[test]
+    fn two_unordered_candidates_are_ambiguous() {
+        let candidates = vec![(set(&[1, 2]), "left"), (set(&[3]), "right")];
+        let err = resolve_scoped("x", &set(&[1, 2, 3]), &candidates)
+            .expect_err("neither candidate contains the other");
+        assert_eq!(err.name, "x");
+        assert_eq!(err.picked, set(&[1, 2]));
+        assert_eq!(err.rivals, vec![set(&[3])]);
+        // The message names both, so a report identifies the two binders.
+        let shown = err.to_string();
+        assert!(shown.contains("`x`"), "{shown}");
+        assert!(
+            shown.contains("is bound at {S1, S2} and at {S3}"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("neither binding contains the other"),
+            "{shown}"
+        );
+    }
+
+    /// A rival the winner *does* contain is not a rival. Ambiguity is about
+    /// the winner failing to be a superset, not about having company: the
+    /// chain `{1} ⊂ {1,2} ⊂ {1,2,3}` has three matching candidates and is
+    /// decided, which is exactly what accumulating binders buys.
+    #[test]
+    fn a_contained_rival_is_not_ambiguity() {
+        let candidates = vec![
+            (set(&[1, 2, 3]), "inner"),
+            (set(&[1, 2]), "middle"),
+            (set(&[1]), "outer"),
+        ];
+        assert_eq!(
+            resolve_scoped("x", &set(&[1, 2, 3]), &candidates).unwrap(),
+            Some("inner")
+        );
+    }
+
+    /// A non-candidate cannot make a reference ambiguous. `{4}` is unordered
+    /// against the winner, but it is not visible from the reference at all,
+    /// so it is not in the comparison.
+    #[test]
+    fn an_invisible_binding_is_not_a_rival() {
+        let candidates = vec![(set(&[1, 2]), "visible"), (set(&[4]), "elsewhere")];
+        assert_eq!(
+            resolve_scoped("x", &set(&[1, 2]), &candidates).unwrap(),
+            Some("visible")
+        );
     }
 }

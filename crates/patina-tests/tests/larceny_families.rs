@@ -1269,8 +1269,10 @@ fn an_introduced_macro_can_assign_to_a_source_written_binder() {
 /// Fixed 2026-08-27: a parameter written in source is bound at the scopes it
 /// *stands in* — every scope enclosing the form, plus the one minted for it.
 /// Nested binders then form a chain, each strictly containing the last, and a
-/// chain is always decidable. `PATINA_AMBIGUITY_STRICT=1` accepts this
-/// program on both backends now, and the whole test suite with it.
+/// chain is always decidable. Both backends accept this program now, and the
+/// whole test suite passes with the rule enforced — which is what let the
+/// enforcement stop being opt-in: an ambiguous reference is an error on every
+/// path, and this test would fail rather than answer if the fix regressed.
 #[test]
 fn a_binder_is_scoped_by_where_it_stands() {
     assert_program_eval_to(

@@ -511,7 +511,12 @@ impl Desugarer {
         let Some((head_name, head_scopes)) = self.identifier_of(head, shared_heap) else {
             return;
         };
-        match self.resolve_syntax(&head_name, &head_scopes) {
+        // A pre-pass, so an ambiguous head is not raised here: it reads as
+        // "not a definition form", the body is scoped without that name, and
+        // the dispatch that actually desugars the form resolves the same head
+        // and reports it. Raising twice for one defect, once from a scan the
+        // program did not ask for, would only make the message worse.
+        match self.resolve_syntax(&head_name, &head_scopes).ok().flatten() {
             Some(SyntaxRef::CoreSyntax(CoreForm::Define)) => {
                 let target = {
                     let heap = shared_heap.borrow();
@@ -596,7 +601,12 @@ impl Desugarer {
     /// site, so `(let ((if 'captured)) (my-cond #t 'ok))` resolves the
     /// template's `if` where the template was written — the special form. That
     /// is `test_special_form_not_captured` in `patina-tests`' hygiene suite.
-    fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Option<SyntaxRef> {
+    ///
+    /// `Err` when two visible bindings of the name are unordered by subset, so
+    /// resolution has no most specific one to return. That is a defect in the
+    /// program's binding structure and it is settled by the time expansion
+    /// reaches here, which is why it is reported now and not at runtime.
+    fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Result<Option<SyntaxRef>> {
         // A reference written in source carries no scopes of its own, but it is
         // not therefore at top level: the scopes it stands in are the ones the
         // desugarer has accumulated on the way here. Passing those is what lets
@@ -608,12 +618,18 @@ impl Desugarer {
         } else {
             scopes
         };
-        let tv = self.env.get_with_scopes(name, scopes)?;
+        let Some(tv) = self
+            .env
+            .get_with_scopes(name, scopes)
+            .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?
+        else {
+            return Ok(None);
+        };
         let heap = self.env.heap().borrow();
         if let Some(form) = heap.get_core_syntax(tv) {
-            return Some(SyntaxRef::CoreSyntax(form));
+            return Ok(Some(SyntaxRef::CoreSyntax(form)));
         }
-        heap.get_macro(tv).cloned().map(SyntaxRef::Macro)
+        Ok(heap.get_macro(tv).cloned().map(SyntaxRef::Macro))
     }
 
     /// Reject a reference to syntax where a value is expected.
@@ -630,7 +646,7 @@ impl Desugarer {
     /// do `syntax-rules` patterns and templates, which the macro expander
     /// handles.
     fn reject_syntax_as_value(&self, name: &str, scopes: &ScopeSet) -> Result<()> {
-        match self.resolve_syntax(name, scopes) {
+        match self.resolve_syntax(name, scopes)? {
             None => Ok(()),
             Some(found) => Err(DesugarError::InvalidSyntax(format!(
                 "invalid use of syntax as a value: `{name}` is {}",
@@ -717,8 +733,14 @@ impl Desugarer {
             // returns `get` unchanged for an empty scope set, so the comparison
             // could only ever be with itself, at the cost of a second walk of
             // the environment chain per template symbol per expansion.
+            //
+            // An ambiguous answer is also a disagreement: it has not
+            // identified a binding, so there is none to alias to.
             if !definition_scopes.is_empty()
-                && def_env.get_with_scopes(name, definition_scopes) != Some(def_value)
+                && !matches!(
+                    def_env.get_with_scopes(name, definition_scopes),
+                    Ok(Some(found)) if found == def_value
+                )
             {
                 continue;
             }
@@ -780,9 +802,12 @@ impl Desugarer {
         let Some((name, scopes)) = self.identifier_of(car, shared_heap) else {
             return false;
         };
+        // An ambiguous head is not `quote`, and saying so is not a guess
+        // about the program: the form is walked as an ordinary one and the
+        // dispatch raises when it resolves the same head.
         matches!(
             self.resolve_syntax(&name, &scopes),
-            Some(SyntaxRef::CoreSyntax(CoreForm::Quote))
+            Ok(Some(SyntaxRef::CoreSyntax(CoreForm::Quote)))
         )
     }
 
@@ -1100,7 +1125,7 @@ impl Desugarer {
         // answers `None` here and falls through to an ordinary application,
         // which is what lets a definition shadow a keyword.
         let (macro_to_expand, core_form) = match &name {
-            Some(sym) => match self.resolve_syntax(sym, &head_scopes) {
+            Some(sym) => match self.resolve_syntax(sym, &head_scopes)? {
                 Some(SyntaxRef::Macro(m)) => (Some(m), None),
                 Some(SyntaxRef::CoreSyntax(form)) => (None, Some(form)),
                 None => (None, None),
@@ -1393,7 +1418,7 @@ impl Desugarer {
         };
         let is_define_syntax = self
             .identifier_of(head, shared_heap)
-            .and_then(|(name, scopes)| self.resolve_syntax(&name, &scopes))
+            .and_then(|(name, scopes)| self.resolve_syntax(&name, &scopes).ok().flatten())
             .is_some_and(|found| matches!(found, SyntaxRef::CoreSyntax(CoreForm::DefineSyntax)));
         if !is_define_syntax {
             return None;
