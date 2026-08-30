@@ -503,15 +503,25 @@ mattered:
    and 127 carry four defects between them (a stale `last` pointer after
    `list-queue-remove-back!`, `list-queue-set-list!` raising on the empty
    list, `lseq-append` truncating a generator-backed argument, `lseq-member`
-   comparing its arguments in the wrong order). All five are reported
+   comparing its arguments in the wrong order). All five were reported
    upstream — chibi-scheme
    [#1179](https://github.com/ashinn/chibi-scheme/issues/1179),
    [#1180](https://github.com/ashinn/chibi-scheme/issues/1180),
-   [#1181](https://github.com/ashinn/chibi-scheme/issues/1181) — and confirmed
-   on chibi master before filing. The tarballs are at
+   [#1181](https://github.com/ashinn/chibi-scheme/issues/1181) — confirmed on
+   chibi master before filing, and **all five were fixed upstream 2026-08-27**
+   (`32ed54b0`, `c00200ec`, `f15b0814`; all three issues closed). Upstream
+   took the reported semantics in every case. The bundles stay the reference
+   implementations — `lib/srfi/PROVENANCE.md` records why the fixes did not
+   make swapping back worth it — and the three suites were re-vendored at
+   those commits, which is the part that mattered. The tarballs are at
    `https://srfi.schemers.org/srfi-N/srfi-N.tgz`.
-2. **A passing suite is not evidence.** All four of those defects pass both
-   Larceny's suite and chibi's, because neither exercises the shape. Diff the
+
+   None of this weakens the rule. Five defects found by reading the
+   specification were all real enough that upstream fixed them, and not one of
+   them had ever failed a suite.
+2. **A passing suite is not evidence.** All four of those defects passed both
+   Larceny's suite and chibi's, because neither exercised the shape — until
+   the fixes above added, upstream, the assertions that catch them. Diff the
    candidate against a second implementation — Gauche's is in
    `~/Project/reference` — and probe the mutators and the lazy paths by hand.
    **Reproduce against the other implementation itself** before blaming it:

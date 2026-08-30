@@ -182,6 +182,8 @@
       (let loop ((n 10))
         (test #f (even? (stream-ref (stream-filter odd? (stream-from 0)) n)))
         (if (positive? n) (loop (- n 1))))
+      (test '(0 1)
+          (stream->list 2 (stream-filter (lambda (n) (< n 2)) (stream-from 0))))
 
       ;; stream-fold
       (test-error ; "stream-fold: non-procedural argument"

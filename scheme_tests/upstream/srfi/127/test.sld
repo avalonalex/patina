@@ -117,7 +117,17 @@
                 (oddeven (make-lseq 'odd 'even 'odd 'even 'odd 'even 'odd 'even)))
             (test '((one 1 odd) (two 2 even) (three 3 odd))
                 (lseq-realize (lseq-zip '(one two three) one2345 oddeven))))
-          )
+
+          (let ()
+            (define (gen . xs)
+              (let ((l xs))
+                (generator->lseq
+                 (lambda ()
+                   (if (null? l) (eof-object)
+                       (let ((x (car l)))
+                         (set! l (cdr l)) x))))))
+            (test '(1 2 3 a b)
+                (lseq-realize (lseq-append (gen 1 2 3) (gen 'a 'b))))))
 
         (test-group "lseqs/mapping"
           (test '() (lseq-map - '()))
@@ -193,5 +203,8 @@
 
           (test '((a) c) (lseq-realize (lseq-member (list 'a) (make-lseq 'b '(a) 'c))))
           (test '(2 3) (lseq-realize (lseq-member 2.0 (make-lseq 1 2 3) =)))
+
+          (test (member 3 '(1 2 5 7) <)
+              (lseq-member 3 '(1 2 5 7) <))
           )))
     ))

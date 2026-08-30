@@ -176,8 +176,8 @@ fn test_alias_bindings_are_usable() {
         ),
         // Reaching a binding *through* the alias, not just checking the name
         // set: a lazy prefix of an infinite stream (the shape chibi's SRFI 41
-        // cannot take — see lib/srfi/PROVENANCE.md) and `stream-match`, whose
-        // `_` the alias re-exports for the macro's sake.
+        // could not take until f15b0814 — see lib/srfi/PROVENANCE.md) and
+        // `stream-match`, whose `_` the alias re-exports for the macro's sake.
         (
             "(import (scheme stream)) \
              (stream->list 2 (stream-filter (lambda (n) (< n 2)) (stream-from 0)))",

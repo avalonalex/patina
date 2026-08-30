@@ -34,9 +34,9 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/158/test.sld` | 76 | 0 | verbatim |
 | `srfi/125/test.sld` | 74 | 0 | imports |
 | `srfi/14/test.sld` | 72 | 0 | verbatim |
-| `srfi/41/test.sld` | 186 | 0 | verbatim |
-| `srfi/117/test.sld` | 34 | 1 | verbatim — the one failure is the suite's, not ours; see below |
-| `srfi/127/test.sld` | 109 | 0 | verbatim |
+| `srfi/41/test.sld` | 187 | 0 | verbatim |
+| `srfi/117/test.sld` | 38 | 1 | verbatim — the one failure is the suite's, not ours; see below |
+| `srfi/127/test.sld` | 111 | 0 | verbatim |
 | `srfi/116/test.sld` | 196 | 0 | verbatim |
 | `srfi/134/test.sld` | 119 | 0 | imports — see below |
 | `srfi/27/test.sld` | 224 | 0 | verbatim |
@@ -251,6 +251,30 @@ reference implementation, which reuses the storage the specification frees it
 to reuse; Larceny's suite makes no such assumption and passes 40 of 40. This
 is the only row whose non-zero failure count is not a defect in our port, and
 `upstream_srfi_suites.rs` says so at the row.
+
+## What running them found upstream, and what came back
+
+Three of these suites were re-vendored on 2026-08-30 at chibi
+[`f15b0814`](https://github.com/ashinn/chibi-scheme/commit/f15b0814),
+[`c00200ec`](https://github.com/ashinn/chibi-scheme/commit/c00200ec) and
+[`32ed54b0`](https://github.com/ashinn/chibi-scheme/commit/32ed54b0), the
+2026-08-27 commits closing chibi-scheme
+[#1179](https://github.com/ashinn/chibi-scheme/issues/1179),
+[#1180](https://github.com/ashinn/chibi-scheme/issues/1180) and
+[#1181](https://github.com/ashinn/chibi-scheme/issues/1181) — the five defects
+this tree found in chibi's own SRFI 41, 117 and 127 (`lib/srfi/PROVENANCE.md`
+has each, and why Patina bundles the SRFIs' reference implementations rather
+than chibi's copies). Upstream took the reported semantics in every case, and
+each commit ships regression tests close to the reported repros. That is what
+moved the counts above: 186 → 187, 34 → 38, 109 → 111.
+
+**Every one of the seven new assertions passed on arrival**, on both backends,
+because the reference implementations Patina ships never had the defects. The
+value of the refresh is not a fix — it is that the behaviour is now pinned by
+*upstream's* tests rather than only by our prose, so a future re-vendoring
+that quietly took chibi's copies back would be caught here. The 117 row's one
+failure is unrelated and survives the refresh; it is the `list-queue-append!`
+assumption described above.
 
 ## Suites not included, and why
 
