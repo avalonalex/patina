@@ -36,6 +36,19 @@
         (list-queue-add-back! z 3)
         (test '(0 1 2 3) (list-queue-list z)))
 
+      (test-group "list-queues/back"
+        (let ((q (list-queue 1 2 3)))
+          (list-queue-remove-back! q)
+          (test '(1 2) (list-queue-list q))
+          (test 2 (list-queue-back q))
+          (list-queue-add-back! q 4)
+          (test '(1 2 4) (list-queue-list q))))
+
+      (test-group "list-queue/set-list"
+        (let ((q (list-queue 1)))
+          (list-queue-set-list! q '())
+          (test '() (list-queue-list q))))
+
       (test-group "list-queues/whole"
         (define a (list-queue 1 2 3))
         (define b (list-queue-copy a))

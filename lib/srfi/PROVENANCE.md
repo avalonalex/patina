@@ -51,7 +51,14 @@ culprit is chibi's `stream->list`, not its `stream-filter`: the loop passes
 iteration tests the count, and asking for *n* elements forces *n+1*. The
 filter itself is lazy — `(stream-car (stream-cdr (stream-filter …)))` answers
 `1` there. Reported as
-[ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181).
+[ashinn/chibi-scheme#1181](https://github.com/ashinn/chibi-scheme/issues/1181),
+and **fixed upstream 2026-08-27** in
+[`f15b0814`](https://github.com/ashinn/chibi-scheme/commit/f15b0814), which
+takes the count test before forcing the cdr and adds the bounded-prefix
+assertion (chibi also removed a stray `not` in `stream-filter`'s `else` arm in
+the same commit — a dead-code typo, not the fault, exactly as the corrected
+attribution above says). The refreshed suite is in
+`scheme_tests/upstream/srfi/41/test.sld`.
 
 **`(srfi 116)` carries three `PATINA LOCAL EDIT`s and eight recorded
 failures, and the two are different things.**
@@ -105,9 +112,33 @@ All four were reproduced against `chibi-scheme` itself, not merely against
 its sources under Patina, and reported upstream:
 [#1179](https://github.com/ashinn/chibi-scheme/issues/1179) (SRFI 117) and
 [#1180](https://github.com/ashinn/chibi-scheme/issues/1180) (SRFI 127). Both
-were confirmed present on chibi master (186e0659) before filing. If they are
-fixed upstream, these bundles can go back to being a straight copy — the
-reference implementations are here for the defects, not out of preference.
+were confirmed present on chibi master (186e0659) before filing.
+
+**Both were fixed upstream 2026-08-27** —
+[`32ed54b0`](https://github.com/ashinn/chibi-scheme/commit/32ed54b0) and
+[`c00200ec`](https://github.com/ashinn/chibi-scheme/commit/c00200ec) — taking
+the reported semantics for all four, and each shipping regression tests close
+to the reported repros. That condition having fired, the paragraph this
+replaces offered to make these bundles a straight copy of chibi's again.
+**They stay the SRFIs' own reference implementations**, for reasons the
+defects were never the whole of:
+
+- chibi's `list-queue-append!` is `(make-list-queue (append-map list-queue-list …))`,
+  a fresh copy. That is a permitted reading — SRFI 117 says it is an error to
+  assume anything about the arguments afterwards — but it is chibi's choice,
+  not the specification's, and adopting it would silently change what
+  `list-queue-append!` costs.
+- The `PATINA LOCAL EDIT` below repairs `list-queue-join!`, which is the
+  reference implementation's own procedure; chibi has no counterpart, so the
+  swap would trade a recorded one-line edit for an unrecorded behavioural
+  change.
+- Nothing is now wrong with either source, so the swap would buy no
+  correctness — only churn in a tree whose value is that it is version-matched
+  and pinned.
+
+What the fixes *did* buy is upstream test coverage: the suites in
+`scheme_tests/upstream/srfi/{117,127}/` were re-vendored at those commits
+(2026-08-30) and all six new assertions passed on arrival on both backends.
 
 **One `PATINA LOCAL EDIT` in `117/list-queues-impl.scm`**, marked in place:
 `list-queue-join!` did an unguarded `(set-cdr! (get-last queue1) …)`, which

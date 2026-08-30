@@ -217,7 +217,12 @@ suite_tests! {
     // adaptation of it — the same file the reference implementation ships
     // with, so it exercises `stream-match` too (ours is chibi's macro over
     // the reference body; see lib/srfi/PROVENANCE.md).
-    (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 186),
+    //
+    // 186 → 187 when the suite was re-vendored at chibi f15b0814 (2026-08-27),
+    // which fixed the `stream->list` defect this tree reported as #1181 and
+    // added the bounded-prefix assertion for it. The reference body Patina
+    // ships never had the defect, so the new assertion passed on arrival.
+    (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 187),
     // The one row whose non-zero failure count is *not* ours, against the
     // convention above. chibi's suite does `(list-queue-append! x …)` and
     // then asserts `x` is unchanged; SRFI 117 says of that procedure "it is
@@ -227,8 +232,15 @@ suite_tests! {
     // reference implementation, which reuses the storage the spec frees it
     // to reuse — and Larceny's suite, which does not make that assumption,
     // passes 40 of 40.
-    (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 1, 34),
-    (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 109),
+    //
+    // 34 → 38 and 109 → 111 when both suites were re-vendored at chibi
+    // 32ed54b0 and c00200ec (2026-08-27), fixing the four defects this tree
+    // reported as #1179 and #1180 and adding regression tests for each. The
+    // SRFI reference implementations Patina ships never had them, so all six
+    // assertions passed on arrival. The one 117 failure below is unrelated and
+    // survives the refresh — it is the `list-queue-append!` assumption above.
+    (srfi_117_list_queue, "srfi 117", "(srfi 117 test)", 1, 38),
+    (srfi_127_lseq, "srfi 127", "(srfi 127 test)", 0, 111),
     // chibi's suite, which exercises the interface and so runs against the
     // SRFI's reference implementation unchanged. Larceny's is richer (345
     // assertions) and finds 8 failures in the comparator section — see
