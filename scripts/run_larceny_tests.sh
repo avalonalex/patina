@@ -14,7 +14,13 @@
 #
 # Environment:
 #   LARCENY_TESTS_DIR     the Lib directory (default: ~/Project/reference/larceny/test/R7RS/Lib)
-#   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300)
+#   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). One suite floors
+#                         it instead of obeying it: `stream` on the
+#                         tree-walker gets at least 900 s, because it PASSES
+#                         given time (81/81, measured 792 s) and is merely
+#                         ~20x slower there than on the VM — triage family
+#                         26. Burning 300 s to report "timeout" told us
+#                         nothing that 13 minutes of tally does not.
 #
 # Exits non-zero if any suite fails, errors, or times out. The tallies are the
 # suite's own ("N tests passed" / "N of M tests failed."), never re-derived.
@@ -139,13 +145,23 @@ run_suite() {
     local suite="$1"
     local log="$LOG_DIR/${suite//\//_}.txt"
     local start end secs status detail passed failed total errors
+    # Family 26: `stream` is correct on the tree-walker but ~20x slower than
+    # the VM on nested infinite streams — 792 s measured for the full suite
+    # against the 300 s default budget. Floor that one suite's budget at
+    # 900 s so the lane reports a tally instead of a timeout; everything
+    # else keeps $TIMEOUT, ephemeron included (family 32's 100-million-pair
+    # allocation has no measured finishing time to size a budget by).
+    local budget="$TIMEOUT"
+    if [ "$BACKEND_NAME" = "tree-walker" ] && [ "$suite" = "stream" ] && [ "$budget" -lt 900 ]; then
+        budget=900
+    fi
     start=$(date +%s)
     # -e off for the whole run-and-parse span: the suite may exit non-zero,
     # and every grep below legitimately matches nothing for some status.
     set +e
     (
         cd "$LARCENY_TESTS_DIR" &&
-        perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
+        perl -e 'alarm shift; exec @ARGV' "$budget" \
             "$PATINA_BIN" "${BACKEND_ARGS[@]}" "${LANE_ARGS[@]}" -I . \
             "$RUN_DIR/$suite.sps" </dev/null
     ) 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$log"
@@ -160,7 +176,7 @@ run_suite() {
 
     if [ "$rc" -eq 142 ]; then
         status="timeout"; passed=0; failed=0; total=0
-        detail="no result after ${TIMEOUT}s"
+        detail="no result after ${budget}s"
     elif [ -n "$passed" ]; then
         status="pass"; failed=0; total=$passed
         detail=""

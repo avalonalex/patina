@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-26 15:55:29  
+**Generated:** 2026-09-01 00:06:58  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,13 +9,13 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 20 of 33 |
-| Assertions passed | 8219 of 8249 (99.6%) |
-| Suites not reaching a tally | 3 |
+| Suites fully passing | 21 of 33 |
+| Assertions passed | 8300 of 8330 (99.6%) |
+| Suites not reaching a tally | 2 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Crashed or hung (3)
+## Crashed or hung (2)
 
 No tally was reached: the process died, or the runner's timeout cut it off. A crash is a defect in Patina's runtime; a timeout may be one, or may be a suite that needs longer than the budget on this backend — the triage doc says which for each.
 
@@ -23,7 +23,6 @@ No tally was reached: the process died, or the runner's timeout cut it off. A cr
 |---|---|
 | char | stack overflow |
 | ephemeron | no result before the timeout |
-| stream | no result before the timeout |
 
 ## Assertion failures (30 in 10 suites)
 
@@ -121,7 +120,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | rlist | pass | 82 | 82 |
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
-| stream | timeout | 0 | 0 |
+| stream | pass | 81 | 81 |
 | text | pass | 1069 | 1069 |
 | time | fail | 1 | 2 |
 | vector | pass | 103 | 103 |
