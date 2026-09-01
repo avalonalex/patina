@@ -177,9 +177,17 @@ impl Op {
 pub enum Outcome {
     /// Set-of-scopes resolution chose a binding.
     Scoped,
-    /// It declined; the caller falls back to a by-name lookup. Whether *that*
-    /// succeeds is not known here — see the `BIND`/`RESOLVE` pair around it.
+    /// It declined and the by-name fallback **answered**. At `phase=compile`
+    /// (the VM's renamer) the fallback is deferred to runtime, so there this
+    /// still means only "left to a by-name lookup", success unknown.
     ByName,
+    /// It declined and the by-name fallback found **nothing** — either the
+    /// name is truly unbound, or every name-visible binding of it was one
+    /// this resolution rejected and the fallback refused to resurrect. On a
+    /// name whose `BIND` shows a scoped binding two lines up, this outcome
+    /// *is* the family-36 refusal doing its job. Runtime (`phase=run`) only;
+    /// the compile phase cannot know.
+    Unbound,
     /// Two candidates and neither more specific: an error, not an answer.
     Ambiguous,
 }
@@ -189,6 +197,7 @@ impl Outcome {
         match self {
             Outcome::Scoped => "scoped",
             Outcome::ByName => "byname",
+            Outcome::Unbound => "unbound",
             Outcome::Ambiguous => "ambiguous",
         }
     }
@@ -466,8 +475,14 @@ mod tests {
             ["get", "set", "bind"]
         );
         assert_eq!(
-            [Outcome::Scoped, Outcome::ByName, Outcome::Ambiguous].map(Outcome::as_str),
-            ["scoped", "byname", "ambiguous"]
+            [
+                Outcome::Scoped,
+                Outcome::ByName,
+                Outcome::Unbound,
+                Outcome::Ambiguous
+            ]
+            .map(Outcome::as_str),
+            ["scoped", "byname", "unbound", "ambiguous"]
         );
     }
 }

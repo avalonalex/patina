@@ -16,12 +16,16 @@
 //! copy *for reads*, and it enforces Flatt's ambiguity condition itself, so
 //! neither backend can answer a reference the rule does not determine.
 //!
-//! Two hand-rolled copies remain, both over `Environment`'s tables and
-//! neither measured. `set_with_scopes` resolves a write by the same subset
-//! rule since triage family 38, but inline and one environment at a time
-//! rather than through this module; `has_scoped_binding` tests subset with no
-//! most-specific rule at all. So a `set!` still resolves without being
-//! checked for ambiguity, and no sweep says anything about one.
+//! Hand-rolled copies remain, all over `Environment`'s tables and none
+//! measured. `set_with_scopes` resolves a write by the same subset rule
+//! since triage family 38, but inline and one environment at a time rather
+//! than through this module; its terminal (`set_scoped_terminal`) and the
+//! read fallback (`get_scoped_fallback`) each apply [`is_candidate`] once
+//! more, to *refuse* a rejected binding rather than to choose one; and
+//! `has_scoped_binding` tests subset with no most-specific rule at all. So a
+//! `set!` still resolves without being checked for ambiguity, and no sweep
+//! says anything about one. Unifying the write with the read is Track Q's
+//! Q7.1 (`PRD/TRACK_Q_QUALITY_PRD.md`).
 //!
 //! Unifying the tie-break was a **behaviour change**, not a pure refactor:
 //! the tree-walker now answers a within-environment tie the way the VM
@@ -223,9 +227,13 @@ pub fn is_candidate(binding: &ScopeSet, reference: &ScopeSet) -> bool {
 ///
 /// **What it does not see**, so that a silent log is read for what it is:
 ///
-/// - The fallback. [`resolve_scoped`] returns `Ok(None)` when no candidate is
-///   a subset, and the caller then answers by name with no scope reasoning at
-///   all. That path is neither reported nor raised.
+/// - The fallback's insides. [`resolve_scoped`] returns `Ok(None)` when no
+///   candidate is a subset, and the caller falls back by name — since triage
+///   family 36's fix that fallback does one piece of scope reasoning of its
+///   own (it refuses the name-only view of a binding this resolution
+///   rejected; `Environment::get_scoped_fallback`). The tree-walker's
+///   `RESOLVE` records distinguish how it ended (`via=byname` vs
+///   `via=unbound`), but this module's sweep does not see or raise it.
 /// - Writes. `Environment::set_with_scopes` resolves by the same subset rule
 ///   since triage family 38, but inline and one environment at a time rather
 ///   than through [`resolve_scoped`], so a `set!` is logged by neither arm and

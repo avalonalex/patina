@@ -612,14 +612,17 @@ its scopes at `phase=run` — that contrast is the axis the family turns on.
 | `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
 | `byname` | `visible_by_name` — whether a name-only lookup may also reach it. The difference between a parameter and a definition. |
 | `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
-| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined, spelling answered), `ambiguous` (two candidates, neither more specific). |
+| `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
 | `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |
 | `landed` | on `WROTE`: where a scoped write finally went. A write walks environment by environment, so its trace is a sequence; this is its conclusion. |
 
 `via=byname` is common — every reference to a global from a scoped context is
-one — so treat it as a filter, not a verdict. What is worth grepping is a
-`via=byname` on a name that *has* a scoped binding two lines above: resolution
-saw a candidate, rejected it, and spelling answered anyway.
+one — so treat it as a filter, not a verdict. What is worth grepping is
+`via=unbound` on a name that *has* a name-visible scoped binding two lines
+above: resolution rejected that binding and the fallback declined to
+resurrect it by spelling (triage family 36's rule). If such a read instead
+comes back `via=byname` with the rejected binding's own value, the rule has
+been broken.
 
 Records are **not** deduplicated (unlike `PATINA_AMBIGUITY_LOG`) because order
 and repetition are the signal. Off, the trace costs a `OnceLock` read and a
