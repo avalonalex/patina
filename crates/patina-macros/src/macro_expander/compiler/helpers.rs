@@ -126,6 +126,16 @@ impl Compiler {
         // resolved as a variable — so it is a guess in only this direction,
         // and this is the direction that leaves the spelling alone. It takes
         // two unordered `let-syntax` binders of `...` to reach.
+        //
+        // Since the family-36 fix, `get_with_scopes` also answers `None` when
+        // the only by-name binding of `...` is a scoped definition these
+        // scopes reject (a macro expansion's own top-level `(define ... v)`)
+        // — the ellipsis then *stays* the ellipsis where it was previously
+        // treated as bound away. That is the hygienic reading (a rejected
+        // binding is not visible to these scopes), it matches the default-
+        // meaning direction of every other guess in this function, and no
+        // program in the suites reaches it; noted so the next audit of this
+        // caller does not rediscover the dependency.
         let Ok(Some(tv)) = env.get_with_scopes(super::super::utils::ELLIPSIS, &scopes) else {
             return false;
         };

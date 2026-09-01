@@ -140,7 +140,10 @@ fn fresh_env_id() -> u64 {
 /// Lookup order for `get_with_scopes(name, scopes)`:
 /// 1. Collect all bindings where `binding.scopes ⊆ scopes`
 /// 2. Return the binding with the largest scope set (most specific)
-/// 3. Fall back to simple bindings if no scoped binding matches
+/// 3. Fall back by name — to simple bindings and aliases, and to the
+///    name-only view of a scoped definition **only when this resolution did
+///    not just reject it**. A binding the rule refused stays refused; the
+///    fallback answering it anyway was triage family 36.
 #[derive(Debug, Clone)]
 pub struct Environment {
     /// Shared heap for TaggedValue interpretation
@@ -460,6 +463,19 @@ impl Environment {
     /// definition reachable only under scopes is unreachable from exactly the
     /// code that needs it — the R7RS suite's `jabberwocky` test.
     ///
+    /// The name-only view's reach is *plain* access — [`get`], [`set`], and
+    /// the relinker resolving through them — not scoped resolution's
+    /// fallback. A **scoped** reference whose resolution rejected this
+    /// binding stays refused (`get_scoped_fallback` / `set_scoped_terminal`):
+    /// since the family 36 fix, one expansion's introduced definition is not
+    /// reachable from a different expansion's introduced reference, which is
+    /// what chibi answers too. The VM still reaches it through its bare-name
+    /// alias — triage family 40 pins that divergence, and Track L §6's
+    /// relinking-by-name entry is its root.
+    ///
+    /// [`get`]: Self::get
+    /// [`set`]: Self::set
+    ///
     /// It is still **one** binding. An earlier version stored the value under
     /// the bare name as well, and a `set!` through the scoped path then left
     /// the two disagreeing — the freeze `alias_bindings` names as the reason
@@ -604,6 +620,14 @@ impl Environment {
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), String> {
+        // Root-only by construction: `set_with_scopes` recurses to the root
+        // before falling back, and per-frame resolution has already rejected
+        // every scoped binding on the chain by then. A non-root call would
+        // run write semantics no test has ever exercised; make that loud.
+        debug_assert!(
+            self.parent.is_none(),
+            "set_scoped_terminal called off the root for `{name}`"
+        );
         if let Some(slot) = self.local_slot(name) {
             self.set_slot_value(slot, value);
             return Ok(());
@@ -616,11 +640,23 @@ impl Environment {
         }
         if let Some(i) = self.visible_scoped_index(name) {
             let mut table = self.scoped_bindings.borrow_mut();
-            if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i))
-                && crate::scope_resolve::is_candidate(&binding.scopes, scopes)
-            {
-                binding.tagged_value = value;
-                return Ok(());
+            if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
+                // Dead arm with a tripwire, exactly as in
+                // `get_scoped_fallback`: the per-frame walk above already
+                // rejected every scoped binding here, so a candidate showing
+                // up means the rule changed under this fallback. Note the
+                // caller would then trace the write as `byname`, which is one
+                // more reason this must never fire silently.
+                debug_assert!(
+                    !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
+                    "set_scoped_terminal reached a binding of `{name}` that is a \
+                     candidate for {scopes} — the per-frame walk should have \
+                     written it"
+                );
+                if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                    binding.tagged_value = value;
+                    return Ok(());
+                }
             }
             // Rejected for these scopes: not writable by spelling.
         }
@@ -635,10 +671,18 @@ impl Environment {
     /// This is the key lookup algorithm for scope-based hygiene:
     /// 1. Collect all bindings for this name where `binding.scopes ⊆ reference.scopes`
     /// 2. Return the binding with the largest scope set (most specific match)
-    /// 3. Fall back to unmarked bindings if no scoped binding matches
+    /// 3. Fall back by name via [`get_scoped_fallback`] — which answers from
+    ///    plain bindings and aliases freely, but never from the name-only
+    ///    view of a scoped binding this resolution rejected in step 1. So a
+    ///    scoped reference can come back `None` for a name a plain [`get`]
+    ///    would answer; that refusal is the fix for triage family 36, and it
+    ///    is what chibi answers for the same shapes.
     ///
     /// The "most specific" rule ensures that inner bindings shadow outer ones
     /// when their scopes are a subset of the reference's scopes.
+    ///
+    /// [`get_scoped_fallback`]: Self::get_scoped_fallback
+    /// [`get`]: Self::get
     ///
     /// `Err` when step 2 has no most specific match to return: two candidates
     /// neither of which contains the other. The caller reports it — a
@@ -728,11 +772,24 @@ impl Environment {
         // value instead named whichever came first when two held the same one
         // — and at `phase=desugar` every binder is the same placeholder.
         let chosen = crate::scope_resolve::resolve_index(name, scopes, &candidates);
+        // The fallback runs before the trace record is written, so the record
+        // can say how the whole read ended, not how it was about to continue.
+        // `via=byname` used to cover both "spelling answered" and "nothing
+        // answered", and the difference is exactly the new refusal: a read
+        // that skips a rejected name-visible binding and finds nothing else
+        // traces `via=unbound`, where the old label asserted the opposite of
+        // what happened on the path being debugged.
+        let result = match &chosen {
+            Ok(Some(i)) => Some(candidates[*i].1),
+            Ok(None) => self.get_scoped_fallback(name, scopes),
+            Err(_) => None,
+        };
         if crate::scope_trace::enabled() {
             use crate::scope_trace::{Op, Outcome};
             let (picked, outcome) = match &chosen {
                 Ok(Some(i)) => (Some(candidates[*i].0.clone()), Outcome::Scoped),
-                Ok(None) => (None, Outcome::ByName),
+                Ok(None) if result.is_some() => (None, Outcome::ByName),
+                Ok(None) => (None, Outcome::Unbound),
                 // Recorded before it propagates: an ambiguous reference is the
                 // most interesting thing that can happen here and used to leave
                 // no record at all, the `?` having carried it away.
@@ -747,19 +804,19 @@ impl Environment {
                 outcome,
             );
         }
-        let result = chosen?.map(|i| candidates[i].1);
+        chosen?;
 
         if debug {
             match &result {
                 Some(tv) => {
                     let v = crate::debug_format::format_tagged(*tv, &self.heap.borrow());
-                    println!("[ENV]   Best match (most specific): {}", v);
+                    println!("[ENV]   Result (scoped or fallback): {}", v);
                 }
-                None => println!("[ENV]   No scoped match; falling back to simple lookup"),
+                None => println!("[ENV]   No scoped match and the fallback found nothing"),
             }
         }
 
-        Ok(result.or_else(|| self.get_scoped_fallback(name, scopes)))
+        Ok(result)
     }
 
     /// The by-name fallback for a scoped reference no scoped binding answered.
@@ -793,9 +850,26 @@ impl Environment {
         }
         if let Some(i) = self.visible_scoped_index(name) {
             let table = self.scoped_bindings.borrow();
-            let binding = &table[name][i];
-            if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                return Some(binding.tagged_value);
+            // `.get(i)`, as `get` reads the same table — the two copies of
+            // this walk must not disagree on out-of-bounds behavior. One
+            // shared walk is Track Q's Q7.3; until then they mirror by hand.
+            if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
+                // Provably dead on this path today: the fallback only runs
+                // after `resolve_index` returned no candidate over this same
+                // chain, so every scoped binding here already failed
+                // `is_candidate`. Kept as a live arm rather than pruned, with
+                // the invariant asserted, so a future change to the rule (a
+                // visibility filter, an ambiguity-policy change) fails a
+                // debug test loudly instead of silently resurrecting a
+                // rejected binding — which would be family 36 again.
+                debug_assert!(
+                    !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
+                    "get_scoped_fallback reached a binding of `{name}` that is a \
+                     candidate for {scopes} — resolution should have chosen it"
+                );
+                if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                    return Some(binding.tagged_value);
+                }
             }
             // Rejected for these scopes: fall through to the parent rather
             // than resurrect it by name.

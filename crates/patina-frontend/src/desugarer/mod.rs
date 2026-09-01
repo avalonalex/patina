@@ -736,6 +736,20 @@ impl Desugarer {
             //
             // An ambiguous answer is also a disagreement: it has not
             // identified a binding, so there is none to alias to.
+            //
+            // Provenance assumption, made explicit since the family-36 fix:
+            // `def_value` came from `get` — the *name-only* view — while the
+            // comparison asks `get_with_scopes`, whose fallback now refuses
+            // the name-only view of a binding those scopes reject. If the
+            // by-name answer is such a rejected scoped definition, the two
+            // views disagree and this symbol is (correctly) not aliased —
+            // scoped resolution at the use site decides it instead, which for
+            // a cross-expansion definition means the refusal family 40 pins.
+            // No in-program shape reaches this today (measured 2026-08-31:
+            // shared global chains agree either way, and the cross-library
+            // generated-getter shape dies earlier at the Template::Literal
+            // skip); re-audit this comparison if internal defines' scoped
+            // bindings ever become relink targets.
             if !definition_scopes.is_empty()
                 && !matches!(
                     def_env.get_with_scopes(name, definition_scopes),
