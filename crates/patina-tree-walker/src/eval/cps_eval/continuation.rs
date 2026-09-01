@@ -39,6 +39,7 @@ impl<'a> CpsEvaluator<'a> {
         cont: &ContValue,
         cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
+        exception_handlers: &[ExceptionHandler],
     ) -> Rc<CpsContinuation> {
         match cont {
             ContValue::Local {
@@ -52,6 +53,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: env.clone(),
                 prompt_tag: None,
                 dynamic_winds: dynamic_winds.to_vec(),
+                exception_handlers: exception_handlers.to_vec(),
                 captured_cont_env: local_cont_env.clone(),
                 resume: None,
             }),
@@ -67,6 +69,9 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 prompt_tag: None,
                 dynamic_winds: vec![],
+                // Halt ends the program; nothing runs after it, so it names no
+                // handlers rather than the caller's.
+                exception_handlers: vec![],
                 captured_cont_env: cont_env.clone(),
                 resume: None,
             }),
@@ -88,6 +93,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 prompt_tag: None,
                 dynamic_winds: dynamic_winds.to_vec(),
+                exception_handlers: exception_handlers.to_vec(),
                 captured_cont_env: cont_env.clone(),
                 resume: Some(other.clone()),
             }),
@@ -99,8 +105,9 @@ impl<'a> CpsEvaluator<'a> {
         cont: &ContValue,
         cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
+        exception_handlers: &[ExceptionHandler],
     ) -> TaggedValue {
-        let k = self.reify_continuation(cont, cont_env, dynamic_winds);
+        let k = self.reify_continuation(cont, cont_env, dynamic_winds, exception_handlers);
         self.evaluator
             .global_env
             .heap()
@@ -163,6 +170,12 @@ impl<'a> CpsEvaluator<'a> {
                 let decoded = continuation_cont_value(&k);
                 let captured_cont_env = k.captured_cont_env.clone();
                 let captured_winds = k.dynamic_winds.clone();
+                // The handler stack is restored from the continuation, not
+                // carried over from the caller — re-entry restores the dynamic
+                // environment the continuation names, and R7RS 6.11 puts the
+                // handlers in it.
+                let captured_handlers = k.exception_handlers.clone();
+                let _ = exception_handlers;
                 self.invoke_continuation_step(
                     decoded,
                     value,
@@ -170,7 +183,7 @@ impl<'a> CpsEvaluator<'a> {
                     captured_cont_env,
                     prompt_stack,
                     captured_winds,
-                    exception_handlers,
+                    captured_handlers,
                 )
             }
 

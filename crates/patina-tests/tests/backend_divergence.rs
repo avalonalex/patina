@@ -47,8 +47,9 @@ mod common;
 use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
-const HANDLER_REENTRY: &str = "PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md B3";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
+// HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
+// converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
@@ -141,44 +142,42 @@ fn callcc_abort_pattern_through_call_with_values() {
     // larceny_families.rs's family 5 — not duplicated here.
 }
 
-/// An error raised *after* a continuation escape is not catchable on the
-/// tree-walker.
+/// An error raised *after* a continuation escape is catchable on both
+/// backends — converged 2026-09-01 when `CpsContinuation` gained the handler
+/// stack.
 ///
 /// Delivering two values to a single-value context is unspecified in R7RS,
 /// and the references take different options: chibi and the VM let `+` raise
 /// on the `#<values>` object, which a `guard` around it catches; Gauche
-/// delivers the first value and answers `2`. What is not an option is the
-/// tree-walker's answer — the type error aborts the program with the
-/// `guard`'s handler stack apparently already gone.
+/// delivers the first value and answers `2`. What was not an option was the
+/// tree-walker's answer — the type error aborted the program with the
+/// `guard`'s handler stack gone.
 ///
-/// Reachable since 2026-08-25, when a multi-value continuation invocation
-/// stopped raising a wrong-arity error at the call site (where it *was*
-/// catchable) and started escaping. The escape path is the same one PRD §6
-/// records as not carrying the handler stack on `CpsContinuation`; this is
-/// that gap, in a shape the SRFI 1 fix made ordinary.
+/// It became reachable on 2026-08-25, when a multi-value continuation
+/// invocation stopped raising a wrong-arity error at the call site (where it
+/// *was* catchable) and started escaping, and the escape path reset the
+/// handler stack to empty. It carries the captured stack now.
 #[test]
 fn an_error_after_a_multi_value_escape_is_catchable() {
-    assert_divergence(
+    assert_program_eval_to(
         "(guard (e (#t (list 'caught))) (+ 1 (call/cc (lambda (k) (k 1 2)))))",
-        On::Vm,
         "(caught)",
-        ErrorClass::AtRuntime,
-        HANDLER_REENTRY,
     );
 }
 
-// ─── Continuation re-entry loses the handler stack (audit B3) ────────────────
+// ─── Continuation re-entry keeps the handler stack (audit B3 — closed) ───────
 
 /// Re-entering a continuation captured under `with-exception-handler` keeps
-/// the handler on the VM (restored from its snapshot) but loses it on the
-/// tree-walker: the escape path in `cps_eval/mod.rs` resets
-/// `exception_handlers` to empty because `CpsContinuation` does not carry
-/// them. Tree-walker: `unhandled continuable exception: boom`. The fix is to
-/// store the handler stack (and `prompt_stack`) on `CpsContinuation` and
-/// restore both on re-entry, as the VM does.
+/// the handler on both backends — converged 2026-09-01, closing audit B3.
+///
+/// The VM always restored the stack from its `VmContinuation` snapshot. The
+/// tree-walker's escape path in `cps_eval/mod.rs` reset `exception_handlers`
+/// to empty, because `CpsContinuation` did not carry them; it does now, and
+/// re-entry restores them like `dynamic_winds`. Kept as the regression guard,
+/// held to one expectation on both backends.
 #[test]
 fn reentered_continuation_keeps_exception_handler() {
-    assert_divergence(
+    assert_program_eval_to(
         r#"
         (define saved #f)
         (define entered #f)
@@ -193,10 +192,7 @@ fn reentered_continuation_keeps_exception_handler() {
               (list 'second-pass first)
               (begin (set! entered #t) (saved #f))))
         "#,
-        On::Vm,
         "(second-pass 42)",
-        ErrorClass::AtRuntime,
-        HANDLER_REENTRY,
     );
 }
 

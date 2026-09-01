@@ -34,8 +34,12 @@ impl<'a> CpsEvaluator<'a> {
                 let cont = cont_env
                     .get(k)
                     .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                // Reify with empty dynamic winds for now (will be filled in by caller if needed)
-                Ok(self.reify_continuation_tagged(cont, cont_env, &[]))
+                // Reify with empty dynamic winds for now (will be filled in by caller if needed).
+                // The handler stack is empty here for the same reason: this
+                // trivial-eval path carries no machine state. `eval_one_step`'s
+                // own `ContRef` arm, which does carry it, is the path that
+                // matters for `call/cc`.
+                Ok(self.reify_continuation_tagged(cont, cont_env, &[], &[]))
             }
 
             CpsExprKind::Lambda {
