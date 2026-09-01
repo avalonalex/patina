@@ -58,6 +58,10 @@ impl<'a> CpsEvaluator<'a> {
                 resume: None,
             }),
 
+            // Already reified, including its handler stack: re-reifying is
+            // the identity, so `exception_handlers` is deliberately unread
+            // here. The continuation names the environment it was *captured*
+            // in, not the one it is being handed around in.
             ContValue::Captured(k) => k.clone(),
 
             ContValue::Halt => Rc::new(CpsContinuation {
@@ -175,7 +179,6 @@ impl<'a> CpsEvaluator<'a> {
                 // environment the continuation names, and R7RS 6.11 puts the
                 // handlers in it.
                 let captured_handlers = k.exception_handlers.clone();
-                let _ = exception_handlers;
                 self.invoke_continuation_step(
                     decoded,
                     value,

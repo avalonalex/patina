@@ -1242,9 +1242,14 @@ through Rust to reach the handlers installed outside. Routing at the `?` is what
 parameter-converter fix below does and it works — the outer frame still has its handlers — but the
 general fix is to thread the handler stack into the nested trampoline.
 
-Same shape as the quarantined `reentered_continuation_keeps_exception_handler`, where
-`CpsContinuation` does not carry the handler stack either; the two probably want one fix. The
-enabling refactor both reviews converged on independently is a `MachineState` bundling
+Its sibling row closed on 2026-09-01: `reentered_continuation_keeps_exception_handler` was
+`CpsContinuation` not carrying the handler stack, which is a *storage* gap and is fixed by storing
+it. **This row is the other half and no field fixes it** — the nested trampoline fabricates an empty
+stack because nothing marks which trampoline captured a continuation, so `apply_cps_step` turns
+every reified-continuation invoke into an escape and the calling primitive runs its cleanup either
+way. The VM's `across_reentry` is the equivalent the tree-walker lacks.
+
+The enabling refactor both reviews converged on independently is a `MachineState` bundling
 `cont`/`cont_env`/`prompt_stack`/`dynamic_winds`/`exception_handlers` — the five values threaded
 through every `cps_eval` signature, every `StepResult` variant, and the reason for six
 `#[allow(clippy::too_many_arguments)]` in the crate. With it, routing becomes one call at the

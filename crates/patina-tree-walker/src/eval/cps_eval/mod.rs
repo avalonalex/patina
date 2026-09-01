@@ -295,13 +295,19 @@ impl<'a> CpsEvaluator<'a> {
                         // continuation, like `dynamic_winds`: R7RS 6.11 puts
                         // the handler stack in the dynamic environment, so
                         // re-entry has to bring it back. Resetting it to empty
-                        // is what made `guard`'s re-raise report "unhandled
-                        // continuable exception" — the jump back into the raise
-                        // point arrived with no handlers.
+                        // emptied the stack for the rest of the trampoline, so
+                        // any raise *after* an earlier `guard` had fired went
+                        // unhandled.
                         //
-                        // `prompt_stack` is still reset. Delimited
-                        // continuations are a separate question from this one
-                        // and nothing measured asks for it yet.
+                        // This restores the stack at the escape, and no more.
+                        // Two neighbours on the same path stay as they were:
+                        // `prompt_stack` is still reset (delimited
+                        // continuations are a separate question, and nothing
+                        // measured asks for it), and the wind thunks that
+                        // `application.rs` runs just before parking the escape
+                        // still execute on a nested trampoline that fabricates
+                        // an empty stack of its own (`wind.rs`), which is the
+                        // boundary defect Track L §6 tracks.
                         //
                         // `resume` holds an effect-carrying continuation that
                         // must be re-established rather than jumped past; the

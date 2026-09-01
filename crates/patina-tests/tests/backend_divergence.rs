@@ -142,26 +142,56 @@ fn callcc_abort_pattern_through_call_with_values() {
     // larceny_families.rs's family 5 — not duplicated here.
 }
 
-/// An error raised *after* a continuation escape is catchable on both
-/// backends — converged 2026-09-01 when `CpsContinuation` gained the handler
-/// stack.
+/// An error raised *after* a continuation escape is catchable — converged
+/// 2026-09-01 when `CpsContinuation` gained the handler stack. The
+/// tree-walker used to abort with `Type error: car expects a pair`, because
+/// the escape had emptied the `guard`'s handler stack on the way past.
 ///
-/// Delivering two values to a single-value context is unspecified in R7RS,
-/// and the references take different options: chibi and the VM let `+` raise
-/// on the `#<values>` object, which a `guard` around it catches; Gauche
-/// delivers the first value and answers `2`. What was not an option was the
-/// tree-walker's answer — the type error aborted the program with the
-/// `guard`'s handler stack gone.
-///
-/// It became reachable on 2026-08-25, when a multi-value continuation
-/// invocation stopped raising a wrong-arity error at the call site (where it
-/// *was* catchable) and started escaping, and the escape path reset the
-/// handler stack to empty. It carries the captured stack now.
+/// Found through a multi-value shape —
+/// `(guard (e (#t (list 'caught))) (+ 1 (call/cc (lambda (k) (k 1 2)))))`,
+/// reachable since 2026-08-25 when a multi-value continuation invocation
+/// stopped raising a wrong-arity error at the call site and started escaping.
+/// That program is **not** what is asserted here: delivering two values to a
+/// single-value context is unspecified in R7RS, and the references split on
+/// it (chibi and our VM let `+` raise on the `#<values>` object; Gauche
+/// delivers the first value and answers `2`). Pinning it would hold both
+/// backends to a choice R7RS does not require. The escape below is
+/// single-valued and the error after it is unambiguous, so every
+/// implementation must answer `caught` — chibi and Gauche do.
 #[test]
-fn an_error_after_a_multi_value_escape_is_catchable() {
+fn an_error_after_a_continuation_escape_is_catchable() {
     assert_program_eval_to(
-        "(guard (e (#t (list 'caught))) (+ 1 (call/cc (lambda (k) (k 1 2)))))",
-        "(caught)",
+        "(guard (e (#t 'caught))
+           (begin (call-with-current-continuation (lambda (k) (k 1)))
+                  (car 7)))",
+        "caught",
+    );
+}
+
+/// The escape path's broadest effect, and the one nothing else covers: after
+/// an inner `guard` fires, a *later* raise must still find the outer handler.
+///
+/// The tree-walker reset `exception_handlers` to empty on every re-entry, and
+/// a `guard` that fires re-enters — `guard` expands to `call/cc` +
+/// `with-exception-handler`, and catching invokes `guard-k`. So one caught
+/// exception emptied the handler stack for everything after it:
+///
+/// ```text
+///   tree-walker, before => Error: unhandled exception: y
+///   VM, chibi, Gauche   => (outer y)
+/// ```
+///
+/// Nothing in `nested_exception_handlers.rs` caught this: those tests nest
+/// guards but never raise again *after* an inner one has fired, so they pass
+/// either way. This is an ordinary shape — a loop that catches per item and
+/// then fails on something else — not an exotic one.
+#[test]
+fn a_raise_after_an_earlier_guard_fired_still_finds_the_outer_handler() {
+    assert_program_eval_to(
+        "(guard (o (#t (list 'outer o)))
+           (begin (guard (i (#t 'inner)) (raise 'x))
+                  (raise 'y)))",
+        "(outer y)",
     );
 }
 
