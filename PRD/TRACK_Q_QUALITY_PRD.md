@@ -1,6 +1,12 @@
 # Track Q — Code and Project Quality PRD
 
 **Created:** 2026-08-09
+**Updated:** 2026-08-31 — added Q7, the hygiene consolidation queue: the defect
+queue (triage families 33–39) closed with the matrix at 28 of 28, and what made
+those defects possible — one rule hand-copied across five sites — is exactly
+this track's charter to delete. Each Q7 item names the guard that must exist
+before it is attempted. §1.1's property-testing gap now points at Track H for
+its hygiene half.
 **Status:** Planning → ready to execute
 **Scope decision:** **structural, not cosmetic.** This track fixes gaps in how the
 project *proves* it is correct — test structure, CI coverage, API surface, and the
@@ -44,7 +50,7 @@ backend is the one CI exercises least. §1.2 is what that gap was already hiding
 | **No cross-backend differential test exists.** The chibi suite is run twice by two scripts and the two reports are compared by a human reading two files. | `scripts/run_chibi_tests_tree_walker.sh:7` re-execs `run_chibi_tests.sh --tree-walker`; the outputs land in `scheme_tests/reports/compatibility.md` and `compatibility_tree_walker.md` with no programmatic diff. |
 | A primitive is **registered and exported with a body that always errors.** | `with_exception_handler` returns `InternalError("with-exception-handler: not yet implemented - requires CPS integration")` — `patina-primitives/src/primitives/exceptions.rs:285-287` — yet is registered at `:369-375` and exported as `("with-exception-handler", Arity::Exact(2))` in `patina-runtime/src/stdlib/internal_errors.rs:35`. Both backends special-case the name at the call site, so the stub is reachable only as a first-class value — see §1.2. |
 | Two god objects. | `patina-core/src/heap/mod.rs` — 2,878 lines, **155 `pub fn`** (plus 51 in `heap/numeric.rs`, 2,090 lines): a ~200-method surface on the type every crate depends on. `patina-vm/src/runtime/vm_state.rs` — 3,381 lines, 56 functions. |
-| **No property or fuzz testing.** | Zero matches for `proptest`/`quickcheck`/`arbitrary`/`fuzz` across all `Cargo.toml`; no `fuzz/` directory. |
+| **No property or fuzz testing.** | Zero matches for `proptest`/`quickcheck`/`arbitrary`/`fuzz` across all `Cargo.toml`; no `fuzz/` directory. *(2026-08-31: the hygiene half of this gap has its own track now — `PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md`. Q3 keeps the input-facing layers.)* |
 | **No perf regression gate.** After ~15 PRs of Track P work, nothing in CI would catch a regression. | The scoreboard is a manual sweep against a Chibi checkout outside the repo (`~/Project/r7rs-benchmarks`); `crates/patina-tests/benches/` is Criterion-only and not run in CI. |
 | Status numbers are duplicated and have drifted. | `PRD/MILESTONES.md:5` headlines geomean **0.93×**; `PRD/TRACK_P_PERFORMANCE_PRD.md` §1.11 records **0.79×**. `PRD/SNOW_AND_PERF_ROADMAP.md:51-54`'s own housekeeping list of stale links is itself still stale. `PRD/README.md` — the directory's index — still reports **1159/1159**, calls Phase 2 "Next / Planning" (the VM shipped and is the default backend), lists `phase2/VM_BACKEND_DESIGN.md` as "(to be created)", and does not mention Tracks P, L, or Q at all. 221 markdown files / 3.7 MB under `PRD/` vs 16 under `docs/`. |
 | Generated artifacts are version-controlled, so every test run dirties the tree. | `scheme_tests/reports/{compatibility,compatibility_tree_walker}.md` and `results*.txt` — currently modified in the working tree with timestamp-and-timing churn only. |
@@ -271,6 +277,10 @@ stays fast; a nightly job may run a larger budget.
 - **Acceptance:** the three properties above run in CI; each found defect lands
   with its shrunk regression case.
 
+Hygiene properties are deliberately absent from this list: they have their own
+track (`PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md`, item H2), and H2's kernel
+properties double as the named guards for Q7 below.
+
 ### Q4 — Reduce the `Heap` and `VmState` API surface
 `Heap` exposes ~200 public methods, and the `RefCell` borrow rule documented in
 `CLAUDE.md` exists because the API permits the mistake it warns about. This item
@@ -329,6 +339,82 @@ live status.
 
 ---
 
+### Q7 — Hygiene consolidation queue  *(added 2026-08-31)*
+
+The hygiene defect queue (triage families 33–39) closed with
+`hygiene_matrix.rs` reading 28 of 28 on both backends — and every family in it
+was an interaction between two *copies* of one rule: desugar-time stamping vs
+runtime binding, read resolution vs write resolution, one backend's binder rule
+vs the other's. The consolidation arc is half-walked already (#135 merged the
+two read copies into `patina_core::scope_resolve`; #137 collapsed the parameter
+double-cell; #139 made binder scoping uniform; the internal-define fix removed
+the params/defines asymmetry). This queue names what remains.
+
+Discipline: **no item is attempted before its named guard exists**, and a
+consolidation must be behavior-identical under the matrix, both chibi suites,
+and the Larceny lanes — one that changes an answer is a defect fix travelling
+incognito and must be split into its own PR with its own pin.
+
+1. **Writes resolve through `scope_resolve`, like reads.**
+   `Environment::set_with_scopes` still resolves per-environment with an inline
+   copy of the most-specific rule and never calls `resolve_index` — so an
+   ambiguous write picks by size where an ambiguous read is refused. Replace
+   with one candidate walk over the chain, resolved once, consumed by both
+   directions; refuse ambiguous writes. First recorded as "the rest of #138
+   worth recovering" in triage family 38 — this row is that item's durable
+   home, since the triage doc deletes itself when its queue empties.
+   **Guard:** Track H's H2 read/write-symmetry property, plus the matrix's
+   write rows and the `an_introduced_macro_can_assign_*` pins.
+2. **One `binder_disposition` function.** The two-arm rule — a source-written
+   binder binds at the scopes it stands in and stays visible by name; a
+   macro-introduced one binds at its own scopes, scoped-only — is hand-copied
+   at every site that binds: the tree-walker's `application.rs` `bind`
+   closure, the VM's `alpha_rename` (`build_bindings`, and
+   `body_define_bindings` with the in-flight internal-define fix), and the CPS
+   transform's `define_scopes` (same fix). One `patina-core` function, so a
+   fourth binding form cannot diverge one flavor at a time.
+   **Guard:** the matrix (28 two-directional pins).
+3. **One precedence function for `get` and `set`.** Both procedurally encode
+   plain binding → alias → name-visible scoped binding → parent, and they have
+   drifted once already (the scoped write-through was added to `set` after the
+   fact to re-match `get`). Merge the *resolution precedence*, not the
+   storage: the plain map's stable slots are the VM global cache's soundness
+   argument and the hot path, so a storage merge is a perf-and-GC project with
+   no correctness payoff beyond what the precedence merge gives.
+   **Guard:** Q1's differential harness + both chibi suites.
+4. **Check the desugar/run seam instead of hoping.** Family 36's diagnosis
+   was exactly a `BIND phase=desugar` and a `BIND phase=run` record
+   disagreeing on one binder's scopes. A checker over `PATINA_SCOPE_TRACE`
+   output that pairs the two phases per binder and fails on a scope mismatch
+   turns that seam from hoped-for into enforced. Instrumentation rather than
+   refactor — it can equally land under Track H's H1 plumbing; whichever
+   moves first takes it.
+5. **Retire the remaining spelling-based mechanisms.** (a) Literal matching
+   still compares spellings (`shadowed_names` / `is_literal_shadowed_tagged` —
+   the desugarer's own comment names it the one place shadowing has not moved
+   to bindings). Contained. (b) The relinker resolves macro-generated
+   definitions by name, with a documented defect (a user's later global steals
+   a macro's private definition — Track L §6's jabberwocky note). Deep — it
+   needs scoped relinking and a migration story for definition-environment
+   references; not to be started casually.
+   **Guard for both:** the matrix, both chibi suites, and SRFI 101's
+   shadowing-names suite (56 of 56 today — the accidental adversarial-renaming
+   experiment that found families 33–35).
+
+Deliberately **not** in this queue: *resolve once, before the backends* — one
+expansion-and-resolution pass handing both backends fully-resolved code, after
+which `Environment` needs no scoped table at runtime. The VM's `alpha_rename`
+proves the endgame locally (past it, scopes are gone), but runtime by-name
+resolution is load-bearing for `eval`, `interaction-environment`, `load` and
+REPL redefinition, so this is a design decision for the `syntax-case` rewrite,
+recorded in `PRD/macro/SYNTAX_CASE_DESIGN.md`, not a refactor of the current
+architecture.
+
+- **Acceptance:** per item — the named guard exists and is green before the
+  change; the matrix, chibi (both backends) and the Larceny lanes read
+  identically before and after; the deleted copy is *deleted*, not delegated
+  to.
+
 ## 5. Sequencing
 
 **Q0** (one CI job) → **Q1** (harness, seeded with the §1.2 failures) → **Q2**
@@ -339,6 +425,11 @@ everything depends on and it benefits from Q1 being in place first.
 Q0 and Q1 are the ones that pay for the rest: Q0 is nearly free, and Q1 converts
 every future backend divergence from a manual discovery into a test failure. Q2
 is the proof that they were needed.
+
+**Q7** rides behind its guards rather than this ordering: Q7.1 waits for Track
+H's H2; Q7.2 and Q7.3 can go any time under the matrix; Q7.4 lands with
+whichever of Q7 or Track H's H1 moves first; Q7.5(b) not before a written
+design note on scoped relinking.
 
 ## 6. Risks & mitigations
 
