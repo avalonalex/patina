@@ -1140,24 +1140,43 @@ than via `assert_divergence`, which needs a backend to *fail*: both backends
 agree and neither errors, they return a plausible wrong answer. The test says
 what to do when it converges.
 
-**VM: invoking a continuation inside its own `dynamic-wind` re-runs the thunks** — ❌ **open**.
-No primitive involved; the minimal repro is a bare `call/cc`.
+**VM: invoking a continuation inside its own `dynamic-wind` re-runs the thunks** — ✅ **fixed
+2026-09-01**. No primitive involved; the minimal repro is a bare `call/cc`.
 
 ```scheme
 (dynamic-wind (lambda () (log 'in)) (lambda () (call/cc (lambda (k) (k #f)))) (lambda () (log 'out)))
-;; VM => (in out in out)
+;; VM => (in out in out)          until 2026-09-01
 ;; tree-walker, chibi, Gauche => (in out)
 ```
 
-The VM treats invoking a continuation captured *within* the extent as leaving and re-entering it,
-so the after- and before-thunks run again; R7RS §6.10 only requires them when the dynamic extent is
-actually exited and re-entered, which it is not here.
+The VM treated invoking a continuation captured *within* the extent as leaving and re-entering it,
+so the after- and before-thunks ran again; R7RS §6.10 only requires them when the dynamic extent is
+actually exited and re-entered, which it is not here. `run_wind_transition` forced the common prefix
+of the two wind stacks to zero for every full `call/cc` invoke; it takes the real prefix now, keyed
+on a new `DynamicWindRecord::id` minted from the counter the tree-walker's record already used.
+
+**Two things the fix turned up, both now pinned in the same test file.** The *value* form of
+`dynamic-wind` runs its body on a nested Rust call, so an escape abandons the frame that owns the
+cleanup — safe only while every invoke drained the whole stack, and once the prefix is honoured the
+after-thunk went from running at the wrong time (`(in out in)`) to never running at all (`(in)`).
+It pops and runs its own record now, and the value form matches chibi on all four escape shapes
+where main matched on one. And the exit loop recomputes the prefix per iteration: a continuation
+invoked from inside an after-thunk replaces `dynamic_winds` wholesale, which a hoisted index would
+outlive — unreachable under the forced zero, reachable once the bound can be nonzero.
 
 **Recorded late, and that is the point.** This was visible as the "four `in`/`out` pairs" symptom in
 the primitive-escape work, and when those entries were rewritten the standalone repro went with
-them — a defect that had been tracked became untracked, and only a review sweep caught it. It is now
+them — a defect that had been tracked became untracked, and only a review sweep caught it. It was
 pinned in `crates/patina-tests/tests/backend_divergence.rs`, which is the mechanism that would have
-prevented that: prose in a PRD can be edited away, a failing test cannot.
+prevented that: prose in a PRD can be edited away, a failing test cannot. The value-form regression
+above makes the same argument twice over — `cargo test` was fully green while the after-thunk leaked,
+because the pin covered only head position.
+
+**Still open next door**, and worth naming so nobody assumes identity settled it: `vm_raise_value`,
+the two prompt paths (`AbortToPrompt`, `CaptureComposable`) and the value-form arm still locate wind
+records by *depth*. A continuation invoke can now replace a stack record-for-record while keeping its
+length, so those comparisons rest on an assumption identity was introduced to retire. Composable
+invokes also bypass `run_wind_transition` entirely, running every captured `before` thunk.
 
 **VM: a primitive used as a `call-with-values` consumer still mishandles an escaping callback** —
 ❌ **open**. The last shape of the re-entry class; the rest closed 2026-08-16.

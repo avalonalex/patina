@@ -1297,14 +1297,11 @@ fn dispatch_one_instruction(
         Instruction::PushWind { before, after } => {
             let before_val = state.reg_at(base, before);
             let after_val = state.reg_at(base, after);
-            state.dynamic_winds.push(DynamicWindRecord {
-                id: patina_core::next_dynamic_wind_id(),
-                before: before_val,
-                after: after_val,
-                // stack_depth = 0: sentinel meaning "managed by instruction
-                // sequence, not auto-popped by pop_resolved_winds".
-                stack_depth: 0,
-            });
+            // stack_depth = 0: sentinel meaning "managed by instruction
+            // sequence, not auto-popped by pop_resolved_winds".
+            state
+                .dynamic_winds
+                .push(DynamicWindRecord::new(before_val, after_val, 0));
         }
 
         Instruction::PopWind => {
@@ -2277,18 +2274,33 @@ fn handle_control_primitive(
             // escape always fell through to `set_reg` on a dead frame.
             run_thunk(state, args[0])?;
             let wind_depth = state.dynamic_winds.len();
-            state.dynamic_winds.push(DynamicWindRecord {
-                id: patina_core::next_dynamic_wind_id(),
-                before: args[0],
-                after: args[2],
-                stack_depth: state.frames.len(),
-            });
+            let frame_depth = state.frames.len();
+            state
+                .dynamic_winds
+                .push(DynamicWindRecord::new(args[0], args[2], frame_depth));
             let result = match run_thunk_outcome(state, args[1])? {
                 ThunkOutcome::Returned(v) => v,
-                // The wind transition the continuation ran already executed
-                // this record's after-thunk and replaced the frames: nothing
-                // left to clean up, and nothing of ours to write.
-                ThunkOutcome::Escaped(v) => return Err(park_escape(state, v)),
+                // The body escaped through a continuation, so this call owns
+                // no frame to deliver into. Whether the after-thunk is still
+                // owed has to be *read off the stack*, not assumed: it used to
+                // be safe to assume the jump had already run it, because a
+                // full continuation invoke drained every wind record. Now that
+                // the transition keeps the records both stacks share, a jump
+                // that stays inside this extent leaves ours in place — and
+                // this frame, which is the only thing that would ever pop it,
+                // is about to be abandoned. Left alone the record outlives its
+                // owner and fires at some unrelated later transfer.
+                ThunkOutcome::Escaped(v) => {
+                    if state.dynamic_winds.len() > wind_depth {
+                        state.dynamic_winds.truncate(wind_depth);
+                        // Best-effort, and deliberately after the truncate: an
+                        // after-thunk that fails on its own terms loses to the
+                        // escape already in flight, exactly as the unwind loop
+                        // in `vm_raise_value` used to treat it.
+                        let _ = run_thunk(state, args[2]);
+                    }
+                    return Err(park_escape(state, v));
+                }
             };
             // If the body aborted, the abort already ran exit thunks and
             // truncated dynamic_winds. Only do cleanup if our record is still there.
@@ -2842,30 +2854,44 @@ fn run_wind_transition(
     // exit down to the deepest extent both stacks share, then enter from
     // there. An extent on both sides is never left, so its thunks do not run.
     //
-    // Keyed on `DynamicWindRecord::id`, which exists for exactly this and is
-    // unique per `dynamic-wind` *call*. The `before` thunk is not an identity:
-    // two calls sharing one thunk — the same closure in a loop, or the
-    // `(lambda () #f)` that `with-output-to-file` uses — would compare equal
-    // and the common prefix would run past the point where the stacks diverge.
+    // The prefix is keyed on `DynamicWindRecord::id`, unique per
+    // `dynamic-wind` *call*, which is why the VM's record grew one. Depth
+    // cannot serve — the whole question is where two stacks stop agreeing —
+    // and neither can the `before` thunk, since two calls may share a closure.
     //
-    // A full `call/cc` invoke used to force this to 0, exiting and re-entering
-    // every extent including the shared ones. Invoking a continuation captured
-    // inside its own extent then ran that extent's after and before thunks for
-    // a jump that crossed nothing: `(dynamic-wind in (lambda () (call/cc
-    // (lambda (k) (k #f)))) out)` logged `(in out in out)` where the
-    // tree-walker, chibi and Gauche log `(in out)`.
-    let common = state
-        .dynamic_winds
-        .iter()
-        .zip(target_winds.iter())
-        .take_while(|(a, b)| a.id == b.id)
-        .count();
+    // What was wrong was not the comparison but that it was skipped: a full
+    // `call/cc` invoke forced the prefix to 0, so it exited and re-entered
+    // every extent, the shared ones included. (The by-`before` comparison this
+    // replaces was real code but unreachable — both call sites passed
+    // `force_reenter: true`.) Invoking a continuation captured inside its own
+    // extent therefore ran that extent's after and before thunks for a jump
+    // that crossed nothing: `(dynamic-wind in (lambda () (call/cc (lambda (k)
+    // (k #f)))) out)` logged `(in out in out)` where the tree-walker, chibi
+    // and Gauche log `(in out)`.
+    fn common_prefix(current: &[DynamicWindRecord], target: &[DynamicWindRecord]) -> usize {
+        current
+            .iter()
+            .zip(target.iter())
+            .take_while(|(a, b)| a.id == b.id)
+            .count()
+    }
 
     // Run 'after' thunks for records being exited (innermost first), popping
-    // each *before* it runs — see `vm_raise_value` for why the other order is
-    // unbounded recursion. Truncating as we go is also what the callers want:
-    // every one of them replaces `dynamic_winds` wholesale afterwards.
-    while state.dynamic_winds.len() > common {
+    // each *before* it runs — see `pop_resolved_winds` for why the other order
+    // is unbounded recursion.
+    //
+    // The prefix is recomputed every iteration rather than hoisted: `run_thunk`
+    // re-enters the VM, and a continuation invoked from inside an after-thunk
+    // replaces `state.dynamic_winds` wholesale, which would leave a hoisted
+    // index pointing into a stack that no longer exists. Under the old forced
+    // zero that could not bite, because the loop simply drained to empty; a
+    // nonzero bound makes it reachable. The stacks here are a handful of
+    // records deep, so recomputing costs nothing worth measuring.
+    loop {
+        let common = common_prefix(&state.dynamic_winds, target_winds);
+        if state.dynamic_winds.len() <= common {
+            break;
+        }
         let after = state
             .dynamic_winds
             .pop()
@@ -2875,8 +2901,10 @@ fn run_wind_transition(
     }
 
     // Run 'before' thunks for records being entered (outermost first).
-    let enter_winds: Vec<_> = target_winds[common..].to_vec();
-    for record in enter_winds {
+    // `target_winds` is the caller's own vector, not a view into `state`, so
+    // this borrows rather than copying.
+    let common = common_prefix(&state.dynamic_winds, target_winds);
+    for record in &target_winds[common..] {
         run_thunk(state, record.before)?;
     }
 

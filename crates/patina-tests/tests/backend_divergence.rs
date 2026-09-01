@@ -331,14 +331,15 @@ fn callback_using_its_own_continuation_yields_nothing_on_the_tree_walker() {
 /// re-entered even the extents both stacks shared. It takes the common prefix
 /// now, keyed on the wind record's identity, as the tree-walker always did.
 ///
-/// Found while taking `guard` to R7RS 7.3's expansion for {GUARD_UNWIND_ORDER}
-/// families 22 and 28: that expansion leaves its body through a continuation
-/// far more often, and under the old rule a `guard` inside a
-/// `with-output-to-file` re-ran that form's after thunk — which closes the
-/// port — so the next write failed on a port the program still held. The
-/// defect is older and independent of that work, and is fixed here on its own
-/// terms. Kept as the regression guard: it was tracked in the PRD once, lost
-/// in an edit, and recovered only by review, which is why it lives in a test.
+/// Found while taking `guard` to R7RS 7.3's expansion for Track L triage
+/// families 22 and 28 (`PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6): that expansion
+/// leaves its body through a continuation far more often, and under the old
+/// rule a `guard` inside a `with-output-to-file` re-ran that form's after
+/// thunk — which closes the port — so the next write failed on a port the
+/// program still held. The defect is older and independent of that work, and
+/// is fixed here on its own terms. Kept as the regression guard: it was
+/// tracked in the PRD once, lost in an edit, and recovered only by review,
+/// which is why it lives in a test.
 #[test]
 fn a_continuation_within_its_own_wind_runs_the_thunks_once() {
     assert_program_eval_to(
@@ -351,6 +352,70 @@ fn a_continuation_within_its_own_wind_runs_the_thunks_once() {
         (reverse log)
     "#,
         "(in out)",
+    );
+}
+
+/// The same jump through the **value** form of `dynamic-wind`, which is a
+/// different code path and the one that regressed while this PR was written.
+///
+/// Head-position `dynamic-wind` compiles to `PushWind`/`PopWind`, so a
+/// continuation resuming inside the body still reaches the instruction that
+/// pops the record. The value form runs its body on a nested Rust call in
+/// `handle_control_primitive`, and an escape abandons the frame that owns the
+/// cleanup — it used to be safe to abandon it because a full continuation
+/// invoke drained every wind record on the way past. Once the transition keeps
+/// the records both stacks share, that stopped being true, and the after-thunk
+/// went from running at the wrong time to never running at all:
+///
+/// ```text
+///   (define dw dynamic-wind) (dw in (lambda () (call/cc (lambda (k) (k #f)))) out)
+///   main VM              => (in out in)     the thunks of a jump that crossed nothing
+///   mid-fix VM           => (in)            after-thunk leaked entirely
+///   chibi, Gauche, now   => (in out)
+/// ```
+///
+/// The leaked record also outlived its owner and fired at the next unrelated
+/// transfer, so the fourth shape below pins that a later `dynamic-wind` is
+/// unaffected. `cargo test` was fully green with the leak present, because
+/// nothing exercised the value form with an escaping body.
+#[test]
+fn the_value_form_of_dynamic_wind_runs_its_after_thunk_once() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base))
+        (define dw dynamic-wind)
+        (define (probe run)
+          (let ((log '()))
+            (run (lambda (x) (set! log (cons x log))))
+            (reverse log)))
+        (list
+          ;; escape stays inside the extent
+          (probe (lambda (note)
+                   (dw (lambda () (note 'in))
+                       (lambda () (call/cc (lambda (k) (k #f))))
+                       (lambda () (note 'out)))))
+          ;; the record must not survive to fire at a later, unrelated wind
+          (probe (lambda (note)
+                   (dw (lambda () (note 'in))
+                       (lambda () (call/cc (lambda (k) (k #f))))
+                       (lambda () (note 'after-dw)))
+                   (dynamic-wind (lambda () (note 'in2))
+                                 (lambda () 'body)
+                                 (lambda () (note 'out2)))))
+          ;; reached through apply, not a variable reference
+          (probe (lambda (note)
+                   (apply dynamic-wind
+                          (list (lambda () (note 'in))
+                                (lambda () (call/cc (lambda (k) (k #f))))
+                                (lambda () (note 'out))))))
+          ;; escape that genuinely leaves the extent
+          (probe (lambda (note)
+                   (call/cc (lambda (esc)
+                     (dw (lambda () (note 'in))
+                         (lambda () (esc 'gone))
+                         (lambda () (note 'out))))))))
+    "#,
+        "((in out) (in after-dw in2 out2) (in out) (in out))",
     );
 }
 

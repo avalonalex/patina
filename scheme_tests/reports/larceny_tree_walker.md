@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-01 11:18:25  
+**Generated:** 2026-09-01 00:06:58  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,7 +10,7 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 21 of 33 |
-| Assertions passed | 8302 of 8330 (99.7%) |
+| Assertions passed | 8300 of 8330 (99.6%) |
 | Suites not reaching a tally | 2 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -24,12 +24,14 @@ No tally was reached: the process died, or the runner's timeout cut it off. A cr
 | char | stack overflow |
 | ephemeron | no result before the timeout |
 
-## Assertion failures (28 in 10 suites)
+## Assertion failures (30 in 10 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### base — 9 of 1079 failed
+### base — 11 of 1079 failed
 
+- (not located) — `v`
+- (not located) — `v`
 - [base.sld:918](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L918) — `name` `unquote`
 - [base.sld:921](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L921) — `name` `foo`
 - [base.sld:924](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L924) — `append` `sqrt`
@@ -90,7 +92,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | fail | 1070 | 1079 |
+| base | fail | 1068 | 1079 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | crash | 0 | 0 |
