@@ -1145,57 +1145,42 @@ fn a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion() {
 
 // ---------------------------------------------------------------------------
 // Family 36 — a use-site binding captures a template's reference.
-// Tree-walker only for parameters and `let`; BOTH backends for internal
-// defines (see the last two tests in this section).
+// The parameter/`let` half is fixed: the by-name fallback no longer
+// resurrects a binding set-of-scopes resolution rejected
+// (`Environment::get_scoped_fallback`). Internal defines still capture on
+// BOTH backends — they reach the runtime with an empty scope set, so there
+// is nothing for the fallback to have rejected (see the last two tests in
+// this section, and the triage doc's step 2).
 // ---------------------------------------------------------------------------
 
 /// `mk`'s template references `list`; a use-site `(let ((list 1)) …)` has no
-/// bearing on it, and the VM agrees. The tree-walker binds and looks up
-/// locals by name (`application.rs` / `step.rs`), so the template's `list`
-/// finds the variable. Surfaced by the review of #132 while auditing the
-/// relinker's contract, which skips a name when the two environments'
-/// global views agree and leaves the rest to scope-aware resolution — which
-/// the tree-walker does not do for locals.
+/// bearing on it. Both backends now agree with chibi. The tree-walker used
+/// to error (`Not a procedure: #<integer>`): the template's `list` fell back
+/// by name onto the use-site binding after scope resolution rejected it —
+/// the `get_with_scopes` fallback this family's fix taught to skip a
+/// rejected binding.
 #[test]
 fn a_use_site_local_does_not_capture_a_templates_reference() {
-    assert_divergence(
+    assert_program_eval_to(
         "(define-syntax mk (syntax-rules () ((_ a b) (list a b))))
          (let ((list 1)) (mk 1 2))",
-        On::Vm,
         "(1 2)",
-        ErrorClass::AtRuntime,
-        "scheme_tests/reports/larceny_triage.md, family 36",
     );
 }
 
 /// The same defect, silent instead of loud — and this is the shape worth
-/// keeping. `assert_divergence` above pins a case where the tree-walker
-/// *errors*, which is at least visible; here it returns a wrong answer to
-/// the plainest statement of R7RS §4.3.2 there is, and nothing says so.
-///
-/// Measured 2026-08-27 against three implementations: chibi, Racket 8.x and
-/// the VM all answer `1`. Two lines, no `list`, no arity change — if the
-/// tree-walker is ever taught to bind locals by scopes, this is the test
-/// that should go green first.
-///
-/// Not `assert_divergence`, which assumes the wrong backend fails. Both
-/// answers are asserted so that *either* moving trips the test: a fix flips
-/// the tree-walker's, and a regression flips the VM's.
+/// keeping: the plainest statement of R7RS §4.3.2 there is. chibi, Racket
+/// and both backends answer `1`; the tree-walker answered `5` until the
+/// by-name fallback learned to skip a binding this resolution rejected,
+/// which is exactly "taught to bind locals by scopes" done from the
+/// resolution side rather than the binding side.
 #[test]
-fn a_use_site_local_silently_captures_a_templates_reference() {
-    let code = "(define x 1)
-                (define-syntax m (syntax-rules () ((m) x)))
-                (let ((x 5)) (m))";
-    assert_eq!(
-        eval_program_vm(code),
+fn a_templates_reference_resolves_past_a_same_named_use_site_let() {
+    assert_program_eval_to(
+        "(define x 1)
+         (define-syntax m (syntax-rules () ((m) x)))
+         (let ((x 5)) (m))",
         "1",
-        "VM: the template's `x` means the definition-site binding"
-    );
-    assert_eq!(
-        eval_program_tree_walker(code),
-        "5",
-        "tree-walker, quarantined: the use-site `let` captures it — \
-         scheme_tests/reports/larceny_triage.md, family 36"
     );
 }
 

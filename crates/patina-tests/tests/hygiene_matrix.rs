@@ -19,8 +19,12 @@
 //!
 //! The `correct` column is what **chibi 0.12 and Racket 9.3 both** answer,
 //! measured 2026-08-28. They agree on all 28 shapes, which is why a single
-//! column can stand for "correct". Patina gets **9** of the 28 wrong — two on
-//! the VM, eight on the tree-walker, one of them on both.
+//! column can stand for "correct". Patina got **9** of the 28 wrong when
+//! first measured — two on the VM, eight on the tree-walker, one of them on
+//! both. The six ordinary-binder read rows went green together when the
+//! by-name fallback stopped resurrecting a rejected binding; the **3** rows
+//! still wrong are all the internal define — two on the VM, two on the
+//! tree-walker, the read row on both.
 //!
 //! Every shape is a program both oracles *accept*: see the note in
 //! **Adding axes** about why a row pinned at "both reject it" is not coverage.
@@ -212,20 +216,22 @@ fn program(shape: &Shape) -> String {
 const MATRIX: &[Shape] = &[
     // ---- macro defined OUTSIDE, template READS X ------------------------
     // The template's `X` is the global; a use-site binder must not capture
-    // it. The tree-walker captures on every binder — family 36, and this is
-    // its true extent. The VM captures only through an internal define.
+    // it. The tree-walker used to capture on every binder; the six ordinary
+    // binder rows went green when the by-name fallback stopped resurrecting
+    // a binding the resolution rejected (`Environment::get_scoped_fallback`).
+    // What remains of family 36 is the internal define, on both backends.
     Shape { binder: Binder::LambdaParam, site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::Let,         site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::LetStar,         site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::Letrec,       site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::NamedLet,    site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::DoVar,       site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(global global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     // The one binder the VM gets wrong too: an internal define reaches the
     // runtime with an empty scope set on both backends.
     Shape { binder: Binder::InternalDef, site: Site::Outside, action: Action::Read,
@@ -383,9 +389,11 @@ fn the_defect_count_is_what_the_roadmap_says() {
     // VM: an internal define captures a template's reference in both
     // directions — family 36's only VM surface.
     assert_eq!(vm.len(), 2, "VM shapes wrong: {vm:?}");
-    // Tree-walker: family 36 on all seven binders in the read direction, and
-    // family 38's fallback on the internal define.
-    assert_eq!(tw.len(), 8, "tree-walker shapes wrong: {tw:?}");
+    // Tree-walker: family 36's internal define in the read direction, and
+    // family 38's fallback on the internal define. Every remaining wrong
+    // cell is the internal define: it reaches the runtime with an empty
+    // scope set, so no resolution ever rejects it — the triage doc's step 2.
+    assert_eq!(tw.len(), 2, "tree-walker shapes wrong: {tw:?}");
 
     // Every wrong row names the family it belongs to, so the table doubles as
     // the index from defect to surface count.
@@ -400,28 +408,27 @@ fn the_defect_count_is_what_the_roadmap_says() {
     }
 }
 
-/// Family 36 is one defect with eight surfaces, not eight defects.
+/// Family 36 is down to the internal define.
 ///
-/// Recorded as a test rather than as prose because the count is what makes the
-/// fix's acceptance criterion checkable: all seven go green together, or the
-/// fix is addressing a symptom.
+/// It began as one defect with eight surfaces; the six ordinary binder rows
+/// went green together when the by-name fallback stopped resurrecting a
+/// rejected binding — together, which is what this count being a test was
+/// for. The two that remain are both the internal define, which reaches the
+/// runtime with an empty scope set on both backends, so there is nothing for
+/// that fallback to have rejected. They must likewise go green together
+/// (with family 38's row, whose fix is the same one), or the fix is
+/// addressing a symptom.
 #[test]
-fn family_36_has_eight_surfaces() {
+fn family_36_is_down_to_the_internal_define() {
     let faces: Vec<String> = MATRIX
         .iter()
         .filter(|s| s.family == "36")
         .map(|s| s.name())
         .collect();
-    assert_eq!(faces.len(), 8, "{faces:?}");
-    // Seven are the read direction, one per binder; the eighth is the write
-    // direction through an internal define, which only the VM gets wrong.
     assert_eq!(
-        faces
-            .iter()
-            .filter(|n| n.ends_with("/outside/read"))
-            .count(),
-        7,
-        "{faces:?}"
+        faces,
+        vec!["internal-def/outside/read", "internal-def/outside/write"],
+        "family 36's remaining surfaces"
     );
 }
 

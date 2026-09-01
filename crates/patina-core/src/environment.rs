@@ -572,7 +572,7 @@ impl Environment {
             // Fall back to unmarked binding. This is the *root*, the recursion
             // having walked here — triage family 38's open half — so the
             // terminal record says which of the two ways the walk ended.
-            let landed = self.set(name, value);
+            let landed = self.set_scoped_terminal(name, scopes, value);
             crate::scope_trace::wrote(
                 name,
                 scopes,
@@ -583,6 +583,50 @@ impl Environment {
                 },
             );
             landed
+        }
+    }
+
+    /// The terminal of [`set_with_scopes`]'s fallback: [`set`], except that
+    /// the name-only view of a scoped binding this resolution rejected is not
+    /// written through. That is [`get_scoped_fallback`]'s rule on the write
+    /// side, and it has to hold on both or a reference could clobber by
+    /// spelling a binding it is not allowed to read. Reached only at the
+    /// root — the per-frame walk above already resolved every scoped binding
+    /// on the chain — so the parent arm mirrors [`set`]'s for shape, not for
+    /// traffic.
+    ///
+    /// [`set`]: Self::set
+    /// [`set_with_scopes`]: Self::set_with_scopes
+    /// [`get_scoped_fallback`]: Self::get_scoped_fallback
+    fn set_scoped_terminal(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+        value: TaggedValue,
+    ) -> Result<(), String> {
+        if let Some(slot) = self.local_slot(name) {
+            self.set_slot_value(slot, value);
+            return Ok(());
+        }
+        if let Some((target_env, target_name)) = self.alias_target(name) {
+            return match target_env {
+                Some(env) => env.set(&target_name, value),
+                None => self.set(&target_name, value),
+            };
+        }
+        if let Some(i) = self.visible_scoped_index(name) {
+            let mut table = self.scoped_bindings.borrow_mut();
+            if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i))
+                && crate::scope_resolve::is_candidate(&binding.scopes, scopes)
+            {
+                binding.tagged_value = value;
+                return Ok(());
+            }
+            // Rejected for these scopes: not writable by spelling.
+        }
+        match &self.parent {
+            Some(parent) => parent.set_scoped_terminal(name, scopes, value),
+            None => Err(name.to_string()),
         }
     }
 
@@ -715,7 +759,50 @@ impl Environment {
             }
         }
 
-        Ok(result.or_else(|| self.get(name)))
+        Ok(result.or_else(|| self.get_scoped_fallback(name, scopes)))
+    }
+
+    /// The by-name fallback for a scoped reference no scoped binding answered.
+    ///
+    /// Walks as [`get`] does — plain bindings, aliases, then the name-only
+    /// view of scoped definitions — except that a frame's name-only view is
+    /// skipped when this resolution *rejected* the binding behind it.
+    /// Reaching by spelling a binding set-of-scopes resolution just refused
+    /// would override the rule with the spelling-based capture scope sets
+    /// exist to replace; that override was triage family 36's read half. A
+    /// plain binding was never a candidate for anything, so falling back to
+    /// one is the fallback doing its job rather than overriding a decision.
+    ///
+    /// The predicate is stated with `is_candidate` rather than as "skip every
+    /// visible binding" — equivalent on this path, since the resolution that
+    /// fell back here saw every scoped binding on this chain — because an
+    /// *alias* jumps into another environment chain this resolution never
+    /// looked at. Nothing over there was rejected, so the walk continues
+    /// through plain [`get`] on that side.
+    ///
+    /// [`get`]: Self::get
+    fn get_scoped_fallback(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+        if let Some(tv) = self.bindings.borrow().get(name) {
+            return Some(tv);
+        }
+        if let Some((target_env, target_name)) = self.alias_target(name) {
+            return match target_env {
+                Some(env) => env.get(&target_name),
+                None => self.get(&target_name),
+            };
+        }
+        if let Some(i) = self.visible_scoped_index(name) {
+            let table = self.scoped_bindings.borrow();
+            let binding = &table[name][i];
+            if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                return Some(binding.tagged_value);
+            }
+            // Rejected for these scopes: fall through to the parent rather
+            // than resurrect it by name.
+        }
+        self.parent
+            .as_ref()
+            .and_then(|p| p.get_scoped_fallback(name, scopes))
     }
 
     /// Does `name` have a *scoped* binding visible from `scopes`?
