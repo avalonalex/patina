@@ -1298,6 +1298,7 @@ fn dispatch_one_instruction(
             let before_val = state.reg_at(base, before);
             let after_val = state.reg_at(base, after);
             state.dynamic_winds.push(DynamicWindRecord {
+                id: patina_core::next_dynamic_wind_id(),
                 before: before_val,
                 after: after_val,
                 // stack_depth = 0: sentinel meaning "managed by instruction
@@ -1475,9 +1476,10 @@ fn dispatch_one_instruction(
                         message: "InvokeContinuation: not a full continuation".into(),
                     })?;
 
-                // Wind transition (full continuation — force re-enter).
+                // Wind transition: leave and enter only what the two stacks
+                // do not share.
                 let target_winds = cc.dynamic_winds.clone();
-                run_wind_transition(state, &target_winds, true)?;
+                run_wind_transition(state, &target_winds)?;
 
                 // Restore the full state snapshot.
                 state.registers = cc.registers.clone();
@@ -2276,6 +2278,7 @@ fn handle_control_primitive(
             run_thunk(state, args[0])?;
             let wind_depth = state.dynamic_winds.len();
             state.dynamic_winds.push(DynamicWindRecord {
+                id: patina_core::next_dynamic_wind_id(),
                 before: args[0],
                 after: args[2],
                 stack_depth: state.frames.len(),
@@ -2834,21 +2837,29 @@ fn pop_resolved_winds(state: &mut VmState) -> Result<(), VmError> {
 fn run_wind_transition(
     state: &mut VmState,
     target_winds: &[DynamicWindRecord],
-    force_reenter: bool,
 ) -> Result<(), VmError> {
-    // Find the common prefix (matched by `before` thunk identity).
-    // For full call/cc continuations, force_reenter=true means we must exit
-    // all current winds and re-enter all target winds (R7RS semantics).
-    let common = if force_reenter {
-        0
-    } else {
-        state
-            .dynamic_winds
-            .iter()
-            .zip(target_winds.iter())
-            .take_while(|(a, b)| a.before == b.before)
-            .count()
-    };
+    // R7RS §6.10 runs the thunks for the extents actually left and entered:
+    // exit down to the deepest extent both stacks share, then enter from
+    // there. An extent on both sides is never left, so its thunks do not run.
+    //
+    // Keyed on `DynamicWindRecord::id`, which exists for exactly this and is
+    // unique per `dynamic-wind` *call*. The `before` thunk is not an identity:
+    // two calls sharing one thunk — the same closure in a loop, or the
+    // `(lambda () #f)` that `with-output-to-file` uses — would compare equal
+    // and the common prefix would run past the point where the stacks diverge.
+    //
+    // A full `call/cc` invoke used to force this to 0, exiting and re-entering
+    // every extent including the shared ones. Invoking a continuation captured
+    // inside its own extent then ran that extent's after and before thunks for
+    // a jump that crossed nothing: `(dynamic-wind in (lambda () (call/cc
+    // (lambda (k) (k #f)))) out)` logged `(in out in out)` where the
+    // tree-walker, chibi and Gauche log `(in out)`.
+    let common = state
+        .dynamic_winds
+        .iter()
+        .zip(target_winds.iter())
+        .take_while(|(a, b)| a.id == b.id)
+        .count();
 
     // Run 'after' thunks for records being exited (innermost first), popping
     // each *before* it runs — see `vm_raise_value` for why the other order is
@@ -3138,7 +3149,7 @@ fn try_invoke_continuation(
     // Full (call/cc) continuation?
     if let Some(cc) = state.get_vm_continuation(func_val) {
         let target_winds = cc.dynamic_winds.clone();
-        run_wind_transition(state, &target_winds, true)?;
+        run_wind_transition(state, &target_winds)?;
         state.registers = cc.registers.clone();
         state.frames = cc.frames.clone();
         state.dynamic_winds = cc.dynamic_winds.clone();

@@ -37,6 +37,12 @@ pub struct PromptFrame {
 /// boundary is invoked, the VM runs the appropriate `before`/`after` thunks.
 #[derive(Debug, Clone)]
 pub struct DynamicWindRecord {
+    /// Identity of this `dynamic-wind` *call*, unique across the process.
+    ///
+    /// The common prefix of two wind stacks is found by comparing these
+    /// (R7RS §6.10). Minted by `patina_core::next_dynamic_wind_id`, the same
+    /// source the tree-walker's record uses.
+    pub id: u64,
     /// Thunk to call when entering this dynamic extent.
     pub before: TaggedValue,
     /// Thunk to call when leaving this dynamic extent.

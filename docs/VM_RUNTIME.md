@@ -313,7 +313,13 @@ intercepted at call dispatch time.
 - `run_wind_transition()`: finds common prefix between current and target wind
   stacks, runs `after` thunks for exiting (innermost first), then `before`
   thunks for entering (outermost first)
-- `force_reenter` flag: full continuations always exit/re-enter all winds
+- The common prefix is keyed on `DynamicWindRecord::id`, unique per
+  `dynamic-wind` *call* and minted by `patina_core::next_dynamic_wind_id`. The
+  `before` thunk is not an identity — two calls may share one closure
+- Every invoke takes the common prefix, full `call/cc` continuations included.
+  A `force_reenter` flag used to force it to zero for those, so a continuation
+  captured inside its own extent re-ran that extent's thunks for a jump that
+  crossed nothing (fixed 2026-09-01, Track L §6)
 
 ### 5.4 Values / Call-with-values
 

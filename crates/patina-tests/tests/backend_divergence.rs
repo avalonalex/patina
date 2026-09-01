@@ -316,41 +316,41 @@ fn callback_using_its_own_continuation_yields_nothing_on_the_tree_walker() {
     );
 }
 
-/// VM: invoking a continuation captured inside its own `dynamic-wind` extent
-/// re-runs the wind thunks, as though the extent had been exited and
-/// re-entered.
+/// Invoking a continuation captured inside its own `dynamic-wind` extent runs
+/// the wind thunks once, on both backends — converged 2026-09-01.
 ///
 /// ```text
 ///   (dynamic-wind in (lambda () (call/cc (lambda (k) (k #f)))) out)
 ///   tree-walker, chibi, Gauche => (in out)
-///   VM                         => (in out in out)
+///   VM                         => (in out in out)   until 2026-09-01
 /// ```
 ///
 /// R7RS §6.10 runs the thunks when the extent is actually left and re-entered;
-/// invoking `k` here never leaves it. Pinned because this defect was tracked
-/// in the PRD, lost in an edit, and recovered only by review — a test cannot
-/// be edited away by accident.
+/// invoking `k` here never leaves it. The VM's `run_wind_transition` forced
+/// the common prefix to zero on every full `call/cc` invoke, so it exited and
+/// re-entered even the extents both stacks shared. It takes the common prefix
+/// now, keyed on the wind record's identity, as the tree-walker always did.
+///
+/// Found while taking `guard` to R7RS 7.3's expansion for {GUARD_UNWIND_ORDER}
+/// families 22 and 28: that expansion leaves its body through a continuation
+/// far more often, and under the old rule a `guard` inside a
+/// `with-output-to-file` re-ran that form's after thunk — which closes the
+/// port — so the next write failed on a port the program still held. The
+/// defect is older and independent of that work, and is fixed here on its own
+/// terms. Kept as the regression guard: it was tracked in the PRD once, lost
+/// in an edit, and recovered only by review, which is why it lives in a test.
 #[test]
-fn continuation_within_its_own_wind_reruns_the_thunks_on_the_vm() {
-    const PROGRAM: &str = r#"
+fn a_continuation_within_its_own_wind_runs_the_thunks_once() {
+    assert_program_eval_to(
+        r#"
         (import (scheme base))
         (define log '())
         (dynamic-wind (lambda () (set! log (cons 'in log)))
                       (lambda () (call/cc (lambda (k) (k #f))))
                       (lambda () (set! log (cons 'out log))))
         (reverse log)
-    "#;
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
+    "#,
         "(in out)",
-        "the tree-walker matches chibi and Gauche; if this changed, it regressed"
-    );
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "(in out in out)",
-        "\n[vm] NO LONGER DIVERGES — it now runs the wind thunks once.\n\
-         Replace both assertions with assert_program_eval_to(PROGRAM, \"(in out)\") \
-         and update {GUARD_UNWIND_ORDER}."
     );
 }
 

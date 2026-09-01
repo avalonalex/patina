@@ -66,6 +66,19 @@ pub struct CpsContinuation {
 /// Global counter for generating unique dynamic-wind IDs
 static DYNAMIC_WIND_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Mint a fresh `dynamic-wind` identity.
+///
+/// One counter for both backends, because both need the same thing and for
+/// the same reason: a wind record has to be told apart from every other one
+/// to find the common prefix of two wind stacks (R7RS §6.10). The `before`
+/// thunk cannot serve — two `dynamic-wind` calls may share one closure — and
+/// the depth cannot either, since the whole question is where two stacks stop
+/// agreeing. The VM keeps its own record type, so it mints through here
+/// rather than duplicating the counter.
+pub fn next_dynamic_wind_id() -> u64 {
+    DYNAMIC_WIND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// A record of a dynamic-wind that needs to be managed during continuation jumps
 #[derive(Debug, Clone, Copy)]
 pub struct DynamicWindRecord {
@@ -82,7 +95,7 @@ impl DynamicWindRecord {
     /// Create a new dynamic-wind record with a unique ID
     pub fn new(before: TaggedValue, after: TaggedValue) -> Self {
         Self {
-            id: DYNAMIC_WIND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            id: next_dynamic_wind_id(),
             before,
             after,
         }
