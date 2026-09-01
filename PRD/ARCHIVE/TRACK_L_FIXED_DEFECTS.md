@@ -968,3 +968,223 @@ lexed before identifiers and so is unaffected, as is `⟨real⟩@⟨real⟩` pol
 identifier *start*; a leading digit still reads as a number). Both are covered by unit tests
 alongside `crates/patina-tests/tests/at_identifiers.rs`.
 
+
+
+---
+
+# Moved 2026-09-01 — the second sweep
+
+Eight entries reconciled out of §6 Open in the Track L bookkeeping run: five were fixed by
+the 2026-08-24/25 Larceny sweep and never re-marked in §6 (the triage doc and L5.3's table
+were updated instead — two records of one fact drifted, which is Track Q's Q6 lesson), two
+were already marked fixed in place, and one — the quasiquoted-vector hygiene entry — turned
+out to have been fixed by the family 33-35 work and was caught by running its recorded repro
+rather than trusting its ❌.
+
+*Fixed 2026-08-24 — triage family 1 (desugarer include-directory stack, exactly the fix sketched below).*
+
+**A nested `include` resolves against the wrong directory** — ❌ **open**.
+Blocks Larceny's `base` suite (~900 assertions). `base.sld` says
+`(include "tests/scheme/base-test1.scm")` (cwd-relative, upstream's
+convention), and `base-test3.scm` in turn says `(include "base-test4.scm")`,
+which every implementation that runs the suite resolves relative to
+`base-test3.scm`. Patina reports `cannot read 'base-test4.scm'`. Two causes in
+`desugar_include_tagged` / `resolve_include_base_dir`
+(`patina-frontend/src/desugarer/mod.rs`):
+
+- an included file is parsed with `Parser::new_with_heap`, so its forms have
+  no source and a nested include has nothing to be relative *to*; and
+- the base directory is "the first location in the source map with a file
+  path" — a `HashMap` walk, so which file wins is not even deterministic. A
+  library body is worse off still: `SchemeLibraryLoader` parses `.sld` files
+  without a source map, so for `include` inside a library the only candidate
+  is whatever *program* happens to be in the map.
+
+chibi 0.12 fails this file the same way (its top-level `include` is
+cwd-relative too), Gauche resolves relative to the including file. The fix
+that satisfies both conventions: a stack of include directories in the
+desugarer, seeded by the backends from `ParsedLibrary::source` for a library
+body and pushed by each `include` while its file is desugared; look there
+first, then the cwd. Nothing that works today changes — a path found from
+the cwd is still found — and the `HashMap` walk goes.
+
+---
+
+*Fixed 2026-08-24 — triage family 2 (worklist + lazily allocated visited set).*
+
+**`equal?` does not terminate on circular structures** — ❌ **open**, both
+backends. R7RS 6.1: "`equal?` must always terminate even if its arguments are
+circular data structures". Two suites hit it two ways:
+
+```scheme
+(define a (list 1 2))   (set-cdr! (cdr a) a)        ;; period 2
+(define b (list 1 2 1 2)) (set-cdr! (cdddr b) b)    ;; period 4, same unrolling
+(equal? a b)                                        ;; hangs; chibi, Gauche => #t
+(equal? (read (open-input-string "#1=#(1 #1#)"))
+        (read (open-input-string "#1=#(1 #1#)")))   ;; stack overflow
+```
+
+`(equal? a a)` is fine — `eq?` short-circuits — so it only shows when two
+*distinct* cyclic structures are compared (the suites compare a freshly read
+cyclic datum against a hand-built one). The reader itself builds the
+cycles correctly (`#1=(a . #1#)` reads and prints as `#0=(a . #0#)`); this is
+`Heap::tagged_values_equal` (`patina-core/src/heap/mod.rs`) recursing without
+a visited set. The standard technique is a union-find / pair-of-pointers
+table consulted after a depth budget, so the acyclic fast path stays fast.
+
+---
+
+*Fixed 2026-08-24 — triage family 3 (R7RS 7.3's iterative force with promise-update!, in the primitive and the tree-walker's CPS force).*
+
+**`delay-force` is not iterative** — ❌ **open**, both backends. R7RS 7.3
+(the `(scheme lazy)` reference implementation) exists so that this runs in
+bounded space; Patina overflows the Rust stack at 100 000:
+
+```scheme
+(import (scheme lazy))
+(define (count-down n)
+  (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
+(force (count-down 100000))          ;; stack overflow; the suite's leak tests go to 1 000 000
+```
+
+Both backends, so it is in the shared promise machinery rather than in
+either evaluator: `force` must iterate on a `delay-force` result (re-point
+the outer promise at the inner one and loop) instead of recursing into it.
+
+---
+
+*Fixed 2026-08-25 — triage family 4 (the VM's values side buffer removed; multiple values are only ever a #<values> object).*
+
+**VM: a discarded call to `values` poisons the next `call-with-values`** —
+❌ **open**, VM only; the tree-walker is right. Found through the `vector`
+suite, where `(vector-unfold values 7)` made the *following* test's thunk
+evaluate to `6`.
+
+```scheme
+(define (call1 f) (f 42))
+(call1 values)                                       ;; result discarded
+(call-with-values (lambda () 'c) (lambda x x))       ;; VM => (42)   tree-walker, chibi => (c)
+```
+
+Calling `values` with one argument in a non-tail position leaves the VM's
+multiple-values state set; the next `call-with-values` whose producer
+returns a plain single value picks it up instead. Not caught by the chibi
+suite because nothing there calls `values` for effect and then immediately
+uses `call-with-values`. Pinning as a divergence would work here: the VM
+returns a wrong value rather than failing.
+
+---
+
+*Fixed 2026-08-25 — triage family 5; the wrong first diagnosis below is the keeper.*
+
+**Tree-walker: SRFI 1's `zip` raises a wrong-arity error** — ✅ **fixed
+2026-08-25**, tree-walker only. Eight assertions in the `list` suite (the
+ninth failure there, `delete-duplicates!`, is upstream's).
+
+The diagnosis recorded here was wrong and worth keeping as a caution: it read
+"`zip` is `(apply map list list1 more-lists)` … the same `apply` shape written
+at top level works, so the fault is in applying the library-internal `map`".
+It is not `apply` at all. SRFI 1's `%cars+cdrs` bails out of an exhausted list
+with `(abort '() '())` — a continuation invoked with two values, which the
+tree-walker refused — so every n-ary procedure that walks more than one list
+failed. `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` had named `%cars+cdrs`
+among its impacts since 2026-03-19; the two records sat apart for months.
+
+---
+
+*Fixed by #73/#77, confirmed 2026-08-18.*
+
+**VM: a raising parameter converter produces no output at all** — ✅ **fixed** (no longer reproduces;
+confirmed 2026-08-18 on `origin/main` as well as on the audit branch, so it was fixed by #73/#77
+rather than by anything after). `(guard (e (#t 'caught)) (p 9))` with a converter that raises for
+that value answers `caught` on both backends and leaves the parameter unchanged, which is what chibi
+does. Found 2026-08-15; the original text follows.
+
+`(guard (e (#t 'caught)) (p 9))` where `p`'s converter raises exits 0 having written nothing —
+neither an error nor a catch, where the tree-walker catches it.
+
+Narrowed 2026-08-15: a converter that *escapes* rather than raises was the same register-base bug
+and is fixed (`(call/cc (lambda (k) (let ((p (make-parameter 1 (lambda (x) (k 'escaped))))) (p 9))))`
+now returns `escaped` on both). What remains is the raise path specifically, which is a different
+mechanism — the error is neither routed to the handlers nor propagated.
+
+Not pinned as a divergence: `assert_divergence` needs the broken backend to *fail*, and this one
+silently succeeds. Worth fixing before anyone trusts converter errors.
+
+---
+
+*Fixed 2026-08-18 (#93), by shape and not by symptom — the honest limit below still stands.*
+
+**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ✅ **fixed 2026-08-18** (#93),
+as part of the class sweep the audit's C1 entry called for. `mark_substituted_tagged` now flattens the
+spine once and decides head-ness at element 0, which is the durable fix named at the end of this entry.
+The honest limit below still stands: no observable repro was ever constructed, so this was fixed by
+shape and not by symptom — the attempts (a substituted `(f quote y)` / `(f define-syntax z)` reaching an
+inner macro's literal comparison) all agreed with chibi before and after.
+Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
+this section already follows. `mark_substituted_tagged`
+(`patina-macros/src/macro_expander/expander/hygiene.rs`) walks a pair tree by recursing on the cdr
+and re-reading its head, exactly as `rewrite_refs` did:
+
+```rust
+if self.is_macro_definition_tagged(car) || self.is_quote_form_tagged(car) {
+    return tv;                       // correct for a form, wrong for a tail
+}
+let new_car = self.mark_substituted_tagged(car);
+let new_cdr = self.mark_substituted_tagged(cdr);   // cdr re-read as a form
+```
+
+So for a substituted value shaped like `(f quote y)`, the recursive call on the tail `(quote y)`
+sees a quote head and returns unchanged — and `y`, plus everything after it, never receives the
+macro scope. That function exists precisely so substituted identifiers can be told apart from a
+nested macro's own pattern variables, which is the mechanism behind two already-fixed entries in
+this section, so losing the mark is a hygiene defect rather than a cosmetic one.
+
+**Honest limit on this entry:** the code shape is confirmed identical, but no observable repro has
+been constructed yet. Reaching it needs a single pattern variable bound to a list with `quote`,
+`syntax-rules`, `define-syntax`, `let-syntax` or `letrec-syntax` in non-initial position, whose
+later elements then matter to an inner macro's identity comparisons — plausible from
+`(chibi parse)`-style macro-writing-macro code but not yet exhibited. Do not close it as theoretical
+without trying; do not report it as user-visible without a repro.
+
+The durable fix is the one the sibling walkers already use: `compile_template` and
+`compile_template_escaped` flatten the spine once via `collect_list_items` and index element 0,
+which is what `rewrite_form` converged on independently. `mark_substituted_tagged` is the one that
+still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
+`contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
+`evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
+all, and the last flattens before dispatching.
+
+---
+
+*Fixed by triage families 33-35's vector-walking scope flip (2026-08-26); repro verified correct on both backends 2026-09-01 — (#(introduced) #(use-site)), the Chez/Gauche answer. The 'do not treat that as the diagnosis' caveat below dates from before the expander produced identifiers inside vectors at all; the upstream half it pointed at was family 35.*
+
+**Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
+it captures in *both* directions at once — the template's own binding and the caller's argument each
+resolve to the other:
+
+```scheme
+(define tmp 'use-site)
+(define-syntax g1 (syntax-rules () ((_)   (let ((tmp 'introduced)) `#(,tmp)))))
+(define-syntax g2 (syntax-rules () ((_ e) (let ((tmp 'introduced)) `#(,e)))))
+(list (g1) (g2 tmp))
+;; Chez, Gauche => (#(introduced) #(use-site))
+;; Patina       => (#(use-site)   #(introduced))
+```
+
+The list equivalents (`` `(,tmp) ``) are correct, so this is specific to vectors. The obvious
+suspect is `flip_scope_on_tagged_impl` in `patina-macros/src/macro_expander/mod.rs`, which ends
+"All other values (vectors, etc.) pass through unchanged" while its own doc comment two screens
+earlier claims it "traverses the heap structure (pairs, **vectors**, identifiers)". The doc and the
+code disagree, and `contains_identifier_tagged` has the same gap — so its early exit can skip the
+flip for a tree whose only identifiers sit inside a vector. `rewrite_refs` in the desugarer already
+fixed exactly this oversight for itself ("A pair-only walk silently left the reference unlinked").
+
+**Do not treat that as the diagnosis.** Teaching both functions to descend into vectors did *not*
+change the behaviour, and instrumentation showed the flip never runs on that expansion at all —
+neither the vector arm nor the pass-through tail was reached. So something upstream is also not
+producing the identifiers one would expect. Start by confirming what the expanded output actually
+contains before changing the flip.
+
+---
+
