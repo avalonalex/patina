@@ -34,8 +34,20 @@ impl<'a> CpsEvaluator<'a> {
                 let cont = cont_env
                     .get(k)
                     .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                // Reify with empty dynamic winds for now (will be filled in by caller if needed)
-                Ok(self.reify_continuation_tagged(cont, cont_env, &[]))
+                // Empty winds and an empty handler stack because this
+                // trivial-eval path carries no machine state to fill them from.
+                //
+                // **Unreachable today**, which is the only reason that is
+                // safe: `CpsExprKind::ContRef` is constructed nowhere outside
+                // a `patina-core` unit test, so neither this arm nor
+                // `eval_one_step`'s runs. The live `call/cc` reification is
+                // `step.rs`'s `CallCC` arm, which passes the real stack.
+                //
+                // A stored empty stack is not "no opinion" — since re-entry
+                // restores whatever is stored, it *erases* the caller's
+                // handlers. So if `ContRef` is ever made live, thread the
+                // machine state in rather than leaving this as it stands.
+                Ok(self.reify_continuation_tagged(cont, cont_env, &[], &[]))
             }
 
             CpsExprKind::Lambda {

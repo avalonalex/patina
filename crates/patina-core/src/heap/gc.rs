@@ -764,6 +764,9 @@ impl<'h> GcVisitor<'h> {
         self.visit_expr_literals(&k.body);
         self.visit_env(&k.env);
         self.visit_winds(&k.dynamic_winds);
+        for handler in &k.exception_handlers {
+            trace_exception_handler(handler, self);
+        }
         trace_cont_env(&k.captured_cont_env, self);
         // Today `resume` always aliases a value that is also reachable through
         // `captured_cont_env` — every reify site stores the wrapper it read out

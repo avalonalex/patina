@@ -137,6 +137,12 @@ impl<'a> CpsEvaluator<'a> {
             env: self.evaluator.global_env.clone(),
             prompt_tag: None,
             dynamic_winds: vec![],
+            // Empty is not "no opinion": re-entry restores what is stored, so
+            // this would erase the caller's handlers. Harmless only because
+            // this placeholder is unreachable — no `Control`/`Prompt` node is
+            // ever emitted. Give it the real stack when delimited capture is
+            // implemented.
+            exception_handlers: vec![],
             captured_cont_env: ContEnv::new(),
             resume: None,
         })

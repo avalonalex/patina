@@ -87,7 +87,12 @@ impl<'a> CpsEvaluator<'a> {
                     let cont = cont_env
                         .get(k)
                         .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                    let tagged = self.reify_continuation_tagged(cont, &cont_env, &current_winds);
+                    let tagged = self.reify_continuation_tagged(
+                        cont,
+                        &cont_env,
+                        &current_winds,
+                        &exception_handlers,
+                    );
                     return Ok(StepResult::Done(tagged));
                 }
 
@@ -336,8 +341,12 @@ impl<'a> CpsEvaluator<'a> {
                         .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
                         .clone();
 
-                    let captured_k_tagged =
-                        self.reify_continuation_tagged(&k, &cont_env, &current_winds);
+                    let captured_k_tagged = self.reify_continuation_tagged(
+                        &k,
+                        &cont_env,
+                        &current_winds,
+                        &exception_handlers,
+                    );
 
                     return Ok(StepResult::ApplyProc {
                         proc: procedure,

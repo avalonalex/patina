@@ -291,15 +291,24 @@ impl<'a> CpsEvaluator<'a> {
                         // carries its real ContEnv, so there is nothing to
                         // decode and one path serves every case.
                         //
-                        // NOTE: `exception_handlers` and `prompt_stack` are
-                        // reset rather than restored -- CpsContinuation does not
-                        // carry them, so re-entering a continuation captured
-                        // under a handler loses that handler. The VM restores
-                        // both from its snapshot. Quarantined as a known
-                        // divergence in crates/patina-tests/tests/
-                        // backend_divergence.rs (reentered_continuation_keeps_
-                        // exception_handler); storing them here is now
-                        // straightforward since the type can hold them.
+                        // `exception_handlers` is restored from the
+                        // continuation, like `dynamic_winds`: R7RS 6.11 puts
+                        // the handler stack in the dynamic environment, so
+                        // re-entry has to bring it back. Resetting it to empty
+                        // emptied the stack for the rest of the trampoline, so
+                        // any raise *after* an earlier `guard` had fired went
+                        // unhandled.
+                        //
+                        // This restores the stack at the escape, and no more.
+                        // Two neighbours on the same path stay as they were:
+                        // `prompt_stack` is still reset (delimited
+                        // continuations are a separate question, and nothing
+                        // measured asks for it), and the wind thunks that
+                        // `application.rs` runs just before parking the escape
+                        // still execute on a nested trampoline that fabricates
+                        // an empty stack of its own (`wind.rs`), which is the
+                        // boundary defect Track L §6 tracks.
+                        //
                         // `resume` holds an effect-carrying continuation that
                         // must be re-established rather than jumped past; the
                         // common case flattens to a Local.
@@ -311,7 +320,7 @@ impl<'a> CpsEvaluator<'a> {
                             k.captured_cont_env.clone(),
                             Vec::new(),
                             k.dynamic_winds.clone(),
-                            Vec::new(),
+                            k.exception_handlers.clone(),
                         )?;
                     } else {
                         return Err(EvalError::InternalError(

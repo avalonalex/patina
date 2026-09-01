@@ -38,6 +38,24 @@ pub struct CpsContinuation {
     /// These need to be reinstalled when the continuation is invoked
     pub dynamic_winds: Vec<DynamicWindRecord>,
 
+    /// The exception handlers installed where this continuation was captured.
+    ///
+    /// Restored on re-entry, exactly like `dynamic_winds`. R7RS 6.11 makes the
+    /// handler stack part of the dynamic environment, so a continuation that
+    /// does not carry it cannot restore the environment it names.
+    ///
+    /// The VM's `VmContinuation` has always carried the stack; the
+    /// tree-walker's escape path reset it to empty on every re-entry, so a
+    /// continuation captured under a handler came back without it. Two
+    /// quarantined divergences were that gap and converge with this field.
+    ///
+    /// It is also what R7RS 7.3's `guard` will need (Track L triage families
+    /// 22 and 28, in flight): that expansion jumps *out* of the raise point to
+    /// run the clauses and, when none matches, back *in* to re-raise — and an
+    /// empty stack on the way back turns the re-raise into "unhandled
+    /// continuable exception".
+    pub exception_handlers: Vec<crate::cont_value::ExceptionHandler>,
+
     /// The continuation environment in scope where this was captured.
     ///
     /// The body may reference let-cont bindings by name, so re-entry has to

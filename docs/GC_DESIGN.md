@@ -256,7 +256,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | `CompiledMacro` pattern/template literal `TaggedValue`s (`compiled_macro.rs:78,:280`) |
-| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` before/after thunks, `captured_cont_bindings` (recursive), body literals (§4.4) |
+| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` before/after thunks, `exception_handlers` (via `trace_exception_handler`), `captured_cont_env` (recursive), `resume` (`trace_cont_value`), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 | `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
