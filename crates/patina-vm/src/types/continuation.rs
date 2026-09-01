@@ -37,6 +37,17 @@ pub struct PromptFrame {
 /// boundary is invoked, the VM runs the appropriate `before`/`after` thunks.
 #[derive(Debug, Clone)]
 pub struct DynamicWindRecord {
+    /// Identity of the `dynamic-wind` *call* this record came from. Minted by
+    /// `patina_core::next_dynamic_wind_id`, the same source the tree-walker's
+    /// record uses.
+    ///
+    /// The common prefix of two wind stacks is found by comparing these
+    /// (R7RS §6.10). That scan is positional, which matters: an id is unique
+    /// per call but **may repeat within one live stack**, because invoking a
+    /// composable continuation extends `dynamic_winds` with the records it
+    /// captured. Do not treat it as a key — a map, or a `position()` search —
+    /// without handling duplicates.
+    pub id: u64,
     /// Thunk to call when entering this dynamic extent.
     pub before: TaggedValue,
     /// Thunk to call when leaving this dynamic extent.
@@ -45,6 +56,22 @@ pub struct DynamicWindRecord {
     /// Used by `pop_resolved_winds` to detect when the body has returned
     /// (e.g. after a continuation invocation resumes and completes).
     pub stack_depth: usize,
+}
+
+impl DynamicWindRecord {
+    /// Push-site constructor, so the id is minted in exactly one place.
+    ///
+    /// Both call sites used to spell `patina_core::next_dynamic_wind_id()`
+    /// inline, which is two things to keep in step and the only tie between
+    /// the VM and the shared counter.
+    pub fn new(before: TaggedValue, after: TaggedValue, stack_depth: usize) -> Self {
+        Self {
+            id: patina_core::next_dynamic_wind_id(),
+            before,
+            after,
+            stack_depth,
+        }
+    }
 }
 
 /// A captured delimited continuation (created by `AbortToPrompt` or

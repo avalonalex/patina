@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-08-25 20:16:30  
+**Generated:** 2026-09-01 12:30:54  
 **Backend:** VM  
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 12 of 16 |
-| Assertions passed | 4017 of 4025 (99.8%) |
+| Suites fully passing | 11 of 16 |
+| Assertions passed | 4023 of 4033 (99.8%) |
 | Suites not reaching a tally | 1 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -23,7 +23,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Parse error in tests/r6rs/base.sld: desugar error: Invalid syntax: let-syntax requires bindings and at least one body expression` |
 
-## Assertion failures (8 in 3 suites)
+## Assertion failures (10 in 4 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -44,6 +44,11 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [eval.sld:16](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/eval.sld#L16) — `eval` `eval:car`
 
+### exceptions — 2 of 9 failed
+
+- (not located) — `#t` `with-exception-handler`
+- (not located) — `v`
+
 ## All suites
 
 | Suite | Status | Passed | Total |
@@ -54,7 +59,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | control | pass | 11 | 11 |
 | enums | fail | 23 | 26 |
 | eval | fail | 1 | 2 |
-| exceptions | pass | 1 | 1 |
+| exceptions | fail | 7 | 9 |
 | hashtables | pass | 249 | 249 |
 | io/simple | pass | 56 | 56 |
 | lists | pass | 72 | 72 |

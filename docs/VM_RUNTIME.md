@@ -313,7 +313,23 @@ intercepted at call dispatch time.
 - `run_wind_transition()`: finds common prefix between current and target wind
   stacks, runs `after` thunks for exiting (innermost first), then `before`
   thunks for entering (outermost first)
-- `force_reenter` flag: full continuations always exit/re-enter all winds
+- The common prefix is keyed on `DynamicWindRecord::id`, unique per
+  `dynamic-wind` *call* and minted by `patina_core::next_dynamic_wind_id`. The
+  `before` thunk is not an identity — two calls may share one closure
+- Full `call/cc` invokes take the common prefix. A `force_reenter` flag used
+  to force it to zero for them, so a continuation captured inside its own
+  extent re-ran that extent's thunks for a jump that crossed nothing (fixed
+  2026-09-01, Track L §6)
+- Composable/delimited invokes do **not** go through `run_wind_transition` at
+  all: both the `InvokeContinuation { composable: true }` arm and the
+  delimited branch of `try_invoke_continuation` run every captured `before`
+  thunk unconditionally, then extend `dynamic_winds`. Shared extents are not
+  skipped there
+- The value form of `dynamic-wind` (`handle_control_primitive`) runs its body
+  on a nested Rust call, so an escape abandons the frame that owns the
+  cleanup. That arm pops and runs its own after-thunk when the record survives
+  the transition; head-position `dynamic-wind` needs none of this because
+  `PushWind`/`PopWind` are instructions the resumed continuation still reaches
 
 ### 5.4 Values / Call-with-values
 
