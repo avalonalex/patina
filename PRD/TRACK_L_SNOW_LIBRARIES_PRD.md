@@ -1263,8 +1263,13 @@ surfaces.
   (with-exception-handler (lambda (c) 'handled)
     (lambda () (dynamic-wind (lambda () 1) (lambda () (raise 'x)) (lambda () (car 7))))))
 ;; tree-walker => Error: Type error: car expects a pair   (escapes)
-;; VM          => handled
+;; VM, Gauche  => caught
 ```
+
+(Re-measured 2026-09-01: the VM answers `caught`, not `handled` as this block
+used to say. The row's substance is unchanged — the tree-walker escapes, the
+VM does not — and it is the *mechanism* half of the entry below, which is the
+semantics half.)
 
 The visible cause is `run_wind_handlers(…)?` propagating as a Rust error. The actual cause is
 `apply_from_direct_tagged` (`cps_eval/wind.rs`): it runs wind thunks and parameter converters on a
@@ -1300,6 +1305,59 @@ ready for the reference expansion; this backend is the only thing holding it.
 **Caveat before converging it:** the pinned divergence row records what the VM returns, not an
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
+
+**An exception raised by a `dynamic-wind` after-thunk does not behave like a
+`finally`** — ❌ **open**, both backends. Characterised 2026-09-01 while
+landing triage families 22 and 28, which changed one of the four cases below
+and so forced the question.
+
+Gauche implements Java's `finally` rule exactly, and does so consistently
+across every shape. An exception raised by an after-thunk **replaces** the
+exception in flight, unwinding **continues** through the outer winds, and the
+replacement is delivered to the nearest handler enclosing the `dynamic-wind`.
+chibi cannot arbitrate — it overflows the stack on all four probes — so Gauche
+is the oracle here, and its self-consistency is the argument for trusting it.
+
+| # | shape | VM | tree-walker | Gauche |
+|---|---|---|---|---|
+| 1 | `guard` + `raise`, after-thunk raises | uncaught, program stops | escapes | `(one secondary)` |
+| 2 | nested guards, inner catches | `(outer secondary)` | escapes | `(inner secondary)` |
+| 3 | normal exit, after-thunk raises | ✅ caught | ✅ caught | caught |
+| 4 | `call/cc` escape, after-thunk raises | ✅ caught | escapes | caught |
+
+So the VM meets the rule in 2 of 4 and the tree-walker in 1 of 4. **Only case 1
+moved with families 22/28**, from `(one primary)` — the after-thunk's exception
+silently discarded, which is the one answer the rule most clearly forbids — to
+the exception cascading uncaught. Cases 2–4 are unchanged from before that
+work, on both backends.
+
+**A second half, easy to miss:** the rule also says unwinding *continues*
+outward past the thunk that raised. It does not here. With a nested wind whose
+inner after-thunk raises, Gauche answers `((caught sec2) (in1 in2 out2 out1))`
+— the outer thunk still runs — while ours stops, and the outer thunk never
+runs: measured through a file the abort cannot swallow, the VM's log reads
+`(in1 in2 out2)`. Before families 22/28 the VM continued the unwind and then
+discarded the exception. So the fix is about *both* who catches and how far the
+unwind gets, not only the former.
+
+**Why it is not a patch.** Case 1 requires the `guard`'s handler to fire
+*twice*: once for the primary, again for the secondary its own escape raised.
+`vm_raise_value` pops a handler when it fires and never restores it for a
+non-continuable raise, so by the time the after-thunk runs that handler is
+gone. Meeting the rule means changing how the handler stack behaves across a
+`guard` escape — the same machinery that produced three separate regressions
+during families 22/28 (a leaked after-thunk in the value form of
+`dynamic-wind`, a stranded caller premise, and this row's case 1). It earns
+its own change, with its own review.
+
+The tree-walker additionally needs the nested-trampoline boundary above: it
+escapes on three of the four because a wind thunk runs on a trampoline with no
+handler stack.
+
+**Acceptance:** the four cases above answer as Gauche does, on both backends,
+pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs` — which asserts
+today's answers now, so the fix trips it. Larceny r7rs lanes must not move
+except where a row is genuinely gained.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

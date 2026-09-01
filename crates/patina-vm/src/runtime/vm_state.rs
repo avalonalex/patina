@@ -2690,12 +2690,15 @@ fn vm_raise_value(
         // No handler — format and propagate as Rust error
         use patina_primitives::primitives::io::datum_writer::format_display_tagged;
         let display = format_display_tagged(exception, &state.heap);
+        // Deliberately the same wording for both. Whether the raise was
+        // continuable is an implementation detail once nothing handles it, and
+        // since `guard`'s re-raise is `raise-continuable` (R7RS 7.3), saying
+        // "continuable" here reported a plain `(raise 'x)` whose guard declined
+        // as `unhandled continuable exception: x` — naming a form the user
+        // never wrote.
+        let _ = continuable;
         Err(VmError::SchemeException {
-            message: if continuable {
-                format!("unhandled continuable exception: {}", display)
-            } else {
-                format!("unhandled exception: {}", display)
-            },
+            message: format!("unhandled exception: {}", display),
         })
     }
 }

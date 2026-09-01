@@ -43,6 +43,11 @@ fn guard_covers_every_r7rs_clause_shape() {
         (show (guard (e (else (list 'else e))) (raise 'a)))
         (show (guard (e ((assq 'b e) => cdr)) (raise (list (cons 'b 42)))))
         (show (guard (e ((memv e '(1 2 3)))) (raise 2)))
+        ;; the two NON-terminal walker rules: `=>` and a bare test, each with
+        ;; a clause after them, which the terminal rules would otherwise hide
+        (show (guard (e ((assq 'b e) => cdr) (#t 'fell-through)) (raise (list (cons 'c 1)))))
+        (show (guard (e ((memv e '(7 8)) ) (#t 'fell-through)) (raise 9)))
+        (show (guard (e ((assq 'b e) => cdr) (#t 'no)) (raise (list (cons 'b 5)))))
         (show (guard (e ((symbol? e) 'sym) ((string? e) 'str)) (raise "s")))
         (show (guard (o (#t (list 'outer o)))
                 (guard (e ((string? e) 'str)) (raise 'inner))))
@@ -58,7 +63,8 @@ fn guard_covers_every_r7rs_clause_shape() {
                     (raise 'obj)))))
         (reverse out)
         "#,
-        "((else a) 42 (2 3) str (outer inner) 3 (1 2 3) () ok 42 inner (top obj))",
+        "((else a) 42 (2 3) fell-through fell-through 5 str (outer inner) 3 \
+         (1 2 3) () ok 42 inner (top obj))",
     );
 }
 
@@ -196,9 +202,9 @@ fn test_three_levels_of_nesting() {
 ///    `(in out)`, because the raise path unwound before calling the handler,
 ///    so that continuation was captured after the extent had been left.
 ///  - "so it is the handler machinery, not `guard`" — also wrong. Neither
-///    half moves this alone. It took three changes together: the handler
-///    stack on `CpsContinuation`, no unwind on any raise path, and the
-///    reference `guard`.
+///    half moves this alone. It took four changes together: the handler stack
+///    on `CpsContinuation` (#150), the VM's wind common prefix (#149), no
+///    unwind on any raise path, and the reference `guard`.
 #[test]
 fn test_a_guard_re_raise_rewinds_into_the_raiser() {
     assert_eq!(

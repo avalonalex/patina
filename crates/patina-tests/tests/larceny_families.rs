@@ -699,11 +699,12 @@ fn let_values_binds_all_clauses_in_parallel() {
 /// before-thunk runs again on the way back in, and the after-thunk again
 /// on the way out to the outer guard. Fixed 2026-09-01 (family 22).
 ///
-/// The visible half of family 28. Three changes together, none of which
-/// works alone: `CpsContinuation` carries the handler stack, so the jump
-/// back in still has handlers; no raise path unwinds, so the raise point is
-/// still there to jump back to; and `guard` is R7RS 7.3's expansion, whose
-/// `handler-k` is the thing that jumps.
+/// The visible half of family 28. Four changes together, none of which works
+/// alone — the first two landed ahead of this as #150 and #149: `CpsContinuation` carries the handler stack, so the jump
+/// back in still has handlers; the VM takes the common prefix of two wind
+/// stacks, so a jump that crosses nothing runs no thunks; no raise path
+/// unwinds, so the raise point is still there to jump back to; and `guard` is
+/// R7RS 7.3's expansion, whose `handler-k` is the thing that jumps.
 #[test]
 fn a_guard_reraise_reenters_the_dynamic_extent() {
     assert_program_eval_to(

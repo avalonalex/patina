@@ -29,11 +29,26 @@
 ;; raise point, so a declining clause could not re-raise where R7RS says it
 ;; must (Track L triage family 22).
 
-;; The clause walker. Not exported: it is an implementation detail of
-;; `guard`, like `%define-field-accessors` is of `define-record-type`.
-;; `reraise` is the expression to run when no clause matches.
+;; The clause walker. `reraise` is the expression to run when no clause
+;; matches.
+;;
+;; Not exported, which is the *minority* choice here: `%define-field-accessors`,
+;; `%make-constructor` and `%parameterize-swap!` are all exported from
+;; `(scheme base)` despite being macro internals. Keeping this one out is
+;; deliberate and verified — `guard`'s template resolves it hygienically at the
+;; definition site, checked through `(only (scheme base) guard raise)` and
+;; `(prefix (scheme base) s:)`. Export it only if a resolution failure forces
+;; the issue.
 (define-syntax %guard-aux
   (syntax-rules (else =>)
+    ;; No clauses at all. R7RS's grammar wants one or more, but the previous
+    ;; expansion accepted `(guard (e) body)` by handing `cond` an empty clause
+    ;; list, and rejecting it here would fail with a message naming this
+    ;; helper — an identifier the user never wrote. Re-raise instead, which is
+    ;; what "no clause matched" means.
+    ((%guard-aux reraise)
+     reraise)
+
     ((%guard-aux reraise (else result1 result2 ...))
      (begin result1 result2 ...))
 

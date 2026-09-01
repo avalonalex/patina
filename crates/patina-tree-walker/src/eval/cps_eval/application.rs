@@ -585,11 +585,10 @@ impl<'a> CpsEvaluator<'a> {
             use patina_primitives::primitives::io::datum_writer::format_display_tagged;
             let heap = self.evaluator.global_env.heap();
             let exception_str = format_display_tagged(exception_tagged, heap);
-            let msg = if continuable {
-                format!("unhandled continuable exception: {}", exception_str)
-            } else {
-                format!("unhandled exception: {}", exception_str)
-            };
+            // One wording for both — see the VM's `vm_raise_value` for why:
+            // `guard` re-raises with `raise-continuable`, so "continuable" here
+            // described the expansion rather than the user's code.
+            let msg = format!("unhandled exception: {}", exception_str);
             Err(EvalError::SchemeException {
                 kind: ExceptionKind::Error,
                 message: msg,
