@@ -116,7 +116,7 @@ to learn what a push would have told you anyway.
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
 - `docs/GC_DESIGN.md` — garbage collection design for both backends (Collector/GcRoots traits, root inventory, staging); GC is always on since stage 4c
 - `PRD/future/GC_STAGE5_PRD.md` — remaining GC pause work (weak continuation tables, immortal roots, nested-loop collection, generational)
-- `PRD/phase2/SYNTAX_CASE_DESIGN.md`, `PRD/phase2/R7RS_LARGE_STATUS.md`
+- `PRD/macro/SYNTAX_CASE_DESIGN.md`, `PRD/phase2/R7RS_LARGE_STATUS.md`
 - `PRD/ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 
 **Feature docs:**
@@ -198,6 +198,6 @@ if let Some(v) = v { heap.borrow()... }
 **Phase 1 complete** — Tree-walker: 100% R7RS compliance.
 
 **Phase 2 complete** — Bytecode VM (`patina-vm/`) is the default backend. 1226/1226 R7RS tests pass.
-**Phase 3:** `syntax-case` procedural macros — see `PRD/phase2/SYNTAX_CASE_DESIGN.md`.
+**Phase 3:** `syntax-case` procedural macros — see `PRD/macro/SYNTAX_CASE_DESIGN.md`.
 **Phase 4:** Gradual typing (Typed Racket-style).
 **Phase 5+:** Reactive streams, miniKanren logic programming.

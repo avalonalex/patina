@@ -147,6 +147,10 @@ properties:
 reverting `set_with_scopes` to exact-match (the pre-#137 rule) makes the
 symmetry property fail within the default case budget.
 
+H2's properties are also the named guards for Track Q's hygiene consolidation
+queue (`PRD/TRACK_Q_QUALITY_PRD.md` Q7): in particular, the write-path
+unification (Q7.1) is not attempted before the symmetry property exists.
+
 ### H3 — poison-shadow and differential generators *(a week; needs the external harness scripted)*
 
 Two generators, one discipline:
@@ -197,7 +201,7 @@ evaluation is the deliverable; commitment to more is a separate decision.
 ### H5 — deferred: mechanization at the syntax-case boundary
 
 If Phase 3 re-founds expansion on one specified algorithm (see
-`PRD/phase2/SYNTAX_CASE_DESIGN.md`), that specification is the moment to
+`PRD/macro/SYNTAX_CASE_DESIGN.md`), that specification is the moment to
 consider a mechanized model — Lean 4 is the natural host (its own expander
 is the hygiene design built for a theorem-proving language: Ullrich & de
 Moura, IJCAR 2020). Until then a model would shadow a moving implementation.

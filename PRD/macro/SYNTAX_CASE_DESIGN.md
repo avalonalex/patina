@@ -13,12 +13,15 @@ This document outlines the design for implementing `syntax-case`, the procedural
 
 **Key Insight:** Patina's existing scope-set hygiene infrastructure is fully compatible with `syntax-case`. The main work is adding syntax objects and procedural interfaces—the hygiene mechanism remains unchanged.
 
+**Counterpoint recorded 2026-08-31:** "remains unchanged" is compatible-with, not settled-for. This rewrite is the one natural moment to *consolidate* hygiene instead of carrying its current distribution forward — see [Resolve Once, Before the Backends](#resolve-once-before-the-backends) below, added after the 2026-08 hygiene defect queue (triage families 33–39) closed.
+
 ---
 
 ## Table of Contents
 
 1. [Motivation](#motivation)
-2. [Current State](#current-state)
+2. [Resolve Once, Before the Backends](#resolve-once-before-the-backends)
+3. [Current State](#current-state)
 3. [Syntax Objects](#syntax-objects)
 4. [Core Forms](#core-forms)
 5. [Hygiene Utilities](#hygiene-utilities)
@@ -78,6 +81,52 @@ This document outlines the design for implementing `syntax-case`, the procedural
 - Programmatic syntax construction
 - Better error messages
 - Foundation for syntax-rules (can be a macro!)
+
+---
+
+## Resolve Once, Before the Backends
+
+*(Added 2026-08-31 — a decision this rewrite must make, recorded while the
+lesson is fresh.)*
+
+Today hygiene is distributed: the desugarer stamps scopes and keeps a
+desugar-time environment, the tree-walker resolves scoped bindings **at
+runtime** (`Environment`'s scoped tables, by-name views and fallbacks), the VM
+resolves **at compile time** (`alpha_rename`), and the CPS transform carries
+binder scopes of its own. Every defect in triage families 33–39 was an
+interaction between two of those copies, and the chibi suite read 1226/1226 on
+both backends through all of them because both backends share the desugarer.
+
+The VM's `alpha_rename` proves the endgame locally: past that pass, scope sets
+are *gone* — everything downstream is plain, uniquely-named references. The
+decision for this rewrite: run expansion **and resolution** once, in the
+shared pipeline, and hand *both* backends fully-resolved code. Then:
+
+- `Environment` needs no scoped table, no `visible_by_name` views, and no
+  by-name fallback at runtime — the entire class of fallback-capture defects
+  (family 36) becomes unrepresentable rather than guarded against;
+- hygiene lives in **one specified algorithm**, which is also the point at
+  which Track H's deferred mechanization (H5) stops shadowing a moving
+  implementation and starts being the spec;
+- Track Q's consolidation queue (Q7) collapses from five items into the
+  removal of code the resolved IR no longer reads.
+
+What the design must solve before committing (the reasons this is a rewrite
+boundary and not a refactor of the current architecture):
+
+1. **Runtime code creation.** `eval`, `interaction-environment`, `load` and
+   REPL redefinition create and resolve bindings at runtime; a resolve-once
+   pipeline needs a story for late-arriving code (re-run the resolver per
+   `eval` unit, as the VM effectively does today).
+2. **Definition-environment relinking.** Macro-generated macros resolve
+   library-private helpers by name today (the `jabberwocky` constraint, with
+   its documented steal defect — Track L §6). Resolved IR must carry those
+   links as bindings, which is also the only known path to *fixing* that
+   defect.
+3. **Cross-backend contract.** The resolved IR becomes the backend interface;
+   `hygiene_matrix.rs` and Track H's harnesses are the acceptance gate that
+   the single pass answers exactly what the two-resolver architecture answers
+   today (28 of 28 against chibi and Racket).
 
 ---
 
