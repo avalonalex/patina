@@ -56,12 +56,14 @@ Counting *cells* (a row can be wrong on one backend or both):
 | step | work | fixes | matrix cells wrong after |
 |---|---|---|---|
 | — | measured 2026-08-28 | — | 10 (VM 2, tw 8) |
-| 1 | ✅ the by-name fallback must not resurrect a binding the rule rejected | the 6 tree-walker read rows that are not `internal-def` | **4** (VM 2, tw 2) — today |
-| 2 | internal defines carry their scopes to runtime | the 3 `internal-def` rows (4 cells), and with them family 38's remaining half | **0** |
+| 1 | ✅ the by-name fallback must not resurrect a binding the rule rejected | the 6 tree-walker read rows that are not `internal-def` | 4 (VM 2, tw 2) |
+| 2 | ✅ internal defines carry their scopes to runtime | the 3 `internal-def` rows (4 cells), and with them family 38's remaining half | **0** — today |
 | 3 | a `do` result clause is not a definition context | — it is not a matrix row; it has its own test | 0 |
 
-Step 3 does not change the count because it is not a hygiene defect and is
-deliberately not scored with them. Steps 1 and 2 close the queue.
+Steps 1 and 2 landed 2026-08-31 and the matrix reads **28 of 28 on both
+backends**; every row is now a two-directional regression guard. Step 3 is
+the one item left, and it is not a hygiene defect — it is deliberately not
+scored with them.
 
 ### Step 1 — ✅ landed 2026-08-31
 
@@ -91,28 +93,54 @@ terminal fallback (`set_scoped_terminal`, reached only at the root) no longer
 writes through the name-only view of a binding the per-frame walk rejected —
 a reference must not clobber by spelling a binding it is not allowed to read.
 
-### Step 2 — the one real piece of engineering left
+### Step 2 — ✅ landed 2026-08-31
 
-An internal define reaches the runtime with an **empty** scope set on both
-backends, so there is nothing for step 1's predicate to reject. Two lines of
-trace state it:
+An internal define reached the runtime with an **empty** scope set on both
+backends, so there was nothing for step 1's predicate to reject — and an
+empty binding set is a subset of every reference's, so on the VM the define
+was a *universal candidate* that won every scoped resolution of its spelling.
+Two lines of trace stated it:
 
 ```text
 BIND phase=desugar name="c" scopes={S136} byname=false
 BIND phase=run     name="c" scopes={}     byname=true
 ```
 
-The desugarer stamps the binder (`scope_body` over `body_definition_names`) and
-the stamp does not survive to `step.rs`'s `CpsExprKind::Define` arm. Carry it
-through, on both backends. It must keep `visible_by_name = true`: the relinker
-resolves macro-generated definitions by name, which is what the R7RS suite's
-`jabberwocky` test needs — `define_scoped_definition`'s own doc explains why.
+The fix turned out to be the pattern #137 already established for
+parameters, applied at each backend's own resolution point — no desugarer
+change at all. A source-written internal define now binds **at the scopes of
+the body it stands in** (`Lambda`'s `binding_scopes`), staying visible by
+name; a macro-introduced one keeps its own scopes, scoped-only:
 
-Do **not** try to fix this by taking the by-name path away. Measured and
-rejected: binding source-written parameters through `define_with_scopes`
-instead fixes two of this family's repros and breaks lambda evaluation
-outright — `test_eval_lambda` fails and the chibi tree-walker suite aborts
-before reporting a score.
+- **Tree-walker:** the CPS transform tracks the innermost lambda's
+  `binding_scopes` (`CpsTransformer::body_scopes`, saved and restored around
+  each body) and its `Define` arm stamps an empty-scoped define with them
+  (`define_scopes`). `step.rs` is untouched — `define_scoped_definition`
+  already binds one cell reachable by name and by scopes, which keeps the
+  relinker's by-name path (`jabberwocky`) working.
+- **VM:** `body_define_bindings` applies `build_bindings`' parameter rule to
+  body defines: empty datum scopes → bind at `binding_scopes`, `is_simple`;
+  otherwise the define's own scopes, scoped-only. `rename_body`'s alias
+  splice still keys off the datum's scopes, so source-written defines get no
+  alias — they are renamed consistently, like parameters.
+
+With the define a real scoped candidate, family 38's remaining half closed
+as a consequence rather than a choice, exactly as predicted below: an
+inside-macro's write resolves to the define before any fallback is
+consulted, and an outside-macro's write is rejected by scopes and falls
+through to the global.
+
+Cost, measured interleaved in both orders on a tree-walker microbench that
+does nothing but read and write internal defines: +3.2% — each such
+reference is a plain-map miss plus a scoped-table lookup where it was a
+plain-map hit. The VM pays nothing (compile-time resolution). Real programs
+mix in parameters and arithmetic, which are unchanged.
+
+Still true, kept for the record: do **not** try to fix this class by taking
+the by-name path away. Measured and rejected: binding source-written
+parameters through `define_with_scopes` instead fixes two repros and breaks
+lambda evaluation outright — `test_eval_lambda` fails and the chibi
+tree-walker suite aborts before reporting a score.
 
 ### Step 3 — not a hygiene defect
 
@@ -333,10 +361,11 @@ file's header explains the hard way.
 - Fix: the expander already marks exactly what a template introduced — after the output flip, the expansion's fresh scope is on every introduced identifier and on nothing that came in through a pattern variable — so `expand_macro_with_scope` returns that scope and the relinker renames only identifiers carrying it. A plain symbol never qualifies. That needed the scope flip to walk vectors (a quasiquoted `#(,(helper x))` in a template had relied on the spelling match); review found the first version copying every vector it walked, which made a vector object embedded in code via `eval` a copy the expansion mutated instead — it copies only a vector whose elements changed now (`a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion`).
 - Left as recorded, from the same review: `for_each_symbol` skips `Template::Literal`, so an identifier an outer expansion introduced into a generated macro's template never enters `template_symbols` — under SRFI 101 the generated form works because the outer expansion's own relinking already aliased it, but a program-level `(define (list . xs) …)` (an error in R7RS terms) still reaches it; the relinker walks with no cycle guard, so a cyclic datum reached outside a quote — a self-evaluating cyclic vector literal — overflows once relinking is active (both backends' quasiquote walkers already hang on cyclic templates); and a literal `'datum` template is now rebuilt per expansion where it used to insert one shared pair, about +20% on a template of five literals and `(eq? (m) (m))` `#f` where it was `#t` (unspecified; chibi answers `#f`).
 
-### 36. A use-site binding captures a template's reference — ✅ fixed for every ordinary binder 2026-08-31 (step 1); internal defines remain, **both backends**
-- Ours: `a_use_site_local_does_not_capture_a_templates_reference`, `a_templates_reference_resolves_past_a_same_named_use_site_let` (both now assert the correct answer on both backends), `a_macro_introduced_reference_is_not_captured_by_a_same_named_parameter`, `an_internal_define_captures_a_templates_reference_on_both_backends`, `a_macro_introduced_assignment_captures_an_internal_define_on_the_vm`. The last two still pin the wrong answers: internal defines are step 2.
-- **Step 1 landed 2026-08-31** — see the queue above. The six ordinary-binder read rows (lambda parameters, `let`, `let*`, `letrec`, named `let`, `do` variables) no longer capture on the tree-walker: the by-name fallback skips a binding the resolution rejected instead of resurrecting it by spelling. The internal-define rows are untouched by it, for the reason the queue's step 2 states: an internal define reaches the runtime with an empty scope set, so there is no scoped binding for the fallback to have rejected.
-- **Also pinned by `crates/patina-tests/tests/hygiene_matrix.rs`, and that file is the acceptance spec.** The tests above are shapes someone happened to write down; the matrix is the cross product — 7 binder forms × macro-inside/outside × read/write — scored against chibi 0.12 and Racket 9.3, which agree on all 28. It measured this family at **eight surfaces**: the tree-walker captured through `lambda` parameters, `let`, `let*`, `letrec`, named `let`, `do` variables and internal defines in the read direction, and the VM through an internal define in both directions. Step 1 turned the six ordinary-binder rows green together, none of the other 22 moved (`shapes_score_as_recorded` fails in either direction — the criterion both closed attempts lacked); the internal-define rows remain, and they are step 2's acceptance target along with family 38's row.
+### 36. A use-site binding captures a template's reference — ✅ fixed 2026-08-31, both backends, all eight surfaces
+- Ours: `a_use_site_local_does_not_capture_a_templates_reference`, `a_templates_reference_resolves_past_a_same_named_use_site_let`, `a_macro_introduced_reference_is_not_captured_by_a_same_named_parameter`, `an_internal_define_does_not_capture_a_templates_reference` (né `…_captures_…_on_both_backends`), `a_macro_introduced_assignment_reaches_past_an_internal_define` (né `…_captures_an_internal_define_on_the_vm`) — every one now asserts the correct answer on both backends.
+- **Step 1 landed 2026-08-31** — see the queue above. The six ordinary-binder read rows (lambda parameters, `let`, `let*`, `letrec`, named `let`, `do` variables) no longer capture on the tree-walker: the by-name fallback skips a binding the resolution rejected instead of resurrecting it by spelling. Its review surfaced family 40 — the same refusal exposes the VM's bare-name alias for cross-expansion macro-introduced globals — pinned there, not here.
+- **Step 2 landed the same day and closed the internal-define half** — the queue's step 2 entry records the mechanism (bind a source-written internal define at its body's `binding_scopes`, the parameter rule from #137, applied in the CPS transform and in the VM's `body_define_bindings`). All four repros below now answer as chibi and Racket do, and the matrix reads 28 of 28.
+- **Also pinned by `crates/patina-tests/tests/hygiene_matrix.rs`, and that file is the acceptance spec.** The tests above are shapes someone happened to write down; the matrix is the cross product — 7 binder forms × macro-inside/outside × read/write — scored against chibi 0.12 and Racket 9.3, which agree on all 28. It measured this family at **eight surfaces**: the tree-walker captured through `lambda` parameters, `let`, `let*`, `letrec`, named `let`, `do` variables and internal defines in the read direction, and the VM through an internal define in both directions. Step 1 turned the six ordinary-binder rows green together and step 2 the internal-define rows, none of the other rows moving either time (`shapes_score_as_recorded` fails in either direction — the criterion both closed attempts lacked).
 - `(define-syntax mk (syntax-rules () ((_ a b) (list a b)))) (let ((list 1)) (mk 1 2))` — the tree-walker answered `Not a procedure: #<integer>` where VM and chibi answer `(1 2)` (fixed by step 1; likewise a procedure parameter named `list`, and a library-defined `mk`). Found by the review of #132 auditing the relinker's contract: it skips a name when the two environments' global views agree (`self.env.get(name) == Some(def_value)`) and leaves the rest to scope-aware resolution, which the tree-walker does not do for locals — `application.rs`/`step.rs` bind parameters by name and `Environment::get` falls back to the by-name table. Pre-existing, unrelated to #132's changes. That entry originally prescribed "the tree-walker resolving locals by scopes as the VM's alpha-rename does" — **withdrawn 2026-08-28**: the VM captures an internal define too (below), so it is not a working model for this family, and the `application.rs`/`step.rs` diagnosis describes pre-#136 code.
 - **A silent version of the same defect, measured 2026-08-27 — this is the shape to fix against.** The repro above at least *errors*; two lines shorter it returns a wrong answer to the plainest statement of §4.3.2 there is, and says nothing:
 
@@ -398,7 +427,7 @@ file's header explains the hard way.
 - **Fixed 2026-08-27**, on the third attempt and only after family 39 was. The two failed attempts are above and they failed for one reason: perturbing the scope sets while binders were mutually *unordered* left "largest wins" deciding by accident, which is what turned `(match '(a . 1) ((x . y) (list x y)))` into `(a a)`. Scoping a binder at the scopes it stands in (family 39) makes nested binders a chain, and on a chain there is nothing left to decide by accident. The fix itself is then the `enter_binding_form(binders, binding_scope)` this entry proposed a year of attempts ago, used by `desugar_lambda_tagged`, the `define` shorthand, `desugar_let_syntax_impl_tagged` and the internal-define body.
 - Verified: `(genlam)` answers 101 on both backends, as chibi does; `a_macro_introduced_variable_binding_renames_its_scope` asserts all three binding forms at the right answer on both, having been asserted at the wrong one before.
 
-### 38. A scoped write cannot reach the binding its own read can — tree-walker only — ✅ fixed 2026-08-27 (the fallback halves remain)
+### 38. A scoped write cannot reach the binding its own read can — tree-walker only — ✅ fixed 2026-08-27; the fallback halves closed 2026-08-31 with family 36's step 2
 - Ours: `an_introduced_macro_can_assign_to_an_introduced_binding`, `an_introduced_macro_can_assign_to_a_source_written_binder` (both `assert_program_eval_to` since the 2026-08-27 fix; the earlier `…_diverges` names and their `assert_divergence` quarantine are gone)
 - Also `crates/patina-tests/tests/hygiene_matrix.rs`, where this family's remaining half is the single row `internal-def/inside/write`: the tree-walker answers `(5 99)` where chibi, Racket and the VM answer `(99 global)`. It goes green with family 36's fix rather than before it.
 - `Environment::get_with_scopes` resolves by subset — the largest binding scope set contained in the reference's — while `set_with_scopes` demands an *exact* match. A reference can read a binding it cannot write, and the write falls through to the root's by-name `set`.
@@ -445,6 +474,7 @@ file's header explains the hard way.
 - The third is not fixable there, and this is the part worth checking rather than believing: the binder is an internal define, and an internal define reaches the runtime with an **empty** scope set (`[PROBE] Define "c" scopes={} empty=true` from the `CpsExprKind::Define` arm), so `insert_scoped` files it by name and there is no scoped candidate to reject. The desugarer stamps those binders; the stamp does not survive to `step.rs`. Reading the desugarer alone suggests the opposite conclusion — family 36 records the measurement.
 - **So the fallback position is not the decision it looks like.** `main`'s root fallback is right for those three only because the intended target happens to live at the root, and wrong for the two this entry opens with. Family 36 records the measurement that settles it — an internal define reaches the runtime with an empty scope set — so **fix family 36 first**; this half then follows from it rather than being chosen.
 - The rest of #138 is worth recovering when it returns: resolving the write across the whole chain through `patina_core::scope_resolve` rather than one environment at a time, so an ambiguous `set!` is refused like an ambiguous reference, and a candidate walk shared with the read so the two cannot drift about order.
+- **Closed 2026-08-31, and the fallback position was indeed not a decision** — family 36's step 2 settled it, as predicted. With an internal define bound at its body's scopes, the `(g)` repro above resolves *scoped* on both backends (the inside-macro's write carries the body's scopes, a superset of the binder's) and answers 15 before any fallback is consulted; the outside-macro shapes are rejected by scopes and fall through to the global by rule rather than by the accident of where the root is. Pinned by `an_introduced_macro_can_assign_to_the_internal_define_it_stands_beside` and the matrix's `internal-def` write rows. What remains recoverable from #138 — one shared candidate walk for read and write, and refusing an ambiguous `set!` — is an internal-consistency cleanup now, not a defect: `set_with_scopes` still resolves per-environment and picks by size where a read would refuse, but no measured program distinguishes them today. Its durable home is Track Q's consolidation queue, item Q7.1 (`PRD/TRACK_Q_QUALITY_PRD.md`), guarded by Track H's H2 symmetry property — recorded there because this doc deletes itself when its queue empties.
 
 ### 39. The scope model is under-determined; nesting order covers for it — both backends — ✅ fixed 2026-08-27
 - Ours: `test_let_syntax_nested_lexical_scoping` (`crates/patina-tests/tests/let_syntax.rs`) already pins the *answer*; what is new is why it is right. The defect was reproducible by enforcing Flatt's rule, which refused this program.

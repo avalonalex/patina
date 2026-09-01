@@ -25,7 +25,7 @@ mod common;
 
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program, eval_program_tree_walker, eval_program_vm, scratch_path,
+    eval_program, scratch_path,
 };
 use tempfile::TempDir;
 
@@ -1144,13 +1144,13 @@ fn a_vector_object_in_evaluated_code_keeps_its_identity_through_expansion() {
 }
 
 // ---------------------------------------------------------------------------
-// Family 36 — a use-site binding captures a template's reference.
-// The parameter/`let` half is fixed: the by-name fallback no longer
-// resurrects a binding set-of-scopes resolution rejected
-// (`Environment::get_scoped_fallback`). Internal defines still capture on
-// BOTH backends — they reach the runtime with an empty scope set, so there
-// is nothing for the fallback to have rejected (see the last two tests in
-// this section, and the triage doc's step 2).
+// Family 36 — a use-site binding captured a template's reference. Closed in
+// two steps: the by-name fallback no longer resurrects a binding
+// set-of-scopes resolution rejected (`Environment::get_scoped_fallback`),
+// and internal defines carry the scopes of the body they stand in to the
+// runtime on both backends (`CpsTransformer::define_scopes`, the VM's
+// `body_define_bindings`) — like parameters, one cell reachable by name and
+// by scopes. Every test in this section is a regression guard now.
 // ---------------------------------------------------------------------------
 
 /// `mk`'s template references `list`; a use-site `(let ((list 1)) …)` has no
@@ -1232,66 +1232,72 @@ fn a_macro_introduced_reference_is_not_captured_by_a_same_named_parameter() {
 /// defect is fixed; at that point both assertions become `"global"` and this
 /// comment goes away.
 #[test]
-fn an_internal_define_captures_a_templates_reference_on_both_backends() {
-    // `(list r c)` rather than a bare `(g)`: ending at `(g)` would answer 5
-    // whether `(define c 5)` bound fresh in `g`'s frame — the defect here —
-    // or leaked out and clobbered the global, which is a different and worse
-    // one. Observing both distinguishes them. Order is forced with `r` since
-    // R7RS §4.1.3 leaves operand order unspecified.
-    let code = "(define c 'global)
-                (define-syntax rd (syntax-rules () ((rd) c)))
-                (define (g) (define c 5) (rd))
-                (define r (g))
-                (list r c)";
-    let wrong = "(5 global)"; // correct is (global global)
-    assert_eq!(
-        eval_program_vm(code),
-        wrong,
-        "VM: expected the pinned wrong answer; if this is now (global global) the \
-         defect is fixed — see {TRIAGE} family 36"
-    );
-    assert_eq!(
-        eval_program_tree_walker(code),
-        wrong,
-        "tree-walker: expected the pinned wrong answer; if this is now \
-         `global` the defect is fixed — see {TRIAGE} family 36"
+fn an_internal_define_does_not_capture_a_templates_reference() {
+    // `(list r c)` rather than a bare `(g)`: ending at `(g)` would answer
+    // `global` whether the template's `c` reached the global — correct — or
+    // something stranger happened; observing both distinguishes a clean
+    // resolution from a clobber. Order is forced with `r` since R7RS §4.1.3
+    // leaves operand order unspecified.
+    //
+    // Both backends answered `(5 global)` until internal defines carried the
+    // scopes of the body they stand in to the runtime: with no scopes, the
+    // define was reachable by name from the template's fallback on the
+    // tree-walker, and a universal candidate on the VM.
+    assert_program_eval_to(
+        "(define c 'global)
+         (define-syntax rd (syntax-rules () ((rd) c)))
+         (define (g) (define c 5) (rd))
+         (define r (g))
+         (list r c)",
+        "(global global)",
     );
 }
 
-/// The same capture through a macro-introduced `set!`, where the two backends
-/// disagree and the tree-walker is the one that is right.
+/// The same shape through a macro-introduced `set!`: the write must reach
+/// past the internal define to the global.
 ///
 /// chibi and Racket answer `(5 99)`: the template's `c` is the global, so
-/// `g`'s local keeps 5 and the global becomes 99. The VM captures the
-/// internal define — writing 5 to 99 and leaving the global alone. The
-/// tree-walker is correct here only by accident: its scoped write finds no
-/// candidate and falls back at the *root*, which is where the intended target
-/// happens to live.
-///
-/// Recorded because that accident is load-bearing. PR #138 moved the fallback
-/// to the starting environment — defensible on its own terms, and it put the
-/// tree-walker on the VM's wrong answer here.
+/// `g`'s local keeps 5 and the global becomes 99. The VM captured the
+/// internal define until it carried scopes; the tree-walker was correct
+/// before that, but only by accident — its scoped write found no candidate
+/// and fell back at the *root*, which is where the intended target happens
+/// to live. PR #138 moved that fallback inward and landed on the VM's wrong
+/// answer, which is why this pin exists. Both backends now answer by the
+/// rule: the define is a scoped candidate the write's scopes reject, so the
+/// write falls through to the global.
 #[test]
-fn a_macro_introduced_assignment_captures_an_internal_define_on_the_vm() {
-    let code = "(define c 'global)
-                (define-syntax b (syntax-rules () ((b) (set! c 99))))
-                (define (g) (define c 5) (b) c)
-                (define r (g))
-                (list r c)";
-    assert_eq!(
-        eval_program_vm(code),
-        "(99 global)",
-        "VM: expected the pinned wrong answer — it captures `g`'s internal \
-         define; if this is now (5 99) the defect is fixed — see {TRIAGE} \
-         family 36"
-    );
-    assert_eq!(
-        eval_program_tree_walker(code),
+fn a_macro_introduced_assignment_reaches_past_an_internal_define() {
+    assert_program_eval_to(
+        "(define c 'global)
+         (define-syntax b (syntax-rules () ((b) (set! c 99))))
+         (define (g) (define c 5) (b) c)
+         (define r (g))
+         (list r c)",
         "(5 99)",
-        "tree-walker: this one is CORRECT and must stay so. It holds only \
-         because the scoped write falls back at the root; PR #138 moved that \
-         inward and broke it. Do not \"un-quarantine\" this half — see \
-         {TRIAGE} families 36 and 38"
+    );
+}
+
+/// Family 38's last surface: a macro defined *inside* the frame assigns to
+/// the internal define its own read can see.
+///
+/// `b` is defined in `g`'s body, so its template's `c` carries the body's
+/// scopes and must reach `g`'s `c` — chibi and the VM answered 15 while the
+/// tree-walker said "Undefined variable: c": with the define bound by name
+/// only, the scoped write found no candidate anywhere, recursed to the root,
+/// and found nothing there either (`get`'s fallback starts at the reading
+/// frame; `set`'s terminal is the root — the asymmetry family 38 records).
+/// With the define bound at its body's scopes, the write resolves to it like
+/// any other binding, before any fallback is consulted.
+#[test]
+fn an_introduced_macro_can_assign_to_the_internal_define_it_stands_beside() {
+    assert_program_eval_to(
+        "(define (g)
+           (define c 5)
+           (define-syntax b (syntax-rules () ((b) (set! c (+ c 10)))))
+           (b)
+           c)
+         (g)",
+        "15",
     );
 }
 

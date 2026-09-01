@@ -108,9 +108,11 @@ to learn what a push would have told you anyway.
 
 **Active planning docs:**
 - `scheme_tests/reports/larceny_triage.md` — **the open defect queue.** Start here
-  for macro/hygiene work: it opens with an ordered plan (families 36 and 38),
-  what each step fixes, its acceptance criterion, and the approaches already
-  measured and rejected. Two PRs were closed for skipping it.
+  for macro/hygiene work: the hygiene queue (families 36 and 38) closed
+  2026-08-31 with the matrix at 28 of 28, but the doc still records what each
+  step did, the acceptance criteria, and the approaches measured and rejected
+  — and the non-hygiene families are still open. Two PRs were closed for
+  skipping it.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker (Priorities 1–5 status)
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`

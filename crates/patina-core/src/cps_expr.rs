@@ -335,7 +335,11 @@ pub enum CpsExprKind {
     ///
     /// `scopes` mirrors `Set`'s, and for the same reason: the defined
     /// identifier's hygiene scopes are part of which binding this is, not
-    /// decoration on it. Empty for a name written in source.
+    /// decoration on it. Unlike the CoreExpr variant's, these are the scopes
+    /// the binding *lives at*: the CPS transform stamps a source-written
+    /// internal define with its body's `binding_scopes`, exactly as
+    /// `application.rs` binds a source-written parameter. Empty only for a
+    /// top-level define, which is a plain global.
     Define {
         name: Symbol,
         scopes: ScopeSet,
