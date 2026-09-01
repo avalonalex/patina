@@ -19,7 +19,73 @@
 //! case to leave unimplemented.
 
 mod common;
+use common::assert_program_eval_to;
 use common::eval_program as eval;
+
+/// Every shape of `guard` R7RS §4.2.7 defines, in one program, checked against
+/// chibi and Gauche — which produce this line character for character.
+///
+/// `guard` was rewritten on 2026-09-01 to R7RS 7.3's expansion, bar one
+/// deliberate deviation on the success path (triage families 22 and 28; the
+/// reason is in `lib/scheme/base/exceptions.scm`). The new expansion routes
+/// the body's *normal* result through a `call-with-values` and a thunk where
+/// the previous one returned it directly, so the shapes at risk are not the
+/// exception ones: they are multiple values, zero values, and a body whose
+/// definitions must stay in a body context. The clause walker moved from
+/// `cond` to its own `%guard-aux`, which puts `else` and `=>` at risk too, and
+/// `var` is bound by a `let` inside a template, which puts hygiene at risk.
+#[test]
+fn guard_covers_every_r7rs_clause_shape() {
+    assert_program_eval_to(
+        r#"
+        (define out '())
+        (define (show x) (set! out (cons x out)))
+        (show (guard (e (else (list 'else e))) (raise 'a)))
+        (show (guard (e ((assq 'b e) => cdr)) (raise (list (cons 'b 42)))))
+        (show (guard (e ((memv e '(1 2 3)))) (raise 2)))
+        (show (guard (e ((symbol? e) 'sym) ((string? e) 'str)) (raise "s")))
+        (show (guard (o (#t (list 'outer o)))
+                (guard (e ((string? e) 'str)) (raise 'inner))))
+        (show (guard (e (#t 'never)) 1 2 3))
+        (show (call-with-values (lambda () (guard (e (#t 'never)) (values 1 2 3))) list))
+        (show (call-with-values (lambda () (guard (e (#t 'never)) (values))) list))
+        (show (let ((else #f)) (guard (e ((symbol? e) 'sym)) 'ok)))
+        (show (guard (e (#t 'never)) (define x 7) (* x 6)))
+        (show (let ((e 'outer)) (guard (e (#t e)) (raise 'inner))))
+        (show (guard (a (#t (list 'top a)))
+                (guard (b ((string? b) 'no))
+                  (guard (c ((number? c) 'no))
+                    (raise 'obj)))))
+        (reverse out)
+        "#,
+        "((else a) 42 (2 3) str (outer inner) 3 (1 2 3) () ok 42 inner (top obj))",
+    );
+}
+
+/// The handler and the `guard` clauses run in *different* dynamic
+/// environments, and a parameter says which is which more directly than a
+/// wind log does. chibi and Gauche produce this line exactly.
+///
+/// R7RS 6.11 runs the handler "in the dynamic environment of the call to
+/// `raise`", so it reads `inner`. R7RS 4.2.7 runs the clauses "in the dynamic
+/// environment of the `guard` expression", so they read `outer` — `guard-k`
+/// has already left the `parameterize` by then. Before triage families 22 and
+/// 28 the raise path unwound first and the handler read `outer` too, which
+/// collapsed the distinction this test exists to hold.
+#[test]
+fn a_handler_and_a_guard_clause_run_in_different_dynamic_environments() {
+    assert_program_eval_to(
+        r#"
+        (define p (make-parameter 'outer))
+        (list
+          (guard (e (#t (list 'clause (p)))) (parameterize ((p 'inner)) (raise 'x)))
+          (with-exception-handler (lambda (e) (list 'handler (p)))
+            (lambda () (parameterize ((p 'inner)) (raise-continuable 'x))))
+          (parameterize ((p 'mid)) (guard (e (#t (list 'nested (p)))) (raise 'x))))
+        "#,
+        "((clause outer) (handler inner) (nested mid))",
+    );
+}
 
 #[test]
 fn test_nested_guard_through_a_thunk() {
@@ -113,31 +179,28 @@ fn test_three_levels_of_nesting() {
 }
 
 /// A `guard` whose clauses all fail re-raises **in the raiser's dynamic
-/// extent** (R7RS §4.2.7), so a `dynamic-wind` between the two guards should
-/// be re-entered before the re-raise and exited again after it.
+/// extent** (R7RS §4.2.7), so a `dynamic-wind` between the two guards is
+/// re-entered before the re-raise and exited again after it. Fixed
+/// 2026-09-01 with Track L triage families 22 and 28.
 ///
-/// Patina does not rewind: it re-raises where the `guard` stands. Both
-/// backends agree, so this is a deviation from the report and from chibi
-/// rather than a divergence — recorded here because it is observable, and
-/// only with side-effecting wind thunks (audit F9).
+/// Patina used to re-raise where the `guard` stands, on both backends —
+/// a deviation from chibi rather than a divergence, and observable only with
+/// side-effecting wind thunks (audit F9), because the value the whole
+/// expression produces is the same either way.
 ///
-/// ```text
-/// Patina  => (in out)          chibi => (in out in out)
-/// ```
+/// This pin outlived two wrong diagnoses, and both are worth keeping:
 ///
-/// **That "not the handler machinery" was wrong, measured 2026-08-25.** R7RS
-/// 7.3's reference `guard` carries exactly the continuation this describes,
-/// back into the raiser's wind stack — and still gives `(in out)` here,
-/// because `with-exception-handler` unwinds *before* calling the handler, so
-/// the continuation is captured after the extent has been left. Both halves
-/// are needed. See Track L PRD §6, "An exception handler runs after the
-/// unwind", and the triage doc's families 22 and 28 for the order and for
-/// what changing the unwind reopens; this pin closes with them.
-///
-/// The value the whole expression produces is the same either way, which is
-/// why nothing else notices.
+///  - "the fix is `guard`'s expansion, not the handler machinery" — wrong,
+///    measured 2026-08-25. R7RS 7.3's reference `guard` carries exactly the
+///    continuation back into the raiser's wind stack and *still* gave
+///    `(in out)`, because the raise path unwound before calling the handler,
+///    so that continuation was captured after the extent had been left.
+///  - "so it is the handler machinery, not `guard`" — also wrong. Neither
+///    half moves this alone. It took three changes together: the handler
+///    stack on `CpsContinuation`, no unwind on any raise path, and the
+///    reference `guard`.
 #[test]
-fn test_a_guard_re_raise_does_not_rewind_into_the_raiser() {
+fn test_a_guard_re_raise_rewinds_into_the_raiser() {
     assert_eq!(
         eval(
             "(import (scheme base))
@@ -151,6 +214,6 @@ fn test_a_guard_re_raise_does_not_rewind_into_the_raiser() {
                      (lambda () (set! log (cons 'out log)))))))
              (list result (reverse log))"
         ),
-        "((outer boom) (in out))"
+        "((outer boom) (in out in out))"
     );
 }

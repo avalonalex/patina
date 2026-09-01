@@ -294,14 +294,24 @@ intercepted at call dispatch time.
 | `Values` | `values` | Store in `value_buffer`, return primary value |
 | `CallWithValues` | `call-with-values` | Clear buffer, run producer, unpack values, call consumer |
 | `WithExceptionHandler` | `with-exception-handler` | Push handler, run thunk, pop on return |
-| `Raise` | `raise` | Pop handler, unwind winds, push handler frame |
+| `Raise` | `raise` | Pop handler, push handler frame — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
 | `Error` | `error` | Construct error object, then Raise |
 
 ### 5.2 Exception Handling
 
 - `ExceptionHandler` stack on VmState, pushed/popped by `WithExceptionHandler`
-- `vm_raise_value()`: pops handler, unwinds dynamic-wind, pushes handler frame
+- `vm_raise_value()`: pops the handler and pushes the handler frame. It does
+  **not** touch the wind stack: R7RS 6.11 calls the handler "in the dynamic
+  environment of the call to `raise`", and a raise crosses no dynamic extent,
+  so no `after` thunk is due. Popping the handler is the only change a raise
+  makes. `guard` unwinds by escaping through `guard-k`, an ordinary
+  continuation, and re-raises by jumping back in through `handler-k` (see
+  `lib/scheme/base/exceptions.scm`). Unwinding here instead ran an after thunk
+  twice and left `guard` with no raise point to return to — Track L triage
+  families 22 and 28, fixed 2026-09-01
+- `ExceptionHandler` records only the handler and the frame depth. It used to
+  carry the wind depth `raise` unwound to; nothing unwinds, so nothing reads it
 - `pop_exception_handlers()`: cleanup on normal thunk return
 - Error classification: `classify_error()` maps `VmError` →
   `ExceptionKind` (FileError, ReadError, etc.)

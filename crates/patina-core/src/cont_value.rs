@@ -156,9 +156,6 @@ pub struct PromptFrame {
 pub struct ExceptionHandler {
     /// The handler procedure as TaggedValue (lambda (condition) ...)
     pub handler: TaggedValue,
-    /// The dynamic winds active when this handler was installed.
-    /// Used by `raise` to unwind dynamic-wind after-thunks before invoking the handler.
-    pub dynamic_winds: Vec<DynamicWindRecord>,
 }
 
 // ==================== ContValue ====================

@@ -137,9 +137,13 @@ impl<'a> CpsEvaluator<'a> {
             // Pop the handler (it's been invoked)
             let new_handlers = exception_handlers[..exception_handlers.len() - 1].to_vec();
 
-            // Unwind dynamic-wind after-thunks back to the handler's installation point
-            self.run_wind_handlers(&dynamic_winds, &handler_entry.dynamic_winds)?;
-            let handler_winds = handler_entry.dynamic_winds.clone();
+            // The wind stack is left as the error found it, for the reason
+            // `apply_raise` records: a raise crosses no dynamic extent, so
+            // the unwind belongs to `guard`'s escape, not here. Routing a
+            // Rust-level error through the handlers has to look exactly like
+            // a `raise` of the same object, or the two paths disagree about
+            // where the handler runs — which is what made `(error "x")` and
+            // `(raise 'x)` order the after-thunk differently.
 
             // Create continuation for when handler returns
             // Runtime errors are non-continuable (only user-raised exceptions can be continuable)
@@ -151,7 +155,7 @@ impl<'a> CpsEvaluator<'a> {
             };
 
             // Handler is already TaggedValue - use directly for ApplyProc.proc
-            // Call the handler with the dynamic winds restored to handler's installation point
+            // Call the handler in the error's own dynamic extent
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
                 args: vec![exception_tagged],
@@ -159,7 +163,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 cont_env,
                 prompt_stack,
-                dynamic_winds: handler_winds,
+                dynamic_winds,
                 exception_handlers: new_handlers,
             })
         } else {

@@ -492,12 +492,9 @@ impl<'a> CpsEvaluator<'a> {
             original_cont: Box::new(cont),
         };
 
-        // Push the exception handler onto the stack, capturing current dynamic winds
-        // so that `raise` can unwind back to this point before invoking the handler
-        let new_handler = ExceptionHandler {
-            handler,
-            dynamic_winds: dynamic_winds.clone(),
-        };
+        // Push the exception handler onto the stack. It records no wind depth:
+        // a raise does not unwind, so there is nothing to unwind *to*.
+        let new_handler = ExceptionHandler { handler };
         let mut new_exception_handlers = exception_handlers;
         new_exception_handlers.push(new_handler);
 
@@ -547,10 +544,12 @@ impl<'a> CpsEvaluator<'a> {
             let mut new_handlers = exception_handlers;
             new_handlers.pop();
 
-            // Unwind dynamic-wind after-thunks back to the handler's installation point
-            // R7RS §6.10: after-thunks must run before control leaves the dynamic extent
-            self.run_wind_handlers(&dynamic_winds, &handler_entry.dynamic_winds)?;
-            let handler_winds = handler_entry.dynamic_winds.clone();
+            // The wind stack is left as the raise found it. R7RS 6.11 calls
+            // the handler in the dynamic environment of the `raise`, and a
+            // raise crosses no dynamic extent, so no after-thunk is due here.
+            // The unwind belongs to `guard`, whose `guard-k` jump runs the
+            // after-thunks through the ordinary wind machinery (Track L
+            // triage families 22 and 28).
 
             // Create continuation for when handler returns
             let handler_return_cont = ContValue::RaiseHandlerReturn {
@@ -569,7 +568,7 @@ impl<'a> CpsEvaluator<'a> {
             };
 
             // Handler is already TaggedValue - use directly for ApplyProc.proc
-            // Call handler with the dynamic winds restored to the handler's installation point
+            // Call the handler in the raise's own dynamic extent
             Ok(StepResult::ApplyProc {
                 proc: handler_entry.handler,
                 args: vec![exception_tagged],
@@ -577,7 +576,7 @@ impl<'a> CpsEvaluator<'a> {
                 env: self.evaluator.global_env.clone(),
                 cont_env,
                 prompt_stack,
-                dynamic_winds: handler_winds,
+                dynamic_winds,
                 exception_handlers: new_handlers,
             })
         } else {

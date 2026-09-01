@@ -2531,12 +2531,12 @@ fn handle_control_primitive(
                 }
             }
 
-            // Push exception handler (captures current dynamic winds and frame depth).
-            // The handler is popped when the thunk returns (via pop_exception_handlers)
-            // or when raise invokes it.
+            // Push exception handler (captures the frame depth). The handler is
+            // popped when the thunk returns (via pop_exception_handlers) or when
+            // raise invokes it. It records no wind depth: a raise does not
+            // unwind, so there is nothing to unwind *to*.
             state.exception_handlers.push(ExceptionHandler {
                 handler: handler_proc,
-                dynamic_winds: state.dynamic_winds.clone(),
                 stack_depth: state.frames.len(),
             });
 
@@ -2623,37 +2623,22 @@ fn vm_raise_value(
     continuable: bool,
 ) -> Result<(), VmError> {
     if let Some(handler_entry) = state.exception_handlers.pop() {
-        // Unwind dynamic-wind after-thunks back to the handler's installation point
-        let target_wind_depth = handler_entry.dynamic_winds.len();
-        // Pop each record *before* running its after-thunk, never after. A
-        // continuation invoked inside an after-thunk re-enters the wind
-        // machinery, and a record still on `dynamic_winds` has its after-thunk
-        // run again — and again, with no depth guard: native recursion that
-        // aborts the process instead of reporting a stack overflow.
-        // `pop_resolved_winds` has always had this ordering; this loop and
-        // `run_wind_transition` collected the records up front and truncated
-        // afterwards.
-        while state.dynamic_winds.len() > target_wind_depth {
-            let after = state
-                .dynamic_winds
-                .pop()
-                .expect("loop condition guarantees a record")
-                .after;
-            match run_thunk_outcome(state, after) {
-                Ok(ThunkOutcome::Returned(_)) => {}
-                Ok(ThunkOutcome::Escaped(v)) => return Err(park_escape(state, v)),
-                // Best-effort: a wind thunk that fails on its own terms during
-                // unwinding loses to the exception already in flight. An
-                // escape parked by something deeper is not a failure and must
-                // not be swallowed here.
-                Err(e) => {
-                    if state.pending_escape.is_some() {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
+        // The wind stack is left exactly as the raise found it. R7RS 6.11
+        // calls the handler "in the dynamic environment of the call to
+        // `raise`, except that the current exception handler is the outer
+        // one" — the pop above is that exception, and it is the only one.
+        //
+        // A raise crosses no dynamic extent, so no after-thunk is due. This
+        // used to unwind to the handler's own installation depth first, which
+        // ran an after-thunk nothing had asked for and left the extent before
+        // the handler could see it. `guard` then had nowhere to go back to, so
+        // a declining clause could not re-raise where R7RS says it must
+        // (Track L triage families 22 and 28).
+        //
+        // The unwind still happens for `guard` — one level up, where it
+        // belongs. `guard-k` is an ordinary continuation, and jumping to it
+        // runs the after-thunks through the wind machinery that already
+        // handles every other control transfer.
         if continuable {
             // Continuable: run handler synchronously, return its value
             let handler_result = match call_any(state, handler_entry.handler, &[exception], dst)? {

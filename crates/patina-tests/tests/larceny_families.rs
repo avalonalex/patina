@@ -697,25 +697,24 @@ fn let_values_binds_all_clauses_in_parallel() {
 /// R7RS 4.2.7: a `guard` with no matching clause re-raises "in the dynamic
 /// environment of the original call to `raise`" — so the `dynamic-wind`
 /// before-thunk runs again on the way back in, and the after-thunk again
-/// on the way out to the outer guard. Ours re-raises from the guard's own
-/// environment and runs neither.
+/// on the way out to the outer guard. Fixed 2026-09-01 (family 22).
 ///
-/// **When this converges on `(out in out in)`, replace with
-/// `assert_program_eval_to` and update the triage doc.**
+/// The visible half of family 28. Three changes together, none of which
+/// works alone: `CpsContinuation` carries the handler stack, so the jump
+/// back in still has handlers; no raise path unwinds, so the raise point is
+/// still there to jump back to; and `guard` is R7RS 7.3's expansion, whose
+/// `handler-k` is the thing that jumps.
 #[test]
 fn a_guard_reraise_reenters_the_dynamic_extent() {
-    assert_eq!(
-        eval_program(
-            "(define v '())
-             (guard (exn ((equal? exn 5) 'five))
-               (guard (exn ((equal? exn 6) 'six))
-                 (dynamic-wind (lambda () (set! v (cons 'in v)))
-                               (lambda () (raise 5))
-                               (lambda () (set! v (cons 'out v))))))
-             v"
-        ),
-        "(out in)",
-        "expected the pinned wrong answer; if this is now (out in out in) the defect is fixed"
+    assert_program_eval_to(
+        "(define v '())
+         (guard (exn ((equal? exn 5) 'five))
+           (guard (exn ((equal? exn 6) 'six))
+             (dynamic-wind (lambda () (set! v (cons 'in v)))
+                           (lambda () (raise 5))
+                           (lambda () (set! v (cons 'out v))))))
+         v",
+        "(out in out in)",
     );
 }
 
@@ -821,47 +820,44 @@ fn error_accepts_a_message_that_is_not_a_string() {
 
 /// R7RS 6.11: a handler is called "in the dynamic environment of the call to
 /// `raise`, except that the current exception handler is the outer one".
-/// Both backends unwind to the handler's own wind depth *first* on the
-/// `raise`/`raise-continuable` path, so the handler runs outside the extent —
-/// and the after-thunk runs twice.
+/// Both backends unwound to the handler's own wind depth *first*, so the
+/// handler ran outside the extent and the after-thunk ran twice. Fixed
+/// 2026-09-01 (family 28).
+///
+/// The fix removes work rather than adding it: a `raise` crosses no dynamic
+/// extent, so no raise path unwinds any more. The pop of the handler stack is
+/// the only thing R7RS asks a raise to change. `guard`'s `guard-k` does the
+/// crossing, through the same wind machinery as every other control transfer.
 ///
 /// Found 2026-08-25 while attempting family 22, whose visible symptom this
-/// produces on the non-continuable path: a `guard` cannot re-enter an extent
-/// that was left before its handler ran. Measured, not deduced — R7RS 7.3's
-/// reference `guard`, which explicitly jumps a continuation back to the raise
-/// point, still gives family 22's wrong answer on the VM, because that
-/// continuation is captured after the unwind. Neither half fixes it alone;
-/// {TRIAGE} family 22 records the order.
+/// produces on the non-continuable path. Neither half fixed it alone, which
+/// was measured rather than deduced: R7RS 7.3's reference `guard` jumps a
+/// continuation back to the raise point and still gave family 22's wrong
+/// answer under the old raise path, because that continuation was captured
+/// after the unwind.
 ///
 /// Two neighbours, deliberately not re-pinned here: the tree-walker's `error`
-/// path runs its handler *before* the unwind — the opposite ordering, and
-/// already pinned in `backend_divergence.rs` — and the wind machinery the fix
-/// will lean on has a VM defect of its own, also pinned there
+/// path, whose opposite ordering converged with this (now
+/// `a_guard_clause_runs_after_the_unwind` in `backend_divergence.rs`), and a
+/// VM defect in the wind machinery the fix leans on, still pinned there
 /// (`continuation_within_its_own_wind_reruns_the_thunks_on_the_vm`). Plain
 /// re-entry is covered by `compliance/control.rs`'s
 /// `test_dynamic_wind_with_callcc_reentry` (R7RS §6.10's own example) rather
 /// than re-derived here.
-///
-/// **When the log converges on `(in handler out)` — chibi's and Gauche's —
-/// replace the assertion with `assert_program_eval_to` and update {TRIAGE}
-/// families 22 and 28 together with PRD §6's entry.**
 #[test]
 fn an_exception_handler_runs_in_the_raises_dynamic_extent() {
-    let program = "(define v '())
-                   (define (log x) (set! v (cons x v)))
-                   (define answer
-                     (with-exception-handler
-                       (lambda (e) (log 'handler) 'handled)
-                       (lambda ()
-                         (dynamic-wind (lambda () (log 'in))
-                                       (lambda () (raise-continuable 'x))
-                                       (lambda () (log 'out))))))
-                   (list answer (reverse v))";
-    assert_eq!(
-        eval_program(program),
-        "(handled (in out handler out))",
-        "expected the pinned wrong answer; if this is now (handled (in handler out)) \
-         the defect is fixed — see {TRIAGE} families 22 and 28"
+    assert_program_eval_to(
+        "(define v '())
+         (define (log x) (set! v (cons x v)))
+         (define answer
+           (with-exception-handler
+             (lambda (e) (log 'handler) 'handled)
+             (lambda ()
+               (dynamic-wind (lambda () (log 'in))
+                             (lambda () (raise-continuable 'x))
+                             (lambda () (log 'out))))))
+         (list answer (reverse v))",
+        "(handled (in handler out))",
     );
 }
 
