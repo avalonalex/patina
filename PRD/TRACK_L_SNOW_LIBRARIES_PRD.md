@@ -1,13 +1,26 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-08-26 — chibi's `(srfi 101 test)` runs under SRFI 101's shadowing names (56 of 56, both backends) after five hygiene fixes and a review round that found the next layer (triage families 33–36); the corpus rises to 127 of 161 as `okmij-ssax`'s macro expansion and `chrisoei-cint` pass. Earlier, 2026-08-25 — SRFI 116 bundled as `(scheme ilist)`, 337 of 345 (VM lane 4827 of 4845; tree-walker 4607 of 4625). Earlier — the tree-walker delivers multiple values to a continuation, fixing SRFI 1's n-ary procedures there and closing a bug open since March. Earlier — SRFI 117 and 127 bundled as `(scheme list-queue)` and `(scheme lseq)`; their suites pass 40 of 40 and 109 of 109 (19 of 33 suites, 4490 of 4500 on the VM; tree-walker 17 of 33). Earlier — `guard`'s re-raise diagnosed to its root (the handler runs after the unwind; pinned) rather than fixed, and the attempt recorded. Earlier — SRFI 41 bundled as `(scheme stream)`; the suite passes 81 of 81 on the VM (17 of 33 suites, 4341 of 4351); the corpus drops the package, 125 of 161. Earlier — `let-values` binds in parallel (R7RS 7.3's reference), `read-line` ends at a bare return, and a continuation is a procedure for `with-exception-handler` on the VM. Earlier the same day — cycle-safe expansion walkers and per-datum reader labels; `base` ran briefly under a scope-aware-shadowing attempt that review showed unsound and was backed out — its five new findings are pinned (families 21–25). Earlier the same day — the VM's values side buffer removed (4260 of 4270). Earlier, 2026-08-24 — second round: `equal?` on cycles, iterative `delay-force`, `string->number` = reader syntax (15 of 33 suites, 4258 of 4270). Earlier the same day — L5.3's low-hanging fixes landed (nested `include`, port-open predicates, `rationalize`, Unicode simple case mapping, `(scheme charset)`): 13 of 33 suites, 4172 of 4193. Earlier the same day — L5.3 retargeted onto Larceny's R7RS suites (Clinger's rewrite of Racket's R6RS suite), run from a reference checkout because they are LGPL; harness landed and three lanes measured, with a twelve-row defect queue. Earlier: 2026-08-22 — Patina reads `include-shared` and refuses it by name; `compat/EXCLUSIONS.scm` takes packages out of the score with a recorded reason, leaving a five-row bundling queue. Earlier: 2026-08-19 — L5 added (R6RS reader, `--allow-r6rs`, and the bundled R6RS libraries); L1's queue marked against what has actually shipped. Earlier: 2026-08-08 — corpus vendored (197 packages, `compat/vendor/`); L1 rescoped to the R7RS-large bundling policy and ordered by measured in-degree. Earlier: reframed from "be a Snow target" to **self-contained compatibility coverage**; verified the loading machinery end-to-end; established that no chibi fork, upstream PR, or external package manager is required; promoted the harness (L3) to the centrepiece.
-**Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live with a measured baseline
-(**127 of 161** vendored packages pass, 2026-08-26, of which **127 of 136 are in scope** — the
-other 25 are excluded by `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and
-libraries landed; **L5.3's harness landed 2026-08-24** (12 of 33 R7RS suites clean, 4070 of 4100
-reachable assertions, and a measured defect queue — see L5.3); L1/L2's queue is down to
-five actionable rows
+**Updated:** 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
+the recorded repros: eight fixed entries moved to `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md` (five from
+the 2026-08-24/25 Larceny sweep that were never re-marked here, two already marked in place, and
+the quasiquoted-vector hygiene entry, which families 33–35 had fixed under it), and the
+relinking-by-name entry re-measured to **VM-only** — the tree-walker now answers all three of its
+repros as chibi and Gauche do, courtesy of the hygiene arc. The play-by-play this line used to
+carry lives in this file's git history; the shape of it: corpus vendored 2026-08-08 → harness live
+2026-08-13 → Larceny lanes and their defect queue 2026-08-24 → all 33 suites loading 2026-08-26 →
+the hygiene queue closed 2026-08-31/09-01 (matrix 28 of 28 on both backends, families 33–39 fixed,
+family 40 quarantined).
+**Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
+packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
+`compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
+deferred; L5.3's lanes: VM **22 of 33** suites clean (8445/8475), tree-walker **21 of 33**
+(8300/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
+spent** — the bundling queue is empty; what remains is SRFI 115 (only if the corpus justifies it)
+and the low-demand Tangerine trio 146/159/160. **L2 is the open bundling front** (`(chibi match)`,
+`(chibi io)`, `(chibi pathname)`, `(chibi show)`/SRFI 166 — the last also worth two corpus
+rows; `(chibi string)`, `(chibi optional)` and `(chibi filesystem)`'s portable half are done). The open defect queue is §6 Open plus the non-hygiene triage families;
+the largest single item is the exception-extent cluster (families 22+28 land together).
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -118,62 +131,38 @@ and `-A` already cover, and none is standard-track.
 The policy in one line: bundle what R7RS-large names, plus what cannot exist without the runtime,
 plus the legacy aliases the ecosystem actually imports. Everything else stays out.
 
-**SRFI 130 + SRFI 14 landed 2026-08-14, and the queue they came off is now flat.** SRFI 130 (Red
-edition, cursor-based strings) reached in-degree 6 after the `@` fix and led the table; SRFI 14 came
-with it, since `(chibi string)` — which SRFI 130 is written against — imports it for exactly two
-names. Both are byte-identical snowball imports; the chain and its one deviation are recorded in
-`lib/srfi/PROVENANCE.md`, `lib/chibi/PROVENANCE.md` and `lib/srfi/130.sld`'s header.
+**Everything the policy and the measurements agreed on has shipped, and the queue is flat.**
+Compressed 2026-09-01 from the item-by-item log this section used to carry (this file's git
+history has it in full); what remains uncompressed is the open remainder and the lessons.
 
-The result reorders what is left. **No missing library is now worth more than two packages**, and the
-one at three is `(chibi)`, chibi's implementation core, which is permanently out of reach. Bundling
-was the cheap lever for most of this track; it is close to spent. The remaining corpus failures are
-concentrated in the parse-error and load-error buckets — so the queue below should be read as a
-completeness exercise against the policy rather than as the ordered route to a higher score.
+Shipped, in `lib/srfi/` and `lib/scheme/`: SRFI 151 bitwise with `(srfi 60)`/`(srfi 33)` shims
+(Rust primitives; the largest measured gap at in-degree 31/19); the Red-edition `(scheme …)`
+aliases (`box`, `comparator`, `list`, `set`, `sort`, `vector`, `generator`, `hash-table`);
+SRFI 125 hash tables; SRFI 27 random (RNG primitive, in-degree 9); SRFI 143 fixnums; SRFI 130
+cursor strings with SRFI 14 char-sets, `(chibi string)` (in-degree 16) and `(chibi optional)`;
+the re-export shims `(srfi 23)`, `(srfi 98)`, `(srfi 142)` and `(scheme small)`; and the
+Red/Tangerine set the Larceny suites
+demanded — 41 `stream`, 101 `rlist`, 116 `ilist`, 117 `list-queue`, 124 `ephemeron` (Rust — an
+ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideque`, 135 `text`,
+144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md` /
+`lib/chibi/PROVENANCE.md`.
 
-*Correction (2026-08-19):* an earlier revision of the paragraph above read the parse-error bucket
-as "defects, not absent libraries". Auditing it row by row found most of it is neither: **9 of 14
-rows are three upstream typos in cond-expand fallback branches chibi never compiles**, which Gauche
-rejects exactly as Patina does — see §6 "Upstream, not ours". One row was a real Patina defect
-(`case` with an empty-body clause, fixed) and one is an architectural gap (chibi-regexp's
-full-Unicode char-sets, §6 open). The honest pass-rate ceiling is correspondingly lower than the
-bucket suggested.
+**Still open in L1:** SRFI 115 regex — large, and only if the corpus justifies it — the
+low-demand Tangerine trio 146/159/160, and the near-free re-export shims `(srfi 6)`, `(srfi 9)`,
+`(srfi 11)`, `(srfi 39)` (R7RS base already provides the functionality; nothing in the corpus has
+asked for them yet, which is why they have kept not happening). Nothing else: no missing library is worth more than two
+packages, and the one at three, `(chibi)`, is chibi's implementation core and permanently out of
+reach.
 
-Priority order, highest value first. **Items 1, 2, 4 and 5 have since shipped and this list had
-not been marked** — `lib/srfi/` and `lib/scheme/` are the current state, not the queue below.
-1. ✅ **Bitwise: SRFI 151, plus `(srfi 60)` / `(srfi 33)` shims** — **done**; `lib/srfi/151`,
-   `60.sld`, `33.sld`. Standard-track *and* the largest ecosystem gap — 31 packages import
-   `(srfi 60)`, 19 import `(srfi 33)`, and R7RS-large names 151. Needed Rust primitives; portable
-   Scheme would have been unusably slow.
-2. ✅ **`(scheme …)` alias libraries** for the Red-edition SRFIs — **done**; `box`, `comparator`,
-   `list`, `set`, `sort`, `vector`, `generator`, `hash-table` all sit in `lib/scheme/`.
-3. ~~**SRFI 125** hash tables … Needs a `HeapObjectData::HashMap` variant.~~ — ✅ **done
-   2026-08-16, and that premise was wrong.** No new runtime support was needed, and checking why is
-   the useful part: the piece that genuinely cannot be written in Scheme, `equal-hash`, has been a
-   Rust primitive all along, and the shipped `(srfi 69)` is already a real bucket-vector table
-   rather than an alist. SRFI 125 itself is a **layer**, not a table — chibi's is 178 lines over
-   SRFI 69 and SRFI 128, both of which Patina ships — so bundling it is Scheme-level work.
-   `(srfi 69)` is unchanged as the substrate rather than becoming an alias; a Rust-backed table
-   stays available as a *performance* decision for Track P, to be taken on a profile rather than
-   assumed here.
-4. ✅ **SRFI 27** random — **done**; `lib/srfi/27.sld`. Needed an RNG primitive; in-degree 9.
-5. ✅ **SRFI 143** fixnums — **done**; `lib/srfi/143`, matched to the VM's fixnum width.
-6. ~~**SRFI 14** char-sets (in-degree 4)~~ — ✅ **done 2026-08-14**, pulled forward by SRFI 130.
-   Then the remaining standard-track set with little measured demand: Red 41, 101, 116, 117, 124,
-   127, 134, 135 and Tangerine 146, 159, 160.
-8. ✅ **SRFI 130** cursor-based strings — **done 2026-08-14**, out of numeric order because the
-   measured queue put it first. Red edition, and the top missing library at in-degree 6.
-7. **SRFI 115** regex last — large, and only if the corpus justifies it.
-
-Near-free re-export shims to do alongside, since R7RS base already provides the functionality but
-packages import them by SRFI name: `(srfi 9)`, `(srfi 11)`, `(srfi 39)`, `(srfi 6)`.
-
-✅ **Four more shims landed 2026-08-19**, driven by the measured missing-library queue rather than
-the list above: `(srfi 23)` (`error`, re-export), `(srfi 98)` (environment access, re-export from
-`(scheme process-context)`), `(srfi 142)` (withdrawn predecessor of SRFI 151 — a rename over it,
-except `bitwise-if`, whose trailing arguments 142 reads the other way round, so the shim swaps
-them), and `(scheme small)` (the R7RS-small union library). Together with the harness's
-test-script import scanning from the same change, they flipped jkode-sassy, srfi-235 and srfi-78
-to pass and advanced chrisoei-cint to its real blocker, `(srfi 144)` — 121 → 124.
+Three lessons this queue recorded, kept because each corrected a filed premise:
+- *SRFI 125 needed no runtime support* — `equal-hash` was a Rust primitive all along and the
+  shipped `(srfi 69)` was already a real table; 125 is a 178-line layer over 69+128. A
+  Rust-backed table remains a Track P performance decision, to be taken on a profile.
+- *The parse-error bucket was not a defect list* — 9 of its 14 rows are three upstream
+  `cond-expand` typos chibi itself never compiles (§6 "Upstream, not ours"), so the honest
+  pass-rate ceiling is lower than the bucket suggested.
+- *In-degree beats intuition* — the original plan led with SRFI 26/13/41 on feel; measurement
+  put 130/14 first and the corpus agreed.
 
 *Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
 test with `(chibi test)`, which Patina **already ships**. Primitive-backed work goes under
@@ -184,7 +173,7 @@ library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 
 ### L2 — Bundle the common `(chibi …)` libraries
 Third-party packages frequently `(import (chibi …))`; today only `(chibi test)` exists. Port from the pinned chibi checkout the harness already fetches (locally mirrored at `~/Project/reference/chibi-scheme`), in the order L0.75/L3 dictate. Each ported library also brings its upstream `*-test.sld` suite, which drops straight into the L3 corpus:
-- `(chibi match)`, `(chibi optional)` — pure Scheme, pervasive in chibi-authored packages, and `(chibi optional)` also retires the ad-hoc `:optional` / `let-optionals` shims the existing SRFI ports carry. Highest leverage in this group.
+- `(chibi match)` — pure Scheme, pervasive in chibi-authored packages. Highest leverage in this group. (✅ `(chibi optional)` turns out to have shipped long ago, with `(chibi test)` in #39 — noticed in the 2026-09-01 bookkeeping sweep; whether the SRFI ports' ad-hoc `:optional`/`let-optionals` shims can now be retired onto it is unchecked.)
 - ✅ `(chibi string)` — **done 2026-08-14**, bundled as `(srfi 130)`'s dependency rather than on its
   own schedule, though it earned a place either way at in-degree 16, the highest in the corpus after
   `(slib common)`. Byte-identical to the 0.9.0 snowball; `lib/chibi/PROVENANCE.md` carries the
@@ -1085,100 +1074,6 @@ triage families 22 and 28, the tree-walker `guard` entry below and
 `nested_exception_handlers.rs`'s pin all close together or not at all.
 
 
-*The six entries below were found 2026-08-24 by Larceny's suites (L5.3); each
-is one of that item's queue rows, with the repro that pins it.*
-
-**A nested `include` resolves against the wrong directory** — ❌ **open**.
-Blocks Larceny's `base` suite (~900 assertions). `base.sld` says
-`(include "tests/scheme/base-test1.scm")` (cwd-relative, upstream's
-convention), and `base-test3.scm` in turn says `(include "base-test4.scm")`,
-which every implementation that runs the suite resolves relative to
-`base-test3.scm`. Patina reports `cannot read 'base-test4.scm'`. Two causes in
-`desugar_include_tagged` / `resolve_include_base_dir`
-(`patina-frontend/src/desugarer/mod.rs`):
-
-- an included file is parsed with `Parser::new_with_heap`, so its forms have
-  no source and a nested include has nothing to be relative *to*; and
-- the base directory is "the first location in the source map with a file
-  path" — a `HashMap` walk, so which file wins is not even deterministic. A
-  library body is worse off still: `SchemeLibraryLoader` parses `.sld` files
-  without a source map, so for `include` inside a library the only candidate
-  is whatever *program* happens to be in the map.
-
-chibi 0.12 fails this file the same way (its top-level `include` is
-cwd-relative too), Gauche resolves relative to the including file. The fix
-that satisfies both conventions: a stack of include directories in the
-desugarer, seeded by the backends from `ParsedLibrary::source` for a library
-body and pushed by each `include` while its file is desugared; look there
-first, then the cwd. Nothing that works today changes — a path found from
-the cwd is still found — and the `HashMap` walk goes.
-
-**`equal?` does not terminate on circular structures** — ❌ **open**, both
-backends. R7RS 6.1: "`equal?` must always terminate even if its arguments are
-circular data structures". Two suites hit it two ways:
-
-```scheme
-(define a (list 1 2))   (set-cdr! (cdr a) a)        ;; period 2
-(define b (list 1 2 1 2)) (set-cdr! (cdddr b) b)    ;; period 4, same unrolling
-(equal? a b)                                        ;; hangs; chibi, Gauche => #t
-(equal? (read (open-input-string "#1=#(1 #1#)"))
-        (read (open-input-string "#1=#(1 #1#)")))   ;; stack overflow
-```
-
-`(equal? a a)` is fine — `eq?` short-circuits — so it only shows when two
-*distinct* cyclic structures are compared (the suites compare a freshly read
-cyclic datum against a hand-built one). The reader itself builds the
-cycles correctly (`#1=(a . #1#)` reads and prints as `#0=(a . #0#)`); this is
-`Heap::tagged_values_equal` (`patina-core/src/heap/mod.rs`) recursing without
-a visited set. The standard technique is a union-find / pair-of-pointers
-table consulted after a depth budget, so the acyclic fast path stays fast.
-
-**`delay-force` is not iterative** — ❌ **open**, both backends. R7RS 7.3
-(the `(scheme lazy)` reference implementation) exists so that this runs in
-bounded space; Patina overflows the Rust stack at 100 000:
-
-```scheme
-(import (scheme lazy))
-(define (count-down n)
-  (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
-(force (count-down 100000))          ;; stack overflow; the suite's leak tests go to 1 000 000
-```
-
-Both backends, so it is in the shared promise machinery rather than in
-either evaluator: `force` must iterate on a `delay-force` result (re-point
-the outer promise at the inner one and loop) instead of recursing into it.
-
-**VM: a discarded call to `values` poisons the next `call-with-values`** —
-❌ **open**, VM only; the tree-walker is right. Found through the `vector`
-suite, where `(vector-unfold values 7)` made the *following* test's thunk
-evaluate to `6`.
-
-```scheme
-(define (call1 f) (f 42))
-(call1 values)                                       ;; result discarded
-(call-with-values (lambda () 'c) (lambda x x))       ;; VM => (42)   tree-walker, chibi => (c)
-```
-
-Calling `values` with one argument in a non-tail position leaves the VM's
-multiple-values state set; the next `call-with-values` whose producer
-returns a plain single value picks it up instead. Not caught by the chibi
-suite because nothing there calls `values` for effect and then immediately
-uses `call-with-values`. Pinning as a divergence would work here: the VM
-returns a wrong value rather than failing.
-
-**Tree-walker: SRFI 1's `zip` raises a wrong-arity error** — ✅ **fixed
-2026-08-25**, tree-walker only. Eight assertions in the `list` suite (the
-ninth failure there, `delete-duplicates!`, is upstream's).
-
-The diagnosis recorded here was wrong and worth keeping as a caution: it read
-"`zip` is `(apply map list list1 more-lists)` … the same `apply` shape written
-at top level works, so the fault is in applying the library-internal `map`".
-It is not `apply` at all. SRFI 1's `%cars+cdrs` bails out of an exhausted list
-with `(abort '() '())` — a continuation invoked with two values, which the
-tree-walker refused — so every n-ary procedure that walks more than one list
-failed. `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` had named `%cars+cdrs`
-among its impacts since 2026-03-19; the two records sat apart for months.
-
 **Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
 **open**, tree-walker only (the VM runs the same suite in 4 s).
 `filter-all-chars` in Larceny's `char.body.scm` is a plain `do` from 0 to
@@ -1360,63 +1255,6 @@ instead of fabricating an empty one.
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
 
-**VM: a raising parameter converter produces no output at all** — ✅ **fixed** (no longer reproduces;
-confirmed 2026-08-18 on `origin/main` as well as on the audit branch, so it was fixed by #73/#77
-rather than by anything after). `(guard (e (#t 'caught)) (p 9))` with a converter that raises for
-that value answers `caught` on both backends and leaves the parameter unchanged, which is what chibi
-does. Found 2026-08-15; the original text follows.
-
-`(guard (e (#t 'caught)) (p 9))` where `p`'s converter raises exits 0 having written nothing —
-neither an error nor a catch, where the tree-walker catches it.
-
-Narrowed 2026-08-15: a converter that *escapes* rather than raises was the same register-base bug
-and is fixed (`(call/cc (lambda (k) (let ((p (make-parameter 1 (lambda (x) (k 'escaped))))) (p 9))))`
-now returns `escaped` on both). What remains is the raise path specifically, which is a different
-mechanism — the error is neither routed to the handlers nor propagated.
-
-Not pinned as a divergence: `assert_divergence` needs the broken backend to *fail*, and this one
-silently succeeds. Worth fixing before anyone trusts converter errors.
-
-**The same tail-is-not-a-form defect is still live in `mark_substituted_tagged`** — ✅ **fixed 2026-08-18** (#93),
-as part of the class sweep the audit's C1 entry called for. `mark_substituted_tagged` now flattens the
-spine once and decides head-ness at element 0, which is the durable fix named at the end of this entry.
-The honest limit below still stands: no observable repro was ever constructed, so this was fixed by
-shape and not by symptom — the attempts (a substituted `(f quote y)` / `(f define-syntax z)` reaching an
-inner macro's literal comparison) all agreed with chibi before and after.
-Found 2026-08-14 by auditing the *class* behind the `quote`-argument fix below, which is the practice
-this section already follows. `mark_substituted_tagged`
-(`patina-macros/src/macro_expander/expander/hygiene.rs`) walks a pair tree by recursing on the cdr
-and re-reading its head, exactly as `rewrite_refs` did:
-
-```rust
-if self.is_macro_definition_tagged(car) || self.is_quote_form_tagged(car) {
-    return tv;                       // correct for a form, wrong for a tail
-}
-let new_car = self.mark_substituted_tagged(car);
-let new_cdr = self.mark_substituted_tagged(cdr);   // cdr re-read as a form
-```
-
-So for a substituted value shaped like `(f quote y)`, the recursive call on the tail `(quote y)`
-sees a quote head and returns unchanged — and `y`, plus everything after it, never receives the
-macro scope. That function exists precisely so substituted identifiers can be told apart from a
-nested macro's own pattern variables, which is the mechanism behind two already-fixed entries in
-this section, so losing the mark is a hygiene defect rather than a cosmetic one.
-
-**Honest limit on this entry:** the code shape is confirmed identical, but no observable repro has
-been constructed yet. Reaching it needs a single pattern variable bound to a list with `quote`,
-`syntax-rules`, `define-syntax`, `let-syntax` or `letrec-syntax` in non-initial position, whose
-later elements then matter to an inner macro's identity comparisons — plausible from
-`(chibi parse)`-style macro-writing-macro code but not yet exhibited. Do not close it as theoretical
-without trying; do not report it as user-visible without a repro.
-
-The durable fix is the one the sibling walkers already use: `compile_template` and
-`compile_template_escaped` flatten the spine once via `collect_list_items` and index element 0,
-which is what `rewrite_form` converged on independently. `mark_substituted_tagged` is the one that
-still hand-rolls car/cdr recursion. Checked and clean: `stamp_expansion_source`,
-`contains_identifier_tagged`, `flip_scope_on_tagged_impl`, `strip_identifiers_impl` and
-`evaluate_feature_requirement_tagged` — the first four recurse uniformly with no head dispatch at
-all, and the last flattens before dispatching.
-
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many
 more tokens through `read_identifier` and so makes the stop set matter more.
@@ -1465,39 +1303,14 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 `cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
 kept there rather than repeated here: they are one defect, and it now has one document.
 
-**Hygiene is not applied inside a quasiquoted vector** — ❌ **open**. Both backends. Six lines, and
-it captures in *both* directions at once — the template's own binding and the caller's argument each
-resolve to the other:
+**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-01; it was both backends when recorded). This is the root of triage family 40, whose three `assert_divergence` quarantines pin the class; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
 
-```scheme
-(define tmp 'use-site)
-(define-syntax g1 (syntax-rules () ((_)   (let ((tmp 'introduced)) `#(,tmp)))))
-(define-syntax g2 (syntax-rules () ((_ e) (let ((tmp 'introduced)) `#(,e)))))
-(list (g1) (g2 tmp))
-;; Chez, Gauche => (#(introduced) #(use-site))
-;; Patina       => (#(use-site)   #(introduced))
-```
-
-The list equivalents (`` `(,tmp) ``) are correct, so this is specific to vectors. The obvious
-suspect is `flip_scope_on_tagged_impl` in `patina-macros/src/macro_expander/mod.rs`, which ends
-"All other values (vectors, etc.) pass through unchanged" while its own doc comment two screens
-earlier claims it "traverses the heap structure (pairs, **vectors**, identifiers)". The doc and the
-code disagree, and `contains_identifier_tagged` has the same gap — so its early exit can skip the
-flip for a tree whose only identifiers sit inside a vector. `rewrite_refs` in the desugarer already
-fixed exactly this oversight for itself ("A pair-only walk silently left the reference unlinked").
-
-**Do not treat that as the diagnosis.** Teaching both functions to descend into vectors did *not*
-change the behaviour, and instrumentation showed the flip never runs on that expansion at all —
-neither the vector arm nor the pass-through tail was reached. So something upstream is also not
-producing the identifiers one would expect. Start by confirming what the expanded output actually
-contains before changing the flip.
-
-**Definition-env relinking rewrites by name** — ❌ **open**, and blocked on the entry above.
-
-*Two more symptoms, recorded 2026-08-23 while reviewing the VM hygiene work.*
-Both are the bare name collapsing an identity the rest of the pipeline keeps
-distinct, both are on **main before that work** and on both backends, and both
-are right in chibi and Gauche:
+*Two symptoms recorded 2026-08-23 while reviewing the VM hygiene work*, both
+the bare name collapsing an identity the rest of the pipeline keeps distinct.
+When recorded they reproduced on both backends; **re-measured 2026-09-01 the
+tree-walker now answers both as chibi and Gauche do** (10 20, and 10) — the
+scoped-define and fallback fixes reached them — and the wrong answers below
+are the VM's alone, produced by its compiler's bare-name alias:
 
 ```scheme
 (define-syntax jab
@@ -1532,20 +1345,12 @@ variables, which can be spelled like a template symbol without being one:
 ;; Patina       => (from-definition from-definition)   ; the caller's argument was captured
 ```
 
-The template's `helper` should resolve to the definition environment; the one the *caller* passed
-must not. Template-local bindings are already handled correctly (a template that says
-`(let ((helper …)) …)` works), so this is specifically pattern-variable material colliding with a
-template symbol name.
-
-The fix needs a way to tell template-emitted identifiers from substituted ones. The natural
-discriminator is the flip-scope invariant — introduced identifiers carry the expansion's macro
-scope, substituted ones had it flipped back off. That was implemented and **backed out**: it fixes
-this capture but breaks `test_quasiquoted_vector_elements_are_rewritten`, because template material
-inside a quasiquoted vector also comes out with empty scopes. That is the same vector gap as the
-entry above, which is why this is blocked on it rather than independently fixable.
-
-If the vector work does not restore the invariant, the deeper fix is to decide at template-expansion
-time instead, where `Template::Symbol` and `Template::Var` distinguish the two without any proxy.
+✅ *This half is fixed* — the flip-scope discriminator described below landed with triage family 35
+(2026-08-26: the relinker renames only identifiers carrying the expansion's fresh scope), and the
+repro answers `(from-definition from-use-site)` on both backends, verified 2026-09-01. The earlier
+attempt had been backed out over the quasiquoted-vector gap, which families 33-35 also closed. What
+remains of this entry is the *alias* half above: the bare name the relinked definition is reachable
+by, which is the VM-only family-40 class.
 
 ### Fixed
 
@@ -1555,6 +1360,15 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| Hygiene was not applied inside a quasiquoted vector (captured in both directions) | 2026-08-26, verified 2026-09-01 |
+| The relinker captured pattern-variable material spelled like a template symbol | 2026-08-26 (family 35) |
+| Tree-walker: SRFI 1's n-ary procedures raised a wrong-arity error (`zip`) | 2026-08-25 |
+| VM: a discarded call to `values` poisoned the next `call-with-values` | 2026-08-25 |
+| A nested `include` resolved against the wrong directory, nondeterministically | 2026-08-24 |
+| `equal?` did not terminate on circular structures | 2026-08-24 |
+| `delay-force` was not iterative (100 000 deep overflowed the stack) | 2026-08-24 |
+| `mark_substituted_tagged` treated a tail as a form (fixed by shape; no repro ever constructed) | 2026-08-18 |
+| VM: a raising parameter converter produced no output at all | 2026-08-18 (by #73/#77) |
 | A recursive macro's per-expansion *definitions* collapsed onto one binding | 2026-08-23 |
 | A generated macro's template collapsed identifiers from different expansions | 2026-08-20 |
 | `read-line` rejected chibi's max-chars argument; textual reads rejected binary ports | 2026-08-19 |

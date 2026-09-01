@@ -1,8 +1,14 @@
 # R7RS-Large Status Tracking
 
-**Last Updated:** 2026-08-08 — reconciled shipped-SRFI status against `lib/srfi/`, added the bundling policy and a measured priority order
+**Last Updated:** 2026-09-01 — bookkeeping: the header had read 2026-08-08 while the tables
+underneath were kept current through the 2026-08-24…26 bundling wave; they now agree. Reconciled
+against `lib/` on this date: **Red 16 of 17 shipped** (17 counting SRFI 158 for the superseded
+121), **Tangerine 4 of 8**; the measured priority order below is spent and marked as history.
 
-This document tracks the status of R7RS-large editions and Patina's support for them.
+This document is **the bundling policy and edition tracker for Track L** — the answer to "does
+Patina ship this library, and why (not)". Track L's L1 defers to it for scope; the corpus
+in-degree measurements order it; `crates/patina-tests/tests/r7rs_large_aliases.rs` keeps its
+alias tables honest.
 
 ---
 
@@ -164,7 +170,12 @@ Patina a slow package manager for code it does not need to own.
 ### Ordering
 
 The policy fixes the *set*; measured dependency in-degree over `compat/vendor/` fixes the *order*.
-Highest-value first:
+**This queue is spent (2026-09-01)** — every numbered item below shipped except the two that were
+always conditional, which are the whole remaining list: **SRFI 115** (large; only if the corpus
+justifies it) and the **Tangerine trio 146/159/160** (standard-track, little measured demand —
+159/`(scheme show)` would also clear two corpus rows via `(chibi show)`/SRFI 166, which is the
+likeliest reason to take it). The near-free shims `(srfi 6/9/11/39)` at the end also remain, for
+want of a package that asks. Kept as written for the record, strikethrough marking what shipped:
 
 1. ~~Bitwise — SRFI 151 + 60/33 shims~~ — **done**. Core operators are Rust primitives in
    `(patina internal bitwise)`; the ~30 derived procedures are Scheme. `(srfi 60)` (in-degree 31)
@@ -175,13 +186,13 @@ Highest-value first:
    SRFI 128, not a replacement: SRFI 69 stays as the substrate and keeps its own narrower
    semantics, because it is a separate published SRFI with 16 corpus importers. Four deviations
    were needed and are recorded in `lib/srfi/125.sld`'s header.
-4. **SRFI 27 random** — runtime-forced, in-degree 9.
+4. ~~**SRFI 27 random** — runtime-forced, in-degree 9.~~ — **done**.
 5. ~~SRFI 143 fixnums~~ — **done**. Mostly renames over SRFI 151 and `(scheme base)`; the part that
    had to be right is `fx-width` / `fx-greatest` / `fx-least`, derived by probing `fixnum?` rather
    than hardcoded so the library cannot claim a range the tagging does not provide.
-6. **SRFI 14 char-sets** (in-degree 4), then the remaining Red data structures (41, 101, 116, 117,
-   124, 127, 134, 135) and Tangerine (146, 159, 160), which are standard-track but show little
-   ecosystem demand.
+6. ~~**SRFI 14 char-sets** (in-degree 4), then the remaining Red data structures (41, 101, 116,
+   117, 124, 127, 134, 135)~~ — **all done by 2026-08-26**, the Larceny suites having supplied the
+   demand the corpus had not; Tangerine (146, 159, 160) remains.
 7. **SRFI 115 regex** last — large, and only if the corpus justifies it.
 
 Near-free re-export shims worth doing alongside, since R7RS base already provides the functionality
