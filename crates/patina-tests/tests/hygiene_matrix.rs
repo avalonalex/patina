@@ -22,9 +22,12 @@
 //! column can stand for "correct". Patina got **9** of the 28 wrong when
 //! first measured — two on the VM, eight on the tree-walker, one of them on
 //! both. The six ordinary-binder read rows went green together when the
-//! by-name fallback stopped resurrecting a rejected binding; the **3** rows
-//! still wrong are all the internal define — two on the VM, two on the
-//! tree-walker, the read row on both.
+//! by-name fallback stopped resurrecting a rejected binding (the triage
+//! queue's step 1); the three internal-define rows went green together when
+//! internal defines started carrying the scopes of the body they stand in to
+//! the runtime (step 2). **All 28 now match the oracles.** The matrix stays:
+//! every row is a regression guard now, in both directions, which is the
+//! guard PR #133 and PR #138 did not have.
 //!
 //! Every shape is a program both oracles *accept*: see the note in
 //! **Adding axes** about why a row pinned at "both reject it" is not coverage.
@@ -224,7 +227,8 @@ const MATRIX: &[Shape] = &[
     // it. The tree-walker used to capture on every binder; the six ordinary
     // binder rows went green when the by-name fallback stopped resurrecting
     // a binding the resolution rejected (`Environment::get_scoped_fallback`).
-    // What remains of family 36 is the internal define, on both backends.
+    // The internal define captured on both backends until it carried the
+    // scopes of the body it stands in to the runtime, like a parameter.
     Shape { binder: Binder::LambdaParam, site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::Let,         site: Site::Outside, action: Action::Read,
@@ -237,10 +241,10 @@ const MATRIX: &[Shape] = &[
             correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
     Shape { binder: Binder::DoVar,       site: Site::Outside, action: Action::Read,
             correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
-    // The one binder the VM gets wrong too: an internal define reaches the
-    // runtime with an empty scope set on both backends.
+    // The one binder the VM got wrong too: an internal define reached the
+    // runtime with an empty scope set on both backends, until step 2.
     Shape { binder: Binder::InternalDef, site: Site::Outside, action: Action::Read,
-            correct: "(global global)", vm: "(5 global)", tw: "(5 global)", family: "36" },
+            correct: "(global global)", vm: "(global global)", tw: "(global global)", family: "" },
 
     // ---- macro defined OUTSIDE, template WRITES X -----------------------
     // The write must reach past the use-site binder to the global. These are
@@ -258,9 +262,11 @@ const MATRIX: &[Shape] = &[
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
     Shape { binder: Binder::DoVar,       site: Site::Outside, action: Action::Write,
             correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
-    // The VM captures the internal define and never touches the global.
+    // The VM captured the internal define here until it carried scopes: an
+    // empty binding set is a subset of every reference's, so the define was
+    // a universal candidate for the template's `set!`.
     Shape { binder: Binder::InternalDef, site: Site::Outside, action: Action::Write,
-            correct: "(5 99)", vm: "(99 global)", tw: "(5 99)", family: "36" },
+            correct: "(5 99)", vm: "(5 99)", tw: "(5 99)", family: "" },
 
     // ---- macro defined INSIDE, template READS X -------------------------
     // The template's `X` *is* the binder's, so reading it must yield 5.
@@ -292,11 +298,13 @@ const MATRIX: &[Shape] = &[
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
     Shape { binder: Binder::NamedLet,    site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
-    // The tree-walker's scoped write finds no candidate — an internal define
-    // has no scopes — and falls back at the *root*, so it assigns the global
-    // and leaves the binder at 5. Triage family 38's remaining half.
+    // Family 38's last surface: the tree-walker's scoped write found no
+    // candidate — an internal define had no scopes — and fell back at the
+    // *root*, assigning the global and leaving the binder at 5. Fixed by the
+    // same change as the rows above: with the define bound at its body's
+    // scopes, the template's write resolves to it like any other binding.
     Shape { binder: Binder::InternalDef, site: Site::Inside, action: Action::Write,
-            correct: "(99 global)", vm: "(99 global)", tw: "(5 99)", family: "38" },
+            correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
     Shape { binder: Binder::DoVar,       site: Site::Inside, action: Action::Write,
             correct: "(99 global)", vm: "(99 global)", tw: "(99 global)", family: "" },
 ];
@@ -391,14 +399,11 @@ fn the_defect_count_is_what_the_roadmap_says() {
     let vm = wrong(|s| s.vm);
     let tw = wrong(|s| s.tw);
 
-    // VM: an internal define captures a template's reference in both
-    // directions — family 36's only VM surface.
-    assert_eq!(vm.len(), 2, "VM shapes wrong: {vm:?}");
-    // Tree-walker: family 36's internal define in the read direction, and
-    // family 38's fallback on the internal define. Every remaining wrong
-    // cell is the internal define: it reaches the runtime with an empty
-    // scope set, so no resolution ever rejects it — the triage doc's step 2.
-    assert_eq!(tw.len(), 2, "tree-walker shapes wrong: {tw:?}");
+    // Zero, on both backends — the hygiene queue's steps 1 and 2 are done.
+    // A row going red now is a regression on a shape chibi and Racket agree
+    // about, whichever direction it moved.
+    assert_eq!(vm.len(), 0, "VM shapes wrong: {vm:?}");
+    assert_eq!(tw.len(), 0, "tree-walker shapes wrong: {tw:?}");
 
     // Every wrong row names the family it belongs to, so the table doubles as
     // the index from defect to surface count.
@@ -413,28 +418,24 @@ fn the_defect_count_is_what_the_roadmap_says() {
     }
 }
 
-/// Family 36 is down to the internal define.
+/// Families 36 and 38 are closed; no row is a defect pin any more.
 ///
-/// It began as one defect with eight surfaces; the six ordinary binder rows
-/// went green together when the by-name fallback stopped resurrecting a
-/// rejected binding — together, which is what this count being a test was
-/// for. The two that remain are both the internal define, which reaches the
-/// runtime with an empty scope set on both backends, so there is nothing for
-/// that fallback to have rejected. They must likewise go green together
-/// (with family 38's row, whose fix is the same one), or the fix is
-/// addressing a symptom.
+/// Family 36 began as one defect with eight surfaces. The six ordinary
+/// binder rows went green together when the by-name fallback stopped
+/// resurrecting a rejected binding — together, which is what this count
+/// being a test was for. The internal-define rows (and family 38's, whose
+/// fix was the same one) went green together when internal defines started
+/// carrying the scopes of the body they stand in to the runtime, on both
+/// backends. An empty `family` on every row is now itself asserted, so a
+/// future defect pin has to bring its family label back with it.
 #[test]
-fn family_36_is_down_to_the_internal_define() {
+fn family_36_is_closed() {
     let faces: Vec<String> = MATRIX
         .iter()
-        .filter(|s| s.family == "36")
-        .map(|s| s.name())
+        .filter(|s| !s.family.is_empty())
+        .map(|s| format!("{} ({})", s.name(), s.family))
         .collect();
-    assert_eq!(
-        faces,
-        vec!["internal-def/outside/read", "internal-def/outside/write"],
-        "family 36's remaining surfaces"
-    );
+    assert!(faces.is_empty(), "rows still pinned to a defect: {faces:?}");
 }
 
 /// The two `do` rows are not a hygiene defect and should not be fixed as one.

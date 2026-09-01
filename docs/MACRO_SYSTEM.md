@@ -600,11 +600,14 @@ RESOLVE phase=run name="c" ref={S137} cands=0 picked=- via=byname op=set
 WROTE   phase=run name="c" ref={S137} landed=byname
 ```
 
-Those four lines are triage family 36. The desugarer stamps the internal define
-with `{S136}`; the binding that reaches the runtime carries nothing, so a
-reference at `{S137}` has no candidate, falls back to spelling, and the write
-lands somewhere the rule never chose. A `let` binder traced the same way keeps
-its scopes at `phase=run` — that contrast is the axis the family turns on.
+Those four lines were triage family 36 (fixed 2026-08-31; the `BIND
+phase=run` line now reads `scopes={S136} byname=true`). The desugarer stamped
+the internal define with `{S136}`; the binding that reached the runtime
+carried nothing, so a reference at `{S137}` had no candidate, fell back to
+spelling, and the write landed somewhere the rule never chose. A `let` binder
+traced the same way kept its scopes at `phase=run` — that contrast was the
+axis the family turned on, and is still the shape of trace this instrument
+exists to catch.
 
 | field | meaning |
 |---|---|

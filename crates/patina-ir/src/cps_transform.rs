@@ -48,6 +48,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct CpsTransformer {
     /// Counter for generating unique names
     gensym_counter: AtomicU64,
+    /// `binding_scopes` of the lambda body being transformed, empty at top
+    /// level. A `Define` written in source carries no scopes of its own; the
+    /// transform stamps it with these, so it reaches the runtime bound at
+    /// the scopes it stands in — the rule `application.rs` applies to a
+    /// source-written parameter. Saved and restored around each lambda body,
+    /// since bodies nest.
+    body_scopes: std::cell::RefCell<Rc<ScopeSet>>,
 }
 
 impl Default for CpsTransformer {
@@ -60,6 +67,35 @@ impl CpsTransformer {
     pub fn new() -> Self {
         Self {
             gensym_counter: AtomicU64::new(0),
+            body_scopes: std::cell::RefCell::new(Rc::new(ScopeSet::new())),
+        }
+    }
+
+    /// Transform `body` with [`Self::body_scopes`] set to `binding_scopes`,
+    /// restoring the enclosing body's scopes afterwards.
+    fn transform_lambda_body(
+        &self,
+        body: &[CoreExpr],
+        binding_scopes: &Rc<ScopeSet>,
+        cont_param: &ContVar,
+    ) -> CpsExpr {
+        let saved = self.body_scopes.replace(binding_scopes.clone());
+        let cps_body = self.transform_body(body, cont_param);
+        self.body_scopes.replace(saved);
+        cps_body
+    }
+
+    /// The scopes a `Define` binds at: its own when the defined identifier
+    /// carries any (a macro introduced it), otherwise the enclosing body's —
+    /// empty only at top level, where a define is a plain global. An
+    /// internal define that reached the runtime with an empty set was not a
+    /// narrow binding but a by-name one every macro-introduced reference of
+    /// its spelling could capture (triage family 36's internal-define half).
+    fn define_scopes(&self, scopes: &ScopeSet) -> ScopeSet {
+        if scopes.is_empty() {
+            (**self.body_scopes.borrow()).clone()
+        } else {
+            scopes.clone()
         }
     }
 
@@ -134,7 +170,7 @@ impl CpsTransformer {
                 // where body' is body transformed with continuation k'
 
                 let cont_param = self.gensym_cont();
-                let cps_body = self.transform_body(body, &cont_param);
+                let cps_body = self.transform_lambda_body(body, binding_scopes, &cont_param);
 
                 let (cps_params, cps_variadic) = self.transform_formals(params);
 
@@ -257,6 +293,7 @@ impl CpsTransformer {
             } => {
                 // Transform: (define name value)
                 // Into: evaluate value, do define, continue with unspecified
+                let scopes = self.define_scopes(scopes);
 
                 if self.is_trivial(value) {
                     let cps_value = self.transform_trivial(value);
@@ -388,7 +425,7 @@ impl CpsTransformer {
                 binding_scopes,
             } => {
                 let cont_param = self.gensym_cont();
-                let cps_body = self.transform_body(body, &cont_param);
+                let cps_body = self.transform_lambda_body(body, binding_scopes, &cont_param);
                 let (cps_params, cps_variadic) = self.transform_formals(params);
 
                 CpsExpr::new(CpsExprKind::Lambda {

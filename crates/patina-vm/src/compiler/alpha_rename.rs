@@ -308,18 +308,39 @@ fn top_level_define_bindings(exprs: &[CoreExpr]) -> Vec<Binding> {
 ///
 /// A counter is unique enough for a name that cannot leave this tree, and no
 /// alias is involved because nothing outside the body resolves them by name.
-fn body_define_bindings(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<Binding> {
+///
+/// The scopes follow `build_bindings`' rule for parameters, for the same
+/// reason: a definition a macro introduced binds at its own scopes and is
+/// invisible to simple lookups; one written in source binds at the scopes it
+/// stands in — the body's `binding_scopes` — and is visible to both. Leaving
+/// a source-written define at its datum's *empty* set did not make a narrow
+/// binding but a universal candidate: `is_candidate({}, r)` holds for every
+/// reference `r`, so an internal define captured every macro-introduced
+/// reference of its spelling, in both directions (triage family 36's
+/// internal-define half).
+fn body_define_bindings(
+    exprs: &[CoreExpr],
+    binding_scopes: &std::rc::Rc<ScopeSet>,
+    env: &mut RenameEnv,
+) -> Vec<Binding> {
     let mut names = Vec::new();
     for_each_define(exprs, &mut |name, scopes| {
         names.push((name.clone(), scopes.clone()));
     });
     names
         .into_iter()
-        .map(|(name, scopes)| Binding {
-            unique_name: env.make_unique_name(&name),
-            is_simple: scopes.is_empty(),
-            name,
-            scopes,
+        .map(|(name, scopes)| {
+            let (scopes, is_simple) = if scopes.is_empty() {
+                ((**binding_scopes).clone(), true)
+            } else {
+                (scopes, false)
+            };
+            Binding {
+                unique_name: env.make_unique_name(&name),
+                is_simple,
+                name,
+                scopes,
+            }
         })
         .collect()
 }
@@ -423,11 +444,13 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
         } => {
             let mut bindings = build_bindings(params, binding_scopes, env);
 
-            // Add bindings for the body's internal defines. Each keeps the
-            // scopes of the identifier it defines: they were forced to
-            // `ScopeSet::new()` here, which made every expansion of one macro
-            // template collapse onto a single local.
-            bindings.extend(body_define_bindings(body, env));
+            // Add bindings for the body's internal defines. A macro-introduced
+            // one keeps the scopes of the identifier it defines (they were
+            // once forced to `ScopeSet::new()` here, which made every
+            // expansion of one macro template collapse onto a single local);
+            // a source-written one binds at the body's scopes, like a
+            // parameter.
+            bindings.extend(body_define_bindings(body, binding_scopes, env));
 
             let renamed_params = build_renamed_formals(params, &bindings);
 
