@@ -1545,14 +1545,24 @@ primitive's callback within a thunk is outside it on both backends — the
 "primitive's callback runs on a nested trampoline with no handler stack" entry
 above.
 
-**VM: the value form of `dynamic-wind` loses its body's value when a
-continuation captured in that body is re-entered** — ❌ **open**. Pre-existing,
-found 2026-09-02 while probing the change above; `main` gives the same answer,
-and the wind thunks run at the right times either way.
+**VM: the value form of `dynamic-wind` runs the wrong after-thunk and loses
+its body's value when a continuation re-enters it** — ❌ **open**, filed as
+**issue #157**. Pre-existing: `main` (`3614f8c1`) gives identical answers, and
+the change above moved neither. Found 2026-09-02 while probing it.
+
+Two symptoms, one cause. The wrong-thunk half was **missed on the first pass**
+of this entry, which claimed "the wind thunks run at the right times either
+way"; `/code-review` of the VM PR produced the repro that falsifies it.
 
 ```scheme
+;; 1 — the wrong after-thunk runs
 (define dw dynamic-wind)
-(define k #f)
+(dw in1 (lambda () (call/cc (lambda (c) (set! saved c) 'first))) out1)
+(dw in2 (lambda () (saved 'second)) out2)
+;; VM => (in1 out1 in2 out2 in1 out2)   tree-walker, Gauche => (… in1 out1)
+;;   `out1` never runs; `out2` runs twice
+
+;; 2 — the body's value is lost
 (define r (dw (lambda () #f)
               (lambda () (call/cc (lambda (c) (set! k c) 'first)))
               (lambda () #f)))
@@ -1560,20 +1570,31 @@ and the wind thunks run at the right times either way.
 r   ;; tree-walker, Gauche => second   VM => ()
 ```
 
-The value form runs its body on a nested Rust call in
-`handle_control_primitive`, and *that* Rust frame is what writes the body's
-result into the caller's register. A captured continuation restores the VM's
-own frames, whose pc is already past the `Call`, so nothing writes the
-register: `r` keeps the `NULL` that `call/cc`'s capture cleared it to, which
-prints as `()`. Head-position `dynamic-wind` is unaffected — its result
-delivery is an instruction, and instructions are restored.
+The value form's bookkeeping lives in a **Rust frame**
+(`handle_control_primitive`'s `DynamicWind` arm), and a re-entered continuation
+restores the VM's own frames, not that Rust frame. For (2) the arm's
+`set_reg(dst, result)` is what delivers the body's value, and the restored
+frame's pc is already past the `Call`, so nothing writes the register: `r`
+keeps the `NULL` that `call/cc`'s capture cleared it to, which prints as `()`
+— and being a `NULL` in a live register it can surface downstream as an
+unrelated `type error: expected a procedure, got null` rather than as a
+visibly wrong value. For (1) the `ThunkOutcome::Escaped` arm decides whether it
+still owes its after-thunk with a **length** test,
+`state.dynamic_winds.len() > wind_depth`, applied after the jump has already
+replaced `state.dynamic_winds` with the *target's* records — so it truncates
+the target's records and re-runs its own thunk.
 
-The same shape as the value form's after-thunk defect fixed on 2026-08-17: a
-value form's bookkeeping lives in a Rust frame that a re-entry does not bring
-back. Pinned as
+Head-position `dynamic-wind` is unaffected in both: its result delivery and its
+record cleanup are instructions (`PopWind`, `Call after`), and instructions are
+restored with the frame.
+
+The same shape as the value form's after-thunk defect fixed on 2026-08-17.
+Symptom (2) is pinned as
 `the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm` in
-`backend_divergence.rs`. The fix is the same shape as this entry's: give the
-value form an instruction to return to, rather than a Rust frame.
+`backend_divergence.rs`. **Fix shape:** give the value form an instruction to
+return to rather than a Rust frame — the move the entry above made for a jump's
+wind thunks; failing that, test for its own record by `DynamicWindRecord::id`
+instead of comparing lengths.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

@@ -905,11 +905,18 @@ fn test_reentering_nested_value_form_winds_runs_each_thunk_once() {
     // still-running entry and went round for ever; head-position
     // `dynamic-wind` cannot reach it, because `PushWind` records carry the
     // "not auto-popped" sentinel already.
+    //
+    // `note` raises past a bounded log, so a regression *fails* rather than
+    // spinning: the pre-fix VM looped for ever here, and an unbounded version
+    // of this test would show up as a `cargo test` run that never terminates
+    // and names no failing test — on CI, as a job timeout.
     assert_program_eval_to(
         r#"
         (define k #f)
         (define log '())
-        (define (note x) (set! log (cons x log)))
+        (define (note x)
+          (if (> (length log) 12) (error "wind thunks are looping"))
+          (set! log (cons x log)))
         (define dw dynamic-wind)
         (define (deep n)
           (if (= n 0)

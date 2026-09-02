@@ -50,10 +50,12 @@ pub struct VmState {
     /// are process-wide sequential — see `CodeObjectId::fresh`). Slots for
     /// ids loaded into other `VmState`s stay `None`.
     pub(crate) code_store: Vec<Option<Rc<CodeObject>>>,
-    /// The one-instruction stub each step of a continuation jump runs in
-    /// ([`wind_jump_stub`]). Built on the first jump that has a wind thunk to
-    /// run — most states never build one — and also held in `code_store`.
-    pub(crate) wind_jump_code: Option<Rc<CodeObject>>,
+    /// Id of the one-instruction stub each step of a continuation jump runs
+    /// in ([`wind_jump_stub`]). Built on the first jump that has a wind thunk
+    /// to run; most states never build one. The id, not the `Rc` — the code
+    /// object has exactly one owner, `code_store`, and this is a note of
+    /// where to find it.
+    pub(crate) wind_jump_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -1354,11 +1356,21 @@ fn dispatch_one_instruction(
             let target = state.reg_at(base, wind_step::TARGET);
             let value = state.reg_at(base, wind_step::VALUE);
             let entering = state.reg_at(base, wind_step::ENTERING);
-            let frame = state
+            state
                 .frames
                 .pop()
                 .expect("ResumeWindJump runs in its own frame");
-            state.free_top_registers(frame.register_base);
+            // The stub's register window is deliberately **not** freed here.
+            // It is the only root for `target` and `value` — and `target` is a
+            // `VmContinuationRef` whose payload lives in a *weak* store
+            // (`gc_roots.rs`), so an unrooted one at a collecting safe point
+            // would have its payload pruned. Freeing it would leave both
+            // reachable from Rust locals alone until the next step writes them
+            // back. No safe point runs in that window today, which is what
+            // makes this cheap insurance rather than a fix; the same reasoning
+            // roots `pending_escape`. The window costs `NUM_REGS` per step and
+            // is reclaimed wholesale when the travel ends: arrival replaces
+            // the register file, and so does any jump that abandons this one.
 
             // A before-thunk's record is pushed only now, after it returned:
             // while the thunk runs, its extent is not entered, so a jump out
@@ -1371,22 +1383,33 @@ fn dispatch_one_instruction(
                     .ok_or_else(|| VmError::TypeError {
                         message: "continuation jump: not a full continuation".into(),
                     })?;
-                if let Some(record) = cc.dynamic_winds.get(index as usize) {
-                    state.dynamic_winds.push(DynamicWindRecord {
-                        // `stack_depth` is `pop_resolved_winds`' business, and
-                        // it means nothing here: the frame that would own this
-                        // record is in the target's snapshot, not on the live
-                        // stack, so the depth the record carries can easily be
-                        // *above* the travel's own frames and make the next
-                        // thunk's return look like this extent's body
-                        // returning. 0 is `PushWind`'s sentinel for "managed
-                        // by the sequence that pushed it, not auto-popped",
-                        // and that is what the travel is. Arrival restores the
-                        // target's records with their real depths.
-                        stack_depth: 0,
-                        ..record.clone()
-                    });
-                }
+                let record =
+                    cc.dynamic_winds
+                        .get(index as usize)
+                        .ok_or_else(|| VmError::Runtime {
+                            // Unreachable: `index` was in range when the step
+                            // was pushed, and a continuation's wind stack is
+                            // immutable. Stated as an error rather than an
+                            // `if let` with no `else`, because doing nothing
+                            // here would leave `step_wind_jump` to pick the
+                            // same record again — a silent infinite loop with
+                            // side effects instead of a diagnosis.
+                            message: "continuation jump: entered wind record is gone".into(),
+                        })?;
+                state.dynamic_winds.push(DynamicWindRecord {
+                    // `stack_depth` is `pop_resolved_winds`' business, and
+                    // it means nothing here: the frame that would own this
+                    // record is in the target's snapshot, not on the live
+                    // stack, so the depth the record carries can easily be
+                    // *above* the travel's own frames and make the next
+                    // thunk's return look like this extent's body
+                    // returning. 0 is `PushWind`'s sentinel for "managed
+                    // by the sequence that pushed it, not auto-popped",
+                    // and that is what the travel is. Arrival restores the
+                    // target's records with their real depths.
+                    stack_depth: 0,
+                    ..record.clone()
+                });
             }
 
             step_wind_jump(state, target, value)?;
@@ -1554,11 +1577,9 @@ fn dispatch_one_instruction(
                 // stack. No pass emits this instruction — the live invoke
                 // paths are `call_value` and `call_any` — but it goes through
                 // the same travel so no second copy of the jump can drift.
-                if state.get_vm_continuation(cont_tv).is_none() {
-                    return Err(VmError::TypeError {
-                        message: "InvokeContinuation: not a full continuation".into(),
-                    });
-                }
+                // `step_wind_jump` makes the not-a-continuation check itself;
+                // repeating it here would only buy a second wording of the
+                // same error that no test can reach.
                 step_wind_jump(state, cont_tv, deliver_val)?;
                 return Err(park_escape(state, deliver_val));
             }
@@ -2100,8 +2121,8 @@ fn call_any(
     // handler, a call-with-values consumer, a wind thunk. Invoking it
     // replaces the stack, so the caller's own frame is gone: signal the
     // dispatch loop the same way the instruction-level call paths do.
-    if try_invoke_continuation(state, func_val, args)? {
-        return Err(signal_continuation_invoked(state, args));
+    if let Some(delivered) = try_invoke_continuation(state, func_val, args)? {
+        return Err(park_escape(state, delivered));
     }
     call_closure(state, func_val, args, return_reg)?;
     Ok(None)
@@ -2244,12 +2265,18 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
 
 /// Run a thunk (0-arg closure) to completion and *require* that it returned.
 ///
-/// The internal boundaries that only ever run bookkeeping thunks — the wind
-/// transitions and the resolved-wind sweep — use this: a continuation invoked
-/// inside one of those does not resume here, it unwinds, so the sentinel is
-/// simply propagated. Callers that have a result to place (`dynamic-wind`'s
-/// body, `call-with-values`' producer) use [`run_thunk_outcome`] instead and
-/// decide for themselves.
+/// The internal boundaries that only ever run bookkeeping thunks — the
+/// resolved-wind sweep, the value form's own cleanup, the prompt paths' exit
+/// and entry thunks — use this: a continuation invoked inside one of those
+/// does not resume here, it unwinds, so the sentinel is simply propagated.
+/// Callers that have a result to place (`dynamic-wind`'s body,
+/// `call-with-values`' producer) use [`run_thunk_outcome`] instead and decide
+/// for themselves.
+///
+/// A *jump's* wind thunks are no longer among these. Since 2026-09-02 they run
+/// as ordinary frames under a `ResumeWindJump` stub (`step_wind_jump`), not on
+/// a nested loop, which is what lets a continuation captured inside one be
+/// resumed.
 fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmError> {
     match run_thunk_outcome(state, thunk)? {
         ThunkOutcome::Returned(v) => Ok(v),
@@ -2265,9 +2292,12 @@ fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmE
 enum ThunkOutcome {
     Returned(TaggedValue),
     /// A continuation unwound past this boundary. The caller owns no live
-    /// frame: it must not write a register, must not run its own cleanup
-    /// (the wind transition already ran the after-thunks), and must hand the
-    /// unwind on.
+    /// frame: it must not write a register, and must hand the unwind on.
+    ///
+    /// Whether it owes its own cleanup has to be *read off the stack*, not
+    /// assumed — the value form of `dynamic-wind` does run an after-thunk on
+    /// this path, when its record survived the jump; see that arm for why, and
+    /// for the bug in how it decides.
     Escaped(TaggedValue),
 }
 
@@ -3108,7 +3138,7 @@ fn push_wind_step(
     handlers: &[ExceptionHandler],
 ) -> Result<(), VmError> {
     install_thunk_handlers(state, handlers);
-    let code = wind_jump_stub(state);
+    let code = wind_jump_stub(state)?;
     let base = state.alloc_registers(wind_step::NUM_REGS);
     state.frames.push(CallFrame {
         pc: 0,
@@ -3140,8 +3170,15 @@ fn push_wind_step(
 /// at. Clamping against one constant preserves the stack's non-decreasing
 /// order, and nothing else reads the field.
 ///
-/// There is no restore: every step of a jump installs a stack, and arrival
-/// installs the target's own.
+/// There is no restore, and none is owed. Every step of a jump installs a
+/// stack and arrival installs the target's own, so the jump site's stack is
+/// never the right one to come back to — R7RS 6.10 puts the thunk in its own
+/// call's dynamic environment, not the jump's. That holds for a `VmError` the
+/// thunk's *call* raises too (a `dynamic-wind` whose after is `42`): it is
+/// routed through the record's handlers, which is where a raise from the thunk
+/// belongs. A travel abandoned by an error that nothing catches abandons the
+/// machine with it — `execute` clears the frames and every stack on the way
+/// out.
 fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
     let depth = state.frames.len();
     state.exception_handlers.clear();
@@ -3159,9 +3196,9 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
 /// without qualification — this one has no constants to trace, but the
 /// invariant is cheaper to keep than to caveat.
-fn wind_jump_stub(state: &mut VmState) -> Rc<CodeObject> {
-    if let Some(code) = &state.wind_jump_code {
-        return Rc::clone(code);
+fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    if let Some(id) = state.wind_jump_code {
+        return state.code_object(id);
     }
     let instructions = vec![Instruction::ResumeWindJump];
     let id = CodeObjectId::fresh();
@@ -3175,9 +3212,8 @@ fn wind_jump_stub(state: &mut VmState) -> Rc<CodeObject> {
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
     });
-    let code = state.code_object(id).expect("just loaded");
-    state.wind_jump_code = Some(Rc::clone(&code));
-    code
+    state.wind_jump_code = Some(id);
+    state.code_object(id)
 }
 
 /// The handler stack a `dynamic-wind` record captures.
@@ -3453,24 +3489,21 @@ fn try_invoke_continuation(
     state: &mut VmState,
     func_val: TaggedValue,
     args: &[TaggedValue],
-) -> Result<bool, VmError> {
-    // `(k v)` delivers v; `(k)` and `(k v1 v2 …)` deliver a #<values> object,
-    // exactly as `(values …)` would return one — so a producer that escapes
-    // through a continuation still hands call-with-values its values.
-    let deliver_val = state.heap.borrow_mut().values_from(args.to_vec());
-
+) -> Result<Option<TaggedValue>, VmError> {
     // Full (call/cc) continuation?
     //
     // The travel may not finish here: a jump with a wind thunk to run pushes
     // that thunk's frames and comes back through `ResumeWindJump`. Either
     // way this call is over, and the caller signals the dispatch loop.
     if state.get_vm_continuation(func_val).is_some() {
+        let deliver_val = deliver_value(state, args);
         step_wind_jump(state, func_val, deliver_val)?;
-        return Ok(true);
+        return Ok(Some(deliver_val));
     }
 
     // Delimited (composable) continuation?
     if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+        let deliver_val = deliver_value(state, args);
         let enter_winds = dc.dynamic_winds.clone();
         for record in &enter_winds {
             run_thunk(state, record.before)?;
@@ -3493,10 +3526,23 @@ fn try_invoke_continuation(
                 state.registers[caller_base + ret_reg as usize] = deliver_val;
             }
         }
-        return Ok(true);
+        return Ok(Some(deliver_val));
     }
 
-    Ok(false)
+    Ok(None)
+}
+
+/// What `(k …)` delivers: `(k v)` delivers `v`; `(k)` and `(k v1 v2 …)`
+/// deliver a `#<values>` object, exactly as `(values …)` would return one — so
+/// a producer that escapes through a continuation still hands
+/// `call-with-values` its values.
+///
+/// Built only once the callee is known to be a continuation. It used to be the
+/// first thing `try_invoke_continuation` did, so every non-continuation callee
+/// that reached the probe paid a `Vec` (and, for other than one argument, a
+/// heap allocation) to decline.
+fn deliver_value(state: &mut VmState, args: &[TaggedValue]) -> TaggedValue {
+    state.heap.borrow_mut().values_from(args.to_vec())
 }
 
 /// Try to call `func_val` as a primitive. Returns `Some(result)` if it was a
@@ -3510,28 +3556,25 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
     matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
 }
 
-/// Report that a continuation was just invoked, replacing or extending the
-/// frames the caller was running.
+/// Park `value` for the dispatch loop that owns the resumed frame and return
+/// the sentinel that unwinds the Rust frames in between.
 ///
 /// Always an unwind, never a return. The frames now on `state` may belong to
 /// any enclosing dispatch loop — or to none of them, if the escape targets a
 /// frame further out — and only `run_loop_until` knows its own `exit_depth`,
 /// so it is the one place allowed to decide whether to resume or exit. Every
-/// synchronous boundary in between (`run_thunk`, and through it `dynamic-wind`,
-/// `call-with-values`, the wind transitions) sees the sentinel and learns that
+/// synchronous boundary in between (`run_thunk`, and through it the value form
+/// of `dynamic-wind` and `call-with-values`) sees the sentinel and learns that
 /// the value is the resumed computation's, not its own — which is the whole
 /// difference between writing a register in a live frame and writing one in a
 /// frame that no longer exists.
-fn signal_continuation_invoked(state: &mut VmState, arg_vals: &[TaggedValue]) -> VmError {
-    let primary = arg_vals
-        .first()
-        .copied()
-        .unwrap_or(TaggedValue::UNSPECIFIED);
-    park_escape(state, primary)
-}
-
-/// Park `value` for the dispatch loop that owns the resumed frame and return
-/// the sentinel that unwinds the Rust frames in between.
+///
+/// `value` is what the continuation *delivers*
+/// ([`deliver_value`]), which for `(k)` and `(k v1 v2 …)` is a `#<values>`
+/// object rather than the first argument. The two invoke paths used to park
+/// different things — `ResumeWindJump` the delivered value, the direct path
+/// `args[0]` — so the same `(k 1 2)` carried different values depending on
+/// whether the jump happened to cross a wind.
 fn park_escape(state: &mut VmState, value: TaggedValue) -> VmError {
     state.pending_escape = Some(value);
     VmError::ContinuationEscape
@@ -3582,8 +3625,8 @@ fn call_value_with_probe(
             state.set_reg(dst, result?);
             return Ok(None);
         }
-        if try_invoke_continuation(state, func_val, arg_vals)? {
-            return Err(signal_continuation_invoked(state, arg_vals));
+        if let Some(delivered) = try_invoke_continuation(state, func_val, arg_vals)? {
+            return Err(park_escape(state, delivered));
         }
     }
     let code_id = match closure_code_id {
@@ -3685,8 +3728,8 @@ fn tail_call_value_with_probe(
         }
 
         // Continuation invocation in tail position.
-        if try_invoke_continuation(state, func_val, arg_vals)? {
-            return Err(signal_continuation_invoked(state, arg_vals));
+        if let Some(delivered) = try_invoke_continuation(state, func_val, arg_vals)? {
+            return Err(park_escape(state, delivered));
         }
 
         // Parameters in tail position: same as primitives.

@@ -608,7 +608,7 @@ fn a_before_thunk_on_reentry_sees_its_own_dynamic_winds_handlers() {
 }
 
 /// VM: the **value** form of `dynamic-wind` loses its body's value when a
-/// continuation captured in that body is re-entered.
+/// continuation captured in that body is re-entered — issue #157.
 ///
 /// ```text
 ///   (define dw dynamic-wind)
@@ -634,6 +634,21 @@ fn a_before_thunk_on_reentry_sees_its_own_dynamic_winds_handlers() {
 /// wind_runs_its_after_thunk_once`): a value form's bookkeeping lives in a
 /// Rust frame that a re-entry does not bring back. Recorded in
 /// {GUARD_UNWIND_ORDER}.
+///
+/// The lost value is only half of #157. The same arm also runs the **wrong
+/// after-thunk**, because it decides whether it still owes one by comparing
+/// wind-stack *lengths* after the jump has replaced that stack with the
+/// target's:
+///
+/// ```text
+///   (dw in1 «capture saved» out1) then (dw in2 (lambda () (saved 'second)) out2)
+///   tree-walker, Gauche => (in1 out1 in2 out2 in1 out1)
+///   VM                  => (in1 out1 in2 out2 in1 out2)
+/// ```
+///
+/// Not pinned here as a second assertion: one program per divergence keeps the
+/// panic message actionable, and both halves retire together when #157's fix
+/// gives the value form an instruction to return to.
 #[test]
 fn the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm() {
     const PROGRAM: &str = r#"

@@ -402,7 +402,7 @@ pub enum Instruction {
     ///
     /// Its frame's registers carry the jump: the target continuation, the
     /// value it delivers, and which of the target's records this step is
-    /// entering (see `WIND_STEP_*` in `runtime/vm_state.rs`).
+    /// entering (see the `wind_step` module in `runtime/vm_state.rs`).
     ResumeWindJump,
 
     // ── Global Definitions ────────────────────────────────────────────────────
