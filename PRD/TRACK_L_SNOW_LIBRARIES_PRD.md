@@ -1480,8 +1480,16 @@ is the environment the thunk runs in.
 **Acceptance (VM):** rows 1, 2, 5, 6, 10 and 11 answer as Gauche does. Every
 row is pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs`; the VM
 side asserts *today's* answers, so the fix trips it and has to update the
-record deliberately. Larceny r7rs lanes must not move except where a row is
-genuinely gained.
+record deliberately. Two more shapes, found by review of the tree-walker PR
+and pinned the same way in `backend_divergence.rs` (section "the VM's wind
+thunks"), must also answer as Gauche does: a continuation captured *inside*
+an after-thunk while a jump is running it, which the VM answers by running
+the thunk again and losing the jump's value (`(() (before after after))` for
+`(escaped (before after))`); and a handler installed at the *jump* but not at
+the `dynamic-wind` call, which the VM lets catch a before-thunk's raise
+(`(inner b)` for `(outer b)`) — the rows above all have a handler missing at
+the jump, this one has one extra. Larceny r7rs lanes must not move except
+where a row is genuinely gained.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many
