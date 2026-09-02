@@ -266,6 +266,7 @@ same way.
 | Instruction | Semantics |
 |---|---|
 | `Nop` | No operation. Used for patching. |
+| `ResumeWindJump` | Take the next step of a continuation jump that is running wind thunks (§7.3). Never emitted by the compiler: it is the whole body of the stub frame the runtime pushes under each thunk. |
 
 ---
 
@@ -336,16 +337,33 @@ pub struct PromptFrame {
 
 ### 7.3 Dynamic Wind
 
-The VM maintains a `Vec<DynamicWindRecord>` (before/after thunk pairs with
-`stack_depth`). Continuation invocation runs appropriate exit/entry thunks.
+The VM maintains a `Vec<DynamicWindRecord>`. Each record is one `dynamic-wind`
+call: its thunks, the frame depth it was installed at, and the exception
+handler stack that call had.
 
 ```rust
 pub struct DynamicWindRecord {
+    pub id:          u64,
     pub before:      TaggedValue,
     pub after:       TaggedValue,
     pub stack_depth: usize,
+    pub handlers:    Rc<[ExceptionHandler]>,
 }
 ```
+
+Invoking a full continuation *travels* between the live wind stack and the
+target's, one thunk per step: leave the innermost extent the two do not share
+(pop the record, run its `after`), then enter the target's remaining extents
+outermost first (run `before`, push the record when it returns). Each thunk
+runs as an ordinary call under a one-instruction stub frame
+(`ResumeWindJump`), which is what makes "the rest of the jump" a resumable
+frame rather than a Rust call — a continuation captured inside a thunk
+captures the stub, and re-entering it finishes the thunk and then the jump.
+
+Each thunk also runs under `handlers` — its *own* call's stack, not the one
+live at the jump. R7RS 6.10 puts the thunks in the dynamic environment of the
+`dynamic-wind` call, and 6.11 puts the handler stack in that environment;
+together they are the `finally` rule of Track L §6.
 
 ### 7.4 Continuation Storage
 

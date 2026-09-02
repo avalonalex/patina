@@ -889,3 +889,41 @@ fn test_dynamic_wind_callcc_escape_runs_after() {
         "(before body after)",
     );
 }
+
+#[test]
+fn test_reentering_nested_value_form_winds_runs_each_thunk_once() {
+    // Re-entering a continuation captured inside two nested extents runs both
+    // before-thunks, once each, and leaves the extents standing.
+    //
+    // The value form of `dynamic-wind` is what makes this a real test: its
+    // records carry the frame depth of the call, which `pop_resolved_winds`
+    // reads to decide that a body has returned. A jump that *enters* an extent
+    // pushes its record back, and the depth on it belongs to a stack that is
+    // not the live one — captured deep, re-entered from the top level, it sits
+    // above every frame the travel has, so the next before-thunk's return
+    // looked like this extent's body returning. The VM ran `out-a` under the
+    // still-running entry and went round for ever; head-position
+    // `dynamic-wind` cannot reach it, because `PushWind` records carry the
+    // "not auto-popped" sentinel already.
+    assert_program_eval_to(
+        r#"
+        (define k #f)
+        (define log '())
+        (define (note x) (set! log (cons x log)))
+        (define dw dynamic-wind)
+        (define (deep n)
+          (if (= n 0)
+              (dw (lambda () (note 'in-a))
+                  (lambda ()
+                    (dw (lambda () (note 'in-b))
+                        (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+                        (lambda () (note 'out-b))))
+                  (lambda () (note 'out-a)))
+              (car (list (deep (- n 1))))))
+        (define first-time? (eq? 'first (deep 6)))
+        (if first-time? (k 'second) #f)
+        (reverse log)
+        "#,
+        "(in-a in-b out-b out-a in-a in-b out-b out-a)",
+    );
+}

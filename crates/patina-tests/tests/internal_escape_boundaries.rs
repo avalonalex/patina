@@ -22,7 +22,7 @@
 //! | `call-with-values` producer (value form)    | `run_thunk_outcome` — skips the consumer |
 //! | `vm_raise_value` exit winds                 | `run_thunk_outcome` — pops before running |
 //! | `vm_raise_value` continuable handler        | `run_loop_until_outcome` — no re-push, no `set_reg` |
-//! | `run_wind_transition` exit / enter thunks   | `run_thunk` — pops before running |
+//! | a jump's exit / enter thunks (`step_wind_jump`) | *not a boundary any more* — since 2026-09-02 each thunk is an ordinary frame under a `ResumeWindJump` stub, so an escape out of one is an ordinary escape and a continuation captured in one is resumable |
 //! | `pop_resolved_winds`                        | `run_thunk` — already popped before running |
 //! | `AbortCurrentContinuation` exit winds (both the control primitive and `Instruction::Abort`) | `run_thunk` — pops before running |
 //! | `try_invoke_continuation` delimited enter thunks | `run_thunk` |
@@ -125,7 +125,10 @@ fn test_escape_from_a_call_with_values_producer_called_as_a_value() {
 /// The record was still on `dynamic_winds` while its own after-thunk ran, so
 /// the escape re-entered it and re-ran the same thunk, with no depth guard:
 /// `run_thunk → try_invoke_continuation → run_wind_transition → run_thunk`
-/// until the native stack gave out and aborted the process.
+/// until the native stack gave out and aborted the process. Popping the
+/// record first closed it; running the thunks as frames rather than nested
+/// Rust calls (2026-09-02) means the recursion has nowhere to build up
+/// either.
 ///
 /// The one program here chibi cannot arbitrate — it loops on this too, and
 /// dies with a clean "out of stack space". Both Patina backends now answer;

@@ -1369,9 +1369,10 @@ variants are Scheme-defined and never cross.) The `eval` primitive is the other 
 boundary: `ApplyContext::eval_expr` starts a nested `eval_cps` run, which has its own copy of the
 escape-catching arm and resumes a continuation *inside* itself, so `(k 'x)` under `eval` inside a
 wind lands as `#<unspecified>` on the tree-walker where the VM answers `x`. The wind thunks
-themselves run under the record's stack now; a raise *inside such a callback* in a wind thunk is
-still outside the `finally` rule, which is the limit of the entry above and of
-`wind_thunk_exceptions.rs`.
+themselves run under the record's stack now, on both backends; a raise *inside such a callback* in
+a wind thunk is still outside the `finally` rule, which is the limit of the entry above and of
+`wind_thunk_exceptions.rs`. (The VM's own callback boundary, `VmApplyContext`, re-enters the same
+machine and so does *not* fabricate empty stacks — this row is the tree-walker's alone.)
 
 Its sibling row closed on 2026-09-01: `reentered_continuation_keeps_exception_handler` was
 `CpsContinuation` not carrying the handler stack, which is a *storage* gap and is fixed by storing
@@ -1414,9 +1415,9 @@ with #151, but by `call-with-port` no longer closing on an escape (R7RS 6.13.1),
 trampoline telling a local jump from an escape; the misread is still there.
 
 **An exception raised by a `dynamic-wind` after-thunk does not behave like a
-`finally`** — ✅ **tree-walker fixed 2026-09-01**; ❌ **VM open**. Characterised
-2026-09-01 while landing triage families 22 and 28, which changed one of the
-first four cases below and so forced the question.
+`finally`** — ✅ **fixed on both backends** (tree-walker 2026-09-01, VM
+2026-09-02). Characterised 2026-09-01 while landing triage families 22 and 28,
+which changed one of the first four cases below and so forced the question.
 
 Gauche implements Java's `finally` rule exactly, and does so consistently
 across every shape. An exception raised by an after-thunk **replaces** the
@@ -1437,7 +1438,10 @@ after-thunks still run and the secondary lands at the nearest handler
 enclosing the call. Every row below is that one rule; none of it is a
 special case for exceptions in thunks.
 
-| # | shape | VM | tree-walker | Gauche |
+The table below is what each backend gave **before its fix**; both now answer
+Gauche's column on every row.
+
+| # | shape | VM, before | tree-walker, before | Gauche |
 |---|---|---|---|---|
 | 1 | `guard` + `raise`, after-thunk raises | uncaught, program stops | ✅ | `(one secondary)` |
 | 2 | nested guards, inner catches | `(outer secondary)` | ✅ | `(inner secondary)` |
@@ -1451,13 +1455,13 @@ special case for exceptions in thunks.
 | 10 | no `guard`: a handler escapes through `k`, the after-thunk raises | uncaught, program stops | ✅ | `(escaped secondary (primary secondary))` — the handler runs twice |
 | 11 | a declining inner `guard`, an outer handler that *returns* from the continuable re-raise | `(() (secondary secondary))` — handler runs twice, the escape's value is lost | ✅ | `(escaped (secondary))` — the thunk resumes where `handler-k` re-entered it |
 
-The tree-walker meets all eleven, and its lanes did not move otherwise. The
-VM meets 5 of 11: rows 3, 4, 7, 8, 9 — each because nothing had been popped
-before the jump, or because the handler that was popped happened to be the
-one the rule would skip anyway. **Only case 1 moved with families 22/28**,
-from `(one primary)` — the after-thunk's exception silently discarded, which
-is the one answer the rule most clearly forbids — to the exception cascading
-uncaught.
+The tree-walker met all eleven from 2026-09-01, and its lanes did not move
+otherwise. The VM met 5 of 11 until 2026-09-02: rows 3, 4, 7, 8, 9 — each
+because nothing had been popped before the jump, or because the handler that
+was popped happened to be the one the rule would skip anyway. **Only case 1
+moved with families 22/28**, from `(one primary)` — the after-thunk's
+exception silently discarded, which is the one answer the rule most clearly
+forbids — to the exception cascading uncaught.
 
 **How the tree-walker got there — the shape the VM change should take.** A
 `DynamicWindRecord` carries the handler stack of its `dynamic-wind` call, and
@@ -1473,31 +1477,103 @@ is the unwind continuing (row 5, and triage family 30). Second, row 11: a
 handler returned, and a thunk that is a step can be resumed there; a thunk
 run on a nested Rust call cannot, because the frame that was running it is
 gone. The earlier plan — seed the nested trampoline with the record's
-environment — was measured against row 11 and dropped for that reason. The
-VM has the same two choices: `vm_raise_value` pops a handler when it fires
-and never restores it for a non-continuable raise, so by the time the
-after-thunk runs the handler is gone. The change is where its wind thunks
-get their handler stack from — the record, not the machine — and how a
-re-entry into a running thunk lands.
+environment — was measured against row 11 and dropped for that reason.
 
 **The unwind itself was never the gap, on either backend.** With a handler
-outside to catch, the VM does continue the unwind past a raising thunk
+outside to catch, the VM did continue the unwind past a raising thunk
 (row 5's second form). What each row above needs is *who catches*, and that
 is the environment the thunk runs in.
 
-**Acceptance (VM):** rows 1, 2, 5, 6, 10 and 11 answer as Gauche does. Every
-row is pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs`; the VM
-side asserts *today's* answers, so the fix trips it and has to update the
-record deliberately. Two more shapes, found by review of the tree-walker PR
-and pinned the same way in `backend_divergence.rs` (section "the VM's wind
-thunks"), must also answer as Gauche does: a continuation captured *inside*
-an after-thunk while a jump is running it, which the VM answers by running
-the thunk again and losing the jump's value (`(() (before after after))` for
-`(escaped (before after))`); and a handler installed at the *jump* but not at
-the `dynamic-wind` call, which the VM lets catch a before-thunk's raise
+**How the VM got there (2026-09-02).** The same two mechanisms, in the shapes
+the VM has. `DynamicWindRecord` grew a `handlers: Rc<[ExceptionHandler]>`,
+filled at both push sites (`PushWind` for head-position `dynamic-wind`, the
+`DynamicWind` control primitive for the value form) — the VM needed it for the
+same reason the tree-walker did: `vm_raise_value` pops a handler when it fires
+and never restores it for a non-continuable raise, so by the time the
+after-thunk ran the handler was gone. And `run_wind_transition` — a Rust loop
+that ran every thunk on a nested dispatch loop — became `step_wind_jump`,
+which runs **one** thunk per call and hands control back to the machine: it
+pushes a stub frame whose single instruction is the new `ResumeWindJump`,
+calls the thunk under it, and returns the parked-escape sentinel every
+continuation invoke already returns, so the dispatch loop that owns the frames
+decides whether to run them. `ResumeWindJump` pops the stub, pushes an entered
+record if there was one, and travels on.
+
+Making "the rest of the jump" a *frame* is what the VM needed for the two
+review shapes, and it is the exact analogue of the tree-walker's `Jump` step.
+A continuation captured inside a thunk captures the stub frame, so re-entering
+it finishes the thunk and then the jump. Before, it captured the **jump
+site's** frame instead, parked mid-sequence at the inlined `dynamic-wind`'s
+`PopWind` — so re-entering it ran `Call after` a second time and the jump's
+value never arrived.
+
+Two things the VM needed that the tree-walker did not, both because its
+records and handlers carry frame depths that a jump makes meaningless:
+
+- the handler stack a thunk runs under is installed with each entry's
+  `stack_depth` **clamped** to the live frame depth, or `pop_exception_handlers`
+  drops handlers the moment a frame at their recorded depth returns;
+- a record pushed back by a re-entry gets `PushWind`'s `stack_depth = 0`
+  sentinel for the length of the travel, or `pop_resolved_winds` reads its
+  original (deeper) depth, decides the extent's body has returned, and runs its
+  after-thunk under the still-running entry. Nested value-form extents
+  re-entered from a shallower stack **hang** without this; pinned as
+  `test_reentering_nested_value_form_winds_runs_each_thunk_once` in
+  `cps_features.rs`.
+
+**Acceptance (VM), all met.** Rows 1, 2, 5, 6, 10 and 11 answer as Gauche
+does; every row is pinned in
+`crates/patina-tests/tests/wind_thunk_exceptions.rs`, now as a single
+`assert_program_eval_to` per row against both backends. The two shapes found
+by review of the tree-walker PR also answer as Gauche does and have moved to
+`backend_divergence.rs`' "Not divergences": a continuation captured *inside*
+an after-thunk while a jump is running it (the VM used to run the thunk again
+and lose the jump's value — `(() (before after after))` for
+`(escaped (before after))`), and a handler installed at the *jump* but not at
+the `dynamic-wind` call, which the VM used to let catch a before-thunk's raise
 (`(inner b)` for `(outer b)`) — the rows above all have a handler missing at
-the jump, this one has one extra. Larceny r7rs lanes must not move except
-where a row is genuinely gained.
+the jump, that one has one extra. chibi is 1226/1226 on both backends, and the
+Larceny r7rs VM lane is 8447 of 8475 in 22 of 33 suites — unmoved, no row
+either gained or lost.
+
+**What is still outside the rule on the VM.** The paths that are not a jump
+run their thunks on a nested dispatch loop under the *live* handler stack:
+`pop_resolved_winds` (a body that returned normally — where the live stack is
+the call's anyway, which is row 3), the value form's own cleanup, and the
+composable-continuation entry thunks. And a raise from inside a Rust
+primitive's callback within a thunk is outside it on both backends — the
+"primitive's callback runs on a nested trampoline with no handler stack" entry
+above.
+
+**VM: the value form of `dynamic-wind` loses its body's value when a
+continuation captured in that body is re-entered** — ❌ **open**. Pre-existing,
+found 2026-09-02 while probing the change above; `main` gives the same answer,
+and the wind thunks run at the right times either way.
+
+```scheme
+(define dw dynamic-wind)
+(define k #f)
+(define r (dw (lambda () #f)
+              (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+              (lambda () #f)))
+(if (eq? r 'first) (k 'second) #f)
+r   ;; tree-walker, Gauche => second   VM => ()
+```
+
+The value form runs its body on a nested Rust call in
+`handle_control_primitive`, and *that* Rust frame is what writes the body's
+result into the caller's register. A captured continuation restores the VM's
+own frames, whose pc is already past the `Call`, so nothing writes the
+register: `r` keeps the `NULL` that `call/cc`'s capture cleared it to, which
+prints as `()`. Head-position `dynamic-wind` is unaffected — its result
+delivery is an instruction, and instructions are restored.
+
+The same shape as the value form's after-thunk defect fixed on 2026-08-17: a
+value form's bookkeeping lives in a Rust frame that a re-entry does not bring
+back. Pinned as
+`the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm` in
+`backend_divergence.rs`. The fix is the same shape as this entry's: give the
+value form an instruction to return to, rather than a Rust frame.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

@@ -133,6 +133,10 @@ fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut GcVisitor<'_>) {
     for wind in winds {
         visitor.visit(wind.before);
         visitor.visit(wind.after);
+        // The handler stack of the record's `dynamic-wind` call, which its
+        // thunks run under: reachable from nowhere else once the live stack
+        // has moved on, which is exactly when a jump is about to use it.
+        trace_handlers(&wind.handlers, visitor);
     }
 }
 
