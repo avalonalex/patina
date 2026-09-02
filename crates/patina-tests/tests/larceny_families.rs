@@ -697,14 +697,16 @@ fn let_values_binds_all_clauses_in_parallel() {
 /// R7RS 4.2.7: a `guard` with no matching clause re-raises "in the dynamic
 /// environment of the original call to `raise`" — so the `dynamic-wind`
 /// before-thunk runs again on the way back in, and the after-thunk again
-/// on the way out to the outer guard. Fixed 2026-09-01 (family 22).
+/// on the way out to the outer guard. Fixed 2026-09-01 (family 22, see
+/// {TRIAGE}).
 ///
 /// The visible half of family 28. Four changes together, none of which works
-/// alone — the first two landed ahead of this as #150 and #149: `CpsContinuation` carries the handler stack, so the jump
-/// back in still has handlers; the VM takes the common prefix of two wind
-/// stacks, so a jump that crosses nothing runs no thunks; no raise path
-/// unwinds, so the raise point is still there to jump back to; and `guard` is
-/// R7RS 7.3's expansion, whose `handler-k` is the thing that jumps.
+/// alone — the first two landed ahead of this as #150 and #149:
+/// `CpsContinuation` carries the handler stack, so the jump back in still has
+/// handlers; the VM takes the common prefix of two wind stacks, so a jump
+/// that crosses nothing runs no thunks; no raise path unwinds, so the raise
+/// point is still there to jump back to; and `guard` is R7RS 7.3's
+/// expansion, whose `handler-k` is the thing that jumps.
 #[test]
 fn a_guard_reraise_reenters_the_dynamic_extent() {
     assert_program_eval_to(
@@ -837,14 +839,14 @@ fn error_accepts_a_message_that_is_not_a_string() {
 /// answer under the old raise path, because that continuation was captured
 /// after the unwind.
 ///
-/// Two neighbours, deliberately not re-pinned here: the tree-walker's `error`
-/// path, whose opposite ordering converged with this (now
-/// `a_guard_clause_runs_after_the_unwind` in `backend_divergence.rs`), and a
-/// VM defect in the wind machinery the fix leans on, still pinned there
-/// (`continuation_within_its_own_wind_reruns_the_thunks_on_the_vm`). Plain
+/// Two neighbours, deliberately not re-pinned here, both in
+/// `backend_divergence.rs`: the tree-walker's `error` path, whose opposite
+/// ordering converged with this (`a_guard_clause_runs_after_the_unwind`), and
+/// the VM's wind machinery the fix leans on, which #149 converged
+/// (`a_continuation_within_its_own_wind_runs_the_thunks_once`). Plain
 /// re-entry is covered by `compliance/control.rs`'s
 /// `test_dynamic_wind_with_callcc_reentry` (R7RS §6.10's own example) rather
-/// than re-derived here.
+/// than re-derived here. See {TRIAGE} family 28.
 #[test]
 fn an_exception_handler_runs_in_the_raises_dynamic_extent() {
     assert_program_eval_to(

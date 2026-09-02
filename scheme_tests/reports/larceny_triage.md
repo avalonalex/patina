@@ -26,7 +26,9 @@ ran briefly (2026-08-25, #114 before review): VM 5306/5334 — `base` itself 104
 5909; tree-walker 17 of 33, 5660 of 5689; `base` itself 1054 of 1064 on the VM and 1053 on the tree-walker (family 30). Bundling SRFI 134 as `(scheme ideque)` (2026-08-25) then took the VM lane to 20 of 33, 5995 of 6023, and the tree-walker to 18 of 33, 5774 of 5803; SRFI 144 as `(scheme flonum)` (2026-08-26) took them to 7274 of 7303 and 7053 of 7083, the suite counts unchanged because `flonum` keeps one failure that is not ours; SRFI 135 as `(scheme text)` (2026-08-26) took them to 21 of 33, 8358 of 8387 and 19 of 33, 8137 of 8167 — a clean 1069 of 1069 in `text`, so that one moves the suite count. SRFI 124 as `(scheme ephemeron)` (2026-08-26, implemented in Rust) took the VM to 8363 of 8393 and left the tree-walker where it was: that suite scores 5 of 6 on the VM (family 32) and times out on the tree-walker, which is asked to allocate 100 million pairs to force a collection. SRFI 101 as `(scheme rlist)` (2026-08-26, from chibi's R7RS adaptation) took them to 22 of 33, 8445 of 8475 and 20 of 33, 8219 of 8249 — 82 of 82, and with it **every one of the 33 suites now loads**: the report's "library under test not bundled" section is gone. The lane totals rise by more than `text` alone because advertising `full-unicode-strings` alongside it un-gated non-ASCII data in other suites too: both suites had been running their ASCII-only branch. The R6RS lane
 is unchanged at 12 of 16, 4017 of 4025. Giving `stream` the budget it measures
 at (2026-09-01, family 26) moved the tree-walker lane to 21 of 33, 8300 of
-8330 — no defect fixed, one timeout converted to a tally. Running chibi's own `(srfi 101 test)`
+8330 — no defect fixed, one timeout converted to a tally. Families 22 and 28
+(2026-09-01, #151) took both lanes up by two: VM 8447 of 8475, tree-walker
+8302 of 8330. Running chibi's own `(srfi 101 test)`
 against the shadowing names (2026-08-26) then found families 33–35; with them
 fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 

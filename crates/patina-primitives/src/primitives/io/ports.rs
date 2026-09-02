@@ -657,8 +657,15 @@ pub(super) fn call_with_port(
     // Call the procedure with the port — both already TaggedValues
     let result = ctx.apply_proc(args[1], vec![args[0]]);
 
-    // Close the port regardless of result
-    port.close();
+    // R7RS 6.13.1: the port is closed if `proc` returns, and "must not be
+    // closed automatically" if it does not. An `Err` here is a raise or a
+    // continuation escape leaving `proc`, and the code that receives it — a
+    // `guard` clause runs after the escape, in the guard's own extent — may
+    // still hold the port. Closing on the way out handed such a clause a
+    // closed port.
+    if result.is_ok() {
+        port.close();
+    }
 
     // Return the result
     result

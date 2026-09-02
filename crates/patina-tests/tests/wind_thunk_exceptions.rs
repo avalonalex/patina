@@ -21,8 +21,8 @@ use common::{
 };
 
 /// The recorded answer for a shape neither backend catches: the program stops,
-/// and the message names the *secondary* exception. Returns the message so a
-/// caller can say which backend it came from.
+/// and the message names the *secondary* exception. `who` names the backend
+/// in the panic message.
 fn expect_stops_naming_secondary(result: Result<String, String>, who: &str) {
     match result {
         Err(message) => assert!(
@@ -122,22 +122,28 @@ fn case4_after_thunk_raises_during_a_callcc_escape() {
 }
 
 /// A nested wind, where the *inner* after-thunk raises: does unwinding
-/// continue outward?
+/// continue outward past it?
 ///
 /// Gauche answers `((caught sec2) (in1 in2 out2 out1))` — the outer
 /// after-thunk still runs, then the replacement is delivered. Ours stops the
-/// program, and the outer thunk does **not** run: measured through a
-/// file the abort cannot swallow, the VM's log reads `(in1 in2 out2)`.
+/// program at `sec2`, and the outer thunk does **not** run: measured through
+/// files the abort cannot swallow, both backends' logs read `in1 in2 out2`.
 ///
-/// So this is a second half of the same gap. It is case 1's shape (a `guard`
-/// escape meeting a failing after-thunk), and it shows that "unwinding
-/// continues past the thunk that raised" is *also* something we do not do —
-/// worth knowing, because it means the fix is not only about who catches.
+/// That is a *consequence* of case 1, not a second gap. The `guard`'s handler
+/// is gone when `sec2` is raised, nothing outside catches it, and an
+/// unhandled exception stops the program where it is raised — no after-thunk
+/// runs after a fatal error on any implementation. Put a handler outside and
+/// the VM continues the unwind and runs `out1` before delivering `sec2` — to
+/// the outer `guard`, which is case 2's gap, not this one. The second program
+/// pins that, so the case-1 fix can rely on the unwind machinery it needs: it
+/// is already there. The tree-walker still escapes for the nested-trampoline
+/// reason.
 ///
 /// Before families 22 and 28 the VM answered `((caught primary) (in1 in2 out2
-/// out1))`: it continued unwinding, then discarded `sec2` entirely.
+/// out1))` to the first program: it continued unwinding, then discarded `sec2`
+/// entirely.
 #[test]
-fn a_failing_inner_after_thunk_stops_the_outward_unwind() {
+fn an_uncaught_inner_after_thunk_exception_stops_before_the_outer_thunk() {
     const PROGRAM: &str = r#"
         (define log '())
         (define caught
@@ -152,4 +158,28 @@ fn a_failing_inner_after_thunk_stops_the_outward_unwind() {
     "#;
     expect_stops_naming_secondary(try_eval_program_vm(PROGRAM), "vm");
     expect_stops_naming_secondary(try_eval_program_tree_walker(PROGRAM), "tree-walker");
+
+    const WITH_OUTER_GUARD: &str = r#"
+        (define log '())
+        (define caught
+          (guard (o (#t (list 'outer o)))
+            (guard (e (#t (list 'caught e)))
+              (dynamic-wind (lambda () (set! log (cons 'in1 log)))
+                (lambda ()
+                  (dynamic-wind (lambda () (set! log (cons 'in2 log)))
+                    (lambda () (raise 'primary))
+                    (lambda () (set! log (cons 'out2 log)) (raise 'sec2))))
+                (lambda () (set! log (cons 'out1 log)))))))
+        (list caught (reverse log))
+    "#;
+    assert_eq!(
+        eval_program_vm(WITH_OUTER_GUARD),
+        "((outer sec2) (in1 in2 out2 out1))",
+        "the VM finishes the unwind when something outside catches; Gauche: \
+         ((caught sec2) (in1 in2 out2 out1))"
+    );
+    expect_stops_naming_secondary(
+        try_eval_program_tree_walker(WITH_OUTER_GUARD),
+        "tree-walker",
+    );
 }

@@ -14,8 +14,8 @@ family 40 quarantined).
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
 packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
-deferred; L5.3's lanes: VM **22 of 33** suites clean (8445/8475), tree-walker **21 of 33**
-(8300/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
+deferred; L5.3's lanes: VM **22 of 33** suites clean (8447/8475), tree-walker **21 of 33**
+(8302/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
 spent** — the bundling queue is empty; what remains is SRFI 115 (only if the corpus justifies it)
 and the low-demand Tangerine trio 146/159/160. **L2 is the open bundling front** (`(chibi match)`,
 `(chibi io)`, `(chibi pathname)`, `(chibi show)`/SRFI 166 — the last also worth two corpus
@@ -1078,6 +1078,79 @@ chibi lanes stay 1226/1226. Pinned as
 the tree-walker `guard` entry below and `nested_exception_handlers.rs`'s pin
 closed with it, as recorded.
 
+**What the second review of #151 found, and where each went.** Four fixed in
+the same PR, all older than the family, all made ordinary traffic by the
+reference `guard`: (1) the VM popped a `with-exception-handler` handler only
+on a closure `Return` — a thunk ending in a tail call to `values`, a
+primitive, a parameter or a control primitive left it installed for the rest
+of the program, and the reference expansion ends every successful `guard` in
+`(apply values args)`, so every one leaked; the first fix for that popped at
+a nested run loop's exit depth and lost a *live* handler instead, because
+after a tail-call dip a handler the loop was started under and one installed
+inside it sit at the same depth — the loop now closes only what was installed
+after its own entry (`handlers_at_entry`), and depth-based pops do nothing at
+the exit depth. (2) A `call/cc` snapshot clones the register file, and `dst`
+still held the previous capture's continuation, so each `guard` iteration
+chained to the last — 296 MB at 160k iterations, 21 MB after clearing `dst`
+before the snapshot. (3) `call-with-port` and the two `call-with-*-file`
+closed their port on an escape; R7RS 6.13.1 closes "if `proc` returns", and
+a `guard` clause reading what the callback wrote needs it open — this also
+retired audit F6's quarantine on the tree-walker, by removing the
+resource rather than the misread behind it. (4) `execute` left the VM holding
+the frames, handlers and winds of a form that failed, so the REPL's next form
+returned into them. Pinned in `nested_exception_handlers.rs`,
+`escape_from_primitive.rs` and `interpreter_api.rs`. Filed rather than fixed:
+three VM raise-path gaps (next entry), and two more manifestations of the
+tree-walker boundary defect (its entry below).
+
+**The measured cost of the reference expansion**, accepted for consistency
+over speed: a `guard` whose body succeeds costs +65% on both backends (3M
+iterations, VM 1.15 s → 1.90 s, tree-walker 12.0 s → 19.7 s), a caught raise
++57% on the VM and +33% on the tree-walker (1M, 0.73 s → 1.14 s and
+6.3 s → 8.3 s). Every `guard` now captures a full continuation, and on the VM
+that clones the register file: non-tail recursion through a `guard` 4000 deep
+peaks at 1.83 GB against 1.38 GB before (the tree-walker's CPS capture is
+cheap: 111 MB against 312 MB). Per-`guard` memory in a loop is at or below
+`main`. A `guard` that captures only what it needs — a lighter continuation
+for the success path, or an `else`-only fast path — is the follow-up if a
+corpus program shows the cost; none has.
+
+**VM: three gaps in `vm_raise_value`** — ❌ **open**, VM only. Found by the
+second review of #151 (2026-09-01); all three predate families 22/28, and the
+reference `guard` changed their symptoms without causing them. Pinned in
+`crates/patina-tests/tests/backend_divergence.rs` where the tree-walker is
+right.
+
+1. **A `guard` is gone after one of its clauses declines a
+   `raise-continuable`.** The continuable path pops the handler to run it and
+   re-pushes it only when the handler *returns*; `guard`'s handler leaves
+   through `handler-k`, so the re-push is skipped and the body continues
+   without its `guard`. `(with-exception-handler (lambda (e) (list 'I e))
+   (lambda () (guard (e ((eq? e 'y) 'caught-y)) (list (raise-continuable 'x)
+   (raise-continuable 'y)))))` — tree-walker, chibi, Gauche `caught-y`; VM
+   `((I x) (I y))`. Fix: re-push on the `Escaped` arm too, or have the handler
+   run *without* popping and let the raise's handler lookup skip the top one.
+2. **A handler that returns from a non-continuable `raise` is not an error.**
+   R7RS 6.11 raises a secondary exception; the tree-walker does, the VM
+   delivers the handler's value to the raise's destination register as if the
+   raise were continuable — `(list (raise 'x))` under `(lambda (e) 'returned)`
+   answers `(returned)`, and `(+ 1 (raise 'x))` fails inside `+`. The
+   non-continuable path pushes the handler's frame and lets the run loop drive
+   it, so nothing is there when it returns; the fix is a marker on that frame
+   (or a sentinel return register) that `Return` recognises. Reached from a
+   *primitive's* error the same hole is worse: the run loop routes a catchable
+   `VmError` through `vm_raise_value` with **register 0** as the destination,
+   so `(list (car 5))` under the same handler answers `(())` — the handler's
+   value overwrote register 0 and `car`'s own destination kept `()`.
+3. **A continuation used as the handler for a primitive's error is fatal** —
+   `(call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))`
+   dies with `continuation escaped past a synchronous boundary`, where the
+   same idiom over `(raise 'obj)` works since family 24. The run loop's error
+   route does not catch `call_any`'s continuation signal. Tree-walker, chibi
+   and Gauche deliver the error object.
+
+None has a Larceny row; all three are pinned.
+
 
 **Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
 **open**, tree-walker only (the VM runs the same suite in 4 s).
@@ -1306,6 +1379,21 @@ ready for the reference expansion; this backend is the only thing holding it.
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
 
+**Two more manifestations, found by the second review of #151 (2026-09-01)**, both pinned in
+`backend_divergence.rs`. A `guard` whose clause *declines* inside a primitive's callback loses the
+outer `guard`: the reference expansion re-raises through `handler-k`, back inside the callback, and
+the nested trampoline there has no handlers, so `(guard (outer (#t …)) (call-with-port p (lambda (p)
+(guard (e ((string? e) 'no)) (raise 'sym)))))` dies with `unhandled exception: sym` where the VM,
+chibi and Gauche answer `(outer sym)` — on both raise forms; the old expansion re-raised from the
+clause side, outside the callback, and happened to work. And a raise inside a callback that *is*
+caught outside arrives as the wrong object: the nested trampoline reports it as an "unhandled
+exception" error, which the outer trampoline then routes to the `guard` as an error object, so
+`(guard (e ((eq? e 'x) 'ok)) (call-with-port p (lambda (p) (raise 'x))))` sees an error object whose
+message is `unhandled exception: x` rather than `'x`, and declines. (This one predates the
+families: `main` gave the same.) The F6 quarantine — the port closed under the retry loop — retired
+with #151, but by `call-with-port` no longer closing on an escape (R7RS 6.13.1), not by the
+trampoline telling a local jump from an escape; the misread is still there.
+
 **An exception raised by a `dynamic-wind` after-thunk does not behave like a
 `finally`** — ❌ **open**, both backends. Characterised 2026-09-01 while
 landing triage families 22 and 28, which changed one of the four cases below
@@ -1331,14 +1419,20 @@ silently discarded, which is the one answer the rule most clearly forbids — to
 the exception cascading uncaught. Cases 2–4 are unchanged from before that
 work, on both backends.
 
-**A second half, easy to miss:** the rule also says unwinding *continues*
-outward past the thunk that raised. It does not here. With a nested wind whose
-inner after-thunk raises, Gauche answers `((caught sec2) (in1 in2 out2 out1))`
-— the outer thunk still runs — while ours stops, and the outer thunk never
-runs: measured through a file the abort cannot swallow, the VM's log reads
-`(in1 in2 out2)`. Before families 22/28 the VM continued the unwind and then
-discarded the exception. So the fix is about *both* who catches and how far the
-unwind gets, not only the former.
+**The unwind itself is not the gap.** The rule also says unwinding *continues*
+outward past the thunk that raised, and with a nested wind whose inner
+after-thunk raises, Gauche answers `((caught sec2) (in1 in2 out2 out1))` — the
+outer thunk still runs. With a single `guard`, ours stops at `sec2` and the
+outer thunk never runs (both backends' logs read `in1 in2 out2`, measured
+through files the abort cannot swallow) — but that is case 1's consequence: the
+handler is gone, nothing catches `sec2`, and an unhandled exception stops the
+program where it is raised. Put a handler *outside* and the VM does continue
+the unwind: `((outer sec2) (in1 in2 out2 out1))`, the outer thunk run and the
+secondary delivered — one handler too far out, which is case 2. (Re-measured
+2026-09-01 by review; an earlier version of this paragraph read the
+single-guard log as a second gap.) So the fix is about who catches; the
+machinery that carries the unwind past a failing thunk is already there and
+pinned.
 
 **Why it is not a patch.** Case 1 requires the `guard`'s handler to fire
 *twice*: once for the primary, again for the secondary its own escape raised.

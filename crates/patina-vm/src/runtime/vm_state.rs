@@ -648,7 +648,26 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
         code,
     });
 
-    run_loop_until(state, 0)
+    let result = run_loop_until(state, 0);
+    if result.is_err() {
+        // An error that reaches the top level abandons whatever the machine
+        // was doing: the frames it was running, the handlers and wind
+        // records their extents installed, an escape parked mid-flight. None
+        // of it can be resumed, and the next `execute` runs "until the frame
+        // stack is empty" — left in place, the abandoned frames would be
+        // where that next form *returns to*, and a REPL or resilient-mode
+        // script would run the dead frames after it, re-reporting the old
+        // error. Winds are dropped, not unwound: their after-thunks were
+        // never owed a run by an abort, and one that raised would abort the
+        // recovery.
+        state.frames.clear();
+        state.registers.clear();
+        state.pending_escape = None;
+        state.prompt_stack.clear();
+        state.dynamic_winds.clear();
+        state.exception_handlers.clear();
+    }
+    result
 }
 
 /// Execute a code object in the **current** `VmState`, returning to the
@@ -821,13 +840,27 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // frame's code changes — call, return, tail call, continuation invoke.
     let mut cur_code = state.current_code()?;
 
+    // A handler installed during this loop is dead once the loop's frame has
+    // returned, and this count is the only thing that identifies it: a
+    // tail-called `with-exception-handler` installs at `exit_depth`, which is
+    // also where a handler this loop was *started under* sits when the
+    // control primitive that started it tail-replaced its thunk's frame —
+    // `(with-exception-handler h (lambda () (dw before body after)))` runs
+    // `before` on a nested loop with `h` at that depth and still owed `body`'s
+    // raise. So the exit-depth `Return` pops nothing (see
+    // `pop_resolved_extents`) and the loop closes its own on the way out.
+    let handlers_at_entry = state.exception_handlers.len();
+
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
         maybe_collect(state, is_outermost);
 
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
-            Ok(Some(val)) => return Ok(LoopExit::Returned(val)),
+            Ok(Some(val)) => {
+                state.exception_handlers.truncate(handlers_at_entry);
+                return Ok(LoopExit::Returned(val));
+            }
             Ok(None) => continue,
             Err(e) => {
                 // Checked before the catchability test on purpose: the
@@ -1234,7 +1267,8 @@ fn dispatch_one_instruction(
             let result = state.reg_at(base, val);
             let frame = state.frames.pop().expect("Return with empty stack");
             if state.frames.len() == exit_depth || state.frames.is_empty() {
-                // Reached target depth (or absolute bottom) — this loop is done.
+                // Reached target depth (or absolute bottom) — this loop is
+                // done. Handlers installed under it close in the loop itself.
                 state.free_top_registers(frame.register_base);
                 return Ok(Some(result));
             }
@@ -1243,12 +1277,7 @@ fn dispatch_one_instruction(
             state.set_reg(return_reg, result);
             // Free the callee's register window.
             state.free_top_registers(frame.register_base);
-            // Pop any PromptFrames whose body just returned normally.
-            pop_resolved_prompts(state);
-            // Pop exception handlers whose thunk returned normally.
-            pop_exception_handlers(state);
-            // Pop dynamic-wind records whose body returned, running after-thunks.
-            pop_resolved_winds(state)?;
+            pop_resolved_extents(state, exit_depth)?;
         }
 
         // ── call-with-values (instruction-level) ─────────────────────────
@@ -1290,6 +1319,7 @@ fn dispatch_one_instruction(
             } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
             {
                 state.set_reg(return_reg, result);
+                pop_resolved_extents(state, exit_depth)?;
             }
         }
 
@@ -2295,8 +2325,9 @@ fn handle_control_primitive(
                         state.dynamic_winds.truncate(wind_depth);
                         // Best-effort, and deliberately after the truncate: an
                         // after-thunk that fails on its own terms loses to the
-                        // escape already in flight, exactly as the unwind loop
-                        // in `vm_raise_value` used to treat it.
+                        // escape already in flight. (`vm_raise_value`'s
+                        // unwind loop treated it the same way before triage
+                        // family 28 removed that loop.)
                         let _ = run_thunk(state, args[2]);
                     }
                     return Err(park_escape(state, v));
@@ -2421,6 +2452,16 @@ fn handle_control_primitive(
                 });
             }
             let proc = args[0];
+            // `dst` is dead at this point — the only writes it will ever
+            // see are this call's result or a value delivered through the
+            // continuation — so whatever it still holds must not go into
+            // the snapshot. Left in, it chains: `guard`'s expansion is
+            // `((call/cc …))`, so `dst` holds the thunk the *previous* guard
+            // delivered, that thunk closes over its `handler-k`, and that
+            // continuation's snapshot holds the one before. A loop catching
+            // one raise per iteration retained nine heap objects per
+            // iteration for the life of its frame (296 MB at 160k).
+            state.set_reg(dst, TaggedValue::NULL);
             // Capture a full continuation: snapshot of entire current state
             let cont = VmContinuation {
                 frames: state.frames.clone(),
@@ -2611,8 +2652,13 @@ fn vm_raise(
 ///
 /// For non-continuable raise, this pushes the handler frame and returns Ok —
 /// the caller's run loop will drive the handler to completion. The handler is
-/// expected to escape via `call/cc` continuation or similar; if it returns
-/// normally, the Return instruction path detects the non-continuable case.
+/// expected to escape via `call/cc` continuation or similar. **If it returns
+/// normally nothing notices**: R7RS 6.11 wants a secondary exception raised
+/// in the handler's dynamic environment, but no path here detects the return
+/// — `Return` delivers the handler's value to `dst` as though the raise had
+/// been continuable, and the popped handler is not restored. The tree-walker
+/// raises the secondary; recorded in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6
+/// and pinned in `backend_divergence.rs`.
 ///
 /// For continuable raise, this runs the handler synchronously and returns its
 /// value as the result of `raise-continuable`.
@@ -2652,6 +2698,17 @@ fn vm_raise_value(
                         // own handler stack, so this entry must not be
                         // re-pushed, and `dst` names a register in a frame
                         // that is gone.
+                        //
+                        // Right for a jump *out* (`guard-k`), wrong for a
+                        // jump back *in*: `guard`'s declining clause invokes
+                        // `handler-k`, captured inside this handler with the
+                        // entry popped, and the handler then returns to the
+                        // raise point through the restored frames — with no
+                        // re-push on that path, the `guard` is gone for the
+                        // rest of its body. The tree-walker's cleanup
+                        // continuation restores it. Recorded in
+                        // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, pinned in
+                        // `backend_divergence.rs`.
                         LoopExit::Escaped(v) => return Err(park_escape(state, v)),
                     }
                 }
@@ -2679,9 +2736,10 @@ fn vm_raise_value(
                 }
                 None => {
                     // Handler frame was pushed — the run loop will drive it.
-                    // The handler is expected to escape (via call/cc or abort).
-                    // If it returns normally via Return instruction, that path
-                    // needs to handle the non-continuable case.
+                    // The handler is expected to escape (via call/cc or
+                    // abort). If it returns normally, `Return` delivers its
+                    // value to `dst` unremarked — the gap the doc comment
+                    // above records.
                     Ok(())
                 }
             }
@@ -2690,16 +2748,14 @@ fn vm_raise_value(
         // No handler — format and propagate as Rust error
         use patina_primitives::primitives::io::datum_writer::format_display_tagged;
         let display = format_display_tagged(exception, &state.heap);
-        // Deliberately the same wording for both. Whether the raise was
-        // continuable is an implementation detail once nothing handles it, and
-        // since `guard`'s re-raise is `raise-continuable` (R7RS 7.3), saying
-        // "continuable" here reported a plain `(raise 'x)` whose guard declined
-        // as `unhandled continuable exception: x` — naming a form the user
-        // never wrote.
-        let _ = continuable;
-        Err(VmError::SchemeException {
-            message: format!("unhandled exception: {}", display),
-        })
+        // Deliberately the same wording whether or not the raise was
+        // continuable — the variant's `Display` supplies it. Continuability is
+        // an implementation detail once nothing handles it, and since
+        // `guard`'s re-raise is `raise-continuable` (R7RS 7.3), saying
+        // "continuable" here reported a plain `(raise 'x)` whose guard
+        // declined as `unhandled continuable exception: x` — naming a form
+        // the user never wrote.
+        Err(VmError::SchemeException { message: display })
     }
 }
 
@@ -2801,6 +2857,38 @@ fn pop_resolved_prompts(state: &mut VmState) {
             break;
         }
     }
+}
+
+/// Close the extents keyed on frames that are no longer on the stack. Called
+/// wherever the frame stack has just shrunk and the departing frame's value
+/// has been delivered: `Return`, and each tail-position branch that pops the
+/// frame itself because its callee (a control primitive, a primitive, a
+/// parameter, a `call-with-values` consumer) delivers straight to the caller.
+///
+/// A handler is live exactly while the thunk it was installed for has a
+/// frame, which is `stack_depth < frames.len()`; the same holds of prompts
+/// and wind records. So the pops are safe at any such point, and skipping
+/// them at one leaves a stale entry that the next raise finds — the
+/// tail-position branches used to skip them, and
+/// `(with-exception-handler h (lambda () (values 1)))` left `h` installed
+/// for the rest of the program.
+///
+/// **Nothing is popped at the run loop's exit depth.** The depth test cannot
+/// decide there: a handler the loop was *started under* — its thunk's frame
+/// tail-replaced by the control primitive that started the loop, so it sits
+/// at exactly `exit_depth` — is live, while one a tail-called
+/// `with-exception-handler` installed *inside* the loop sits at the same
+/// depth and is dead. `run_loop_until_outcome` closes the second kind from
+/// its own entry count. Prompts and wind records at that depth belong to the
+/// Rust caller that started the loop (`run_thunk_outcome`, a prompt body),
+/// which closes them itself.
+fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) -> Result<(), VmError> {
+    if state.frames.len() == exit_depth || state.frames.is_empty() {
+        return Ok(());
+    }
+    pop_resolved_prompts(state);
+    pop_exception_handlers(state);
+    pop_resolved_winds(state)
 }
 
 /// Pop exception handlers whose thunk has returned (stack shrank below their depth).
@@ -3342,18 +3430,28 @@ fn tail_call_value_with_probe(
             let frame = state.frames.pop().expect("tail call ctrl with empty stack");
             let return_reg = frame.return_reg;
             state.free_top_registers(frame.register_base);
+            let depth = state.frames.len();
             // Now at depth N-1. Handle with dst = return_reg (slot in frame
             // N-2). (At exit depth, return_reg is still the right dst — not
             // 0, which could clobber live registers like MutableCell
             // pointers.)
+            //
+            // The extents keyed on the popped frame stay open across the
+            // dispatch: a `raise` in tail position must still find the
+            // handler its thunk was called under.
             if let Some(escaped) =
                 handle_control_primitive(state, ctrl, arg_vals, return_reg, exit_depth)?
             {
                 return Ok(Some(escaped));
             }
-            // The control primitive has completed. If it wrote its result and
-            // returned immediately (no new frames pushed past exit_depth), the
-            // enclosing loop is done; otherwise let it drive the new frames.
+            // The control primitive has completed. If it delivered its
+            // result without pushing a frame, the tail call has returned and
+            // the popped frame's extents close now, as after `Return`; a
+            // frame it did push closes them when that frame returns. Then,
+            // if this is the exit depth, the enclosing loop is done.
+            if state.frames.len() == depth {
+                pop_resolved_extents(state, exit_depth)?;
+            }
             if state.frames.len() == exit_depth {
                 let result = state.reg(return_reg);
                 return Ok(Some(result));
@@ -3380,6 +3478,8 @@ fn tail_call_value_with_probe(
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
+            // The popped frame's extents close now, as after `Return`.
+            pop_resolved_extents(state, exit_depth)?;
             return Ok(None);
         }
 
@@ -3402,6 +3502,7 @@ fn tail_call_value_with_probe(
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
+            pop_resolved_extents(state, exit_depth)?;
             return Ok(None);
         }
     }

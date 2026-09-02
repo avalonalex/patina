@@ -41,11 +41,11 @@
 ;; the issue.
 (define-syntax %guard-aux
   (syntax-rules (else =>)
-    ;; No clauses at all. R7RS's grammar wants one or more, but the previous
-    ;; expansion accepted `(guard (e) body)` by handing `cond` an empty clause
-    ;; list, and rejecting it here would fail with a message naming this
-    ;; helper — an identifier the user never wrote. Re-raise instead, which is
-    ;; what "no clause matched" means.
+    ;; No clauses at all. R7RS 7.1.3 allows it (`(guard (<identifier>
+    ;; <cond clause>*) <body>)`), and 7.3's reference `guard-aux` does not
+    ;; cover it — a `(guard (e) body)` would fail there with a message naming
+    ;; this helper, an identifier the user never wrote. Re-raise, which is
+    ;; what "no clause matched" means, on both raise forms.
     ((%guard-aux reraise)
      reraise)
 
