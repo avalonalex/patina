@@ -140,7 +140,7 @@ impl<'a> CpsEvaluator<'a> {
     ///
     /// Returns TaggedValue for efficient storage and to avoid Value round-trips.
     pub fn eval(&self, expr: &CpsExpr) -> Result<TaggedValue, EvalError> {
-        self.eval_in_env(expr, self.evaluator.global_env.clone())
+        self.eval_in_env(Rc::new(expr.clone()), self.evaluator.global_env.clone())
     }
 
     /// Evaluate a CPS expression in a specific environment
@@ -150,9 +150,14 @@ impl<'a> CpsEvaluator<'a> {
     /// go into the library's environment, not the global environment.
     ///
     /// Returns TaggedValue for efficient storage and to avoid Value round-trips.
+    /// Takes the expression by `Rc` because the step loop walks it that way:
+    /// descending into a `let`, an `if` branch or a lambda body is then a
+    /// refcount bump rather than a deep clone of the subtree. It is also the
+    /// node the trampoline's safe point roots, so the collector traces the
+    /// tree the loop is actually walking rather than a copy of it.
     pub fn eval_in_env(
         &self,
-        expr: &CpsExpr,
+        expr: Rc<CpsExpr>,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         // Every trampoline defers collection for its own extent; only the
@@ -173,15 +178,9 @@ impl<'a> CpsEvaluator<'a> {
         // Debug: show the CPS expression (enabled via RUST_LOG=patina_tree_walker::eval::cps_eval=debug)
         debug!(target: "patina_tree_walker::eval::cps_eval", input_expr = %expr, "CPS evaluation starting");
 
-        // The step loop carries the expression by `Rc` so that walking into a
-        // `let`, an `if` branch or a lambda body is a refcount bump rather
-        // than a deep clone of the subtree; the tree it walks is immutable.
-        // One clone here lifts the caller's borrowed root into that form.
-        let root = Rc::new(expr.clone());
-
         // Start with the initial expression
         let mut current_step = match self.eval_one_step(
-            &root,
+            &expr,
             env,
             cont_env,
             prompt_stack,
@@ -201,7 +200,7 @@ impl<'a> CpsEvaluator<'a> {
         loop {
             // GC safe point: all live state is in `current_step` and `expr`,
             // both rooted below. No heap borrow is outstanding here.
-            self.maybe_collect(is_outermost, &current_step, expr);
+            self.maybe_collect(is_outermost, &current_step, &expr);
 
             step_count += 1;
             if step_count <= 30 {
@@ -389,7 +388,7 @@ pub fn eval_cps(
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
-    cps_evaluator.eval_in_env(&cps_expr, env)
+    cps_evaluator.eval_in_env(Rc::new(cps_expr), env)
 }
 
 #[cfg(test)]

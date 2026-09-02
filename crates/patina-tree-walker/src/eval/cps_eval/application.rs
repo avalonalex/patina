@@ -40,11 +40,10 @@ impl<'a> CpsEvaluator<'a> {
             let heap_ref = heap.borrow();
             match heap_ref.get_procedure(proc_tagged) {
                 Some(p) => (Some(p), None, None),
-                None => (
-                    None,
-                    heap_ref.get_continuation(proc_tagged),
-                    heap_ref.get_parameter(proc_tagged),
-                ),
+                None => match heap_ref.get_continuation(proc_tagged) {
+                    Some(k) => (None, Some(k), None),
+                    None => (None, None, heap_ref.get_parameter(proc_tagged)),
+                },
             }
         };
 

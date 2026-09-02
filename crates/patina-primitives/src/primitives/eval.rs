@@ -204,7 +204,7 @@ const R5RS_SYNTAX_NOT_IN_BASE: &[&str] = &["delay"];
 fn install_r5rs_syntax(env: &Rc<Environment>, base_lib: &patina_core::Library) {
     for name in R5RS_SYNTAX {
         if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(name.to_string(), tv);
+            env.define(*name, tv);
         } else {
             debug_assert!(
                 R5RS_SYNTAX_NOT_IN_BASE.contains(name),
@@ -521,7 +521,7 @@ fn primitive_scheme_report_environment(
     // Install procedures
     for name in R5RS_PROCEDURES {
         if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(name.to_string(), tv);
+            env.define(*name, tv);
         }
     }
 
@@ -548,7 +548,7 @@ fn primitive_scheme_report_environment(
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
             if let Some(tv) = inexact_lib.get_export_tagged(name) {
-                env.define(name.to_string(), tv);
+                env.define(*name, tv);
             }
         }
     }
@@ -564,7 +564,7 @@ fn primitive_scheme_report_environment(
             "angle",
         ] {
             if let Some(tv) = complex_lib.get_export_tagged(name) {
-                env.define(name.to_string(), tv);
+                env.define(*name, tv);
             }
         }
     }
@@ -572,11 +572,11 @@ fn primitive_scheme_report_environment(
     // Add the R5RS-specific aliases
     // exact->inexact is an alias for inexact
     if let Some(tv) = base_lib.get_export_tagged("inexact") {
-        env.define("exact->inexact".to_string(), tv);
+        env.define("exact->inexact", tv);
     }
     // inexact->exact is an alias for exact
     if let Some(tv) = base_lib.get_export_tagged("exact") {
-        env.define("inexact->exact".to_string(), tv);
+        env.define("inexact->exact", tv);
     }
 
     // Add null-environment and scheme-report-environment themselves

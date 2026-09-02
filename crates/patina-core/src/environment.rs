@@ -38,11 +38,17 @@ type ScopedBindingList = SmallVec<[ScopedBinding; 1]>;
 /// flag, so a frame holding parameters alone answers in one bool load.
 ///
 /// Derefs to the map, so the accessors that only read it are unchanged.
+///
+/// Whether the table holds a name-visible binding is *not* recorded here but
+/// on the environment, as `has_visible_scoped`: that question is asked of
+/// every frame a name lookup walks past, and answering it from a field beside
+/// the map would cost a `RefCell` borrow per frame to learn there is nothing
+/// there. One copy of the fact, in one place, with `insert_scoped` its only
+/// writer — two would be a way for a lookup to miss a binding a scoped
+/// resolution still finds, which is the shape of triage families 36 and 38.
 #[derive(Debug, Default)]
 struct ScopedTable {
     map: FxHashMap<Rc<str>, ScopedBindingList>,
-    /// Whether any binding here is visible to a name-only lookup.
-    any_visible_by_name: bool,
 }
 
 impl std::ops::Deref for ScopedTable {
@@ -89,11 +95,11 @@ type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
 /// ones where a linear scan would actually be the wrong shape.
 #[derive(Debug, Default)]
 struct Bindings {
-    /// Bound names in slot order: a name's slot *is* its index here.
-    names: SmallVec<[Rc<str>; 3]>,
-    /// Values, indexed by slot. Kept beside `names` rather than paired with
-    /// them so `for_each_local_value` can hand the GC a plain slice.
-    slots: SmallVec<[TaggedValue; 3]>,
+    /// The bindings in slot order: a name's slot *is* its index here. One
+    /// vector rather than parallel name and value vectors, so there is no
+    /// length invariant for `read_slot` to index past and no second
+    /// allocation when a frame outgrows its inline capacity.
+    slots: SmallVec<[(Rc<str>, TaggedValue); 3]>,
     /// name → slot, present only above `LINEAR_MAX` entries.
     index: Option<Box<FxHashMap<Rc<str>, u32>>>,
 }
@@ -120,19 +126,19 @@ impl Bindings {
         match &self.index {
             Some(index) => index.get(name).copied(),
             None => self
-                .names
+                .slots
                 .iter()
-                .position(|n| name_matches(n, name))
+                .position(|(n, _)| name_matches(n, name))
                 .map(|i| i as u32),
         }
     }
 
     fn read_slot(&self, slot: u32) -> TaggedValue {
-        self.slots[slot as usize]
+        self.slots[slot as usize].1
     }
 
     fn write_slot(&mut self, slot: u32, value: TaggedValue) {
-        self.slots[slot as usize] = value;
+        self.slots[slot as usize].1 = value;
     }
 
     fn get(&self, name: &str) -> Option<TaggedValue> {
@@ -144,36 +150,45 @@ impl Bindings {
         // A fresh frame is the common case on the tree-walker's hot path —
         // one is built per `let`-bound temporary and per call — and it has
         // nothing to search.
-        if !self.names.is_empty()
+        if !self.slots.is_empty()
             && let Some(slot) = self.slot_of(&name)
         {
-            self.slots[slot as usize] = value;
+            self.slots[slot as usize].1 = value;
             return;
         }
-        let slot = self.names.len() as u32;
-        self.slots.push(value);
+        let slot = self.slots.len() as u32;
         match &mut self.index {
             Some(index) => {
                 index.insert(Rc::clone(&name), slot);
-                self.names.push(name);
             }
-            None => {
-                self.names.push(name);
-                if self.names.len() > LINEAR_MAX {
-                    let mut index = FxHashMap::default();
-                    index.reserve(self.names.len());
-                    for (i, n) in self.names.iter().enumerate() {
-                        index.insert(Rc::clone(n), i as u32);
-                    }
-                    self.index = Some(Box::new(index));
+            // Cross into indexed form *after* pushing, so the new name is in
+            // the table the index is built from. `>` rather than `>=`: the
+            // index appears on the binding that takes the frame past
+            // `LINEAR_MAX`, and `linear_and_indexed_frames_agree_on_slots`
+            // pins that the two forms answer alike either side of it.
+            None if slot as usize + 1 > LINEAR_MAX => {
+                self.slots.push((name, value));
+                let mut index = FxHashMap::default();
+                index.reserve(self.slots.len());
+                for (i, (n, _)) in self.slots.iter().enumerate() {
+                    index.insert(Rc::clone(n), i as u32);
                 }
+                self.index = Some(Box::new(index));
+                return;
             }
+            None => {}
         }
+        self.slots.push((name, value));
     }
 
     /// Every bound name, in slot order.
     fn names(&self) -> impl Iterator<Item = &Rc<str>> {
-        self.names.iter()
+        self.slots.iter().map(|(n, _)| n)
+    }
+
+    /// Every bound value, in slot order.
+    fn values(&self) -> impl Iterator<Item = TaggedValue> + '_ {
+        self.slots.iter().map(|&(_, v)| v)
     }
 }
 
@@ -212,6 +227,17 @@ fn fresh_env_id() -> u64 {
 ///    name-only view of a scoped definition **only when this resolution did
 ///    not just reject it**. A binding the rule refused stays refused; the
 ///    fallback answering it anyway was triage family 36.
+///
+/// ## Deliberately not `Clone`
+///
+/// The binding tables are owned inline, so a derived `Clone` would *fork*
+/// them while copying `env_id` — and `env_id` is what patina-vm's per-site
+/// global cache keys a resolved slot on (`GlobalCacheEntry` in
+/// `patina-vm/src/types/code_object.rs`). Two environments sharing an id and
+/// disagreeing about a name would hand that cache a hit against the wrong
+/// table and return the wrong value silently. An environment is shared by its
+/// `Rc` and by nothing else; `gc_identity` rests on the same rule. Do not add
+/// the derive.
 #[derive(Debug)]
 pub struct Environment {
     /// Shared heap for TaggedValue interpretation
@@ -249,6 +275,14 @@ pub struct Environment {
     /// macro was expanded. Kept outside the `RefCell`s they describe so that
     /// walking a chain of frames costs a load per frame rather than two
     /// borrow-flag round trips.
+    ///
+    /// These are the **only** copies of those two facts, and each has exactly
+    /// one writer — `define_alias` and `insert_scoped`. A second copy stored
+    /// beside the table it describes is how a lookup comes to miss a binding
+    /// that scoped resolution still finds, which is what triage families 36
+    /// and 38 were. Both latch on and never clear: nothing removes a binding
+    /// from either table, so a `true` is permanent and a stale one would only
+    /// cost a borrow, never an answer.
     has_aliases: Cell<bool>,
     has_visible_scoped: Cell<bool>,
     parent: Option<Rc<Environment>>,
@@ -350,7 +384,7 @@ impl Environment {
         let qualified_name: Rc<str> = Rc::from(format!("{}/{}", library.join("."), name));
         let proc = crate::procedure::Procedure::primitive(name, arity, qualified_name, None);
         let tv = self.heap.borrow_mut().alloc_procedure(proc);
-        self.define(name.to_string(), tv);
+        self.define(name, tv);
     }
 
     /// Set an existing binding (searches parent environments)
@@ -545,7 +579,6 @@ impl Environment {
             self.has_visible_scoped.set(true);
         }
         let mut table = self.scoped_bindings.borrow_mut();
-        table.any_visible_by_name |= visible_by_name;
         let bindings = table.entry(name).or_default();
         match bindings.iter_mut().find(|b| b.scopes == scopes) {
             Some(existing) => {
@@ -614,10 +647,10 @@ impl Environment {
     /// share one rule: `get` and `set` must agree on *which* binding the bare
     /// name means, and two predicates that merely look alike would not have to.
     fn visible_scoped_index(&self, name: &str) -> Option<usize> {
-        let table = self.scoped_bindings.borrow();
-        if !table.any_visible_by_name {
+        if !self.has_visible_scoped.get() {
             return None;
         }
+        let table = self.scoped_bindings.borrow();
         table.get(name)?.iter().rposition(|b| b.visible_by_name)
     }
 
@@ -1083,7 +1116,7 @@ impl Environment {
     /// Visit every value bound locally (simple and scoped bindings, not the
     /// parent chain). GC tracing hook — allocation-free, unlike `bindings()`.
     pub fn for_each_local_value(&self, f: &mut dyn FnMut(TaggedValue)) {
-        for &tv in self.bindings.borrow().slots.iter() {
+        for tv in self.bindings.borrow().values() {
             f(tv);
         }
         for scoped in self.scoped_bindings.borrow().values() {
@@ -1158,6 +1191,33 @@ mod tests {
         // x resolves via the parent chain but has no local slot in the child.
         assert_eq!(child.get("x"), Some(TaggedValue::fixnum(42)));
         assert_eq!(child.local_slot("x"), None);
+    }
+
+    #[test]
+    fn linear_and_indexed_frames_agree_on_slots() {
+        // `Bindings` answers by linear scan until a frame passes
+        // `LINEAR_MAX`, then by hash index. Only the global environment
+        // crosses that line at runtime, and it crosses it during startup,
+        // where a name the index misses looks like a missing primitive
+        // rather than an indexing bug — so the crossover is pinned here.
+        let env = Environment::new();
+        let names: Vec<String> = (0..LINEAR_MAX + 2).map(|i| format!("v{i}")).collect();
+        for (i, name) in names.iter().enumerate() {
+            env.define(name.as_str(), TaggedValue::fixnum(i as i64));
+        }
+        // Every name keeps the slot its insertion order gave it, on both
+        // sides of the crossover, and reads through the index agree with the
+        // values.
+        for (i, name) in names.iter().enumerate() {
+            assert_eq!(env.local_slot(name), Some(i as u32), "slot of {name}");
+            assert_eq!(env.get(name), Some(TaggedValue::fixnum(i as i64)));
+        }
+        // Redefining after the index exists must overwrite in place, not
+        // append a second slot the index then shadows.
+        env.define("v0", TaggedValue::fixnum(99));
+        assert_eq!(env.local_slot("v0"), Some(0));
+        assert_eq!(env.get("v0"), Some(TaggedValue::fixnum(99)));
+        assert_eq!(env.bindings().len(), names.len());
     }
 
     #[test]

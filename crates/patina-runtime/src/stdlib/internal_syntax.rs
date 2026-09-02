@@ -65,5 +65,5 @@ pub fn seed_top_level_syntax(env: &Rc<Environment>) {
 /// the environment's own `RefCell`s.
 fn define_core_syntax(env: &Rc<Environment>, form: CoreForm) {
     let marker = env.heap().borrow_mut().core_syntax(form);
-    env.define(form.name().to_string(), marker);
+    env.define(form.name(), marker);
 }
