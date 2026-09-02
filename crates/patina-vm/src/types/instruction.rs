@@ -390,6 +390,21 @@ pub enum Instruction {
     /// instruction emitted after `PopWind` in the codegen sequence.
     PopWind,
 
+    /// Take the next step of a continuation jump that is running wind thunks.
+    ///
+    /// Never emitted by the compiler. It is the whole body of the one-frame
+    /// stub the runtime pushes under each wind thunk of a jump
+    /// (`push_wind_step` in `runtime/vm_state.rs`), so that "the rest of the
+    /// jump" is an ordinary frame: a continuation captured inside the thunk
+    /// captures it, and re-entering that continuation resumes the thunk and
+    /// then continues the jump, instead of falling back into whatever the
+    /// jump site was doing.
+    ///
+    /// Its frame's registers carry the jump: the target continuation, the
+    /// value it delivers, and which of the target's records this step is
+    /// entering (see the `wind_step` module in `runtime/vm_state.rs`).
+    ResumeWindJump,
+
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },

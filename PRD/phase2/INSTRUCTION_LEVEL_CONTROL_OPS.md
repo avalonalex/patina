@@ -39,7 +39,7 @@ After `try_invoke_continuation` in Call/TailCall dispatch, if `frames.len() <= e
 | `dynamic-wind` | 3 (before, body, after) | Body thunk escape works; re-entry into body is broken |
 | `with-exception-handler` | 1 (thunk) | Thunk escape works; handler re-invocation may break |
 | `call-with-continuation-prompt` | 1 (body) | Currently uses `call_closure` (instruction-level), OK |
-| `run_wind_transition` | N (before/after thunks) | Thunks are small; unlikely to `call/cc` but not impossible |
+| wind transition | N (before/after thunks) | Thunks are small; unlikely to `call/cc` but not impossible — and one that does is why the thunks became stub frames (`ResumeWindJump`) rather than nested calls, 2026-09-02 |
 
 ## Proposed Design: Compile Control Ops as Instructions
 
@@ -161,7 +161,7 @@ Similarly for `dynamic-wind` — the after-thunk call is in tail position of the
 
 1. **Phase 1: `call-with-values`** — Complete. Compiler emits `Call producer` + `CallWithValues consumer`.
 2. ~~**Phase 2: `with-exception-handler`**~~ — Already instruction-level. The runtime intercept uses `call_closure` (not `run_thunk`) and `pop_exception_handlers` on Return. No changes needed.
-3. **Phase 3: `dynamic-wind`** — Complete. Compiler emits `Call before` + `PushWind` + `Call body` + `PopWind` + `Call after`. `PushWind` uses `stack_depth = 0` sentinel so `pop_resolved_winds` doesn't auto-pop; `PopWind` explicitly removes the record. Wind transition for continuation escape/re-entry uses the existing `run_wind_transition` mechanism (compares wind record lists, no `stack_depth` dependency).
+3. **Phase 3: `dynamic-wind`** — Complete. Compiler emits `Call before` + `PushWind` + `Call body` + `PopWind` + `Call after`. `PushWind` uses `stack_depth = 0` sentinel so `pop_resolved_winds` doesn't auto-pop; `PopWind` explicitly removes the record. Wind transition for continuation escape/re-entry compares wind record lists (no `stack_depth` dependency) and runs one thunk per step under a `ResumeWindJump` stub frame — `step_wind_jump`, which replaced `run_wind_transition` on 2026-09-02.
 
 ### Backward compatibility
 

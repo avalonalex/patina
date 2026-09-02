@@ -319,10 +319,27 @@ intercepted at call dispatch time.
 
 ### 5.3 Dynamic Wind
 
-- Wind records pushed by `DynamicWind` control primitive
-- `run_wind_transition()`: finds common prefix between current and target wind
-  stacks, runs `after` thunks for exiting (innermost first), then `before`
-  thunks for entering (outermost first)
+- Wind records pushed by `PushWind` (head-position `dynamic-wind`) or by the
+  `DynamicWind` control primitive (the value form). Each records the
+  **exception handler stack of its own call** (`DynamicWindRecord::handlers`),
+  which is the part of the dynamic environment R7RS 6.10 gives its thunks
+- `step_wind_jump()`: one step of a jump to a full continuation. It finds the
+  common prefix of the live and target wind stacks and runs **one** thunk —
+  an `after` for the innermost extent being left (popped *before* it runs), or
+  a `before` for the outermost being entered (its record pushed only *after*
+  it returns) — then, with none left, restores the target's snapshot and
+  delivers the value
+- Each thunk runs as an ordinary frame under a stub frame whose single
+  instruction is `ResumeWindJump`, which comes back to `step_wind_jump`. So
+  "the rest of the jump" is a frame: a continuation captured inside a thunk
+  captures it, and re-entering that continuation finishes the thunk and then
+  the jump. Thunks ran on a nested Rust call until 2026-09-02, and a
+  continuation captured in one re-entered the *jump site's* frame instead —
+  mid-sequence, at its `PopWind` (Track L §6, the `finally` rule)
+- The handler stack a thunk runs under comes from its record, not from the
+  machine. `install_thunk_handlers` clamps the recorded frame depths to the
+  live stack first; `pop_exception_handlers` reads them, and they belong to a
+  stack that has moved on
 - The common prefix is keyed on `DynamicWindRecord::id`, unique per
   `dynamic-wind` *call* and minted by `patina_core::next_dynamic_wind_id`. The
   `before` thunk is not an identity — two calls may share one closure
@@ -330,16 +347,22 @@ intercepted at call dispatch time.
   to force it to zero for them, so a continuation captured inside its own
   extent re-ran that extent's thunks for a jump that crossed nothing (fixed
   2026-09-01, Track L §6)
-- Composable/delimited invokes do **not** go through `run_wind_transition` at
-  all: both the `InvokeContinuation { composable: true }` arm and the
-  delimited branch of `try_invoke_continuation` run every captured `before`
-  thunk unconditionally, then extend `dynamic_winds`. Shared extents are not
-  skipped there
+- Composable/delimited invokes do **not** travel at all: both the
+  `InvokeContinuation { composable: true }` arm and the delimited branch of
+  `try_invoke_continuation` run every captured `before` thunk unconditionally,
+  on a nested call and under the live handler stack, then extend
+  `dynamic_winds`. Shared extents are not skipped there
+- `pop_resolved_winds()` runs the after-thunk of a record whose body has
+  returned, also on a nested call and under the live stack. On a normal exit
+  that stack *is* the call's, so the rule holds there without help
 - The value form of `dynamic-wind` (`handle_control_primitive`) runs its body
   on a nested Rust call, so an escape abandons the frame that owns the
   cleanup. That arm pops and runs its own after-thunk when the record survives
   the transition; head-position `dynamic-wind` needs none of this because
-  `PushWind`/`PopWind` are instructions the resumed continuation still reaches
+  `PushWind`/`PopWind` are instructions the resumed continuation still
+  reaches. The same split leaves the value form unable to deliver its body's
+  value when a continuation re-enters that body — pinned in
+  `backend_divergence.rs`, Track L §6
 
 ### 5.4 Values / Call-with-values
 
@@ -353,7 +376,8 @@ intercepted at call dispatch time.
 
 **Full (call/cc):**
 1. Snapshot frames, registers, winds, prompts, exception handlers
-2. On invocation: run wind transitions, restore entire snapshot
+2. On invocation: travel the wind stacks one thunk per step (§5.3), each on a
+   `ResumeWindJump` stub frame, then restore the entire snapshot
 3. Deliver value to `deliver_reg`
 
 **Delimited (abort/prompt):**

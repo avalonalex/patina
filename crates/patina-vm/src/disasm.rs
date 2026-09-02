@@ -316,6 +316,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             format!("PushWind      before=r{} after=r{}", before, after)
         }
         Instruction::PopWind => "PopWind".to_string(),
+        Instruction::ResumeWindJump => "ResumeWindJump".to_string(),
         Instruction::Nop => "Nop".to_string(),
     }
 }
