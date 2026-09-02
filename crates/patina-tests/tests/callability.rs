@@ -164,47 +164,37 @@ fn test_a_control_primitive_error_is_catchable_in_every_position() {
     }
 }
 
-/// The class is narrowed, not closed. An error raised by user code inside a
-/// `dynamic-wind` thunk still escapes `guard` on the tree-walker, because
-/// `run_wind_handlers(…)?` propagates it as a Rust error.
+/// An error raised by user code inside a `dynamic-wind` after thunk reaches
+/// the enclosing `guard` — converged 2026-09-01.
 ///
-/// The depth is one level below that `?`: `apply_from_direct_tagged`
-/// (`cps_eval/wind.rs`) runs wind thunks on a *nested trampoline* that starts
-/// with an empty handler stack, so the error has to come back through Rust to
-/// reach the handlers installed outside. Routing at the `?` is what the
-/// parameter-converter case in this PR does and it works, but the general fix
-/// is to thread the handler stack into the nested trampoline. Tracked in the
-/// PRD; see `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+/// It used to escape on the tree-walker: `run_wind_handlers(…)?` ran the
+/// thunk on a nested trampoline with an empty handler stack, so the error had
+/// to come back through Rust and nothing routed it to the handlers installed
+/// outside. Wind thunks now run as steps of the trampoline the jump was made
+/// on, each under the handler stack its `dynamic-wind` call was made in
+/// (R7RS 6.10; `cps_eval/wind.rs`), so the `(car 7)` error finds the `guard`
+/// like any other raise would. Primitive callbacks still run on the nested
+/// trampoline — that boundary stays open in `backend_divergence.rs` and
+/// `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 ///
-/// The pinned value is what the VM returns, *not* an established correct
-/// answer: chibi loops forever on this program, so no reference was available
-/// to arbitrate. What this row asserts is only that the two backends disagree
-/// — the tree-walker dies where the VM does not. Establish the right answer
-/// before converging them.
-///
-/// The VM's half moved from `handled` to `caught` with the audit's A3 fix
-/// (wind records are popped before their after-thunk runs). Both are
-/// unarbitrated, but `caught` is the explicable one: the after-thunk's own
-/// `(car 7)` error reaches the enclosing `guard`, which is where an error
-/// raised during unwinding should land. `handled` came from the old ordering
-/// swallowing that error and letting the original `raise` reach the handler
-/// — and chibi calls a handler returning from a non-continuable `raise` an
-/// error in its own right (`(with-exception-handler (lambda (c) 'handled)
-/// (lambda () (raise 'x)))` answers `caught` there, where the VM still
-/// answers `handled`).
+/// `caught` is arbitrated by Gauche (chibi loops forever on this program):
+/// the after thunk runs in the environment of the `dynamic-wind` call, which
+/// is inside the `with-exception-handler`, but that handler's `'handled` is
+/// then a return from a non-continuable `raise`, which R7RS 6.11 makes a
+/// secondary exception raised in the same environment — so the `guard`
+/// catches either way. The VM's half moved from `handled` to `caught` with
+/// the audit's A3 fix (wind records are popped before their after-thunk
+/// runs); `handled` came from the old ordering swallowing the thunk's error.
 #[test]
-fn test_an_error_inside_a_wind_thunk_still_escapes_on_the_tree_walker() {
-    assert_divergence(
+fn test_an_error_inside_a_wind_thunk_reaches_the_enclosing_guard() {
+    assert_program_eval_to(
         r#"(guard (e (#t 'caught))
              (with-exception-handler (lambda (c) 'handled)
                (lambda ()
                  (dynamic-wind (lambda () 1)
                                (lambda () (raise 'x))
                                (lambda () (car 7))))))"#,
-        On::Vm,
         "caught",
-        ErrorClass::AtRuntime,
-        "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6",
     );
 }
 

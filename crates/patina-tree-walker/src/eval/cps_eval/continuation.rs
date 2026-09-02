@@ -162,32 +162,18 @@ impl<'a> CpsEvaluator<'a> {
             }
 
             ContValue::Captured(k) => {
-                // Travel between dynamic extents, then decode through the same
-                // `continuation_cont_value` the escape path uses. Before this
-                // delegation the arm evaluated `k.body` with the *caller's*
-                // cont_env and ignored `resume` entirely — a resume-carrying
-                // continuation would have evaluated its sentinel Halt body and
-                // died on `__resume_value__`. Unreachable today (nothing
-                // constructs `Captured`), load-bearing for Q2's first-class
-                // continuation work.
-                self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
-                let decoded = continuation_cont_value(&k);
-                let captured_cont_env = k.captured_cont_env.clone();
-                let captured_winds = k.dynamic_winds.clone();
-                // The handler stack is restored from the continuation, not
-                // carried over from the caller — re-entry restores the dynamic
-                // environment the continuation names, and R7RS 6.11 puts the
-                // handlers in it.
-                let captured_handlers = k.exception_handlers.clone();
-                self.invoke_continuation_step(
-                    decoded,
-                    value,
-                    _env,
-                    captured_cont_env,
-                    prompt_stack,
-                    captured_winds,
-                    captured_handlers,
-                )
+                // Delivering to a captured continuation is a jump to it: the
+                // same wind travel and the same re-entry (the escape handler
+                // in `mod.rs`, which decodes through `continuation_cont_value`
+                // and restores the environment the continuation names) as
+                // applying it. Before this delegation the arm evaluated
+                // `k.body` with the *caller's* cont_env and ignored `resume`
+                // entirely — a resume-carrying continuation would have
+                // evaluated its sentinel Halt body and died on
+                // `__resume_value__`. Unreachable today (nothing constructs
+                // `Captured`), load-bearing for Q2's first-class continuation
+                // work.
+                self.jump_to_continuation(value, k, cont_env, prompt_stack, dynamic_winds)
             }
 
             ContValue::Halt => {
@@ -357,6 +343,32 @@ impl<'a> CpsEvaluator<'a> {
                     dynamic_winds,
                     exception_handlers,
                 })
+            }
+
+            ContValue::Jump {
+                entered,
+                value: jump_value,
+                target,
+            } => {
+                // A wind thunk on the way to `target` has returned (its value
+                // is ignored). A before-thunk's extent is entered now that the
+                // thunk is done, so a raise inside it did not put the record
+                // on the stack the raise's escape unwinds. Then travel on from
+                // the live stack: the thunk ran with the stack below its
+                // record, and anything it did to the stack is balanced.
+                //
+                // `exception_handlers` is dropped on purpose. It is the stack
+                // the thunk just ran under — its own record's, installed by
+                // `jump_to_continuation` — and it belongs to no one else: the
+                // next thunk gets *its* record's stack, and arrival restores
+                // `target`'s from the continuation (`mod.rs`). Carrying it
+                // forward would leak one `dynamic-wind` call's handlers into
+                // the next thunk on the path.
+                let mut new_winds = dynamic_winds;
+                if let Some(record) = entered {
+                    new_winds.push(record);
+                }
+                self.jump_to_continuation(jump_value, target, cont_env, prompt_stack, new_winds)
             }
 
             ContValue::ExceptionHandlerCleanup { original_cont } => {

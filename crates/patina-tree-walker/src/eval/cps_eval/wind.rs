@@ -1,52 +1,110 @@
 //! Dynamic-wind and promise handling for CPS evaluation
 //!
 //! This module contains functions for:
-//! - Running dynamic-wind handlers when switching contexts
+//! - Jumping to a captured continuation, running the wind thunks on the way
 //! - Forcing promises in CPS mode
 //! - Creating delimited continuations
 
 use super::CpsEvaluator;
-use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{
+    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
+};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::rc::Rc;
 
+/// How many leading records two wind stacks share (R7RS §6.10's common
+/// prefix), by identity of the `dynamic-wind` call.
+fn common_wind_prefix(from: &[DynamicWindRecord], to: &[DynamicWindRecord]) -> usize {
+    from.iter()
+        .zip(to.iter())
+        .take_while(|(a, b)| a.id == b.id)
+        .count()
+}
+
 impl<'a> CpsEvaluator<'a> {
-    /// Run dynamic-wind handlers when switching from one continuation to another
+    /// Take the next step of a jump to `target`: run one wind thunk between
+    /// the live wind stack and the target's, or, with none left, park the
+    /// escape and unwind the Rust stack to the outermost trampoline.
     ///
-    /// This implements the "travel to point" algorithm from chibi-scheme:
-    /// 1. Find the common prefix of the two wind stacks (by ID)
-    /// 2. Run "after" handlers for winds being exited (from current to common, in reverse)
-    /// 3. Run "before" handlers for winds being entered (from common to target)
-    pub(super) fn run_wind_handlers(
+    /// This is chibi's "travel to point", one thunk per step: leave the
+    /// innermost extent not shared with the target (pop its record, run its
+    /// `after`), until the live stack is a prefix of the target's; then enter
+    /// the target's remaining extents outermost first (run `before`, push the
+    /// record). The step after each thunk is `ContValue::Jump`, which comes
+    /// back here.
+    ///
+    /// Each thunk runs in the dynamic environment of its own `dynamic-wind`
+    /// call (R7RS §6.10): the wind stack below its record, and the handler
+    /// stack the record captured. So a raise in an after-thunk reaches the
+    /// `guard` whose escape is running it, the guard's handler fires a second
+    /// time, and its second jump — starting from the stack this one had got
+    /// to — abandons this jump and runs the after-thunks still outstanding.
+    /// That is the `finally` rule Track L §6 asked for: the after-thunk's
+    /// exception replaces the one in flight, and unwinding continues.
+    ///
+    /// Popping the record *before* running its after-thunk is what makes the
+    /// second jump terminate: the thunk is not on the stack it jumps from.
+    pub(super) fn jump_to_continuation(
         &self,
-        from: &[DynamicWindRecord],
-        to: &[DynamicWindRecord],
-    ) -> Result<(), EvalError> {
-        // Find the common prefix by comparing IDs
-        let common_len = from
-            .iter()
-            .zip(to.iter())
-            .take_while(|(a, b)| a.id == b.id)
-            .count();
+        value: TaggedValue,
+        target: Rc<CpsContinuation>,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        mut dynamic_winds: Vec<DynamicWindRecord>,
+    ) -> Result<StepResult, EvalError> {
+        let common = common_wind_prefix(&dynamic_winds, &target.dynamic_winds);
 
-        // Run "after" handlers for winds we're leaving (in reverse order)
-        // This exits from the innermost to the common ancestor
-        for wind in from.iter().skip(common_len).rev() {
-            // Use CPS machinery directly with TaggedValue - no conversion needed
-            self.apply_from_direct_tagged(wind.after, vec![])?;
+        if dynamic_winds.len() > common {
+            let record = dynamic_winds.pop().expect("longer than its prefix");
+            let handlers = record.handlers.to_vec();
+            return Ok(StepResult::ApplyProc {
+                proc: record.after,
+                args: vec![],
+                cont: ContValue::Jump {
+                    entered: None,
+                    value,
+                    target,
+                },
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers: handlers,
+            });
         }
 
-        // Run "before" handlers for winds we're entering
-        // This enters from the common ancestor to the target
-        for wind in to.iter().skip(common_len) {
-            // Use CPS machinery directly with TaggedValue - no conversion needed
-            self.apply_from_direct_tagged(wind.before, vec![])?;
+        if let Some(record) = target.dynamic_winds.get(dynamic_winds.len()) {
+            let record = record.clone();
+            let handlers = record.handlers.to_vec();
+            return Ok(StepResult::ApplyProc {
+                proc: record.before,
+                args: vec![],
+                cont: ContValue::Jump {
+                    entered: Some(record),
+                    value,
+                    target,
+                },
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers: handlers,
+            });
         }
 
-        Ok(())
+        // Arrived. The trampoline that catches this resumes `target` with the
+        // environment it captured (`mod.rs`). Every `apply_from_direct_tagged`
+        // between here and there unwinds on the way — its loop `?`s each step
+        // — but a nested `eval_cps` run (the `eval` primitive, through
+        // `ApplyContext::eval_expr`) has its own copy of the catching arm and
+        // resumes `target` *inside* itself, so the escape never leaves it and
+        // the primitive returns the nested run's `Halt` value instead. That
+        // is one face of PRD §6's open "primitive's callback" entry.
+        set_pending_escape(value, target);
+        Err(EvalError::ContinuationEscape)
     }
 
     /// Force a promise in CPS mode

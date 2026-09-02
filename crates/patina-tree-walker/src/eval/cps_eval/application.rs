@@ -5,9 +5,7 @@
 //! `call-with-values`, `force`, `dynamic-wind`, and exception handling.
 
 use super::CpsEvaluator;
-use super::types::{
-    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
-};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::CpsPrimitive;
 use patina_core::tagged_value::TaggedValue;
@@ -251,13 +249,9 @@ impl<'a> CpsEvaluator<'a> {
             // `%cars+cdrs` bails out with `(abort '() '())`.
             let val_tagged = heap.borrow_mut().values_from(args);
 
-            // Run dynamic-wind handlers for continuation jump
-            // This travels from current winds to the captured winds
-            self.run_wind_handlers(&dynamic_winds, &k.dynamic_winds)?;
-
-            // Store escape data and return error to propagate up
-            set_pending_escape(val_tagged, k);
-            Err(EvalError::ContinuationEscape)
+            // Travel from the live winds to the captured ones, one thunk per
+            // step, then park the escape (`wind.rs`).
+            self.jump_to_continuation(val_tagged, k, cont_env, prompt_stack, dynamic_winds)
         } else if let Some((values, converter)) = param_opt {
             // Parameters are callable - pass TaggedValue args directly
             self.apply_parameter(
@@ -400,8 +394,11 @@ impl<'a> CpsEvaluator<'a> {
         let body = args[1]; // Keep as TaggedValue
         let after = args[2]; // Keep as TaggedValue
 
-        // Create the wind record with TaggedValue thunks directly
-        let wind_record = DynamicWindRecord::new(before, after);
+        // The record remembers the handler stack of this call: a thunk a
+        // continuation jump runs later gets this stack, not the jump's
+        // (R7RS §6.10 — see the field's doc).
+        let wind_record =
+            DynamicWindRecord::new(before, after, Rc::from(exception_handlers.as_slice()));
         let wind_id = wind_record.id;
 
         // Create cleanup continuation that will:

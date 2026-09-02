@@ -441,6 +441,47 @@ fn the_value_form_of_dynamic_wind_runs_its_after_thunk_once() {
     );
 }
 
+/// A continuation escaping from an *after* thunk still runs the enclosing
+/// after thunk — converged 2026-09-01 (triage family 30).
+///
+/// R7RS 6.10: `dynamic-wind`'s third thunk runs whenever control leaves the
+/// dynamic extent, and calling `k` from inside one is still leaving — the
+/// outer wind has not finished unwinding, so its own after thunk is still
+/// owed. The VM always paid it. The tree-walker ran the whole unwind on a
+/// nested trampoline that a second jump escaped out of, so it stopped at the
+/// inner thunk and never ran `outer-after`. It now runs each wind thunk as a
+/// step of the trampoline the jump was made on, with the record already
+/// popped, so the second jump starts from where the first had got to and the
+/// outer thunk is still on its path.
+///
+/// Found when Larceny's `base` suite began loading (families 14/15/23): it
+/// was the one assertion in that suite the two backends answered differently.
+/// chibi cannot arbitrate this one — re-entering `k` from an after thunk
+/// sends it into an unbounded loop — but Gauche and the suite's own
+/// expectation agree with this answer.
+#[test]
+fn a_continuation_from_an_after_thunk_still_runs_the_outer_after() {
+    assert_program_eval_to(
+        r#"
+        (define trace '())
+        (define (note x) (set! trace (cons x trace)))
+        (define result
+          (call-with-current-continuation
+            (lambda (k)
+              (dynamic-wind
+                (lambda () (note 'outer-before))
+                (lambda ()
+                  (dynamic-wind
+                    (lambda () (note 'inner-before))
+                    (lambda () (note 'body) (k 'from-body))
+                    (lambda () (note 'inner-after) (k 'from-after))))
+                (lambda () (note 'outer-after))))))
+        (list result (reverse trace))
+    "#,
+        "(from-after (outer-before inner-before body inner-after outer-after))",
+    );
+}
+
 /// Bad syntax handed to the `eval` primitive is the *caller's* error, raised
 /// while the program runs — catchable, on both backends. The tree-walker used
 /// to wrap it in a non-catchable `InternalError` (so this program died) while
@@ -519,56 +560,6 @@ fn call_with_port_survives_an_in_extent_continuation_invoke() {
     );
 }
 
-/// A continuation escaping from an *after* thunk skips the enclosing after
-/// thunk on the tree-walker.
-///
-/// R7RS 6.10: `dynamic-wind`'s third thunk runs whenever control leaves the
-/// dynamic extent, and calling `k` from inside one is still leaving — the
-/// outer wind has not finished unwinding, so its own after thunk is still
-/// owed. The VM pays it; the tree-walker stops at the inner one and never
-/// runs `outer-after`.
-///
-/// Found when Larceny's `base` suite began loading (families 14/15/23): it is
-/// the one assertion in that suite the two backends answer differently, and
-/// it counts the winds rather than naming them, so upstream reads 7 against
-/// the tree-walker's 3. Quarantined with explicit per-backend assertions
-/// rather than `assert_divergence` because the broken side returns a value.
-///
-/// chibi cannot arbitrate this one: re-entering `k` from an after thunk sends
-/// it into an unbounded loop. Gauche and the suite's own expectation agree
-/// with the VM.
-#[test]
-fn a_continuation_from_an_after_thunk_skips_the_outer_after_on_the_tree_walker() {
-    const PROGRAM: &str = r#"
-        (define trace '())
-        (define (note x) (set! trace (cons x trace)))
-        (define result
-          (call-with-current-continuation
-            (lambda (k)
-              (dynamic-wind
-                (lambda () (note 'outer-before))
-                (lambda ()
-                  (dynamic-wind
-                    (lambda () (note 'inner-before))
-                    (lambda () (note 'body) (k 'from-body))
-                    (lambda () (note 'inner-after) (k 'from-after))))
-                (lambda () (note 'outer-after))))))
-        (list result (reverse trace))
-    "#;
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "(from-after (outer-before inner-before body inner-after outer-after))",
-        "the VM runs every after thunk it owes; if this changed, it regressed"
-    );
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
-        "(from-after (outer-before inner-before body inner-after))",
-        "\n[tree-walker] NO LONGER DIVERGES — it now runs the outer after thunk.\n\
-         Replace both assertions with a single assert_program_eval_to on the VM's \
-         answer and close the entry in scheme_tests/reports/larceny_triage.md."
-    );
-}
-
 /// Tree-walker: `unhandled exception: sym` — a declining `guard` clause
 /// inside a primitive's callback loses the outer `guard`.
 ///
@@ -578,7 +569,9 @@ fn a_continuation_from_an_after_thunk_skips_the_outer_after_on_the_tree_walker()
 /// That jump lands inside the `call-with-port` callback, which runs on the
 /// tree-walker's nested trampoline — and that trampoline starts with an empty
 /// handler stack, so the re-raise finds nothing. The same nested-trampoline
-/// defect as the two tests above, in its third manifestation; it became
+/// defect as the test above and
+/// `callback_using_its_own_continuation_yields_nothing_on_the_tree_walker`,
+/// in its third manifestation; it became
 /// reachable on 2026-09-01 when `guard` took the reference expansion (triage
 /// families 22/28). The old expansion re-raised from the clause side, outside
 /// the callback, and happened to find the outer handler. Both raise forms
@@ -736,5 +729,114 @@ fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
         "#t",
         ErrorClass::AtRuntime,
         GUARD_UNWIND_ORDER,
+    );
+}
+
+// ─── the VM's wind thunks, where the tree-walker is right ────────────────────
+
+/// VM: a continuation captured *inside* an after thunk while a jump is running
+/// it, when invoked, runs the thunk again and loses the jump's value.
+///
+/// ```text
+///   (call/cc (lambda (k)
+///     (dynamic-wind (lambda () (note 'before))
+///                   (lambda () (k 'escaped))
+///                   (lambda () (call/cc (lambda (return)
+///                                (note 'after) (return 'stopped) (note 'unreached)))))))
+///   tree-walker, Gauche => (escaped (before after))
+///   VM                  => (() (before after after))
+/// ```
+///
+/// `return`'s continuation is the rest of the thunk and then the jump that
+/// was running it — on the tree-walker, the `Jump` step in `wind.rs`, which
+/// arrives at `k`'s target with `'escaped` as before. The VM re-runs the
+/// after thunk from its record and the escape value comes out `()`: its wind
+/// thunks are not steps of the jump, which is the shape the VM half of the
+/// `finally` rule has to change (`wind_thunk_exceptions.rs`). Recorded in
+/// {GUARD_UNWIND_ORDER}.
+///
+/// Until PR #152's fix in the tree-walker's escape arm (`cps_eval/mod.rs`),
+/// this program *crashed* the tree-walker with `Error: Continuation escape`:
+/// the parked escape's resumption was invoked in place, and its own parked
+/// escape was carried out of the trampoline by a `?`. No primitive callback
+/// is needed to reach it: a wind thunk whose tail is any `call/cc` that is
+/// later invoked does.
+#[test]
+fn a_continuation_captured_inside_a_running_after_thunk_reruns_it_on_the_vm() {
+    const PROGRAM: &str = r#"
+        (define log '())
+        (define (note x) (set! log (cons x log)))
+        (define r
+          (call/cc (lambda (k)
+            (dynamic-wind
+              (lambda () (note 'before))
+              (lambda () (k 'escaped))
+              (lambda ()
+                (call/cc (lambda (return)
+                  (note 'after)
+                  (return 'stopped)
+                  (note 'unreached))))))))
+        (list r (reverse log))
+    "#;
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(escaped (before after))",
+        "the tree-walker lands the jump once the thunk's own escape arrives; \
+         `Error: Continuation escape` here is the mod.rs escape-arm regression"
+    );
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(() (before after after))",
+        "\n[vm] NO LONGER DIVERGES — the after thunk runs once and the escape value \
+         arrives.\nReplace both assertions with a single assert_program_eval_to on \
+         `(escaped (before after))` and update the entry in \
+         PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
+    );
+}
+
+/// VM: a before thunk run by a re-entry sees the handlers installed at the
+/// *jump*, not those of its `dynamic-wind` call.
+///
+/// ```text
+///   (let ((k #f) (n 0))
+///     (let ((r (guard (o (#t (list 'outer o)))
+///                (dynamic-wind (lambda () (set! n (+ n 1)) (if (= n 2) (raise 'b)))
+///                              (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+///                              (lambda () #f)))))
+///       (if (eq? r 'first) (guard (i (#t (list 'inner i))) (k 'second)) r)))
+///   tree-walker, Gauche => (outer b)
+///   VM                  => (inner b)
+/// ```
+///
+/// The inner `guard` was not installed when `dynamic-wind` was called, so
+/// R7RS 6.10 puts the before thunk's `raise` outside it. This is the
+/// complement of `wind_thunk_exceptions.rs`, whose rows all have a handler
+/// *missing* at the jump; here one is *extra*, and the VM's "handlers from
+/// the machine, not the record" answers wrong in that direction too.
+/// Recorded in {GUARD_UNWIND_ORDER}.
+#[test]
+fn a_before_thunk_on_reentry_sees_the_jump_sites_handlers_on_the_vm() {
+    const PROGRAM: &str = r#"
+        (let ((k #f) (n 0))
+          (let ((r (guard (o (#t (list 'outer o)))
+                     (dynamic-wind
+                       (lambda () (set! n (+ n 1)) (if (= n 2) (raise 'b)))
+                       (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+                       (lambda () #f)))))
+            (if (eq? r 'first)
+                (guard (i (#t (list 'inner i))) (k 'second))
+                r)))
+    "#;
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(outer b)",
+        "the tree-walker runs the before thunk under its dynamic-wind call's handlers"
+    );
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(inner b)",
+        "\n[vm] NO LONGER DIVERGES — the before thunk raises past the jump site's \
+         guard.\nReplace both assertions with a single assert_program_eval_to on \
+         `(outer b)` and update the entry in PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
     );
 }
