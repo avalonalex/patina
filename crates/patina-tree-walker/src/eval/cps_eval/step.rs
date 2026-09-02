@@ -409,17 +409,26 @@ impl<'a> CpsEvaluator<'a> {
                     prompt_stack.truncate(prompt_idx);
                     let prompt_frame = prompt_stack.pop().unwrap();
 
-                    self.run_wind_handlers(&current_winds, &prompt_frame.dynamic_winds)?;
-
-                    return Ok(StepResult::InvokeContinuation {
-                        cont: prompt_frame.cont,
-                        value: val_tagged,
-                        env: current_env,
+                    // Travel to the prompt's wind stack the way a continuation
+                    // jump does — one thunk per step, each in its own
+                    // `dynamic-wind` call's environment — then deliver to the
+                    // prompt's continuation. Unreachable today: no `Abort`
+                    // node is emitted. When delimited continuations are
+                    // implemented, the arrival in `mod.rs` resets
+                    // `prompt_stack` where this needs it kept truncated.
+                    let k = self.reify_continuation(
+                        &prompt_frame.cont,
+                        &cont_env,
+                        &prompt_frame.dynamic_winds,
+                        &exception_handlers,
+                    );
+                    return self.jump_to_continuation(
+                        val_tagged,
+                        k,
                         cont_env,
                         prompt_stack,
-                        dynamic_winds: prompt_frame.dynamic_winds,
-                        exception_handlers,
-                    });
+                        current_winds,
+                    );
                 }
 
                 CpsExprKind::Quasiquote { template, cont } => {

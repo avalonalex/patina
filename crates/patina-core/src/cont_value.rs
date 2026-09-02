@@ -233,6 +233,31 @@ pub enum ContValue {
         result_value: TaggedValue,
         original_cont: Box<ContValue>,
     },
+    /// A continuation jump in progress: `value` is on its way to `target`,
+    /// and a wind thunk between here and there is running. When the thunk
+    /// returns, the next one runs; when none is left, the escape is parked
+    /// and the Rust stack unwinds to the outermost trampoline.
+    ///
+    /// The thunks run as ordinary steps, with this as their continuation, so
+    /// a raise inside one finds its handlers on the same trampoline and a
+    /// continuation captured inside one can be re-entered — a `guard` that
+    /// declines re-enters the thunk through its `handler-k`, and the thunk
+    /// then completes and the jump lands. They used to run on a nested
+    /// trampoline with an empty environment, where a raise was fatal and a
+    /// re-entry after the nested frame had unwound reached its `Halt` and
+    /// ended the program with the thunk's value.
+    Jump {
+        /// The record whose `before` thunk just ran and whose extent is now
+        /// entered — pushed when this continuation is reached, as
+        /// `DynamicWindSetup` pushes after a `dynamic-wind` call's before
+        /// thunk. `None` after an `after` thunk: its record was popped before
+        /// it ran, so a second jump from inside it cannot run it again.
+        entered: Option<DynamicWindRecord>,
+        /// The value to deliver to `target`.
+        value: TaggedValue,
+        /// The continuation being jumped to.
+        target: Rc<CpsContinuation>,
+    },
     /// Special continuation for with-exception-handler cleanup
     /// When the thunk completes normally, pop the exception handler and continue
     ExceptionHandlerCleanup { original_cont: Box<ContValue> },

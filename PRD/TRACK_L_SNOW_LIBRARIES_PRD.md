@@ -1327,29 +1327,43 @@ other two down to it. Converged with triage families 22 and 28; now
 `crates/patina-tests/tests/backend_divergence.rs`, held to one expectation on
 both backends.
 
-**Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
-sweeping the class below, and left open deliberately because the fix is one level down from where it
-surfaces.
+**Tree-walker: an error inside a wind thunk escapes `guard`** — ✅ **fixed 2026-09-01**, together
+with the tree-walker half of the `finally` entry below. Found 2026-08-15 while sweeping the class
+below, and left open deliberately because the fix was one level down from where it surfaced.
 
 ```scheme
 (guard (e (#t 'caught))
   (with-exception-handler (lambda (c) 'handled)
     (lambda () (dynamic-wind (lambda () 1) (lambda () (raise 'x)) (lambda () (car 7))))))
-;; tree-walker => Error: Type error: car expects a pair   (escapes)
+;; tree-walker => Error: Type error: car expects a pair   (escaped, until 2026-09-01)
 ;; VM, Gauche  => caught
 ```
 
-(Re-measured 2026-09-01: the VM answers `caught`, not `handled` as this block
-used to say. The row's substance is unchanged — the tree-walker escapes, the
-VM does not — and it is the *mechanism* half of the entry below, which is the
-semantics half.)
+The visible cause was `run_wind_handlers(…)?` propagating as a Rust error. The actual cause was
+`apply_from_direct_tagged` (`cps_eval/wind.rs`): it ran wind thunks on a *nested trampoline that
+starts with an empty handler stack*, so anything they raised had to come back through Rust to reach
+the handlers installed outside. The fix did not thread the handler stack into that trampoline, as
+this entry proposed; it took wind thunks off it. A continuation jump now runs one wind thunk per
+step of the trampoline the jump was made on — `ContValue::Jump`, driven by `jump_to_continuation`
+in `cps_eval/wind.rs` — and each thunk runs under the handler stack its own `dynamic-wind` call
+captured, which `DynamicWindRecord` now carries. That is R7RS 6.10's rule ("called in the same
+dynamic environment as the call to dynamic-wind") applied to the one part of the dynamic
+environment the record did not already hold, and it is what makes the `finally` behaviour below
+fall out of the unwinder rather than be patched onto it. Gauche arbitrates `caught` (chibi loops
+forever on the repro). Now `test_an_error_inside_a_wind_thunk_reaches_the_enclosing_guard` in
+`callability.rs`, one expectation on both backends.
 
-The visible cause is `run_wind_handlers(…)?` propagating as a Rust error. The actual cause is
-`apply_from_direct_tagged` (`cps_eval/wind.rs`): it runs wind thunks and parameter converters on a
-*nested trampoline that starts with an empty handler stack*, so anything they raise must come back
-through Rust to reach the handlers installed outside. Routing at the `?` is what the
-parameter-converter fix below does and it works — the outer frame still has its handlers — but the
-general fix is to thread the handler stack into the nested trampoline.
+The same change closed triage family 30 — a `k` invoked from an *after* thunk skipped the enclosing
+after thunk on the tree-walker. The whole unwind used to run on the nested trampoline, and the second
+jump escaped out of it; as steps, the second jump starts from the wind stack the first had reached,
+with the raising record already popped, so the outer thunk is still on its path. Converged in
+`a_continuation_from_an_after_thunk_still_runs_the_outer_after` (`backend_divergence.rs`).
+
+**Tree-walker: a primitive's callback runs on a nested trampoline with no handler stack** — ❌
+**open**. What the entry above did *not* close. `apply_from_direct_tagged` still exists, and every
+callback a Rust primitive makes — `call-with-port`, `map` over a closure, a parameter converter —
+runs on it with fabricated empty stacks, so a raise or a continuation invoke inside the callback
+cannot see the handlers, winds or prompts installed outside.
 
 Its sibling row closed on 2026-09-01: `reentered_continuation_keeps_exception_handler` was
 `CpsContinuation` not carrying the handler stack, which is a *storage* gap and is fixed by storing
@@ -1368,16 +1382,13 @@ instead of fabricating an empty one.
 **This row now blocks something concrete, which it did not before.** Until the tree-walker has
 `across_reentry`'s equivalent, `guard` cannot use R7RS 7.3's success-path jump — that jump leaves
 the body through a continuation on *every* evaluation, so a `guard` inside a `call-with-port`
-callback closes the port under the still-running callback. **Measured 2026-09-01, after the two
+callback reads as an escape and the rest of the callback is abandoned (until #151 it also closed
+the port under it). **Measured 2026-09-01, after the two
 prerequisite PRs landed:** with the verbatim reference line the VM is unaffected (Larceny `base`
 1071 of 1079 either way — #149's wind fix is what made that true), while the tree-walker drops from
 1070 of 1079 to 987 of 1009, 13 new failures and 70 assertions that stop running. The VM half is
 ready for the reference expansion; this backend is the only thing holding it.
 `lib/scheme/base/exceptions.scm` records the deviation and points here.
-
-**Caveat before converging it:** the pinned divergence row records what the VM returns, not an
-established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
-Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
 
 **Two more manifestations, found by the second review of #151 (2026-09-01)**, both pinned in
 `backend_divergence.rs`. A `guard` whose clause *declines* inside a primitive's callback loses the
@@ -1395,63 +1406,82 @@ with #151, but by `call-with-port` no longer closing on an escape (R7RS 6.13.1),
 trampoline telling a local jump from an escape; the misread is still there.
 
 **An exception raised by a `dynamic-wind` after-thunk does not behave like a
-`finally`** — ❌ **open**, both backends. Characterised 2026-09-01 while
-landing triage families 22 and 28, which changed one of the four cases below
-and so forced the question.
+`finally`** — ✅ **tree-walker fixed 2026-09-01**; ❌ **VM open**. Characterised
+2026-09-01 while landing triage families 22 and 28, which changed one of the
+first four cases below and so forced the question.
 
 Gauche implements Java's `finally` rule exactly, and does so consistently
 across every shape. An exception raised by an after-thunk **replaces** the
 exception in flight, unwinding **continues** through the outer winds, and the
 replacement is delivered to the nearest handler enclosing the `dynamic-wind`.
-chibi cannot arbitrate — it overflows the stack on all four probes — so Gauche
+chibi cannot arbitrate — it overflows the stack on these probes — so Gauche
 is the oracle here, and its self-consistency is the argument for trusting it.
+
+**The rule is R7RS's, not Java's, and Gauche is consistent because it applies
+one rule.** 6.10: "the before and after thunks are called in the same dynamic
+environment as the call to dynamic-wind", and 6.11 puts the exception-handler
+stack in the dynamic environment. So a jump-time thunk runs under the handlers
+captured at its `dynamic-wind` call. The `guard` whose escape is running the
+unwind is still among them, fires again for the secondary, and its second
+`guard-k` jump abandons the first — starting from the wind stack the first
+had reached, the raising record already popped, so the outstanding outer
+after-thunks still run and the secondary lands at the nearest handler
+enclosing the call. Every row below is that one rule; none of it is a
+special case for exceptions in thunks.
 
 | # | shape | VM | tree-walker | Gauche |
 |---|---|---|---|---|
-| 1 | `guard` + `raise`, after-thunk raises | uncaught, program stops | escapes | `(one secondary)` |
-| 2 | nested guards, inner catches | `(outer secondary)` | escapes | `(inner secondary)` |
-| 3 | normal exit, after-thunk raises | ✅ caught | ✅ caught | caught |
-| 4 | `call/cc` escape, after-thunk raises | ✅ caught | escapes | caught |
+| 1 | `guard` + `raise`, after-thunk raises | uncaught, program stops | ✅ | `(one secondary)` |
+| 2 | nested guards, inner catches | `(outer secondary)` | ✅ | `(inner secondary)` |
+| 3 | normal exit, after-thunk raises | ✅ | ✅ | `(normal-exit secondary)` |
+| 4 | `call/cc` escape, after-thunk raises | ✅ | ✅ | `(escape secondary)` |
+| 5 | nested winds, inner after-thunk raises, one `guard` | uncaught, program stops; with a second `guard` outside, `((outer sec2) (in1 in2 out2 out1))` | ✅ | `((caught sec2) (in1 in2 out2 out1))` |
+| 6 | a handler inside the body re-raises, then the after-thunk raises | uncaught, program stops | ✅ | `(outer secondary)` |
+| 7 | `raise-continuable` in the after-thunk, handler returns | ✅ | ✅ | `(x (sec))` — the thunk resumes, the escape lands |
+| 8 | a declining `guard` re-enters through `handler-k`; the *before*-thunk raises on the second entry | ✅ | ✅ | `(outer before-raised ((before 1) after (before 2)))` — `after` once |
+| 9 | the `guard` clause declines the secondary | ✅ | ✅ | `(outer secondary)` |
+| 10 | no `guard`: a handler escapes through `k`, the after-thunk raises | uncaught, program stops | ✅ | `(escaped secondary (primary secondary))` — the handler runs twice |
+| 11 | a declining inner `guard`, an outer handler that *returns* from the continuable re-raise | `(() (secondary secondary))` — handler runs twice, the escape's value is lost | ✅ | `(escaped (secondary))` — the thunk resumes where `handler-k` re-entered it |
 
-So the VM meets the rule in 2 of 4 and the tree-walker in 1 of 4. **Only case 1
-moved with families 22/28**, from `(one primary)` — the after-thunk's exception
-silently discarded, which is the one answer the rule most clearly forbids — to
-the exception cascading uncaught. Cases 2–4 are unchanged from before that
-work, on both backends.
+The tree-walker meets all eleven, and its lanes did not move otherwise. The
+VM meets 5 of 11: rows 3, 4, 7, 8, 9 — each because nothing had been popped
+before the jump, or because the handler that was popped happened to be the
+one the rule would skip anyway. **Only case 1 moved with families 22/28**,
+from `(one primary)` — the after-thunk's exception silently discarded, which
+is the one answer the rule most clearly forbids — to the exception cascading
+uncaught.
 
-**The unwind itself is not the gap.** The rule also says unwinding *continues*
-outward past the thunk that raised, and with a nested wind whose inner
-after-thunk raises, Gauche answers `((caught sec2) (in1 in2 out2 out1))` — the
-outer thunk still runs. With a single `guard`, ours stops at `sec2` and the
-outer thunk never runs (both backends' logs read `in1 in2 out2`, measured
-through files the abort cannot swallow) — but that is case 1's consequence: the
-handler is gone, nothing catches `sec2`, and an unhandled exception stops the
-program where it is raised. Put a handler *outside* and the VM does continue
-the unwind: `((outer sec2) (in1 in2 out2 out1))`, the outer thunk run and the
-secondary delivered — one handler too far out, which is case 2. (Re-measured
-2026-09-01 by review; an earlier version of this paragraph read the
-single-guard log as a second gap.) So the fix is about who catches; the
-machinery that carries the unwind past a failing thunk is already there and
-pinned.
+**How the tree-walker got there — the shape the VM change should take.** A
+`DynamicWindRecord` carries the handler stack of its `dynamic-wind` call, and
+a jump runs each thunk as an ordinary trampoline step (`ContValue::Jump`,
+`jump_to_continuation` in `cps_eval/wind.rs`) with that stack installed: one
+after-thunk per step on the way out, popping the record *before* its thunk
+runs; one before-thunk per step on the way in, pushing the record only after
+its thunk *returns* (row 8's single `after` depends on that). Two things fall
+out of "steps, not a nested call". First, a second jump from inside a thunk
+is just a jump — it starts from the wind stack the first had reached, which
+is the unwind continuing (row 5, and triage family 30). Second, row 11: a
+`guard` that declines re-enters the thunk through `handler-k` *after* the
+handler returned, and a thunk that is a step can be resumed there; a thunk
+run on a nested Rust call cannot, because the frame that was running it is
+gone. The earlier plan — seed the nested trampoline with the record's
+environment — was measured against row 11 and dropped for that reason. The
+VM has the same two choices: `vm_raise_value` pops a handler when it fires
+and never restores it for a non-continuable raise, so by the time the
+after-thunk runs the handler is gone. The change is where its wind thunks
+get their handler stack from — the record, not the machine — and how a
+re-entry into a running thunk lands.
 
-**Why it is not a patch.** Case 1 requires the `guard`'s handler to fire
-*twice*: once for the primary, again for the secondary its own escape raised.
-`vm_raise_value` pops a handler when it fires and never restores it for a
-non-continuable raise, so by the time the after-thunk runs that handler is
-gone. Meeting the rule means changing how the handler stack behaves across a
-`guard` escape — the same machinery that produced three separate regressions
-during families 22/28 (a leaked after-thunk in the value form of
-`dynamic-wind`, a stranded caller premise, and this row's case 1). It earns
-its own change, with its own review.
+**The unwind itself was never the gap, on either backend.** With a handler
+outside to catch, the VM does continue the unwind past a raising thunk
+(row 5's second form). What each row above needs is *who catches*, and that
+is the environment the thunk runs in.
 
-The tree-walker additionally needs the nested-trampoline boundary above: it
-escapes on three of the four because a wind thunk runs on a trampoline with no
-handler stack.
-
-**Acceptance:** the four cases above answer as Gauche does, on both backends,
-pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs` — which asserts
-today's answers now, so the fix trips it. Larceny r7rs lanes must not move
-except where a row is genuinely gained.
+**Acceptance (VM):** rows 1, 2, 5, 6, 10 and 11 answer as Gauche does. Every
+row is pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs`; the VM
+side asserts *today's* answers, so the fix trips it and has to update the
+record deliberately. Larceny r7rs lanes must not move except where a row is
+genuinely gained.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

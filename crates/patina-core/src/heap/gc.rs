@@ -583,10 +583,15 @@ impl<'h> GcVisitor<'h> {
         }
     }
 
-    /// Trace a `dynamic-wind` record's before/after thunks.
+    /// Trace a `dynamic-wind` record: its before/after thunks and the handler
+    /// stack it will run them under. A handler reachable only from a record
+    /// is live for as long as the record can still run a thunk.
     pub fn visit_wind(&mut self, wind: &DynamicWindRecord) {
         self.visit(wind.before);
         self.visit(wind.after);
+        for handler in wind.handlers.iter() {
+            trace_exception_handler(handler, self);
+        }
     }
 
     /// Trace a stack of `dynamic-wind` records.
@@ -1144,6 +1149,18 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
             } => {
                 visitor.visit(*result_value);
                 original_cont
+            }
+
+            ContValue::Jump {
+                entered,
+                value,
+                target,
+            } => {
+                if let Some(record) = entered {
+                    visitor.visit_wind(record);
+                }
+                visitor.visit(*value);
+                return visitor.visit_continuation(target);
             }
 
             ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,

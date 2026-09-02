@@ -1,54 +1,60 @@
-//! What happens when a `dynamic-wind` *after* thunk raises.
+//! What happens when a `dynamic-wind` thunk raises during a continuation jump.
 //!
-//! R7RS says nothing about this, so the oracle is Gauche, which implements
-//! Java's `finally` rule and does so consistently across every shape probed:
-//! the after-thunk's exception **replaces** the one in flight, unwinding
-//! **continues** through the outer winds, and the replacement is delivered to
-//! the nearest handler enclosing the `dynamic-wind`. chibi cannot arbitrate —
-//! it overflows the stack on all four probes below.
+//! The rule is R7RS 6.10: "The before and after thunks are called in the same
+//! dynamic environment as the call to dynamic-wind" — and 6.11 puts the
+//! exception-handler stack in that environment. So a thunk that a `guard`'s
+//! escape runs still sees the guard's handler, the handler fires a second
+//! time, and its second jump abandons the first: the after-thunk's exception
+//! **replaces** the one in flight, unwinding **continues** through the outer
+//! winds, and the replacement reaches the nearest handler enclosing the
+//! `dynamic-wind`. That is Java's `finally` rule, and Gauche implements it
+//! consistently across every shape below. chibi cannot arbitrate — it
+//! overflows the stack on these probes — so Gauche is the oracle.
 //!
-//! We meet that rule in 2 of 4 cases on the VM and 1 of 4 on the tree-walker.
-//! These tests assert **today's answers**, not Gauche's, so that the fix trips
-//! them and has to update the record deliberately. Each one names what Gauche
-//! says, so the target is written down rather than remembered.
+//! The tree-walker meets the rule on every shape: a wind record captures the
+//! handler stack of its `dynamic-wind` call, and a jump runs each thunk as a
+//! step of the trampoline it was made on, under that stack. The VM still runs
+//! a thunk under whatever handlers are current at the jump, so it meets the
+//! rule only where nothing was popped before the jump. Its tests assert
+//! **today's answers**, not Gauche's, so the VM fix trips them and has to
+//! update the record deliberately; each names what Gauche says.
 //!
 //! Tracked in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, "An exception raised by
 //! a `dynamic-wind` after-thunk does not behave like a `finally`".
 
 mod common;
 use common::{
-    assert_program_eval_to, eval_program_vm, try_eval_program_tree_walker, try_eval_program_vm,
+    assert_program_eval_to, eval_program_tree_walker, eval_program_vm, try_eval_program_vm,
 };
 
-/// The recorded answer for a shape neither backend catches: the program stops,
-/// and the message names the *secondary* exception. `who` names the backend
-/// in the panic message.
-fn expect_stops_naming_secondary(result: Result<String, String>, who: &str) {
-    match result {
+/// The VM's recorded answer for a shape it does not catch: the program stops,
+/// and the message names the *secondary* exception.
+fn vm_stops_naming_secondary(program: &str) {
+    match try_eval_program_vm(program) {
         Err(message) => assert!(
             message.contains("secondary") || message.contains("sec2"),
-            "\n[{who}] stops, but not on the secondary exception: {message}"
+            "\n[vm] stops, but not on the secondary exception: {message}"
         ),
         Ok(value) => panic!(
-            "\n[{who}] NO LONGER STOPS — it answered {value:?}.\nIf this is Gauche's \
-             answer, the finally rule landed: assert it directly and update PRD §6."
+            "\n[vm] NO LONGER STOPS — it answered {value:?}.\nIf this is Gauche's answer, \
+             the finally rule landed on the VM: assert it directly and update PRD §6."
         ),
     }
 }
 
 /// Case 1 — a `guard` catches, and the after-thunk raises during its escape.
 ///
-/// Gauche: `(one secondary)`. Its clause runs **once** and sees the
+/// Gauche: `(one secondary)`. The clause runs **once** and sees the
 /// *secondary*; the primary is discarded, exactly as a Java `finally` discards
-/// the exception it replaces. That needs the guard's handler to fire twice —
-/// once for the primary, again for the secondary raised by its own escape —
-/// which neither backend does.
+/// the exception it replaces. The guard's handler fires twice — once for the
+/// primary, again for the secondary raised by its own escape — because the
+/// after-thunk runs under the handler stack of the `dynamic-wind` call, where
+/// that handler is still installed.
 ///
-/// This is the only one of the four that moved with triage families 22 and 28.
-/// Before them the VM answered `(one primary)`: the after-thunk's exception was
-/// silently discarded, which is the one answer the rule most clearly forbids.
-/// It now cascades and stops the program, which is closer to the rule but still
-/// short of it.
+/// On the VM the handler is gone by the time the thunk runs, and the secondary
+/// cascades uncaught. (Before families 22 and 28 it answered `(one primary)`:
+/// the after-thunk's exception silently discarded, which is the one answer the
+/// rule most clearly forbids.)
 #[test]
 fn case1_after_thunk_raises_during_a_guard_escape() {
     const PROGRAM: &str = r#"
@@ -57,18 +63,15 @@ fn case1_after_thunk_raises_during_a_guard_escape() {
                         (lambda () (raise 'primary))
                         (lambda () (raise 'secondary))))
     "#;
-    // Neither backend catches it; both stop the program. Gauche: (one secondary).
-    expect_stops_naming_secondary(try_eval_program_vm(PROGRAM), "vm");
-    expect_stops_naming_secondary(try_eval_program_tree_walker(PROGRAM), "tree-walker");
+    assert_eq!(eval_program_tree_walker(PROGRAM), "(one secondary)");
+    vm_stops_naming_secondary(PROGRAM);
 }
 
 /// Case 2 — nested guards; the inner one catches the primary.
 ///
 /// Gauche: `(inner secondary)` — the handler nearest the `dynamic-wind`. The VM
 /// gives the *outer* guard, because the inner one's handler is gone by the time
-/// the after-thunk runs. The tree-walker escapes entirely.
-///
-/// Unchanged by families 22/28 on both backends.
+/// the after-thunk runs.
 #[test]
 fn case2_nested_guards_see_the_after_thunk_exception() {
     const PROGRAM: &str = r#"
@@ -78,18 +81,19 @@ fn case2_nested_guards_see_the_after_thunk_exception() {
                           (lambda () (raise 'primary))
                           (lambda () (raise 'secondary)))))
     "#;
+    assert_eq!(eval_program_tree_walker(PROGRAM), "(inner secondary)");
     assert_eq!(
         eval_program_vm(PROGRAM),
         "(outer secondary)",
         "VM reaches the outer guard; Gauche reaches the inner one"
     );
-    expect_stops_naming_secondary(try_eval_program_tree_walker(PROGRAM), "tree-walker");
 }
 
 /// Case 3 — the body exits normally and the after-thunk raises.
 ///
-/// Both backends already match Gauche. Kept so the fix cannot regress the one
-/// shape that works everywhere.
+/// Both backends match Gauche: on a normal exit the live handler stack *is*
+/// the `dynamic-wind` call's. Kept so the fix cannot regress the one shape
+/// that always worked.
 #[test]
 fn case3_after_thunk_raises_on_a_normal_exit() {
     assert_program_eval_to(
@@ -105,45 +109,37 @@ fn case3_after_thunk_raises_on_a_normal_exit() {
 
 /// Case 4 — an ordinary `call/cc` escape, with the after-thunk raising.
 ///
-/// The VM matches Gauche; the tree-walker escapes, for the same
-/// nested-trampoline reason as case 2.
+/// Both match Gauche. A plain escape pops no handler, so the VM's live stack
+/// happens to equal the call's; the tree-walker used to run the thunk on a
+/// nested trampoline with no handlers at all.
 #[test]
 fn case4_after_thunk_raises_during_a_callcc_escape() {
-    const PROGRAM: &str = r#"
+    assert_program_eval_to(
+        r#"
         (guard (e (#t (list 'escape e)))
           (call-with-current-continuation
             (lambda (k)
               (dynamic-wind (lambda () #f)
                             (lambda () (k 'escaped))
                             (lambda () (raise 'secondary))))))
-    "#;
-    assert_eq!(eval_program_vm(PROGRAM), "(escape secondary)");
-    expect_stops_naming_secondary(try_eval_program_tree_walker(PROGRAM), "tree-walker");
+    "#,
+        "(escape secondary)",
+    );
 }
 
-/// A nested wind, where the *inner* after-thunk raises: does unwinding
-/// continue outward past it?
+/// Nested winds, where the *inner* after-thunk raises: unwinding continues
+/// outward past it.
 ///
-/// Gauche answers `((caught sec2) (in1 in2 out2 out1))` — the outer
-/// after-thunk still runs, then the replacement is delivered. Ours stops the
-/// program at `sec2`, and the outer thunk does **not** run: measured through
-/// files the abort cannot swallow, both backends' logs read `in1 in2 out2`.
-///
-/// That is a *consequence* of case 1, not a second gap. The `guard`'s handler
-/// is gone when `sec2` is raised, nothing outside catches it, and an
-/// unhandled exception stops the program where it is raised — no after-thunk
-/// runs after a fatal error on any implementation. Put a handler outside and
-/// the VM continues the unwind and runs `out1` before delivering `sec2` — to
-/// the outer `guard`, which is case 2's gap, not this one. The second program
-/// pins that, so the case-1 fix can rely on the unwind machinery it needs: it
-/// is already there. The tree-walker still escapes for the nested-trampoline
-/// reason.
-///
-/// Before families 22 and 28 the VM answered `((caught primary) (in1 in2 out2
-/// out1))` to the first program: it continued unwinding, then discarded `sec2`
-/// entirely.
+/// Gauche: `((caught sec2) (in1 in2 out2 out1))`. The guard's second jump
+/// starts from the wind stack the first jump had got to — the inner record
+/// already popped — so it runs `out1` and then delivers `sec2`. The same
+/// program with an outer guard around it shows the VM does finish the unwind
+/// when something outside catches: `((outer sec2) (in1 in2 out2 out1))`, one
+/// handler too far out (case 2's gap). With a single guard the VM stops at
+/// `sec2` and never runs `out1`: nothing catches, and an unhandled exception
+/// stops the program where it is raised.
 #[test]
-fn an_uncaught_inner_after_thunk_exception_stops_before_the_outer_thunk() {
+fn nested_winds_finish_unwinding_before_delivering_the_replacement() {
     const PROGRAM: &str = r#"
         (define log '())
         (define caught
@@ -156,8 +152,11 @@ fn an_uncaught_inner_after_thunk_exception_stops_before_the_outer_thunk() {
               (lambda () (set! log (cons 'out1 log))))))
         (list caught (reverse log))
     "#;
-    expect_stops_naming_secondary(try_eval_program_vm(PROGRAM), "vm");
-    expect_stops_naming_secondary(try_eval_program_tree_walker(PROGRAM), "tree-walker");
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "((caught sec2) (in1 in2 out2 out1))"
+    );
+    vm_stops_naming_secondary(PROGRAM);
 
     const WITH_OUTER_GUARD: &str = r#"
         (define log '())
@@ -173,13 +172,169 @@ fn an_uncaught_inner_after_thunk_exception_stops_before_the_outer_thunk() {
         (list caught (reverse log))
     "#;
     assert_eq!(
+        eval_program_tree_walker(WITH_OUTER_GUARD),
+        "((caught sec2) (in1 in2 out2 out1))"
+    );
+    assert_eq!(
         eval_program_vm(WITH_OUTER_GUARD),
         "((outer sec2) (in1 in2 out2 out1))",
         "the VM finishes the unwind when something outside catches; Gauche: \
          ((caught sec2) (in1 in2 out2 out1))"
     );
-    expect_stops_naming_secondary(
-        try_eval_program_tree_walker(WITH_OUTER_GUARD),
-        "tree-walker",
+}
+
+/// A handler *inside* the body re-raises, then the after-thunk raises.
+///
+/// Gauche: `(outer secondary)`. Two handlers fire for the primary (the inner
+/// one re-raises to the guard); the after-thunk still runs under the stack
+/// the `dynamic-wind` call had, which holds the guard. On the VM both handlers
+/// were popped by then, and the secondary cascades uncaught.
+#[test]
+fn inner_handler_reraises_then_after_thunk_raises() {
+    const PROGRAM: &str = r#"
+        (guard (e (#t (list 'outer e)))
+          (dynamic-wind (lambda () #f)
+            (lambda ()
+              (with-exception-handler
+                (lambda (c) (raise (list 'from-inner c)))
+                (lambda () (raise 'primary))))
+            (lambda () (raise 'secondary))))
+    "#;
+    assert_eq!(eval_program_tree_walker(PROGRAM), "(outer secondary)");
+    vm_stops_naming_secondary(PROGRAM);
+}
+
+/// `raise-continuable` from an after-thunk, with a handler that returns: the
+/// thunk resumes, completes, and the original escape lands.
+///
+/// Gauche: `(x (sec))`. Both match: a plain escape pops nothing on the VM,
+/// and the tree-walker now runs the thunk as a step with the call's handlers,
+/// so the handler's return goes back into the thunk.
+#[test]
+fn raise_continuable_in_after_thunk_resumes_the_thunk() {
+    assert_program_eval_to(
+        r#"
+        (define log '())
+        (define r
+          (with-exception-handler
+            (lambda (c) (set! log (cons c log)) 'ignored)
+            (lambda ()
+              (call/cc (lambda (k)
+                (dynamic-wind (lambda () #f)
+                              (lambda () (k 'x))
+                              (lambda () (raise-continuable 'sec))))))))
+        (list r (reverse log))
+    "#,
+        "(x (sec))",
+    );
+}
+
+/// A `guard` declines, its `handler-k` re-enters the wind, and the
+/// *before*-thunk raises on that second entry.
+///
+/// Gauche: `(outer before-raised ((before 1) after (before 2)))`. The before
+/// thunk runs under the `dynamic-wind` call's stack — both guards — so the
+/// inner guard gets a second look, declines again, and the outer one catches.
+/// Its record is not on the wind stack while it runs, so the escape does not
+/// run the after-thunk a second time: `after` appears once. The VM gives the
+/// same answer by a shorter route (the inner handler is already gone, so the
+/// outer one fires directly).
+#[test]
+fn before_thunk_raises_on_reentry_after_a_guard_declines() {
+    assert_program_eval_to(
+        r#"
+        (define n 0)
+        (define log '())
+        (guard (o (#t (list 'outer o (reverse log))))
+          (guard (e ((eq? e 'never) 'never))
+            (dynamic-wind
+              (lambda ()
+                (set! n (+ n 1))
+                (set! log (cons (list 'before n) log))
+                (if (= n 2) (raise 'before-raised)))
+              (lambda () (raise 'primary))
+              (lambda () (set! log (cons 'after log))))))
+    "#,
+        "(outer before-raised ((before 1) after (before 2)))",
+    );
+}
+
+/// The after-thunk raises and the guard's clause *declines* the secondary:
+/// the re-raise reaches the outer guard.
+///
+/// Gauche: `(outer secondary)`. Both match — the VM because the inner handler
+/// is already gone, which is case 2's gap giving the right answer here by
+/// accident.
+#[test]
+fn guard_clause_declines_the_secondary() {
+    assert_program_eval_to(
+        r#"
+        (guard (o (#t (list 'outer o)))
+          (guard (e ((eq? e 'primary) (list 'inner e)))
+            (dynamic-wind (lambda () #f)
+                          (lambda () (raise 'primary))
+                          (lambda () (raise 'secondary)))))
+    "#,
+        "(outer secondary)",
+    );
+}
+
+/// No `guard` at all: a `with-exception-handler` handler escapes through a
+/// continuation, and the after-thunk raises on the way out. The handler runs
+/// again, for the secondary, and its second escape replaces the first.
+///
+/// Gauche: `(escaped secondary (primary secondary))`. On the VM the handler
+/// was popped by the first raise and the secondary cascades uncaught.
+#[test]
+fn handler_escape_runs_the_handler_again_for_the_secondary() {
+    const PROGRAM: &str = r#"
+        (define log '())
+        (call/cc (lambda (k)
+          (with-exception-handler
+            (lambda (c) (set! log (cons c log)) (k (list 'escaped c (reverse log))))
+            (lambda ()
+              (dynamic-wind (lambda () #f)
+                            (lambda () (raise 'primary))
+                            (lambda () (raise 'secondary)))))))
+    "#;
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(escaped secondary (primary secondary))"
+    );
+    vm_stops_naming_secondary(PROGRAM);
+}
+
+/// The shape that tells the two tree-walker designs apart. The inner guard
+/// declines the secondary; the outer handler *returns* from the continuable
+/// re-raise; so the after-thunk must resume where `handler-k` re-entered it,
+/// complete, and let the original escape land.
+///
+/// Gauche: `(escaped (secondary))`. Running the thunk as a trampoline step
+/// makes that re-entry ordinary. Running it on a nested trampoline cannot:
+/// the nested Rust frame is gone by the time `handler-k` re-enters, and the
+/// thunk's `Halt` ends the program with `'ignored`. The VM answers
+/// `(() (secondary secondary))` — the handler runs twice and the escape's
+/// value is lost — which is the VM change's problem to solve.
+#[test]
+fn after_thunk_resumes_after_a_declining_guard_and_a_returning_handler() {
+    const PROGRAM: &str = r#"
+        (define log '())
+        (define r
+          (with-exception-handler
+            (lambda (c) (set! log (cons c log)) 'ignored)
+            (lambda ()
+              (guard (e ((eq? e 'never) 'never))
+                (call/cc (lambda (k)
+                  (dynamic-wind (lambda () #f)
+                                (lambda () (k 'escaped))
+                                (lambda () (raise-continuable 'secondary)))))))))
+        (list r (reverse log))
+    "#;
+    assert_eq!(eval_program_tree_walker(PROGRAM), "(escaped (secondary))");
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "(() (secondary secondary))",
+        "the VM runs the handler twice and loses the escape's value; Gauche: \
+         (escaped (secondary))"
     );
 }

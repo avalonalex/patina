@@ -210,8 +210,9 @@ resolve or a `set!` happen. **The per-node hook must sit at the top of the inner
 
 **(b) The `dynamic-wind` trampoline needs no second fire site.**
 `apply_from_direct_tagged` (`cps_eval/wind.rs:164`) *does* contain a copy of the driver
-loop (`wind.rs:195`) so that wind before/after thunks and primitive-initiated
-applications can run nested — but that copy contains no `CpsExprKind` dispatch of its
+loop (`wind.rs:195`) so that primitive-initiated applications and parameter
+converters can run nested (wind thunks no longer do: since 2026-09-01 a continuation
+jump runs them as `ContValue::Jump` steps of the outer loop) — but that copy contains no `CpsExprKind` dispatch of its
 own: every arm delegates straight back to `eval_one_step` (`wind.rs:209`),
 `invoke_continuation_step`, and `apply_cps_step`. **A hook at `step.rs:74` therefore
 already fires inside wind handlers**, and no `Unwind` site is needed there either
@@ -307,8 +308,9 @@ Design decisions, with rationale:
   `eval_in_env`. **Known limitation:** unwinding this way does not run `dynamic-wind`
   after-thunks, so a quit/restart mid-program leaves `parameterize` swaps and
   redirected ports in place. For a debugger that tears down its session immediately
-  this is acceptable; a client that keeps evaluating after an abort must run
-  `run_wind_handlers(&current_winds, &[])` (`cps_eval/wind.rs:23`) itself.
+  this is acceptable; a client that keeps evaluating after an abort must unwind the
+  wind stack itself — `jump_to_continuation` (`cps_eval/wind.rs`) towards a
+  continuation with no winds does it, one `ContValue::Jump` step per thunk.
 - **One hook, not a handler list.** The archived design's `HookManager` with handler
   vectors is speculative generality; the VM tracer takes one handle and has needed
   nothing more. Composition, if ever needed, is a hook that fans out.

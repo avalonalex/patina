@@ -126,16 +126,21 @@ fn test_gcd_with_let_values() {
 /// frames, handlers and winds of the form it had abandoned: the next form's
 /// own error was then delivered to the *previous* form's handler, or its
 /// return landed in a frame that no longer had a program behind it (review of
-/// triage families 22/28, 2026-09-01). Both failing shapes below stopped the
-/// program with something still installed — an exception from an after-thunk
-/// mid-unwind, and a handler raising from inside a handler — and the probe
-/// after each is that `car`'s own error is what comes back, then that a plain
-/// form evaluates.
+/// triage families 22/28, 2026-09-01). Both failing shapes below stop the
+/// program with something still installed — an unhandled exception from an
+/// after-thunk mid-unwind, and a handler raising from inside a handler — and
+/// the probe after each is that `car`'s own error is what comes back, then
+/// that a plain form evaluates.
+///
+/// The after-thunk shape has no handler at all, on purpose: with a `guard`
+/// around it the secondary is *caught* under the `finally` rule (R7RS 6.10,
+/// `wind_thunk_exceptions.rs`), so that form stops being an error on a
+/// backend that meets the rule, and it did on the tree-walker.
 #[test]
 fn an_error_leaves_the_interpreter_ready_for_the_next_form() {
     fn check<B: Backend>(interp: Interpreter<B>, name: &str) {
         for failing in [
-            "(guard (e (#t 'c)) (dynamic-wind (lambda () #f) (lambda () (raise 'p)) (lambda () (raise 'sec))))",
+            "(call/cc (lambda (k) (dynamic-wind (lambda () #f) (lambda () (k 1)) (lambda () (raise 'sec)))))",
             "(with-exception-handler (lambda (e) (raise 'inner)) (lambda () (car 5)))",
         ] {
             assert!(

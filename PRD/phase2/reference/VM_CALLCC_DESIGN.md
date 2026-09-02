@@ -455,8 +455,9 @@ With SRFI-226, all control effects unify under prompts:
 
 Adding new control abstractions = adding a new prompt tag. No ISA changes.
 
-The `run_wind_transition` function is shared with the tree-walker's
-`CpsEvaluator::run_wind_handlers` logic (same `DynamicWindRecord` struct).
+The `run_wind_transition` function mirrors the tree-walker's
+`CpsEvaluator::jump_to_continuation` (`cps_eval/wind.rs`); the two backends keep
+separate `DynamicWindRecord` types.
 
 ---
 

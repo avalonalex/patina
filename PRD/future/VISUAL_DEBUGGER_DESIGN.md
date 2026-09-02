@@ -237,8 +237,9 @@ scope**: `make_delimited_continuation` is an explicit TODO stub
 
 One teardown caveat inherited from the hook layer: `DebugDecision::Abort` unwinds
 without running `dynamic-wind` after-thunks (hook doc §5.1), so quit/restart leaves
-`parameterize` swaps and port redirections in place. The session must run
-`run_wind_handlers` itself on restart, or tear down and rebuild the interpreter.
+`parameterize` swaps and port redirections in place. The session must unwind the
+wind stack itself on restart (`jump_to_continuation` towards a continuation with no
+winds, `cps_eval/wind.rs`), or tear down and rebuild the interpreter.
 
 ---
 

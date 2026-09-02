@@ -98,7 +98,7 @@ pub fn next_dynamic_wind_id() -> u64 {
 }
 
 /// A record of a dynamic-wind that needs to be managed during continuation jumps
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DynamicWindRecord {
     /// Unique identifier for this dynamic-wind invocation
     /// Used to find the common prefix when switching continuations
@@ -107,15 +107,35 @@ pub struct DynamicWindRecord {
     pub before: TaggedValue,
     /// The "after" thunk to call when leaving this dynamic extent
     pub after: TaggedValue,
+    /// The exception handlers installed where `dynamic-wind` was called.
+    ///
+    /// R7RS 6.10: "The before and after thunks are called in the same
+    /// dynamic environment as the call to dynamic-wind", and 6.11 puts the
+    /// handler stack in that environment. So a thunk run by a continuation
+    /// jump gets *this* stack, not whatever is current at the jump — which
+    /// after a `guard` has fired no longer holds the guard's handler, so an
+    /// after-thunk that raised went uncaught instead of reaching the guard a
+    /// second time (Track L §6, the `finally` rule).
+    ///
+    /// Shared, not owned: records are cloned into every captured
+    /// continuation, and a handler stack copied per clone was the cost the
+    /// tree-walker's continuation capture could not afford.
+    pub handlers: Rc<[crate::cont_value::ExceptionHandler]>,
 }
 
 impl DynamicWindRecord {
-    /// Create a new dynamic-wind record with a unique ID
-    pub fn new(before: TaggedValue, after: TaggedValue) -> Self {
+    /// Create a new dynamic-wind record with a unique ID, remembering the
+    /// handler stack of the `dynamic-wind` call it stands for.
+    pub fn new(
+        before: TaggedValue,
+        after: TaggedValue,
+        handlers: Rc<[crate::cont_value::ExceptionHandler]>,
+    ) -> Self {
         Self {
             id: next_dynamic_wind_id(),
             before,
             after,
+            handlers,
         }
     }
 }

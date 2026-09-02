@@ -256,7 +256,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | `CompiledMacro` pattern/template literal `TaggedValue`s (`compiled_macro.rs:78,:280`) |
-| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` before/after thunks, `exception_handlers` (via `trace_exception_handler`), `captured_cont_env` (recursive), `resume` (`trace_cont_value`), body literals (§4.4) |
+| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `captured_cont_env` (recursive), `resume` (`trace_cont_value`), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 | `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
@@ -335,7 +335,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `Evaluator.global_env` | `eval/mod.rs:43` | `visit_env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
 | `PENDING_ESCAPE` thread-local | `eval/cps_eval/types.rs:21-31` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root |
-| Suspended outer `StepResult`s in nested trampolines | `apply_from_direct_tagged`, `eval/cps_eval/wind.rs:163` | **Not rooted** — handled by deferral (§7), not by tracing |
+| Suspended outer `StepResult`s in nested trampolines | `apply_from_direct_tagged`, `eval/cps_eval/wind.rs:223` | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
 | Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
 

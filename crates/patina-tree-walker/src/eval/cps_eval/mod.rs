@@ -299,15 +299,13 @@ impl<'a> CpsEvaluator<'a> {
                         // any raise *after* an earlier `guard` had fired went
                         // unhandled.
                         //
-                        // This restores the stack at the escape, and no more.
-                        // Two neighbours on the same path stay as they were:
+                        // This restores the stack at the escape, and no more:
                         // `prompt_stack` is still reset (delimited
                         // continuations are a separate question, and nothing
-                        // measured asks for it), and the wind thunks that
-                        // `application.rs` runs just before parking the escape
-                        // still execute on a nested trampoline that fabricates
-                        // an empty stack of its own (`wind.rs`), which is the
-                        // boundary defect Track L §6 tracks.
+                        // measured asks for it). The wind thunks between the
+                        // jump and here have already run, as steps of the
+                        // trampoline the jump was made on, each in its own
+                        // `dynamic-wind` call's environment (`wind.rs`).
                         //
                         // `resume` holds an effect-carrying continuation that
                         // must be re-established rather than jumped past; the
