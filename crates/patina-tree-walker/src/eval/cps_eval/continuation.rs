@@ -145,14 +145,14 @@ impl<'a> CpsEvaluator<'a> {
                 // like Scheme lambdas do. We define in the captured environment directly.
                 // This is important because `Define` inside a continuation body should
                 // go to the original lexical scope, not an artificially created child scope.
-                captured_env.define(param.to_string(), value);
+                captured_env.define(param, value);
 
                 // Return Continue step instead of recursive call
                 // IMPORTANT: Use the continuation's captured cont_env, not the current one!
                 // This ensures the continuation body can look up continuations that were
                 // in scope when the continuation was defined.
                 Ok(StepResult::Continue {
-                    expr: body.as_ref().clone(),
+                    expr: body,
                     env: captured_env,
                     cont_env: captured_cont_env,
                     prompt_stack,

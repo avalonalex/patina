@@ -14,13 +14,13 @@
 #
 # Environment:
 #   LARCENY_TESTS_DIR     the Lib directory (default: ~/Project/reference/larceny/test/R7RS/Lib)
-#   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). One suite floors
-#                         it instead of obeying it: `stream` on the
-#                         tree-walker gets at least 900 s, because it PASSES
-#                         given time (81/81, measured 792 s) and is merely
-#                         ~20x slower there than on the VM — triage family
-#                         26. Burning 300 s to report "timeout" told us
-#                         nothing that 13 minutes of tally does not.
+#   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). Two suites floor
+#                         it instead of obeying it: `stream` and `ephemeron`
+#                         on the tree-walker get at least 600 s, because both
+#                         PASS given time and both run long enough that the
+#                         default budget is near their measured time — triage
+#                         family 26. Burning 300 s to report "timeout" told us
+#                         nothing that five minutes of tally does not.
 #
 # Exits non-zero if any suite fails, errors, or times out. The tallies are the
 # suite's own ("N tests passed" / "N of M tests failed."), never re-derived.
@@ -145,15 +145,22 @@ run_suite() {
     local suite="$1"
     local log="$LOG_DIR/${suite//\//_}.txt"
     local start end secs status detail passed failed total errors
-    # Family 26: `stream` is correct on the tree-walker but ~20x slower than
-    # the VM on nested infinite streams — 792 s measured for the full suite
-    # against the 300 s default budget. Floor that one suite's budget at
-    # 900 s so the lane reports a tally instead of a timeout; everything
-    # else keeps $TIMEOUT, ephemeron included (family 32's 100-million-pair
-    # allocation has no measured finishing time to size a budget by).
+    # Family 26: two suites are correct on the tree-walker but slow there —
+    # `stream` at 315 s (nested infinite streams, down from 792 s before the
+    # CPS evaluator's allocation work) and `ephemeron` at 142 s (it allocates
+    # 100 million pairs to force a collection). Both are wall-clock
+    # measurements on an idle machine, and this lane is known to be sensitive
+    # to load: `time.sld` already flakes under a concurrent build. A budget
+    # sized at the measurement would turn a passing suite into a "timeout"
+    # under any parallel work, and the reports in scheme_tests/reports assert
+    # that both pass. So floor both at 600 s — roughly 2x and 4x their
+    # measured times — rather than let `ephemeron`'s 142 s sit against a
+    # 300 s default. Everything else keeps $TIMEOUT.
     local budget="$TIMEOUT"
-    if [ "$BACKEND_NAME" = "tree-walker" ] && [ "$suite" = "stream" ] && [ "$budget" -lt 900 ]; then
-        budget=900
+    if [ "$BACKEND_NAME" = "tree-walker" ] && [ "$budget" -lt 600 ]; then
+        case "$suite" in
+            stream | ephemeron) budget=600 ;;
+        esac
     fi
     start=$(date +%s)
     # -e off for the whole run-and-parse span: the suite may exit non-zero,

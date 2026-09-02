@@ -177,7 +177,7 @@ impl VmState {
             let proc =
                 Procedure::primitive(name, arity, Rc::from(qualified_name.as_str()), Some(index));
             let tv = self.heap.borrow_mut().alloc_procedure(proc);
-            self.globals.define(name.to_string(), tv);
+            self.globals.define(name, tv);
         }
     }
 
@@ -1131,7 +1131,7 @@ fn dispatch_one_instruction(
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
             mark_if_shadowing_primitive(state, &globals, name, val);
-            globals.define(name.to_string(), val);
+            globals.define(Rc::clone(name), val);
         }
 
         // ── Closure Creation ────────────────────────────────────────────

@@ -531,9 +531,9 @@ impl<'h> GcVisitor<'h> {
         self.marks.is_marked(tv).unwrap_or(true)
     }
 
-    /// Trace through an environment chain. Deduped by the identity of the
-    /// shared bindings map, so the global environment is walked once no
-    /// matter how many closures point at it.
+    /// Trace through an environment chain. Deduped by environment identity,
+    /// so the global environment is walked once no matter how many closures
+    /// point at it.
     pub fn visit_env(&mut self, env: &Environment) {
         let mut current = Some(env);
         while let Some(e) = current {
@@ -544,8 +544,8 @@ impl<'h> GcVisitor<'h> {
             e.for_each_local_value(&mut |tv| self.visit(tv));
             // Alias edges leave the parent tree, so collect them and walk them
             // as separate roots rather than following the chain.
-            let mut alias_targets = Vec::new();
-            e.for_each_alias_target(&mut |target| alias_targets.push(target.clone()));
+            let mut alias_targets: Vec<Rc<Environment>> = Vec::new();
+            e.for_each_alias_target(&mut |target| alias_targets.push(Rc::clone(target)));
             for target in &alias_targets {
                 self.visit_env(target);
             }

@@ -77,7 +77,7 @@ fn compile_pipeline(
                 "bare-name aliases need a parentless environment"
             );
             for (bare, renamed_to) in global_aliases {
-                env.define_alias(bare.to_string(), env.clone(), renamed_to);
+                env.define_alias(bare, env.clone(), renamed_to);
             }
         }
         None => debug_assert!(

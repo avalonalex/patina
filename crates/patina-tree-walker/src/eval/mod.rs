@@ -909,7 +909,7 @@ impl Evaluator {
                 // Import all exports into the current environment
                 for export_name in lib.export_names() {
                     if let Some(value) = lib.get_export_tagged(export_name) {
-                        env.define(export_name.to_string(), value);
+                        env.define(export_name, value);
                     }
                 }
                 Ok(())

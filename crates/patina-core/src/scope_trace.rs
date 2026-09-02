@@ -286,6 +286,7 @@ fn phase_str() -> &'static str {
 /// `scopes` is what it is actually filed under — `{}` meaning it went to the
 /// plain by-name table, which is the fact that took an ad hoc `eprintln!` to
 /// establish for internal defines.
+#[inline]
 pub fn bind(name: &str, scopes: &ScopeSet, visible_by_name: bool) {
     if !enabled() {
         return;

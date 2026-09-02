@@ -28,7 +28,11 @@ is unchanged at 12 of 16, 4017 of 4025. Giving `stream` the budget it measures
 at (2026-09-01, family 26) moved the tree-walker lane to 21 of 33, 8300 of
 8330 — no defect fixed, one timeout converted to a tally. Families 22 and 28
 (2026-09-01, #151) took both lanes up by two: VM 8447 of 8475, tree-walker
-8302 of 8330. Running chibi's own `(srfi 101 test)`
+8302 of 8330. Speeding the CPS evaluator up 2.4–2.8× (2026-09-02, issue #153)
+then took the tree-walker lane to 22 of 33, 8309 of 8336, and its wall clock
+from ~20 minutes to 9: `ephemeron` finishes inside the default budget now
+instead of timing out, which is the one suite that moved. No defect was fixed
+there either, and the VM lane is untouched. Running chibi's own `(srfi 101 test)`
 against the shadowing names (2026-08-26) then found families 33–35; with them
 fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 
@@ -307,12 +311,23 @@ file's header explains the hard way.
 - Same discovery; chibi, Gauche and the VM give `()`.
 - Fix: the rule "one value is itself, any other count is a `#<values>` object" now lives in one place, `Heap::values_from`. It had been written out four times — the `values` primitive, the VM's `values` intercept, and each backend's continuation invocation — and the primitive's copy special-cased zero to `#<unspecified>`, which is what this row was. Fixing family 17 without it left `(k)` and `(values)` disagreeing on the same backend.
 
-### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — ✅ resolved in the runner 2026-09-01; the 20× itself remains a perf observation
+### 26. Tree-walker: the `stream` suite exceeds the runner's timeout — ✅ resolved in the runner 2026-09-01, and the underlying slowness cut 2.4–2.8× on 2026-09-02
 - Ours: none — a performance property, not a wrong answer, like `time`.
 - Upstream: [tests/scheme/stream.sld#L97](tests/scheme/stream.sld#L97), the 50th Pythagorean triple built from nested infinite streams. Measured: tree-walker 27 s at n=10, 117 s at n=20, past 200 s at n=30; the VM does n=50 in 33 s and passes the suite 81 of 81. About 20× on this workload, so the suite needed ~11 minutes against the runner's 300 s.
-- **Resolved 2026-09-01 by budgeting, not by speed:** measured end to end first — with a 1200 s budget the suite **passes 81 of 81 on the tree-walker in 792 s** — then `run_larceny_tests.sh` learned to floor `stream`'s budget at 900 s on the tree-walker lane (only that suite, only that backend; `LARCENY_TEST_TIMEOUT` above 900 still wins). The lane reports a tally instead of burning five minutes to say "timeout": 21 of 33 suites, 8300 of 8330. `ephemeron` (family 32) keeps the default budget — its 100-million-pair allocation has no measured finishing time to size a budget by, and a floor chosen blind would just burn longer.
-- The 20× gap is real and stays recorded here: promise-heavy `delay-force` workloads are the tree-walker's worst ratio against the VM. Nothing in Track P currently owns tree-walker throughput; if that changes, this workload is the benchmark to start from.
-- **Owned by [issue #153](https://github.com/avalonalex/patina/issues/153) since 2026-09-01:** the whole tree-walker lane, not just `stream` — ~20 minutes against the VM's one, with `stream`, `ephemeron`, `lazy`, and `char` making up 97% of it. The per-suite numbers, the promise-path hypothesis, and the profiling first step live there; this family stays the record of the `stream` budget.
+- **Resolved 2026-09-01 by budgeting, not by speed:** measured end to end first — with a 1200 s budget the suite **passes 81 of 81 on the tree-walker in 792 s** — then `run_larceny_tests.sh` learned to floor `stream`'s budget on the tree-walker lane (only that suite, only that backend; a larger `LARCENY_TEST_TIMEOUT` still wins). The lane reports a tally instead of burning five minutes to say "timeout": 21 of 33 suites, 8300 of 8330. That 792 s is a *first* measurement, taken while sizing the budget; the settled figure for the same suite on the same code is the 707 s the next full lane recorded, and 707 is the number the comparison below uses.
+- **Owned by [issue #153](https://github.com/avalonalex/patina/issues/153) since 2026-09-01:** the whole tree-walker lane, not just `stream` — ~20 minutes against the VM's one, with `stream`, `ephemeron`, `lazy`, and `char` making up 97% of it. The per-suite measurements and the profiling live there; this family stays the record of the `stream` budget. The promise-path hypothesis the issue opened with is **wrong** — see the next bullet — so read the issue's comments, not its description, for the cause.
+- **The slowness itself was profiled and cut on 2026-09-02** (GitHub issue #153, which is where the measurements and the reasoning live). The profile said allocation, not promises: the CPS evaluator built an `Environment` per `let`-bound temporary and per call, and each one cost four `Rc` allocations plus a `HashMap` table and a `String` key for its first binding. Making a small frame allocation-free, carrying the expression by `Rc` instead of deep-cloning it per step, and sharing a frame across a run of `let` bindings while nothing has captured it took the lane from ~20 minutes to **9 minutes**. Both columns below are per-suite times from full-lane runs (derived from the logs' mtimes — `larceny_report.py` emits no durations), before at `8da5efd6` and after at the fix:
+
+  | suite | before | after |
+  |---|---|---|
+  | `stream` | 707 s | 315 s |
+  | `ephemeron` | killed at the 300 s budget | passes 6/6 in 142 s |
+  | `lazy` | 91 s | 41 s |
+  | `sort` | 19 s | 9 s |
+  | `flonum` | 12 s | 5 s |
+
+  The runner now floors **both** `stream` and `ephemeron` at 600 s on this backend. `ephemeron`'s 142 s against the 300 s default was too little margin for a lane this sensitive to machine load, and the tally above is what the tracked reports assert.
+- **A gap remains, and it is no longer promise-shaped.** `stream` is still ~10× the VM, and the ratio is about the same on a plain counting loop, so this is general interpreter throughput rather than anything about `delay-force` — the hypothesis issue #153 opened with, and the one the profile falsified. What is left is dominated by the environment-chain walk on every variable read and by the one allocation per frame that a closure capturing it makes unavoidable. Nothing in Track P owns tree-walker throughput; if that changes, `tests/scheme/run/lazy.sps` is the benchmark to start from.
 
 ### 27. `error` refused a message that is not a string — both backends — ✅ fixed 2026-08-25
 - Ours: `error_accepts_a_message_that_is_not_a_string`
@@ -350,7 +365,7 @@ file's header explains the hard way.
 - Upstream: [tests/scheme/ephemeron.sld](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ephemeron.sld) — the `ephemeron` suite's one failure, and the reason it is 5 of 6 rather than 6.
 - `(set! keys (reverse (reverse (list-tail keys 5))))` in a procedure, then a collection *in that same frame*: the old ten-element list stays reachable, because a register of the live frame still holds it. Replacing outright — `(set! keys 'gone)` — collects it, and so does doing the same computation in a helper that returns before the collection. The tree-walker gets all three right.
 - Not an ephemeron defect; ephemerons are just what made it observable, since they are the only thing in the language that reports whether a particular object was collected. It is GC precision, and it is owned by `GC_STAGE5_PRD.md`'s Priority 2b, added with this entry so the defect has somewhere to land.
-- The tree-walker cannot run this suite at all: its `force-gc` allocates 100 million pairs and exceeds the runner's timeout — family 26's slowness, not this.
+- The tree-walker now runs this suite and passes it 6 of 6 (2026-09-02): its `force-gc` allocates 100 million pairs, which used to exceed the runner's 300 s timeout and now takes 142 s — family 26's speed work, not a change here. So the defect is VM-only in fact as well as in name, and the tree-walker's clean 6 of 6 is the control the entry always needed.
 
 ### 33. A template's `quote` resolved at the use site — both backends — ✅ fixed 2026-08-26
 - Ours: `a_templates_quote_is_not_captured_by_a_use_site_let_syntax`, `a_templates_quote_is_the_definition_sites_quote_under_an_imported_one`
