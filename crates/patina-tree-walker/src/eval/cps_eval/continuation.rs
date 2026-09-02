@@ -356,6 +356,14 @@ impl<'a> CpsEvaluator<'a> {
                 // on the stack the raise's escape unwinds. Then travel on from
                 // the live stack: the thunk ran with the stack below its
                 // record, and anything it did to the stack is balanced.
+                //
+                // `exception_handlers` is dropped on purpose. It is the stack
+                // the thunk just ran under — its own record's, installed by
+                // `jump_to_continuation` — and it belongs to no one else: the
+                // next thunk gets *its* record's stack, and arrival restores
+                // `target`'s from the continuation (`mod.rs`). Carrying it
+                // forward would leak one `dynamic-wind` call's handlers into
+                // the next thunk on the path.
                 let mut new_winds = dynamic_winds;
                 if let Some(record) = entered {
                     new_winds.push(record);

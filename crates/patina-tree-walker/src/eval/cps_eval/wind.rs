@@ -95,9 +95,14 @@ impl<'a> CpsEvaluator<'a> {
             });
         }
 
-        // Arrived. The outermost trampoline resumes `target` with the
-        // environment it captured (`mod.rs`); every nested trampoline between
-        // here and there unwinds on the way.
+        // Arrived. The trampoline that catches this resumes `target` with the
+        // environment it captured (`mod.rs`). Every `apply_from_direct_tagged`
+        // between here and there unwinds on the way — its loop `?`s each step
+        // — but a nested `eval_cps` run (the `eval` primitive, through
+        // `ApplyContext::eval_expr`) has its own copy of the catching arm and
+        // resumes `target` *inside* itself, so the escape never leaves it and
+        // the primitive returns the nested run's `Halt` value instead. That
+        // is one face of PRD §6's open "primitive's callback" entry.
         set_pending_escape(value, target);
         Err(EvalError::ContinuationEscape)
     }

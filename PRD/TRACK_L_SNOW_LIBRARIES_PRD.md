@@ -1361,9 +1361,17 @@ with the raising record already popped, so the outer thunk is still on its path.
 
 **Tree-walker: a primitive's callback runs on a nested trampoline with no handler stack** — ❌
 **open**. What the entry above did *not* close. `apply_from_direct_tagged` still exists, and every
-callback a Rust primitive makes — `call-with-port`, `map` over a closure, a parameter converter —
-runs on it with fabricated empty stacks, so a raise or a continuation invoke inside the callback
-cannot see the handlers, winds or prompts installed outside.
+callback a Rust higher-order primitive makes — `member` and `assoc` with a predicate,
+`call-with-port` and the `call-with-*-file` family, `force`, a parameter converter — runs on it
+with fabricated empty stacks, so a raise or a continuation invoke inside the callback cannot see
+the handlers, winds or prompts installed outside. (`map`, `for-each` and the `vector-`/`string-`
+variants are Scheme-defined and never cross.) The `eval` primitive is the other face of the same
+boundary: `ApplyContext::eval_expr` starts a nested `eval_cps` run, which has its own copy of the
+escape-catching arm and resumes a continuation *inside* itself, so `(k 'x)` under `eval` inside a
+wind lands as `#<unspecified>` on the tree-walker where the VM answers `x`. The wind thunks
+themselves run under the record's stack now; a raise *inside such a callback* in a wind thunk is
+still outside the `finally` rule, which is the limit of the entry above and of
+`wind_thunk_exceptions.rs`.
 
 Its sibling row closed on 2026-09-01: `reentered_continuation_keeps_exception_handler` was
 `CpsContinuation` not carrying the handler stack, which is a *storage* gap and is fixed by storing
