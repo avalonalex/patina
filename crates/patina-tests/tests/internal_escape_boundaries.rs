@@ -17,13 +17,10 @@
 //!
 //! | Site (`runtime/vm_state.rs`)                | Guard |
 //! |---------------------------------------------|-------|
-//! | `dynamic-wind` before / after thunk (value form) | `run_thunk` — propagates the sentinel |
-//! | `dynamic-wind` body (value form)            | `run_thunk_outcome` — skips cleanup and `set_reg` |
+//! | `dynamic-wind`'s three thunks (value form)  | *not a boundary any more* — since 2026-09-02 all three are ordinary frames of `value_wind_stub`, the same `PushWind`/`Call`/`PopWind` sequence head position compiles to (issue #157) |
 //! | `call-with-values` producer (value form)    | `run_thunk_outcome` — skips the consumer |
-//! | `vm_raise_value` exit winds                 | `run_thunk_outcome` — pops before running |
 //! | `vm_raise_value` continuable handler        | `run_loop_until_outcome` — no re-push, no `set_reg` |
 //! | a jump's exit / enter thunks (`step_wind_jump`) | *not a boundary any more* — since 2026-09-02 each thunk is an ordinary frame under a `ResumeWindJump` stub, so an escape out of one is an ordinary escape and a continuation captured in one is resumable |
-//! | `pop_resolved_winds`                        | `run_thunk` — already popped before running |
 //! | `AbortCurrentContinuation` exit winds (both the control primitive and `Instruction::Abort`) | `run_thunk` — pops before running |
 //! | `try_invoke_continuation` delimited enter thunks | `run_thunk` |
 //! | `Instruction::InvokeContinuation` enter thunks | `run_thunk` |

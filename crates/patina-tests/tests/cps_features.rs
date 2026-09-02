@@ -890,21 +890,55 @@ fn test_dynamic_wind_callcc_escape_runs_after() {
     );
 }
 
+/// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
+/// Rust one.
+///
+/// It used to run its body on a nested dispatch loop, so N nested value-form
+/// extents meant N nested Rust calls: 5000 of them aborted the process with
+/// `fatal runtime error: stack overflow` on `main` (`7e696892`, release,
+/// macOS), while 4000 passed. Running the same instructions head position
+/// compiles to, in a stub frame, removed the Rust recursion along with the
+/// bugs it caused (issue #157) — 20000 is fine now.
+///
+/// A regression here **aborts the test binary** rather than failing this test,
+/// because that is what a stack overflow does; the abort message names the
+/// cause plainly, which a silently wrong answer would not.
+#[test]
+fn test_nested_value_form_winds_do_not_nest_rust_frames() {
+    assert_program_eval_to(
+        r#"
+        (define dw dynamic-wind)
+        (define (nest n)
+          (if (= n 0)
+              'done
+              (dw (lambda () #f) (lambda () (nest (- n 1))) (lambda () #f))))
+        (nest 5000)
+        "#,
+        "done",
+    );
+}
+
 #[test]
 fn test_reentering_nested_value_form_winds_runs_each_thunk_once() {
     // Re-entering a continuation captured inside two nested extents runs both
     // before-thunks, once each, and leaves the extents standing.
     //
-    // The value form of `dynamic-wind` is what makes this a real test: its
-    // records carry the frame depth of the call, which `pop_resolved_winds`
-    // reads to decide that a body has returned. A jump that *enters* an extent
-    // pushes its record back, and the depth on it belongs to a stack that is
-    // not the live one — captured deep, re-entered from the top level, it sits
-    // above every frame the travel has, so the next before-thunk's return
-    // looked like this extent's body returning. The VM ran `out-a` under the
-    // still-running entry and went round for ever; head-position
-    // `dynamic-wind` cannot reach it, because `PushWind` records carry the
-    // "not auto-popped" sentinel already.
+    // The value form of `dynamic-wind` is what made this a real test. Its
+    // records used to carry the frame depth of the call, and
+    // `pop_resolved_winds` read that depth to decide a body had returned. A
+    // jump that *enters* an extent pushes its record back, and the depth on it
+    // belongs to a stack that is not the live one — captured deep, re-entered
+    // from the top level, it sat above every frame the travel had, so the next
+    // before-thunk's return looked like this extent's body returning. The VM
+    // ran `out-a` under the still-running entry and went round for ever;
+    // head-position `dynamic-wind` could not reach it, because `PushWind`
+    // records carried the "not auto-popped" sentinel already.
+    //
+    // Neither half of that exists now (issue #157, 2026-09-02): the value form
+    // runs `PushWind` too, records carry no depth, and `pop_resolved_winds` is
+    // gone. The program stays because the shape it exercises — re-entry across
+    // two nested extents, from a much shallower stack — is worth holding both
+    // backends to whatever the mechanism underneath.
     //
     // `note` raises past a bounded log, so a regression *fails* rather than
     // spinning: the pre-fix VM looped for ever here, and an unbounded version

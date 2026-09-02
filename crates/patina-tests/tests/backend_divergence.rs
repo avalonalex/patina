@@ -383,10 +383,10 @@ fn a_continuation_within_its_own_wind_runs_the_thunks_once() {
 ///
 /// Head-position `dynamic-wind` compiles to `PushWind`/`PopWind`, so a
 /// continuation resuming inside the body still reaches the instruction that
-/// pops the record. The value form runs its body on a nested Rust call in
-/// `handle_control_primitive`, and an escape abandons the frame that owns the
-/// cleanup — it used to be safe to abandon it because a full continuation
-/// invoke drained every wind record on the way past. Once the transition keeps
+/// pops the record. The value form used to run its body on a nested Rust call
+/// in `handle_control_primitive`, and an escape abandoned the frame that owned
+/// the cleanup — it used to be safe to abandon it because a full continuation
+/// invoke drained every wind record on the way past. Once the transition kept
 /// the records both stacks share, that stopped being true, and the after-thunk
 /// went from running at the wrong time to never running at all:
 ///
@@ -401,6 +401,11 @@ fn a_continuation_within_its_own_wind_runs_the_thunks_once() {
 /// transfer, so the fourth shape below pins that a later `dynamic-wind` is
 /// unaffected. `cargo test` was fully green with the leak present, because
 /// nothing exercised the value form with an escaping body.
+///
+/// The nested Rust call is gone since 2026-09-02 (issue #157, the row below):
+/// the value form runs the same `PushWind`/`PopWind` sequence in a stub frame,
+/// so these four shapes now go through the instructions head position uses.
+/// They stay because they are the shapes that caught the leak.
 #[test]
 fn the_value_form_of_dynamic_wind_runs_its_after_thunk_once() {
     assert_program_eval_to(
@@ -607,51 +612,42 @@ fn a_before_thunk_on_reentry_sees_its_own_dynamic_winds_handlers() {
     );
 }
 
-/// VM: the **value** form of `dynamic-wind` loses its body's value when a
-/// continuation captured in that body is re-entered — issue #157.
+/// A continuation re-entering the body of the **value** form of
+/// `dynamic-wind` finds the call still intact — converged 2026-09-02
+/// (issue #157).
+///
+/// Two symptoms, one cause. The call's remaining obligations — deliver the
+/// body's value, pop the record, run *its own* after-thunk — used to live in
+/// the Rust frame `handle_control_primitive` ran the body on, and a re-entry
+/// restores the VM's frames, not that one:
 ///
 /// ```text
-///   (define dw dynamic-wind)
-///   (define r (dw (lambda () #f)
-///                 (lambda () (call/cc (lambda (c) (set! k c) 'first)))
-///                 (lambda () #f)))
-///   (if (eq? r 'first) (k 'second) #f)
-///   tree-walker, Gauche => second
-///   VM                  => ()
-/// ```
+///   (define r (dw (lambda () #f) «capture k, return 'first» (lambda () #f)))
+///   (if (eq? r 'first) (k 'second) #f)          => second, VM said ()
 ///
-/// Not a wind-thunk defect and not new — `main` gave the same before the VM
-/// took its wind thunks off the nested loop, and the thunks here run at the
-/// right times either way. The value form runs its body on a nested Rust call
-/// in `handle_control_primitive`, and *that* frame is what writes the body's
-/// result into the caller's register. A captured continuation restores the
-/// VM's own frames, whose pc is already past the `Call`, so nothing writes
-/// the register: `r` keeps the `NULL` `call/cc`'s capture cleared it to,
-/// which prints as `()`. Head-position `dynamic-wind` is unaffected — its
-/// result delivery is an instruction, and instructions are restored.
-///
-/// The same shape as the after-thunk row above (`the_value_form_of_dynamic_
-/// wind_runs_its_after_thunk_once`): a value form's bookkeeping lives in a
-/// Rust frame that a re-entry does not bring back. Recorded in
-/// {GUARD_UNWIND_ORDER}.
-///
-/// The lost value is only half of #157. The same arm also runs the **wrong
-/// after-thunk**, because it decides whether it still owes one by comparing
-/// wind-stack *lengths* after the jump has replaced that stack with the
-/// target's:
-///
-/// ```text
 ///   (dw in1 «capture saved» out1) then (dw in2 (lambda () (saved 'second)) out2)
-///   tree-walker, Gauche => (in1 out1 in2 out2 in1 out1)
-///   VM                  => (in1 out1 in2 out2 in1 out2)
+///                                              => (in1 out1 in2 out2 in1 out1),
+///                                                 VM said (… in1 out2)
 /// ```
 ///
-/// Not pinned here as a second assertion: one program per divergence keeps the
-/// panic message actionable, and both halves retire together when #157's fix
-/// gives the value form an instruction to return to.
+/// The `()` was the `NULL` `call/cc`'s capture cleared `dst` to, left in a
+/// live register — downstream it surfaced as an unrelated `type error:
+/// expected a procedure, got null` rather than as a visibly wrong value. The
+/// wrong after-thunk came from the `Escaped` arm deciding what it still owed
+/// with a *length* test, `dynamic_winds.len() > wind_depth`, applied after
+/// the jump had already replaced that stack with the target's: it truncated
+/// the target's records and re-ran its own.
+///
+/// The fix is the move PR #156 made for a jump's wind thunks — the value form
+/// now runs the same `PushWind`/`Call`/`PopWind` sequence head position
+/// compiles to, in a stub frame of its own, so "the rest of the
+/// `dynamic-wind`" is a pc that the continuation restores. Head position was
+/// never affected, for exactly that reason. Recorded in {GUARD_UNWIND_ORDER}.
 #[test]
-fn the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm() {
-    const PROGRAM: &str = r#"
+fn the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body() {
+    // The body's value is the call's value, delivered on the re-entry too.
+    assert_program_eval_to(
+        r#"
         (define dw dynamic-wind)
         (define k #f)
         (define r (dw (lambda () #f)
@@ -659,19 +655,131 @@ fn the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm() {
                       (lambda () #f)))
         (if (eq? r 'first) (k 'second) #f)
         r
-    "#;
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
+    "#,
         "second",
-        "the re-entered body's value is the value form's value"
     );
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "()",
-        "\n[vm] NO LONGER DIVERGES — the value form delivers its body's value \
-         after a re-entry.\nReplace both assertions with a single \
-         assert_program_eval_to on `second` and close the entry in \
-         PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
+    // Re-entering extent 1 from inside extent 2 leaves extent 2 (`out2`) and
+    // enters extent 1 (`in1`); when the resumed body returns, extent 1 closes
+    // with its *own* after-thunk, `out1`.
+    assert_program_eval_to(
+        r#"
+        (import (scheme base))
+        (define dw dynamic-wind)
+        (define log '())
+        (define (note x) (set! log (cons x log)))
+        (define saved #f)
+        (define done #f)
+        (dw (lambda () (note 'in1))
+            (lambda () (call/cc (lambda (c) (set! saved c) 'first)))
+            (lambda () (note 'out1)))
+        (if (not done)
+            (begin (set! done #t)
+                   (dw (lambda () (note 'in2))
+                       (lambda () (saved 'second))
+                       (lambda () (note 'out2)))))
+        (reverse log)
+    "#,
+        "(in1 out1 in2 out2 in1 out1)",
+    );
+}
+
+/// A continuation captured in the value form's **before** or **after** thunk
+/// and re-entered after the call has returned — converged 2026-09-02 with the
+/// body case above, and by the same change.
+///
+/// The value form ran each thunk on a nested dispatch loop. While that loop is
+/// still on the Rust stack a continuation captured in the thunk resumes fine —
+/// a retry loop inside a before-thunk always worked, on `main` too. It is the
+/// *late* re-entry, after the `dynamic-wind` call has returned and the loop is
+/// gone, that had nothing to come back to:
+///
+/// ```text
+///   A: capture in `before`, re-enter later => (val (in body out body out))
+///   B: capture in `after`,  re-enter later => (val (in body out))
+///   main VM said (#<unknown> (in body out)) to both
+/// ```
+///
+/// `#<unknown>` is an uninitialised register reaching user-visible output: the
+/// re-entry delivered into a frame that no longer existed, and the rest of the
+/// `dynamic-wind` — the body, the after-thunk, the value — never ran at all.
+/// Gauche and the tree-walker both give the two answers above. (chibi answers
+/// `(val ())` to both; its continuation does not carry the `set!`s to `log`,
+/// which is a different question from the one asked here.)
+#[test]
+fn the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base))
+        (define dw dynamic-wind)
+        (define (probe run)
+          (let ((log '()))
+            (list (run (lambda (x) (set! log (cons x log)))) (reverse log))))
+        (list
+          ;; A — the resumed before-thunk returns, and the rest of the call
+          ;; runs a second time from there.
+          (probe (lambda (note)
+                   (let ((k #f) (done #f))
+                     (let ((r (dw (lambda () (note 'in) (call/cc (lambda (c) (set! k c))))
+                                  (lambda () (note 'body) 'val)
+                                  (lambda () (note 'out)))))
+                       (if (not done) (begin (set! done #t) (k #f)))
+                       r))))
+          ;; B — the resumed after-thunk returns, and the call is then over,
+          ;; so nothing repeats.
+          (probe (lambda (note)
+                   (let ((k #f) (done #f))
+                     (let ((r (dw (lambda () (note 'in))
+                                  (lambda () (note 'body) 'val)
+                                  (lambda () (note 'out) (call/cc (lambda (c) (set! k c)))))))
+                       (if (not done) (begin (set! done #t) (k #f)))
+                       r)))))
+    "#,
+        "((val (in body out body out)) (val (in body out)))",
+    );
+}
+
+/// A `call/cc` retry loop *inside* one of the value form's wind thunks, which
+/// resumes while the thunk is still running.
+///
+/// Not a converged row — `main` answered this correctly too, because the
+/// nested dispatch loop the thunk ran on was still on the Rust stack to resume
+/// into. It is here as a guard on the rewritten path: the thunks are ordinary
+/// frames of `value_wind_stub` now, and this is the shape that would notice if
+/// the stub's register window or its `Call` sequence got the thunk's own
+/// re-entry wrong.
+#[test]
+fn the_value_form_of_dynamic_wind_captures_inside_its_own_thunks() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base))
+        (define dw dynamic-wind)
+        (define (probe run)
+          (let ((log '()))
+            (run (lambda (x) (set! log (cons x log))))
+            (reverse log)))
+        (list
+          ;; a retry loop inside the before-thunk
+          (probe (lambda (note)
+                   (let ((n 0))
+                     (dw (lambda ()
+                           (let ((k (call/cc (lambda (c) c))))
+                             (note n)
+                             (set! n (+ n 1))
+                             (if (< n 3) (k k))))
+                         (lambda () (note 'body))
+                         (lambda () (note 'out))))))
+          ;; and one inside the after-thunk
+          (probe (lambda (note)
+                   (let ((n 0))
+                     (dw (lambda () (note 'in))
+                         (lambda () (note 'body))
+                         (lambda ()
+                           (let ((k (call/cc (lambda (c) c))))
+                             (note n)
+                             (set! n (+ n 1))
+                             (if (< n 3) (k k)))))))))
+    "#,
+        "((0 1 2 body out) (in body 0 1 2))",
     );
 }
 

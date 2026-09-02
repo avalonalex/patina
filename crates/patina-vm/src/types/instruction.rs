@@ -381,8 +381,11 @@ pub enum Instruction {
     // ── dynamic-wind (instruction-level) ────────────────────────────────────
     /// Push a dynamic-wind record onto `VmState::dynamic_winds`.
     ///
-    /// Uses `stack_depth = 0` so `pop_resolved_winds` won't auto-pop it;
-    /// the explicit `PopWind` instruction handles cleanup instead.
+    /// The only push site there is. Head-position `dynamic-wind` compiles to
+    /// this; the value form runs the same sequence in a runtime-pushed stub
+    /// frame (`value_wind_stub` in `runtime/vm_state.rs`). A record is popped
+    /// by the `PopWind` that follows in its own sequence, or by a
+    /// continuation jump that leaves its extent — never swept by depth.
     PushWind { before: Reg, after: Reg },
 
     /// Pop the top dynamic-wind record from `VmState::dynamic_winds`.

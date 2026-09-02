@@ -268,6 +268,14 @@ same way.
 | `Nop` | No operation. Used for patching. |
 | `ResumeWindJump` | Take the next step of a continuation jump that is running wind thunks (§7.3). Never emitted by the compiler: it is the whole body of the stub frame the runtime pushes under each thunk. |
 
+Two instruction sequences are likewise never emitted by the compiler but built
+by the runtime as whole code objects: the one-instruction wind-jump stub above,
+and the six-instruction stub the **value form** of `dynamic-wind` runs
+(`value_wind_stub`) — `Call before` / `PushWind` / `Call body` / `PopWind` /
+`Call after` / `Return`, the same sequence pass 5 emits for head position. Both
+exist so that work the runtime owes after a thunk returns is a *pc* a captured
+continuation restores, rather than a Rust frame it cannot.
+
 ---
 
 ## 5. Control Primitives (Continuations, Exceptions, Values)
@@ -338,18 +346,20 @@ pub struct PromptFrame {
 ### 7.3 Dynamic Wind
 
 The VM maintains a `Vec<DynamicWindRecord>`. Each record is one `dynamic-wind`
-call: its thunks, the frame depth it was installed at, and the exception
-handler stack that call had.
+call: its thunks and the exception handler stack that call had.
 
 ```rust
 pub struct DynamicWindRecord {
-    pub id:          u64,
-    pub before:      TaggedValue,
-    pub after:       TaggedValue,
-    pub stack_depth: usize,
-    pub handlers:    Rc<[ExceptionHandler]>,
+    pub id:       u64,
+    pub before:   TaggedValue,
+    pub after:    TaggedValue,
+    pub handlers: Rc<[ExceptionHandler]>,
 }
 ```
+
+Records are pushed and popped only by `PushWind`/`PopWind` and by a
+continuation jump's travel, so nothing needs the frame depth a record used to
+carry.
 
 Invoking a full continuation *travels* between the live wind stack and the
 target's, one thunk per step: leave the innermost extent the two do not share

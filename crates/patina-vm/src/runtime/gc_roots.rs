@@ -128,8 +128,9 @@ fn trace_frames(frames: &[CallFrame], visitor: &mut GcVisitor<'_>) {
 }
 
 fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut GcVisitor<'_>) {
-    // The VM has its own `DynamicWindRecord` (it carries a stack depth), so
-    // `GcVisitor::visit_winds` — which takes the core type — does not apply.
+    // The VM has its own `DynamicWindRecord` (it carries an id and a handler
+    // stack), so `GcVisitor::visit_winds` — which takes the core type — does
+    // not apply.
     for wind in winds {
         visitor.visit(wind.before);
         visitor.visit(wind.after);

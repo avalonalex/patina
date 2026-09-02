@@ -54,10 +54,6 @@ pub struct DynamicWindRecord {
     pub before: TaggedValue,
     /// Thunk to call when leaving this dynamic extent.
     pub after: TaggedValue,
-    /// Frame stack depth when this wind was installed.
-    /// Used by `pop_resolved_winds` to detect when the body has returned
-    /// (e.g. after a continuation invocation resumes and completes).
-    pub stack_depth: usize,
     /// The exception handlers installed where `dynamic-wind` was called.
     ///
     /// R7RS 6.10: "The before and after thunks are called in the same dynamic
@@ -83,18 +79,14 @@ impl DynamicWindRecord {
     ///
     /// Both call sites used to spell `patina_core::next_dynamic_wind_id()`
     /// inline, which is two things to keep in step and the only tie between
-    /// the VM and the shared counter.
-    pub fn new(
-        before: TaggedValue,
-        after: TaggedValue,
-        stack_depth: usize,
-        handlers: Rc<[ExceptionHandler]>,
-    ) -> Self {
+    /// the VM and the shared counter. `PushWind` is now the only one — the
+    /// value form of `dynamic-wind` runs that instruction too, in a stub
+    /// frame of its own.
+    pub fn new(before: TaggedValue, after: TaggedValue, handlers: Rc<[ExceptionHandler]>) -> Self {
         Self {
             id: patina_core::next_dynamic_wind_id(),
             before,
             after,
-            stack_depth,
             handlers,
         }
     }

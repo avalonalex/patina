@@ -108,9 +108,10 @@ pub struct PromptFrame {
 ```rust
 #[derive(Clone)]
 pub struct DynamicWindRecord {
-    pub before:      TaggedValue,
-    pub after:       TaggedValue,
-    pub stack_depth: usize,       // frames.len() at installation
+    pub id:       u64,            // unique per `dynamic-wind` call
+    pub before:   TaggedValue,
+    pub after:    TaggedValue,
+    pub handlers: Rc<[ExceptionHandler]>,
 }
 ```
 
@@ -264,8 +265,8 @@ On `Return { val }`:
 2. Pop current frame, free registers
 3. If at exit depth, return result
 4. Write result to caller's `return_reg`
-5. Run cleanup: `pop_resolved_prompts()`, `pop_exception_handlers()`,
-   `pop_resolved_winds()`
+5. Run cleanup: `pop_resolved_prompts()`, `pop_exception_handlers()`. Wind
+   records are not swept here — `PopWind` pops each one (§5.3)
 
 ### 4.5 Helper Functions
 
@@ -319,10 +320,11 @@ intercepted at call dispatch time.
 
 ### 5.3 Dynamic Wind
 
-- Wind records pushed by `PushWind` (head-position `dynamic-wind`) or by the
-  `DynamicWind` control primitive (the value form). Each records the
-  **exception handler stack of its own call** (`DynamicWindRecord::handlers`),
-  which is the part of the dynamic environment R7RS 6.10 gives its thunks
+- Wind records pushed by `PushWind`, which is the *only* push site: head
+  position compiles to it, and the value form runs it too (see the last bullet
+  below). Each records the **exception handler stack of its own call**
+  (`DynamicWindRecord::handlers`), which is the part of the dynamic
+  environment R7RS 6.10 gives its thunks
 - `step_wind_jump()`: one step of a jump to a full continuation. It finds the
   common prefix of the live and target wind stacks and runs **one** thunk —
   an `after` for the innermost extent being left (popped *before* it runs), or
@@ -352,17 +354,24 @@ intercepted at call dispatch time.
   `try_invoke_continuation` run every captured `before` thunk unconditionally,
   on a nested call and under the live handler stack, then extend
   `dynamic_winds`. Shared extents are not skipped there
-- `pop_resolved_winds()` runs the after-thunk of a record whose body has
-  returned, also on a nested call and under the live stack. On a normal exit
-  that stack *is* the call's, so the rule holds there without help
-- The value form of `dynamic-wind` (`handle_control_primitive`) runs its body
-  on a nested Rust call, so an escape abandons the frame that owns the
-  cleanup. That arm pops and runs its own after-thunk when the record survives
-  the transition; head-position `dynamic-wind` needs none of this because
-  `PushWind`/`PopWind` are instructions the resumed continuation still
-  reaches. The same split leaves the value form unable to deliver its body's
-  value when a continuation re-enters that body — pinned in
-  `backend_divergence.rs`, Track L §6
+- The value form of `dynamic-wind` (`handle_control_primitive`) pushes a stub
+  frame running `value_wind_stub`'s six instructions — the same
+  `Call before` / `PushWind` / `Call body` / `PopWind` / `Call after` /
+  `Return` sequence pass 5 emits for head position — and returns to the
+  dispatch loop. So the two forms share one implementation, and everything the
+  call still owes is a **pc**: a continuation captured in the body restores
+  this frame with it, and returning through it pops the record, runs this
+  call's own after-thunk, and delivers the body's value. Until 2026-09-02 the
+  arm ran the body on a nested Rust call and did that bookkeeping in Rust,
+  which a re-entry abandoned: the call ran the *wrong* after-thunk (its own a
+  second time, the target's not at all — it decided what it owed by comparing
+  wind-stack lengths after the jump had replaced that stack) and left its
+  caller's register holding the `NULL` `call/cc`'s capture had cleared it to
+  (issue #157)
+- Wind records are therefore not swept by frame depth, and carry none. A
+  `pop_resolved_winds()` that ran the after-thunk of a record whose body had
+  returned existed until 2026-09-02 as the value form's last line of cleanup;
+  with `PushWind`/`PopWind` doing the work it was reachable on no input
 
 ### 5.4 Values / Call-with-values
 
