@@ -30,10 +30,23 @@ impl<'a> CpsEvaluator<'a> {
         let heap = self.evaluator.global_env.heap();
 
         // Extract all type checks upfront to ensure borrows are released before nested heap access
-        // This avoids RefCell borrow conflicts when primitives need to borrow the heap
-        let proc_opt = heap.borrow().get_procedure(proc_tagged);
-        let cont_opt = heap.borrow().get_continuation(proc_tagged);
-        let param_opt = heap.borrow().get_parameter(proc_tagged);
+        // This avoids RefCell borrow conflicts when primitives need to borrow the heap.
+        //
+        // One borrow rather than three, and the two rarer questions are asked
+        // only when the first says no: every procedure call comes through
+        // here, and a continuation or a parameter object in operator position
+        // is the exception.
+        let (proc_opt, cont_opt, param_opt) = {
+            let heap_ref = heap.borrow();
+            match heap_ref.get_procedure(proc_tagged) {
+                Some(p) => (Some(p), None, None),
+                None => (
+                    None,
+                    heap_ref.get_continuation(proc_tagged),
+                    heap_ref.get_parameter(proc_tagged),
+                ),
+            }
+        };
 
         // Dispatch based on extracted types
         if let Some(p) = proc_opt {
@@ -88,12 +101,12 @@ impl<'a> CpsEvaluator<'a> {
                     let bind = |param: &ScopedParam, value: TaggedValue| {
                         if !param.scopes.is_empty() {
                             new_env.define_with_scopes(
-                                param.name.to_string(),
+                                Rc::clone(&param.name),
                                 param.scopes.clone(),
                                 value,
                             );
                         } else if binding_scopes.is_empty() {
-                            new_env.define(param.name.to_string(), value);
+                            new_env.define(Rc::clone(&param.name), value);
                         } else {
                             // One cell, reachable both ways: by name for the
                             // references written in source, and under the
@@ -105,7 +118,7 @@ impl<'a> CpsEvaluator<'a> {
                             // the other stale. That is Larceny triage family
                             // 38's obstacle, and this is what removes it.
                             new_env.define_scoped_definition(
-                                param.name.to_string(),
+                                Rc::clone(&param.name),
                                 (**binding_scopes).clone(),
                                 value,
                             );
@@ -133,7 +146,7 @@ impl<'a> CpsEvaluator<'a> {
 
                     // Return Continue step instead of recursive call
                     Ok(StepResult::Continue {
-                        expr: body.as_ref().clone(),
+                        expr: Rc::clone(body),
                         env: new_env,
                         cont_env: new_cont_env,
                         prompt_stack,

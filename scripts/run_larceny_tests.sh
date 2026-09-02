@@ -16,11 +16,11 @@
 #   LARCENY_TESTS_DIR     the Lib directory (default: ~/Project/reference/larceny/test/R7RS/Lib)
 #   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). One suite floors
 #                         it instead of obeying it: `stream` on the
-#                         tree-walker gets at least 900 s, because it PASSES
-#                         given time (81/81, measured 792 s) and is merely
-#                         ~20x slower there than on the VM — triage family
-#                         26. Burning 300 s to report "timeout" told us
-#                         nothing that 13 minutes of tally does not.
+#                         tree-walker gets at least 600 s, because it PASSES
+#                         given time (81/81, measured 315 s) and is still the
+#                         slowest suite on that backend — triage family 26.
+#                         Burning 300 s to report "timeout" told us nothing
+#                         that five minutes of tally does not.
 #
 # Exits non-zero if any suite fails, errors, or times out. The tallies are the
 # suite's own ("N tests passed" / "N of M tests failed."), never re-derived.
@@ -145,15 +145,15 @@ run_suite() {
     local suite="$1"
     local log="$LOG_DIR/${suite//\//_}.txt"
     local start end secs status detail passed failed total errors
-    # Family 26: `stream` is correct on the tree-walker but ~20x slower than
-    # the VM on nested infinite streams — 792 s measured for the full suite
-    # against the 300 s default budget. Floor that one suite's budget at
-    # 900 s so the lane reports a tally instead of a timeout; everything
-    # else keeps $TIMEOUT, ephemeron included (family 32's 100-million-pair
-    # allocation has no measured finishing time to size a budget by).
+    # Family 26: `stream` is correct on the tree-walker but slower than on
+    # the VM on nested infinite streams — 315 s measured for the full suite
+    # against the 300 s default budget, down from 792 s before the CPS
+    # evaluator's allocation work. Floor that one suite's budget at 600 s so
+    # the lane reports a tally instead of a timeout; everything else keeps
+    # $TIMEOUT, `ephemeron` included, which now finishes inside it.
     local budget="$TIMEOUT"
-    if [ "$BACKEND_NAME" = "tree-walker" ] && [ "$suite" = "stream" ] && [ "$budget" -lt 900 ]; then
-        budget=900
+    if [ "$BACKEND_NAME" = "tree-walker" ] && [ "$suite" = "stream" ] && [ "$budget" -lt 600 ]; then
+        budget=600
     fi
     start=$(date +%s)
     # -e off for the whole run-and-parse span: the suite may exit non-zero,

@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-01 21:45:21  
+**Generated:** 2026-09-02 10:57:37  
 **Backend:** tree-walker  
 **Lane:** tests/scheme (R7RS-small + Red edition)  
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,20 +9,19 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 21 of 33 |
-| Assertions passed | 8303 of 8330 (99.7%) |
-| Suites not reaching a tally | 2 |
+| Suites fully passing | 22 of 33 |
+| Assertions passed | 8309 of 8336 (99.7%) |
+| Suites not reaching a tally | 1 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Crashed or hung (2)
+## Crashed or hung (1)
 
 No tally was reached: the process died, or the runner's timeout cut it off. A crash is a defect in Patina's runtime; a timeout may be one, or may be a suite that needs longer than the budget on this backend — the triage doc says which for each.
 
 | Suite | What |
 |---|---|
 | char | stack overflow |
-| ephemeron | no result before the timeout |
 
 ## Assertion failures (27 in 10 suites)
 
@@ -97,7 +96,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | comparator | pass | 158 | 158 |
 | complex | fail | 60 | 61 |
 | cxr | pass | 28 | 28 |
-| ephemeron | timeout | 0 | 0 |
+| ephemeron | pass | 6 | 6 |
 | eval | fail | 2 | 3 |
 | file | pass | 75 | 75 |
 | flonum | fail | 1279 | 1280 |

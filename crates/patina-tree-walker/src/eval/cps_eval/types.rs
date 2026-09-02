@@ -60,7 +60,7 @@ pub(super) enum StepResult {
     Done(TaggedValue),
     /// Continue evaluation with a new expression and state
     Continue {
-        expr: CpsExpr,
+        expr: Rc<CpsExpr>,
         env: Rc<Environment>,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,

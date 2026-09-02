@@ -173,9 +173,15 @@ impl<'a> CpsEvaluator<'a> {
         // Debug: show the CPS expression (enabled via RUST_LOG=patina_tree_walker::eval::cps_eval=debug)
         debug!(target: "patina_tree_walker::eval::cps_eval", input_expr = %expr, "CPS evaluation starting");
 
+        // The step loop carries the expression by `Rc` so that walking into a
+        // `let`, an `if` branch or a lambda body is a refcount bump rather
+        // than a deep clone of the subtree; the tree it walks is immutable.
+        // One clone here lifts the caller's borrowed root into that form.
+        let root = Rc::new(expr.clone());
+
         // Start with the initial expression
         let mut current_step = match self.eval_one_step(
-            expr,
+            &root,
             env,
             cont_env,
             prompt_stack,

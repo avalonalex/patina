@@ -53,10 +53,21 @@ impl Default for ContEnv {
     }
 }
 
+thread_local! {
+    /// The one `Empty` node every empty `ContEnv` shares.
+    ///
+    /// Applying a procedure starts its body with a fresh continuation
+    /// environment, so `new` runs once per call; allocating a node that
+    /// carries nothing, only to drop it a few steps later, was a malloc and a
+    /// free per call. The node is immutable and its identity is used only for
+    /// GC dedup, so one shared node is indistinguishable from many.
+    static EMPTY_CONT_ENV: Rc<ContEnvNode> = Rc::new(ContEnvNode::Empty);
+}
+
 impl ContEnv {
     /// Create an empty continuation environment.
     pub fn new() -> Self {
-        ContEnv(Rc::new(ContEnvNode::Empty))
+        ContEnv(EMPTY_CONT_ENV.with(Rc::clone))
     }
 
     /// Look up a continuation by name. Returns the most recently inserted

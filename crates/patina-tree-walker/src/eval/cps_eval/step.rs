@@ -20,7 +20,7 @@ impl<'a> CpsEvaluator<'a> {
     /// The caller (eval) processes these steps in a trampoline loop.
     pub(super) fn eval_one_step(
         &self,
-        expr: &CpsExpr,
+        expr: &Rc<CpsExpr>,
         env: Rc<Environment>,
         mut cont_env: ContEnv,
         mut prompt_stack: Vec<PromptFrame>,
@@ -29,9 +29,14 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         // Process LetVal/LetCont/If/Set/Define/Prompt in a local loop
         // since they just update state and continue with a new expression
-        let mut current_expr = expr.clone();
+        let mut current_expr = Rc::clone(expr);
         let mut current_env = env.clone();
         let current_winds = dynamic_winds;
+
+        // Whether `current_env` is a frame this run made for a `LetVal`, and
+        // so a frame the `LetVal` arm may still extend. False for the
+        // environment we were handed: that one belongs to our caller.
+        let mut own_frame = false;
 
         // Track the "definition environment" - where `define` should create bindings.
         // This is the environment passed in (from lambda entry or top-level),
@@ -121,10 +126,36 @@ impl<'a> CpsEvaluator<'a> {
                     // `LetVal`, so this is where `(undefined-fn)`'s lookup fails.
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
-                    let new_env = Rc::new(Environment::with_parent(current_env.clone()));
-                    new_env.define(name.to_string(), val);
-                    current_expr = body.as_ref().clone();
-                    current_env = new_env;
+                    // A call site expands to a run of `LetVal`s — one for the
+                    // operator, one per trivial argument — and giving each its
+                    // own environment costs an allocation apiece and leaves a
+                    // chain that every later variable read walks a link at a
+                    // time. Consecutive bindings share a frame instead, but
+                    // only while `current_env` is a frame this run made *and*
+                    // nothing else holds it: a strong count of one says no
+                    // closure, continuation or heap value captured it, so no
+                    // one can observe the extra binding.
+                    //
+                    // The guard is what makes this safe rather than merely
+                    // fast. Sharing unconditionally is ~10% quicker on
+                    // straight-line code and wrong for lazy code, because a
+                    // continuation captured partway through the run would then
+                    // hold every binding made after it: on SRFI 45's leak test
+                    // 3 (`tests/scheme/run/lazy.sps`) that took peak memory
+                    // from 39 MB to 895 MB, breaking the bounded-space
+                    // property those tests exist to check. Once something
+                    // captures the frame its count rises and the next binding
+                    // starts a fresh one, which is the old behaviour exactly
+                    // where the old behaviour mattered.
+                    if own_frame && Rc::strong_count(&current_env) == 1 {
+                        current_env.define(Rc::clone(name), val);
+                    } else {
+                        let new_env = Rc::new(Environment::with_parent(current_env.clone()));
+                        new_env.define(Rc::clone(name), val);
+                        current_env = new_env;
+                        own_frame = true;
+                    }
+                    current_expr = Rc::clone(body);
                 }
 
                 CpsExprKind::LetCont {
@@ -140,7 +171,7 @@ impl<'a> CpsEvaluator<'a> {
                         cont_env: cont_env.clone(),
                     };
                     cont_env = cont_env.insert(name.clone(), cont);
-                    current_expr = body.as_ref().clone();
+                    current_expr = Rc::clone(body);
                 }
 
                 CpsExprKind::If {
@@ -151,9 +182,9 @@ impl<'a> CpsEvaluator<'a> {
                     let test_val =
                         try_catchable!(self.eval_trivial_tagged(test, &current_env, &cont_env));
                     current_expr = if test_val.is_truthy() {
-                        consequent.as_ref().clone()
+                        Rc::clone(consequent)
                     } else {
-                        alternate.as_ref().clone()
+                        Rc::clone(alternate)
                     };
                 }
 
@@ -166,7 +197,7 @@ impl<'a> CpsEvaluator<'a> {
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
                     try_catchable!(self.set_var_tagged(var, scopes, val, &current_env));
-                    current_expr = cont.as_ref().clone();
+                    current_expr = Rc::clone(cont);
                 }
 
                 CpsExprKind::Define {
@@ -185,8 +216,8 @@ impl<'a> CpsEvaluator<'a> {
                     //
                     // Bound under its scopes, with a name-only view of the
                     // same cell — see `Environment::define_scoped_definition`.
-                    def_env.define_scoped_definition(name.to_string(), scopes.clone(), val);
-                    current_expr = cont.as_ref().clone();
+                    def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
+                    current_expr = Rc::clone(cont);
                 }
 
                 CpsExprKind::Prompt { tag, body, cont } => {
@@ -201,7 +232,7 @@ impl<'a> CpsEvaluator<'a> {
                         dynamic_winds: current_winds.clone(),
                     });
 
-                    current_expr = body.as_ref().clone();
+                    current_expr = Rc::clone(body);
                 }
 
                 // Note: CpsExpr::Parameterize has been removed.

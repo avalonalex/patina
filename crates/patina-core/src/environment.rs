@@ -3,7 +3,8 @@ use crate::scope::ScopeSet;
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
+use smallvec::SmallVec;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -21,6 +22,11 @@ pub struct ScopedBinding {
     pub(crate) visible_by_name: bool,
 }
 
+/// The bindings of one name in one environment: one per scope set it is bound
+/// at, which is one in all but the rare shadowing case. Inline, so binding a
+/// macro-introduced parameter does not allocate a `Vec` per call.
+type ScopedBindingList = SmallVec<[ScopedBinding; 1]>;
+
 /// The scoped bindings of one environment, plus the one fact a lookup needs
 /// before it is worth searching them.
 ///
@@ -34,13 +40,13 @@ pub struct ScopedBinding {
 /// Derefs to the map, so the accessors that only read it are unchanged.
 #[derive(Debug, Default)]
 struct ScopedTable {
-    map: FxHashMap<String, Vec<ScopedBinding>>,
+    map: FxHashMap<Rc<str>, ScopedBindingList>,
     /// Whether any binding here is visible to a name-only lookup.
     any_visible_by_name: bool,
 }
 
 impl std::ops::Deref for ScopedTable {
-    type Target = FxHashMap<String, Vec<ScopedBinding>>;
+    type Target = FxHashMap<Rc<str>, ScopedBindingList>;
     fn deref(&self) -> &Self::Target {
         &self.map
     }
@@ -63,23 +69,62 @@ impl std::ops::DerefMut for ScopedTable {
 type AliasTarget = (Option<Rc<Environment>>, Rc<str>);
 
 /// Alias name -> the binding it forwards to.
-type AliasBindings = FxHashMap<String, AliasTarget>;
+type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
 
-/// Simple (non-scoped) binding storage: name → slot index into `slots`.
+/// Simple (non-scoped) binding storage: an append-only list of slots, each
+/// holding its own name, with a hash index built only for large environments.
 ///
 /// Slots are append-only: a binding's slot never moves or disappears once
 /// created, and redefining a name overwrites its slot in place. The VM's
 /// per-site global caches rest on this invariant (see `GlobalCacheEntry`
 /// in patina-vm), so every mutation must go through these methods.
+///
+/// Nearly every environment the tree-walker builds is a frame of one or two
+/// bindings — a CPS `LetVal` temporary, a lambda's parameters — and it builds
+/// several per procedure call. A `HashMap` charges such a frame a table
+/// allocation for its first binding and a hash for every lookup, which is
+/// most of what the frame costs. So a small frame lives inline and is scanned
+/// linearly, and the index is built only when one grows past `LINEAR_MAX`:
+/// in practice the global environment and the per-library environments, the
+/// ones where a linear scan would actually be the wrong shape.
 #[derive(Debug, Default)]
 struct Bindings {
-    map: FxHashMap<String, u32>,
-    slots: Vec<TaggedValue>,
+    /// Bound names in slot order: a name's slot *is* its index here.
+    names: SmallVec<[Rc<str>; 3]>,
+    /// Values, indexed by slot. Kept beside `names` rather than paired with
+    /// them so `for_each_local_value` can hand the GC a plain slice.
+    slots: SmallVec<[TaggedValue; 3]>,
+    /// name → slot, present only above `LINEAR_MAX` entries.
+    index: Option<Box<FxHashMap<Rc<str>, u32>>>,
+}
+
+/// Frames up to this many bindings are searched linearly, without a hash index.
+const LINEAR_MAX: usize = 8;
+
+/// Does a stored binding name match the name being looked up?
+///
+/// The address check is the point. The CPS transform gives a `let`-bound
+/// temporary and every reference to it the *same* `Rc<str>`, and the
+/// evaluator binds and looks up through that symbol, so on the hot path the
+/// two `&str`s are the same slice and an address comparison settles it
+/// without touching the bytes. Names that reach here from different symbols —
+/// a global, say — fall through to the byte comparison and are unaffected.
+#[inline]
+fn name_matches(candidate: &str, name: &str) -> bool {
+    (std::ptr::eq(candidate.as_ptr(), name.as_ptr()) && candidate.len() == name.len())
+        || candidate == name
 }
 
 impl Bindings {
     fn slot_of(&self, name: &str) -> Option<u32> {
-        self.map.get(name).copied()
+        match &self.index {
+            Some(index) => index.get(name).copied(),
+            None => self
+                .names
+                .iter()
+                .position(|n| name_matches(n, name))
+                .map(|i| i as u32),
+        }
     }
 
     fn read_slot(&self, slot: u32) -> TaggedValue {
@@ -95,17 +140,40 @@ impl Bindings {
     }
 
     /// Define semantics: overwrite the existing slot or append a new one.
-    fn insert(&mut self, name: String, value: TaggedValue) {
-        match self.map.entry(name) {
-            std::collections::hash_map::Entry::Occupied(e) => {
-                let slot = *e.get();
-                self.slots[slot as usize] = value;
+    fn insert(&mut self, name: Rc<str>, value: TaggedValue) {
+        // A fresh frame is the common case on the tree-walker's hot path —
+        // one is built per `let`-bound temporary and per call — and it has
+        // nothing to search.
+        if !self.names.is_empty()
+            && let Some(slot) = self.slot_of(&name)
+        {
+            self.slots[slot as usize] = value;
+            return;
+        }
+        let slot = self.names.len() as u32;
+        self.slots.push(value);
+        match &mut self.index {
+            Some(index) => {
+                index.insert(Rc::clone(&name), slot);
+                self.names.push(name);
             }
-            std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(self.slots.len() as u32);
-                self.slots.push(value);
+            None => {
+                self.names.push(name);
+                if self.names.len() > LINEAR_MAX {
+                    let mut index = FxHashMap::default();
+                    index.reserve(self.names.len());
+                    for (i, n) in self.names.iter().enumerate() {
+                        index.insert(Rc::clone(n), i as u32);
+                    }
+                    self.index = Some(Box::new(index));
+                }
             }
         }
+    }
+
+    /// Every bound name, in slot order.
+    fn names(&self) -> impl Iterator<Item = &Rc<str>> {
+        self.names.iter()
     }
 }
 
@@ -144,22 +212,22 @@ fn fresh_env_id() -> u64 {
 ///    name-only view of a scoped definition **only when this resolution did
 ///    not just reject it**. A binding the rule refused stays refused; the
 ///    fallback answering it anyway was triage family 36.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Environment {
     /// Shared heap for TaggedValue interpretation
     heap: SharedHeap,
     /// Simple name-based bindings (for built-ins and top-level)
     /// Stores TaggedValue internally for memory efficiency
-    bindings: Rc<RefCell<Bindings>>,
-    /// Process-unique id for this environment's simple bindings, minted at
-    /// construction and shared by clones (which alias the same bindings).
-    /// Never reused, unlike an address — see `GlobalCacheEntry` in patina-vm
-    /// for the cache soundness argument, and `gc_identity` for the
-    /// address-based identity the GC uses to dedup *live* environments.
+    bindings: RefCell<Bindings>,
+    /// Process-unique id for this environment, minted at construction and
+    /// shared by every holder of its `Rc`. Never reused, unlike an address —
+    /// see `GlobalCacheEntry` in patina-vm for the cache soundness argument,
+    /// and `gc_identity` for the address-based identity the GC uses to dedup
+    /// *live* environments.
     env_id: u64,
     /// Scope-aware bindings (for scope sets hygiene)
     /// Each name can have multiple bindings with different scope sets
-    scoped_bindings: Rc<RefCell<ScopedTable>>,
+    scoped_bindings: RefCell<ScopedTable>,
     /// Bindings installed by macro expansion that point at a binding in
     /// another environment instead of holding a value.
     ///
@@ -171,7 +239,18 @@ pub struct Environment {
     /// The indirection is deliberate: resolving through the alias on every
     /// lookup means a later `set!` on the original binding is visible, which
     /// copying the value at expansion time would silently freeze.
-    alias_bindings: Rc<RefCell<AliasBindings>>,
+    alias_bindings: RefCell<AliasBindings>,
+    /// Whether `alias_bindings` holds anything, and whether `scoped_bindings`
+    /// holds a name-visible definition.
+    ///
+    /// Both questions are asked of every frame a name lookup walks past, and
+    /// the answer is no for almost every frame — a lambda's parameters are
+    /// scoped bindings but not *visible* ones, and aliases exist only where a
+    /// macro was expanded. Kept outside the `RefCell`s they describe so that
+    /// walking a chain of frames costs a load per frame rather than two
+    /// borrow-flag round trips.
+    has_aliases: Cell<bool>,
+    has_visible_scoped: Cell<bool>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -185,10 +264,12 @@ impl Environment {
     pub fn with_heap(heap: SharedHeap) -> Self {
         Environment {
             heap,
-            bindings: Rc::new(RefCell::new(Bindings::default())),
+            bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
-            scoped_bindings: Rc::new(RefCell::new(ScopedTable::default())),
-            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            scoped_bindings: RefCell::new(ScopedTable::default()),
+            alias_bindings: RefCell::new(FxHashMap::default()),
+            has_aliases: Cell::new(false),
+            has_visible_scoped: Cell::new(false),
             parent: None,
         }
     }
@@ -197,10 +278,12 @@ impl Environment {
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
             heap: parent.heap.clone(),
-            bindings: Rc::new(RefCell::new(Bindings::default())),
+            bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
-            scoped_bindings: Rc::new(RefCell::new(ScopedTable::default())),
-            alias_bindings: Rc::new(RefCell::new(FxHashMap::default())),
+            scoped_bindings: RefCell::new(ScopedTable::default()),
+            alias_bindings: RefCell::new(FxHashMap::default()),
+            has_aliases: Cell::new(false),
+            has_visible_scoped: Cell::new(false),
             parent: Some(parent),
         }
     }
@@ -241,7 +324,8 @@ impl Environment {
     ///
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
-    pub fn define(&self, name: String, value: TaggedValue) {
+    pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
+        let name = name.into();
         // A plain binding is reachable by name and by nothing else, so
         // `byname=true` here is a property of the table, not a decision.
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
@@ -308,28 +392,38 @@ impl Environment {
     /// This is the primary API - returns TaggedValue directly.
     /// For the simple name-based lookup for identifiers.
     pub fn get(&self, name: &str) -> Option<TaggedValue> {
-        if let Some(tv) = self.bindings.borrow().get(name) {
-            return Some(tv);
+        // Walked iteratively rather than by recursing into the parent: the
+        // tree-walker builds a frame per `let`-bound temporary, so this chain
+        // is the hottest loop in the backend.
+        let mut env = self;
+        loop {
+            if let Some(tv) = env.bindings.borrow().get(name) {
+                return Some(tv);
+            }
+            // Follow a macro-expansion alias into the environment the macro was
+            // defined in. Checked after real bindings so a local definition always
+            // wins, and before the parent so the alias is not shadowed by an
+            // unrelated outer binding of the same (unique) name.
+            if env.has_aliases.get()
+                && let Some((target_env, target_name)) = env.alias_target(name)
+            {
+                return match target_env {
+                    Some(target) => target.get(&target_name),
+                    None => env.get(&target_name),
+                };
+            }
+            // A macro-introduced definition lives under its scopes; this is the
+            // name-only view of it. Checked after real bindings and aliases, so a
+            // binding written in source always wins.
+            if env.has_visible_scoped.get()
+                && let Some(i) = env.visible_scoped_index(name)
+            {
+                return env.scoped_bindings.borrow()[name]
+                    .get(i)
+                    .map(|b| b.tagged_value);
+            }
+            env = env.parent.as_deref()?;
         }
-        // Follow a macro-expansion alias into the environment the macro was
-        // defined in. Checked after real bindings so a local definition always
-        // wins, and before the parent so the alias is not shadowed by an
-        // unrelated outer binding of the same (unique) name.
-        if let Some((target_env, target_name)) = self.alias_target(name) {
-            return match target_env {
-                Some(env) => env.get(&target_name),
-                None => self.get(&target_name),
-            };
-        }
-        // A macro-introduced definition lives under its scopes; this is the
-        // name-only view of it. Checked after real bindings and aliases, so a
-        // binding written in source always wins.
-        if let Some(i) = self.visible_scoped_index(name) {
-            return self.scoped_bindings.borrow()[name]
-                .get(i)
-                .map(|b| b.tagged_value);
-        }
-        self.parent.as_ref().and_then(|p| p.get(name))
     }
 
     /// Resolve a macro-expansion alias installed here, if any.
@@ -384,13 +478,19 @@ impl Environment {
     /// Keyed by `alias`, so a second install under the same name replaces the
     /// first. For the bare-name kind that means the most recently compiled
     /// definition of a given spelling is the one relinking reaches.
-    pub fn define_alias(&self, alias: String, target_env: Rc<Environment>, target_name: Rc<str>) {
+    pub fn define_alias(
+        &self,
+        alias: impl Into<Rc<str>>,
+        target_env: Rc<Environment>,
+        target_name: Rc<str>,
+    ) {
         // A target that is this environment is stored as `None`: see
         // `AliasTarget`.
         let target_env = (target_env.env_id() != self.env_id()).then_some(target_env);
+        self.has_aliases.set(true);
         self.alias_bindings
             .borrow_mut()
-            .insert(alias, (target_env, target_name));
+            .insert(alias.into(), (target_env, target_name));
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)
@@ -398,9 +498,15 @@ impl Environment {
     /// Use this when creating bindings from binding forms (lambda, let, etc.)
     /// where you want to track the lexical scope for hygiene.
     /// This is the primary API - accepts TaggedValue directly.
-    pub fn define_with_scopes(&self, name: String, scopes: ScopeSet, value: TaggedValue) {
+    pub fn define_with_scopes(
+        &self,
+        name: impl Into<Rc<str>>,
+        scopes: ScopeSet,
+        value: TaggedValue,
+    ) {
         use crate::macro_debug;
 
+        let name = name.into();
         if macro_debug::is_enabled() {
             let desc = crate::debug_format::format_tagged(value, &self.heap.borrow());
             println!(
@@ -425,7 +531,7 @@ impl Environment {
     /// evaluation for the life of the process.
     fn insert_scoped(
         &self,
-        name: String,
+        name: Rc<str>,
         scopes: ScopeSet,
         value: TaggedValue,
         visible_by_name: bool,
@@ -435,6 +541,9 @@ impl Environment {
             return;
         }
         crate::scope_trace::bind(&name, &scopes, visible_by_name);
+        if visible_by_name {
+            self.has_visible_scoped.set(true);
+        }
         let mut table = self.scoped_bindings.borrow_mut();
         table.any_visible_by_name |= visible_by_name;
         let bindings = table.entry(name).or_default();
@@ -480,8 +589,13 @@ impl Environment {
     /// the bare name as well, and a `set!` through the scoped path then left
     /// the two disagreeing — the freeze `alias_bindings` names as the reason
     /// its own indirection exists.
-    pub fn define_scoped_definition(&self, name: String, scopes: ScopeSet, value: TaggedValue) {
-        self.insert_scoped(name, scopes, value, true);
+    pub fn define_scoped_definition(
+        &self,
+        name: impl Into<Rc<str>>,
+        scopes: ScopeSet,
+        value: TaggedValue,
+    ) {
+        self.insert_scoped(name.into(), scopes, value, true);
     }
 
     /// Position of the most recent name-visible scoped definition of `name`
@@ -842,13 +956,17 @@ impl Environment {
         if let Some(tv) = self.bindings.borrow().get(name) {
             return Some(tv);
         }
-        if let Some((target_env, target_name)) = self.alias_target(name) {
+        if self.has_aliases.get()
+            && let Some((target_env, target_name)) = self.alias_target(name)
+        {
             return match target_env {
                 Some(env) => env.get(&target_name),
                 None => self.get(&target_name),
             };
         }
-        if let Some(i) = self.visible_scoped_index(name) {
+        if self.has_visible_scoped.get()
+            && let Some(i) = self.visible_scoped_index(name)
+        {
             let table = self.scoped_bindings.borrow();
             // `.get(i)`, as `get` reads the same table — the two copies of
             // this walk must not disagree on out-of-bounds behavior. One
@@ -911,11 +1029,16 @@ impl Environment {
 
     /// Get all variable names defined in this environment and parent environments
     pub fn get_all_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.bindings.borrow().map.keys().cloned().collect();
+        let mut names: Vec<String> = self
+            .bindings
+            .borrow()
+            .names()
+            .map(|k| k.to_string())
+            .collect();
         // Include names from scoped bindings
         for name in self.scoped_bindings.borrow().keys() {
-            if !names.contains(name) {
-                names.push(name.clone());
+            if !names.iter().any(|n| n.as_str() == name.as_ref()) {
+                names.push(name.to_string());
             }
         }
         if let Some(parent) = &self.parent {
@@ -932,9 +1055,9 @@ impl Environment {
     /// This is useful for library imports where we need to iterate over all exports.
     pub fn bindings(&self) -> Vec<(String, TaggedValue)> {
         let b = self.bindings.borrow();
-        b.map
-            .iter()
-            .map(|(k, &i)| (k.clone(), b.read_slot(i)))
+        b.names()
+            .enumerate()
+            .map(|(i, k)| (k.to_string(), b.read_slot(i as u32)))
             .collect()
     }
 
@@ -949,11 +1072,12 @@ impl Environment {
 
     /// Stable identity for GC deduplication.
     ///
-    /// Keyed on the shared bindings map rather than the `Environment` struct:
-    /// `Environment` is `Clone`, so several structs (and several
-    /// `Rc<Environment>`s) can alias the same bindings.
+    /// The struct's own address. An environment is only ever shared by its
+    /// `Rc`, never copied — `Environment` is deliberately not `Clone`, since
+    /// its binding tables are owned inline — so one address means one
+    /// environment, and a collection cannot free one while tracing it.
     pub fn gc_identity(&self) -> usize {
-        Rc::as_ptr(&self.bindings) as usize
+        self as *const Environment as usize
     }
 
     /// Visit every value bound locally (simple and scoped bindings, not the
@@ -975,7 +1099,7 @@ impl Environment {
     /// private referenced by an exported macro -- are live, but the alias edge
     /// is an `Rc<Environment>` in a side table rather than a `TaggedValue` in a
     /// slot, so `for_each_local_value` cannot see it.
-    pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Environment)) {
+    pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Rc<Environment>)) {
         for (env, _) in self.alias_bindings.borrow().values() {
             // A `None` target is this environment, which the caller is already
             // tracing.
@@ -1037,13 +1161,18 @@ mod tests {
     }
 
     #[test]
-    fn test_env_ids_unique_and_shared_by_clones() {
-        let a = Environment::new();
+    fn test_env_ids_unique_and_nonzero() {
+        let a = Rc::new(Environment::new());
         let b = Environment::new();
         assert_ne!(a.env_id(), 0);
         assert_ne!(a.env_id(), b.env_id());
-        // A clone aliases the same bindings and must carry the same id.
-        assert_eq!(a.clone().env_id(), a.env_id());
+        // Sharing an environment is sharing its `Rc`, so an id is stable for
+        // every holder of it. `Environment` is deliberately not `Clone`: its
+        // binding tables are owned inline rather than behind an `Rc`, so a
+        // value copy would be a *fork*, and two environments that disagreed
+        // about `x` would both claim to be the one holding it.
+        let alias = Rc::clone(&a);
+        assert_eq!(alias.env_id(), a.env_id());
     }
 
     #[test]
