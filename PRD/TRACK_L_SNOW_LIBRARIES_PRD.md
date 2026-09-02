@@ -1599,7 +1599,10 @@ the continuation restores along with the frame.
 
 A **third** symptom converges as a consequence, not by separate repair, and was
 found while writing the tests: a continuation captured in the *before* or
-*after* thunk and re-entered after the call has returned. While the nested loop
+*after* thunk and re-entered after the call has returned. Filed as **issue
+#159** rather than folded in silently, because #157 documents only the body
+case and this failure looks different — an *uninitialised* value, and a call
+that stops dead rather than one that mis-orders its thunks. While the nested loop
 is still on the Rust stack a thunk's own `call/cc` retry loop resumes fine —
 that worked on `main` and is pinned separately as
 `the_value_form_of_dynamic_wind_captures_inside_its_own_thunks`, labelled as

@@ -684,8 +684,8 @@ fn the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body() {
 }
 
 /// A continuation captured in the value form's **before** or **after** thunk
-/// and re-entered after the call has returned — converged 2026-09-02 with the
-/// body case above, and by the same change.
+/// and re-entered after the call has returned — issue #159, converged
+/// 2026-09-02 with the body case above and by the same change.
 ///
 /// The value form ran each thunk on a nested dispatch loop. While that loop is
 /// still on the Rust stack a continuation captured in the thunk resumes fine —
@@ -704,7 +704,12 @@ fn the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body() {
 /// `dynamic-wind` — the body, the after-thunk, the value — never ran at all.
 /// Gauche and the tree-walker both give the two answers above. (chibi answers
 /// `(val ())` to both; its continuation does not carry the `set!`s to `log`,
-/// which is a different question from the one asked here.)
+/// which is a different question from the one asked here, so it cannot
+/// arbitrate this row.)
+///
+/// Filed separately from #157 because that issue documents only the body case,
+/// and the failure here is visibly different: not a wrong value but an
+/// uninitialised one, and not a mis-ordered thunk but a call that stops dead.
 #[test]
 fn the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks() {
     assert_program_eval_to(
@@ -743,7 +748,8 @@ fn the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks() {
 ///
 /// Not a converged row — `main` answered this correctly too, because the
 /// nested dispatch loop the thunk ran on was still on the Rust stack to resume
-/// into. It is here as a guard on the rewritten path: the thunks are ordinary
+/// into. It is the *late* re-entry, after that loop is gone, that was broken
+/// (#159, the row above). It is here as a guard on the rewritten path: the thunks are ordinary
 /// frames of `value_wind_stub` now, and this is the shape that would notice if
 /// the stub's register window or its `Call` sequence got the thunk's own
 /// re-entry wrong.
