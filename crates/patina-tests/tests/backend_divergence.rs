@@ -236,41 +236,37 @@ fn apply_values_agrees() {
     assert_program_eval_to("(apply values (list 7))", "7");
 }
 
-/// Tree-walker: a `guard` handler runs *inside* the dynamic extent of the
-/// erroring expression, before `dynamic-wind`'s after-thunk.
+/// A `guard` clause runs after the unwind, on both backends — converged
+/// 2026-09-01 with Track L triage families 22 and 28.
 ///
 /// ```text
 ///   VM, chibi, Gauche => (before after handler)
-///   tree-walker       => (before handler after)
+///   tree-walker       => (before handler after)   until 2026-09-01
 /// ```
 ///
-/// R7RS §4.2.7 puts the unwind first and both references agree with the VM.
-/// Not cosmetic: a handler writing to `current-output-port` writes into
-/// whatever the un-unwound extent installed, which is how it was found.
+/// R7RS §4.2.7 evaluates the clauses in the `guard`'s own dynamic
+/// environment, so the after-thunk runs before them. Not cosmetic: a handler
+/// writing to `current-output-port` wrote into whatever the un-unwound extent
+/// installed, which is how it was found.
 ///
-/// Not `assert_divergence` — that needs the broken backend to *fail*, and this
-/// one returns a plausible wrong answer.
+/// The tree-walker diverged because `(error "x")` reached the handler from
+/// `apply_error`, which — alone among the three raise paths — did not unwind
+/// first. The fix took the *other* two down to `apply_error`'s behaviour
+/// rather than the reverse: no raise path unwinds now, and the unwind comes
+/// from `guard-k`, which is where R7RS puts it. Kept as the regression guard
+/// for both backends. See {GUARD_UNWIND_ORDER}.
 #[test]
-fn guard_handler_runs_before_the_unwind_on_the_tree_walker() {
-    const PROGRAM: &str = r#"
+fn a_guard_clause_runs_after_the_unwind() {
+    assert_program_eval_to(
+        r#"
         (define log '())
         (guard (e (#t (set! log (cons 'handler log))))
           (dynamic-wind (lambda () (set! log (cons 'before log)))
                         (lambda () (error "x"))
                         (lambda () (set! log (cons 'after log)))))
         (reverse log)
-    "#;
-    assert_eq!(
-        eval_program_vm(PROGRAM),
+    "#,
         "(before after handler)",
-        "the VM matches chibi and Gauche; if this changed, it regressed"
-    );
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
-        "(before handler after)",
-        "\n[tree-walker] NO LONGER DIVERGES — it now unwinds before the handler.\n\
-         Replace both assertions with assert_program_eval_to(PROGRAM, \
-         \"(before after handler)\") and update {GUARD_UNWIND_ORDER}."
     );
 }
 
@@ -489,24 +485,28 @@ fn unbound_variable_is_catchable_in_every_position() {
     }
 }
 
-// ─── the nested trampoline, in its resource-corruption form ──────────────────
+// ─── the tree-walker's nested trampoline ─────────────────────────────────────
 
-/// Tree-walker: `I/O error: port is closed`.
+/// A `call/cc` retry loop inside a `call-with-port` callback answers `"012"`
+/// on both backends — converged 2026-09-01, but read the mechanism before
+/// counting it as a fix.
 ///
-/// A `call/cc` retry loop inside a `call-with-port` callback. The callback has
-/// not returned — the continuation resumes *inside* it — but the tree-walker's
-/// nested trampoline reads the invoke as an escape and closes the port, so the
-/// next write in the same callback fails on a port the program still holds.
+/// The tree-walker used to fail with `I/O error: port is closed`: the callback
+/// has not returned — the continuation resumes *inside* it — but the nested
+/// trampoline reads the invoke as an escape, and `call-with-port` closed the
+/// port on every exit, so the next write in the same callback failed on a port
+/// the program still held (audit F6, the resource-corruption manifestation of
+/// the nested-trampoline defect in Track L §6).
 ///
-/// The root cause is the already-tracked nested-trampoline defect (Track L §6):
-/// wind and callback thunks run on a trampoline that does not share the outer
-/// one's state, so what came back through Rust cannot be told from what
-/// escaped. What is new here is the *manifestation* — a resource closed while
-/// still in use, rather than an error routed to the wrong handler — which is
-/// why it earns its own row (audit F6). VM and chibi both answer `"012"`.
+/// What changed is `call-with-port`, not the trampoline: R7RS 6.13.1 closes
+/// the port only "if `proc` returns", so an escape leaves it open now (found
+/// by review of triage families 22/28). The misread is still there — the two
+/// tests below and `callback_using_its_own_continuation_yields_nothing_on_the_tree_walker`
+/// show it — it just no longer destroys a resource on this shape. VM and
+/// chibi answered `"012"` throughout.
 #[test]
-fn call_with_port_closes_the_port_on_an_in_extent_continuation_invoke() {
-    assert_divergence(
+fn call_with_port_survives_an_in_extent_continuation_invoke() {
+    assert_program_eval_to(
         r#"(call-with-port (open-output-string)
              (lambda (p)
                (let ((n 0))
@@ -515,10 +515,7 @@ fn call_with_port_closes_the_port_on_an_in_extent_continuation_invoke() {
                    (set! n (+ n 1))
                    (if (< n 3) (k k)))
                  (get-output-string p))))"#,
-        On::Vm,
         "\"012\"",
-        ErrorClass::AtRuntime,
-        GUARD_UNWIND_ORDER,
     );
 }
 
@@ -569,5 +566,175 @@ fn a_continuation_from_an_after_thunk_skips_the_outer_after_on_the_tree_walker()
         "\n[tree-walker] NO LONGER DIVERGES — it now runs the outer after thunk.\n\
          Replace both assertions with a single assert_program_eval_to on the VM's \
          answer and close the entry in scheme_tests/reports/larceny_triage.md."
+    );
+}
+
+/// Tree-walker: `unhandled exception: sym` — a declining `guard` clause
+/// inside a primitive's callback loses the outer `guard`.
+///
+/// R7RS 7.3's `guard` re-raises a declined condition by jumping back *into*
+/// the raise point through `handler-k` and calling `raise-continuable` there,
+/// so the next handler out is the one that was installed around the raise.
+/// That jump lands inside the `call-with-port` callback, which runs on the
+/// tree-walker's nested trampoline — and that trampoline starts with an empty
+/// handler stack, so the re-raise finds nothing. The same nested-trampoline
+/// defect as the two tests above, in its third manifestation; it became
+/// reachable on 2026-09-01 when `guard` took the reference expansion (triage
+/// families 22/28). The old expansion re-raised from the clause side, outside
+/// the callback, and happened to find the outer handler. Both raise forms
+/// reach it. VM, chibi and Gauche: `(outer sym)`.
+#[test]
+fn a_declining_guard_inside_a_port_callback_loses_the_outer_guard_on_the_tree_walker() {
+    for raise in ["raise", "raise-continuable"] {
+        assert_divergence(
+            &format!(
+                "(guard (outer (#t (list 'outer outer)))
+                   (call-with-port (open-input-string \"a\")
+                     (lambda (p) (guard (e ((string? e) 'no)) ({raise} 'sym)))))"
+            ),
+            On::Vm,
+            "(outer sym)",
+            ErrorClass::AtRuntime,
+            GUARD_UNWIND_ORDER,
+        );
+    }
+}
+
+/// Tree-walker: a raise inside a primitive's callback reaches the outer
+/// `guard` as the wrong object.
+///
+/// The callback's `(raise 'x)` finds no handler on the nested trampoline, so
+/// that trampoline reports it as an `unhandled exception: x` *error*, which
+/// the outer trampoline then routes to the `guard` as an error object. A
+/// clause testing for `'x` declines, and the program dies re-raising an
+/// object nobody raised. VM, chibi, Gauche: `(sym x)`. Older than triage
+/// families 22/28 — `main` gave the same — and the same trampoline defect.
+#[test]
+fn a_raise_inside_a_port_callback_reaches_the_guard_as_an_error_object_on_the_tree_walker() {
+    assert_divergence(
+        r#"(guard (e ((symbol? e) (list 'sym e))
+                    ((error-object? e) (raise (error-object-message e))))
+             (call-with-port (open-input-string "a") (lambda (p) (raise 'x))))"#,
+        On::Vm,
+        "(sym x)",
+        ErrorClass::AtRuntime,
+        GUARD_UNWIND_ORDER,
+    );
+}
+
+// ─── the VM's raise paths, where the tree-walker is right ─────────────────────
+
+/// VM: a `guard` is gone after one of its clauses declines a
+/// `raise-continuable`.
+///
+/// ```text
+///   (with-exception-handler (lambda (e) (list 'I e))
+///     (lambda () (guard (e ((eq? e 'y) 'caught-y))
+///       (list (raise-continuable 'x) (raise-continuable 'y)))))
+///   tree-walker, chibi, Gauche => caught-y
+///   VM                         => ((I x) (I y))
+/// ```
+///
+/// The `guard`'s handler declines `'x`, which re-raises it through
+/// `handler-k` to the outer handler; that returns `(I x)`, and the body
+/// continues to raise `'y` — which the `guard` must catch. On the VM the
+/// continuable path in `vm_raise_value` pops the handler to run it and
+/// re-pushes it only when the handler *returns*; `guard`'s handler leaves
+/// through `handler-k` instead, so the re-push is skipped and the `guard` is
+/// silently uninstalled for the rest of its body. Found by review of triage
+/// families 22/28 (2026-09-01). The skipped re-push predates them; what they
+/// changed is the symptom — with the old expansion this program answered
+/// `(I x)` on the VM and died with a non-continuable error on the
+/// tree-walker, so neither backend was right before. Recorded in
+/// {GUARD_UNWIND_ORDER}.
+#[test]
+fn a_guard_that_declined_a_continuable_raise_is_gone_on_the_vm() {
+    const PROGRAM: &str = r#"
+        (with-exception-handler (lambda (e) (list 'I e))
+          (lambda () (guard (e ((eq? e 'y) 'caught-y))
+            (list (raise-continuable 'x) (raise-continuable 'y)))))
+    "#;
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "caught-y",
+        "the tree-walker keeps the guard installed; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_vm(PROGRAM),
+        "((I x) (I y))",
+        "\n[vm] NO LONGER DIVERGES — the guard survives a declined raise-continuable.\n\
+         Replace both assertions with a single assert_program_eval_to on `caught-y` \
+         and close the entry in PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
+    );
+}
+
+/// VM: a handler that returns from a non-continuable `raise` is not an
+/// error — the value it returned is delivered as the value of `(raise …)`.
+///
+/// R7RS 6.11: "If the handler returns, a secondary exception is raised in the
+/// same dynamic environment as the handler." The tree-walker raises it, and
+/// the outer `guard` sees the error object. The VM's non-continuable path in
+/// `vm_raise_value` cannot tell a handler that returned from one that escaped,
+/// because both come back through the same nested run loop, so it delivers
+/// the handler's value to the raise's destination register as if the raise had
+/// been continuable — `(returned)` here, and `+: expected number` if the
+/// raise sat under an arithmetic primitive. Present on `main` before triage
+/// families 22/28; recorded in {GUARD_UNWIND_ORDER}.
+///
+/// The second program is the same hole reached from a *primitive's* error
+/// rather than `raise`: the run loop routes a catchable `VmError` through
+/// `vm_raise_value` with register 0 as the destination, so the returning
+/// handler's value lands in register 0 and `car`'s own destination is left
+/// holding `()`.
+#[test]
+fn a_handler_returning_from_a_non_continuable_raise_is_not_an_error_on_the_vm() {
+    const SECONDARY: &str = "(outer \"exception handler returned from non-continuable exception\")";
+    for (program, vm_answer) in [
+        (
+            r#"(guard (o (#t (list 'outer (if (error-object? o) (error-object-message o) o))))
+                 (with-exception-handler (lambda (e) 'returned)
+                   (lambda () (list (raise 'x)))))"#,
+            "(returned)",
+        ),
+        (
+            r#"(guard (o (#t (list 'outer (if (error-object? o) (error-object-message o) o))))
+                 (with-exception-handler (lambda (e) 'returned)
+                   (lambda () (list (car 5)))))"#,
+            "(())",
+        ),
+    ] {
+        assert_eq!(
+            eval_program_tree_walker(program),
+            SECONDARY,
+            "the tree-walker raises the secondary exception; if this changed, it regressed"
+        );
+        assert_eq!(
+            eval_program_vm(program),
+            vm_answer,
+            "\n[vm] NO LONGER DIVERGES — a returning handler now raises the secondary \
+             exception.\nReplace both assertions with a single assert_program_eval_to on \
+             the tree-walker's answer and close the entry in \
+             PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
+        );
+    }
+}
+
+/// VM: a continuation used *as* the handler for a primitive's error is a
+/// fatal `continuation escaped past a synchronous boundary`.
+///
+/// `(call/cc (lambda (k) (with-exception-handler k thunk)))` is R7RS's own
+/// idiom for capturing a raised object, and triage family 24 made it work for
+/// `raise` on the VM. A `VmError` from a primitive takes the run loop's route
+/// into `vm_raise_value` instead, and `call_any`'s continuation signal is not
+/// caught on that path. The tree-walker answers `#t`, as chibi and Gauche do.
+/// Recorded in {GUARD_UNWIND_ORDER}.
+#[test]
+fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
+    assert_divergence(
+        "(error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5))))))",
+        On::TreeWalker,
+        "#t",
+        ErrorClass::AtRuntime,
+        GUARD_UNWIND_ORDER,
     );
 }

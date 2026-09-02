@@ -14,13 +14,15 @@ family 40 quarantined).
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
 packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
-deferred; L5.3's lanes: VM **22 of 33** suites clean (8445/8475), tree-walker **21 of 33**
-(8300/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
+deferred; L5.3's lanes: VM **22 of 33** suites clean (8447/8475), tree-walker **21 of 33**
+(8302/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
 spent** — the bundling queue is empty; what remains is SRFI 115 (only if the corpus justifies it)
 and the low-demand Tangerine trio 146/159/160. **L2 is the open bundling front** (`(chibi match)`,
 `(chibi io)`, `(chibi pathname)`, `(chibi show)`/SRFI 166 — the last also worth two corpus
 rows; `(chibi string)`, `(chibi optional)` and `(chibi filesystem)`'s portable half are done). The open defect queue is §6 Open plus the non-hygiene triage families;
-the largest single item is the exception-extent cluster (families 22+28 land together).
+the exception-extent cluster (families 22+28) closed 2026-09-01, together with
+the tree-walker `guard` ordering; two quarantined defects turned out to be its
+prerequisites and landed first as #149 and #150.
 **Scope decision:** **self-contained.** Patina measures and fixes its own compatibility with the popular third-party R7RS ecosystem using a harness that lives in this repo. No dependency on `snow-chibi`, a chibi installation, or any external package manager at build, test, or CI time. The `patina pkg` end-user fetcher and FFI remain deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing)
 
@@ -906,7 +908,7 @@ trips its test.
 | ✅ A nested `include` resolves against the wrong directory, and the base is chosen nondeterministically — *fixed 2026-08-24* | base | both |
 | ✅ A shadowed `...` is still the ellipsis, and a template's reference to a keyword-spelled definition-site local is rejected as syntax — *both fixed 2026-08-25*, and with them `let-syntax`'s body and transformer scoping (triage families 14, 15, 23). These **gated `base`**, which now loads and runs 1054 of 1064 on the VM (1053 on the tree-walker, whose one extra failure is a `dynamic-wind` divergence now quarantined as triage family 30). One defect underneath all of them: a local variable was not a binding but a set of *spellings* vetoing syntax resolution, unordered and skipped for any reference carrying scopes. Locals are scoped bindings now and one ordered resolution answers for keywords and variables alike; the ellipsis is decided per token by binding. Two earlier attempts were backed out after review (#111, #114) and their cases are pinned as acceptance tests | base | both |
 | ✅ The macro expander's walkers looped forever on a cyclic quoted datum (the scope flip is now a memoized, cycle-closing copy), and the program parser scoped datum labels to the parse rather than the datum — *fixed 2026-08-25* | base | both |
-| What `base` found while it briefly ran (triage families 21–25, each pinned): ✅ `let-values` binds sequentially and ✅ `read-line` does not end at a bare return — *both fixed 2026-08-25* (R7RS 7.3's `let-values`; one character loop for `read-line`); ✅ VM: `with-exception-handler` rejects a continuation as handler — *fixed 2026-08-25* (the VM's generic call path can invoke a continuation); ✅ `let-syntax` splices its body's definitions and its transformers see their siblings — *fixed 2026-08-25* with families 14/15; still open: a `guard` re-raise does not re-enter the dynamic extent — *diagnosed 2026-08-25* to `with-exception-handler` running its handler after the unwind (§6, pinned as family 28); the reference `guard` alone does not fix it, measured, and the two must land together | base | both |
+| What `base` found while it briefly ran (triage families 21–25, each pinned): ✅ `let-values` binds sequentially and ✅ `read-line` does not end at a bare return — *both fixed 2026-08-25* (R7RS 7.3's `let-values`; one character loop for `read-line`); ✅ VM: `with-exception-handler` rejects a continuation as handler — *fixed 2026-08-25* (the VM's generic call path can invoke a continuation); ✅ `let-syntax` splices its body's definitions and its transformers see their siblings — *fixed 2026-08-25* with families 14/15; ✅ a `guard` re-raise does not re-enter the dynamic extent — *diagnosed 2026-08-25* to `with-exception-handler` running its handler after the unwind (family 28), **fixed 2026-09-01** in four parts, two of which landed first on their own merits (#150 handler stack, #149 wind common prefix) because the reference `guard` routed ordinary traffic through two defects this entry had called neighbours. `base` goes 1069 → 1071 on the VM and 1068 → 1070 on the tree-walker | base | both |
 | Red-edition libraries unbundled, one suite each (nine at the start) — *`(scheme stream)`, `(scheme list-queue)` and `(scheme lseq)` done 2026-08-25* (SRFI 41 from the snow-fort tarball of the reference implementation with `stream-match` from chibi; SRFI 117 and 127 byte-identical from chibi, both plain R7RS over `(srfi 1)` — **superseded 2026-08-26**: chibi's copies carry four defects between them, so both bundles are the SRFIs' own reference implementations; the defects were reported as chibi-scheme #1179/#1180 and fixed upstream 2026-08-27, and `lib/srfi/PROVENANCE.md` records why the bundles stay the reference implementations anyway); ✅ all bundled as of 2026-08-26 — `ideque` (SRFI 134), `flonum` (SRFI 144), `text` (SRFI 135), `ephemeron` (SRFI 124, implemented in Rust: an ephemeron's defining property is what the collector does, so there was nothing to vendor) and `rlist` (SRFI 101, from chibi's R7RS adaptation, the SRFI's own distribution being R6RS). Every one of the 33 suites now loads | 0 suites | both |
 | ✅ SRFI 101's shadowing names exposed five hygiene defects (triage families 33–35, each pinned): a `let-syntax` keyword bound unscoped captured any macro's `quote`; the relinker skipped a `quote` head, so a library's template `quote` resolved to the imported one and expanded without end; a literal `'(1 2)` in a template carried its `quote` verbatim; the relinker renamed by spelling, rewriting the user's `(list …)` inside a macro call; and the VM's quasiquote called `list`/`append`/`list->vector` by name — *all fixed 2026-08-26*. Found by making chibi's `(srfi 101 test)` run; it now passes 56 of 56 on both backends. Review of the fix found the next layer, fixed the same day: a `let-syntax` now puts its scope on its body as written (Racket's rule) so a template-generated one binds and scopes its keyword correctly, `quote` inside a quasiquote is data with its unquotes evaluated, and the ellipsis-escape compiler compiles symbols hygienically; plus a use-site binding capturing a template's reference, quarantined as family 36 — measured 2026-08-28 to be wider than first recorded (a parameter or `let` binder captured on the tree-walker only, an *internal define* on **both** backends, the prerequisite for family 38's remaining half; PR #138 attempted that half directly and was closed unmerged). **Fixed 2026-08-31 in the triage doc's two steps**: the by-name fallback no longer resurrects a binding scope resolution rejected, and an internal define binds at the scopes of the body it stands in, like a parameter — the hygiene matrix reads 28 of 28 on both backends and family 38's fallback half closed with it. Step 1's review surfaced family 40 — the VM still resolves a cross-expansion macro-introduced global by bare name where chibi and the tree-walker now refuse; three divergence quarantines pin it, rooted in this section's relinking-by-name defect | — | both (quasiquote: VM; family 36: both) |
 | ✅ `equal?` does not terminate on circular structures — *fixed 2026-08-24* (worklist + lazily allocated visited set) | read, r6rs mutable-pairs | both |
@@ -1020,58 +1022,134 @@ failure is upstream's.
 ### Open
 
 **An exception handler runs after the unwind, not in the raise's dynamic
-extent** — ❌ **open**, both backends. Found 2026-08-25 while attempting
-Larceny's `guard` re-raise finding (triage family 22, which is this defect's
-visible symptom).
+extent** — ✅ **fixed 2026-09-01**, both backends. Found 2026-08-25 while
+attempting Larceny's `guard` re-raise finding (triage family 22, which is this
+defect's visible symptom).
 
 ```scheme
 (with-exception-handler (lambda (e) (log 'handler) 'handled)
   (lambda () (dynamic-wind (lambda () (log 'in))
                            (lambda () (raise-continuable 'x))
                            (lambda () (log 'out)))))
-;; Patina, both backends => (in out handler out)   — the after-thunk twice
-;; chibi, Gauche         => (in handler out)
+;; was, both backends    => (in out handler out)   — the after-thunk twice
+;; now, and chibi/Gauche => (in handler out)
 ```
 
 R7RS 6.11 calls the handler "in the dynamic environment of the call to
 `raise`, except that the current exception handler is the outer one". Both
-backends unwind to the handler's own wind depth first, so a `guard` cannot
-re-enter an extent that was left before its handler ran: nested guards log
+backends unwound to the handler's own wind depth first, so a `guard` could not
+re-enter an extent that was left before its handler ran: nested guards logged
 `(out in)` where both references log `(out in out in)`.
 
-**Measured, and the measurement refutes the two diagnoses this previously
-carried.** R7RS 7.3's reference `guard` — the double `call/cc` that jumps a
-continuation back to the raise point — was written and run: still `(out in)`
-on the VM, because that continuation is captured *after* the unwind. So
-neither `guard`'s expansion alone (what
-`nested_exception_handlers.rs::test_a_guard_re_raise_does_not_rewind_into_the_raiser`
-records) nor the handler machinery alone is the fix; both are.
+**The fix removes work rather than adding it.** A raise crosses no dynamic
+extent, so no after-thunk is due: no raise path unwinds now, and popping the
+handler stack is the only thing R7RS asks a raise to change. `guard`'s
+`guard-k` does the crossing. Four parts, none sufficient alone — two of them
+landed first, on their own merits, as **#150** (`CpsContinuation` carries the
+handler stack) and **#149** (the VM takes the common prefix of two wind
+stacks). What remains here is the raise paths and `guard` itself.
 
-Four things to know before taking it, each verified:
+Two things this entry had wrong, both corrected by running it:
 
-- **The unwind-first behaviour was deliberate**, 2026-03-01
-  (`PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` items 3–4),
-  closing `test_dynamic_wind_with_exception` and
-  `test_exception_in_dynamic_wind_body_after_runs`. Changing it reopens a
-  closed decision, and those two tests are what closed it.
-- **The tree-walker has two raise paths that disagree.** `(error "x")` runs
-  the handler *before* the unwind — the §6 divergence below — while
-  `(raise 'x)` unwinds first. Sites: VM `vm_raise_value`; tree-walker
-  `apply_raise` (`cps_eval/application.rs`) and `maybe_route_error_through_cps`
-  (`cps_eval/exceptions.rs`).
-- **Order.** The reference `guard` must land *with or before* the raise-path
-  change. With today's `guard` and a handler that no longer unwinds first,
-  three green tests flip: `cps_features.rs`'s two above and
-  `backend_divergence.rs`'s `guard_handler_runs_before_the_unwind_on_the_tree_walker`.
-- **The tree-walker cannot take the reference `guard` yet**: under it,
-  `6.11 Exceptions` runs 27 of 30 with `unhandled continuable exception` —
-  its handler stack does not survive the jump back, the `CpsContinuation` gap
-  recorded below. Substituting `raise` for `raise-continuable` does not help.
+- **There were three tree-walker raise paths, not two.** `apply_error`
+  (`cps_eval/application.rs`) is the third, and it is what produced the
+  `(error "x")` divergence below — alone among the three it never unwound. It
+  needed no change: it already had the shape R7RS asks for, and the fix
+  brought the other two down to it.
+- **It does not reopen the 2026-03-01 decision.**
+  `test_dynamic_wind_with_exception` and
+  `test_exception_in_dynamic_wind_body_after_runs` give exactly what chibi and
+  Gauche give. They state a correct requirement that the correct
+  implementation also meets, and both stayed green. The mechanism changed, not
+  the decision.
 
-Pinned as `an_exception_handler_runs_in_the_raises_dynamic_extent`
-(`crates/patina-tests/tests/larceny_families.rs`). This entry, that pin,
-triage families 22 and 28, the tree-walker `guard` entry below and
-`nested_exception_handlers.rs`'s pin all close together or not at all.
+`guard` carries **one deliberate deviation** from R7RS 7.3: the success path
+returns its thunk rather than jumping to `guard-k` with it. Equivalent — the
+body has returned, so the jump crosses nothing — and required by the
+nested-trampoline boundary defect below. Re-measured after #149 and #150: the
+verbatim line is now free on the VM but still costs the tree-walker 83
+assertions on Larceny's `base`. Restore it when that boundary is fixed.
+
+Larceny `base` goes to 1071 of 1079 on the VM and 1070 of 1079 on the
+tree-walker (from 1069 and 1068), the moved rows being this family's. Both
+chibi lanes stay 1226/1226. Pinned as
+`an_exception_handler_runs_in_the_raises_dynamic_extent`
+(`crates/patina-tests/tests/larceny_families.rs`); triage families 22 and 28,
+the tree-walker `guard` entry below and `nested_exception_handlers.rs`'s pin
+closed with it, as recorded.
+
+**What the second review of #151 found, and where each went.** Four fixed in
+the same PR, all older than the family, all made ordinary traffic by the
+reference `guard`: (1) the VM popped a `with-exception-handler` handler only
+on a closure `Return` — a thunk ending in a tail call to `values`, a
+primitive, a parameter or a control primitive left it installed for the rest
+of the program, and the reference expansion ends every successful `guard` in
+`(apply values args)`, so every one leaked; the first fix for that popped at
+a nested run loop's exit depth and lost a *live* handler instead, because
+after a tail-call dip a handler the loop was started under and one installed
+inside it sit at the same depth — the loop now closes only what was installed
+after its own entry (`handlers_at_entry`), and depth-based pops do nothing at
+the exit depth. (2) A `call/cc` snapshot clones the register file, and `dst`
+still held the previous capture's continuation, so each `guard` iteration
+chained to the last — 296 MB at 160k iterations, 21 MB after clearing `dst`
+before the snapshot. (3) `call-with-port` and the two `call-with-*-file`
+closed their port on an escape; R7RS 6.13.1 closes "if `proc` returns", and
+a `guard` clause reading what the callback wrote needs it open — this also
+retired audit F6's quarantine on the tree-walker, by removing the
+resource rather than the misread behind it. (4) `execute` left the VM holding
+the frames, handlers and winds of a form that failed, so the REPL's next form
+returned into them. Pinned in `nested_exception_handlers.rs`,
+`escape_from_primitive.rs` and `interpreter_api.rs`. Filed rather than fixed:
+three VM raise-path gaps (next entry), and two more manifestations of the
+tree-walker boundary defect (its entry below).
+
+**The measured cost of the reference expansion**, accepted for consistency
+over speed: a `guard` whose body succeeds costs +65% on both backends (3M
+iterations, VM 1.15 s → 1.90 s, tree-walker 12.0 s → 19.7 s), a caught raise
++57% on the VM and +33% on the tree-walker (1M, 0.73 s → 1.14 s and
+6.3 s → 8.3 s). Every `guard` now captures a full continuation, and on the VM
+that clones the register file: non-tail recursion through a `guard` 4000 deep
+peaks at 1.83 GB against 1.38 GB before (the tree-walker's CPS capture is
+cheap: 111 MB against 312 MB). Per-`guard` memory in a loop is at or below
+`main`. A `guard` that captures only what it needs — a lighter continuation
+for the success path, or an `else`-only fast path — is the follow-up if a
+corpus program shows the cost; none has.
+
+**VM: three gaps in `vm_raise_value`** — ❌ **open**, VM only. Found by the
+second review of #151 (2026-09-01); all three predate families 22/28, and the
+reference `guard` changed their symptoms without causing them. Pinned in
+`crates/patina-tests/tests/backend_divergence.rs` where the tree-walker is
+right.
+
+1. **A `guard` is gone after one of its clauses declines a
+   `raise-continuable`.** The continuable path pops the handler to run it and
+   re-pushes it only when the handler *returns*; `guard`'s handler leaves
+   through `handler-k`, so the re-push is skipped and the body continues
+   without its `guard`. `(with-exception-handler (lambda (e) (list 'I e))
+   (lambda () (guard (e ((eq? e 'y) 'caught-y)) (list (raise-continuable 'x)
+   (raise-continuable 'y)))))` — tree-walker, chibi, Gauche `caught-y`; VM
+   `((I x) (I y))`. Fix: re-push on the `Escaped` arm too, or have the handler
+   run *without* popping and let the raise's handler lookup skip the top one.
+2. **A handler that returns from a non-continuable `raise` is not an error.**
+   R7RS 6.11 raises a secondary exception; the tree-walker does, the VM
+   delivers the handler's value to the raise's destination register as if the
+   raise were continuable — `(list (raise 'x))` under `(lambda (e) 'returned)`
+   answers `(returned)`, and `(+ 1 (raise 'x))` fails inside `+`. The
+   non-continuable path pushes the handler's frame and lets the run loop drive
+   it, so nothing is there when it returns; the fix is a marker on that frame
+   (or a sentinel return register) that `Return` recognises. Reached from a
+   *primitive's* error the same hole is worse: the run loop routes a catchable
+   `VmError` through `vm_raise_value` with **register 0** as the destination,
+   so `(list (car 5))` under the same handler answers `(())` — the handler's
+   value overwrote register 0 and `car`'s own destination kept `()`.
+3. **A continuation used as the handler for a primitive's error is fatal** —
+   `(call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))`
+   dies with `continuation escaped past a synchronous boundary`, where the
+   same idiom over `(raise 'obj)` works since family 24. The run loop's error
+   route does not catch `call_any`'s continuation signal. Tree-walker, chibi
+   and Gauche deliver the error object.
+
+None has a Larceny row; all three are pinned.
 
 
 **Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
@@ -1223,24 +1301,31 @@ callback. The second is the tree-walker's half of the boundary problem the VM ju
 equivalent of `across_reentry`, so an escape out of `eval` or `load` does not abandon the caller —
 `(load …)` runs every remaining form in the file.
 
-**Tree-walker: a `guard` handler runs before the unwind** — ❌ **open**. Found 2026-08-15 while
-moving `with-output-to-file` into Scheme, by a test whose two backends disagreed.
+**Tree-walker: a `guard` handler runs before the unwind** — ✅ **fixed
+2026-09-01**. Found 2026-08-15 while moving `with-output-to-file` into Scheme,
+by a test whose two backends disagreed.
 
 ```scheme
 (guard (e (#t (log 'handler)))
   (dynamic-wind (log 'before) (lambda () (error "x")) (log 'after)))
 ;; VM, chibi, Gauche => (before after handler)
-;; tree-walker       => (before handler after)
+;; tree-walker       => (before handler after)   until 2026-09-01
 ```
 
-R7RS §4.2.7 evaluates the clauses "in the dynamic environment of the `guard` expression", so the
-unwind comes first; the VM is right and both references agree with it. Not cosmetic: a handler that
-writes to `current-output-port` writes into whatever the not-yet-unwound extent installed, which is
-exactly how this surfaced — a handler's output vanished into a port that was about to be closed.
+R7RS §4.2.7 evaluates the clauses "in the dynamic environment of the `guard`
+expression", so the unwind comes first; the VM was right and both references
+agree with it. Not cosmetic: a handler that writes to `current-output-port`
+wrote into whatever the not-yet-unwound extent installed, which is exactly how
+this surfaced — a handler's output vanished into a port that was about to be
+closed.
 
-Pinned in `crates/patina-tests/tests/backend_divergence.rs`. Not via `assert_divergence`, which
-needs the broken backend to *fail*; this one returns a plausible wrong answer, so both sides are
-asserted explicitly with a message saying what to do when it converges.
+The cause was `apply_error`, the tree-walker's *third* raise path, which the
+entry above had not recorded: alone among the three it did not unwind before
+the handler. It turned out to be the one already right, and the fix took the
+other two down to it. Converged with triage families 22 and 28; now
+`a_guard_clause_runs_after_the_unwind` in
+`crates/patina-tests/tests/backend_divergence.rs`, held to one expectation on
+both backends.
 
 **Tree-walker: an error inside a wind thunk escapes `guard`** — ❌ **open**. Found 2026-08-15 while
 sweeping the class below, and left open deliberately because the fix is one level down from where it
@@ -1251,8 +1336,13 @@ surfaces.
   (with-exception-handler (lambda (c) 'handled)
     (lambda () (dynamic-wind (lambda () 1) (lambda () (raise 'x)) (lambda () (car 7))))))
 ;; tree-walker => Error: Type error: car expects a pair   (escapes)
-;; VM          => handled
+;; VM, Gauche  => caught
 ```
+
+(Re-measured 2026-09-01: the VM answers `caught`, not `handled` as this block
+used to say. The row's substance is unchanged — the tree-walker escapes, the
+VM does not — and it is the *mechanism* half of the entry below, which is the
+semantics half.)
 
 The visible cause is `run_wind_handlers(…)?` propagating as a Rust error. The actual cause is
 `apply_from_direct_tagged` (`cps_eval/wind.rs`): it runs wind thunks and parameter converters on a
@@ -1275,9 +1365,93 @@ through every `cps_eval` signature, every `StepResult` variant, and the reason f
 trampoline instead of ~18 hand-written sites, and the nested trampoline can inherit the stack
 instead of fabricating an empty one.
 
+**This row now blocks something concrete, which it did not before.** Until the tree-walker has
+`across_reentry`'s equivalent, `guard` cannot use R7RS 7.3's success-path jump — that jump leaves
+the body through a continuation on *every* evaluation, so a `guard` inside a `call-with-port`
+callback closes the port under the still-running callback. **Measured 2026-09-01, after the two
+prerequisite PRs landed:** with the verbatim reference line the VM is unaffected (Larceny `base`
+1071 of 1079 either way — #149's wind fix is what made that true), while the tree-walker drops from
+1070 of 1079 to 987 of 1009, 13 new failures and 70 assertions that stop running. The VM half is
+ready for the reference expansion; this backend is the only thing holding it.
+`lib/scheme/base/exceptions.scm` records the deviation and points here.
+
 **Caveat before converging it:** the pinned divergence row records what the VM returns, not an
 established correct answer — chibi loops forever on that repro, so no reference could arbitrate.
 Establish the right answer first. Pinned in `crates/patina-tests/tests/callability.rs`.
+
+**Two more manifestations, found by the second review of #151 (2026-09-01)**, both pinned in
+`backend_divergence.rs`. A `guard` whose clause *declines* inside a primitive's callback loses the
+outer `guard`: the reference expansion re-raises through `handler-k`, back inside the callback, and
+the nested trampoline there has no handlers, so `(guard (outer (#t …)) (call-with-port p (lambda (p)
+(guard (e ((string? e) 'no)) (raise 'sym)))))` dies with `unhandled exception: sym` where the VM,
+chibi and Gauche answer `(outer sym)` — on both raise forms; the old expansion re-raised from the
+clause side, outside the callback, and happened to work. And a raise inside a callback that *is*
+caught outside arrives as the wrong object: the nested trampoline reports it as an "unhandled
+exception" error, which the outer trampoline then routes to the `guard` as an error object, so
+`(guard (e ((eq? e 'x) 'ok)) (call-with-port p (lambda (p) (raise 'x))))` sees an error object whose
+message is `unhandled exception: x` rather than `'x`, and declines. (This one predates the
+families: `main` gave the same.) The F6 quarantine — the port closed under the retry loop — retired
+with #151, but by `call-with-port` no longer closing on an escape (R7RS 6.13.1), not by the
+trampoline telling a local jump from an escape; the misread is still there.
+
+**An exception raised by a `dynamic-wind` after-thunk does not behave like a
+`finally`** — ❌ **open**, both backends. Characterised 2026-09-01 while
+landing triage families 22 and 28, which changed one of the four cases below
+and so forced the question.
+
+Gauche implements Java's `finally` rule exactly, and does so consistently
+across every shape. An exception raised by an after-thunk **replaces** the
+exception in flight, unwinding **continues** through the outer winds, and the
+replacement is delivered to the nearest handler enclosing the `dynamic-wind`.
+chibi cannot arbitrate — it overflows the stack on all four probes — so Gauche
+is the oracle here, and its self-consistency is the argument for trusting it.
+
+| # | shape | VM | tree-walker | Gauche |
+|---|---|---|---|---|
+| 1 | `guard` + `raise`, after-thunk raises | uncaught, program stops | escapes | `(one secondary)` |
+| 2 | nested guards, inner catches | `(outer secondary)` | escapes | `(inner secondary)` |
+| 3 | normal exit, after-thunk raises | ✅ caught | ✅ caught | caught |
+| 4 | `call/cc` escape, after-thunk raises | ✅ caught | escapes | caught |
+
+So the VM meets the rule in 2 of 4 and the tree-walker in 1 of 4. **Only case 1
+moved with families 22/28**, from `(one primary)` — the after-thunk's exception
+silently discarded, which is the one answer the rule most clearly forbids — to
+the exception cascading uncaught. Cases 2–4 are unchanged from before that
+work, on both backends.
+
+**The unwind itself is not the gap.** The rule also says unwinding *continues*
+outward past the thunk that raised, and with a nested wind whose inner
+after-thunk raises, Gauche answers `((caught sec2) (in1 in2 out2 out1))` — the
+outer thunk still runs. With a single `guard`, ours stops at `sec2` and the
+outer thunk never runs (both backends' logs read `in1 in2 out2`, measured
+through files the abort cannot swallow) — but that is case 1's consequence: the
+handler is gone, nothing catches `sec2`, and an unhandled exception stops the
+program where it is raised. Put a handler *outside* and the VM does continue
+the unwind: `((outer sec2) (in1 in2 out2 out1))`, the outer thunk run and the
+secondary delivered — one handler too far out, which is case 2. (Re-measured
+2026-09-01 by review; an earlier version of this paragraph read the
+single-guard log as a second gap.) So the fix is about who catches; the
+machinery that carries the unwind past a failing thunk is already there and
+pinned.
+
+**Why it is not a patch.** Case 1 requires the `guard`'s handler to fire
+*twice*: once for the primary, again for the secondary its own escape raised.
+`vm_raise_value` pops a handler when it fires and never restores it for a
+non-continuable raise, so by the time the after-thunk runs that handler is
+gone. Meeting the rule means changing how the handler stack behaves across a
+`guard` escape — the same machinery that produced three separate regressions
+during families 22/28 (a leaked after-thunk in the value form of
+`dynamic-wind`, a stranded caller premise, and this row's case 1). It earns
+its own change, with its own review.
+
+The tree-walker additionally needs the nested-trampoline boundary above: it
+escapes on three of the four because a wind thunk runs on a trampoline with no
+handler stack.
+
+**Acceptance:** the four cases above answer as Gauche does, on both backends,
+pinned in `crates/patina-tests/tests/wind_thunk_exceptions.rs` — which asserts
+today's answers now, so the fix trips it. Larceny r7rs lanes must not move
+except where a row is genuinely gained.
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

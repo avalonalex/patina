@@ -113,9 +113,6 @@ pub struct VmDelimitedContinuation {
 pub struct ExceptionHandler {
     /// The handler procedure: called as `(handler condition)`.
     pub handler: TaggedValue,
-    /// Dynamic-wind records at the point the handler was installed.
-    /// Used by `raise` to unwind after-thunks before invoking the handler.
-    pub dynamic_winds: Vec<DynamicWindRecord>,
     /// `VmState::frames.len()` at the time the handler was installed.
     /// Used to pop the handler when the thunk returns normally.
     pub stack_depth: usize,

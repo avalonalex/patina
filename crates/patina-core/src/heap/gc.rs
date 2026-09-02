@@ -1166,11 +1166,11 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
     }
 }
 
-/// Trace an exception handler: the handler procedure itself and the dynamic
-/// winds `raise` unwinds before invoking it.
+/// Trace an exception handler: the handler procedure it holds, which is all
+/// it holds. It used to carry the wind depth `raise` unwound to; no raise path
+/// unwinds now, so the field is gone and so is the retention.
 pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
     visitor.visit(handler.handler);
-    visitor.visit_winds(&handler.dynamic_winds);
 }
 
 // ============================================================================

@@ -146,7 +146,6 @@ fn trace_prompts(prompts: &[PromptFrame], visitor: &mut GcVisitor<'_>) {
 fn trace_handlers(handlers: &[ExceptionHandler], visitor: &mut GcVisitor<'_>) {
     for handler in handlers {
         visitor.visit(handler.handler);
-        trace_winds(&handler.dynamic_winds, visitor);
     }
 }
 

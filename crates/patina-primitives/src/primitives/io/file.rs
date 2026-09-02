@@ -215,8 +215,10 @@ pub(super) fn call_with_input_file(
     // Call the procedure with the port
     let result = ctx.apply_proc(proc, vec![port_tv]);
 
-    // Close the port regardless of result
-    port.close();
+    // Closed only if `proc` returns (R7RS 6.13.1) — see `call_with_port`.
+    if result.is_ok() {
+        port.close();
+    }
 
     // Return the result
     result
@@ -260,8 +262,11 @@ pub(super) fn call_with_output_file(
     // Call the procedure with the port
     let result = ctx.apply_proc(proc, vec![port_tv]);
 
-    // Close the port regardless of result (flush happens on close)
-    port.close();
+    // Closed (and so flushed) only if `proc` returns (R7RS 6.13.1) — see
+    // `call_with_port`.
+    if result.is_ok() {
+        port.close();
+    }
 
     // Return the result
     result

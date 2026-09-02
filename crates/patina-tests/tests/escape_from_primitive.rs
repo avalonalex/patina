@@ -158,6 +158,53 @@ fn test_escaping_out_of_eval() {
     );
 }
 
+/// What the port primitives do with their port when the callback escapes.
+/// R7RS 6.13.1: `call-with-port` closes the port "if `proc` returns" — and
+/// only then, because a `guard` clause runs after that escape and is entitled
+/// to read what the callback wrote, or to decide the port is still its own.
+/// Until 2026-09-01 all three closed on every exit. Closing on the normal
+/// return is the other half, so it is checked in the same program.
+#[test]
+fn test_an_escape_out_of_a_port_callback_leaves_the_port_open() {
+    let dir = TempDir::new().expect("temp dir");
+    let input = scratch_path(&dir, "in.txt");
+    std::fs::write(&input, "seed\n").expect("seed file");
+    let output = scratch_path(&dir, "out.txt");
+
+    assert_program_eval_to(
+        r#"(import (scheme base))
+           (define out #f)
+           (list
+             (guard (e (#t (get-output-string out)))
+               (call-with-port (open-output-string)
+                 (lambda (p) (set! out p) (write-string "inside" p) (raise 'x))))
+             (call-with-port (open-output-string)
+               (lambda (p) (set! out p) 'returned))
+             (output-port-open? out))"#,
+        "(\"inside\" returned #f)",
+    );
+    // The condition itself is deliberately not in the answer: on the
+    // tree-walker a raise inside a primitive's callback reaches the outer
+    // `guard` as an "unhandled exception" error object rather than as `'x` —
+    // the nested-trampoline defect of Track L §6, not this test's subject.
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme file))
+               (define seen #f)
+               (list
+                 (guard (e (#t (read-char seen)))
+                   (call-with-input-file "{input}"
+                     (lambda (p) (set! seen p) (raise 'x))))
+                 (input-port-open? (call-with-input-file "{input}" (lambda (p) p)))
+                 (guard (e (#t (output-port-open? seen)))
+                   (call-with-output-file "{output}"
+                     (lambda (p) (set! seen p) (raise 'y))))
+                 (output-port-open? (call-with-output-file "{output}" (lambda (p) p))))"#
+        ),
+        "(#\\s #f #t #f)",
+    );
+}
+
 /// The parameter *set* path, which runs a converter through a different
 /// boundary than `make-parameter` construction does. Before this it lost the
 /// enclosing top-level `define` outright on the VM.

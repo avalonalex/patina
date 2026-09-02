@@ -2,7 +2,9 @@
 //!
 //! These tests verify the public API provided by the main `patina` crate
 
-use patina_interpreter::{TaggedValue, TreeWalkInterpreter};
+use patina_interpreter::{Interpreter, TaggedValue, TreeWalkInterpreter};
+use patina_runtime::Backend;
+use patina_vm::VmBackend;
 
 #[test]
 fn test_interpreter_basic_arithmetic() {
@@ -116,6 +118,44 @@ fn test_gcd_with_let_values() {
         .unwrap();
 
     assert_eq!(result.as_fixnum(), Some(6));
+}
+
+/// A form that fails must not leave the interpreter in the middle of it. The
+/// REPL and the resilient script mode both evaluate form by form on one
+/// interpreter, and an error is where the VM used to be left holding the
+/// frames, handlers and winds of the form it had abandoned: the next form's
+/// own error was then delivered to the *previous* form's handler, or its
+/// return landed in a frame that no longer had a program behind it (review of
+/// triage families 22/28, 2026-09-01). Both failing shapes below stopped the
+/// program with something still installed — an exception from an after-thunk
+/// mid-unwind, and a handler raising from inside a handler — and the probe
+/// after each is that `car`'s own error is what comes back, then that a plain
+/// form evaluates.
+#[test]
+fn an_error_leaves_the_interpreter_ready_for_the_next_form() {
+    fn check<B: Backend>(interp: Interpreter<B>, name: &str) {
+        for failing in [
+            "(guard (e (#t 'c)) (dynamic-wind (lambda () #f) (lambda () (raise 'p)) (lambda () (raise 'sec))))",
+            "(with-exception-handler (lambda (e) (raise 'inner)) (lambda () (car 5)))",
+        ] {
+            assert!(
+                interp.eval_str(failing).is_err(),
+                "{name}: `{failing}` should fail"
+            );
+            let next = interp.eval_str("(car 5)");
+            let message = next.as_ref().map(|_| ()).map_err(|e| e.to_string());
+            assert!(
+                message.as_ref().is_err_and(|m| m.contains("car")),
+                "{name}: after `{failing}`, `(car 5)` should fail as car's own error, got {message:?}"
+            );
+            let result = interp
+                .eval_str("(+ 1 2)")
+                .unwrap_or_else(|e| panic!("{name}: after `{failing}`, `(+ 1 2)` failed: {e}"));
+            assert_eq!(result.as_fixnum(), Some(3), "{name}: after `{failing}`");
+        }
+    }
+    check(TreeWalkInterpreter::new_tree_walker(), "tree-walker");
+    check(Interpreter::new(VmBackend::new()), "vm");
 }
 
 #[test]
