@@ -1504,6 +1504,11 @@ fn test_an_aborts_after_thunks_run_as_frames() {
 /// That shipped for one review cycle. Both rows below answer as Guile does,
 /// and as they did before it; under the travel the first died with `Error:
 /// unhandled exception: boom-in` and the second answered `CAPTURE-SITE`.
+///
+/// These thunks *are* frames now — issue #167 gave them a
+/// `ResumeComposableInvoke` stub of their own — which is a different thing
+/// from routing them through the travel, and the reason it is a separate
+/// mechanism. This test is what keeps the two apart.
 #[test]
 fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
     // A `guard` around the invoke must see a raise from the re-entered

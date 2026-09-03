@@ -363,15 +363,19 @@ intercepted at call dispatch time.
   since #165 an abort, which travels to a continuation whose top frame calls
   the prompt handler. Each such thunk runs in a stub frame and under its own
   record's handler stack
-- **A composable invoke's re-entry thunks do not**, and deliberately: they run
-  on a nested loop under the **invoke site's** handler stack. Making this a
-  travel too was tried and reverted. A jump's target *replaces* the machine,
-  which is what makes `install_thunk_handlers` right there; a composable
-  target would *extend* it, so installing the record's captured stack loses
-  the invoke site's handlers and resurrects capture-site ones whose extent is
-  over — measured against Guile and against the previous release. The cost of
-  keeping it a loop is that a continuation captured in one of these thunks
-  still misbehaves on re-entry (issue #167)
+- **A composable invoke's re-entry thunks are frames too, but not the jump's**
+  (issue #167). Each runs under a `ResumeComposableInvoke` stub — the exact
+  analogue of `ResumeWindJump`, so that "the rest of the invoke" is a pc a
+  re-entering continuation restores rather than a Rust frame it abandons —
+  and under the **invoke site's** handler stack, with no
+  `install_thunk_handlers`. Making them go through `step_wind_jump` was tried
+  and reverted: a jump's target *replaces* the machine, which is what makes
+  installing the record's captured stack right there, while a composable
+  target *extends* it, so the same call loses the invoke site's handlers and
+  resurrects capture-site ones whose extent is over — measured against Guile
+  and against the release before it. The stub keeps the frame and leaves the
+  handler question alone, which is why it is a fourth mechanism and not a
+  third use of the third
 - **The thunks of an ordinary `dynamic-wind` are neither.** Head position
   compiles to plain `Call`s around `PushWind`/`PopWind`, and the value form
   runs the same instructions in `value_wind_stub`; both run under whatever

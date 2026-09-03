@@ -64,6 +64,10 @@ pub struct VmState {
     /// ([`abort_handler_stub`]). Built on the first abort; a program with no
     /// prompts never builds one.
     pub(crate) abort_handler_code: Option<CodeObjectId>,
+    /// Id of the one-instruction stub each step of a composable invoke's
+    /// extent re-entry runs in ([`invoke_step_stub`]). Built on the first
+    /// invoke that has a `before` thunk to run.
+    pub(crate) invoke_step_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -140,6 +144,7 @@ impl VmState {
             wind_jump_code: None,
             value_wind_code: None,
             abort_handler_code: None,
+            invoke_step_code: None,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -1382,6 +1387,53 @@ fn dispatch_one_instruction(
             }
         }
 
+        Instruction::ResumeComposableInvoke => {
+            // A `before` thunk of a composable invoke's extent re-entry has
+            // returned. Its stub frame holds the rest of the invoke; take it
+            // and go on.
+            let cont = state.reg_at(base, invoke_step::CONT);
+            let value = state.reg_at(base, invoke_step::VALUE);
+            let dst = state
+                .reg_at(base, invoke_step::DST)
+                .as_fixnum()
+                .unwrap_or(0) as u16;
+            let index = state
+                .reg_at(base, invoke_step::INDEX)
+                .as_fixnum()
+                .unwrap_or(0) as usize;
+            state
+                .frames
+                .pop()
+                .expect("ResumeComposableInvoke runs in its own frame");
+            // The stub's register window is deliberately **not** freed, for
+            // the reason `ResumeWindJump` gives: it is the only root for
+            // `cont`, whose payload lives in a weak store. It is reclaimed
+            // when the frame this invoke was made from returns.
+
+            let dc =
+                state
+                    .get_vm_delimited_continuation(cont)
+                    .ok_or_else(|| VmError::TypeError {
+                        message: "ResumeComposableInvoke: not a delimited continuation".into(),
+                    })?;
+
+            // The record is pushed only now, after its thunk returned: while
+            // the thunk runs its extent is not entered, so a jump out of it
+            // does not run the matching after-thunk.
+            let record = dc
+                .dynamic_winds
+                .get(index)
+                .ok_or_else(|| VmError::Runtime {
+                    message: "composable invoke: entered wind record is gone".into(),
+                })?;
+            state.dynamic_winds.push(record.clone());
+
+            match dc.dynamic_winds.get(index + 1) {
+                Some(next) => push_invoke_step(state, cont, value, dst, index + 1, next.before)?,
+                None => finish_delimited_invoke(state, &dc, value, dst),
+            }
+        }
+
         Instruction::ResumeWindJump => {
             // A wind thunk of a jump has returned. Its stub frame holds the
             // rest of the jump; take it and go on travelling.
@@ -1500,7 +1552,7 @@ fn dispatch_one_instruction(
                     .ok_or_else(|| VmError::TypeError {
                         message: "InvokeContinuation: not a delimited continuation".into(),
                     })?;
-                return tail_invoke_delimited(state, dc, deliver_val, exit_depth);
+                return tail_invoke_delimited(state, cont_tv, dc, deliver_val, exit_depth);
             } else {
                 // Non-composable (call/cc): travel the winds and replace the
                 // stack. No pass emits this instruction — the live invoke
@@ -2055,7 +2107,7 @@ fn call_any(
     }
     if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
         let value = deliver_value(state, args);
-        return match invoke_delimited(state, dc, value, return_reg)? {
+        return match invoke_delimited(state, func_val, dc, value, return_reg)? {
             DelimitedInvoke::Resumed => Ok(None),
             DelimitedInvoke::Identity => Ok(Some(value)),
         };
@@ -3625,6 +3677,80 @@ fn push_abort_stub(
     });
 }
 
+/// The registers of the stub frame each `before` thunk of a composable
+/// invoke's extent re-entry runs under. See [`Instruction::ResumeComposableInvoke`].
+mod invoke_step {
+    /// The delimited continuation being invoked. Held here, not only in a Rust
+    /// local, because its payload lives in a **weak** store (`gc_roots.rs`):
+    /// an unrooted ref at a collecting safe point would have its payload
+    /// pruned while the thunks run.
+    pub(super) const CONT: u16 = 0;
+    /// The value the invoke delivers into the captured hole.
+    pub(super) const VALUE: u16 = 1;
+    /// Where the resumed computation returns, as a fixnum.
+    pub(super) const DST: u16 = 2;
+    /// Which of the continuation's extents this step is entering, as a fixnum.
+    pub(super) const INDEX: u16 = 3;
+    /// Where the thunk returns. Its value is discarded, but `Return` needs a
+    /// slot to write into.
+    pub(super) const THUNK_RESULT: u16 = 4;
+    /// Window size of a stub frame.
+    pub(super) const NUM_REGS: u16 = 5;
+}
+
+/// The one-instruction code object every step of a composable invoke runs.
+fn invoke_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    runtime_stub(
+        state,
+        |s| s.invoke_step_code,
+        |s, id| s.invoke_step_code = Some(id),
+        "invoke-step",
+        vec![Instruction::ResumeComposableInvoke],
+        invoke_step::NUM_REGS,
+    )
+}
+
+/// Push the stub carrying the rest of a composable invoke, and call the
+/// `before` thunk of the extent at `index`.
+///
+/// The thunk runs under the **invoke site's** handler stack — no
+/// `install_thunk_handlers` here, unlike `push_wind_step`. That difference is
+/// the whole reason this exists rather than reusing the jump: a jump's target
+/// replaces the machine, so the record's own stack is the only candidate; a
+/// composable invoke's extends it, so the invoke site's stack is a prefix of
+/// the right answer. Installing the record's raw list here loses the invoke
+/// site's handlers and resurrects capture-site ones whose extent is over,
+/// which is pinned in `cps_features.rs`.
+fn push_invoke_step(
+    state: &mut VmState,
+    cont: TaggedValue,
+    value: TaggedValue,
+    dst: u16,
+    index: usize,
+    thunk: TaggedValue,
+) -> Result<(), VmError> {
+    let code = invoke_step_stub(state)?;
+    let base = state.alloc_registers(invoke_step::NUM_REGS);
+    state.frames.push(CallFrame {
+        pc: 0,
+        register_base: base,
+        num_regs: invoke_step::NUM_REGS,
+        closure: None,
+        // Nothing ever returns *into* this frame: `ResumeComposableInvoke`
+        // pops it itself and either starts the next thunk or finishes.
+        return_reg: 0,
+        code,
+    });
+    state.set_reg_at(base, invoke_step::CONT, cont);
+    state.set_reg_at(base, invoke_step::VALUE, value);
+    state.set_reg_at(base, invoke_step::DST, TaggedValue::fixnum(dst as i64));
+    state.set_reg_at(base, invoke_step::INDEX, TaggedValue::fixnum(index as i64));
+    // A primitive thunk returns here and now; its value is discarded either
+    // way, and the stub frame is left on top for the instruction to run.
+    call_any(state, thunk, &[], invoke_step::THUNK_RESULT)?;
+    Ok(())
+}
+
 /// The registers of the stub frame an abort's prompt handler is called in.
 /// See [`abort_handler_stub`].
 mod abort_step {
@@ -3790,44 +3916,53 @@ enum DelimitedInvoke {
 /// the frames alone gives neither: the resumed computation reads a register
 /// nothing wrote, and its value returns to a register no one reads. That is
 /// what this used to do, in two copies (issue #160).
+///
+/// **The extents are re-entered a step at a time, each under a stub frame**
+/// (issue #167). The thunks used to run on a nested Rust loop, so a
+/// continuation captured in one and re-entered restarted that thunk from the
+/// top and lost the resumed value — #157's signature, on the last of the four
+/// places that ran wind thunks. `cont` is the continuation's *handle*, not
+/// just its payload, because the stub carries it across those steps.
 fn invoke_delimited(
     state: &mut VmState,
+    cont: TaggedValue,
     dc: Rc<VmDelimitedContinuation>,
     value: TaggedValue,
     dst: u16,
 ) -> Result<DelimitedInvoke, VmError> {
-    // Every captured extent is re-entered, outermost first, before any of its
-    // frames are live. Unlike a full continuation's jump this does not travel:
-    // an extent the live stack already shares is entered again.
-    //
-    // Each record is pushed only once its own `before` thunk has returned,
-    // the rule `step_wind_jump` follows and for the same reason. A thunk that
-    // raises or escapes then leaves the extents before it entered *and*
-    // owed — their `after` thunks are on the stack of records — and its own
-    // neither entered nor owed.
-    let wind_base = state.dynamic_winds.len();
-    for record in dc.dynamic_winds.iter() {
-        // The invoke site's own handler stack, not the record's: a re-entry
-        // thunk runs where `(k v)` was called, which is what Guile answers and
-        // what `main` has always done. Routing this through `step_wind_jump`
-        // would install the record's stack instead — right for a jump, whose
-        // target *replaces* the machine, and wrong here, where it extends it:
-        // the invoke site's handlers vanish and capture-site ones whose extent
-        // is long gone come back. Measured against Guile and against `main`
-        // before this was reverted.
-        match run_thunk_outcome(state, record.before)? {
-            ThunkOutcome::Returned(_) => {}
-            // A thunk that escaped: the value belongs to whatever it resumed,
-            // and the frames this invoke would have appended are not owed.
-            ThunkOutcome::Escaped(escaped) => return Err(park_escape(state, escaped)),
-        }
-        state.dynamic_winds.push(record.clone());
-    }
-
-    let Some(deliver_reg) = dc.deliver_reg else {
+    if dc.deliver_reg.is_none() {
+        // An empty capture is the identity continuation, and carries no
+        // extents either — `capture_delimited` establishes that.
+        debug_assert!(
+            dc.dynamic_winds.is_empty(),
+            "an identity capture holds no dynamic extents"
+        );
         return Ok(DelimitedInvoke::Identity);
-    };
+    }
+    match dc.dynamic_winds.first() {
+        // Nothing to re-enter, which is the common case: finish here rather
+        // than pay a stub frame to discover there is no thunk to run.
+        None => finish_delimited_invoke(state, &dc, value, dst),
+        Some(record) => push_invoke_step(state, cont, value, dst, 0, record.before)?,
+    }
+    Ok(DelimitedInvoke::Resumed)
+}
 
+/// Append the captured region and deliver — everything a composable invoke
+/// owes once its extents have been re-entered.
+///
+/// Reached directly when there were none, and from
+/// [`Instruction::ResumeComposableInvoke`] when the last `before` thunk has
+/// returned. `wind_base` is *derived* rather than carried: by the time this
+/// runs, every captured record has been pushed, so the base they start at is
+/// what is left when their count is taken off the top.
+fn finish_delimited_invoke(
+    state: &mut VmState,
+    dc: &VmDelimitedContinuation,
+    value: TaggedValue,
+    dst: u16,
+) {
+    let wind_base = state.dynamic_winds.len() - dc.dynamic_winds.len();
     // Relocate the captured register windows onto the end of the live array.
     let shift = state.registers.len().wrapping_sub(dc.base_at_capture);
     state.registers.extend_from_slice(&dc.registers);
@@ -3891,8 +4026,10 @@ fn invoke_delimited(
         .last()
         .expect("deliver_reg is Some only for a non-empty capture")
         .register_base;
+    let deliver_reg = dc
+        .deliver_reg
+        .expect("the caller returns Identity when there is no hole");
     state.registers[top_base + deliver_reg as usize] = value;
-    Ok(DelimitedInvoke::Resumed)
 }
 
 /// [`invoke_delimited`] for an invoke in tail position: the invoking frame is
@@ -3905,6 +4042,7 @@ fn invoke_delimited(
 /// the continuation's frames are now running.
 fn tail_invoke_delimited(
     state: &mut VmState,
+    cont: TaggedValue,
     dc: Rc<VmDelimitedContinuation>,
     value: TaggedValue,
     exit_depth: usize,
@@ -3912,7 +4050,7 @@ fn tail_invoke_delimited(
     let frame = state.frames.pop().expect("tail invoke with empty stack");
     let return_reg = frame.return_reg;
     state.free_top_registers(frame.register_base);
-    match invoke_delimited(state, dc, value, return_reg)? {
+    match invoke_delimited(state, cont, dc, value, return_reg)? {
         DelimitedInvoke::Resumed => Ok(None),
         // The identity continuation passes the value straight through, so
         // this is an ordinary tail return — the same close-out a primitive in
@@ -4028,7 +4166,7 @@ fn call_value_with_probe(
         }
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
             let value = deliver_value(state, arg_vals);
-            return match invoke_delimited(state, dc, value, dst)? {
+            return match invoke_delimited(state, func_val, dc, value, dst)? {
                 DelimitedInvoke::Resumed => Ok(None),
                 DelimitedInvoke::Identity => {
                     state.set_reg(dst, value);
@@ -4141,7 +4279,7 @@ fn tail_call_value_with_probe(
         }
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
             let value = deliver_value(state, arg_vals);
-            return tail_invoke_delimited(state, dc, value, exit_depth);
+            return tail_invoke_delimited(state, func_val, dc, value, exit_depth);
         }
 
         // Parameters in tail position: same as primitives.
