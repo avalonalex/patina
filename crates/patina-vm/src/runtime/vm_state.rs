@@ -3175,30 +3175,53 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
         }));
 }
 
-/// The one-instruction code object every wind step's frame runs.
+/// A code object the runtime builds rather than compiles, memoised in `slot`.
 ///
-/// Built at most once per `VmState` and kept in `code_store`, so the GC's
+/// Both callers want the same three properties, and stating them once is the
+/// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — this one has no constants to trace, but the
-/// invariant is cheaper to keep than to caveat.
-fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    if let Some(id) = state.wind_jump_code {
+/// without qualification — neither stub has constants to trace, but the
+/// invariant is cheaper to keep than to caveat. It is built at most once per
+/// `VmState`, and `slot` holds the id rather than the `Rc` because
+/// `code_store` is the one owner. And its `source_map` is empty, which
+/// `attach_source_location` reads as "not a place in the program" and steps
+/// past — see there.
+fn runtime_stub(
+    state: &mut VmState,
+    slot: impl Fn(&VmState) -> Option<CodeObjectId>,
+    set_slot: impl Fn(&mut VmState, CodeObjectId),
+    name: &str,
+    instructions: Vec<Instruction>,
+    num_regs: u16,
+) -> Result<Rc<CodeObject>, VmError> {
+    if let Some(id) = slot(state) {
         return state.code_object(id);
     }
-    let instructions = vec![Instruction::ResumeWindJump];
     let id = CodeObjectId::fresh();
     state.load(CodeObject {
         id,
-        name: Some(Rc::from("wind-jump")),
+        name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
         instructions,
         constants: Vec::new(),
-        num_regs: wind_step::NUM_REGS,
+        num_regs,
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
     });
-    state.wind_jump_code = Some(id);
+    set_slot(state, id);
     state.code_object(id)
+}
+
+/// The one-instruction code object every wind step's frame runs.
+fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    runtime_stub(
+        state,
+        |s| s.wind_jump_code,
+        |s, id| s.wind_jump_code = Some(id),
+        "wind-jump",
+        vec![Instruction::ResumeWindJump],
+        wind_step::NUM_REGS,
+    )
 }
 
 /// The registers of the stub frame the **value** form of `dynamic-wind` runs
@@ -3242,12 +3265,9 @@ mod value_wind {
 /// call's own after-thunk, and still delivers the body's value to the caller
 /// — none of which a Rust frame abandoned by the jump could do (issue #157).
 ///
-/// Built at most once per `VmState` and kept in `code_store`, like
-/// [`wind_jump_stub`] and for the same GC-invariant reason.
+/// Built by [`runtime_stub`], like [`wind_jump_stub`] and for the reasons
+/// stated there.
 fn value_wind_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    if let Some(id) = state.value_wind_code {
-        return state.code_object(id);
-    }
     let instructions = vec![
         Instruction::Call {
             func: value_wind::BEFORE,
@@ -3275,19 +3295,14 @@ fn value_wind_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
             val: value_wind::RESULT,
         },
     ];
-    let id = CodeObjectId::fresh();
-    state.load(CodeObject {
-        id,
-        name: Some(Rc::from("dynamic-wind")),
-        global_cache: GlobalCacheEntry::table(&instructions),
+    runtime_stub(
+        state,
+        |s| s.value_wind_code,
+        |s, id| s.value_wind_code = Some(id),
+        "dynamic-wind",
         instructions,
-        constants: Vec::new(),
-        num_regs: value_wind::NUM_REGS,
-        arity: Arity::Fixed(0),
-        source_map: Vec::new(),
-    });
-    state.value_wind_code = Some(id);
-    state.code_object(id)
+        value_wind::NUM_REGS,
+    )
 }
 
 /// The handler stack a `dynamic-wind` record captures.
