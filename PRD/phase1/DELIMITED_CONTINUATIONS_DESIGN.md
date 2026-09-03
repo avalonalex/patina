@@ -66,21 +66,45 @@ whose top frame calls the prompt handler, and a composable invoke appends the
 captured region in place. See `docs/VM_RUNTIME.md` §5.5–§5.6. One defect open:
 issue #167.
 
-**The tree-walker**: nothing works, and the scaffolding that exists is dead.
-`CpsExprKind::Prompt` and `CpsExprKind::Abort` are in the CPS IR, `step.rs`
-has an arm for `Prompt` that pushes a `PromptFrame`, and the evaluator threads
-a `prompt_stack` through every step and roots it for GC — but **nothing emits
-either form**, so that stack is always empty and `Abort` has no arm at all.
-The CPS transform recognises `call/cc` and the wind forms by name and does not
-recognise these two, so a call fell through to a registry miss; it now hits a
-deliberate not-implemented error (`primitives::unsupported`).
+**The tree-walker**: nothing works, and the scaffolding that exists is dead
+**but not absent** — an earlier version of this section said `Abort` had no
+arm, which is wrong and worth correcting carefully, because "there is nothing
+there" is what stops anyone auditing what *is*:
 
-**What implementing it involves**: teach the CPS transform to emit
-`Prompt`/`Abort`, implement the `Abort` arm and delimited capture, and
-integrate with `dynamic-wind` and the exception-handler stack — which is where
-every one of the VM's four prompt PRs went wrong. Acceptance criteria already
-exist: twelve `UNSUPPORTED` rows in `control_flow_matrix.rs` with values
-measured against Guile.
+- `CpsExprKind::Prompt` and `CpsExprKind::Abort` are both in the CPS IR, and
+  `cps_eval/step.rs` has an arm for **each**. `Prompt` pushes a `PromptFrame`;
+  `Abort` finds the prompt by tag, reifies its continuation and jumps to it.
+- The evaluator threads a `prompt_stack` through every step and roots it for
+  GC. It is always empty, because **nothing emits either form**.
+- The `Abort` arm had a real bug the whole time — it truncated the prompt
+  stack to the *matched* index, discarding the frame it had just found, and
+  then popped the enclosing prompt, panicking outright when the match was the
+  only prompt on the stack. Dead code, so nothing caught it; it would have
+  fired on the first program a #169 fix made reach there. Corrected
+  2026-09-03.
+
+**Which name is claimed where.** This is the part to get right before
+starting, and the reason `dynamic-wind` works in value position while
+`call/cc` does not:
+
+| | VM | tree-walker |
+|---|---|---|
+| `call/cc`, `call-with-current-continuation` | `vm_control_primitive` | **syntactically**, `cps_transform.rs`'s `is_callcc_reference` |
+| `dynamic-wind`, `apply`, `raise`, `error`, `force`, `call-with-values` | `vm_control_primitive` | at **apply** time, short-name match in `cps_eval/application.rs` |
+| the two prompt names | `vm_control_primitive` | nowhere — a registry miss until #170 gave them a deliberate error |
+
+An apply-time match sees the primitive whatever name reached it; a syntactic
+one only sees the call it was written in. So the site that decides this is
+`application.rs`'s match, not the CPS transform — adding the prompt names
+there is the likely shape of the fix, not teaching `cps_transform` a new
+special case.
+
+**What implementing it involves**: emit `Prompt`/`Abort` (or handle the names
+at apply time), make delimited capture actually delimited, and integrate with
+`dynamic-wind` and the exception-handler stack — which is where every one of
+the VM's four prompt PRs went wrong. Acceptance criteria already exist: twelve
+`UNSUPPORTED` rows in `control_flow_matrix.rs` with values measured against
+Guile.
 
 ---
 

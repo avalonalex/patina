@@ -647,18 +647,19 @@ impl Evaluator {
         Ok(lib_rc)
     }
 
-    /// Check if a library is loaded
-    /// This backend's primitive registry — `patina_primitives::register_all`
-    /// plus what this backend adds on top (`primitives::register_all_primitives`).
+    /// This backend's primitive registry: `patina_primitives::register_all`
+    /// plus what this backend adds on top (see
+    /// `primitives::register_all_primitives`).
     ///
     /// Exposed for the test that asserts every name a shipped library exports
-    /// can actually be dispatched here. That check needs *this* registry, not
-    /// the shared one, because the backend-specific entries are exactly what
-    /// it is about.
+    /// can actually be dispatched here. That check needs *this* registry
+    /// rather than the shared one, because the backend-specific entries are
+    /// exactly what it is about.
     pub fn primitive_registry(&self) -> &patina_primitives::PrimitiveRegistry {
         &self.primitive_registry
     }
 
+    /// Check if a library is loaded
     pub fn is_library_loaded(&self, name: &[String]) -> bool {
         self.library_registry.borrow().is_loaded(name)
     }
