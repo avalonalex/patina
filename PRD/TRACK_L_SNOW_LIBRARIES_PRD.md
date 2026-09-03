@@ -1513,13 +1513,15 @@ records and handlers carry frame depths that a jump makes meaningless:
 - the handler stack a thunk runs under is installed with each entry's
   `stack_depth` **clamped** to the live frame depth, or `pop_exception_handlers`
   drops handlers the moment a frame at their recorded depth returns;
-- a record pushed back by a re-entry gets `PushWind`'s `stack_depth = 0`
-  sentinel for the length of the travel, or `pop_resolved_winds` reads its
-  original (deeper) depth, decides the extent's body has returned, and runs its
+- a record pushed back by a re-entry got `PushWind`'s `stack_depth = 0`
+  sentinel for the length of the travel, or `pop_resolved_winds` read its
+  original (deeper) depth, decided the extent's body had returned, and ran its
   after-thunk under the still-running entry. Nested value-form extents
-  re-entered from a shallower stack **hang** without this; pinned as
+  re-entered from a shallower stack **hung** without this; pinned as
   `test_reentering_nested_value_form_winds_runs_each_thunk_once` in
-  `cps_features.rs`.
+  `cps_features.rs`. (Moot since the #157 entry below: only the value form
+  ever pushed a record with a non-zero depth, and with it gone the depth and
+  the sweep that read it are both removed.)
 
 **Acceptance (VM), all met.** Rows 1, 2, 5, 6, 10 and 11 answer as Gauche
 does; every row is pinned in
@@ -1537,18 +1539,17 @@ Larceny r7rs VM lane is 8447 of 8475 in 22 of 33 suites — unmoved, no row
 either gained or lost.
 
 **What is still outside the rule on the VM.** The paths that are not a jump
-run their thunks on a nested dispatch loop under the *live* handler stack:
-`pop_resolved_winds` (a body that returned normally — where the live stack is
-the call's anyway, which is row 3), the value form's own cleanup, and the
+run their thunks on a nested dispatch loop under the *live* handler stack: the
 composable-continuation entry thunks. And a raise from inside a Rust
 primitive's callback within a thunk is outside it on both backends — the
 "primitive's callback runs on a nested trampoline with no handler stack" entry
-above.
+above. (`pop_resolved_winds` and the value form's own cleanup were on this
+list until 2026-09-02; both are gone with the entry below.)
 
 **VM: the value form of `dynamic-wind` runs the wrong after-thunk and loses
-its body's value when a continuation re-enters it** — ❌ **open**, filed as
-**issue #157**. Pre-existing: `main` (`3614f8c1`) gives identical answers, and
-the change above moved neither. Found 2026-09-02 while probing it.
+its body's value when a continuation re-enters it** — ✅ **fixed 2026-09-02**,
+issue **#157**. Pre-existing: `main` (`3614f8c1`) gave identical answers, and
+the entry above moved neither. Found 2026-09-02 while probing it.
 
 Two symptoms, one cause. The wrong-thunk half was **missed on the first pass**
 of this entry, which claimed "the wind thunks run at the right times either
@@ -1559,42 +1560,129 @@ way"; `/code-review` of the VM PR produced the repro that falsifies it.
 (define dw dynamic-wind)
 (dw in1 (lambda () (call/cc (lambda (c) (set! saved c) 'first))) out1)
 (dw in2 (lambda () (saved 'second)) out2)
-;; VM => (in1 out1 in2 out2 in1 out2)   tree-walker, Gauche => (… in1 out1)
-;;   `out1` never runs; `out2` runs twice
+;; was (in1 out1 in2 out2 in1 out2)   tree-walker, Gauche => (… in1 out1)
+;;   `out1` never ran; `out2` ran twice
 
 ;; 2 — the body's value is lost
 (define r (dw (lambda () #f)
               (lambda () (call/cc (lambda (c) (set! k c) 'first)))
               (lambda () #f)))
 (if (eq? r 'first) (k 'second) #f)
-r   ;; tree-walker, Gauche => second   VM => ()
+r   ;; tree-walker, Gauche => second   was ()
 ```
 
-The value form's bookkeeping lives in a **Rust frame**
+The value form's bookkeeping lived in a **Rust frame**
 (`handle_control_primitive`'s `DynamicWind` arm), and a re-entered continuation
 restores the VM's own frames, not that Rust frame. For (2) the arm's
-`set_reg(dst, result)` is what delivers the body's value, and the restored
-frame's pc is already past the `Call`, so nothing writes the register: `r`
-keeps the `NULL` that `call/cc`'s capture cleared it to, which prints as `()`
-— and being a `NULL` in a live register it can surface downstream as an
-unrelated `type error: expected a procedure, got null` rather than as a
-visibly wrong value. For (1) the `ThunkOutcome::Escaped` arm decides whether it
-still owes its after-thunk with a **length** test,
-`state.dynamic_winds.len() > wind_depth`, applied after the jump has already
-replaced `state.dynamic_winds` with the *target's* records — so it truncates
-the target's records and re-runs its own thunk.
+`set_reg(dst, result)` was what delivered the body's value, and the restored
+frame's pc is already past the `Call`, so nothing wrote the register: `r` kept
+the `NULL` that `call/cc`'s capture cleared it to, which prints as `()` — and
+being a `NULL` in a live register it could surface downstream as an unrelated
+`type error: expected a procedure, got null` rather than as a visibly wrong
+value. For (1) the `ThunkOutcome::Escaped` arm decided whether it still owed
+its after-thunk with a **length** test,
+`state.dynamic_winds.len() > wind_depth`, applied after the jump had already
+replaced `state.dynamic_winds` with the *target's* records — so it truncated
+the target's records and re-ran its own thunk.
 
-Head-position `dynamic-wind` is unaffected in both: its result delivery and its
-record cleanup are instructions (`PopWind`, `Call after`), and instructions are
-restored with the frame.
+Head-position `dynamic-wind` was unaffected in both: its result delivery and
+its record cleanup are instructions (`PopWind`, `Call after`), and instructions
+are restored with the frame.
 
-The same shape as the value form's after-thunk defect fixed on 2026-08-17.
-Symptom (2) is pinned as
-`the_value_form_of_dynamic_wind_loses_its_body_value_on_reentry_on_the_vm` in
-`backend_divergence.rs`. **Fix shape:** give the value form an instruction to
-return to rather than a Rust frame — the move the entry above made for a jump's
-wind thunks; failing that, test for its own record by `DynamicWindRecord::id`
-instead of comparing lengths.
+**The fix** is the move the entry above made for a jump's wind thunks, not the
+`DynamicWindRecord::id` test that was the fallback: the value form now pushes a
+stub frame running `value_wind_stub`'s six instructions — `Call before` /
+`PushWind` / `Call body` / `PopWind` / `Call after` / `Return`, the same
+sequence pass 5 emits for head position — and returns to the dispatch loop. The
+two forms share one implementation, and everything the call still owes is a pc
+the continuation restores along with the frame.
+
+A **third** symptom converges as a consequence, not by separate repair, and was
+found while writing the tests: a continuation captured in the *before* or
+*after* thunk and re-entered after the call has returned. Filed as **issue
+#159** rather than folded in silently, because #157 documents only the body
+case and this failure looks different — an *uninitialised* value, and a call
+that stops dead rather than one that mis-orders its thunks. While the nested loop
+is still on the Rust stack a thunk's own `call/cc` retry loop resumes fine —
+that worked on `main` and is pinned separately as
+`the_value_form_of_dynamic_wind_captures_inside_its_own_thunks`, labelled as
+the non-converged guard it is. The *late* re-entry had nothing to come back to:
+
+```scheme
+(define r (dw (lambda () (note 'in) (call/cc (lambda (c) (set! k c))))
+              (lambda () (note 'body) 'val)
+              (lambda () (note 'out))))
+(if (not done) (begin (set! done #t) (k #f)))
+(list r (reverse log))
+;; was (#<unknown> (in body out))   tree-walker, Gauche => (val (in body out body out))
+```
+
+`#<unknown>` is an uninitialised register reaching user-visible output, and the
+rest of the call — body, after-thunk, value — never ran. Pinned as
+`the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body` and
+`the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks` in
+`backend_divergence.rs`; both fail on `main` with exactly the answers quoted.
+
+**A dead sweep goes with it.** The value form was the last push site that gave
+a record a real frame depth; `PushWind` — now the only one — always used the
+`stack_depth = 0` "not auto-popped" sentinel. So `pop_resolved_winds`, which
+ran the after-thunk of a record whose *depth* said its body had returned,
+became reachable on no input: its test needs `0 >= frames.len()`, and its only
+caller returns early on an empty frame stack. Measured as well as argued — a
+probe on entry never fired on the fixed VM across chibi (1226), the full Rust
+suite and the Larceny r7rs lane (8475 assertions), nor on `main` across chibi
+and the full Rust suite. Removed, along with `DynamicWindRecord::stack_depth`,
+which had no other reader.
+
+**Three prompt/abort shapes converge too**, found by `/code-review` of the fix
+and measured against Racket, which agrees with the fixed VM on all of them:
+
+```text
+                            fixed VM                     main (7e696892)
+  abort from body, non-tail ((handler ab) (in b1 out))   panic: "no active frame"
+  abort from before thunk   ((handler ab) (in))          (#<unspecified> (in body out))
+  abort from after thunk    ((handler ab) (in body out)) (#<unspecified> (in body out))
+```
+
+The abort truncates to the prompt's frame depth, and the value form's
+bookkeeping was a Rust call that truncation walked out from under: one shape
+aborted the process, and the other two silently skipped the handler *and* ran
+thunks the abort should have prevented — `body` and `out` after an abort from
+`before`, which had not entered the extent yet. Nothing in the suite covered
+the value form under a prompt at all; now pinned as
+`test_abort_to_a_prompt_out_of_each_value_form_wind_thunk` in
+`cps_features.rs`, VM-only because the tree-walker has no prompt API.
+
+**Not** fixed, and filed as **issue #160**: invoking the composable continuation
+a prompt handler receives delivers nothing and yields `()`. Pre-existing,
+identical on `main` and the branch, and reproducible with no `dynamic-wind` in
+the program at all — `(call-with-continuation-prompt (lambda () (list 'got
+(abort-current-continuation t 'ab))) t (lambda (v k) (k 10)))` gives `()` where
+Racket gives `(got 10)`. The review reported it as a regression from this
+change; that half does not reproduce, and the defect underneath it is its own.
+
+**A Rust-stack recursion goes too.** The value form ran its body on a nested
+dispatch loop, so N nested value-form extents cost N nested Rust calls: 5000 of
+them aborted the process with `fatal runtime error: stack overflow` on `main`
+(release, macOS), 4000 passed. They cost a VM frame each now — 20000 is fine.
+Pinned as `test_nested_value_form_winds_do_not_nest_rust_frames` in
+`cps_features.rs`, which aborts the test binary on `main`.
+
+**Error locations kept.** The two runtime-built stubs carry no source map, and
+either can be the innermost frame when an error is raised — the value form's
+thunks tail-call out of their own frames. Read literally that cost the error
+its caret entirely (`(dw (lambda () 1) (lambda () (error "boom")) (lambda ()
+2))` printed a bare message where head position printed file, line and source
+line). `attach_source_location` now skips a source-map-less frame and takes the
+location from the call site that pushed it, which also closes the same hole in
+`wind_jump_stub` from the entry above.
+
+**Verified.** chibi 1226/1226 on both backends; `cargo test --all` green; the
+GC differential green on both backends and both lanes; the Larceny r7rs VM lane
+8447 of 8475 in 22 of 33 suites — unmoved, no row either gained or lost. Every
+new test program was run on Gauche and chibi as well as both backends; where
+the four disagreed it was this repo's test at fault, not an implementation (see
+the `let*` note on `probe`).
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

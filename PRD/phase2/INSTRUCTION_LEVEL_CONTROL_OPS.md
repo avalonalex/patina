@@ -161,11 +161,13 @@ Similarly for `dynamic-wind` — the after-thunk call is in tail position of the
 
 1. **Phase 1: `call-with-values`** — Complete. Compiler emits `Call producer` + `CallWithValues consumer`.
 2. ~~**Phase 2: `with-exception-handler`**~~ — Already instruction-level. The runtime intercept uses `call_closure` (not `run_thunk`) and `pop_exception_handlers` on Return. No changes needed.
-3. **Phase 3: `dynamic-wind`** — Complete. Compiler emits `Call before` + `PushWind` + `Call body` + `PopWind` + `Call after`. `PushWind` uses `stack_depth = 0` sentinel so `pop_resolved_winds` doesn't auto-pop; `PopWind` explicitly removes the record. Wind transition for continuation escape/re-entry compares wind record lists (no `stack_depth` dependency) and runs one thunk per step under a `ResumeWindJump` stub frame — `step_wind_jump`, which replaced `run_wind_transition` on 2026-09-02.
+3. **Phase 3: `dynamic-wind`** — Complete. Compiler emits `Call before` + `PushWind` + `Call body` + `PopWind` + `Call after`; `PopWind` removes the record and the `Call` after it runs the thunk. Wind transition for continuation escape/re-entry compares wind record lists and runs one thunk per step under a `ResumeWindJump` stub frame — `step_wind_jump`, which replaced `run_wind_transition` on 2026-09-02. Records carry no frame depth: the `stack_depth = 0` sentinel and the `pop_resolved_winds` sweep it kept records away from are both gone since 2026-09-02, when the value form stopped being the one push site that used a real depth (issue #157).
 
 ### Backward compatibility
 
 The runtime intercept path (`VmControlPrimitive` + `handle_control_primitive`) should be kept as a fallback for cases where the compiler can't statically resolve the callee (e.g., `(apply call-with-values args)`). The instruction-level path is an optimization for the common case.
+
+For `dynamic-wind` the fallback is no longer a *second implementation*: since 2026-09-02 the intercept pushes a stub frame running the same six instructions (`value_wind_stub`), so an unresolvable callee costs a frame, not a different set of semantics. Every divergence between the two forms found so far — a leaked record, a lost body value, the wrong after-thunk on re-entry, a `call/cc` in a wind thunk — came from the second implementation, not from the dispatch.
 
 ## Files to modify
 

@@ -56,6 +56,10 @@ pub struct VmState {
     /// object has exactly one owner, `code_store`, and this is a note of
     /// where to find it.
     pub(crate) wind_jump_code: Option<CodeObjectId>,
+    /// Id of the six-instruction stub the *value* form of `dynamic-wind` runs
+    /// in ([`value_wind_stub`]). Built on the first such call; a program that
+    /// only ever calls `dynamic-wind` in head position never builds one.
+    pub(crate) value_wind_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -130,6 +134,7 @@ impl VmState {
             exception_handlers: Vec::new(),
             code_store: Vec::new(),
             wind_jump_code: None,
+            value_wind_code: None,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -852,10 +857,15 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // tail-called `with-exception-handler` installs at `exit_depth`, which is
     // also where a handler this loop was *started under* sits when the
     // control primitive that started it tail-replaced its thunk's frame —
-    // `(with-exception-handler h (lambda () (dw before body after)))` runs
-    // `before` on a nested loop with `h` at that depth and still owed `body`'s
-    // raise. So the exit-depth `Return` pops nothing (see
+    // `(with-exception-handler h (lambda () (call-with-values p c)))` runs
+    // `p` on a nested loop with `h` at that depth and still owed a raise from
+    // `c`. So the exit-depth `Return` pops nothing (see
     // `pop_resolved_extents`) and the loop closes its own on the way out.
+    //
+    // The example used to be the value form of `dynamic-wind`, whose thunks
+    // ran on nested loops until 2026-09-02 (issue #157). `call-with-values`'
+    // producer is now the only remaining `run_thunk_outcome` caller with a
+    // result to place, and carries the invariant on its own.
     let handlers_at_entry = state.exception_handlers.len();
 
     loop {
@@ -933,17 +943,36 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 /// Attach a source location to an error if it doesn't already have one.
 /// Looks up the current frame's code object and uses the PC to find the
 /// closest source location from the compiled source map.
+///
+/// The innermost frame is not always the one that *has* a source map. The two
+/// stubs the runtime builds rather than compiles — [`value_wind_stub`] and
+/// [`wind_jump_stub`] — carry none at all, and either can be the top frame
+/// when an error is raised: the value form's thunks tail-call out of their own
+/// frames, leaving the stub innermost, and a jump's thunks do the same. Read
+/// literally, that costs the error its caret entirely — `(dw (lambda () 1)
+/// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
+/// head-position `dynamic-wind` printed file, line and source line.
+///
+/// So a source-map-less frame is *skipped*, and the location comes from the
+/// call site that pushed it, which is what the reader wants: the stub is
+/// machinery, not a place in the program. Only an entirely empty map counts as
+/// "not a place" — a compiled frame that merely has no entry at this pc still
+/// stops the search, as it always did, rather than blaming its caller.
 fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     // Don't double-wrap if already has a location.
     if e.source_location().is_some() {
         return e;
     }
-    if let Some(frame) = state.frames.last() {
+    for frame in state.frames.iter().rev() {
+        if frame.code.source_map.is_empty() {
+            continue;
+        }
         // PC was already advanced before dispatch, so use pc-1.
         let pc = frame.pc.saturating_sub(1);
         if let Some(loc) = frame.code.source_location(pc) {
             return e.at(loc.clone());
         }
+        break;
     }
     e
 }
@@ -1284,7 +1313,7 @@ fn dispatch_one_instruction(
             state.set_reg(return_reg, result);
             // Free the callee's register window.
             state.free_top_registers(frame.register_base);
-            pop_resolved_extents(state, exit_depth)?;
+            pop_resolved_extents(state, exit_depth);
         }
 
         // ── call-with-values (instruction-level) ─────────────────────────
@@ -1326,7 +1355,7 @@ fn dispatch_one_instruction(
             } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
             {
                 state.set_reg(return_reg, result);
-                pop_resolved_extents(state, exit_depth)?;
+                pop_resolved_extents(state, exit_depth);
             }
         }
 
@@ -1334,12 +1363,10 @@ fn dispatch_one_instruction(
         Instruction::PushWind { before, after } => {
             let before_val = state.reg_at(base, before);
             let after_val = state.reg_at(base, after);
-            // stack_depth = 0: sentinel meaning "managed by instruction
-            // sequence, not auto-popped by pop_resolved_winds".
             let handlers = captured_handlers(state);
             state
                 .dynamic_winds
-                .push(DynamicWindRecord::new(before_val, after_val, 0, handlers));
+                .push(DynamicWindRecord::new(before_val, after_val, handlers));
         }
 
         Instruction::PopWind => {
@@ -1396,20 +1423,7 @@ fn dispatch_one_instruction(
                             // side effects instead of a diagnosis.
                             message: "continuation jump: entered wind record is gone".into(),
                         })?;
-                state.dynamic_winds.push(DynamicWindRecord {
-                    // `stack_depth` is `pop_resolved_winds`' business, and
-                    // it means nothing here: the frame that would own this
-                    // record is in the target's snapshot, not on the live
-                    // stack, so the depth the record carries can easily be
-                    // *above* the travel's own frames and make the next
-                    // thunk's return look like this extent's body
-                    // returning. 0 is `PushWind`'s sentinel for "managed
-                    // by the sequence that pushed it, not auto-popped",
-                    // and that is what the travel is. Arrival restores the
-                    // target's records with their real depths.
-                    stack_depth: 0,
-                    ..record.clone()
-                });
+                state.dynamic_winds.push(record.clone());
             }
 
             step_wind_jump(state, target, value)?;
@@ -2265,18 +2279,20 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
 
 /// Run a thunk (0-arg closure) to completion and *require* that it returned.
 ///
-/// The internal boundaries that only ever run bookkeeping thunks — the
-/// resolved-wind sweep, the value form's own cleanup, the prompt paths' exit
-/// and entry thunks — use this: a continuation invoked inside one of those
-/// does not resume here, it unwinds, so the sentinel is simply propagated.
-/// Callers that have a result to place (`dynamic-wind`'s body,
-/// `call-with-values`' producer) use [`run_thunk_outcome`] instead and decide
-/// for themselves.
+/// The internal boundaries that only ever run bookkeeping thunks — an abort's
+/// exit winds and a composable continuation's entry thunks — use this: a
+/// continuation invoked inside one of those does not resume here, it unwinds,
+/// so the sentinel is simply propagated. `call-with-values`' producer has a
+/// result to place and uses [`run_thunk_outcome`] instead, deciding for
+/// itself.
 ///
-/// A *jump's* wind thunks are no longer among these. Since 2026-09-02 they run
-/// as ordinary frames under a `ResumeWindJump` stub (`step_wind_jump`), not on
-/// a nested loop, which is what lets a continuation captured inside one be
-/// resumed.
+/// Two families of thunk have left this list, both by the same move — being
+/// given an instruction to come back to instead of a Rust frame. A *jump's*
+/// wind thunks run as ordinary frames under a `ResumeWindJump` stub
+/// (`step_wind_jump`) since 2026-09-02, and the **value form** of
+/// `dynamic-wind` runs all three of its thunks as ordinary frames of
+/// [`value_wind_stub`] since 2026-09-02 as well. In both cases that is what
+/// lets a continuation captured inside one be resumed.
 fn run_thunk(state: &mut VmState, thunk: TaggedValue) -> Result<TaggedValue, VmError> {
     match run_thunk_outcome(state, thunk)? {
         ThunkOutcome::Returned(v) => Ok(v),
@@ -2294,10 +2310,12 @@ enum ThunkOutcome {
     /// A continuation unwound past this boundary. The caller owns no live
     /// frame: it must not write a register, and must hand the unwind on.
     ///
-    /// Whether it owes its own cleanup has to be *read off the stack*, not
-    /// assumed — the value form of `dynamic-wind` does run an after-thunk on
-    /// this path, when its record survived the jump; see that arm for why, and
-    /// for the bug in how it decides.
+    /// Nor may it run cleanup of its own. The one boundary that tried —
+    /// the value form of `dynamic-wind`, deciding whether it still owed its
+    /// after-thunk by comparing wind-stack *lengths* — was asking about a
+    /// stack the jump had already replaced with the target's, and truncated
+    /// the target's records to run its own thunk again (issue #157). Cleanup
+    /// that must survive an escape belongs in an instruction, not here.
     Escaped(TaggedValue),
 }
 
@@ -2315,7 +2333,8 @@ fn unpack_values(state: &VmState, primary: TaggedValue) -> Vec<TaggedValue> {
 /// Run a thunk (0-arg closure) to completion, reporting whether it returned.
 ///
 /// Pushes the thunk's frame, runs the execution loop until that frame returns,
-/// then returns the result. Used by `dynamic-wind` and wind-transition hooks.
+/// then returns the result. Reached by `call-with-values`' producer directly,
+/// and by everything [`run_thunk`] covers.
 fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOutcome, VmError> {
     let depth_before = state.frames.len();
 
@@ -2365,54 +2384,29 @@ fn handle_control_primitive(
                 });
             }
             // Only the value form reaches here; head-position `dynamic-wind`
-            // compiles to `PushWind`/`PopWind`. Each thunk can be escaped out
-            // of, and on escape this call owns no frame to deliver into — the
-            // `dst` it holds is numbered in a window that no longer exists.
-            // The `frames.is_empty()` tests this replaces were never true: a
-            // captured continuation's frame stack is never empty, so the
-            // escape always fell through to `set_reg` on a dead frame.
-            run_thunk(state, args[0])?;
-            let wind_depth = state.dynamic_winds.len();
-            let frame_depth = state.frames.len();
-            let handlers = captured_handlers(state);
-            state.dynamic_winds.push(DynamicWindRecord::new(
-                args[0],
-                args[2],
-                frame_depth,
-                handlers,
-            ));
-            let result = match run_thunk_outcome(state, args[1])? {
-                ThunkOutcome::Returned(v) => v,
-                // The body escaped through a continuation, so this call owns
-                // no frame to deliver into. Whether the after-thunk is still
-                // owed has to be *read off the stack*, not assumed: it used to
-                // be safe to assume the jump had already run it, because a
-                // full continuation invoke drained every wind record. Now that
-                // the transition keeps the records both stacks share, a jump
-                // that stays inside this extent leaves ours in place — and
-                // this frame, which is the only thing that would ever pop it,
-                // is about to be abandoned. Left alone the record outlives its
-                // owner and fires at some unrelated later transfer.
-                ThunkOutcome::Escaped(v) => {
-                    if state.dynamic_winds.len() > wind_depth {
-                        state.dynamic_winds.truncate(wind_depth);
-                        // Best-effort, and deliberately after the truncate: an
-                        // after-thunk that fails on its own terms loses to the
-                        // escape already in flight. (`vm_raise_value`'s
-                        // unwind loop treated it the same way before triage
-                        // family 28 removed that loop.)
-                        let _ = run_thunk(state, args[2]);
-                    }
-                    return Err(park_escape(state, v));
-                }
-            };
-            // If the body aborted, the abort already ran exit thunks and
-            // truncated dynamic_winds. Only do cleanup if our record is still there.
-            if state.dynamic_winds.len() > wind_depth {
-                state.dynamic_winds.pop();
-                run_thunk(state, args[2])?;
-            }
-            state.set_reg(dst, result);
+            // compiles to `PushWind`/`PopWind`. Run the same instructions in
+            // a frame of the machine's own, so that everything this call
+            // still owes — its record, its after-thunk, the delivery of its
+            // body's value — is a pc a re-entering continuation restores
+            // along with the frame, rather than a Rust frame it cannot
+            // (issue #157, and PR #156's move for a jump's wind thunks).
+            let code = value_wind_stub(state)?;
+            let base = state.alloc_registers(value_wind::NUM_REGS);
+            state.frames.push(CallFrame {
+                pc: 0,
+                register_base: base,
+                num_regs: value_wind::NUM_REGS,
+                closure: None,
+                return_reg: dst,
+                code,
+            });
+            // Through `set_reg_at`, not the raw slice: the frame is already
+            // pushed, so `base` *is* `frame_base()`, and the debug assert
+            // keeps that machine-checked if these writes are ever moved above
+            // the push.
+            state.set_reg_at(base, value_wind::BEFORE, args[0]);
+            state.set_reg_at(base, value_wind::BODY, args[1]);
+            state.set_reg_at(base, value_wind::AFTER, args[2]);
         }
 
         VmControlPrimitive::CallWithContinuationPrompt => {
@@ -2939,12 +2933,20 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// parameter, a `call-with-values` consumer) delivers straight to the caller.
 ///
 /// A handler is live exactly while the thunk it was installed for has a
-/// frame, which is `stack_depth < frames.len()`; the same holds of prompts
-/// and wind records. So the pops are safe at any such point, and skipping
-/// them at one leaves a stale entry that the next raise finds — the
-/// tail-position branches used to skip them, and
-/// `(with-exception-handler h (lambda () (values 1)))` left `h` installed
-/// for the rest of the program.
+/// frame, which is `stack_depth < frames.len()`; the same holds of prompts.
+/// So the pops are safe at any such point, and skipping them at one leaves a
+/// stale entry that the next raise finds — the tail-position branches used to
+/// skip them, and `(with-exception-handler h (lambda () (values 1)))` left
+/// `h` installed for the rest of the program.
+///
+/// Wind records are *not* among the extents closed here, and no longer carry
+/// a depth to close them by. Every record is pushed by `PushWind` and popped
+/// by the `PopWind` that follows it in the same instruction sequence, or by
+/// the jump that leaves its extent. A sweep by depth existed until 2026-09-02
+/// as the only cleanup the **value form** of `dynamic-wind` had left once a
+/// continuation abandoned its Rust frame; the value form runs `PushWind` and
+/// `PopWind` itself now ([`value_wind_stub`]), and the sweep was reachable on
+/// no input.
 ///
 /// **Nothing is popped at the run loop's exit depth.** The depth test cannot
 /// decide there: a handler the loop was *started under* — its thunk's frame
@@ -2952,16 +2954,15 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// at exactly `exit_depth` — is live, while one a tail-called
 /// `with-exception-handler` installed *inside* the loop sits at the same
 /// depth and is dead. `run_loop_until_outcome` closes the second kind from
-/// its own entry count. Prompts and wind records at that depth belong to the
-/// Rust caller that started the loop (`run_thunk_outcome`, a prompt body),
-/// which closes them itself.
-fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) -> Result<(), VmError> {
+/// its own entry count. Prompts at that depth belong to the Rust caller that
+/// started the loop (`run_thunk_outcome`, a prompt body), which closes them
+/// itself.
+fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) {
     if state.frames.len() == exit_depth || state.frames.is_empty() {
-        return Ok(());
+        return;
     }
     pop_resolved_prompts(state);
     pop_exception_handlers(state);
-    pop_resolved_winds(state)
 }
 
 /// Pop exception handlers whose thunk has returned (stack shrank below their depth).
@@ -2973,24 +2974,6 @@ fn pop_exception_handlers(state: &mut VmState) {
             break;
         }
     }
-}
-
-/// Pop dynamic-wind records whose body has returned (stack shrank below their
-/// depth), running each after-thunk.  This handles the case where a continuation
-/// invocation resumes inside a dynamic-wind body and the body then returns
-/// normally — the Rust call-stack cleanup in `handle_control_primitive` is no
-/// longer on the stack, so we must do the cleanup here.
-fn pop_resolved_winds(state: &mut VmState) -> Result<(), VmError> {
-    while let Some(dw) = state.dynamic_winds.last() {
-        if dw.stack_depth >= state.frames.len() {
-            let after = dw.after;
-            state.dynamic_winds.pop();
-            run_thunk(state, after)?;
-        } else {
-            break;
-        }
-    }
-    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3150,9 +3133,11 @@ fn push_wind_step(
         return_reg: 0,
         code,
     });
-    state.registers[base + wind_step::TARGET as usize] = target;
-    state.registers[base + wind_step::VALUE as usize] = value;
-    state.registers[base + wind_step::ENTERING as usize] = entering;
+    // `set_reg_at` for the reason the value form's stub gives: the frame is
+    // pushed, so the assert holds and keeps holding.
+    state.set_reg_at(base, wind_step::TARGET, target);
+    state.set_reg_at(base, wind_step::VALUE, value);
+    state.set_reg_at(base, wind_step::ENTERING, entering);
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for `ResumeWindJump` to run.
     call_any(state, thunk, &[], wind_step::THUNK_RESULT)?;
@@ -3190,30 +3175,134 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
         }));
 }
 
-/// The one-instruction code object every wind step's frame runs.
+/// A code object the runtime builds rather than compiles, memoised in `slot`.
 ///
-/// Built at most once per `VmState` and kept in `code_store`, so the GC's
+/// Both callers want the same three properties, and stating them once is the
+/// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — this one has no constants to trace, but the
-/// invariant is cheaper to keep than to caveat.
-fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    if let Some(id) = state.wind_jump_code {
+/// without qualification — neither stub has constants to trace, but the
+/// invariant is cheaper to keep than to caveat. It is built at most once per
+/// `VmState`, and `slot` holds the id rather than the `Rc` because
+/// `code_store` is the one owner. And its `source_map` is empty, which
+/// `attach_source_location` reads as "not a place in the program" and steps
+/// past — see there.
+fn runtime_stub(
+    state: &mut VmState,
+    slot: impl Fn(&VmState) -> Option<CodeObjectId>,
+    set_slot: impl Fn(&mut VmState, CodeObjectId),
+    name: &str,
+    instructions: Vec<Instruction>,
+    num_regs: u16,
+) -> Result<Rc<CodeObject>, VmError> {
+    if let Some(id) = slot(state) {
         return state.code_object(id);
     }
-    let instructions = vec![Instruction::ResumeWindJump];
     let id = CodeObjectId::fresh();
     state.load(CodeObject {
         id,
-        name: Some(Rc::from("wind-jump")),
+        name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
         instructions,
         constants: Vec::new(),
-        num_regs: wind_step::NUM_REGS,
+        num_regs,
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
     });
-    state.wind_jump_code = Some(id);
+    set_slot(state, id);
     state.code_object(id)
+}
+
+/// The one-instruction code object every wind step's frame runs.
+fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    runtime_stub(
+        state,
+        |s| s.wind_jump_code,
+        |s, id| s.wind_jump_code = Some(id),
+        "wind-jump",
+        vec![Instruction::ResumeWindJump],
+        wind_step::NUM_REGS,
+    )
+}
+
+/// The registers of the stub frame the **value** form of `dynamic-wind` runs
+/// in — its three thunks, its body's value, and one slot for the two thunks
+/// whose values are discarded. See [`value_wind_stub`].
+mod value_wind {
+    /// The before-thunk.
+    pub(super) const BEFORE: u16 = 0;
+    /// The body thunk.
+    pub(super) const BODY: u16 = 1;
+    /// The after-thunk.
+    pub(super) const AFTER: u16 = 2;
+    /// The body's value, which is the call's value. Held across the
+    /// after-thunk, so it cannot share a slot with it.
+    pub(super) const RESULT: u16 = 3;
+    /// Where the before- and after-thunks return. Their values are discarded,
+    /// but `Return` needs a slot to write into.
+    pub(super) const DISCARD: u16 = 4;
+    /// Window size of the stub frame.
+    pub(super) const NUM_REGS: u16 = 5;
+}
+
+/// The code object the value form of `dynamic-wind` runs — the six
+/// instructions `pass5_codegen` emits for head position, in a frame of their
+/// own because there is no call site to emit them into.
+///
+/// **Kept in step by hand with `pass5_codegen.rs`'s `dynamic-wind` case**,
+/// which is the price of the two entry points; a change to one is a change to
+/// the other, and each names the other so an editor of either finds it. The
+/// two are not textually identical and are not meant to be: pass 5 emits
+/// `Return` only in tail position and lets the discarded thunk results land in
+/// `expr.dst` and the before-thunk's own register, where a frame of its own
+/// can afford a dedicated slot and always returns. The *order and identity* of
+/// the instructions is what has to match, because that is what the two forms
+/// agreeing depends on.
+///
+/// The point is not to save the nested Rust loop but to make this call's
+/// remaining obligations *resumable*. A continuation captured in the body
+/// restores the VM's frames, and this frame's pc is one of them, so a
+/// re-entry that returns through here still pops the record, still runs this
+/// call's own after-thunk, and still delivers the body's value to the caller
+/// — none of which a Rust frame abandoned by the jump could do (issue #157).
+///
+/// Built by [`runtime_stub`], like [`wind_jump_stub`] and for the reasons
+/// stated there.
+fn value_wind_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    let instructions = vec![
+        Instruction::Call {
+            func: value_wind::BEFORE,
+            args: vec![],
+            dst: value_wind::DISCARD,
+        },
+        Instruction::PushWind {
+            before: value_wind::BEFORE,
+            after: value_wind::AFTER,
+        },
+        Instruction::Call {
+            func: value_wind::BODY,
+            args: vec![],
+            dst: value_wind::RESULT,
+        },
+        // Pops the record; the after-thunk is the `Call` that follows, so
+        // that a jump out of *it* no longer sees this extent as entered.
+        Instruction::PopWind,
+        Instruction::Call {
+            func: value_wind::AFTER,
+            args: vec![],
+            dst: value_wind::DISCARD,
+        },
+        Instruction::Return {
+            val: value_wind::RESULT,
+        },
+    ];
+    runtime_stub(
+        state,
+        |s| s.value_wind_code,
+        |s, id| s.value_wind_code = Some(id),
+        "dynamic-wind",
+        instructions,
+        value_wind::NUM_REGS,
+    )
 }
 
 /// The handler stack a `dynamic-wind` record captures.
@@ -3563,11 +3652,11 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
 /// any enclosing dispatch loop — or to none of them, if the escape targets a
 /// frame further out — and only `run_loop_until` knows its own `exit_depth`,
 /// so it is the one place allowed to decide whether to resume or exit. Every
-/// synchronous boundary in between (`run_thunk`, and through it the value form
-/// of `dynamic-wind` and `call-with-values`) sees the sentinel and learns that
-/// the value is the resumed computation's, not its own — which is the whole
-/// difference between writing a register in a live frame and writing one in a
-/// frame that no longer exists.
+/// synchronous boundary in between (`run_thunk`, and through it
+/// `call-with-values`) sees the sentinel and learns that the value is the
+/// resumed computation's, not its own — which is the whole difference between
+/// writing a register in a live frame and writing one in a frame that no
+/// longer exists.
 ///
 /// `value` is what the continuation *delivers*
 /// ([`deliver_value`]), which for `(k)` and `(k v1 v2 …)` is a `#<values>`
@@ -3694,7 +3783,7 @@ fn tail_call_value_with_probe(
             // frame it did push closes them when that frame returns. Then,
             // if this is the exit depth, the enclosing loop is done.
             if state.frames.len() == depth {
-                pop_resolved_extents(state, exit_depth)?;
+                pop_resolved_extents(state, exit_depth);
             }
             if state.frames.len() == exit_depth {
                 let result = state.reg(return_reg);
@@ -3723,7 +3812,7 @@ fn tail_call_value_with_probe(
             state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
             // The popped frame's extents close now, as after `Return`.
-            pop_resolved_extents(state, exit_depth)?;
+            pop_resolved_extents(state, exit_depth);
             return Ok(None);
         }
 
@@ -3746,7 +3835,7 @@ fn tail_call_value_with_probe(
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
             state.free_top_registers(frame.register_base);
-            pop_resolved_extents(state, exit_depth)?;
+            pop_resolved_extents(state, exit_depth);
             return Ok(None);
         }
     }
