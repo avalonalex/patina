@@ -158,6 +158,45 @@ fn display_tagged(tv: TaggedValue, heap: &RefCell<patina_core::heap::Heap>) -> S
     format_write_tagged(tv, heap)
 }
 
+// ─── Matrix reporting ────────────────────────────────────────────────────────
+
+/// Describe one row of a scoring matrix that stopped answering what it
+/// recorded.
+///
+/// Shared by `hygiene_matrix.rs` and `control_flow_matrix.rs`, which record
+/// the same four things per row — what was recorded, what came back, what the
+/// oracles say, and the program — and had the same three-arm reading of the
+/// difference written out twice. A third matrix would have made it three. The
+/// *reading* is the part worth having in one place: whether a row moved
+/// **toward** the oracles or away from them is what tells the reader if they
+/// are looking at a fix or a regression, and getting that backwards sends
+/// someone hunting the wrong direction.
+pub fn describe_move(
+    name: &str,
+    backend: &str,
+    recorded: &str,
+    got: &str,
+    correct: &str,
+    program: &str,
+) -> String {
+    let direction = if got == correct {
+        "FIXED — it now matches the reference implementations"
+    } else if recorded == correct {
+        "REGRESSED — it used to match the reference implementations"
+    } else {
+        "changed, and is still wrong"
+    };
+    let indented = program
+        .lines()
+        .map(|l| format!("      {l}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "  {name} [{backend}] {direction}\n    recorded {recorded}\n    got      {got}\n\
+         \x20   correct  {correct}\n    program:\n{indented}"
+    )
+}
+
 // ─── Error classes ───────────────────────────────────────────────────────────
 
 /// The coarse class of a failure, compared between backends (audit D3).
@@ -400,12 +439,20 @@ pub fn assert_program_eval_error_at(
 /// bug — a mandatory argument, so a quarantine cannot be written without
 /// saying where it is tracked.
 ///
-/// This is the only way to opt a test out of both-backends coverage, and it is
+/// This is the only way *a test* opts out of both-backends coverage, and it is
 /// designed to **fail when the bug is fixed**: repairing the broken backend
 /// trips the second assertion, whose message tells the fixer to replace this
 /// call with a plain [`assert_program_eval_to`]. Asserting only the working
 /// side would let a quarantine outlive its bug forever, which is how an
 /// exception list becomes a permanent excuse.
+///
+/// **The matrix files are the second inventory**, and rg-ing for this function
+/// will not find them. `hygiene_matrix.rs` and `control_flow_matrix.rs` each
+/// record what every backend answers for every point in a space, so a row
+/// whose actual differs from `correct` is a quarantine too — self-describing,
+/// counted by a per-backend assertion, and failing in both directions for the
+/// same reason this function does. An audit of what is knowingly wrong has to
+/// read all three.
 ///
 /// The pinned [`ErrorClass`] closes the other escape (audit D3): without it,
 /// *any* failure satisfied the quarantine, so a new, unrelated bug could

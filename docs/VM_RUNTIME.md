@@ -481,6 +481,15 @@ found one at a time by hand-written repros (#157, #159, #160, #162, #163) while
 the chibi suite stayed 1226/1226 through all of them; an empty cell is findable
 by reading, before anyone writes a program that trips over it.
 
+Its executable counterpart is
+`crates/patina-tests/tests/control_flow_matrix.rs`, which enumerates the
+*transfers* rather than the state: 24 shapes over how a `dynamic-wind` is
+written, whether it is in tail position, and how control leaves or re-enters
+it. Each row records **which** external implementations back its answer —
+four for the prompt-free shapes, down to one for the shape only Guile can
+express — rather than one number for the table. Where this table catches a
+component nobody carried, that one catches a shape nobody tried.
+
 | transfer | frames | registers | dynamic_winds | prompt_stack | exception_handlers |
 |---|---|---|---|---|---|
 | `call/cc` capture | save | save | save | save | save |
