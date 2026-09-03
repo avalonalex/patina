@@ -356,8 +356,10 @@ intercepted at call dispatch time.
   2026-09-01, Track L §6)
 - Composable/delimited invokes do **not** travel at all: `invoke_delimited`
   runs every captured `before` thunk unconditionally, on a nested call and
-  under the live handler stack, then extends `dynamic_winds`. Shared extents
-  are not skipped there
+  under the live handler stack. Shared extents are not skipped there. Each
+  record is pushed as its own thunk returns, `step_wind_jump`'s rule and for
+  its reason: a thunk that raises leaves the extents before it entered *and*
+  recorded, so their `after` thunks are still owed, and its own neither
 - A composable invoke has two values to place, and `invoke_delimited` is the
   one place that places them. The delivered value goes into the innermost
   captured frame's `deliver_reg` — the hole the capturing call left, since
@@ -371,6 +373,16 @@ intercepted at call dispatch time.
   is the identity continuation, and `(k v)` is `v`. That is what
   `deliver_reg: None` means, and the invoke hands the value straight back to
   its caller instead of appending anything
+- A composable invoke reports **a pushed frame**, never the escape sentinel a
+  full one reports. The distinction is what the caller still owes: a jump
+  replaces the stack and voids the Rust work above it, while a composable
+  continuation *returns*, so a `call-with-values` consumer still has to be
+  applied, a jump still has to be finished, a `raise-continuable` entry still
+  has to be re-pushed. `call_any` returning the sentinel is why the value form
+  of `call-with-values` dropped its consumer where the head form did not. That
+  a resumed invoke can push **more than one** frame is the other half of the
+  same rule: a caller that then runs its own dispatch loop must read the depth
+  to run back down to *before* the call, not as `frames.len() - 1` after it
 - The value form of `dynamic-wind` (`handle_control_primitive`) pushes a stub
   frame running `value_wind_stub`'s six instructions — `Call before` /
   `PushWind` / `Call body` / `PopWind` / `Call after` / `Return`, the same

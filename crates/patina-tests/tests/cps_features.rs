@@ -1073,6 +1073,43 @@ fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
         "(ab 10)"
     );
     assert_eq!(probe("(abort-current-continuation t 'ab)", "(k 10)"), "10");
+    // Reached through `call_any` rather than an instruction. The value form
+    // of `call-with-values` runs its producer across a nested Rust boundary
+    // that still owes the consumer a call, and reporting the resumed frames
+    // as a continuation *escape* told it to abandon that: the two spellings
+    // of one program disagreed, `(handler ())` against the head form's
+    // answer. A composable continuation returns, so its invoke reports a
+    // pushed frame, which is what it is. `(k)` with no arguments delivers a
+    // `#<values>` object exactly as `(values)` would.
+    let head = probe(
+        "(list 'got (abort-current-continuation t 'ab))",
+        "(list 'handler (call-with-values k list))",
+    );
+    let value_form = eval_program_vm(
+        "(define t (make-continuation-prompt-tag 'p))
+         (define cwv call-with-values)
+         (call-with-continuation-prompt
+           (lambda () (list 'got (abort-current-continuation t 'ab)))
+           t
+           (lambda (v k) (list 'handler (cwv k list))))",
+    );
+    assert_eq!(
+        head, value_form,
+        "the head and value forms of call-with-values are the same program"
+    );
+    assert_eq!(head, "(handler ((got #<values>)))");
+    // `k` as the exception handler itself, with *two* frames captured: the
+    // raise runs the handler down to the depth it started at, which stops
+    // being `frames.len() - 1` as soon as an invoke can push more than one
+    // frame. Reading it after the call gave `(handler (a ()))` — the resumed
+    // computation cut in half.
+    assert_eq!(
+        probe(
+            "(list 'a ((lambda (z) (list 'b z (abort-current-continuation t 'ab))) 'zz))",
+            "(list 'handler (with-exception-handler k (lambda () (raise-continuable 'boom))))"
+        ),
+        "(handler (a (b zz boom)))"
+    );
     // A `dynamic-wind` extent inside the captured region is entered again by
     // the invoke — composable invokes do not travel, so this happens whether
     // or not the live stack already shares the extent — and left when the
