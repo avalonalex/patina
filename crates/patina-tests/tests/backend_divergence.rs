@@ -48,6 +48,7 @@ use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
+const TREE_WALKER_PROMPTS: &str = "issue #169";
 // HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
 // converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
 
@@ -998,5 +999,49 @@ fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
         "#t",
         ErrorClass::AtRuntime,
         GUARD_UNWIND_ORDER,
+    );
+}
+
+// ─── the prompt API is VM-only (issue #169) ──────────────────────────────────
+
+/// `(scheme base)` exports the prompt API and only the VM implements it.
+///
+/// Here rather than left as a bare failure because of what the tree-walker
+/// used to say: `Undefined variable:
+/// patina.internal.control/call-with-continuation-prompt` — an internal
+/// library path, and "undefined" of a name the library does define. Neither
+/// backend *registers* these two; control primitives are claimed by name
+/// before dispatch, and the tree-walker's CPS transform does not know them.
+/// It now registers a deliberate not-implemented error instead
+/// (`primitives::unsupported`), which is what makes this a divergence with a
+/// recorded stage rather than a lookup accident.
+///
+/// A `SchemeException`, so `guard` can catch it — behaviour a program is
+/// entitled to from anything `(scheme base)` exports.
+#[test]
+fn call_with_continuation_prompt_is_vm_only() {
+    assert_divergence(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v))",
+        On::Vm,
+        "42",
+        ErrorClass::AtRuntime,
+        TREE_WALKER_PROMPTS,
+    );
+}
+
+/// The other half of the same gap. Separate because a fix could plausibly
+/// land one without the other, and then only one of these should go red.
+#[test]
+fn abort_current_continuation_is_vm_only() {
+    assert_divergence(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt\n\
+         \x20 (lambda () (abort-current-continuation t 'ab))\n\
+         \x20 t (lambda (v k) (list 'handler v)))",
+        On::Vm,
+        "(handler ab)",
+        ErrorClass::AtRuntime,
+        TREE_WALKER_PROMPTS,
     );
 }
