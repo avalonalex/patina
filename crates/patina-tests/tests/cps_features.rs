@@ -1504,6 +1504,11 @@ fn test_an_aborts_after_thunks_run_as_frames() {
 /// That shipped for one review cycle. Both rows below answer as Guile does,
 /// and as they did before it; under the travel the first died with `Error:
 /// unhandled exception: boom-in` and the second answered `CAPTURE-SITE`.
+///
+/// These thunks *are* frames now — issue #167 gave them a
+/// `ResumeComposableInvoke` stub of their own — which is a different thing
+/// from routing them through the travel, and the reason it is a separate
+/// mechanism. This test is what keeps the two apart.
 #[test]
 fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
     // A `guard` around the invoke must see a raise from the re-entered
@@ -1548,6 +1553,79 @@ fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
              (list cap r seen)"
         ),
         "(cap (got 5) INVOKE-SITE)"
+    );
+}
+
+/// Two shapes that only work once a composable invoke's re-entry thunks are
+/// frames — VM-only, measured against Guile 3.0.11.
+///
+/// `control_flow_matrix.rs` covers issue #167 in four spellings, all of them
+/// one extent re-entered and returned from normally. These are the two shapes
+/// the same change fixes that its axes do not reach: a *transfer out of* a
+/// re-entry thunk, and *nested* captured extents. Both were wrong before and
+/// neither would have been noticed — the matrix lists nested extents as an
+/// axis it does not have yet, and a thunk that aborts is not on any axis at
+/// all.
+///
+/// ```text
+///                              this VM                    main (a18d7ae1)
+///   abort out of a re-entry    (outer esc), (in out in)   swallowed: (got 5),
+///     before-thunk                                        (in out in out)
+///   nested captured extents,   (got 5), B re-entered      value lost, B never
+///     inner thunk jumps out                               re-entered
+/// ```
+///
+/// Guile answers this VM's column for both.
+#[test]
+fn a_transfer_out_of_a_re_entry_thunk_behaves() {
+    // The re-entered extent's `before` thunk aborts to a prompt outside the
+    // invoke. The abort must win — the resumed computation never runs, and
+    // the extent it was entering is left without running its `after`, because
+    // a `before` that does not return never entered.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 't))
+             (define t2 (make-continuation-prompt-tag 't2))
+             (define k* #f) (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define cap
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind
+                     (lambda () (note 'in) (if k* (abort-current-continuation t2 'esc) #f))
+                     (lambda () (list 'got (abort-current-continuation t 'ab)))
+                     (lambda () (note 'out))))
+                 t (lambda (v k) (set! k* k) 'cap)))
+             (define r (call-with-continuation-prompt
+                         (lambda () (k* 5)) t2 (lambda (v k) (list 'outer v))))
+             (list cap r (reverse log))"
+        ),
+        "(cap (outer esc) (in out in))"
+    );
+    // Two nested captured extents, with the *outer* `before` thunk capturing a
+    // continuation that is re-entered later. Resuming it has to finish
+    // entering the inner extent too — on `main` the inner one was never
+    // re-entered and the resumed value was lost.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 't))
+             (define k* #f) (define kt #f) (define n 0) (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define cap
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind
+                     (lambda () (note 'A-in1) (call/cc (lambda (c) (set! kt c))) (note 'A-in2))
+                     (lambda () (dynamic-wind (lambda () (note 'B-in))
+                                              (lambda () (list 'got (abort-current-continuation t 'ab)))
+                                              (lambda () (note 'B-out))))
+                     (lambda () (note 'A-out))))
+                 t (lambda (v k) (set! k* k) 'cap)))
+             (define r (k* 5))
+             (when (< n 1) (set! n 1) (kt 'again))
+             (list cap r (reverse log))"
+        ),
+        "(cap (got 5) (A-in1 A-in2 B-in B-out A-out A-in1 A-in2 B-in B-out A-out A-in2 B-in B-out A-out))"
     );
 }
 

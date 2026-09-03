@@ -3,7 +3,7 @@
 //!
 //! Every defect this area has had was found one at a time, by hand-writing a
 //! program that turned out to answer wrong — issues #157, #159, #160, #162,
-//! #163, #165 and #167, closed by PRs #158, #161, #164 and #166 — while the
+//! #163, #165 and #167, closed by PRs #158, #161, #164, #166 and #172 — while the
 //! chibi suite read 1226/1226 on both backends throughout. Twice a fix for one
 //! shape broke another that nothing enumerated, and once a fix shipped a
 //! regression a review caught rather than a test.
@@ -65,11 +65,14 @@
 //!
 //! # What the matrix has found
 //!
-//! On its first run, the four `resume+thunk-reenter` rows. That is issue #167,
-//! which was already filed from a single repro — so the enumeration found no
-//! *new* defect. What it added is that no spelling of the program avoids it:
-//! both extent forms and both positions fail identically, which the one repro
-//! could not say and which is what a fix has to hold against.
+//! On its first run, the four `resume+thunk-reenter` rows. That was issue
+//! #167, already filed from a single repro — so the enumeration found no *new*
+//! defect. What it added is that no spelling of the program avoided it: both
+//! extent forms and both positions failed identically, which the one repro
+//! could not say and which is what the fix had to hold against. All four went
+//! green together when it landed, and the test reported them as `FIXED` rather
+//! than as a failure to be explained — which is the half of "fails in both
+//! directions" that only gets exercised on a good day.
 //!
 //! # What the tree-walker does here
 //!
@@ -81,9 +84,11 @@
 //! "unsupported". When the tree-walker grows prompts those twelve go red
 //! together, which is a request to measure them rather than a failure.
 //!
-//! These twelve rows and the four #167 rows are 16 pinned-known-wrong
-//! assertions that `assert_divergence` does not know about. `common/mod.rs`
-//! names this file as the second inventory for that reason.
+//! Those twelve rows are pinned-known-absent assertions that
+//! `assert_divergence` does not know about — `common/mod.rs` names this file
+//! as the second inventory for that reason. They are all that is left of it:
+//! the four #167 rows were pinned-known-*wrong* until that issue was fixed,
+//! and no row records a wrong answer today.
 //!
 //! # Adding axes
 //!
@@ -442,25 +447,26 @@ const MATRIX: &[Shape] = &[
             oracles: "guile, racket", issue: "" },
 
     // ---- resume, then re-enter a continuation captured in a thunk ------
-    // Issue #167, on all four spellings — not four defects, one defect that no
-    // spelling avoids. The resumed value is lost (`()` for `(got resumed)`) and
-    // the extent is left unbalanced, the last `out` never running.
-    // `invoke_delimited` runs these thunks on a nested Rust loop, so the re-entry
-    // has no pc to come back to; the issue records why routing them through
-    // `step_wind_jump`, which is what fixed the abort's thunks in #165, is *not*
-    // the fix here.
+    // Issue #167, fixed. It was on all four spellings — one defect no spelling
+    // avoided, which is what the enumeration added to the single filed repro.
+    // The resumed value was lost (`()` for `(got resumed)`) and the extent left
+    // unbalanced, the last `out` never running, because `invoke_delimited` ran
+    // these thunks on a nested Rust loop and the re-entry had no pc to come
+    // back to. Each now runs under a `ResumeComposableInvoke` stub — *not*
+    // through `step_wind_jump`, which is what fixed the abort's thunks in #165
+    // and which is wrong here: see `install_thunk_handlers`.
     Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(() (in-1 in-2 out in-1 in-2 out in-2))", tw: UNSUPPORTED,
-            oracles: "guile", issue: "#167" },
+            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            oracles: "guile", issue: "" },
     Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(() (in-1 in-2 out in-1 in-2 out in-2))", tw: UNSUPPORTED,
-            oracles: "guile", issue: "#167" },
+            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            oracles: "guile", issue: "" },
     Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(() (in-1 in-2 out in-1 in-2 out in-2))", tw: UNSUPPORTED,
-            oracles: "guile", issue: "#167" },
+            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            oracles: "guile", issue: "" },
     Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(() (in-1 in-2 out in-1 in-2 out in-2))", tw: UNSUPPORTED,
-            oracles: "guile", issue: "#167" },
+            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            oracles: "guile", issue: "" },
 ];
 
 /// Write every program out, once per oracle, **ready to run**.
@@ -615,14 +621,11 @@ fn the_defect_count_is_what_it_says() {
         .into_iter()
         .chain(wrong(|s| s.vm, false))
         .collect();
-    // Four: issue #167. They are four spellings of one defect, not four
-    // defects — the enumeration's value here is showing that no spelling
-    // avoids it, which a single filed repro could not say.
-    assert_eq!(vm.len(), 4, "VM shapes wrong: {vm:?}");
-    assert!(
-        vm.iter().all(|n| n.ends_with("resume+thunk-reenter")),
-        "the VM's wrong rows should all be #167's: {vm:?}"
-    );
+    // Zero. It was four — issue #167, one defect on all four spellings — until
+    // the composable invoke's re-entry thunks became frames. A row going red
+    // now is a regression on a shape the reference implementations agree
+    // about, whichever direction it moved.
+    assert_eq!(vm.len(), 0, "VM shapes wrong: {vm:?}");
 
     // The tree-walker: zero wrong among the shapes it can run.
     let tw = wrong(|s| s.tw, false);

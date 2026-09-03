@@ -267,10 +267,14 @@ same way.
 |---|---|
 | `Nop` | No operation. Used for patching. |
 | `ResumeWindJump` | Take the next step of a continuation jump that is running wind thunks (§7.3). Never emitted by the compiler: it is the whole body of the stub frame the runtime pushes under each thunk. |
+| `ResumeComposableInvoke` | Take the next step of a composable-continuation invoke that is running the `before` thunks of the extents it re-enters. Never emitted by the compiler, and the analogue of `ResumeWindJump`: it is the whole body of the stub frame pushed under each of those thunks, so that the rest of the invoke is a pc a re-entering continuation restores. It is a separate mechanism rather than a use of the jump's because a jump's target *replaces* the machine and a composable invoke's *extends* it — the handler stack a thunk runs under differs accordingly (see `install_thunk_handlers`). |
 
-Two instruction sequences are likewise never emitted by the compiler but built
-by the runtime as whole code objects: the one-instruction wind-jump stub above,
-and the six-instruction stub the **value form** of `dynamic-wind` runs
+**Four** instruction sequences are likewise never emitted by the compiler but
+built by the runtime as whole code objects: the two one-instruction stubs
+above (`wind_jump_stub`, `invoke_step_stub`), the two-instruction stub an
+**abort** lands on (`abort_handler_stub` — `Call handler(val, k)` / `Return`,
+which is what makes the handler call a frame), and the six-instruction stub
+the **value form** of `dynamic-wind` runs
 (`value_wind_stub`) — `Call before` / `PushWind` / `Call body` / `PopWind` /
 `Call after` / `Return`, the same instructions in the same order that pass 5
 emits for head position (`pass5_codegen.rs`, the `dynamic-wind` case of `RegExprKind::App`), differing only in an unconditional

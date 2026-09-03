@@ -413,6 +413,31 @@ pub enum Instruction {
     /// entering (see the `wind_step` module in `runtime/vm_state.rs`).
     ResumeWindJump,
 
+    /// Take the next step of a composable-continuation invoke that is running
+    /// the `before` thunks of the extents it re-enters.
+    ///
+    /// Never emitted by the compiler, and the exact analogue of
+    /// [`Instruction::ResumeWindJump`]: it is the whole body of the one-frame
+    /// stub the runtime pushes under each of those thunks
+    /// (`push_invoke_step`), so that "the rest of the invoke" — the remaining
+    /// thunks, then appending the captured frames and delivering the value —
+    /// is a **pc** a re-entering continuation restores, rather than a Rust
+    /// frame it abandons.
+    ///
+    /// A jump gets this from `ResumeWindJump`; the value form of
+    /// `dynamic-wind` from `value_wind_stub`; an abort from travelling to a
+    /// landing continuation. This is the fourth and last place that owed it
+    /// (issue #167). It cannot be the third: a jump's target *replaces* the
+    /// machine, and a composable invoke's *extends* it, which is why routing
+    /// these thunks through `step_wind_jump` was tried and reverted — see
+    /// `install_thunk_handlers`.
+    ///
+    /// Its frame's registers carry the invoke: the continuation, the value it
+    /// delivers, where that value's computation returns, and which captured
+    /// extent this step is entering (see the `invoke_step` module in
+    /// `runtime/vm_state.rs`).
+    ResumeComposableInvoke,
+
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },

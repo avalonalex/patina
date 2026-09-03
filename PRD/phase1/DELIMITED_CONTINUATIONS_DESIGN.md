@@ -63,8 +63,8 @@ describe.
 `abort-current-continuation` are intercepted by name in `vm_control_primitive`
 before any registry lookup, an abort travels to a synthesized continuation
 whose top frame calls the prompt handler, and a composable invoke appends the
-captured region in place. See `docs/VM_RUNTIME.md` §5.5–§5.6. One defect open:
-issue #167.
+captured region in place. See `docs/VM_RUNTIME.md` §5.5–§5.6. The last defect against it, #167, was closed
+by PR #172; `control_flow_matrix.rs` is where the next one shows up.
 
 **The tree-walker**: nothing works, and the scaffolding that exists is dead
 **but not absent** — an earlier version of this section said `Abort` had no
