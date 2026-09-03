@@ -15,7 +15,7 @@ use patina_core::environment::Environment;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Collector, MarkSweepCollector};
 use patina_vm::runtime::VmState;
-use patina_vm::types::{VmContinuation, VmDelimitedContinuation};
+use patina_vm::types::{ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation};
 use std::rc::Rc;
 
 /// A `VmState` with no primitives installed — unlike `integration.rs`'s
@@ -45,9 +45,71 @@ fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuati
         base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: 0,
+        wind_depth_at_capture: 0,
+        handler_depth_at_capture: 0,
         prompt_stack: vec![],
         exception_handlers: vec![],
     }
+}
+
+/// The dynamic environment a delimited continuation carries is traced, not
+/// just its registers.
+///
+/// A prompt tag, a prompt handler and an exception handler reachable from
+/// **nothing else**: the delimited store is weak, so
+/// `trace_delimited_continuation`'s visits are all that keep them alive, and
+/// the failure mode of losing one is a use-after-free.
+///
+/// The registers are deliberately empty. Pinning the same value through the
+/// registers *and* the new fields — the obvious way to write this — passes
+/// with the new tracing deleted, because the registers reach it anyway.
+#[test]
+fn a_carried_prompt_and_handler_are_traced() {
+    let mut state = bare_state();
+    let (tag, prompt_handler, exception_handler) = {
+        let mut heap = state.heap.borrow_mut();
+        (
+            heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL),
+            heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL),
+            heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL),
+        )
+    };
+    let cont = VmDelimitedContinuation {
+        frames: vec![],
+        dynamic_winds: vec![],
+        registers: vec![],
+        base_at_capture: 0,
+        deliver_reg: None,
+        depth_at_capture: 0,
+        wind_depth_at_capture: 0,
+        handler_depth_at_capture: 0,
+        prompt_stack: vec![PromptFrame {
+            tag,
+            stack_depth: 0,
+            handler: prompt_handler,
+            dst: 0,
+            dynamic_wind_depth: 0,
+            exception_handler_depth: 0,
+        }],
+        exception_handlers: vec![ExceptionHandler {
+            handler: exception_handler,
+            stack_depth: 0,
+        }],
+    };
+    let cont_ref = state.alloc_vm_delimited_continuation(cont);
+    state.registers.push(cont_ref);
+
+    collect(&state);
+
+    let heap = state.heap.borrow();
+    assert_eq!(
+        heap.stats().free_pairs,
+        0,
+        "nothing the snapshot pins is free"
+    );
+    assert_eq!(heap.car(tag), TaggedValue::fixnum(1));
+    assert_eq!(heap.car(prompt_handler), TaggedValue::fixnum(2));
+    assert_eq!(heap.car(exception_handler), TaggedValue::fixnum(3));
 }
 
 fn collect(state: &VmState) {

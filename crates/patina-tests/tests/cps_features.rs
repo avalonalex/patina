@@ -1262,6 +1262,137 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
     );
 }
 
+/// Resuming a composable continuation somewhere its captured depths do not
+/// already fit — VM-only, measured against Guile 3.0.11.
+///
+/// The test above pins the *semantics*. Every one of its rows happens to
+/// resume at wind depth 0 and handler depth 0, with the carried prompt's
+/// recorded depths equal to the delimiting prompt's, so every relocation in
+/// the invoke cancels to zero and all four rows pass with the arithmetic
+/// deleted. These do not.
+///
+/// A `PromptFrame` records a position in **three** stacks — frames, winds,
+/// handlers — and a carried prompt needs all three moved onto the live ones.
+/// Relocating only the frame depth gave, in order below: an enclosing
+/// `after` thunk run early, handlers enclosing the invoke uninstalled, and a
+/// panic. Two more rows cover the abort itself: its handler truncation runs
+/// before the after-thunks rather than after (a raise from an after-thunk was
+/// still reaching the abandoned handler — #162 in the one window the first fix
+/// missed), and a capture whose recorded depth has outrun the live stack
+/// clamps instead of slicing (`raise` pops the handler entry it is running
+/// before calling it, so a handler aborting to a prompt under itself arrives
+/// with a shorter stack than the prompt recorded).
+///
+/// Guile is the oracle here rather than Racket: `(ice-9 control)`'s
+/// `call-with-prompt` / `abort-to-prompt` are tagged like Patina's *and* it
+/// has R7RS `with-exception-handler` and `raise-continuable`, so all five
+/// programs transcribe one-for-one. It agrees on every row.
+#[test]
+fn test_a_composable_continuation_relocates_the_depths_it_carries() {
+    // Capture a continuation whose region contains an inner prompt, so the
+    // carried `PromptFrame` has depths of its own to relocate.
+    const CAPTURE: &str = "
+        (define t (make-continuation-prompt-tag 't))
+        (define u (make-continuation-prompt-tag 'u))
+        (define k* #f)
+        (define (capture!)
+          (call-with-continuation-prompt
+            (lambda ()
+              (list 'outer
+                (call-with-continuation-prompt
+                  (lambda () (list 'inner (abort-current-continuation t 'ab)
+                                          (abort-current-continuation u 'ab2)))
+                  u (lambda (v2 k2) (list 'inner-handler v2)))))
+            t (lambda (v k) (set! k* k) 'captured)))";
+
+    // Resumed inside a `dynamic-wind`: the abort to the carried prompt must
+    // truncate the live wind stack at *its* extent, not at the depth it
+    // recorded against another stack. Unrelocated, `OUT` ran twice.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{CAPTURE}
+             (define log '())
+             (capture!)
+             (define r (dynamic-wind (lambda () (set! log (cons 'IN log)))
+                                     (lambda () (k* 10))
+                                     (lambda () (set! log (cons 'OUT log)))))
+             (list r (reverse log))"
+        )),
+        "((outer (inner-handler ab2)) (IN OUT))"
+    );
+    // Resumed under a handler: the abort to the carried prompt must not
+    // uninstall handlers that enclose the invoke. Unrelocated, the raise after
+    // it was unhandled.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{CAPTURE}
+             (capture!)
+             (with-exception-handler
+               (lambda (e) (list 'H e))
+               (lambda () (let ((r (k* 10))) (list r (raise-continuable 'ping)))))"
+        )),
+        "((outer (inner-handler ab2)) (H ping))"
+    );
+    // Captured inside a `dynamic-wind` and resumed outside every one: the
+    // carried prompt records a wind depth the live stack cannot reach, and
+    // slicing at it panicked.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{CAPTURE}
+             (define captured
+               (dynamic-wind (lambda () #f)
+                             (lambda () (capture!))
+                             (lambda () #f)))
+             (list captured (k* 10))"
+        )),
+        "(captured (outer (inner-handler ab2)))"
+    );
+    // A raise from an after-thunk the abort itself runs. The handler installed
+    // inside the region being abandoned must already be gone — this is the
+    // answer the `call/cc` path gives for the same shape, because a jump runs
+    // each thunk under its own record's handler stack.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define log '())
+             (define r
+               (with-exception-handler
+                 (lambda (e) (set! log (cons (list 'TOP e) log)) 'top)
+                 (lambda ()
+                   (call-with-continuation-prompt
+                     (lambda ()
+                       (dynamic-wind
+                         (lambda () #f)
+                         (lambda ()
+                           (with-exception-handler
+                             (lambda (e) (set! log (cons (list 'INNER e) log)) 'inner)
+                             (lambda () (abort-current-continuation t 'ab))))
+                         (lambda () (raise-continuable 'from-after))))
+                     t
+                     (lambda (v k) (list 'prompt-handler v))))))
+             (list r (reverse log))"
+        ),
+        "((prompt-handler ab) ((TOP from-after)))"
+    );
+    // A handler aborting to a prompt established inside its own thunk: the
+    // raise has already popped the entry it is running, so the live handler
+    // stack is shorter than the prompt recorded. Slicing at the recorded
+    // length panicked.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (with-exception-handler
+               (lambda (e) (abort-current-continuation t (list 'aborted e)))
+               (lambda ()
+                 (call-with-continuation-prompt
+                   (lambda () (raise-continuable 'x))
+                   t
+                   (lambda (v k) (list 'handler v)))))"
+        ),
+        "(handler (aborted x))"
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.
 ///

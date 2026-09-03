@@ -158,6 +158,17 @@ pub struct VmDelimitedContinuation {
     /// `base_at_capture` does for `CallFrame::register_base`.
     pub depth_at_capture: usize,
 
+    /// `dynamic_winds.len()` and `exception_handlers.len()` the captured
+    /// slices started at. The carried prompts record positions in *those*
+    /// stacks too — a `PromptFrame` names three depths, not one — and an
+    /// abort to a carried prompt truncates all three. Relocating only
+    /// `stack_depth` left the other two pointing at the invoke site's stacks:
+    /// aborting to a carried prompt ran an enclosing `after` thunk early and
+    /// uninstalled handlers that enclose the invoke.
+    pub wind_depth_at_capture: usize,
+    /// See [`Self::wind_depth_at_capture`].
+    pub handler_depth_at_capture: usize,
+
     /// The prompts established *inside* the captured region — everything above
     /// the prompt this continuation was delimited by.
     ///
