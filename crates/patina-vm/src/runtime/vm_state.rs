@@ -857,10 +857,15 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // tail-called `with-exception-handler` installs at `exit_depth`, which is
     // also where a handler this loop was *started under* sits when the
     // control primitive that started it tail-replaced its thunk's frame —
-    // `(with-exception-handler h (lambda () (dw before body after)))` runs
-    // `before` on a nested loop with `h` at that depth and still owed `body`'s
-    // raise. So the exit-depth `Return` pops nothing (see
+    // `(with-exception-handler h (lambda () (call-with-values p c)))` runs
+    // `p` on a nested loop with `h` at that depth and still owed a raise from
+    // `c`. So the exit-depth `Return` pops nothing (see
     // `pop_resolved_extents`) and the loop closes its own on the way out.
+    //
+    // The example used to be the value form of `dynamic-wind`, whose thunks
+    // ran on nested loops until 2026-09-02 (issue #157). `call-with-values`'
+    // producer is now the only remaining `run_thunk_outcome` caller with a
+    // result to place, and carries the invariant on its own.
     let handlers_at_entry = state.exception_handlers.len();
 
     loop {
@@ -938,17 +943,36 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 /// Attach a source location to an error if it doesn't already have one.
 /// Looks up the current frame's code object and uses the PC to find the
 /// closest source location from the compiled source map.
+///
+/// The innermost frame is not always the one that *has* a source map. The two
+/// stubs the runtime builds rather than compiles — [`value_wind_stub`] and
+/// [`wind_jump_stub`] — carry none at all, and either can be the top frame
+/// when an error is raised: the value form's thunks tail-call out of their own
+/// frames, leaving the stub innermost, and a jump's thunks do the same. Read
+/// literally, that costs the error its caret entirely — `(dw (lambda () 1)
+/// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
+/// head-position `dynamic-wind` printed file, line and source line.
+///
+/// So a source-map-less frame is *skipped*, and the location comes from the
+/// call site that pushed it, which is what the reader wants: the stub is
+/// machinery, not a place in the program. Only an entirely empty map counts as
+/// "not a place" — a compiled frame that merely has no entry at this pc still
+/// stops the search, as it always did, rather than blaming its caller.
 fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     // Don't double-wrap if already has a location.
     if e.source_location().is_some() {
         return e;
     }
-    if let Some(frame) = state.frames.last() {
+    for frame in state.frames.iter().rev() {
+        if frame.code.source_map.is_empty() {
+            continue;
+        }
         // PC was already advanced before dispatch, so use pc-1.
         let pc = frame.pc.saturating_sub(1);
         if let Some(loc) = frame.code.source_location(pc) {
             return e.at(loc.clone());
         }
+        break;
     }
     e
 }
@@ -2376,9 +2400,13 @@ fn handle_control_primitive(
                 return_reg: dst,
                 code,
             });
-            state.registers[base + value_wind::BEFORE as usize] = args[0];
-            state.registers[base + value_wind::BODY as usize] = args[1];
-            state.registers[base + value_wind::AFTER as usize] = args[2];
+            // Through `set_reg_at`, not the raw slice: the frame is already
+            // pushed, so `base` *is* `frame_base()`, and the debug assert
+            // keeps that machine-checked if these writes are ever moved above
+            // the push.
+            state.set_reg_at(base, value_wind::BEFORE, args[0]);
+            state.set_reg_at(base, value_wind::BODY, args[1]);
+            state.set_reg_at(base, value_wind::AFTER, args[2]);
         }
 
         VmControlPrimitive::CallWithContinuationPrompt => {
@@ -3105,9 +3133,11 @@ fn push_wind_step(
         return_reg: 0,
         code,
     });
-    state.registers[base + wind_step::TARGET as usize] = target;
-    state.registers[base + wind_step::VALUE as usize] = value;
-    state.registers[base + wind_step::ENTERING as usize] = entering;
+    // `set_reg_at` for the reason the value form's stub gives: the frame is
+    // pushed, so the assert holds and keeps holding.
+    state.set_reg_at(base, wind_step::TARGET, target);
+    state.set_reg_at(base, wind_step::VALUE, value);
+    state.set_reg_at(base, wind_step::ENTERING, entering);
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for `ResumeWindJump` to run.
     call_any(state, thunk, &[], wind_step::THUNK_RESULT)?;
@@ -3191,9 +3221,19 @@ mod value_wind {
     pub(super) const NUM_REGS: u16 = 5;
 }
 
-/// The code object the value form of `dynamic-wind` runs — the same six
+/// The code object the value form of `dynamic-wind` runs — the six
 /// instructions `pass5_codegen` emits for head position, in a frame of their
 /// own because there is no call site to emit them into.
+///
+/// **Kept in step by hand with `pass5_codegen.rs`'s `dynamic-wind` case**,
+/// which is the price of the two entry points; a change to one is a change to
+/// the other, and each names the other so an editor of either finds it. The
+/// two are not textually identical and are not meant to be: pass 5 emits
+/// `Return` only in tail position and lets the discarded thunk results land in
+/// `expr.dst` and the before-thunk's own register, where a frame of its own
+/// can afford a dedicated slot and always returns. The *order and identity* of
+/// the instructions is what has to match, because that is what the two forms
+/// agreeing depends on.
 ///
 /// The point is not to save the nested Rust loop but to make this call's
 /// remaining obligations *resumable*. A continuation captured in the body

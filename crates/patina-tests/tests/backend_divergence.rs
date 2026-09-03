@@ -702,10 +702,14 @@ fn the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body() {
 /// `#<unknown>` is an uninitialised register reaching user-visible output: the
 /// re-entry delivered into a frame that no longer existed, and the rest of the
 /// `dynamic-wind` — the body, the after-thunk, the value — never ran at all.
-/// Gauche and the tree-walker both give the two answers above. (chibi answers
-/// `(val ())` to both; its continuation does not carry the `set!`s to `log`,
-/// which is a different question from the one asked here, so it cannot
-/// arbitrate this row.)
+/// The tree-walker, Gauche and chibi all give the two answers above.
+///
+/// `probe` sequences the run and the log read with `let*` rather than writing
+/// `(list (run …) (reverse log))`. R7RS leaves argument order unspecified and
+/// chibi evaluates right-to-left, so the shorter spelling reads an empty log
+/// there and answers `(val ())` to both rows — a bug in the *test*, not a
+/// disagreement about `dynamic-wind`. It was written that way first, and
+/// cross-checking the row against chibi is what caught it.
 ///
 /// Filed separately from #157 because that issue documents only the body case,
 /// and the failure here is visibly different: not a wrong value but an
@@ -718,7 +722,9 @@ fn the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks() {
         (define dw dynamic-wind)
         (define (probe run)
           (let ((log '()))
-            (list (run (lambda (x) (set! log (cons x log)))) (reverse log))))
+            (let* ((r (run (lambda (x) (set! log (cons x log)))))
+                   (l (reverse log)))
+              (list r l))))
         (list
           ;; A — the resumed before-thunk returns, and the rest of the call
           ;; runs a second time from there.

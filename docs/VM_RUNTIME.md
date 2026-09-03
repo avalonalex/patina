@@ -320,9 +320,12 @@ intercepted at call dispatch time.
 
 ### 5.3 Dynamic Wind
 
-- Wind records pushed by `PushWind`, which is the *only* push site: head
-  position compiles to it, and the value form runs it too (see the last bullet
-  below). Each records the **exception handler stack of its own call**
+- Wind records are *minted* only by `PushWind` — head position compiles to it,
+  and the value form runs it too (see the last bullet below). Two other sites
+  grow `dynamic_winds` by re-pushing records that already exist:
+  `ResumeWindJump` (entering an extent of the jump target) and the
+  composable-continuation invokes (appending the extents they captured). Each
+  record carries the **exception handler stack of its own call**
   (`DynamicWindRecord::handlers`), which is the part of the dynamic
   environment R7RS 6.10 gives its thunks
 - `step_wind_jump()`: one step of a jump to a full continuation. It finds the
@@ -355,9 +358,12 @@ intercepted at call dispatch time.
   on a nested call and under the live handler stack, then extend
   `dynamic_winds`. Shared extents are not skipped there
 - The value form of `dynamic-wind` (`handle_control_primitive`) pushes a stub
-  frame running `value_wind_stub`'s six instructions — the same
-  `Call before` / `PushWind` / `Call body` / `PopWind` / `Call after` /
-  `Return` sequence pass 5 emits for head position — and returns to the
+  frame running `value_wind_stub`'s six instructions — `Call before` /
+  `PushWind` / `Call body` / `PopWind` / `Call after` / `Return`, the same
+  instructions in the same order that pass 5 emits for head position, differing
+  only in that the stub always ends in `Return` (pass 5 emits one only in tail
+  position) and discards the two thunk results into a dedicated slot rather
+  than into `expr.dst` and the before-thunk's register — and returns to the
   dispatch loop. So the two forms share one implementation, and everything the
   call still owes is a **pc**: a continuation captured in the body restores
   this frame with it, and returning through it pops the record, runs this

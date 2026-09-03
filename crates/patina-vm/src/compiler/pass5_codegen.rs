@@ -731,6 +731,14 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 
             // Recognize (dynamic-wind before body after) and emit
             // instruction-level sequence to avoid run_thunk for the body.
+            //
+            // The value form runs the same instructions in the same order,
+            // from a stub code object the runtime builds (`value_wind_stub` in
+            // `runtime/vm_state.rs`) — that is what makes the two forms agree,
+            // and it is kept in step by hand. Changing the sequence here means
+            // changing it there. See that function for the two deliberate
+            // differences (an unconditional `Return`, a dedicated discard
+            // slot).
             if args.len() == 3
                 && let RegExprKind::GlobalRef { name } = &func.kind
                 && name.as_ref() == "dynamic-wind"

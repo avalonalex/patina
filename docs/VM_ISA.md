@@ -272,7 +272,9 @@ Two instruction sequences are likewise never emitted by the compiler but built
 by the runtime as whole code objects: the one-instruction wind-jump stub above,
 and the six-instruction stub the **value form** of `dynamic-wind` runs
 (`value_wind_stub`) — `Call before` / `PushWind` / `Call body` / `PopWind` /
-`Call after` / `Return`, the same sequence pass 5 emits for head position. Both
+`Call after` / `Return`, the same instructions in the same order that pass 5
+emits for head position (`pass5_codegen.rs`, the `dynamic-wind` case of `RegExprKind::App`), differing only in an unconditional
+`Return` and a dedicated discard slot for the two thunk results. Both stubs
 exist so that work the runtime owes after a thunk returns is a *pc* a captured
 continuation restores, rather than a Rust frame it cannot.
 
@@ -357,9 +359,10 @@ pub struct DynamicWindRecord {
 }
 ```
 
-Records are pushed and popped only by `PushWind`/`PopWind` and by a
-continuation jump's travel, so nothing needs the frame depth a record used to
-carry.
+Records are minted only by `PushWind` and popped by `PopWind` or by a
+continuation jump's travel; `ResumeWindJump` and the composable-continuation
+invokes re-push records that already exist. Nothing needs the frame depth a
+record used to carry, and it no longer has one.
 
 Invoking a full continuation *travels* between the live wind stack and the
 target's, one thunk per step: leave the innermost extent the two do not share

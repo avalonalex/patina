@@ -1634,6 +1634,33 @@ suite and the Larceny r7rs lane (8475 assertions), nor on `main` across chibi
 and the full Rust suite. Removed, along with `DynamicWindRecord::stack_depth`,
 which had no other reader.
 
+**Three prompt/abort shapes converge too**, found by `/code-review` of the fix
+and measured against Racket, which agrees with the fixed VM on all of them:
+
+```text
+                            fixed VM                     main (7e696892)
+  abort from body, non-tail ((handler ab) (in b1 out))   panic: "no active frame"
+  abort from before thunk   ((handler ab) (in))          (#<unspecified> (in body out))
+  abort from after thunk    ((handler ab) (in body out)) (#<unspecified> (in body out))
+```
+
+The abort truncates to the prompt's frame depth, and the value form's
+bookkeeping was a Rust call that truncation walked out from under: one shape
+aborted the process, and the other two silently skipped the handler *and* ran
+thunks the abort should have prevented — `body` and `out` after an abort from
+`before`, which had not entered the extent yet. Nothing in the suite covered
+the value form under a prompt at all; now pinned as
+`test_abort_to_a_prompt_out_of_each_value_form_wind_thunk` in
+`cps_features.rs`, VM-only because the tree-walker has no prompt API.
+
+**Not** fixed, and filed as **issue #160**: invoking the composable continuation
+a prompt handler receives delivers nothing and yields `()`. Pre-existing,
+identical on `main` and the branch, and reproducible with no `dynamic-wind` in
+the program at all — `(call-with-continuation-prompt (lambda () (list 'got
+(abort-current-continuation t 'ab))) t (lambda (v k) (k 10)))` gives `()` where
+Racket gives `(got 10)`. The review reported it as a regression from this
+change; that half does not reproduce, and the defect underneath it is its own.
+
 **A Rust-stack recursion goes too.** The value form ran its body on a nested
 dispatch loop, so N nested value-form extents cost N nested Rust calls: 5000 of
 them aborted the process with `fatal runtime error: stack overflow` on `main`
@@ -1641,9 +1668,21 @@ them aborted the process with `fatal runtime error: stack overflow` on `main`
 Pinned as `test_nested_value_form_winds_do_not_nest_rust_frames` in
 `cps_features.rs`, which aborts the test binary on `main`.
 
+**Error locations kept.** The two runtime-built stubs carry no source map, and
+either can be the innermost frame when an error is raised — the value form's
+thunks tail-call out of their own frames. Read literally that cost the error
+its caret entirely (`(dw (lambda () 1) (lambda () (error "boom")) (lambda ()
+2))` printed a bare message where head position printed file, line and source
+line). `attach_source_location` now skips a source-map-less frame and takes the
+location from the call site that pushed it, which also closes the same hole in
+`wind_jump_stub` from the entry above.
+
 **Verified.** chibi 1226/1226 on both backends; `cargo test --all` green; the
 GC differential green on both backends and both lanes; the Larceny r7rs VM lane
-8447 of 8475 in 22 of 33 suites — unmoved, no row either gained or lost.
+8447 of 8475 in 22 of 33 suites — unmoved, no row either gained or lost. Every
+new test program was run on Gauche and chibi as well as both backends; where
+the four disagreed it was this repo's test at fault, not an implementation (see
+the `let*` note on `probe`).
 
 **An identifier swallows `'`, `` ` ``, `,` and `[` instead of ending at them** — ❌ **open**.
 Pre-existing; surfaced 2026-08-16 by review of the Unicode-identifier change, which routes many

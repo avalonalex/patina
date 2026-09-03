@@ -890,32 +890,150 @@ fn test_dynamic_wind_callcc_escape_runs_after() {
     );
 }
 
+/// Aborting to a prompt out of each of the value form's three thunks —
+/// VM-only, and measured against Racket.
+///
+/// `call-with-continuation-prompt` and `abort-current-continuation` are
+/// exported from `(scheme base)` but implemented only on the VM, so this uses
+/// `eval_program_vm` rather than holding both backends to it. Nothing in the
+/// suite covered the *value* form under a prompt at all before 2026-09-02,
+/// which is how three defects survived:
+///
+/// ```text
+///                            this VM                      main (7e696892)
+///   body, tail position      ((handler ab) (in b1 out))   same
+///   body, non-tail           ((handler ab) (in b1 out))   panic: "no active frame"
+///   before thunk             ((handler ab) (in))          (#<unspecified> (in body out))
+///   after thunk              ((handler ab) (in body out)) (#<unspecified> (in body out))
+/// ```
+///
+/// Racket gives this VM's column for all four (same programs, its
+/// one-argument handler). Note the body case only fails on `main` when the
+/// `dynamic-wind` is *not* in tail position of the prompt body — the tail
+/// shape tail-pops the frame first and happens to survive — so the wrapped
+/// spelling below is the one that carries the signal. The other two `main`
+/// rows silently skipped the handler *and* ran thunks the abort should have
+/// prevented: `body` and `out` after an abort from `before`, which had not
+/// entered the extent yet.
+///
+/// All three follow from the same change as #157/#159: the abort truncates to
+/// the prompt's frame depth, and the value form's bookkeeping is now frames
+/// rather than a Rust call the truncation walked out from under.
+#[test]
+fn test_abort_to_a_prompt_out_of_each_value_form_wind_thunk() {
+    const PRELUDE: &str = r#"
+        (define dw dynamic-wind)
+        (define t (make-continuation-prompt-tag 'p))
+        (define (probe run)
+          (let ((log '()))
+            ;; `let*`, not `(list (run …) (reverse log))`: argument order is
+            ;; unspecified, and reading the log first is a different program.
+            (let* ((r (run (lambda (x) (set! log (cons x log)))))
+                   (l (reverse log)))
+              (list r l))))
+    "#;
+    let probe = |body: &str| {
+        eval_program_vm(&format!(
+            "{PRELUDE}
+             (probe (lambda (note)
+               (call-with-continuation-prompt
+                 (lambda () {body})
+                 t
+                 (lambda (v k) (list 'handler v)))))"
+        ))
+    };
+    // From the body: the extent was entered, so `out` still runs. Both
+    // positions, because only the non-tail one caught the `main` panic.
+    assert_eq!(
+        probe(
+            "(dw (lambda () (note 'in))
+                 (lambda () (note 'b1) (abort-current-continuation t 'ab) (note 'b2))
+                 (lambda () (note 'out)))"
+        ),
+        "((handler ab) (in b1 out))",
+        "body abort, dynamic-wind in tail position of the prompt body"
+    );
+    assert_eq!(
+        probe(
+            "(list 'body-result
+                   (dw (lambda () (note 'in))
+                       (lambda () (note 'b1) (abort-current-continuation t 'ab) (note 'b2))
+                       (lambda () (note 'out))))"
+        ),
+        "((handler ab) (in b1 out))",
+        "body abort, non-tail — this is the shape that panicked on main"
+    );
+    // From the before-thunk: the extent is not entered until it returns, so
+    // neither the body nor the after-thunk runs.
+    assert_eq!(
+        probe(
+            "(dw (lambda () (note 'in) (abort-current-continuation t 'ab))
+                 (lambda () (note 'body))
+                 (lambda () (note 'out)))"
+        ),
+        "((handler ab) (in))"
+    );
+    // From the after-thunk: everything has already run.
+    assert_eq!(
+        probe(
+            "(dw (lambda () (note 'in))
+                 (lambda () (note 'body))
+                 (lambda () (note 'out) (abort-current-continuation t 'ab)))"
+        ),
+        "((handler ab) (in body out))"
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
-/// Rust one.
+/// Rust one — VM-only, on a deliberately small stack.
 ///
 /// It used to run its body on a nested dispatch loop, so N nested value-form
 /// extents meant N nested Rust calls: 5000 of them aborted the process with
 /// `fatal runtime error: stack overflow` on `main` (`7e696892`, release,
-/// macOS), while 4000 passed. Running the same instructions head position
-/// compiles to, in a stub frame, removed the Rust recursion along with the
-/// bugs it caused (issue #157) — 20000 is fine now.
+/// macOS, 8 MB main-thread stack), while 4000 passed. Running the same
+/// instructions head position compiles to, in a stub frame, removed the Rust
+/// recursion along with the bugs it caused (issue #157): the whole nest is
+/// heap-allocated `CallFrame`s now, and 20000 runs fine.
 ///
-/// A regression here **aborts the test binary** rather than failing this test,
-/// because that is what a stack overflow does; the abort message names the
-/// cause plainly, which a silently wrong answer would not.
+/// Three things about the shape of this test:
+///
+/// - It runs on a thread with an **explicitly sized** stack. A stack overflow
+///   aborts the process rather than failing one test, so a default-stack
+///   version took all 50 tests in this binary down with a bare `fatal runtime
+///   error` naming none of them. `STACK` also makes the margin a property of
+///   the test rather than of the build profile and platform it lands in — the
+///   4000/5000 figures above were measured in release, and `cargo test` runs
+///   at `opt-level = 1` across two CI platforms.
+/// - `STACK` is a small multiple of what the fixed VM needs, which is a
+///   constant: it passes at 256 KB, and `main` cannot reach 5000 at any size
+///   this machine will give a thread.
+/// - It is **VM-only**, unlike its neighbours. The tree-walker is a CPS
+///   evaluator that does use Rust stack per level, so including it would
+///   measure that instead and force `STACK` past 1 MB. Both backends are held
+///   to nested value-form winds *semantically* by the test below.
 #[test]
 fn test_nested_value_form_winds_do_not_nest_rust_frames() {
-    assert_program_eval_to(
-        r#"
-        (define dw dynamic-wind)
-        (define (nest n)
-          (if (= n 0)
-              'done
-              (dw (lambda () #f) (lambda () (nest (- n 1))) (lambda () #f))))
-        (nest 5000)
-        "#,
-        "done",
-    );
+    const DEPTH: usize = 5000;
+    const STACK: usize = 1024 * 1024;
+    let handle = std::thread::Builder::new()
+        .stack_size(STACK)
+        .spawn(|| {
+            let program = format!(
+                r#"
+                (define dw dynamic-wind)
+                (define (nest n)
+                  (if (= n 0)
+                      'done
+                      (dw (lambda () #f) (lambda () (nest (- n 1))) (lambda () #f))))
+                (nest {DEPTH})
+                "#
+            );
+            assert_eq!(eval_program_vm(&program), "done");
+        })
+        .expect("spawn");
+    if let Err(panic) = handle.join() {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 #[test]
