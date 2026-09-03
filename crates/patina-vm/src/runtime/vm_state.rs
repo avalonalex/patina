@@ -1463,11 +1463,10 @@ fn dispatch_one_instruction(
             let tag_val = state.reg_at(base, tag);
             let abort_val = state.reg_at(base, val);
             let prompt_idx = find_prompt(state, tag_val)?;
-            abort_to_prompt(state, prompt_idx, abort_val, dst)?;
-            // The travel either pushed a thunk's frames or landed and replaced
-            // the stack; either way the loop that owns what is on the stack
+            // Never returns: the travel either pushed a thunk's frames or
+            // landed, and either way the loop that owns what is on the stack
             // decides, as for every other continuation invoke.
-            return Err(park_escape(state, abort_val));
+            return Err(abort_to_prompt(state, prompt_idx, abort_val, dst));
         }
 
         Instruction::CaptureComposable { dst, tag } => {
@@ -2273,6 +2272,11 @@ fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOut
 /// computation — the caller should propagate this as the final value and
 /// not attempt to access the (now-empty) frame stack.
 ///
+/// And `Err(VmError::ContinuationEscape)` when the arm transferred control:
+/// `abort-current-continuation` always does, so the close-out its callers run
+/// after the call — `pop_resolved_extents`, the exit-depth check in
+/// `tail_call_value_with_probe` — is unreachable for that one.
+///
 /// `is_tail` is currently unused (all are handled as non-tail for A6).
 fn handle_control_primitive(
     state: &mut VmState,
@@ -2367,8 +2371,7 @@ fn handle_control_primitive(
             };
 
             let prompt_idx = find_prompt(state, tag)?;
-            abort_to_prompt(state, prompt_idx, val, dst)?;
-            return Err(park_escape(state, val));
+            return Err(abort_to_prompt(state, prompt_idx, val, dst));
         }
 
         VmControlPrimitive::CallWithCurrentContinuation => {
@@ -3021,9 +3024,14 @@ fn push_wind_step(
 /// at. Clamping against one constant preserves the stack's non-decreasing
 /// order, and nothing else reads the field.
 ///
-/// There is no restore, and none is owed. Every step of a jump installs a
-/// stack and arrival installs the target's own, so the jump site's stack is
-/// never the right one to come back to — R7RS 6.10 puts the thunk in its own
+/// There is no restore, and none is owed — *for a jump*, whose target replaces
+/// the machine. Every step installs a stack and arrival installs the target's
+/// own, so the jump site's stack is never the right one to come back to. That
+/// argument does not carry to a transfer whose target would *extend* the live
+/// machine, and a composable invoke is one: there the invoke site's stack is a
+/// prefix of the right answer rather than an irrelevance, which is why its
+/// re-entry thunks run under the live stack and not through here. R7RS 6.10
+/// puts the thunk in its own
 /// call's dynamic environment, not the jump's. That holds for a `VmError` the
 /// thunk's *call* raises too (a `dynamic-wind` whose after is `42`): it is
 /// routed through the record's handlers, which is where a raise from the thunk
@@ -3487,12 +3495,12 @@ fn find_prompt(state: &VmState, tag: TaggedValue) -> Result<usize, VmError> {
 /// One copy, two callers — the control primitive, and the `AbortToPrompt`
 /// instruction no pass emits. They were two copies of forty lines, and both
 /// of the last two corrections to this sequence had to be written twice.
-fn abort_to_prompt(
-    state: &mut VmState,
-    prompt_idx: usize,
-    val: TaggedValue,
-    dst: u16,
-) -> Result<(), VmError> {
+/// Never returns normally. Its value is what the dispatch loop is handed: the
+/// escape sentinel once the abort is under way, or a genuine failure. A caller
+/// that forgot to park one used to go on dispatching into a frame stack the
+/// abort had just rewritten, and the signature is the only thing that can make
+/// that impossible.
+fn abort_to_prompt(state: &mut VmState, prompt_idx: usize, val: TaggedValue, dst: u16) -> VmError {
     let prompt = state.prompt_stack[prompt_idx].clone();
     // `dst` is this abort call's own destination — dead as a result slot, and
     // for that reason the hole the captured continuation resumes into.
@@ -3516,45 +3524,105 @@ fn abort_to_prompt(
     // ran wind thunks. Travelling to a continuation gets both right, and the
     // handler call becomes a frame along with them: a continuation captured
     // in the *handler* is now an ordinary capture too.
-    let stub = abort_handler_stub(state)?;
-    let landing_depth = prompt.stack_depth.min(state.frames.len());
-    let mut frames = state.frames[..landing_depth].to_vec();
-    let mut registers = match frames.last() {
-        Some(top) => state.registers[..top.register_base + top.num_regs as usize].to_vec(),
-        None => Vec::new(),
+    let stub = match abort_handler_stub(state) {
+        Ok(code) => code,
+        Err(e) => return e,
     };
-    let base = registers.len();
-    registers.resize(base + abort_step::NUM_REGS as usize, TaggedValue::NULL);
-    registers[base + abort_step::HANDLER as usize] = prompt.handler;
-    registers[base + abort_step::VAL as usize] = val;
-    registers[base + abort_step::CONT as usize] = cont_tv;
-    frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: abort_step::NUM_REGS,
-        closure: None,
-        return_reg: prompt.dst,
-        code: stub,
-    });
+    let landing_depth = prompt.stack_depth.min(state.frames.len());
+    let wind_depth = prompt.dynamic_wind_depth.min(state.dynamic_winds.len());
+    let handler_depth = prompt
+        .exception_handler_depth
+        .min(state.exception_handlers.len());
+    let registers_end = match state.frames[..landing_depth].last() {
+        Some(top) => top.register_base + top.num_regs as usize,
+        None => 0,
+    };
 
+    // Nothing to leave — no extent between the abort and its prompt, which is
+    // the common case — means there is no travel to run, and the landing can
+    // be cut out of the live machine in place. Building it as a snapshot and
+    // travelling to it instead costs a copy of every surviving register and
+    // frame, plus a heap continuation and a weak-store entry, plus a second
+    // copy on arrival: ~20% on a loop of 300-frame aborts, measured
+    // interleaved against the previous release.
+    if state.dynamic_winds.len() == wind_depth {
+        state.frames.truncate(landing_depth);
+        state.registers.truncate(registers_end);
+        state.prompt_stack.truncate(prompt_idx);
+        state.exception_handlers.truncate(handler_depth);
+        push_abort_stub(
+            &mut state.frames,
+            &mut state.registers,
+            stub,
+            prompt.dst,
+            prompt.handler,
+            val,
+            cont_tv,
+        );
+        return park_escape(state, val);
+    }
+
+    // Otherwise the same landing has to be described rather than applied: the
+    // travel needs the live wind stack intact to know what it is leaving, so
+    // the machine cannot be cut back until it arrives.
+    let mut frames = state.frames[..landing_depth].to_vec();
+    let mut registers = state.registers[..registers_end].to_vec();
+    push_abort_stub(
+        &mut frames,
+        &mut registers,
+        stub,
+        prompt.dst,
+        prompt.handler,
+        val,
+        cont_tv,
+    );
     let target = VmContinuation {
         frames,
         registers,
-        dynamic_winds: state.dynamic_winds
-            [..prompt.dynamic_wind_depth.min(state.dynamic_winds.len())]
-            .to_vec(),
+        dynamic_winds: state.dynamic_winds[..wind_depth].to_vec(),
         prompt_stack: state.prompt_stack[..prompt_idx].to_vec(),
-        exception_handlers: state.exception_handlers[..prompt
-            .exception_handler_depth
-            .min(state.exception_handlers.len())]
-            .to_vec(),
+        exception_handlers: state.exception_handlers[..handler_depth].to_vec(),
         // The jump delivers its value into the top frame's `deliver_reg` on
         // arrival. Nothing reads this one — the stub's `Call` overwrites it —
         // and the abort's value reaches the handler as an argument instead.
         deliver_reg: abort_step::RESULT,
     };
     let target_tv = state.alloc_vm_continuation(target);
-    step_wind_jump(state, target_tv, val)
+    match step_wind_jump(state, target_tv, val) {
+        Ok(()) => park_escape(state, val),
+        Err(e) => e,
+    }
+}
+
+/// Put the frame an abort lands in on top of `frames`, with its window on the
+/// end of `registers`.
+///
+/// One description of the landing frame, used by both of `abort_to_prompt`'s
+/// paths — the one that cuts the live machine back in place and the one that
+/// describes the same machine as a jump target. They differ in how they get
+/// there and must not differ in where they end up.
+fn push_abort_stub(
+    frames: &mut Vec<CallFrame>,
+    registers: &mut Vec<TaggedValue>,
+    code: Rc<CodeObject>,
+    return_reg: u16,
+    handler: TaggedValue,
+    val: TaggedValue,
+    cont: TaggedValue,
+) {
+    let base = registers.len();
+    registers.resize(base + abort_step::NUM_REGS as usize, TaggedValue::NULL);
+    registers[base + abort_step::HANDLER as usize] = handler;
+    registers[base + abort_step::VAL as usize] = val;
+    registers[base + abort_step::CONT as usize] = cont;
+    frames.push(CallFrame {
+        pc: 0,
+        register_base: base,
+        num_regs: abort_step::NUM_REGS,
+        closure: None,
+        return_reg,
+        code,
+    });
 }
 
 /// The registers of the stub frame an abort's prompt handler is called in.
@@ -3615,7 +3683,20 @@ fn capture_delimited(state: &VmState, prompt_idx: usize, hole: u16) -> VmDelimit
         .exception_handler_depth
         .min(state.exception_handlers.len());
     let frames = state.frames[depth_at_capture..].to_vec();
-    let dynamic_winds = state.dynamic_winds[wind_depth_at_capture..].to_vec();
+    // An empty capture is the identity continuation, and it carries no dynamic
+    // environment at all — no frames to run under means nothing for prompts,
+    // handlers or extents to belong to, and an identity invoke appends no
+    // frame whose return could sweep them back off. Established here rather
+    // than assumed at the invoke: an extent open inside the prompt body should
+    // always have a frame of its own (`PushWind` is followed by `PopWind` in
+    // the same code object, so the frame running them cannot tail-call away),
+    // but a release build that met a counter-example would silently re-enter
+    // nothing and push records nothing pops.
+    let dynamic_winds = if frames.is_empty() {
+        Vec::new()
+    } else {
+        state.dynamic_winds[wind_depth_at_capture..].to_vec()
+    };
     // Everything above the delimiting prompt is *inside* the captured region
     // and belongs to the continuation: for prompts the slice above
     // `prompt_idx`, for handlers the slice above the length the prompt
@@ -3715,52 +3796,46 @@ fn invoke_delimited(
     value: TaggedValue,
     dst: u16,
 ) -> Result<DelimitedInvoke, VmError> {
+    // Every captured extent is re-entered, outermost first, before any of its
+    // frames are live. Unlike a full continuation's jump this does not travel:
+    // an extent the live stack already shares is entered again.
+    //
+    // Each record is pushed only once its own `before` thunk has returned,
+    // the rule `step_wind_jump` follows and for the same reason. A thunk that
+    // raises or escapes then leaves the extents before it entered *and*
+    // owed — their `after` thunks are on the stack of records — and its own
+    // neither entered nor owed.
+    let wind_base = state.dynamic_winds.len();
+    for record in dc.dynamic_winds.iter() {
+        // The invoke site's own handler stack, not the record's: a re-entry
+        // thunk runs where `(k v)` was called, which is what Guile answers and
+        // what `main` has always done. Routing this through `step_wind_jump`
+        // would install the record's stack instead — right for a jump, whose
+        // target *replaces* the machine, and wrong here, where it extends it:
+        // the invoke site's handlers vanish and capture-site ones whose extent
+        // is long gone come back. Measured against Guile and against `main`
+        // before this was reverted.
+        match run_thunk_outcome(state, record.before)? {
+            ThunkOutcome::Returned(_) => {}
+            // A thunk that escaped: the value belongs to whatever it resumed,
+            // and the frames this invoke would have appended are not owed.
+            ThunkOutcome::Escaped(escaped) => return Err(park_escape(state, escaped)),
+        }
+        state.dynamic_winds.push(record.clone());
+    }
+
     let Some(deliver_reg) = dc.deliver_reg else {
-        // An empty capture is the identity continuation. It has no extents
-        // either: a capture is empty only when the abort was in tail position
-        // of the prompt body, and an extent open inside that body has a frame
-        // of its own — `PushWind` is followed by `PopWind` in the same code
-        // object, so the frame running them cannot have tail-called away.
-        debug_assert!(
-            dc.dynamic_winds.is_empty(),
-            "an identity capture holds no dynamic extents"
-        );
         return Ok(DelimitedInvoke::Identity);
     };
 
-    // Build the machine with the captured region appended, and *jump* to it.
-    //
-    // Appending is a jump whose target happens to extend the live stacks
-    // rather than replace them, and saying it that way is what gets the wind
-    // thunks right (issue #165). `step_wind_jump` finds the common prefix —
-    // every live record, since the target starts with them — and enters the
-    // rest outermost first, each `before` thunk under **its own record's**
-    // handler stack and in a frame of its own. Run by hand instead they got
-    // the live handler stack, and a continuation captured in one and
-    // re-entered restarted the thunk from the top and lost the resumed value.
-    //
-    // Arrival then installs the whole snapshot at once, which is also how the
-    // handler stack gets back to "the invoke site's, plus the captured ones":
-    // there is nothing to restore, because the target already says what the
-    // answer is.
-    let mut registers = state.registers.clone();
-    let shift = registers.len().wrapping_sub(dc.base_at_capture);
-    registers.extend_from_slice(&dc.registers);
-
+    // Relocate the captured register windows onto the end of the live array.
+    let shift = state.registers.len().wrapping_sub(dc.base_at_capture);
+    state.registers.extend_from_slice(&dc.registers);
     let outermost = state.frames.len();
-    let mut frames = state.frames.clone();
-    frames.extend(dc.frames.iter().cloned());
-    for f in &mut frames[outermost..] {
+    state.frames.extend(dc.frames.iter().cloned());
+    for f in &mut state.frames[outermost..] {
         f.register_base = f.register_base.wrapping_add(shift);
     }
-    // The captured frames still return to the prompt they were captured
-    // under, which is not where `(k v)` was called and, after an abort, is not
-    // on the stack at all.
-    frames[outermost].return_reg = dst;
-
-    let wind_base = state.dynamic_winds.len();
-    let mut dynamic_winds = state.dynamic_winds.clone();
-    dynamic_winds.extend(dc.dynamic_winds.iter().cloned());
 
     // The dynamic environment the captured frames ran in comes back with them:
     // the prompts they established and the handlers they installed. Every
@@ -3771,20 +3846,13 @@ fn invoke_delimited(
     // enclosing `after` thunk early and uninstalled handlers enclosing the
     // invoke.
     let handler_base = state.exception_handlers.len();
-    let mut exception_handlers = state.exception_handlers.clone();
-    exception_handlers.extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
-        stack_depth: relocate_depth(h.stack_depth, dc.depth_at_capture, outermost),
-        ..h.clone()
-    }));
-
-    let mut prompt_stack = state.prompt_stack.clone();
-    prompt_stack.extend(dc.prompt_stack.iter().map(|p| {
+    for p in dc.prompt_stack.iter() {
         let stack_depth = relocate_depth(p.stack_depth, dc.depth_at_capture, outermost);
         debug_assert!(
             stack_depth >= outermost,
             "a carried prompt is inside the capture"
         );
-        PromptFrame {
+        state.prompt_stack.push(PromptFrame {
             stack_depth,
             dynamic_wind_depth: relocate_depth(
                 p.dynamic_wind_depth,
@@ -3800,24 +3868,30 @@ fn invoke_delimited(
             // `call-with-continuation-prompt` was tail-called, so it shares
             // that frame's depth — has no captured frame below it to deliver
             // into any more. Its result is this invoke's result, by the same
-            // reasoning that re-points `return_reg` above.
+            // reasoning that re-points `return_reg` below.
             dst: if stack_depth == outermost { dst } else { p.dst },
             ..p.clone()
-        }
-    }));
+        });
+    }
+    state
+        .exception_handlers
+        .extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
+            stack_depth: relocate_depth(h.stack_depth, dc.depth_at_capture, outermost),
+            ..h.clone()
+        }));
+    // Both stacks are swept by frame depth as the resumed frames return
+    // (`pop_resolved_extents`), which is when they stop applying — except at a
+    // dispatch loop's own exit depth, where that sweep does nothing by design
+    // and `run_loop_until_outcome`'s `handlers_at_entry` truncation is the
+    // only backstop. It covers handlers and not prompts.
 
-    let target = VmContinuation {
-        frames,
-        registers,
-        dynamic_winds,
-        prompt_stack,
-        exception_handlers,
-        // The hole, in the innermost captured frame — which is the target's
-        // top frame, so the jump's own delivery is the delivery.
-        deliver_reg,
-    };
-    let target_tv = state.alloc_vm_continuation(target);
-    step_wind_jump(state, target_tv, value)?;
+    state.frames[outermost].return_reg = dst;
+    let top_base = state
+        .frames
+        .last()
+        .expect("deliver_reg is Some only for a non-empty capture")
+        .register_base;
+    state.registers[top_base + deliver_reg as usize] = value;
     Ok(DelimitedInvoke::Resumed)
 }
 

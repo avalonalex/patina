@@ -1393,15 +1393,14 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     );
 }
 
-/// The dynamic environment a wind thunk runs in, and what happens when a
-/// continuation captured inside one is re-entered — for the two transfers
-/// that ran their thunks on a nested Rust loop. VM-only, measured against
-/// Guile 3.0.11.
+/// An abort's after-thunks: the dynamic environment they run in, and what
+/// happens when a continuation captured inside one is re-entered. VM-only,
+/// measured against Guile 3.0.11.
 ///
-/// A jump has run each thunk under its own record's handler stack, in a frame
-/// of its own, since #156; the value form of `dynamic-wind` since #158. The
-/// abort's after-thunks and a composable invoke's re-entry before-thunks were
-/// the two that did not, and both symptoms follow from that one fact:
+/// A jump has run each wind thunk under its own record's handler stack, in a
+/// frame of its own, since #156; the value form of `dynamic-wind` since #158.
+/// The abort ran its after-thunks on a nested Rust loop instead, and had both
+/// of the defects that follow:
 ///
 /// ```text
 ///                                     this VM              main (7ebfed1f)
@@ -1409,17 +1408,16 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
 ///     captured by the record
 ///   re-enter an after-thunk            after-1 once,        after-1 twice,
 ///                                      value kept           value lost
-///   re-enter a before-thunk            value kept,          value lost,
-///                                      extent balanced      extent unbalanced
 /// ```
 ///
-/// Both are jumps now: an abort travels to a continuation whose top frame
-/// calls the prompt handler, and a composable invoke travels to one that
-/// *extends* the live stacks rather than replacing them. `step_wind_jump`
-/// then owns every wind thunk in the VM, which is what makes these rows
-/// answer the same as the `call/cc` shapes beside them.
+/// It is a jump now: it travels to a continuation whose top frame calls the
+/// prompt handler, because leaving every extent between here and a target is
+/// what a travel *is*.
+///
+/// A composable invoke's re-entry thunks deliberately do **not** go through
+/// the travel — the test below pins why.
 #[test]
-fn test_wind_thunks_of_an_abort_and_a_re_entry_run_as_frames() {
+fn test_an_aborts_after_thunks_run_as_frames() {
     // The handler sits *between* the prompt and the `dynamic-wind`, so the
     // record captured it and its after-thunk must run under it. The same
     // program left by a jump instead of an abort answers `MID` on both
@@ -1471,28 +1469,6 @@ fn test_wind_thunks_of_an_abort_and_a_re_entry_run_as_frames() {
         ),
         "((prompt-handler ab) (before after-1 after-2 after-2))"
     );
-    // The same for a before-thunk a composable invoke re-enters.
-    assert_eq!(
-        eval_program_vm(
-            "(define t (make-continuation-prompt-tag 'p))
-             (define k #f) (define n 0) (define log '())
-             (define (note x) (set! log (cons x log)))
-             (define k* #f)
-             (define captured
-               (call-with-continuation-prompt
-                 (lambda ()
-                   (dynamic-wind (lambda () (note 'in-1)
-                                            (call/cc (lambda (c) (set! k c)))
-                                            (note 'in-2))
-                                 (lambda () (list 'got (abort-current-continuation t 'ab)))
-                                 (lambda () (note 'out))))
-                 t (lambda (v kk) (set! k* kk) 'captured)))
-             (define resumed (k* 10))
-             (if (< n 1) (begin (set! n 1) (k 'again)))
-             (list captured resumed (reverse log))"
-        ),
-        "(captured (got 10) (in-1 in-2 out in-1 in-2 out in-2 out))"
-    );
     // Escaping *out* of an after-thunk the abort is running already worked and
     // has to keep working: the travel reports the escape sentinel like any
     // other, rather than swallowing it.
@@ -1512,6 +1488,66 @@ fn test_wind_thunks_of_an_abort_and_a_re_entry_run_as_frames() {
              r"
         ),
         "escaped-from-after"
+    );
+}
+
+/// A composable invoke's re-entry `before` thunks run under the **invoke
+/// site's** handler stack — VM-only, measured against Guile 3.0.11.
+///
+/// This is the row that says why the abort's fix does not generalise. Routing
+/// the abort through `step_wind_jump` is right: its target *replaces* the
+/// machine, so `install_thunk_handlers` installing the record's own captured
+/// stack is exactly R7RS 6.10. A composable invoke's target would *extend* the
+/// machine, and there the same call is wrong — the invoke site's handlers
+/// disappear and capture-site ones whose extent is long over come back.
+///
+/// That shipped for one review cycle. Both rows below answer as Guile does,
+/// and as they did before it; under the travel the first died with `Error:
+/// unhandled exception: boom-in` and the second answered `CAPTURE-SITE`.
+#[test]
+fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
+    // A `guard` around the invoke must see a raise from the re-entered
+    // extent's before-thunk.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define k* #f)
+             (define cap
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind (lambda () (note 'in) (if k* (raise 'boom-in)))
+                                 (lambda () (list 'got (abort-current-continuation t 'ab)))
+                                 (lambda () (note 'out))))
+                 t (lambda (v k) (set! k* k) 'cap)))
+             (define r (guard (e (#t (note (list 'G e)) 'guarded)) (k* 5)))
+             (list cap r (reverse log))"
+        ),
+        "(cap guarded (in out in (G boom-in)))"
+    );
+    // And a handler at the invoke site wins over one whose extent ended when
+    // the continuation was captured.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define k* #f) (define seen #f)
+             (define cap
+               (with-exception-handler
+                 (lambda (e) (set! seen 'CAPTURE-SITE) 'c)
+                 (lambda ()
+                   (call-with-continuation-prompt
+                     (lambda ()
+                       (dynamic-wind (lambda () (if k* (raise-continuable 'boom-in)))
+                                     (lambda () (list 'got (abort-current-continuation t 'ab)))
+                                     (lambda () #f)))
+                     t (lambda (v k) (set! k* k) 'cap)))))
+             (define r (with-exception-handler
+                         (lambda (e) (set! seen 'INVOKE-SITE) 'i)
+                         (lambda () (k* 5))))
+             (list cap r seen)"
+        ),
+        "(cap (got 5) INVOKE-SITE)"
     );
 }
 
