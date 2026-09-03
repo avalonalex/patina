@@ -1453,7 +1453,7 @@ fn dispatch_one_instruction(
             call_closure(state, body_val, &[], dst)?;
         }
 
-        Instruction::AbortToPrompt { tag, val } => {
+        Instruction::AbortToPrompt { tag, val, dst } => {
             let tag_val = state.reg_at(base, tag);
             let abort_val = state.reg_at(base, val);
 
@@ -1464,21 +1464,7 @@ fn dispatch_one_instruction(
                 .ok_or(VmError::NoMatchingPrompt)?;
             let prompt = state.prompt_stack[prompt_idx].clone();
 
-            // Snapshot the captured frame slice + register windows.
-            let cap_frames = state.frames[prompt.stack_depth..].to_vec();
-            let cap_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
-            let reg_base = if !cap_frames.is_empty() {
-                cap_frames[0].register_base
-            } else {
-                state.registers.len()
-            };
-            let cap_regs = state.registers[reg_base..].to_vec();
-            let cont = VmDelimitedContinuation {
-                frames: cap_frames,
-                dynamic_winds: cap_winds,
-                registers: cap_regs,
-                base_at_capture: reg_base,
-            };
+            let cont = capture_delimited(state, &prompt, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
             // Run dynamic-wind exit thunks for the unwound portion, popping
@@ -1521,22 +1507,10 @@ fn dispatch_one_instruction(
                 .iter()
                 .rposition(|p| p.tag == tag_val)
                 .ok_or(VmError::NoMatchingPrompt)?;
-            let prompt = &state.prompt_stack[prompt_idx];
-
-            let cap_frames = state.frames[prompt.stack_depth..].to_vec();
-            let cap_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
-            let reg_base = if !cap_frames.is_empty() {
-                cap_frames[0].register_base
-            } else {
-                state.registers.len()
-            };
-            let cap_regs = state.registers[reg_base..].to_vec();
-            let cont = VmDelimitedContinuation {
-                frames: cap_frames,
-                dynamic_winds: cap_winds,
-                registers: cap_regs,
-                base_at_capture: reg_base,
-            };
+            // `dst` is both where the continuation object goes and the hole
+            // it delivers into: invoking it makes *this* call return again,
+            // with the delivered value in place of the continuation.
+            let cont = capture_delimited(state, &state.prompt_stack[prompt_idx], dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
             state.set_reg_at(base, dst, cont_tv);
         }
@@ -1550,42 +1524,18 @@ fn dispatch_one_instruction(
             let deliver_val = state.reg_at(base, val);
 
             if composable {
-                // Composable (delimited): append captured frames to current stack.
+                // Composable (delimited): append the captured frames. As with
+                // the arm below, no pass emits this — the live composable
+                // invokes are `call_value`, `tail_call_value` and `call_any` —
+                // and having no `dst` operand to name a destination, it can
+                // only be the tail form. It shares that path, so no second
+                // copy of the append can drift.
                 let dc = state
                     .get_vm_delimited_continuation(cont_tv)
                     .ok_or_else(|| VmError::TypeError {
                         message: "InvokeContinuation: not a delimited continuation".into(),
                     })?;
-
-                // Run wind entry thunks for the newly-appended winds.
-                let enter_winds = dc.dynamic_winds.clone();
-                for record in &enter_winds {
-                    run_thunk(state, record.before)?;
-                }
-
-                // Relocate captured frames onto the end of the register array.
-                let new_base = state.registers.len();
-                let old_base = dc.base_at_capture;
-                let shift = new_base.wrapping_sub(old_base);
-                state.registers.extend_from_slice(&dc.registers);
-                let mut new_frames: Vec<CallFrame> = dc.frames.clone();
-                for f in &mut new_frames {
-                    f.register_base = f.register_base.wrapping_add(shift);
-                }
-                state.frames.extend(new_frames);
-                state.dynamic_winds.extend(enter_winds);
-
-                // Deliver the value into the topmost appended frame's return slot.
-                // The continuation expects the value where the sub-call result would land.
-                if let Some(top) = state.frames.last() {
-                    let ret_reg = top.return_reg;
-                    // Write into the *caller* of the top frame (below the top).
-                    let n = state.frames.len();
-                    if n >= 2 {
-                        let caller_base = state.frames[n - 2].register_base;
-                        state.registers[caller_base + ret_reg as usize] = deliver_val;
-                    }
-                }
+                return tail_invoke_delimited(state, dc, deliver_val, exit_depth);
             } else {
                 // Non-composable (call/cc): travel the winds and replace the
                 // stack. No pass emits this instruction — the live invoke
@@ -2135,8 +2085,17 @@ fn call_any(
     // handler, a call-with-values consumer, a wind thunk. Invoking it
     // replaces the stack, so the caller's own frame is gone: signal the
     // dispatch loop the same way the instruction-level call paths do.
-    if let Some(delivered) = try_invoke_continuation(state, func_val, args)? {
+    if let Some(delivered) = try_invoke_full_continuation(state, func_val, args)? {
         return Err(park_escape(state, delivered));
+    }
+    if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+        // A composable one instead resumes on top of the caller's frame and
+        // returns to it, so `return_reg` is a destination, not a corpse.
+        let value = deliver_value(state, args);
+        return match invoke_delimited(state, dc, value, return_reg)? {
+            DelimitedInvoke::Resumed => Err(park_escape(state, value)),
+            DelimitedInvoke::Identity => Ok(Some(value)),
+        };
     }
     call_closure(state, func_val, args, return_reg)?;
     Ok(None)
@@ -2466,20 +2425,10 @@ fn handle_control_primitive(
                 .ok_or(VmError::NoMatchingPrompt)?;
             let prompt = state.prompt_stack[prompt_idx].clone();
 
-            let cap_frames = state.frames[prompt.stack_depth..].to_vec();
-            let cap_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
-            let reg_base = if !cap_frames.is_empty() {
-                cap_frames[0].register_base
-            } else {
-                state.registers.len()
-            };
-            let cap_regs = state.registers[reg_base..].to_vec();
-            let cont = VmDelimitedContinuation {
-                frames: cap_frames,
-                dynamic_winds: cap_winds,
-                registers: cap_regs,
-                base_at_capture: reg_base,
-            };
+            // `dst` is this abort call's own destination — dead as a result
+            // slot, and for that reason the hole the captured continuation
+            // resumes into.
+            let cont = capture_delimited(state, &prompt, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
             // Popped before each after-thunk runs, for the reason spelled out
@@ -3571,54 +3520,155 @@ fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmCont
         .map(|&(_, ctrl)| ctrl)
 }
 
-/// Try to invoke `func_val` as a continuation. Returns `Ok(true)` if it was
-/// a continuation and was invoked (stack has been replaced/appended),
-/// `Ok(false)` if not a continuation.
-fn try_invoke_continuation(
+/// Try to invoke `func_val` as a full (`call/cc`) continuation. Returns the
+/// value it delivers if it was one — the stack has been replaced, or the
+/// first thunk of the travel pushed — and `None` if it was not.
+///
+/// The travel may not finish here: a jump with a wind thunk to run pushes
+/// that thunk's frames and comes back through `ResumeWindJump`. Either way
+/// this call is over, and the caller signals the dispatch loop.
+///
+/// Delimited continuations are the other half of the same probe, and are
+/// [`invoke_delimited`]'s business rather than this function's: a composable
+/// invoke *returns*, so its caller has to say where — which this signature
+/// has no room for and its three callers each answer differently.
+fn try_invoke_full_continuation(
     state: &mut VmState,
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Full (call/cc) continuation?
-    //
-    // The travel may not finish here: a jump with a wind thunk to run pushes
-    // that thunk's frames and comes back through `ResumeWindJump`. Either
-    // way this call is over, and the caller signals the dispatch loop.
-    if state.get_vm_continuation(func_val).is_some() {
-        let deliver_val = deliver_value(state, args);
-        step_wind_jump(state, func_val, deliver_val)?;
-        return Ok(Some(deliver_val));
+    if state.get_vm_continuation(func_val).is_none() {
+        return Ok(None);
+    }
+    let deliver_val = deliver_value(state, args);
+    step_wind_jump(state, func_val, deliver_val)?;
+    Ok(Some(deliver_val))
+}
+
+/// Snapshot the frames between `prompt` and the live top as a delimited
+/// continuation.
+///
+/// `deliver_reg` is where the capturing call would have written its own
+/// result — the hole this continuation resumes into, in the innermost frame
+/// it captures. Recorded only when there *is* an innermost frame: an
+/// `abort-current-continuation` in tail position of the prompt body has
+/// already popped that frame, and `deliver_reg` then names a register in a
+/// frame below the prompt, which this continuation does not own.
+fn capture_delimited(
+    state: &VmState,
+    prompt: &PromptFrame,
+    deliver_reg: u16,
+) -> VmDelimitedContinuation {
+    let frames = state.frames[prompt.stack_depth..].to_vec();
+    let dynamic_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
+    let base_at_capture = frames
+        .first()
+        .map_or(state.registers.len(), |f| f.register_base);
+    VmDelimitedContinuation {
+        registers: state.registers[base_at_capture..].to_vec(),
+        deliver_reg: (!frames.is_empty()).then_some(deliver_reg),
+        frames,
+        dynamic_winds,
+        base_at_capture,
+    }
+}
+
+/// How an invoke of a delimited continuation ended.
+enum DelimitedInvoke {
+    /// Its frames are on the stack and running, the value delivered into the
+    /// hole they were waiting on. Whatever they return goes to the `dst` the
+    /// invoke named.
+    Resumed,
+    /// It captured no frames, so it is the identity continuation: the value
+    /// it was invoked with *is* its result, and the caller places that value
+    /// the way it places any other immediate one.
+    Identity,
+}
+
+/// Invoke a delimited (composable) continuation: re-enter the extents it
+/// captured, append its frames to the live stack, and deliver `value` into
+/// the hole the innermost one is waiting on.
+///
+/// `dst` is where the *resumed computation's* value goes — the register the
+/// `(k v)` call would have written. The captured frames still return to the
+/// prompt they were captured under, which is not where this invoke happened
+/// and, after an abort, is not on the stack at all, so the outermost one is
+/// re-pointed here.
+///
+/// Delivering into the hole and re-pointing that return are the two halves of
+/// resuming `(list 'got ␣)` with `10` and getting `(got 10)` back. Appending
+/// the frames alone gives neither: the resumed computation reads a register
+/// nothing wrote, and its value returns to a register no one reads. That is
+/// what this used to do, in two copies (issue #160).
+fn invoke_delimited(
+    state: &mut VmState,
+    dc: Rc<VmDelimitedContinuation>,
+    value: TaggedValue,
+    dst: u16,
+) -> Result<DelimitedInvoke, VmError> {
+    // Every captured extent is re-entered, outermost first, before any of its
+    // frames are live. Unlike a full continuation's jump this does not travel:
+    // an extent the live stack already shares is entered again.
+    let enter_winds = dc.dynamic_winds.clone();
+    for record in &enter_winds {
+        run_thunk(state, record.before)?;
+    }
+    state.dynamic_winds.extend(enter_winds);
+
+    let Some(deliver_reg) = dc.deliver_reg else {
+        return Ok(DelimitedInvoke::Identity);
+    };
+
+    // Relocate the captured register windows onto the end of the live array.
+    let shift = state.registers.len().wrapping_sub(dc.base_at_capture);
+    state.registers.extend_from_slice(&dc.registers);
+    let outermost = state.frames.len();
+    state.frames.extend(dc.frames.iter().cloned());
+    for f in &mut state.frames[outermost..] {
+        f.register_base = f.register_base.wrapping_add(shift);
     }
 
-    // Delimited (composable) continuation?
-    if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
-        let deliver_val = deliver_value(state, args);
-        let enter_winds = dc.dynamic_winds.clone();
-        for record in &enter_winds {
-            run_thunk(state, record.before)?;
-        }
-        let new_base = state.registers.len();
-        let old_base = dc.base_at_capture;
-        let shift = new_base.wrapping_sub(old_base);
-        state.registers.extend_from_slice(&dc.registers);
-        let mut new_frames: Vec<CallFrame> = dc.frames.clone();
-        for f in &mut new_frames {
-            f.register_base = f.register_base.wrapping_add(shift);
-        }
-        state.frames.extend(new_frames);
-        state.dynamic_winds.extend(enter_winds);
-        if let Some(top) = state.frames.last() {
-            let ret_reg = top.return_reg;
-            let n = state.frames.len();
-            if n >= 2 {
-                let caller_base = state.frames[n - 2].register_base;
-                state.registers[caller_base + ret_reg as usize] = deliver_val;
+    state.frames[outermost].return_reg = dst;
+    let top_base = state
+        .frames
+        .last()
+        .expect("deliver_reg is Some only for a non-empty capture")
+        .register_base;
+    state.registers[top_base + deliver_reg as usize] = value;
+    Ok(DelimitedInvoke::Resumed)
+}
+
+/// [`invoke_delimited`] for an invoke in tail position: the invoking frame is
+/// done, so it is popped first and the resumed computation returns to *its*
+/// caller — otherwise the appended frames would return into a frame whose
+/// only remaining act is to return again.
+///
+/// Returns what a tail dispatch returns: `Ok(Some(v))` when the popped frame
+/// was the loop's own, `Ok(None)` when the value went to a live caller, and
+/// the escape sentinel once the continuation's frames are running.
+fn tail_invoke_delimited(
+    state: &mut VmState,
+    dc: Rc<VmDelimitedContinuation>,
+    value: TaggedValue,
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
+    let frame = state.frames.pop().expect("tail invoke with empty stack");
+    let return_reg = frame.return_reg;
+    state.free_top_registers(frame.register_base);
+    match invoke_delimited(state, dc, value, return_reg)? {
+        DelimitedInvoke::Resumed => Err(park_escape(state, value)),
+        // The identity continuation passes the value straight through, so
+        // this is an ordinary tail return — the same close-out a primitive in
+        // tail position takes.
+        DelimitedInvoke::Identity => {
+            if state.frames.len() == exit_depth {
+                return Ok(Some(value));
             }
+            state.set_reg(return_reg, value);
+            pop_resolved_extents(state, exit_depth);
+            Ok(None)
         }
-        return Ok(Some(deliver_val));
     }
-
-    Ok(None)
 }
 
 /// What `(k …)` delivers: `(k v)` delivers `v`; `(k)` and `(k v1 v2 …)`
@@ -3627,9 +3677,9 @@ fn try_invoke_continuation(
 /// `call-with-values` its values.
 ///
 /// Built only once the callee is known to be a continuation. It used to be the
-/// first thing `try_invoke_continuation` did, so every non-continuation callee
-/// that reached the probe paid a `Vec` (and, for other than one argument, a
-/// heap allocation) to decline.
+/// first thing the continuation probe did, so every non-continuation callee
+/// that reached it paid a `Vec` (and, for other than one argument, a heap
+/// allocation) to decline.
 fn deliver_value(state: &mut VmState, args: &[TaggedValue]) -> TaggedValue {
     state.heap.borrow_mut().values_from(args.to_vec())
 }
@@ -3714,8 +3764,18 @@ fn call_value_with_probe(
             state.set_reg(dst, result?);
             return Ok(None);
         }
-        if let Some(delivered) = try_invoke_continuation(state, func_val, arg_vals)? {
+        if let Some(delivered) = try_invoke_full_continuation(state, func_val, arg_vals)? {
             return Err(park_escape(state, delivered));
+        }
+        if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+            let value = deliver_value(state, arg_vals);
+            return match invoke_delimited(state, dc, value, dst)? {
+                DelimitedInvoke::Resumed => Err(park_escape(state, value)),
+                DelimitedInvoke::Identity => {
+                    state.set_reg(dst, value);
+                    Ok(None)
+                }
+            };
         }
     }
     let code_id = match closure_code_id {
@@ -3817,8 +3877,12 @@ fn tail_call_value_with_probe(
         }
 
         // Continuation invocation in tail position.
-        if let Some(delivered) = try_invoke_continuation(state, func_val, arg_vals)? {
+        if let Some(delivered) = try_invoke_full_continuation(state, func_val, arg_vals)? {
             return Err(park_escape(state, delivered));
+        }
+        if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+            let value = deliver_value(state, arg_vals);
+            return tail_invoke_delimited(state, dc, value, exit_depth);
         }
 
         // Parameters in tail position: same as primitives.

@@ -280,8 +280,8 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
                 dst, tag, body, handler
             )
         }
-        Instruction::AbortToPrompt { tag, val } => {
-            format!("AbortToPrompt tag=r{}, val=r{}", tag, val)
+        Instruction::AbortToPrompt { tag, val, dst } => {
+            format!("AbortToPrompt tag=r{}, val=r{} (hole r{})", tag, val, dst)
         }
         Instruction::CaptureComposable { dst, tag } => {
             format!("CaptureComposable r{} ← r{}", dst, tag)
