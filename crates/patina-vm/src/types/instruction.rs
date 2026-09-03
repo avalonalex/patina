@@ -436,7 +436,12 @@ pub enum Instruction {
     /// Searches prompt stack for nearest frame matching `tag`, clones the
     /// intervening frames as a `VmDelimitedContinuation`, unwinds the stack,
     /// then calls the prompt's handler with `(val, captured_continuation)`.
-    AbortToPrompt { tag: Reg, val: Reg },
+    ///
+    /// `dst` is the register this call's own result would have landed in. The
+    /// abort never returns one, which is exactly why the operand is needed:
+    /// that register is the hole the captured continuation delivers into if
+    /// the handler invokes it.
+    AbortToPrompt { tag: Reg, val: Reg, dst: Reg },
 
     /// Maps to `call-with-composable-continuation`.
     ///

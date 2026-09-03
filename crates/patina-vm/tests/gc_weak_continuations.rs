@@ -43,6 +43,7 @@ fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuati
         dynamic_winds: vec![],
         registers: vec![payload],
         base_at_capture: 0,
+        deliver_reg: None,
     }
 }
 

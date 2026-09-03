@@ -984,6 +984,158 @@ fn test_abort_to_a_prompt_out_of_each_value_form_wind_thunk() {
     );
 }
 
+/// Invoking the composable continuation a prompt handler receives — VM-only,
+/// and measured against Racket.
+///
+/// Its neighbour above covers the *abort* half of this API and deliberately
+/// never resumes `k`, which is how issue #160 survived. Appending the
+/// captured frames was the whole of the invoke: the value went into a
+/// register named by one frame's numbering and indexed against another's
+/// base, and what the resumed computation returned went to the register the
+/// prompt had been going to write — in a frame the abort had already
+/// unwound. Neither delivery reached anybody.
+///
+/// ```text
+///                                    this VM             main (4624b0e8)
+///   (list 'got ␣) resumed with 10    (got 10)            ()
+///   (+ 1 ␣) resumed with 10          11                  Type error: +
+///   k invoked twice                  ((got 1) (got 2))   (() ())
+///   an extent inside the capture     re-entered          re-entered
+/// ```
+///
+/// Racket gives this VM's column for every row here. Its spelling differs —
+/// an abort there passes only values, so the continuation is captured with
+/// `call-with-composable-continuation` and carried through the abort as one —
+/// but the programs are otherwise these.
+///
+/// The two halves of the fix are each invisible without the other, and the
+/// first row separates them. Measured, by building each half alone:
+/// delivering into the hole while leaving the captured return where it was
+/// resumes the computation correctly and then throws its `(got 10)` away —
+/// `main`'s answer exactly. Re-pointing the return without delivering gives
+/// `(handler ab resumed-to (got ()))`.
+#[test]
+fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
+    let probe = |body: &str, handler: &str| {
+        eval_program_vm(&format!(
+            "(define t (make-continuation-prompt-tag 'p))
+             (call-with-continuation-prompt (lambda () {body}) t (lambda (v k) {handler}))"
+        ))
+    };
+    // The issue's shape: `(k 10)` resumes `(list 'got ␣)` with the 10 in the
+    // hole, and its own value is that list rather than the empty one.
+    assert_eq!(
+        probe(
+            "(list 'got (abort-current-continuation t 'ab))",
+            "(list 'handler v 'resumed-to (k 10))"
+        ),
+        "(handler ab resumed-to (got 10))"
+    );
+    // The delivered value is read, not merely dropped: this used to reach `+`
+    // with the `NULL` an untouched register holds.
+    assert_eq!(
+        probe(
+            "(+ 1 (abort-current-continuation t 'ab))",
+            "(list v (k 10))"
+        ),
+        "(ab 11)"
+    );
+    // Composable, so invoking it twice runs the captured computation twice.
+    assert_eq!(
+        probe(
+            "(list 'got (abort-current-continuation t 'ab))",
+            "(list (k 1) (k 2))"
+        ),
+        "((got 1) (got 2))"
+    );
+    // More than one frame between the prompt and the abort — the relocation
+    // has to keep the appended frames' return chain pointing at each other,
+    // and only its outermost frame at the invoke.
+    assert_eq!(
+        probe(
+            "(list 'a ((lambda (z) (list 'b z (abort-current-continuation t 'ab))) 'zz))",
+            "(list 'handler v (k 10))"
+        ),
+        "(handler ab (a (b zz 10)))"
+    );
+    // `k` in tail position of the handler: the invoking frame is popped
+    // before the append, so the resumed computation returns past it.
+    assert_eq!(
+        probe("(list 'got (abort-current-continuation t 'ab))", "(k 10)"),
+        "(got 10)"
+    );
+    // Nothing between the abort and its prompt — the abort is in tail
+    // position of the body, so that frame is already popped when the capture
+    // happens — makes `k` the identity, and `(k 10)` is 10. Both positions,
+    // because the tail one returns through the handler's own frame.
+    assert_eq!(
+        probe("(abort-current-continuation t 'ab)", "(list v (k 10))"),
+        "(ab 10)"
+    );
+    assert_eq!(probe("(abort-current-continuation t 'ab)", "(k 10)"), "10");
+    // Reached through `call_any` rather than an instruction. The value form
+    // of `call-with-values` runs its producer across a nested Rust boundary
+    // that still owes the consumer a call, and reporting the resumed frames
+    // as a continuation *escape* told it to abandon that: the two spellings
+    // of one program disagreed, `(handler ())` against the head form's
+    // answer. A composable continuation returns, so its invoke reports a
+    // pushed frame, which is what it is. `(k)` with no arguments delivers a
+    // `#<values>` object exactly as `(values)` would.
+    let head = probe(
+        "(list 'got (abort-current-continuation t 'ab))",
+        "(list 'handler (call-with-values k list))",
+    );
+    let value_form = eval_program_vm(
+        "(define t (make-continuation-prompt-tag 'p))
+         (define cwv call-with-values)
+         (call-with-continuation-prompt
+           (lambda () (list 'got (abort-current-continuation t 'ab)))
+           t
+           (lambda (v k) (list 'handler (cwv k list))))",
+    );
+    assert_eq!(
+        head, value_form,
+        "the head and value forms of call-with-values are the same program"
+    );
+    assert_eq!(head, "(handler ((got #<values>)))");
+    // `k` as the exception handler itself, with *two* frames captured: the
+    // raise runs the handler down to the depth it started at, which stops
+    // being `frames.len() - 1` as soon as an invoke can push more than one
+    // frame. Reading it after the call gave `(handler (a ()))` — the resumed
+    // computation cut in half.
+    assert_eq!(
+        probe(
+            "(list 'a ((lambda (z) (list 'b z (abort-current-continuation t 'ab))) 'zz))",
+            "(list 'handler (with-exception-handler k (lambda () (raise-continuable 'boom))))"
+        ),
+        "(handler (a (b zz boom)))"
+    );
+    // A `dynamic-wind` extent inside the captured region is entered again by
+    // the invoke — composable invokes do not travel, so this happens whether
+    // or not the live stack already shares the extent — and left when the
+    // resumed computation returns through it.
+    assert_eq!(
+        eval_program_vm(
+            r#"
+            (define t (make-continuation-prompt-tag 'p))
+            (define log '())
+            (define (note x) (set! log (cons x log)))
+            (define r
+              (call-with-continuation-prompt
+                (lambda ()
+                  (dynamic-wind
+                    (lambda () (note 'in))
+                    (lambda () (list 'got (abort-current-continuation t 'ab)))
+                    (lambda () (note 'out))))
+                t
+                (lambda (v k) (list 'handler v (k 10)))))
+            (list r (reverse log))
+            "#
+        ),
+        "((handler ab (got 10)) (in out in out))"
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.
 ///

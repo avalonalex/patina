@@ -119,6 +119,21 @@ pub struct VmDelimitedContinuation {
     /// The `register_base` of `frames[0]` at capture time.
     /// Used to compute the relocation offset when invoking the continuation.
     pub base_at_capture: usize,
+
+    /// Register in the innermost captured frame where invoking this
+    /// continuation delivers its value: the hole the captured computation is
+    /// waiting on, which is the `dst` of the call that captured it. The
+    /// delimited twin of [`VmContinuation::deliver_reg`].
+    ///
+    /// It is what makes `(k v)` mean anything. The captured frames resume at
+    /// the instruction *after* that call, so a value written anywhere else is
+    /// one the resumed computation never reads.
+    ///
+    /// `None` when `frames` is empty — nothing stood between the capture and
+    /// its prompt, because an `abort-current-continuation` in tail position of
+    /// the prompt body has already popped the body's frame. The continuation
+    /// is then the identity and `(k v)` is `v`.
+    pub deliver_reg: Option<Reg>,
 }
 
 /// An installed exception handler (from `with-exception-handler`).

@@ -145,6 +145,8 @@ pub struct VmDelimitedContinuation {
     pub dynamic_winds:   Vec<DynamicWindRecord>,
     pub registers:       Vec<TaggedValue>,
     pub base_at_capture: usize,
+    pub deliver_reg:     Option<Reg>,  // the hole, in frames.last();
+                                       // None = nothing captured (identity)
 }
 ```
 
@@ -352,11 +354,35 @@ intercepted at call dispatch time.
   to force it to zero for them, so a continuation captured inside its own
   extent re-ran that extent's thunks for a jump that crossed nothing (fixed
   2026-09-01, Track L §6)
-- Composable/delimited invokes do **not** travel at all: both the
-  `InvokeContinuation { composable: true }` arm and the delimited branch of
-  `try_invoke_continuation` run every captured `before` thunk unconditionally,
-  on a nested call and under the live handler stack, then extend
-  `dynamic_winds`. Shared extents are not skipped there
+- Composable/delimited invokes do **not** travel at all: `invoke_delimited`
+  runs every captured `before` thunk unconditionally, on a nested call and
+  under the live handler stack. Shared extents are not skipped there. Each
+  record is pushed as its own thunk returns, `step_wind_jump`'s rule and for
+  its reason: a thunk that raises leaves the extents before it entered *and*
+  recorded, so their `after` thunks are still owed, and its own neither
+- A composable invoke has two values to place, and `invoke_delimited` is the
+  one place that places them. The delivered value goes into the innermost
+  captured frame's `deliver_reg` — the hole the capturing call left, since
+  those frames resume at the instruction *after* it — and the outermost
+  captured frame's `return_reg` is re-pointed at the invoke's own destination,
+  because the prompt it was captured returning to is not where `(k v)` was
+  called and, after an abort, is not on the stack at all. The append on its
+  own delivered nothing and returned nowhere (issue #160)
+- A capture with no frames in it — an `abort-current-continuation` in tail
+  position of the prompt body pops the body's frame before the abort runs —
+  is the identity continuation, and `(k v)` is `v`. That is what
+  `deliver_reg: None` means, and the invoke hands the value straight back to
+  its caller instead of appending anything
+- A composable invoke reports **a pushed frame**, never the escape sentinel a
+  full one reports. The distinction is what the caller still owes: a jump
+  replaces the stack and voids the Rust work above it, while a composable
+  continuation *returns*, so a `call-with-values` consumer still has to be
+  applied, a jump still has to be finished, a `raise-continuable` entry still
+  has to be re-pushed. `call_any` returning the sentinel is why the value form
+  of `call-with-values` dropped its consumer where the head form did not. That
+  a resumed invoke can push **more than one** frame is the other half of the
+  same rule: a caller that then runs its own dispatch loop must read the depth
+  to run back down to *before* the call, not as `frames.len() - 1` after it
 - The value form of `dynamic-wind` (`handle_control_primitive`) pushes a stub
   frame running `value_wind_stub`'s six instructions — `Call before` /
   `PushWind` / `Call body` / `PopWind` / `Call after` / `Return`, the same
