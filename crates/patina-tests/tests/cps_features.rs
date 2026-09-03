@@ -1393,6 +1393,128 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     );
 }
 
+/// The dynamic environment a wind thunk runs in, and what happens when a
+/// continuation captured inside one is re-entered — for the two transfers
+/// that ran their thunks on a nested Rust loop. VM-only, measured against
+/// Guile 3.0.11.
+///
+/// A jump has run each thunk under its own record's handler stack, in a frame
+/// of its own, since #156; the value form of `dynamic-wind` since #158. The
+/// abort's after-thunks and a composable invoke's re-entry before-thunks were
+/// the two that did not, and both symptoms follow from that one fact:
+///
+/// ```text
+///                                     this VM              main (7ebfed1f)
+///   after-thunk's raise, handler       (MID from-after)     (TOP from-after)
+///     captured by the record
+///   re-enter an after-thunk            after-1 once,        after-1 twice,
+///                                      value kept           value lost
+///   re-enter a before-thunk            value kept,          value lost,
+///                                      extent balanced      extent unbalanced
+/// ```
+///
+/// Both are jumps now: an abort travels to a continuation whose top frame
+/// calls the prompt handler, and a composable invoke travels to one that
+/// *extends* the live stacks rather than replacing them. `step_wind_jump`
+/// then owns every wind thunk in the VM, which is what makes these rows
+/// answer the same as the `call/cc` shapes beside them.
+#[test]
+fn test_wind_thunks_of_an_abort_and_a_re_entry_run_as_frames() {
+    // The handler sits *between* the prompt and the `dynamic-wind`, so the
+    // record captured it and its after-thunk must run under it. The same
+    // program left by a jump instead of an abort answers `MID` on both
+    // backends, chibi, Gauche and Guile.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define r
+               (with-exception-handler
+                 (lambda (e) (note (list 'TOP e)) 'top)
+                 (lambda ()
+                   (call-with-continuation-prompt
+                     (lambda ()
+                       (with-exception-handler
+                         (lambda (e) (note (list 'MID e)) 'mid)
+                         (lambda ()
+                           (dynamic-wind
+                             (lambda () #f)
+                             (lambda () (abort-current-continuation t 'ab))
+                             (lambda () (raise-continuable 'from-after))))))
+                     t
+                     (lambda (v k) (list 'prompt-handler v))))))
+             (list r (reverse log))"
+        ),
+        "((prompt-handler ab) ((MID from-after)))"
+    );
+    // Re-entering a continuation captured inside an after-thunk the abort is
+    // running resumes *after* the capture — `after-1` once — and the abort
+    // still delivers its value. On main the thunk restarted from the top and
+    // `r` came out `#<unspecified>`: #157's signature, on the abort.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define k #f) (define n 0) (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define r
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind (lambda () (note 'before))
+                                 (lambda () (abort-current-continuation t 'ab))
+                                 (lambda () (note 'after-1)
+                                            (call/cc (lambda (c) (set! k c)))
+                                            (note 'after-2))))
+                 t (lambda (v k2) (list 'prompt-handler v))))
+             (if (< n 1) (begin (set! n 1) (k 'again)))
+             (list r (reverse log))"
+        ),
+        "((prompt-handler ab) (before after-1 after-2 after-2))"
+    );
+    // The same for a before-thunk a composable invoke re-enters.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define k #f) (define n 0) (define log '())
+             (define (note x) (set! log (cons x log)))
+             (define k* #f)
+             (define captured
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (dynamic-wind (lambda () (note 'in-1)
+                                            (call/cc (lambda (c) (set! k c)))
+                                            (note 'in-2))
+                                 (lambda () (list 'got (abort-current-continuation t 'ab)))
+                                 (lambda () (note 'out))))
+                 t (lambda (v kk) (set! k* kk) 'captured)))
+             (define resumed (k* 10))
+             (if (< n 1) (begin (set! n 1) (k 'again)))
+             (list captured resumed (reverse log))"
+        ),
+        "(captured (got 10) (in-1 in-2 out in-1 in-2 out in-2 out))"
+    );
+    // Escaping *out* of an after-thunk the abort is running already worked and
+    // has to keep working: the travel reports the escape sentinel like any
+    // other, rather than swallowing it.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))
+             (define esc #f)
+             (define r (call/cc (lambda (c) (set! esc c) 'first)))
+             (if (eq? r 'first)
+                 (call-with-continuation-prompt
+                   (lambda ()
+                     (dynamic-wind (lambda () #f)
+                                   (lambda () (abort-current-continuation t 'ab))
+                                   (lambda () (esc 'escaped-from-after))))
+                   t (lambda (v k) (list 'prompt-handler v)))
+                 #f)
+             r"
+        ),
+        "escaped-from-after"
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.
 ///
