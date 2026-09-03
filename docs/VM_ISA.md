@@ -337,11 +337,12 @@ invoke:   restore all snapshots, run wind transitions, deliver value
 
 ```rust
 pub struct PromptFrame {
-    pub tag:                TaggedValue,
-    pub stack_depth:        usize,
-    pub handler:            TaggedValue,
-    pub dst:                Reg,
-    pub dynamic_wind_depth: usize,
+    pub tag:                     TaggedValue,
+    pub stack_depth:             usize,
+    pub handler:                 TaggedValue,
+    pub dst:                     Reg,
+    pub dynamic_wind_depth:      usize,
+    pub exception_handler_depth: usize,  // the boundary an abort unwinds to
 }
 ```
 

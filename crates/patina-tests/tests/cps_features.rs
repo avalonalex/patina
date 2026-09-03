@@ -1136,6 +1136,132 @@ fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
     );
 }
 
+/// What an abort leaves behind, and what a composable continuation carries —
+/// VM-only, measured against Racket 9.3 and Gauche 0.9.15.
+///
+/// Both are cells of the dynamic-state matrix in `docs/VM_RUNTIME.md` §5.6:
+/// of the five components of `VmState` that belong to a dynamic extent rather
+/// than to the machine, the abort was unwinding four and the delimited capture
+/// was saving three.
+///
+/// ```text
+///                                              this VM          main (62a47df9)
+///   abort uninstalls the region's handlers     ESCAPED-TO-TOP   INNER
+///   composable k carries its handler stack     (got (INNER …))  unhandled exception
+///   composable k carries an inner prompt       (outer (inner…)) no matching prompt tag
+/// ```
+///
+/// The oracles: Racket answers the abort and inner-prompt rows directly, and
+/// **Gauche** answers the handler row through `gauche.partcont`'s
+/// `shift`/`reset` with real `with-exception-handler` and `raise-continuable`
+/// — which matters, because Racket's handlers *are* continuation marks, so
+/// Racket alone could not tell "carries the dynamic environment" from an
+/// artifact of that representation.
+///
+/// **Why the boundary is a recorded depth and not a frame depth.** The first
+/// version of this fix inferred it, and two of the rows below are the shapes
+/// that killed that: a `with-exception-handler` in *tail position of the
+/// prompt body* installs at the prompt's own frame depth, because the body
+/// frame is already popped — and so does a handler whose thunk *tail-calls*
+/// `call-with-continuation-prompt`. One is inside the prompt and must go, the
+/// other encloses it and must stay, and they are indistinguishable by depth.
+/// `PromptFrame::exception_handler_depth` records the length at push time, as
+/// `dynamic_wind_depth` has always done for winds.
+#[test]
+fn test_a_prompt_transfers_carry_the_dynamic_environment() {
+    const T: &str = "(define t (make-continuation-prompt-tag 'p))";
+
+    // The abort leaves the extents it unwinds, so the handler installed inside
+    // the prompt body must not catch a raise made from the prompt handler.
+    // The enclosing handler here reaches the prompt by a *tail* call, so it
+    // shares the prompt's frame depth and must survive anyway.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{T}
+             (with-exception-handler
+               (lambda (e) (list 'ESCAPED-TO-TOP e))
+               (lambda ()
+                 (call-with-continuation-prompt
+                   (lambda ()
+                     (with-exception-handler
+                       (lambda (e) (list 'INNER e))
+                       (lambda () (list 'got (abort-current-continuation t 'ab)))))
+                   t
+                   (lambda (v k) (raise-continuable 'boom)))))"
+        )),
+        "(ESCAPED-TO-TOP boom)",
+        "an abort must uninstall the handlers of the region it abandons"
+    );
+    // The mirror shape: the enclosing handler is at a depth of its own, and the
+    // *inner* one is the one sharing the prompt's depth. Same answer required,
+    // for the opposite reason — this is the row that a depth test gets wrong
+    // in whichever direction the other row gets right.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{T}
+             (with-exception-handler
+               (lambda (e) (list 'TOP e))
+               (lambda ()
+                 (list 'r
+                   (call-with-continuation-prompt
+                     (lambda ()
+                       (with-exception-handler
+                         (lambda (e) (list 'INNER e))
+                         (lambda () (list 'got (abort-current-continuation t 'ab)))))
+                     t
+                     (lambda (v k) (raise-continuable 'boom))))))"
+        )),
+        "(r (TOP boom))"
+    );
+    // A composable continuation carries the handlers it was captured under.
+    // Escaping it out of the prompt first is what makes this independent of
+    // the row above: the handler the abort used to leak has been swept by the
+    // ordinary depth sweep before the resume, so a wrong answer here cannot be
+    // rescued by a wrong answer there. The two used to mask each other.
+    assert_eq!(
+        eval_program_vm(&format!(
+            "{T}
+             (define k* #f)
+             (define captured
+               (call-with-continuation-prompt
+                 (lambda ()
+                   (with-exception-handler
+                     (lambda (e) (list 'INNER e))
+                     (lambda () (list 'got (raise-continuable (abort-current-continuation t 'ab))))))
+                 t
+                 (lambda (v k) (set! k* k) 'captured)))
+             (define resumed (k* 'boom))
+             ;; …and they do not outlive the resumed frames: the depth sweep
+             ;; that pops any other handler pops these, because their recorded
+             ;; depths were relocated with the frames.
+             (define after (with-exception-handler
+                             (lambda (e) (list 'OUTER e))
+                             (lambda () (raise-continuable 'again))))
+             (list captured resumed after)"
+        )),
+        "(captured (got (INNER boom)) (OUTER again))"
+    );
+    // And it carries a prompt established inside the captured region: the
+    // resumed frames abort to a delimiter their own code set up.
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 't))
+             (define u (make-continuation-prompt-tag 'u))
+             (call-with-continuation-prompt
+               (lambda ()
+                 (list 'outer
+                   (call-with-continuation-prompt
+                     (lambda () (list 'inner (abort-current-continuation t 'ab)
+                                             (abort-current-continuation u 'ab2)))
+                     u
+                     (lambda (v2 k2) (list 'inner-handler v2)))))
+               t
+               (lambda (v k) (list 'handler v (k 10))))"
+        ),
+        "(handler ab (outer (inner-handler ab2)))"
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.
 ///

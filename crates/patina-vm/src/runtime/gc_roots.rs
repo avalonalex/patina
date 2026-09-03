@@ -169,4 +169,6 @@ fn trace_delimited_continuation(
     visitor.visit_slice(&continuation.registers);
     trace_frames(&continuation.frames, visitor);
     trace_winds(&continuation.dynamic_winds, visitor);
+    trace_prompts(&continuation.prompt_stack, visitor);
+    trace_handlers(&continuation.exception_handlers, visitor);
 }

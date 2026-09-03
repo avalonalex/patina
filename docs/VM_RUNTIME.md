@@ -95,11 +95,12 @@ pub struct VmState {
 ```rust
 #[derive(Clone)]
 pub struct PromptFrame {
-    pub tag:                TaggedValue,
-    pub stack_depth:        usize,
-    pub handler:            TaggedValue,
-    pub dst:                Reg,
-    pub dynamic_wind_depth: usize,
+    pub tag:                     TaggedValue,
+    pub stack_depth:             usize,
+    pub handler:                 TaggedValue,
+    pub dst:                     Reg,
+    pub dynamic_wind_depth:      usize,
+    pub exception_handler_depth: usize,  // the boundary an abort unwinds to
 }
 ```
 
@@ -141,12 +142,16 @@ pub struct VmContinuation {
 }
 
 pub struct VmDelimitedContinuation {
-    pub frames:          Vec<CallFrame>,
-    pub dynamic_winds:   Vec<DynamicWindRecord>,
-    pub registers:       Vec<TaggedValue>,
-    pub base_at_capture: usize,
-    pub deliver_reg:     Option<Reg>,  // the hole, in frames.last();
-                                       // None = nothing captured (identity)
+    pub frames:             Vec<CallFrame>,
+    pub dynamic_winds:      Vec<DynamicWindRecord>,
+    pub registers:          Vec<TaggedValue>,
+    pub base_at_capture:    usize,
+    pub deliver_reg:        Option<Reg>,  // the hole, in frames.last();
+                                          // None = nothing captured (identity)
+    pub depth_at_capture:   usize,        // frame depth the slice started at;
+                                          // the two below are relative to it
+    pub prompt_stack:       Vec<PromptFrame>,
+    pub exception_handlers: Vec<ExceptionHandler>,
 }
 ```
 
@@ -423,10 +428,18 @@ intercepted at call dispatch time.
 
 **Delimited (abort/prompt):**
 1. Find matching prompt by tag
-2. Capture frames `[prompt.stack_depth..]`, registers, winds
+2. Capture frames `[prompt.stack_depth..]`, registers, winds, and the dynamic
+   environment above the prompt — the prompts nested inside it and the handlers
+   installed inside it
 3. Run wind exit thunks
-4. Unwind stack to prompt depth
+4. Unwind stack to prompt depth, and the handler stack to
+   `prompt.exception_handler_depth`
 5. Call handler with `(value, continuation)`
+
+Invoking it appends all of that back, with the frame depths recorded in the
+prompts and handlers relocated by the same shift the register bases get.
+Nothing has to remember to remove them again: both stacks are swept by frame
+depth when the resumed frames return, which is when they stop applying.
 
 ### 5.6 The dynamic-state matrix
 
@@ -445,9 +458,9 @@ by reading, before anyone writes a program that trips over it.
 |---|---|---|---|---|---|
 | `call/cc` capture | save | save | save | save | save |
 | full invoke (arrival) | restore | restore | restore | restore | restore |
-| delimited capture | save | save | save | **✗ #163** | **✗ #163** |
-| composable invoke | append | append | append (re-enter) | **✗ #163** | **✗ #163** |
-| abort unwind | truncate | truncate | run + truncate | truncate | **✗ #162** |
+| delimited capture | save | save | save | save | save |
+| composable invoke | append | append | append (re-enter) | append | append |
+| abort unwind | truncate | truncate | run + truncate | truncate | truncate |
 | `raise` | — | — | — | — | pop one, re-push on continuable return |
 | normal `Return` | pop | free | by `PopWind` | by depth | by depth |
 | wind thunk | push stub | — | — | — | replaced by the record's own |
@@ -483,10 +496,10 @@ it is not in the panel.
 | P1 | a full continuation carries the handler stack | ✓ | ✓ | ✓ | — | ✓ (both backends) |
 | P2 | escaping a handler's extent uninstalls it | ✓ | ✓ | ✓ | — | ✓ (both backends) |
 | P3 | re-entering that extent re-installs it | ✓ | ✓ | ✓ | — | ✓ (both backends) |
-| A1 | **aborting** out of that extent uninstalls it | n/a | n/a | n/a | ✓ | **✗ #162** |
-| D1 | a composable continuation carries the handler stack | n/a | n/a | ✓ | ✓ | **✗ #163** |
+| A1 | **aborting** out of that extent uninstalls it | n/a | n/a | n/a | ✓ | ✓ |
+| D1 | a composable continuation carries the handler stack | n/a | n/a | ✓ | ✓ | ✓ |
 | D2 | a composable continuation re-enters its wind extents | n/a | n/a | ✓ | ✓ | ✓ |
-| D3 | a composable continuation carries a delimiter inside it | n/a | n/a | n/e | ✓ | **✗ #163** |
+| D3 | a composable continuation carries a delimiter inside it | n/a | n/a | n/e | ✓ | ✓ |
 
 `n/a` — no delimited-continuation facility. `n/e` — not expressible: Gauche's
 `shift`/`reset` is untagged, so a `shift` cannot reach past the nearest
@@ -503,7 +516,8 @@ handlers are continuation marks and the agreement could otherwise be an
 artifact of that. Both say a composable continuation carries the dynamic
 context of its *capture*.
 
-A1 is the sharpest of them, because it is #162 itself rather than an analogue:
+A1 was the sharpest of them, because it is #162 itself rather than an
+analogue — the row read `✗` until the fix, and this is what it showed:
 
 ```scheme
 (with-exception-handler (lambda (e) (list 'ESCAPED-TO-TOP e))
@@ -515,18 +529,29 @@ A1 is the sharpest of them, because it is #162 itself rather than an analogue:
       t
       (lambda (v k) (raise-continuable 'boom)))))
 
-;; Patina VM => (INNER boom)            ← the abandoned handler catches
-;; Racket    => (ESCAPED-TO-TOP boom)
+;; before => (INNER boom)            ← the abandoned handler catches
+;; now    => (ESCAPED-TO-TOP boom)   = Racket
 ```
 
-**The two holes interact, which is the reason to read the table as a table.**
-Today a raise inside a resumed composable continuation finds the handler that
-was live at capture — but by accident, because the abort (#162) left that
+**The two holes interacted, which is why they were one change.** A raise
+inside a resumed composable continuation used to find the handler live at
+capture — the right answer, by accident, because the abort (#162) left that
 handler installed rather than because the continuation carried it (#163).
-Escape the same continuation out of its prompt first, so the stale entry has
-been swept, and the raise is unhandled. Fixing #162 alone therefore turns a
-program that works today into one that does not; the two are one change.
-Racket answers with the capture-time context in both spellings.
+Escaping the same continuation out of its prompt first, so the stale entry was
+swept, made the identical raise unhandled. Fixing #162 alone would have turned
+a working program into a broken one.
+
+**The boundary is a recorded length, not a frame depth**, and this is the part
+that is easy to get wrong twice. A `with-exception-handler` in *tail position
+of a prompt body* installs at the prompt's own frame depth, because the body
+frame is already popped; so does a handler whose thunk *tail-calls*
+`call-with-continuation-prompt`. The first is inside the prompt and must be
+uninstalled, the second encloses it and must survive, and no comparison
+against `stack_depth` separates them — each choice of `<` or `<=` fixes one
+shape and breaks the other. `PromptFrame::exception_handler_depth` records
+`exception_handlers.len()` at push time, as `dynamic_wind_depth` has always
+done for winds. Both shapes are pinned in
+`test_a_prompt_transfers_carry_the_dynamic_environment`.
 
 ---
 

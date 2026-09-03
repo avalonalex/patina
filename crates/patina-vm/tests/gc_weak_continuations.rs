@@ -44,6 +44,9 @@ fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuati
         registers: vec![payload],
         base_at_capture: 0,
         deliver_reg: None,
+        depth_at_capture: 0,
+        prompt_stack: vec![],
+        exception_handlers: vec![],
     }
 }
 

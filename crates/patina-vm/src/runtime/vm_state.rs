@@ -1447,6 +1447,7 @@ fn dispatch_one_instruction(
                 tag: tag_val,
                 stack_depth: state.frames.len(),
                 dynamic_wind_depth: state.dynamic_winds.len(),
+                exception_handler_depth: state.exception_handlers.len(),
                 handler: handler_val,
                 dst,
             });
@@ -1464,7 +1465,7 @@ fn dispatch_one_instruction(
                 .ok_or(VmError::NoMatchingPrompt)?;
             let prompt = state.prompt_stack[prompt_idx].clone();
 
-            let cont = capture_delimited(state, &prompt, dst);
+            let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
             // Run dynamic-wind exit thunks for the unwound portion, popping
@@ -1482,6 +1483,17 @@ fn dispatch_one_instruction(
             state.frames.truncate(prompt.stack_depth);
             state.dynamic_winds.truncate(prompt.dynamic_wind_depth);
             state.prompt_stack.truncate(prompt_idx);
+            // An abort leaves the extents it unwinds, and the handlers
+            // installed in them go with the frames that installed them. Left
+            // behind, they stayed live for exactly as long as the prompt
+            // handler ran — the depth sweep on the next `Return` cleared them
+            // afterwards — and caught a raise made from a dynamic extent they
+            // are not in (issue #162). Racket reaches the handler outside the
+            // prompt. The boundary is the prompt's own recorded depth; a frame
+            // depth cannot express it (see `PromptFrame`).
+            state
+                .exception_handlers
+                .truncate(prompt.exception_handler_depth);
             // Reclaim register space freed by the unwind.
             if let Some(top) = state.frames.last() {
                 state
@@ -1510,7 +1522,7 @@ fn dispatch_one_instruction(
             // `dst` is both where the continuation object goes and the hole
             // it delivers into: invoking it makes *this* call return again,
             // with the delivered value in place of the continuation.
-            let cont = capture_delimited(state, &state.prompt_stack[prompt_idx], dst);
+            let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
             state.set_reg_at(base, dst, cont_tv);
         }
@@ -2394,6 +2406,7 @@ fn handle_control_primitive(
                 tag,
                 stack_depth: state.frames.len(),
                 dynamic_wind_depth: state.dynamic_winds.len(),
+                exception_handler_depth: state.exception_handlers.len(),
                 handler,
                 dst,
             });
@@ -2426,7 +2439,7 @@ fn handle_control_primitive(
             // `dst` is this abort call's own destination — dead as a result
             // slot, and for that reason the hole the captured continuation
             // resumes into.
-            let cont = capture_delimited(state, &prompt, dst);
+            let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
 
             // Popped before each after-thunk runs, for the reason spelled out
@@ -2443,6 +2456,17 @@ fn handle_control_primitive(
             state.frames.truncate(prompt.stack_depth);
             state.dynamic_winds.truncate(prompt.dynamic_wind_depth);
             state.prompt_stack.truncate(prompt_idx);
+            // An abort leaves the extents it unwinds, and the handlers
+            // installed in them go with the frames that installed them. Left
+            // behind, they stayed live for exactly as long as the prompt
+            // handler ran — the depth sweep on the next `Return` cleared them
+            // afterwards — and caught a raise made from a dynamic extent they
+            // are not in (issue #162). Racket reaches the handler outside the
+            // prompt. The boundary is the prompt's own recorded depth; a frame
+            // depth cannot express it (see `PromptFrame`).
+            state
+                .exception_handlers
+                .truncate(prompt.exception_handler_depth);
             if let Some(top) = state.frames.last() {
                 state
                     .registers
@@ -3557,9 +3581,19 @@ fn try_invoke_full_continuation(
 /// `abort-current-continuation` in tail position of the prompt body has
 /// already popped that frame, and `hole` then names a register in a frame
 /// below the prompt, which this continuation does not own.
-fn capture_delimited(state: &VmState, prompt: &PromptFrame, hole: u16) -> VmDelimitedContinuation {
-    let frames = state.frames[prompt.stack_depth..].to_vec();
+fn capture_delimited(state: &VmState, prompt_idx: usize, hole: u16) -> VmDelimitedContinuation {
+    let prompt = &state.prompt_stack[prompt_idx];
+    let depth_at_capture = prompt.stack_depth;
+    let frames = state.frames[depth_at_capture..].to_vec();
     let dynamic_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
+    // Everything above the delimiting prompt is *inside* the captured region
+    // and belongs to the continuation. For prompts that is the slice above
+    // `prompt_idx`; for handlers there is no index, but their `stack_depth`s
+    // are non-decreasing (`install_thunk_handlers` clamps against one constant
+    // to keep them so), so the ones installed inside are the suffix deeper
+    // than the prompt.
+    let prompt_stack = state.prompt_stack[prompt_idx + 1..].to_vec();
+    let exception_handlers = state.exception_handlers[prompt.exception_handler_depth..].to_vec();
     let base_at_capture = frames
         .first()
         .map_or(state.registers.len(), |f| f.register_base);
@@ -3579,6 +3613,9 @@ fn capture_delimited(state: &VmState, prompt: &PromptFrame, hole: u16) -> VmDeli
         registers,
         base_at_capture,
         deliver_reg,
+        depth_at_capture,
+        prompt_stack,
+        exception_handlers,
     }
 }
 
@@ -3647,6 +3684,29 @@ fn invoke_delimited(
     for f in &mut state.frames[outermost..] {
         f.register_base = f.register_base.wrapping_add(shift);
     }
+
+    // The dynamic environment the captured frames ran in comes back with them:
+    // the prompts they established and the handlers they installed. Their
+    // recorded depths are frame depths of the stack at capture, so they get
+    // the same relocation the register bases just did — `wrapping_` because a
+    // continuation captured deep can be invoked shallow, and the difference
+    // is then negative.
+    let depth_shift = outermost.wrapping_sub(dc.depth_at_capture);
+    state
+        .prompt_stack
+        .extend(dc.prompt_stack.iter().map(|p| PromptFrame {
+            stack_depth: p.stack_depth.wrapping_add(depth_shift),
+            ..p.clone()
+        }));
+    state
+        .exception_handlers
+        .extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
+            handler: h.handler,
+            stack_depth: h.stack_depth.wrapping_add(depth_shift),
+        }));
+    // Nothing has to remember to take these off again: both stacks are swept
+    // by frame depth when the resumed frames return (`pop_resolved_extents`),
+    // which is exactly when they stop applying.
 
     state.frames[outermost].return_reg = dst;
     let top_base = state
