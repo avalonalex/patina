@@ -359,12 +359,24 @@ intercepted at call dispatch time.
   to force it to zero for them, so a continuation captured inside its own
   extent re-ran that extent's thunks for a jump that crossed nothing (fixed
   2026-09-01, Track L §6)
-- Composable/delimited invokes do **not** travel at all: `invoke_delimited`
-  runs every captured `before` thunk unconditionally, on a nested call and
-  under the live handler stack. Shared extents are not skipped there. Each
-  record is pushed as its own thunk returns, `step_wind_jump`'s rule and for
-  its reason: a thunk that raises leaves the extents before it entered *and*
-  recorded, so their `after` thunks are still owed, and its own neither
+- **A thunk run by a *transfer* goes through `step_wind_jump`** — a jump, and
+  since #165 an abort, which travels to a continuation whose top frame calls
+  the prompt handler. Each such thunk runs in a stub frame and under its own
+  record's handler stack
+- **A composable invoke's re-entry thunks do not**, and deliberately: they run
+  on a nested loop under the **invoke site's** handler stack. Making this a
+  travel too was tried and reverted. A jump's target *replaces* the machine,
+  which is what makes `install_thunk_handlers` right there; a composable
+  target would *extend* it, so installing the record's captured stack loses
+  the invoke site's handlers and resurrects capture-site ones whose extent is
+  over — measured against Guile and against the previous release. The cost of
+  keeping it a loop is that a continuation captured in one of these thunks
+  still misbehaves on re-entry (issue #167)
+- **The thunks of an ordinary `dynamic-wind` are neither.** Head position
+  compiles to plain `Call`s around `PushWind`/`PopWind`, and the value form
+  runs the same instructions in `value_wind_stub`; both run under whatever
+  handler stack is live, which is the right one, because no transfer is
+  happening
 - A composable invoke has two values to place, and `invoke_delimited` is the
   one place that places them. The delivered value goes into the innermost
   captured frame's `deliver_reg` — the hole the capturing call left, since
@@ -431,15 +443,24 @@ intercepted at call dispatch time.
 2. Capture frames `[prompt.stack_depth..]`, registers, winds, and the dynamic
    environment above the prompt — the prompts nested inside it and the handlers
    installed inside it
-3. Run wind exit thunks
-4. Unwind stack to prompt depth, and the handler stack to
-   `prompt.exception_handler_depth`
-5. Call handler with `(value, continuation)`
+3. Build the machine as it will be once the abort lands — every stack cut back
+   to the prompt — with one stub frame on top whose two instructions call the
+   prompt's handler and return its value to `prompt.dst`
+4. **Jump** to it. The travel runs the after-thunks of every extent between
+   here and the prompt, each under its own record's handler stack and in a
+   frame of its own; arrival installs the rest
 
-Invoking it appends all of that back, relocated. A `PromptFrame` records a
-position in **three** stacks — frames, winds, handlers — and all three move:
-relocating only the frame depth left an abort to a carried prompt truncating
-the invoke site's wind and handler stacks at depths that meant nothing there.
+Step 4 is why the abort has no unwinding code of its own: leaving every extent
+between here and a target is exactly a jump's travel, and the version that did
+it by hand got the thunks' handler stack wrong and lost the abort's value when
+a continuation captured in a thunk was re-entered (#165).
+
+Invoking it appends all of that back, relocated, in place — not as the target
+of a jump; see §5.3 for the one attempt at that and why it was reverted. A
+`PromptFrame` records a position in **three** stacks —
+frames, winds, handlers — and all three move: relocating only the frame depth
+left an abort to a carried prompt truncating the invoke site's wind and
+handler stacks at depths that meant nothing there.
 
 They come off again by the ordinary depth sweep as the resumed frames return
 (`pop_resolved_extents`) — with one gap: that sweep does nothing at a dispatch
@@ -466,24 +487,28 @@ by reading, before anyone writes a program that trips over it.
 | full invoke (arrival) | restore | restore | restore | restore | restore |
 | delimited capture | save | save | save | save | save |
 | composable invoke | append | append | append (re-enter) | append | append |
-| abort unwind | truncate | truncate | run + truncate | truncate | truncate |
+| abort unwind | *builds a landing and travels to it* — the `full invoke` row, with a stub frame on top that calls the prompt handler | | | | |
 | `raise` | — | — | — | — | pop one, re-push on continuable return |
 | normal `Return` | pop | free | by `PopWind` | by depth | by depth |
-| wind thunk (jump) | push stub | — | — | — | replaced by the record's own |
-| wind thunk (abort, re-entry) | — | — | — | — | the live stack |
+| wind thunk (jump, abort) | push stub | — | — | — | replaced by the record's own |
+| wind thunk (invoke re-entry) | — | — | — | — | the invoke site's |
+| wind thunk (ordinary call) | — | — | — | — | the live stack |
 
 Notes on the cells that are not a plain yes:
 
 - **`raise` touches nothing but the handler stack.** A raise crosses no
   dynamic extent, so no after-thunk is due; the unwind happens one level up,
   at `guard`'s continuation jump. See §5.2.
-- **Only a jump runs a wind thunk under its own record's handler stack**
-  (`install_thunk_handlers`, reached from `push_wind_step` alone) — which is
-  what R7RS 6.10 asks for, the thunks getting the dynamic environment of the
-  `dynamic-wind` *call*. The abort's after-thunks and a composable invoke's
-  re-entry before-thunks run under the **live** stack instead. They agree
-  wherever the record's stack is the prompt's, which is why the abort's own
-  row above is now right; issue #165 is the remainder.
+- **A thunk run by a transfer runs under its own record's handler stack**
+  (`install_thunk_handlers`, whose only caller is `push_wind_step`), which is
+  what R7RS 6.10 asks for: the thunk gets the dynamic environment of the
+  `dynamic-wind` *call*. That is right precisely because a transfer's target
+  replaces the machine, so there is no live stack worth returning to — and it
+  is why a composable invoke's re-entry thunks are **not** routed here (see
+  §5.3). Before #165 the abort's after-thunks ran on a nested loop under the
+  live stack and had the two defects that follow: the wrong handler for a
+  raise from a thunk, and a continuation captured in one restarting the thunk
+  from the top on re-entry, losing the abort's value.
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.
