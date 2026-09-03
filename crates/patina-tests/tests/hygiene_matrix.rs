@@ -351,22 +351,13 @@ fn shapes_score_as_recorded() {
         for (backend, recorded) in [("vm", shape.vm), ("tree-walker", shape.tw)] {
             let got = answer(&code, backend == "vm");
             if got != recorded {
-                let direction = if got == shape.correct {
-                    "FIXED — it now matches chibi and Racket"
-                } else if recorded == shape.correct {
-                    "REGRESSED — it used to match chibi and Racket"
-                } else {
-                    "changed, and is still wrong"
-                };
-                moved.push(format!(
-                    "  {} [{backend}] {direction}\n    recorded {recorded}\n    got      {got}\n\
-                     \x20   correct  {}\n    program:\n{}",
-                    shape.name(),
+                moved.push(common::describe_move(
+                    &shape.name(),
+                    backend,
+                    recorded,
+                    &got,
                     shape.correct,
-                    code.lines()
-                        .map(|l| format!("      {l}"))
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                    &code,
                 ));
             }
         }

@@ -483,11 +483,12 @@ by reading, before anyone writes a program that trips over it.
 
 Its executable counterpart is
 `crates/patina-tests/tests/control_flow_matrix.rs`, which enumerates the
-*transfers* rather than the state: 20 shapes over how a `dynamic-wind` is
+*transfers* rather than the state: 24 shapes over how a `dynamic-wind` is
 written, whether it is in tail position, and how control leaves or re-enters
-it, each pinned to what five reference implementations answer. Where this
-table catches a component nobody carried, that one catches a shape nobody
-tried.
+it. Each row records **which** external implementations back its answer —
+four for the prompt-free shapes, down to one for the shape only Guile can
+express — rather than one number for the table. Where this table catches a
+component nobody carried, that one catches a shape nobody tried.
 
 | transfer | frames | registers | dynamic_winds | prompt_stack | exception_handlers |
 |---|---|---|---|---|---|

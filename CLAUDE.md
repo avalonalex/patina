@@ -140,16 +140,16 @@ to learn what a push would have told you anyway.
 - `docs/VM_DECISIONS.md` — settled architecture decisions (master reference)
 - `docs/VM_ISA.md` — instruction set architecture and semantics
 - `docs/VM_COMPILER.md` — 2 pre-passes + 5-pass compiler pipeline
-- `docs/VM_RUNTIME.md` — VmState, execution loop, control primitives
+- `docs/VM_RUNTIME.md` — VmState, execution loop, control primitives, and the
+  two instruments for control-flow work: §5.6's table of which dynamic state
+  each transfer saves, restores or truncates, with the oracle panel (Chez,
+  chibi, Gauche, Guile, Racket) that measured it, and its executable
+  counterpart `crates/patina-tests/tests/control_flow_matrix.rs` — 24 transfer
+  shapes, each naming the external implementations behind its expected answer.
+  Read both before touching `dynamic-wind`, prompts or continuations: they are
+  scoreboards, and a fix that improves one row while breaking another fails
+  them, which is how this area's defects have usually arrived
 - `docs/VM_TESTING.md` — testing layers and commands
-- The two instruments for control-flow work, and the thing to read before
-  touching `dynamic-wind`, prompts or continuations: `docs/VM_RUNTIME.md` §5.6
-  (which dynamic state each transfer saves, restores or truncates, measured
-  against six implementations) and
-  `crates/patina-tests/tests/control_flow_matrix.rs` (20 transfer shapes
-  scored against five). Both are scoreboards — a fix that improves one row and
-  breaks another fails them, which is how this area's defects have usually
-  arrived.
 
 **Reference implementations:** chibi-scheme at `~/Project/reference/chibi-scheme`
 - `tests/r7rs-tests.scm` — comprehensive R7RS test suite
