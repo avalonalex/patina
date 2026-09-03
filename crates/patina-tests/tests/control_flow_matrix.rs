@@ -3,7 +3,7 @@
 //!
 //! Every defect this area has had was found one at a time, by hand-writing a
 //! program that turned out to answer wrong — issues #157, #159, #160, #162,
-//! #163, #165 and #167, closed by PRs #158, #161, #164 and #166 — while the
+//! #163, #165 and #167, closed by PRs #158, #161, #164, #166 and #172 — while the
 //! chibi suite read 1226/1226 on both backends throughout. Twice a fix for one
 //! shape broke another that nothing enumerated, and once a fix shipped a
 //! regression a review caught rather than a test.
@@ -84,9 +84,11 @@
 //! "unsupported". When the tree-walker grows prompts those twelve go red
 //! together, which is a request to measure them rather than a failure.
 //!
-//! These twelve rows and the four #167 rows are 16 pinned-known-wrong
-//! assertions that `assert_divergence` does not know about. `common/mod.rs`
-//! names this file as the second inventory for that reason.
+//! Those twelve rows are pinned-known-absent assertions that
+//! `assert_divergence` does not know about — `common/mod.rs` names this file
+//! as the second inventory for that reason. They are all that is left of it:
+//! the four #167 rows were pinned-known-*wrong* until that issue was fixed,
+//! and no row records a wrong answer today.
 //!
 //! # Adding axes
 //!

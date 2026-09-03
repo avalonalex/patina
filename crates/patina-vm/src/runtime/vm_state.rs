@@ -954,11 +954,13 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 /// Looks up the current frame's code object and uses the PC to find the
 /// closest source location from the compiled source map.
 ///
-/// The innermost frame is not always the one that *has* a source map. The two
-/// stubs the runtime builds rather than compiles — [`value_wind_stub`] and
-/// [`wind_jump_stub`] — carry none at all, and either can be the top frame
-/// when an error is raised: the value form's thunks tail-call out of their own
-/// frames, leaving the stub innermost, and a jump's thunks do the same. Read
+/// The innermost frame is not always the one that *has* a source map. The
+/// stubs the runtime builds rather than compiles carry none at all —
+/// [`value_wind_stub`], [`wind_jump_stub`], [`invoke_step_stub`] and
+/// [`abort_handler_stub`] — and any of them can be the top frame when an
+/// error is raised: the value form's thunks tail-call out of their own
+/// frames, leaving the stub innermost, and a jump's, a composable invoke's
+/// re-entry thunks and an abort's handler do the same. Read
 /// literally, that costs the error its caret entirely — `(dw (lambda () 1)
 /// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
 /// head-position `dynamic-wind` printed file, line and source line.
@@ -1393,22 +1395,42 @@ fn dispatch_one_instruction(
             // and go on.
             let cont = state.reg_at(base, invoke_step::CONT);
             let value = state.reg_at(base, invoke_step::VALUE);
+            // Not `unwrap_or(0)`: this window is restored from a snapshot by
+            // a re-entering continuation, so "the slot does not hold what I
+            // wrote" is the failure this stub has, and a default conflates it
+            // with a legitimate zero. `dst = 0` would deliver the resumed
+            // computation into the invoke site's r0 — often a `MutableCell` —
+            // with no message.
+            let malformed = || VmError::Runtime {
+                message: "composable invoke: stub register is not a fixnum".into(),
+            };
             let dst = state
                 .reg_at(base, invoke_step::DST)
                 .as_fixnum()
-                .unwrap_or(0) as u16;
+                .ok_or_else(malformed)? as u16;
             let index = state
                 .reg_at(base, invoke_step::INDEX)
                 .as_fixnum()
-                .unwrap_or(0) as usize;
+                .ok_or_else(malformed)? as usize;
             state
                 .frames
                 .pop()
                 .expect("ResumeComposableInvoke runs in its own frame");
-            // The stub's register window is deliberately **not** freed, for
-            // the reason `ResumeWindJump` gives: it is the only root for
-            // `cont`, whose payload lives in a weak store. It is reclaimed
-            // when the frame this invoke was made from returns.
+            // Freed, unlike `ResumeWindJump`'s — and copying that rule without
+            // its reason is what made this leak. A jump's arrival *replaces*
+            // the register file, so an un-freed window costs one travel; a
+            // composable invoke *extends* it, so the window is stranded under
+            // everything appended after it and is reclaimed only when the
+            // enclosing frame returns — which for a tail-recursive loop of
+            // invokes is never. Measured: 27 MB against `main`'s 10 at 400k
+            // invokes, growing without bound.
+            //
+            // Safe because the four values are already in Rust locals, and
+            // nothing between here and the next write of `cont` — into the
+            // next step's window, or nowhere if this was the last — reaches a
+            // GC safe point. Those live in `run_loop_until_outcome`'s loop,
+            // one dispatch out.
+            state.free_top_registers(base);
 
             let dc =
                 state
@@ -1430,7 +1452,7 @@ fn dispatch_one_instruction(
 
             match dc.dynamic_winds.get(index + 1) {
                 Some(next) => push_invoke_step(state, cont, value, dst, index + 1, next.before)?,
-                None => finish_delimited_invoke(state, &dc, value, dst),
+                None => finish_delimited_invoke(state, &dc, value, dst)?,
             }
         }
 
@@ -3043,17 +3065,7 @@ fn push_wind_step(
 ) -> Result<(), VmError> {
     install_thunk_handlers(state, handlers);
     let code = wind_jump_stub(state)?;
-    let base = state.alloc_registers(wind_step::NUM_REGS);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: wind_step::NUM_REGS,
-        closure: None,
-        // Nothing ever returns *into* this frame: `ResumeWindJump` pops it
-        // itself and either starts the next thunk or lands the jump.
-        return_reg: 0,
-        code,
-    });
+    let base = push_stub_frame(state, code, wind_step::NUM_REGS);
     // `set_reg_at` for the reason the value form's stub gives: the frame is
     // pushed, so the assert holds and keeps holding.
     state.set_reg_at(base, wind_step::TARGET, target);
@@ -3136,6 +3148,32 @@ fn runtime_stub(
     });
     set_slot(state, id);
     state.code_object(id)
+}
+
+/// Push a frame running one of the runtime's own stubs, and return its
+/// register base.
+///
+/// The boilerplate the two thunk-stepping stubs share — `ResumeWindJump` for a
+/// jump and `ResumeComposableInvoke` for a composable invoke's extent
+/// re-entry. What they do **not** share is deliberately left at the call
+/// sites: the jump installs its record's handler stack and the invoke does
+/// not, because a jump's target replaces the machine and an invoke's extends
+/// it. Passing that as a flag would read as a knob; leaving it as one line at
+/// one of two call sites reads as the decision it is.
+///
+/// Nothing ever returns *into* one of these frames: the instruction pops the
+/// frame itself and either starts the next thunk or finishes the transfer.
+fn push_stub_frame(state: &mut VmState, code: Rc<CodeObject>, num_regs: u16) -> usize {
+    let base = state.alloc_registers(num_regs);
+    state.frames.push(CallFrame {
+        pc: 0,
+        register_base: base,
+        num_regs,
+        closure: None,
+        return_reg: 0,
+        code,
+    });
+    base
 }
 
 /// The one-instruction code object every wind step's frame runs.
@@ -3730,21 +3768,12 @@ fn push_invoke_step(
     thunk: TaggedValue,
 ) -> Result<(), VmError> {
     let code = invoke_step_stub(state)?;
-    let base = state.alloc_registers(invoke_step::NUM_REGS);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: invoke_step::NUM_REGS,
-        closure: None,
-        // Nothing ever returns *into* this frame: `ResumeComposableInvoke`
-        // pops it itself and either starts the next thunk or finishes.
-        return_reg: 0,
-        code,
-    });
+    let base = push_stub_frame(state, code, invoke_step::NUM_REGS);
     state.set_reg_at(base, invoke_step::CONT, cont);
     state.set_reg_at(base, invoke_step::VALUE, value);
     state.set_reg_at(base, invoke_step::DST, TaggedValue::fixnum(dst as i64));
     state.set_reg_at(base, invoke_step::INDEX, TaggedValue::fixnum(index as i64));
+
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for the instruction to run.
     call_any(state, thunk, &[], invoke_step::THUNK_RESULT)?;
@@ -3932,17 +3961,16 @@ fn invoke_delimited(
 ) -> Result<DelimitedInvoke, VmError> {
     if dc.deliver_reg.is_none() {
         // An empty capture is the identity continuation, and carries no
-        // extents either — `capture_delimited` establishes that.
-        debug_assert!(
-            dc.dynamic_winds.is_empty(),
-            "an identity capture holds no dynamic extents"
-        );
+        // extents either: `capture_delimited` keys `deliver_reg` and
+        // `dynamic_winds` on the same `frames.is_empty()` test twelve lines
+        // apart, so this is established by construction rather than checked
+        // here — an assert restating it could not fail.
         return Ok(DelimitedInvoke::Identity);
     }
     match dc.dynamic_winds.first() {
         // Nothing to re-enter, which is the common case: finish here rather
         // than pay a stub frame to discover there is no thunk to run.
-        None => finish_delimited_invoke(state, &dc, value, dst),
+        None => finish_delimited_invoke(state, &dc, value, dst)?,
         Some(record) => push_invoke_step(state, cont, value, dst, 0, record.before)?,
     }
     Ok(DelimitedInvoke::Resumed)
@@ -3961,8 +3989,20 @@ fn finish_delimited_invoke(
     dc: &VmDelimitedContinuation,
     value: TaggedValue,
     dst: u16,
-) {
-    let wind_base = state.dynamic_winds.len() - dc.dynamic_winds.len();
+) -> Result<(), VmError> {
+    // Checked, because arbitrary user code has run between the invoke and
+    // here — that is what the stub frames are for — and this assumes every
+    // captured record is still on top. Unchecked it would wrap in release and
+    // hand `relocate_depth` a base near 2^64, producing carried prompts with
+    // garbage wind depths: silent corruption of some later abort's travel
+    // rather than a diagnosis here.
+    let wind_base = state
+        .dynamic_winds
+        .len()
+        .checked_sub(dc.dynamic_winds.len())
+        .ok_or_else(|| VmError::Runtime {
+            message: "composable invoke: a re-entered extent left the wind stack".into(),
+        })?;
     // Relocate the captured register windows onto the end of the live array.
     let shift = state.registers.len().wrapping_sub(dc.base_at_capture);
     state.registers.extend_from_slice(&dc.registers);
@@ -4030,6 +4070,7 @@ fn finish_delimited_invoke(
         .deliver_reg
         .expect("the caller returns Identity when there is no hole");
     state.registers[top_base + deliver_reg as usize] = value;
+    Ok(())
 }
 
 /// [`invoke_delimited`] for an invoke in tail position: the invoking frame is
