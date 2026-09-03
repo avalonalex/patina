@@ -1447,6 +1447,7 @@ fn dispatch_one_instruction(
                 tag: tag_val,
                 stack_depth: state.frames.len(),
                 dynamic_wind_depth: state.dynamic_winds.len(),
+                exception_handler_depth: state.exception_handlers.len(),
                 handler: handler_val,
                 dst,
             });
@@ -1456,61 +1457,17 @@ fn dispatch_one_instruction(
         Instruction::AbortToPrompt { tag, val, dst } => {
             let tag_val = state.reg_at(base, tag);
             let abort_val = state.reg_at(base, val);
-
-            let prompt_idx = state
-                .prompt_stack
-                .iter()
-                .rposition(|p| p.tag == tag_val)
-                .ok_or(VmError::NoMatchingPrompt)?;
-            let prompt = state.prompt_stack[prompt_idx].clone();
-
-            let cont = capture_delimited(state, &prompt, dst);
-            let cont_tv = state.alloc_vm_delimited_continuation(cont);
-
-            // Run dynamic-wind exit thunks for the unwound portion, popping
-            // each before it runs (see `vm_raise_value`).
-            while state.dynamic_winds.len() > prompt.dynamic_wind_depth {
-                let after = state
-                    .dynamic_winds
-                    .pop()
-                    .expect("loop condition guarantees a record")
-                    .after;
-                run_thunk(state, after)?;
-            }
-
-            // Unwind the call stack.
-            state.frames.truncate(prompt.stack_depth);
-            state.dynamic_winds.truncate(prompt.dynamic_wind_depth);
-            state.prompt_stack.truncate(prompt_idx);
-            // Reclaim register space freed by the unwind.
-            if let Some(top) = state.frames.last() {
-                state
-                    .registers
-                    .truncate(top.register_base + top.num_regs as usize);
-            } else {
-                state.registers.clear();
-            }
-
-            // Call handler(abort_val, captured_cont) — result goes to prompt.dst.
-            // Handler may be a primitive or a VM closure.
-            if let Some(result) =
-                call_any(state, prompt.handler, &[abort_val, cont_tv], prompt.dst)?
-            {
-                state.set_reg(prompt.dst, result);
-            }
+            let prompt_idx = find_prompt(state, tag_val)?;
+            abort_to_prompt(state, prompt_idx, abort_val, dst)?;
         }
 
         Instruction::CaptureComposable { dst, tag } => {
             let tag_val = state.reg_at(base, tag);
-            let prompt_idx = state
-                .prompt_stack
-                .iter()
-                .rposition(|p| p.tag == tag_val)
-                .ok_or(VmError::NoMatchingPrompt)?;
+            let prompt_idx = find_prompt(state, tag_val)?;
             // `dst` is both where the continuation object goes and the hole
             // it delivers into: invoking it makes *this* call return again,
             // with the delivered value in place of the continuation.
-            let cont = capture_delimited(state, &state.prompt_stack[prompt_idx], dst);
+            let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
             state.set_reg_at(base, dst, cont_tv);
         }
@@ -2394,6 +2351,7 @@ fn handle_control_primitive(
                 tag,
                 stack_depth: state.frames.len(),
                 dynamic_wind_depth: state.dynamic_winds.len(),
+                exception_handler_depth: state.exception_handlers.len(),
                 handler,
                 dst,
             });
@@ -2416,45 +2374,8 @@ fn handle_control_primitive(
                 TaggedValue::UNSPECIFIED
             };
 
-            let prompt_idx = state
-                .prompt_stack
-                .iter()
-                .rposition(|p| p.tag == tag)
-                .ok_or(VmError::NoMatchingPrompt)?;
-            let prompt = state.prompt_stack[prompt_idx].clone();
-
-            // `dst` is this abort call's own destination — dead as a result
-            // slot, and for that reason the hole the captured continuation
-            // resumes into.
-            let cont = capture_delimited(state, &prompt, dst);
-            let cont_tv = state.alloc_vm_delimited_continuation(cont);
-
-            // Popped before each after-thunk runs, for the reason spelled out
-            // in `vm_raise_value`.
-            while state.dynamic_winds.len() > prompt.dynamic_wind_depth {
-                let after = state
-                    .dynamic_winds
-                    .pop()
-                    .expect("loop condition guarantees a record")
-                    .after;
-                run_thunk(state, after)?;
-            }
-
-            state.frames.truncate(prompt.stack_depth);
-            state.dynamic_winds.truncate(prompt.dynamic_wind_depth);
-            state.prompt_stack.truncate(prompt_idx);
-            if let Some(top) = state.frames.last() {
-                state
-                    .registers
-                    .truncate(top.register_base + top.num_regs as usize);
-            } else {
-                state.registers.clear();
-            }
-
-            // Handler may be a primitive or a VM closure.
-            if let Some(result) = call_any(state, prompt.handler, &[val, cont_tv], prompt.dst)? {
-                state.set_reg(prompt.dst, result);
-            }
+            let prompt_idx = find_prompt(state, tag)?;
+            abort_to_prompt(state, prompt_idx, val, dst)?;
         }
 
         VmControlPrimitive::CallWithCurrentContinuation => {
@@ -3557,9 +3478,117 @@ fn try_invoke_full_continuation(
 /// `abort-current-continuation` in tail position of the prompt body has
 /// already popped that frame, and `hole` then names a register in a frame
 /// below the prompt, which this continuation does not own.
-fn capture_delimited(state: &VmState, prompt: &PromptFrame, hole: u16) -> VmDelimitedContinuation {
-    let frames = state.frames[prompt.stack_depth..].to_vec();
-    let dynamic_winds = state.dynamic_winds[prompt.dynamic_wind_depth..].to_vec();
+/// The innermost prompt carrying `tag`.
+fn find_prompt(state: &VmState, tag: TaggedValue) -> Result<usize, VmError> {
+    state
+        .prompt_stack
+        .iter()
+        .rposition(|p| p.tag == tag)
+        .ok_or(VmError::NoMatchingPrompt)
+}
+
+/// `abort-current-continuation`: capture the delimited continuation, leave
+/// every extent between here and the prompt, and call the prompt's handler
+/// with `(val, k)`.
+///
+/// One copy, two callers — the control primitive, and the `AbortToPrompt`
+/// instruction no pass emits. They were two copies of forty lines, and both
+/// of the last two corrections to this sequence had to be written twice.
+fn abort_to_prompt(
+    state: &mut VmState,
+    prompt_idx: usize,
+    val: TaggedValue,
+    dst: u16,
+) -> Result<(), VmError> {
+    let prompt = state.prompt_stack[prompt_idx].clone();
+    // `dst` is this abort call's own destination — dead as a result slot, and
+    // for that reason the hole the captured continuation resumes into.
+    let cont = capture_delimited(state, prompt_idx, dst);
+    let cont_tv = state.alloc_vm_delimited_continuation(cont);
+
+    // The handlers installed inside the region go first, before anything at
+    // all runs — the after-thunks below included. They belong to the extents
+    // this abort is leaving, so a raise from an after-thunk must not reach
+    // them, which is where the first version of this fix still had #162: it
+    // truncated after the thunks and the abandoned handler caught. The
+    // boundary is the prompt's own recorded length; a frame depth cannot
+    // express it (see `PromptFrame`).
+    //
+    // Still not what a *jump* does: `push_wind_step` runs each thunk under its
+    // own record's handler stack (R7RS 6.10's dynamic environment, the
+    // `finally` rule of Track L §6), and these thunks run under the live one.
+    // The two agree wherever the record's stack is the prompt's; issue #165.
+    state
+        .exception_handlers
+        .truncate(prompt.exception_handler_depth);
+
+    // Run dynamic-wind exit thunks for the unwound portion, popping each
+    // before it runs (see `vm_raise_value`).
+    while state.dynamic_winds.len() > prompt.dynamic_wind_depth {
+        let after = state
+            .dynamic_winds
+            .pop()
+            .expect("loop condition guarantees a record")
+            .after;
+        run_thunk(state, after)?;
+    }
+
+    // Unwind the call stack.
+    state.frames.truncate(prompt.stack_depth);
+    state.dynamic_winds.truncate(prompt.dynamic_wind_depth);
+    state.prompt_stack.truncate(prompt_idx);
+    // Reclaim register space freed by the unwind.
+    if let Some(top) = state.frames.last() {
+        state
+            .registers
+            .truncate(top.register_base + top.num_regs as usize);
+    } else {
+        state.registers.clear();
+    }
+
+    // Call handler(val, captured_cont) — result goes to `prompt.dst`. The
+    // handler may be a primitive or a VM closure.
+    if let Some(result) = call_any(state, prompt.handler, &[val, cont_tv], prompt.dst)? {
+        state.set_reg(prompt.dst, result);
+    }
+    Ok(())
+}
+
+fn capture_delimited(state: &VmState, prompt_idx: usize, hole: u16) -> VmDelimitedContinuation {
+    let prompt = &state.prompt_stack[prompt_idx];
+    // A prompt's recorded depths can outrun the stacks they index: a `raise`
+    // pops the handler entry it is running *before* calling it, so a handler
+    // that aborts to a prompt established under itself arrives with
+    // `exception_handlers` shorter than the prompt recorded. Clamped, not
+    // sliced — nothing above the boundary is left to capture — and clamped for
+    // all three, since the same "recorded against a stack that has since
+    // shrunk" applies to a jump popping winds mid-travel. Slicing panicked.
+    let depth_at_capture = prompt.stack_depth.min(state.frames.len());
+    let wind_depth_at_capture = prompt.dynamic_wind_depth.min(state.dynamic_winds.len());
+    let handler_depth_at_capture = prompt
+        .exception_handler_depth
+        .min(state.exception_handlers.len());
+    let frames = state.frames[depth_at_capture..].to_vec();
+    let dynamic_winds = state.dynamic_winds[wind_depth_at_capture..].to_vec();
+    // Everything above the delimiting prompt is *inside* the captured region
+    // and belongs to the continuation: for prompts the slice above
+    // `prompt_idx`, for handlers the slice above the length the prompt
+    // recorded.
+    //
+    // Except when nothing was captured. An empty capture is the identity
+    // continuation — `(k v)` is `v`, no code runs — so there is no region for
+    // a dynamic environment to belong to, and taking one would only leak it:
+    // an identity invoke appends no frame whose return could sweep it back
+    // off. (The set is not always empty: `with-exception-handler` tail-called
+    // from a prompt body installs at the prompt's own depth.)
+    let (prompt_stack, exception_handlers) = if frames.is_empty() {
+        (Vec::new(), Vec::new())
+    } else {
+        (
+            state.prompt_stack[prompt_idx + 1..].to_vec(),
+            state.exception_handlers[handler_depth_at_capture..].to_vec(),
+        )
+    };
     let base_at_capture = frames
         .first()
         .map_or(state.registers.len(), |f| f.register_base);
@@ -3579,7 +3608,26 @@ fn capture_delimited(state: &VmState, prompt: &PromptFrame, hole: u16) -> VmDeli
         registers,
         base_at_capture,
         deliver_reg,
+        depth_at_capture,
+        wind_depth_at_capture,
+        handler_depth_at_capture,
+        prompt_stack,
+        exception_handlers,
     }
+}
+
+/// Move a depth recorded against one stack onto another: `value` sat `from`
+/// units up that stack, and the same position is `to` units up this one.
+///
+/// Saturating rather than wrapping, and not hypothetically:
+/// `install_thunk_handlers` clamps a record's handler depths down to the
+/// thunk's frame depth, which can be *below* the prompt a continuation was
+/// delimited by, so `value < from` happens. Wrapping would send such a depth
+/// to about 2^64, where `pop_exception_handlers`' `stack_depth >= frames.len()`
+/// test drops it on the next return instead of keeping it for as long as the
+/// resumed frames run.
+fn relocate_depth(value: usize, from: usize, to: usize) -> usize {
+    (to + value).saturating_sub(from)
 }
 
 /// How an invoke of a delimited continuation ended.
@@ -3630,6 +3678,7 @@ fn invoke_delimited(
     // raises or escapes then leaves the extents before it entered *and*
     // owed — their `after` thunks are on the stack of records — and its own
     // neither entered nor owed.
+    let wind_base = state.dynamic_winds.len();
     for record in dc.dynamic_winds.iter() {
         run_thunk(state, record.before)?;
         state.dynamic_winds.push(record.clone());
@@ -3647,6 +3696,54 @@ fn invoke_delimited(
     for f in &mut state.frames[outermost..] {
         f.register_base = f.register_base.wrapping_add(shift);
     }
+
+    // The dynamic environment the captured frames ran in comes back with them:
+    // the prompts they established and the handlers they installed. Every
+    // depth in it was recorded against a stack at capture and has to be moved
+    // onto the live one — and a `PromptFrame` records **three**, one per stack
+    // it delimits. Relocating only `stack_depth` left the other two indexing
+    // the invoke site's stacks, so an abort to a carried prompt ran an
+    // enclosing `after` thunk early and uninstalled handlers enclosing the
+    // invoke.
+    let handler_base = state.exception_handlers.len();
+    for p in dc.prompt_stack.iter() {
+        let stack_depth = relocate_depth(p.stack_depth, dc.depth_at_capture, outermost);
+        debug_assert!(
+            stack_depth >= outermost,
+            "a carried prompt is inside the capture"
+        );
+        state.prompt_stack.push(PromptFrame {
+            stack_depth,
+            dynamic_wind_depth: relocate_depth(
+                p.dynamic_wind_depth,
+                dc.wind_depth_at_capture,
+                wind_base,
+            ),
+            exception_handler_depth: relocate_depth(
+                p.exception_handler_depth,
+                dc.handler_depth_at_capture,
+                handler_base,
+            ),
+            // A carried prompt sitting at the outermost appended frame — its
+            // `call-with-continuation-prompt` was tail-called, so it shares
+            // that frame's depth — has no captured frame below it to deliver
+            // into any more. Its result is this invoke's result, by the same
+            // reasoning that re-points `return_reg` below.
+            dst: if stack_depth == outermost { dst } else { p.dst },
+            ..p.clone()
+        });
+    }
+    state
+        .exception_handlers
+        .extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
+            stack_depth: relocate_depth(h.stack_depth, dc.depth_at_capture, outermost),
+            ..h.clone()
+        }));
+    // Both stacks are swept by frame depth as the resumed frames return
+    // (`pop_resolved_extents`), which is when they stop applying — except at a
+    // dispatch loop's own exit depth, where that sweep does nothing by design
+    // and `run_loop_until_outcome`'s `handlers_at_entry` truncation is the
+    // only backstop. It covers handlers and not prompts.
 
     state.frames[outermost].return_reg = dst;
     let top_base = state

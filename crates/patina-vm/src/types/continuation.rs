@@ -31,6 +31,21 @@ pub struct PromptFrame {
     /// `VmState::dynamic_winds.len()` at the time the prompt was pushed.
     /// Used to run the correct subset of wind hooks during unwinding.
     pub dynamic_wind_depth: usize,
+
+    /// `VmState::exception_handlers.len()` at the time the prompt was pushed:
+    /// the handler stack the prompt's *own* call had, which is also the one
+    /// its handler runs under, and the boundary an abort unwinds to (#162) and
+    /// a delimited capture starts from (#163).
+    ///
+    /// Recorded rather than inferred from `stack_depth`, for the reason
+    /// `dynamic_wind_depth` is recorded: a frame depth does not identify a
+    /// handler's extent. Two different extents share one depth — a
+    /// `with-exception-handler` in **tail position** of a prompt body installs
+    /// at the prompt's own depth because the body frame is already popped, and
+    /// so does a handler whose thunk **tail-calls** `call-with-continuation-prompt`.
+    /// The first is inside the prompt and the second encloses it. Only the
+    /// length taken at push time tells them apart.
+    pub exception_handler_depth: usize,
 }
 
 /// Records a `dynamic-wind` in progress.
@@ -134,6 +149,45 @@ pub struct VmDelimitedContinuation {
     /// the prompt body has already popped the body's frame. The continuation
     /// is then the identity and `(k v)` is `v`.
     pub deliver_reg: Option<Reg>,
+
+    /// `VmState::frames.len()` the captured slice started at — the prompt's
+    /// own depth. Invoking the continuation lands `frames[0]` somewhere else,
+    /// and this is what the difference is measured from: the frame depths
+    /// recorded in `prompt_stack` and `exception_handlers` below are relative
+    /// to the stack at capture and have to be shifted by it, exactly as
+    /// `base_at_capture` does for `CallFrame::register_base`.
+    pub depth_at_capture: usize,
+
+    /// `dynamic_winds.len()` and `exception_handlers.len()` the captured
+    /// slices started at. The carried prompts record positions in *those*
+    /// stacks too — a `PromptFrame` names three depths, not one — and an
+    /// abort to a carried prompt truncates all three. Relocating only
+    /// `stack_depth` left the other two pointing at the invoke site's stacks:
+    /// aborting to a carried prompt ran an enclosing `after` thunk early and
+    /// uninstalled handlers that enclose the invoke.
+    pub wind_depth_at_capture: usize,
+    /// See [`Self::wind_depth_at_capture`].
+    pub handler_depth_at_capture: usize,
+
+    /// The prompts established *inside* the captured region — everything above
+    /// the prompt this continuation was delimited by.
+    ///
+    /// Without them a `shift`-like re-entry runs its own body with its own
+    /// delimiters missing: resuming a computation that established an inner
+    /// prompt and then aborts to it reports "no matching prompt tag" for a
+    /// prompt its own code set up (issue #163).
+    pub prompt_stack: Vec<PromptFrame>,
+
+    /// The exception handlers installed *inside* the captured region.
+    ///
+    /// Part of the dynamic environment the captured computation runs in, and
+    /// so part of the continuation: a `raise` in the resumed frames must reach
+    /// the handler that was live where they were **captured**, not whatever is
+    /// live where `(k v)` happened to be called. Racket and Gauche both answer
+    /// that way — see `docs/VM_RUNTIME.md` §5.6, which measures it in both,
+    /// Gauche's with real `with-exception-handler` rather than through the
+    /// continuation marks Racket's handlers are made of.
+    pub exception_handlers: Vec<ExceptionHandler>,
 }
 
 /// An installed exception handler (from `with-exception-handler`).

@@ -9,7 +9,9 @@ pub mod continuation;
 pub mod instruction;
 
 pub use code_object::{Arity, CodeObject, CodeObjectId, ConstIdx, GlobalCacheEntry};
-pub use continuation::{DynamicWindRecord, PromptFrame, VmContinuation, VmDelimitedContinuation};
+pub use continuation::{
+    DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
+};
 pub use instruction::Instruction;
 
 use patina_core::tagged_value::HeapIndex;
