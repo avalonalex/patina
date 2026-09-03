@@ -142,6 +142,14 @@ to learn what a push would have told you anyway.
 - `docs/VM_COMPILER.md` — 2 pre-passes + 5-pass compiler pipeline
 - `docs/VM_RUNTIME.md` — VmState, execution loop, control primitives
 - `docs/VM_TESTING.md` — testing layers and commands
+- The two instruments for control-flow work, and the thing to read before
+  touching `dynamic-wind`, prompts or continuations: `docs/VM_RUNTIME.md` §5.6
+  (which dynamic state each transfer saves, restores or truncates, measured
+  against six implementations) and
+  `crates/patina-tests/tests/control_flow_matrix.rs` (20 transfer shapes
+  scored against five). Both are scoreboards — a fix that improves one row and
+  breaks another fails them, which is how this area's defects have usually
+  arrived.
 
 **Reference implementations:** chibi-scheme at `~/Project/reference/chibi-scheme`
 - `tests/r7rs-tests.scm` — comprehensive R7RS test suite
