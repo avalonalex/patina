@@ -428,6 +428,57 @@ intercepted at call dispatch time.
 4. Unwind stack to prompt depth
 5. Call handler with `(value, continuation)`
 
+### 5.6 The dynamic-state matrix
+
+`VmState` carries five components that belong to a *dynamic extent* rather
+than to the machine: `frames`, `registers`, `dynamic_winds`, `prompt_stack`,
+`exception_handlers`. Every control transfer has to say what it does with each
+one, and a transfer that forgets a component does not fail loudly — it runs
+under somebody else's dynamic context.
+
+This table is the whole list. It exists because the defects in this area were
+found one at a time by hand-written repros (#157, #159, #160, #162, #163) while
+the chibi suite stayed 1226/1226 through all of them; an empty cell is findable
+by reading, before anyone writes a program that trips over it.
+
+| transfer | frames | registers | dynamic_winds | prompt_stack | exception_handlers |
+|---|---|---|---|---|---|
+| `call/cc` capture | save | save | save | save | save |
+| full invoke (arrival) | restore | restore | restore | restore | restore |
+| delimited capture | save | save | save | **✗ #163** | **✗ #163** |
+| composable invoke | append | append | append (re-enter) | **✗ #163** | **✗ #163** |
+| abort unwind | truncate | truncate | run + truncate | truncate | **✗ #162** |
+| `raise` | — | — | — | — | pop one, re-push on continuable return |
+| normal `Return` | pop | free | by `PopWind` | by depth | by depth |
+| wind thunk | push stub | — | — | — | replaced by the record's own |
+
+Notes on the cells that are not a plain yes:
+
+- **`raise` touches nothing but the handler stack.** A raise crosses no
+  dynamic extent, so no after-thunk is due; the unwind happens one level up,
+  at `guard`'s continuation jump. See §5.2.
+- **A wind thunk runs under its own record's handler stack**, not the live
+  one (`install_thunk_handlers`) — R7RS 6.10 gives the thunks the dynamic
+  environment of the `dynamic-wind` *call*.
+- **Parameter objects are not a sixth component.** `parameterize` expands to
+  `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
+  parameter state rides on `dynamic_winds` and needs no snapshot of its own.
+  Anything else built on `parameterize` — `current-output-port` and the
+  redirecting `with-*` procedures — inherits that.
+- **`execute` clears all five** when a form abandons the machine with an
+  uncaught error. Winds are dropped rather than unwound: an abandoned
+  after-thunk was never owed a run, and one that raised would abort the
+  recovery.
+
+**The two holes interact, which is the reason to read the table as a table.**
+Today a raise inside a resumed composable continuation finds the handler that
+was live at capture — but by accident, because the abort (#162) left that
+handler installed rather than because the continuation carried it (#163).
+Escape the same continuation out of its prompt first, so the stale entry has
+been swept, and the raise is unhandled. Fixing #162 alone therefore turns a
+program that works today into one that does not; the two are one change.
+Racket answers with the capture-time context in both spellings.
+
 ---
 
 ## 6. GC Roots
