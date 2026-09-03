@@ -437,8 +437,16 @@ impl<'a> CpsEvaluator<'a> {
                             EvalError::InternalError(format!("No prompt found for tag: {}", tag))
                         })?;
 
-                    prompt_stack.truncate(prompt_idx);
-                    let prompt_frame = prompt_stack.pop().unwrap();
+                    // `split_off` rather than truncate-then-pop: the frames
+                    // above the match go, and the matched frame *is* the one
+                    // being aborted to. Truncating to `prompt_idx` dropped it
+                    // and then popped the **enclosing** prompt instead, which
+                    // delivered to the wrong continuation and wind stack — and
+                    // panicked outright on `pop().unwrap()` when the matching
+                    // prompt was the only one on the stack. Dead code, so
+                    // nothing caught it; the first program #169 makes reach
+                    // here would have.
+                    let prompt_frame = prompt_stack.split_off(prompt_idx).remove(0);
 
                     // Travel to the prompt's wind stack the way a continuation
                     // jump does — one thunk per step, each in its own
