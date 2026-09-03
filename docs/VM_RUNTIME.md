@@ -470,6 +470,55 @@ Notes on the cells that are not a plain yes:
   after-thunk was never owed a run, and one that raised would abort the
   recovery.
 
+#### What the reference implementations answer
+
+The rows above are Patina's behaviour. These are the same questions put to
+implementations that have had decades of scrutiny, measured 2026-09-03 — Chez
+10.2 (`petite`), chibi 0.12, Gauche 0.9.15, Racket 9.3. Larceny is a source
+checkout here with no built binary (the lane only borrows its test suite), so
+it is not in the panel.
+
+| | question | Chez | chibi | Gauche | Racket | Patina |
+|---|---|---|---|---|---|---|
+| P1 | a full continuation carries the handler stack | ✓ | ✓ | ✓ | — | ✓ (both backends) |
+| P2 | escaping a handler's extent uninstalls it | ✓ | ✓ | ✓ | — | ✓ (both backends) |
+| P3 | re-entering that extent re-installs it | ✓ | ✓ | ✓ | — | ✓ (both backends) |
+| A1 | **aborting** out of that extent uninstalls it | n/a | n/a | n/a | ✓ | **✗ #162** |
+| D1 | a composable continuation carries the handler stack | n/a | n/a | ✓ | ✓ | **✗ #163** |
+| D2 | a composable continuation re-enters its wind extents | n/a | n/a | ✓ | ✓ | ✓ |
+| D3 | a composable continuation carries a delimiter inside it | n/a | n/a | n/e | ✓ | **✗ #163** |
+
+`n/a` — no delimited-continuation facility. `n/e` — not expressible: Gauche's
+`shift`/`reset` is untagged, so a `shift` cannot reach past the nearest
+`reset`. `—` for Racket on P1–P3: it has no `raise-continuable`, and its
+escaping `with-handlers` answers a different question.
+
+Two things worth taking from this. **P1–P3 are unanimous across five
+implementations**, so those cells are settled behaviour rather than a Patina
+convention — and Patina matches on both backends. And **the delimited rows have
+two independent oracles, not one**: Gauche's `gauche.partcont` answers D1 and
+D2 with real R7RS `with-exception-handler` and `raise-continuable`, which is a
+stronger witness than Racket's for the handler question, since Racket's
+handlers are continuation marks and the agreement could otherwise be an
+artifact of that. Both say a composable continuation carries the dynamic
+context of its *capture*.
+
+A1 is the sharpest of them, because it is #162 itself rather than an analogue:
+
+```scheme
+(with-exception-handler (lambda (e) (list 'ESCAPED-TO-TOP e))
+  (lambda ()
+    (call-with-continuation-prompt
+      (lambda ()
+        (with-exception-handler (lambda (e) (list 'INNER e))
+          (lambda () (list 'got (abort-current-continuation t 'ab)))))
+      t
+      (lambda (v k) (raise-continuable 'boom)))))
+
+;; Patina VM => (INNER boom)            ← the abandoned handler catches
+;; Racket    => (ESCAPED-TO-TOP boom)
+```
+
 **The two holes interact, which is the reason to read the table as a table.**
 Today a raise inside a resumed composable continuation finds the handler that
 was live at capture — but by accident, because the abort (#162) left that
