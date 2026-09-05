@@ -916,6 +916,18 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // producer is now the only remaining `run_thunk_outcome` caller with a
     // result to place, and carries the invariant on its own.
     let handlers_at_entry = state.exception_handlers.len();
+    // The same for prompts. A nested loop that returns at its own exit depth
+    // pops nothing there by design (`pop_resolved_extents`), so a prompt
+    // opened *inside* it — by a parameter converter, by a primitive's
+    // comparator — outlives the loop and is found by the next abort. The
+    // handler half of this has been here since those extents were keyed on
+    // frame depth; `finish_delimited_invoke`'s comment has named the prompt
+    // half as missing for as long.
+    //
+    // Not the fix for a prompt a *continuation's snapshot* carries past its
+    // own body: that one is closed on arrival (issue #176), because no loop
+    // need return between the re-entry and the abort that finds it.
+    let prompts_at_entry = state.prompt_stack.len();
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
@@ -925,6 +937,7 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
                 state.exception_handlers.truncate(handlers_at_entry);
+                state.prompt_stack.truncate(prompts_at_entry);
                 return Ok(LoopExit::Returned(val));
             }
             Ok(None) => continue,
@@ -2533,6 +2546,7 @@ fn handle_control_primitive(
             } else {
                 TaggedValue::FALSE
             };
+            let prompt_idx = state.prompt_stack.len();
             state.prompt_stack.push(PromptFrame {
                 tag,
                 stack_depth: state.frames.len(),
@@ -2556,7 +2570,14 @@ fn handle_control_primitive(
             // prompt. `None` means a frame was pushed and the ordinary sweep
             // will do it.
             if let Some(result) = call_any(state, body, args.get(3..).unwrap_or(&[]), dst)? {
-                state.prompt_stack.pop();
+                // `truncate(prompt_idx)`, not `pop()`: the top of the stack is
+                // not necessarily the frame this call pushed. A no-frame body
+                // can still re-enter the VM — `assoc` with a comparator that
+                // opens a prompt of its own, a parameter converter that does —
+                // and a prompt left above ours is what `pop()` would take,
+                // closing someone else's and leaving this one live for the
+                // next abort to land on.
+                state.prompt_stack.truncate(prompt_idx);
                 state.set_reg(dst, result);
             }
         }

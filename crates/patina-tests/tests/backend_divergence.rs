@@ -36,8 +36,11 @@
 //! `apply` is simply a third way to reach it.
 //!
 //! **The VM keeps one narrow dispatcher**, `call_any`, with the same probe set
-//! the apply instructions shed — so a control primitive or continuation
-//! reached through `call-with-values` or a prompt handler still fails there:
+//! the apply instructions shed — so a **control primitive** reached through
+//! `call-with-values`, a prompt handler or a prompt body still fails there
+//! (issue #186). A *continuation* does not: `call_any` grew probes for the
+//! full and delimited kinds, so this sentence naming them was wrong until
+//! 2026-09-05.
 //! `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
 //! `callability.rs`, not here, because both backends do not disagree about it
 //! — only the VM is wrong, and the tree-walker is right. An **exception**
@@ -1247,19 +1250,76 @@ fn a_composable_continuation_captured_inside_a_raise_handler_carries_it() {
     );
 }
 
-/// The prompt body is any procedure — issue #179, fixed 2026-09-05.
+/// A prompt is closed by *identity*, not by taking the top of the stack, and
+/// a dispatch loop closes the prompts it did not open.
 ///
-/// **Racket 9.3 and Guile 3.0.11** both take one, and so did the tree-walker;
-/// the VM called it through `call_closure`, which accepts a compiled closure
-/// and nothing else. It goes through `call_any` now, the same dispatcher that
-/// already served the prompt's *handler*.
+/// Both are crashes the review of #179 found, and both need a body that
+/// finishes **without a frame** — the case that made
+/// `call-with-continuation-prompt` close its own prompt at all.
 ///
-/// What that costs is the one thing worth remembering here: a primitive or a
-/// parameter object finishes without a frame, so no `Return` comes to carry
-/// the prompt off by depth, and `call-with-continuation-prompt` is the single
-/// call site that closes its own prompt.
+/// The first: such a body can still re-enter the VM and leave a prompt above
+/// this call's. `pop()` then took *that* one, leaving this call's live for the
+/// next abort to land on — `expected a procedure, got null`, reading a handler
+/// out of a frame that had been cut away. `truncate(prompt_idx)` closes the
+/// frame this call pushed and anything the body stranded on top of it.
+///
+/// The second is older and independent of the body: a prompt opened inside a
+/// nested dispatch loop outlives it, because the sweep at a loop's own exit
+/// depth deliberately pops nothing. The handler half of that backstop has
+/// always been there; the prompt half was not, and a parameter converter that
+/// opens a prompt is enough to reach it with no prompt body in sight.
 #[test]
-fn the_prompt_body_is_any_procedure() {
+fn a_no_frame_body_closes_this_calls_prompt_and_no_other() {
+    const TAGS: &str = "(define t (make-continuation-prompt-tag 'p))\n\
+         (define t2 (make-continuation-prompt-tag 'q))\n";
+
+    // The body is the primitive `assoc`, whose comparator opens a prompt of
+    // its own — so when `assoc` returns, the stack top is not this call's.
+    assert_program_eval_to(
+        &format!(
+            "{TAGS}(define (cmp a b)\n\
+             \x20 (call-with-continuation-prompt (lambda () (equal? a b)) t2 (lambda (v k) 'h2)))\n\
+             (define r (call-with-continuation-prompt assoc t (lambda (v k) (list 'H v))\n\
+             \x20                                    2 '((1 a) (2 b)) cmp))\n\
+             (list r (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))"
+        ),
+        "((2 b) no-prompt)",
+    );
+
+    // No prompt body at all: a parameter converter opens one inside the
+    // nested loop its call runs on, and the loop must close it on the way out.
+    assert_program_eval_to(
+        &format!(
+            "{TAGS}(define q (make-parameter 1\n\
+             \x20 (lambda (v) (call-with-continuation-prompt (lambda () (* v 10)) t2 \
+                 (lambda (a k) 'h2)))))\n\
+             (q 42)\n\
+             (list (q) (guard (e (#t 'no-prompt)) (abort-current-continuation t2 'stale)))"
+        ),
+        "(420 no-prompt)",
+    );
+}
+
+/// The prompt body may be a primitive or a parameter object — issue #179,
+/// fixed 2026-09-05.
+///
+/// **Racket 9.3 and Guile 3.0.11** both take those, and so did the
+/// tree-walker; the VM called the body through `call_closure`, which accepts
+/// a compiled closure and nothing else. It goes through `call_any` now, the
+/// same dispatcher that already served the prompt's *handler*.
+///
+/// Not *any* procedure, which is what this test claimed until the review of
+/// #179: `call_any` is the narrow dispatcher, so a VM-intercepted control
+/// primitive as the body still fails — see
+/// `a_control_primitive_as_the_prompt_body_fails_on_the_vm` below, which
+/// pins that rather than leaving the gap inside a name that denies it.
+///
+/// What the change costs is the one thing worth remembering here: a primitive
+/// or a parameter object finishes without a frame, so no `Return` comes to
+/// carry the prompt off by depth, and `call-with-continuation-prompt` closes
+/// its own prompt in that case.
+#[test]
+fn the_prompt_body_may_be_a_primitive_or_a_parameter() {
     const T: &str = "(define t (make-continuation-prompt-tag 'p))\n";
     // A parameter object, and a primitive given the arguments that follow the
     // handler.
@@ -1285,5 +1345,39 @@ fn the_prompt_body_is_any_procedure() {
              \x20 (lambda () (abort-current-continuation t 'ab)) t (lambda (v k) (list 'h v)))"
         ),
         "(h ab)",
+    );
+}
+
+/// VM: a VM-intercepted **control** primitive as the prompt body is not
+/// callable there.
+///
+/// ```text
+///   (call-with-continuation-prompt apply t (lambda (v k) 'h) + '(1 2 3))
+///   tree-walker => 6
+///   VM          => Undefined variable: patina.internal.control/apply
+/// ```
+///
+/// Not introduced by #179 and not its to fix: `call_any` probes primitive →
+/// parameter → continuation → closure, and a control primitive is claimed by
+/// name *before* any of that. Every caller of that dispatcher has the same
+/// hole — `call-with-values`' consumer and a prompt handler already did, and
+/// #179 made the prompt *body* a third. Closing it means giving `call_any`
+/// `call_value`'s probe set, which needs an `exit_depth` its call sites do not
+/// all have; the sibling row is
+/// `callability.rs`'s `test_apply_through_call_with_values_is_still_broken_on_the_vm`.
+/// Filed as issue #186, which lists all three call sites; the work is
+/// {CONTROL_OPS}.
+///
+/// Pinned here rather than left inside the neighbouring test's name, which
+/// used to say "any procedure" and so denied this row existed.
+#[test]
+fn a_control_primitive_as_the_prompt_body_fails_on_the_vm() {
+    assert_divergence(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt apply t (lambda (v k) 'h) + '(1 2 3))",
+        On::TreeWalker,
+        "6",
+        ErrorClass::AtRuntime,
+        "issue #186",
     );
 }

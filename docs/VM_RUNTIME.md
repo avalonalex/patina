@@ -277,7 +277,7 @@ On `Return { val }`:
 
 ### 4.5 Helper Functions
 
-- **`call_any()`** — dispatches to primitive, parameter, or closure; used by
+- **`call_any()`** — dispatches to primitive, parameter, full or delimited continuation, or closure; **not** to a VM-intercepted control primitive, which is issue #186's hole at each of its call sites; used by
   control primitives for sub-calls
 - **`call_any_sync()`** — calls and waits for result (primitives return
   immediately; closures run via `run_loop_until()`)
@@ -296,7 +296,7 @@ intercepted at call dispatch time.
 | Variant | Scheme form | Behavior |
 |---|---|---|
 | `DynamicWind` | `dynamic-wind` | Push wind record, run body, pop on return |
-| `CallWithContinuationPrompt` | `call-with-continuation-prompt` | Push prompt, run body thunk |
+| `CallWithContinuationPrompt` | `call-with-continuation-prompt` | Push prompt, call the body through `call_any` — any procedure, not only a closure (§5.5) |
 | `AbortCurrentContinuation` | `abort-current-continuation` | Find prompt, capture delimited cont, unwind, call handler |
 | `CallWithCurrentContinuation` | `call/cc` | Snapshot full stack, deliver to proc |
 | `Values` | `values` | Store in `value_buffer`, return primary value |
@@ -511,6 +511,30 @@ A loop-exit backstop was tried first and is not enough: it closes the
 two-top-level-form spelling of the issue and leaves the same sequence inside a
 single `let` body dying exactly as before, since no loop returns between the
 re-entry and the abort. Both spellings are pinned in `backend_divergence.rs`.
+
+#### Who closes a prompt
+
+Three answers, and the third is the one that is easy to miss.
+
+- **The depth sweep**, for a body with a frame: its `Return` runs
+  `pop_resolved_extents`, which pops every prompt whose `stack_depth` the
+  stack has shrunk past.
+- **The dispatch loop**, for a prompt opened inside it: `run_loop_until_outcome`
+  truncates `prompt_stack` to its length at entry, beside the same truncation
+  for `exception_handlers`, because the sweep at a loop's own exit depth
+  deliberately pops nothing. A parameter converter that opens a prompt reaches
+  this with no prompt body in sight.
+- **`call-with-continuation-prompt` itself**, for a body that finishes without
+  a frame — a primitive, a parameter object, an identity delimited
+  continuation (issue #179). No `Return` is coming, so nothing else can. It
+  closes by **recorded index**, not by popping the top: such a body may
+  re-enter the VM and leave a prompt above this call's, and popping blind took
+  that one and left this call's live for the next abort to land on.
+
+A prompt a *continuation's snapshot* carries past its own body is a fourth
+case, closed on arrival — see §5.5's note on issue #176.
+
+---
 
 #### Aborting out of a Rust primitive's callback
 
