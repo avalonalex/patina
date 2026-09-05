@@ -1039,12 +1039,27 @@ fn the_prompt_apis_edges_agree_on_both_backends() {
 // so the divergence is on the inventory, and each names its issue. Guile
 // 3.0.11 backs the tree-walker's answer wherever it is cited.
 
-/// #176: after a continuation captured inside a prompt body is re-entered
-/// and the body returns a second time, the VM keeps the prompt frame, and a
-/// later abort outside any prompt lands on it.
+/// A prompt does not outlive its body when a continuation captured inside
+/// the body is re-entered — issue #176, fixed 2026-09-05.
+///
+/// The body's value has been delivered twice, once normally and once through
+/// the re-entered continuation, so no prompt is live when the abort runs and
+/// `guard` catches it. The tree-walker and Guile 3.0.11 always answered this;
+/// the VM died with `expected a procedure, got null`, aborting to a prompt
+/// whose body had returned in an earlier top-level form.
+///
+/// `(call/cc …)` is in **tail position** of the prompt body, which is what
+/// made it reachable: the body's frame is popped before the capture, so the
+/// prompt's `stack_depth` already equals `frames.len()` while the body is
+/// still running. An abort at that moment must still find the prompt — the
+/// second assertion, which every implementation answers `(h x)` — and the
+/// same depth reading holds once the body is finished. No comparison of
+/// depths tells the two apart, so the prompt rides into the continuation's
+/// snapshot and the ordinary sweep never reaches it again. The loop closes
+/// the prompts it did not open, as it already did for handlers.
 #[test]
-fn a_re_entered_prompt_body_leaves_its_frame_behind_on_the_vm() {
-    assert_divergence(
+fn a_prompt_does_not_outlive_a_re_entered_body() {
+    assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (define saved #f) (define n 0)\n\
          (define r (call-with-continuation-prompt\n\
@@ -1053,10 +1068,16 @@ fn a_re_entered_prompt_body_leaves_its_frame_behind_on_the_vm() {
          (set! n (+ n 1))\n\
          (if (= n 1) (saved 'second))\n\
          (list 'r r (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))",
-        On::TreeWalker,
         "(r second no-prompt)",
-        ErrorClass::AtRuntime,
-        "issue #176",
+    );
+    // The window the fix must not close: the body has tail-called away, so
+    // its frame is gone, and the prompt is still the one an abort belongs to.
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt\n\
+         \x20 (lambda () (call/cc (lambda (c) (abort-current-continuation t 'x))))\n\
+         \x20 t (lambda (v k) (list 'h v)))",
+        "(h x)",
     );
 }
 

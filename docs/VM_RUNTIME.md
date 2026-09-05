@@ -483,10 +483,25 @@ left an abort to a carried prompt truncating the invoke site's wind and
 handler stacks at depths that meant nothing there.
 
 They come off again by the ordinary depth sweep as the resumed frames return
-(`pop_resolved_extents`) — with one gap: that sweep does nothing at a dispatch
-loop's own exit depth, by design, and the only backstop there is
-`run_loop_until_outcome`'s `exception_handlers.truncate(handlers_at_entry)`,
-which covers handlers and not prompts.
+(`pop_resolved_extents`), and by a backstop at the dispatch loop's own exit
+depth, where that sweep does nothing by design:
+`run_loop_until_outcome` truncates both `exception_handlers` and
+`prompt_stack` to their lengths at entry, since a loop owns no extent it did
+not open.
+
+The prompt half of that was missing until 2026-09-05 (issue #176), and the
+program that needed it is the one no depth can classify: `(call/cc …)` in
+**tail position** of a prompt body. The body's frame is popped before the
+capture, so the prompt's `stack_depth` equals `frames.len()` while the body is
+still running — an abort then must still find the prompt, and every
+implementation agrees it does — and the same reading holds once the body's
+value has been delivered and the prompt is finished. A continuation captured
+in that window carries the prompt in its snapshot, so re-entering it restores
+a frame the depth sweep will never reach again, and the *next* form's abort
+lands on a prompt whose body returned in the previous one. It is the frame
+-depth twin of the `exception_handler_depth` problem in §5.6's last
+paragraph, and it has the same shape of answer: record a length, and close
+what the loop did not open.
 
 ### 5.6 The dynamic-state matrix
 

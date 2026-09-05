@@ -882,6 +882,23 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // producer is now the only remaining `run_thunk_outcome` caller with a
     // result to place, and carries the invariant on its own.
     let handlers_at_entry = state.exception_handlers.len();
+    // The same for prompts, and for the same reason (issue #176).
+    //
+    // The depth sweep cannot close a prompt whose body **tail-called** away:
+    // the body's frame is gone, so the prompt's `stack_depth` already equals
+    // `frames.len()` while the body is still running — an abort at that
+    // moment must still find it, and all of chibi, Gauche, Guile and Racket
+    // agree it does. The same reading also holds once the body's value has
+    // been delivered, when the prompt is finished, and no comparison of
+    // depths separates the two. It is the frame-depth twin of the recorded
+    // `exception_handler_depth` that §5.6's last paragraph is about.
+    //
+    // A continuation captured in that window carries the prompt in its
+    // snapshot, so re-entering it restores a frame the sweep will never
+    // reach, and the *next* form's abort finds a prompt whose body returned
+    // in the previous one. A loop owns no prompt it did not open, so
+    // truncating to the entry length on the way out closes exactly those.
+    let prompts_at_entry = state.prompt_stack.len();
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
@@ -891,6 +908,7 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
                 state.exception_handlers.truncate(handlers_at_entry);
+                state.prompt_stack.truncate(prompts_at_entry);
                 return Ok(LoopExit::Returned(val));
             }
             Ok(None) => continue,
