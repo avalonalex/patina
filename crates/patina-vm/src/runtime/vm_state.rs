@@ -53,15 +53,19 @@ pub struct VmState {
     /// while genuinely being a return. Two opposite meanings, one shape; the
     /// only thing that can distinguish them is the transfer itself (#177).
     ///
-    /// Read in exactly one place — `run_apply_proc`, the nested loop under a
-    /// Rust primitive's callback, which is the only boundary a program has
-    /// been built to break. `across_reentry`'s frame-depth test covers the
-    /// others as far as anything measured shows: an abort out of a
-    /// `parameterize` converter reaches its prompt with or without a check
-    /// here, so one is not written on the strength of the argument alone.
+    /// Read by `across_reentry`, which is every re-entry boundary at once —
+    /// a primitive's callback, `eval`, a parameter converter, library
+    /// loading. Read per-boundary first, and that covered one of four: an
+    /// abort out of `eval` kept the old failure verbatim, and one out of a
+    /// tail-position parameter *set* stored its value into the parameter and
+    /// never ran the handler. `parameterize` was the wrong thing to measure —
+    /// it reaches the callback through `apply_proc`, the boundary that was
+    /// already fixed.
     ///
-    /// Cleared by whichever dispatch loop resumes into the landing, which is
-    /// the point past which no boundary is owed the news.
+    /// Cleared in two places: whichever dispatch loop resumes into the
+    /// landing, which is the point past which no boundary is owed the news;
+    /// and `execute`, with the rest of the machine, so a form cannot leave
+    /// one latched for the next.
     pub(crate) pending_transfer: bool,
     /// Stack of active continuation prompts (SRFI-226).
     pub prompt_stack: Vec<PromptFrame>,
@@ -700,6 +704,11 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     });
 
     let result = run_loop_until(state, 0);
+    // Nothing is left to resume: an escape that reached depth 0 *is* this
+    // form's value, and a loop re-parks one on the way out for the boundary
+    // it may have crossed. Dropped with the transfer flag so neither is
+    // mistaken for in-flight when the next form runs.
+    state.pending_escape = None;
     state.pending_transfer = false;
     if result.is_err() {
         // An error that reaches the top level abandons whatever the machine
@@ -926,6 +935,13 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
                 // to a `guard`. See `VmState::pending_escape`.
                 if let Some(value) = state.pending_escape.take() {
                     if state.frames.len() <= exit_depth {
+                        // Still in flight: this loop does not own the frame
+                        // the escape landed in, so the one that does must
+                        // still find it parked. Returning it in `Escaped`
+                        // alone is not enough — `run_loop_until` flattens
+                        // that to a plain value, and the boundaries above
+                        // (`across_reentry`) unwind on the parked state.
+                        state.pending_escape = Some(value);
                         return Ok(LoopExit::Escaped(value));
                     }
                     // Control resumed in a frame this loop still owns, so
@@ -3448,6 +3464,21 @@ fn across_reentry<T>(
     value_of: impl FnOnce(&T) -> TaggedValue,
 ) -> Result<T, Reentry> {
     let result = body(state);
+    // A transfer has abandoned this call whatever the depths say, and the
+    // depths cannot say: an abort cuts every stack back to its prompt and
+    // pushes one stub frame, which lands at exactly `depth_before` when the
+    // prompt sits one frame below this boundary. See
+    // [`VmState::pending_transfer`] for why the frames cannot be asked.
+    //
+    // Here rather than at each boundary, because this function is the one
+    // place that decides it — its own doc has said so since the first attempt
+    // at the escape fix "covered one boundary of four". Issue #177's first fix
+    // covered one of four again: `force` (through `apply_proc`) worked while
+    // `eval` and a tail-position parameter *set* (through `call_any_sync`,
+    // which stored the abort's value into the parameter) did not.
+    if state.pending_transfer {
+        return Err(Reentry::Escaped);
+    }
     if state.frames.len() < depth_before {
         // Any error here belongs to a call that is being abandoned; what
         // resumes is the continuation's value, not this one's outcome.
@@ -3561,16 +3592,12 @@ fn run_apply_proc(
     }
     // VM closure was pushed; run until it returns.
     //
-    // A loop that exits at its own floor reports `Escaped`, and that alone
-    // does not say whether this call is over: a continuation captured and
-    // invoked *inside* the callback delivers its value into the very register
-    // this call is waiting on, which is a return by another route. Only a
-    // transfer that built a landing has abandoned us (see
-    // `VmState::pending_transfer`).
-    match run_loop_until_outcome(state, depth_before)? {
-        LoopExit::Escaped(v) if state.pending_transfer => Err(park_escape(state, v)),
-        LoopExit::Returned(v) | LoopExit::Escaped(v) => Ok(v),
-    }
+    // `Escaped` needs no special handling here: a loop exiting at its own
+    // floor means the callback delivered its value — a continuation captured
+    // and invoked *inside* it does exactly that — and the one case where it
+    // does not is a transfer, which `across_reentry` catches for every
+    // boundary at once.
+    run_loop_until(state, depth_before)
 }
 
 /// Recognized VM-intercepted control primitives.

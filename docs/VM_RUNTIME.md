@@ -536,8 +536,20 @@ callback delivers its value into the register the call is waiting on, which is
 a return by another route, and the primitive must run on (`member` with such a
 comparator, pinned in `escape_from_primitive.rs`). So the transfer says it
 itself — `VmState::pending_transfer`, set by `abort_to_prompt` and cleared by
-whichever loop resumes into the landing. `run_apply_proc` is its one reader:
-`Escaped` alone does not end the call, `Escaped` during a transfer does.
+whichever loop resumes into the landing (and by `execute`, so a form cannot
+leave one latched for the next).
+
+**`across_reentry` reads it, which is every boundary at once.** It was read
+per-boundary first, and that covered one of four: `force` worked while `eval`
+kept the old failure verbatim and a tail-position parameter *set* stored the
+abort's value into the parameter and never ran the handler. `parameterize` was
+the wrong thing to measure it against — that reaches its converter through
+`apply_proc`, the boundary already fixed. `across_reentry`'s own doc had
+already said where new boundaries go, having been written after the *previous*
+one-of-four fix in the same function.
+
+`escape_from_primitive.rs` sweeps every re-entrant primitive by **both**
+transfers now, which is what makes the next missed boundary visible.
 
 ---
 
