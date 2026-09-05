@@ -106,14 +106,18 @@ fn every_exported_primitive_can_be_dispatched() {
     /// no registry entry backs them there. Qualified, so an exclusion names
     /// the binding it excuses rather than every export sharing a short name.
     ///
-    /// Per backend, because the sets genuinely differ — and the difference is
-    /// what this test is for. The VM matches all six in `vm_control_primitive`;
-    /// the tree-walker claims four and *registers* the other two with a
-    /// deliberate not-implemented error, which is issue #169.
+    /// Per backend, because the sets can genuinely differ — and a difference
+    /// is what this test is for. Today they are the same six names: the VM
+    /// matches them in `vm_control_primitive`, the tree-walker in
+    /// `cps_eval/application.rs` and the CPS transform. Until 2026-09-04 the
+    /// tree-walker claimed four and *registered* the two prompt names with a
+    /// deliberate not-implemented error (#170); issue #169 gave it the
+    /// implementation and deleted the registration, and the two moved here.
     ///
     /// Being on a list means "not undispatchable", not "works everywhere":
     ///
-    /// - `apply` and `dynamic-wind` are claimed at **apply** time, by a
+    /// - `apply`, `dynamic-wind`, `call-with-continuation-prompt` and
+    ///   `abort-current-continuation` are claimed at **apply** time, by a
     ///   short-name match on `Procedure::Primitive` (the VM's
     ///   `vm_control_primitive`, the tree-walker's `cps_eval/application.rs`),
     ///   so they work in head *and* value position on both backends.
@@ -131,7 +135,9 @@ fn every_exported_primitive_can_be_dispatched() {
         (
             "tree-walker",
             &[
+                "patina.internal.control/abort-current-continuation",
                 "patina.internal.control/apply",
+                "patina.internal.control/call-with-continuation-prompt",
                 "patina.internal.control/call-with-current-continuation",
                 "patina.internal.control/call/cc",
                 "patina.internal.control/dynamic-wind",
@@ -226,10 +232,11 @@ fn every_exported_primitive_can_be_dispatched() {
         undispatchable.is_empty(),
         "{} exported primitive(s) cannot be dispatched.\n\n{}\n\n\
          Either implement it, register a deliberate not-implemented error for it \
-         (see `crates/patina-tree-walker/src/eval/primitives/unsupported.rs`), or \
-         add it to that backend's CLAIMED_BEFORE_DISPATCH list if the backend \
-         claims the name before dispatch — and check what the *other* backend \
-         does with it.",
+         (as `primitives/unsupported.rs` did for the prompt API until #169 was \
+         fixed: an ordinary `SchemeException` naming the backend and the issue, \
+         so `guard` can catch it), or add it to that backend's \
+         CLAIMED_BEFORE_DISPATCH list if the backend claims the name before \
+         dispatch — and check what the *other* backend does with it.",
         undispatchable.len(),
         undispatchable
             .iter()
