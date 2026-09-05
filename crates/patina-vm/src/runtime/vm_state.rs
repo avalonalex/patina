@@ -3102,6 +3102,26 @@ fn step_wind_jump(
     state.dynamic_winds = cc.dynamic_winds.clone();
     state.prompt_stack = cc.prompt_stack.clone();
     state.exception_handlers = cc.exception_handlers.clone();
+    // A snapshot can carry a prompt whose body is already finished, and this
+    // is the one moment that can tell (issue #176).
+    //
+    // `pop_resolved_prompts` reads `stack_depth >= frames.len()` as "the
+    // body's frame is gone, so the prompt is over". That reading is wrong at
+    // *capture* time: a body whose tail expression is a control primitive —
+    // `(call/cc …)` — has had its frame popped by the tail call while the
+    // primitive is still to deliver its value, and an abort from inside it
+    // must still find the prompt. Guile and Racket both answer that it does,
+    // and `backend_divergence.rs` pins it.
+    //
+    // Here the same reading is exact, because the thing that made it wrong
+    // cannot be pending: the value is being delivered *now*, by this arrival,
+    // into the frame the snapshot restored. A prompt with no frame above it
+    // has therefore already delivered its own value — the only thing that
+    // could still have delivered it was the frame that is gone. Left in
+    // place it is invisible to every later sweep, since no Return will ever
+    // cross its depth again, and the next abort in the program lands on a
+    // prompt whose body returned long before.
+    pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
     if let Some(top) = state.frames.last() {
@@ -4180,7 +4200,11 @@ fn finish_delimited_invoke(
     // (`pop_resolved_extents`), which is when they stop applying — except at a
     // dispatch loop's own exit depth, where that sweep does nothing by design
     // and `run_loop_until_outcome`'s `handlers_at_entry` truncation is the
-    // only backstop. It covers handlers and not prompts.
+    // only backstop, which covers handlers and not prompts. A prompt a *full*
+    // continuation's snapshot carries past its own body is swept on arrival
+    // instead (issue #176, `restore_continuation`); a composable invoke has no
+    // equivalent, because it appends to the live stacks rather than replacing
+    // them, and the frames it appends are the ones the depth sweep follows.
 
     state.frames[outermost].return_reg = dst;
     let top_base = state

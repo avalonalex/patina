@@ -488,6 +488,30 @@ loop's own exit depth, by design, and the only backstop there is
 `run_loop_until_outcome`'s `exception_handlers.truncate(handlers_at_entry)`,
 which covers handlers and not prompts.
 
+**A full continuation's snapshot can carry a prompt past its own body**, and
+that one is closed on arrival (issue #176, `restore_continuation`). The
+program that needs it is the one no depth can classify: `(call/cc …)` in
+**tail position** of a prompt body. The tail call pops the body's frame before
+the capture, so the prompt's `stack_depth` already equals `frames.len()` while
+the body is still running — an abort at that moment must still find the
+prompt, and Guile 3.0.11 and Racket 9.3 both answer that it does — and the
+identical reading holds once the body's value has been delivered and the
+prompt is over. It is the frame-depth twin of the recorded
+`exception_handler_depth` in §5.6's last paragraph: a tail call erases the
+frame a depth test needs.
+
+Arrival is the one moment the reading *is* exact, which is why the sweep sits
+there and not at a loop's exit. The value is being delivered right then, into
+the frame the snapshot restored, so a prompt with no frame above it has
+already delivered its own — the only thing that could still have delivered it
+was the frame that is gone. Left in place, no later sweep reaches it, because
+no `Return` will ever cross its depth again.
+
+A loop-exit backstop was tried first and is not enough: it closes the
+two-top-level-form spelling of the issue and leaves the same sequence inside a
+single `let` body dying exactly as before, since no loop returns between the
+re-entry and the abort. Both spellings are pinned in `backend_divergence.rs`.
+
 ### 5.6 The dynamic-state matrix
 
 `VmState` carries five components that belong to a *dynamic extent* rather
