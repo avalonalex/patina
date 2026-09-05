@@ -1636,6 +1636,70 @@ fn a_transfer_out_of_a_re_entry_thunk_behaves() {
     );
 }
 
+/// What a raise still owes once its handler returns is a **frame**, so a
+/// continuation captured inside the handler carries it — issue #178, both
+/// backends, measured against Guile 3.0.11.
+///
+/// `backend_divergence.rs` holds the four answers that changed when this
+/// landed. This is the property of the *mechanism* that none of them pins:
+/// the handler's reinstalled depth is stored as a distance below the stub's
+/// own frame rather than as an absolute index, because the frame can be
+/// captured and replayed at another depth.
+///
+/// **Finding a program that can tell the two apart took four tries**, and the
+/// three that failed are why this comment is long — each looked like it was
+/// testing the depth and was not:
+///
+/// - `(raise-continuable (abort-current-continuation …))` captures at the
+///   *abort*, which runs before the raise. No stub frame is in the region at
+///   all, so the resumed program takes the ordinary path.
+/// - resuming at the same depth it was captured at makes the arithmetic
+///   cancel — the same trap
+///   `test_a_composable_continuation_relocates_the_depths_it_carries`
+///   documents for the carried prompt depths.
+/// - a `guard` around the second raise shadows the handler under test, so it
+///   answers for the guard whichever way the depth went.
+///
+/// What discriminates: capture from inside the handler, resume **deep inside
+/// a nest**, and let an outer handler *identify itself*. Storing the absolute
+/// index passes every row in `backend_divergence.rs` and every other shape
+/// here, and answers `INNER` below — the reinstalled handler outliving the
+/// thunk it belongs to, because a depth from the stack the raise happened on
+/// is shallower than anything on the stack it was resumed on, so nothing ever
+/// pops it. Measured by building it that way, not by reasoning.
+#[test]
+fn the_remainder_of_a_raise_is_a_frame() {
+    const CAPTURE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
+         (define k* #f)\n\
+         (define cap (call-with-continuation-prompt\n\
+         \x20 (lambda ()\n\
+         \x20   (with-exception-handler\n\
+         \x20     (lambda (e) (if (eq? e 'rc) (abort-current-continuation t 'ab) (list 'INNER e)))\n\
+         \x20     (lambda () (list 'body (raise-continuable 'rc)))))\n\
+         \x20 t (lambda (v k) (set! k* k) 'cap)))\n\
+         (define (nest n thunk) (if (= n 0) (thunk) (list 'L (nest (- n 1) thunk))))";
+
+    // Resuming replays the handler's return, so the stub re-pushes the
+    // handler and the body goes on. Once that body has returned its thunk is
+    // over, and the next raise must reach OUTER.
+    assert_program_eval_to(
+        &format!(
+            "{CAPTURE}\n\
+             (with-exception-handler (lambda (e) (list 'OUTER e))\n\
+             \x20 (lambda () (nest 6 (lambda ()\n\
+             \x20   (let ((r (k* 'resumed))) (list r (raise-continuable 'after)))))))"
+        ),
+        "(L (L (L (L (L (L ((body resumed) (OUTER after))))))))",
+    );
+
+    // Invoking the same continuation twice reinstalls once per resumption,
+    // each for its own extent — the handler stack does not accumulate.
+    assert_program_eval_to(
+        &format!("{CAPTURE}\n(list (k* 'one) (k* 'two))"),
+        "((body one) (body two))",
+    );
+}
+
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.
 ///

@@ -37,11 +37,13 @@
 //!
 //! **The VM keeps one narrow dispatcher**, `call_any`, with the same probe set
 //! the apply instructions shed — so a control primitive or continuation
-//! reached through `call-with-values`, a prompt handler or an exception
-//! handler still fails there:
+//! reached through `call-with-values` or a prompt handler still fails there:
 //! `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
 //! `callability.rs`, not here, because both backends do not disagree about it
-//! — only the VM is wrong, and the tree-walker is right.
+//! — only the VM is wrong, and the tree-walker is right. An **exception**
+//! handler left that list on 2026-09-05: issue #178 moved the handler call
+//! into `raise_step_stub`, whose `Call` is the ordinary instruction, so a
+//! continuation can be a handler for a primitive's error too.
 
 mod common;
 use common::*;
@@ -888,118 +890,75 @@ fn a_raise_inside_a_port_callback_reaches_the_guard_as_an_error_object_on_the_tr
 
 // ─── the VM's raise paths, where the tree-walker is right ─────────────────────
 
-/// VM: a `guard` is gone after one of its clauses declines a
-/// `raise-continuable`.
-///
-/// ```text
-///   (with-exception-handler (lambda (e) (list 'I e))
-///     (lambda () (guard (e ((eq? e 'y) 'caught-y))
-///       (list (raise-continuable 'x) (raise-continuable 'y)))))
-///   tree-walker, chibi, Gauche => caught-y
-///   VM                         => ((I x) (I y))
-/// ```
+/// A `guard` survives one of its clauses declining a `raise-continuable`.
 ///
 /// The `guard`'s handler declines `'x`, which re-raises it through
 /// `handler-k` to the outer handler; that returns `(I x)`, and the body
-/// continues to raise `'y` — which the `guard` must catch. On the VM the
-/// continuable path in `vm_raise_value` pops the handler to run it and
-/// re-pushes it only when the handler *returns*; `guard`'s handler leaves
-/// through `handler-k` instead, so the re-push is skipped and the `guard` is
-/// silently uninstalled for the rest of its body. Found by review of triage
-/// families 22/28 (2026-09-01). The skipped re-push predates them; what they
-/// changed is the symptom — with the old expansion this program answered
-/// `(I x)` on the VM and died with a non-continuable error on the
-/// tree-walker, so neither backend was right before. Recorded in
-/// {GUARD_UNWIND_ORDER}.
+/// continues to raise `'y` — which the `guard` must catch. chibi and Gauche
+/// agree.
+///
+/// The VM used to answer `((I x) (I y))`: its continuable path popped the
+/// handler to run it and re-pushed it only when the handler *returned*, in
+/// Rust after a nested dispatch loop, and `guard`'s handler leaves through
+/// `handler-k` instead — so the re-push was skipped and the `guard` was
+/// silently uninstalled for the rest of its body. Converged 2026-09-05 with
+/// issue #178, which made the re-push an instruction in a frame: `handler-k`
+/// captures that frame like any other, so re-entering it runs the re-push.
 #[test]
-fn a_guard_that_declined_a_continuable_raise_is_gone_on_the_vm() {
-    const PROGRAM: &str = r#"
-        (with-exception-handler (lambda (e) (list 'I e))
-          (lambda () (guard (e ((eq? e 'y) 'caught-y))
-            (list (raise-continuable 'x) (raise-continuable 'y)))))
-    "#;
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
+fn a_guard_survives_declining_a_continuable_raise() {
+    assert_program_eval_to(
+        "(with-exception-handler (lambda (e) (list 'I e))\n\
+         \x20 (lambda () (guard (e ((eq? e 'y) 'caught-y))\n\
+         \x20   (list (raise-continuable 'x) (raise-continuable 'y)))))",
         "caught-y",
-        "the tree-walker keeps the guard installed; if this changed, it regressed"
-    );
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "((I x) (I y))",
-        "\n[vm] NO LONGER DIVERGES — the guard survives a declined raise-continuable.\n\
-         Replace both assertions with a single assert_program_eval_to on `caught-y` \
-         and close the entry in PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
     );
 }
 
-/// VM: a handler that returns from a non-continuable `raise` is not an
-/// error — the value it returned is delivered as the value of `(raise …)`.
+/// A handler that returns from a non-continuable `raise` raises the
+/// secondary exception R7RS 6.11 asks for.
 ///
-/// R7RS 6.11: "If the handler returns, a secondary exception is raised in the
-/// same dynamic environment as the handler." The tree-walker raises it, and
-/// the outer `guard` sees the error object. The VM's non-continuable path in
-/// `vm_raise_value` cannot tell a handler that returned from one that escaped,
-/// because both come back through the same nested run loop, so it delivers
-/// the handler's value to the raise's destination register as if the raise had
-/// been continuable — `(returned)` here, and `+: expected number` if the
-/// raise sat under an arithmetic primitive. Present on `main` before triage
-/// families 22/28; recorded in {GUARD_UNWIND_ORDER}.
+/// "If the handler returns, a secondary exception is raised in the same
+/// dynamic environment as the handler." The VM used to deliver the handler's
+/// value to the raise's destination register as if the raise had been
+/// continuable — `(returned)` for the first thunk, and for the second, where
+/// the raise is a *primitive's* error routed with register 0 as its
+/// destination, the returning handler's value landed in r0 and `car`'s own
+/// destination was left holding `()`. It could not tell a handler that
+/// returned from one that escaped, because both came back through the same
+/// nested run loop.
 ///
-/// The second program is the same hole reached from a *primitive's* error
-/// rather than `raise`: the run loop routes a catchable `VmError` through
-/// `vm_raise_value` with register 0 as the destination, so the returning
-/// handler's value lands in register 0 and `car`'s own destination is left
-/// holding `()`.
+/// Converged 2026-09-05 with issue #178: the return lands on `ResumeRaise`,
+/// an instruction, which sees it whatever the handler was and whichever route
+/// the raise took.
 #[test]
-fn a_handler_returning_from_a_non_continuable_raise_is_not_an_error_on_the_vm() {
+fn a_handler_returning_from_a_non_continuable_raise_raises_the_secondary() {
     const SECONDARY: &str = "(outer \"exception handler returned from non-continuable exception\")";
-    for (program, vm_answer) in [
-        (
-            r#"(guard (o (#t (list 'outer (if (error-object? o) (error-object-message o) o))))
-                 (with-exception-handler (lambda (e) 'returned)
-                   (lambda () (list (raise 'x)))))"#,
-            "(returned)",
-        ),
-        (
-            r#"(guard (o (#t (list 'outer (if (error-object? o) (error-object-message o) o))))
-                 (with-exception-handler (lambda (e) 'returned)
-                   (lambda () (list (car 5)))))"#,
-            "(())",
-        ),
-    ] {
-        assert_eq!(
-            eval_program_tree_walker(program),
+    for thunk in ["(list (raise 'x))", "(list (car 5))"] {
+        assert_program_eval_to(
+            &format!(
+                "(guard (o (#t (list 'outer (if (error-object? o) (error-object-message o) o))))\n\
+                 \x20 (with-exception-handler (lambda (e) 'returned) (lambda () {thunk})))"
+            ),
             SECONDARY,
-            "the tree-walker raises the secondary exception; if this changed, it regressed"
-        );
-        assert_eq!(
-            eval_program_vm(program),
-            vm_answer,
-            "\n[vm] NO LONGER DIVERGES — a returning handler now raises the secondary \
-             exception.\nReplace both assertions with a single assert_program_eval_to on \
-             the tree-walker's answer and close the entry in \
-             PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
         );
     }
 }
 
-/// VM: a continuation used *as* the handler for a primitive's error is a
-/// fatal `continuation escaped past a synchronous boundary`.
+/// A continuation used *as* the handler, for a primitive's error.
 ///
 /// `(call/cc (lambda (k) (with-exception-handler k thunk)))` is R7RS's own
-/// idiom for capturing a raised object, and triage family 24 made it work for
-/// `raise` on the VM. A `VmError` from a primitive takes the run loop's route
-/// into `vm_raise_value` instead, and `call_any`'s continuation signal is not
-/// caught on that path. The tree-walker answers `#t`, as chibi and Gauche do.
-/// Recorded in {GUARD_UNWIND_ORDER}.
+/// idiom for capturing a raised object; chibi and Gauche answer `#t` too.
+/// Triage family 24 made it work for `raise` on the VM, but a `VmError` from a
+/// primitive takes the run loop's route into `vm_raise_value`, which called
+/// the handler through `call_any` — the narrow dispatcher, which does not
+/// accept a continuation. Converged 2026-09-05 with issue #178: the handler
+/// is called by the `Call` instruction of `raise_step_stub` now, which is the
+/// same dispatcher every other call goes through.
 #[test]
-fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
-    assert_divergence(
+fn a_continuation_can_be_the_handler_for_a_primitive_error() {
+    assert_program_eval_to(
         "(error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5))))))",
-        On::TreeWalker,
         "#t",
-        ErrorClass::AtRuntime,
-        GUARD_UNWIND_ORDER,
     );
 }
 
@@ -1127,54 +1086,40 @@ fn an_abort_from_a_forced_thunk_in_tail_position_is_a_type_error_on_the_vm() {
     );
 }
 
-/// #178: a composable continuation captured from inside an exception handler.
-/// Resuming it returns from the handler; R7RS 6.11 then reinstalls the
-/// handler after a continuable raise, and raises a secondary exception after
-/// a non-continuable one. The tree-walker and Guile do both; the VM does
-/// neither. Recorded as a pair of answers rather than through
-/// `assert_divergence`, because the VM's wrong answer is a *value* in the
-/// first case and the tree-walker's right answer is an *error* in the second
-/// — neither is a shape that helper can express.
+/// A composable continuation captured from inside an exception handler
+/// carries the handler with it — issue #178, fixed 2026-09-05.
+///
+/// Resuming `k` returns from the handler. R7RS 6.11 then reinstalls the
+/// handler after a continuable raise, so the second `raise-continuable` must
+/// reach it; and raises a secondary exception after a non-continuable one.
+/// The VM did neither: both were Rust after a nested dispatch loop, which the
+/// resumed frames returned straight past. Guile 3.0.11 answers as both
+/// backends now do.
 #[test]
-fn a_composable_continuation_captured_inside_a_raise_handler() {
-    const CONTINUABLE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
-        (guard (e (#t (list 'caught e)))\n\
-        \x20 (call-with-continuation-prompt\n\
-        \x20   (lambda ()\n\
-        \x20     (with-exception-handler\n\
-        \x20       (lambda (e) (if (eq? e 'rc)\n\
-        \x20                       (abort-current-continuation t (list 'aborted e))\n\
-        \x20                       (list 'handled-again e)))\n\
-        \x20       (lambda () (list 'body (raise-continuable 'rc) (raise-continuable 'rc2)))))\n\
-        \x20   t (lambda (v k) (list 'h (k 'resumed)))))";
-    assert_eq!(
-        eval_program_tree_walker(CONTINUABLE),
+fn a_composable_continuation_captured_inside_a_raise_handler_carries_it() {
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (guard (e (#t (list 'caught e)))\n\
+         \x20 (call-with-continuation-prompt\n\
+         \x20   (lambda ()\n\
+         \x20     (with-exception-handler\n\
+         \x20       (lambda (e) (if (eq? e 'rc)\n\
+         \x20                       (abort-current-continuation t (list 'aborted e))\n\
+         \x20                       (list 'handled-again e)))\n\
+         \x20       (lambda () (list 'body (raise-continuable 'rc) (raise-continuable 'rc2)))))\n\
+         \x20   t (lambda (v k) (list 'h (k 'resumed)))))",
         "(h (body resumed (handled-again rc2)))",
-        "Guile answers this"
     );
-    assert_eq!(
-        eval_program_vm(CONTINUABLE),
-        "(caught rc2)",
-        "the VM's recorded wrong answer — issue #178; a change here is a move in one direction or the other"
-    );
-
-    const NON_CONTINUABLE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
-        (guard (e (#t (list 'caught (error-object? e))))\n\
-        \x20 (call-with-continuation-prompt\n\
-        \x20   (lambda ()\n\
-        \x20     (with-exception-handler\n\
-        \x20       (lambda (e) (abort-current-continuation t (list 'aborted e)))\n\
-        \x20       (lambda () (list 'body (raise 'nc)))))\n\
-        \x20   t (lambda (v k) (list 'h (k 'resumed)))))";
-    assert_eq!(
-        eval_program_tree_walker(NON_CONTINUABLE),
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (guard (e (#t (list 'caught (error-object? e))))\n\
+         \x20 (call-with-continuation-prompt\n\
+         \x20   (lambda ()\n\
+         \x20     (with-exception-handler\n\
+         \x20       (lambda (e) (abort-current-continuation t (list 'aborted e)))\n\
+         \x20       (lambda () (list 'body (raise 'nc)))))\n\
+         \x20   t (lambda (v k) (list 'h (k 'resumed)))))",
         "(caught #t)",
-        "the secondary exception, caught by the guard — Guile answers an error object too"
-    );
-    assert_eq!(
-        eval_program_vm(NON_CONTINUABLE),
-        "(h (body resumed))",
-        "the VM's recorded wrong answer — issue #178"
     );
 }
 

@@ -438,6 +438,34 @@ pub enum Instruction {
     /// `runtime/vm_state.rs`).
     ResumeComposableInvoke,
 
+    /// The bookkeeping a `raise` still owes once its handler has returned.
+    ///
+    /// The middle instruction of [`raise_step_stub`]'s three — `Call handler`,
+    /// this, `Return` — and the reason a raise's remainder is a **pc** rather
+    /// than Rust code after a nested dispatch loop. What it does depends on
+    /// the raise it stands for, which its frame's `CONTINUABLE` register says:
+    ///
+    /// - **continuable**: re-push the handler, which R7RS 6.11 keeps
+    ///   installed for the rest of the thunk once the handler has returned,
+    ///   and let the `Return` deliver its value as the value of
+    ///   `(raise-continuable …)`.
+    /// - **non-continuable**: raise a secondary exception, because R7RS 6.11
+    ///   says a handler that returns from `raise` must not simply return.
+    ///
+    /// Both used to live in `vm_raise_value`, after a nested
+    /// `run_loop_until_outcome`, and both were therefore invisible to a
+    /// continuation captured inside the handler: resuming one replayed the
+    /// handler's frames and returned straight past the Rust that owed the
+    /// work. That cost three divergences — a `guard` silently uninstalled
+    /// after a declining clause, a composable continuation that lost its
+    /// handler, and a non-continuable handler allowed to return (issue #178).
+    /// A frame is captured with the rest of them, so the debt is carried
+    /// wherever the continuation goes.
+    ///
+    /// Its frame's registers are the `raise_step` module in
+    /// `runtime/vm_state.rs`.
+    ResumeRaise,
+
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },
