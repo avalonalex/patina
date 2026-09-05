@@ -916,6 +916,18 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
     // producer is now the only remaining `run_thunk_outcome` caller with a
     // result to place, and carries the invariant on its own.
     let handlers_at_entry = state.exception_handlers.len();
+    // The same for prompts. A nested loop that returns at its own exit depth
+    // pops nothing there by design (`pop_resolved_extents`), so a prompt
+    // opened *inside* it — by a parameter converter, by a primitive's
+    // comparator — outlives the loop and is found by the next abort. The
+    // handler half of this has been here since those extents were keyed on
+    // frame depth; `finish_delimited_invoke`'s comment has named the prompt
+    // half as missing for as long.
+    //
+    // Not the fix for a prompt a *continuation's snapshot* carries past its
+    // own body: that one is closed on arrival (issue #176), because no loop
+    // need return between the re-entry and the abort that finds it.
+    let prompts_at_entry = state.prompt_stack.len();
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
@@ -925,6 +937,7 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
                 state.exception_handlers.truncate(handlers_at_entry);
+                state.prompt_stack.truncate(prompts_at_entry);
                 return Ok(LoopExit::Returned(val));
             }
             Ok(None) => continue,
@@ -2213,8 +2226,9 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// **Narrower than [`call_value`]**, and knowingly so for now: it probes
 /// primitive → parameter → closure, which is the probe set the `apply`
 /// instructions shed when they moved to `call_value`. A VM-intercepted control
-/// primitive or a continuation reached through one of this function's callers
-/// — `call-with-values`' consumer, a prompt handler, an exception handler —
+/// primitive reached through one of this function's callers —
+/// `call-with-values`' consumer, a prompt handler, a prompt *body* (issue
+/// #179, which is why that one is here rather than at `call_closure`) —
 /// still fails, e.g.
 /// `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
 /// `patina-tests/tests/callability.rs`; the fix is to give this function
@@ -2532,6 +2546,7 @@ fn handle_control_primitive(
             } else {
                 TaggedValue::FALSE
             };
+            let prompt_idx = state.prompt_stack.len();
             state.prompt_stack.push(PromptFrame {
                 tag,
                 stack_depth: state.frames.len(),
@@ -2543,8 +2558,28 @@ fn handle_control_primitive(
             // Anything past the handler goes to the body, as Racket's does.
             // These were dropped on the floor until the review of #175 — a
             // one-argument body was called with none.
-            call_closure(state, body, args.get(3..).unwrap_or(&[]), dst)?;
-            // When body returns normally, pop_resolved_prompts will clean up the prompt.
+            //
+            // `call_any`, not `call_closure`: the body is any procedure, which
+            // is what Racket, Guile and the tree-walker all take — a
+            // primitive, a parameter object, a continuation. `call_closure`
+            // took a compiled closure and nothing else (issue #179).
+            // `Some` is a body that needed no frame and has already finished —
+            // a primitive, a parameter object, a delimited continuation that
+            // was the identity. No `Return` is coming to carry the prompt off
+            // by depth, so this is the one call site that closes its own
+            // prompt. `None` means a frame was pushed and the ordinary sweep
+            // will do it.
+            if let Some(result) = call_any(state, body, args.get(3..).unwrap_or(&[]), dst)? {
+                // `truncate(prompt_idx)`, not `pop()`: the top of the stack is
+                // not necessarily the frame this call pushed. A no-frame body
+                // can still re-enter the VM — `assoc` with a comparator that
+                // opens a prompt of its own, a parameter converter that does —
+                // and a prompt left above ours is what `pop()` would take,
+                // closing someone else's and leaving this one live for the
+                // next abort to land on.
+                state.prompt_stack.truncate(prompt_idx);
+                state.set_reg(dst, result);
+            }
         }
 
         VmControlPrimitive::AbortCurrentContinuation => {
