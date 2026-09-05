@@ -1641,62 +1641,110 @@ fn a_transfer_out_of_a_re_entry_thunk_behaves() {
 /// backends, measured against Guile 3.0.11.
 ///
 /// `backend_divergence.rs` holds the four answers that changed when this
-/// landed. This is the property of the *mechanism* that none of them pins:
-/// the handler's reinstalled depth is stored as a distance below the stub's
-/// own frame rather than as an absolute index, because the frame can be
-/// captured and replayed at another depth.
+/// landed. What is here is the property none of them pins: **when the
+/// reinstated handler goes away again.** R7RS 6.11 puts it back for the rest
+/// of the thunk's extent, so a replay of that debt has to end where the
+/// replayed region does — otherwise a handler answers a raise long after its
+/// `with-exception-handler` returned, and which one answers depends on frame
+/// counts nobody wrote down.
 ///
-/// **Finding a program that can tell the two apart took four tries**, and the
-/// three that failed are why this comment is long — each looked like it was
-/// testing the depth and was not:
+/// Both backends record a boundary for it, by different means: the VM gives
+/// the entry a depth measured from the floor of the smallest region that
+/// could replay the frame (`vm_raise_value`), and the tree-walker sweeps the
+/// handler stack back to the prompt frame's `handler_depth` when the boundary
+/// is reached (`cps_eval/continuation.rs`).
+///
+/// **Finding programs that can see any of this is most of the work**, and the
+/// ones that cannot are worth naming, because each looks like it tests the
+/// property:
 ///
 /// - `(raise-continuable (abort-current-continuation …))` captures at the
-///   *abort*, which runs before the raise. No stub frame is in the region at
-///   all, so the resumed program takes the ordinary path.
-/// - resuming at the same depth it was captured at makes the arithmetic
-///   cancel — the same trap
-///   `test_a_composable_continuation_relocates_the_depths_it_carries`
-///   documents for the carried prompt depths.
-/// - a `guard` around the second raise shadows the handler under test, so it
-///   answers for the guard whichever way the depth went.
-///
-/// What discriminates: capture from inside the handler, resume **deep inside
-/// a nest**, and let an outer handler *identify itself*. Storing the absolute
-/// index passes every row in `backend_divergence.rs` and every other shape
-/// here, and answers `INNER` below — the reinstalled handler outliving the
-/// thunk it belongs to, because a depth from the stack the raise happened on
-/// is shallower than anything on the stack it was resumed on, so nothing ever
-/// pops it. Measured by building it that way, not by reasoning.
+///   *abort*, which runs first — no raise-step frame is in the region at all.
+/// - resuming at the depth it was captured at makes every relocation cancel,
+///   the trap `test_a_composable_continuation_relocates_the_depths_it_carries`
+///   documents for carried prompt depths.
+/// - a `guard` around the later raise installs its own handler on top and
+///   answers whichever way the one under test went.
+/// - invoking the continuation twice and reading only the two values: an
+///   implementation that pushed a handler per invoke and popped none gives
+///   the identical answer. The trailing raise below is what makes it bite.
 #[test]
 fn the_remainder_of_a_raise_is_a_frame() {
-    const CAPTURE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
-         (define k* #f)\n\
-         (define cap (call-with-continuation-prompt\n\
-         \x20 (lambda ()\n\
-         \x20   (with-exception-handler\n\
-         \x20     (lambda (e) (if (eq? e 'rc) (abort-current-continuation t 'ab) (list 'INNER e)))\n\
-         \x20     (lambda () (list 'body (raise-continuable 'rc)))))\n\
-         \x20 t (lambda (v k) (set! k* k) 'cap)))\n\
-         (define (nest n thunk) (if (= n 0) (thunk) (list 'L (nest (- n 1) thunk))))";
+    /// `k*` resumes a body whose handler aborted, with `nest` frames between
+    /// the `with-exception-handler` and the prompt. `INSIDE` puts the handler
+    /// within the captured region, `OUTSIDE` puts it beyond the region's
+    /// floor — the case whose depth no region contains.
+    fn capture(nest: usize, inside: bool) -> String {
+        let body = "(call-with-continuation-prompt\n\
+             \x20 (lambda () (list 'body (raise-continuable 'rc)))\n\
+             \x20 t (lambda (v k) (set! k* k) 'cap))";
+        let handler = "(lambda (e) (if (eq? e 'rc) (abort-current-continuation t 'ab) \
+                        (list 'INNER e)))";
+        let guarded = if inside {
+            format!(
+                "(call-with-continuation-prompt\n\
+                 \x20 (lambda () (with-exception-handler {handler}\n\
+                 \x20   (lambda () (list 'body (raise-continuable 'rc)))))\n\
+                 \x20 t (lambda (v k) (set! k* k) 'cap))"
+            )
+        } else {
+            format!(
+                "(with-exception-handler {handler} (lambda () (nest {nest} (lambda () {body}))))"
+            )
+        };
+        format!(
+            "(define t (make-continuation-prompt-tag 'p))\n\
+             (define k* #f)\n\
+             (define (nest n thunk) (if (= n 0) (thunk) (list 'L (nest (- n 1) thunk))))\n\
+             (define cap {guarded})"
+        )
+    }
 
-    // Resuming replays the handler's return, so the stub re-pushes the
-    // handler and the body goes on. Once that body has returned its thunk is
-    // over, and the next raise must reach OUTER.
+    // The handler is installed *inside* the prompt, so the region contains
+    // its extent. Resuming replays the re-push; once the resumed body has
+    // returned, the next raise must reach OUTER. Nesting the resume puts the
+    // replay at a depth the capture never saw.
     assert_program_eval_to(
         &format!(
-            "{CAPTURE}\n\
+            "{}\n\
              (with-exception-handler (lambda (e) (list 'OUTER e))\n\
              \x20 (lambda () (nest 6 (lambda ()\n\
-             \x20   (let ((r (k* 'resumed))) (list r (raise-continuable 'after)))))))"
+             \x20   (let ((r (k* 'resumed))) (list r (raise-continuable 'after)))))))",
+            capture(0, true)
         ),
         "(L (L (L (L (L (L ((body resumed) (OUTER after))))))))",
     );
 
-    // Invoking the same continuation twice reinstalls once per resumption,
-    // each for its own extent — the handler stack does not accumulate.
+    // The handler is installed *outside* the prompt, so its own depth names a
+    // frame below anything the region owns. Reinstating there on a replay put
+    // the entry where nothing sweeps it, and the answer flipped to INNER as
+    // soon as one frame separated the handler from the prompt — the VM was
+    // right at 0 and wrong from 1, the tree-walker wrong at every count.
+    // Guile answers OUTER throughout.
+    for n in [0usize, 1, 2, 5, 20] {
+        assert_program_eval_to(
+            &format!(
+                "{}\n\
+                 (with-exception-handler (lambda (e) (list 'OUTER e))\n\
+                 \x20 (lambda () (let ((r (k* 'resumed))) (list r (raise-continuable 'after)))))",
+                capture(n, false)
+            ),
+            "((body resumed) (OUTER after))",
+        );
+    }
+
+    // Invoking the same continuation twice reinstalls once per resumption and
+    // leaves nothing behind: the trailing raise reaches OUTER, which it would
+    // not if the two re-pushes had accumulated.
     assert_program_eval_to(
-        &format!("{CAPTURE}\n(list (k* 'one) (k* 'two))"),
-        "((body one) (body two))",
+        &format!(
+            "{}\n\
+             (with-exception-handler (lambda (e) (list 'OUTER e))\n\
+             \x20 (lambda () (let* ((a (k* 'one)) (b (k* 'two)))\n\
+             \x20   (list a b (raise-continuable 'after)))))",
+            capture(0, true)
+        ),
+        "((body one) (body two) (OUTER after))",
     );
 }
 
