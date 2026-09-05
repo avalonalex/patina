@@ -183,11 +183,7 @@ impl CpsExpr {
                 value.for_each_literal(seen, f);
                 cont.for_each_literal(seen, f);
             }
-            CpsExprKind::CallCC { proc, .. } | CpsExprKind::Control { proc, .. } => {
-                proc.for_each_literal(seen, f);
-            }
-            CpsExprKind::Prompt { body, .. } => body.for_each_literal(seen, f),
-            CpsExprKind::Abort { value, .. } => value.for_each_literal(seen, f),
+            CpsExprKind::CallCC { proc, .. } => proc.for_each_literal(seen, f),
             CpsExprKind::PrimOp { args, .. } => {
                 for arg in args {
                     arg.for_each_literal(seen, f);
@@ -348,43 +344,25 @@ pub enum CpsExprKind {
     },
 
     // ==================== Control Operators ====================
-    // These are the primitives for implementing call/cc and shift/reset.
     /// Capture current continuation (for call/cc)
     /// (call/cc (lambda (k) body) current-k)
     ///
     /// Reifies the current continuation as a first-class value and passes
     /// it to the given procedure.
+    ///
+    /// The only control form the CPS transform emits. The prompt API —
+    /// `call-with-continuation-prompt`, `abort-current-continuation` and
+    /// the composable continuation an abort hands its handler — is claimed
+    /// at *apply* time by the tree-walker (`cps_eval/prompts.rs`), like
+    /// `dynamic-wind`, so that it works as a value as well as in operator
+    /// position. `Prompt`, `Control` and `Abort` nodes existed here for that
+    /// API until 2026-09-04 with nothing emitting them.
     CallCC {
         /// Procedure that receives the continuation
         proc: Rc<CpsExpr>,
         /// Current continuation (to be captured)
         cont: ContVar,
     },
-
-    /// Establish a prompt (for reset)
-    /// (prompt tag body k)
-    ///
-    /// Establishes a delimiter for delimited continuation capture.
-    /// When `body` completes normally, its result goes to `k`.
-    Prompt {
-        tag: PromptTag,
-        body: Rc<CpsExpr>,
-        cont: ContVar,
-    },
-
-    /// Capture delimited continuation (for shift)
-    /// (control tag (lambda (k) body))
-    ///
-    /// Captures the continuation up to the nearest prompt with matching tag.
-    /// The captured continuation is passed to the procedure.
-    Control { tag: PromptTag, proc: Rc<CpsExpr> },
-
-    /// Abort to prompt
-    /// (abort tag value)
-    ///
-    /// Discards the current continuation up to the prompt and returns
-    /// the value to the prompt's handler.
-    Abort { tag: PromptTag, value: Rc<CpsExpr> },
 
     // ==================== Template ====================
     /// Quasiquote template evaluation
@@ -578,9 +556,6 @@ impl CpsExprKind {
             CpsExprKind::Set { .. } => "set!",
             CpsExprKind::Define { .. } => "define",
             CpsExprKind::CallCC { .. } => "call/cc",
-            CpsExprKind::Prompt { .. } => "prompt",
-            CpsExprKind::Control { .. } => "control",
-            CpsExprKind::Abort { .. } => "abort",
             CpsExprKind::Quasiquote { .. } => "quasiquote",
             CpsExprKind::PrimOp { .. } => "prim-op",
             CpsExprKind::Halt(_) => "halt",
@@ -673,15 +648,6 @@ impl std::fmt::Display for CpsExprKind {
             }
             CpsExprKind::CallCC { proc, cont } => {
                 write!(f, "(call/cc {} #{})", proc, cont)
-            }
-            CpsExprKind::Prompt { tag, body, cont } => {
-                write!(f, "(prompt {} {} #{})", tag, body, cont)
-            }
-            CpsExprKind::Control { tag, proc } => {
-                write!(f, "(control {} {})", tag, proc)
-            }
-            CpsExprKind::Abort { tag, value } => {
-                write!(f, "(abort {} {})", tag, value)
             }
             CpsExprKind::Quasiquote { template, cont } => {
                 write!(f, "(quasiquote {} #{})", template, cont)

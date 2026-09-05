@@ -34,74 +34,112 @@ pub(super) fn continuation_cont_value(k: &CpsContinuation) -> ContValue {
 }
 
 impl<'a> CpsEvaluator<'a> {
+    /// Reify `cont` as a *full* continuation: the chain plus the whole
+    /// dynamic environment — winds, handlers and prompts — at the capture.
     pub(super) fn reify_continuation(
         &self,
         cont: &ContValue,
         cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
         exception_handlers: &[ExceptionHandler],
+        prompt_stack: &[PromptFrame],
     ) -> Rc<CpsContinuation> {
         match cont {
+            // Already reified, including its dynamic state: re-reifying is
+            // the identity, so the stacks are deliberately unread here. The
+            // continuation names the environment it was *captured* in, not
+            // the one it is being handed around in.
+            ContValue::Captured(k) => k.clone(),
+
+            // Halt ends the program; nothing runs after it, so it names no
+            // dynamic state rather than the caller's.
+            ContValue::Halt => self.capture(cont, cont_env, None, &[], &[], &[]),
+
+            _ => self.capture(
+                cont,
+                cont_env,
+                None,
+                dynamic_winds,
+                exception_handlers,
+                prompt_stack,
+            ),
+        }
+    }
+
+    /// Build the continuation object for `cont` carrying exactly the dynamic
+    /// state given: a full continuation when `boundary` is `None`, a
+    /// composable one delimited by that boundary otherwise (`prompts.rs`).
+    ///
+    /// The one encoder, as `continuation_cont_value` is the one decoder. The
+    /// chain is stored one of two ways: a `Local` is flattened into the
+    /// `body`/`param`/`env` triple, and every other variant is stored whole in
+    /// `resume`. Flattening the effect-carrying wrappers would be wrong —
+    /// re-entering a `DynamicWindCleanup` has to re-establish the cleanup so
+    /// the after thunk still runs, not just jump past it. That is what the
+    /// `__dw_after__` / `__dw_wind_id__` / `__dw_original__` sentinel
+    /// encoding existed to preserve, in ~90 lines across three files, because
+    /// the storage type could not hold a ContValue. It can now.
+    pub(super) fn capture(
+        &self,
+        cont: &ContValue,
+        cont_env: &ContEnv,
+        boundary: Option<u64>,
+        dynamic_winds: &[DynamicWindRecord],
+        exception_handlers: &[ExceptionHandler],
+        prompt_stack: &[PromptFrame],
+    ) -> Rc<CpsContinuation> {
+        let sentinel = |name: &str| -> (Rc<CpsExpr>, Rc<str>) {
+            let body = CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
+                name: Rc::from(name),
+                scopes: ScopeSet::new(),
+            })));
+            (body, Rc::from(name))
+        };
+        let (body, param, env, captured_cont_env, resume) = match cont {
             ContValue::Local {
                 param,
                 body,
                 env,
                 cont_env: local_cont_env,
-            } => Rc::new(CpsContinuation {
-                body: body.clone(),
-                param: param.clone(),
-                env: env.clone(),
-                prompt_tag: None,
-                dynamic_winds: dynamic_winds.to_vec(),
-                exception_handlers: exception_handlers.to_vec(),
-                captured_cont_env: local_cont_env.clone(),
-                resume: None,
-            }),
-
-            // Already reified, including its handler stack: re-reifying is
-            // the identity, so `exception_handlers` is deliberately unread
-            // here. The continuation names the environment it was *captured*
-            // in, not the one it is being handed around in.
-            ContValue::Captured(k) => k.clone(),
-
-            ContValue::Halt => Rc::new(CpsContinuation {
-                body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-                    name: Rc::from("__halt_value__"),
-                    scopes: ScopeSet::new(),
-                }))),
-                param: Rc::from("__halt_value__"),
-                env: self.evaluator.global_env.clone(),
-                prompt_tag: None,
-                dynamic_winds: vec![],
-                // Halt ends the program; nothing runs after it, so it names no
-                // handlers rather than the caller's.
-                exception_handlers: vec![],
-                captured_cont_env: cont_env.clone(),
-                resume: None,
-            }),
-
-            // Effect-carrying wrappers are stored whole in `resume`.
-            //
-            // Flattening them to the continuation underneath is wrong: re-entering
-            // a DynamicWindCleanup has to re-establish the cleanup so the after
-            // thunk still runs, not just jump past it. That is what the
-            // `__dw_after__` / `__dw_wind_id__` / `__dw_original__` sentinel
-            // encoding existed to preserve, in ~90 lines across three files,
-            // because the storage type could not hold a ContValue. It can now.
-            other => Rc::new(CpsContinuation {
-                body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Var {
-                    name: Rc::from("__resume_value__"),
-                    scopes: ScopeSet::new(),
-                }))),
-                param: Rc::from("__resume_value__"),
-                env: self.evaluator.global_env.clone(),
-                prompt_tag: None,
-                dynamic_winds: dynamic_winds.to_vec(),
-                exception_handlers: exception_handlers.to_vec(),
-                captured_cont_env: cont_env.clone(),
-                resume: Some(other.clone()),
-            }),
-        }
+            } => (
+                body.clone(),
+                param.clone(),
+                env.clone(),
+                local_cont_env.clone(),
+                None,
+            ),
+            ContValue::Halt => {
+                let (body, param) = sentinel("__halt_value__");
+                (
+                    body,
+                    param,
+                    self.evaluator.global_env.clone(),
+                    cont_env.clone(),
+                    None,
+                )
+            }
+            other => {
+                let (body, param) = sentinel("__resume_value__");
+                (
+                    body,
+                    param,
+                    self.evaluator.global_env.clone(),
+                    cont_env.clone(),
+                    Some(other.clone()),
+                )
+            }
+        };
+        Rc::new(CpsContinuation {
+            body,
+            param,
+            env,
+            boundary,
+            dynamic_winds: dynamic_winds.to_vec(),
+            prompt_stack: prompt_stack.to_vec(),
+            exception_handlers: exception_handlers.to_vec(),
+            captured_cont_env,
+            resume,
+        })
     }
 
     pub(super) fn reify_continuation_tagged(
@@ -110,8 +148,15 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: &ContEnv,
         dynamic_winds: &[DynamicWindRecord],
         exception_handlers: &[ExceptionHandler],
+        prompt_stack: &[PromptFrame],
     ) -> TaggedValue {
-        let k = self.reify_continuation(cont, cont_env, dynamic_winds, exception_handlers);
+        let k = self.reify_continuation(
+            cont,
+            cont_env,
+            dynamic_winds,
+            exception_handlers,
+            prompt_stack,
+        );
         self.evaluator
             .global_env
             .heap()
@@ -129,7 +174,7 @@ impl<'a> CpsEvaluator<'a> {
         value: TaggedValue,
         _env: Rc<Environment>,
         cont_env: ContEnv,
-        prompt_stack: Vec<PromptFrame>,
+        mut prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
@@ -173,6 +218,19 @@ impl<'a> CpsEvaluator<'a> {
                 // `__resume_value__`. Unreachable today (nothing constructs
                 // `Captured`), load-bearing for Q2's first-class continuation
                 // work.
+                //
+                // A composable continuation cannot stand here: delivering to
+                // it means resuming its chain *and returning somewhere* when
+                // the chain reaches its boundary, and a `ContValue` used as
+                // the continuation of a step has no somewhere. `(k v)` goes
+                // through `apply_cps_step`, which has the call's own
+                // continuation to return to.
+                if k.boundary.is_some() {
+                    return Err(EvalError::InternalError(
+                        "a composable continuation was delivered to as a step's continuation"
+                            .to_string(),
+                    ));
+                }
                 self.jump_to_continuation(value, k, cont_env, prompt_stack, dynamic_winds)
             }
 
@@ -467,6 +525,81 @@ impl<'a> CpsEvaluator<'a> {
                         })
                     }
                 }
+            }
+
+            ContValue::PromptBoundary { id } => {
+                // The prompt body has returned, or a resumed chain has come
+                // back to its boundary. Pop the frame and deliver to what is
+                // below it. By id rather than blindly the top, so that an
+                // inconsistency is an internal error here and not a delivery
+                // to the wrong continuation; see the variant's doc for why
+                // the top is what it finds.
+                let Some(idx) = prompt_stack.iter().rposition(|frame| frame.id == id) else {
+                    return Err(EvalError::InternalError(format!(
+                        "prompt boundary {id} reached with no frame for it on the prompt stack"
+                    )));
+                };
+                debug_assert_eq!(
+                    idx + 1,
+                    prompt_stack.len(),
+                    "a prompt boundary is reached with its own frame on top"
+                );
+                let frame = prompt_stack.split_off(idx).swap_remove(0);
+                Ok(StepResult::InvokeContinuation {
+                    cont: frame.cont,
+                    value,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                })
+            }
+
+            ContValue::AbortLanding {
+                handler,
+                delimited,
+                cont,
+            } => {
+                // The abort has arrived, with every stack cut back to its
+                // prompt: `(handler value k)`, and the handler's value goes
+                // where the prompt's would have.
+                Ok(StepResult::ApplyProc {
+                    proc: handler,
+                    args: vec![value, delimited],
+                    cont: *cont,
+                    env: self.evaluator.global_env.clone(),
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                })
+            }
+
+            ContValue::ComposableInvokeStep {
+                target,
+                value: resume_value,
+                index,
+                cont,
+            } => {
+                // The `before` thunk of the captured extent at `index` has
+                // returned (its value is ignored), so the extent is entered
+                // now — after the thunk, as `DynamicWindSetup` and `Jump` do,
+                // so that a raise inside it did not run under a record that
+                // was not yet on the stack. Then on to the next extent, or to
+                // the chain itself.
+                let mut new_winds = dynamic_winds;
+                new_winds.push(target.dynamic_winds[index].clone());
+                self.resume_composable(
+                    target,
+                    resume_value,
+                    index + 1,
+                    *cont,
+                    cont_env,
+                    prompt_stack,
+                    new_winds,
+                    exception_handlers,
+                )
             }
         }
     }

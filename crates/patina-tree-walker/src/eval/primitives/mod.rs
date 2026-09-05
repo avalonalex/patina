@@ -9,7 +9,6 @@
 //! for proper CPS compatibility with call/cc.
 
 mod debug;
-mod unsupported;
 
 use patina_core::TaggedValue;
 use patina_runtime::Procedure;
@@ -60,10 +59,5 @@ impl Evaluator {
 
         // Register tree-walker-specific debug primitives
         debug::register(registry);
-
-        // …and the `(scheme base)` exports this backend does not implement,
-        // so they fail with a message that says so rather than with an
-        // internal name. See `unsupported`.
-        unsupported::register(registry);
     }
 }

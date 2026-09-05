@@ -148,15 +148,48 @@ impl<'a> Iterator for ContEnvIter<'a> {
 
 // ==================== PromptFrame ====================
 
-/// A prompt frame on the meta-continuation stack
+/// A prompt on the tree-walker's prompt stack.
+///
+/// A prompt is a *boundary in the continuation*: the prompt body runs with
+/// [`ContValue::PromptBoundary`] as its continuation rather than the
+/// caller's, and the caller's lives here. Reaching the boundary pops this
+/// frame and delivers to `cont`. That is what makes a delimited continuation
+/// simple to capture — it is the aborting call's own continuation chain,
+/// which ends at the boundary — and simple to compose: invoking one pushes a
+/// frame of its own with the invoke site's continuation in `cont`, so the
+/// chain returns to the invoker when it reaches its boundary.
+///
+/// The VM keeps the same three-stack position (`docs/VM_RUNTIME.md` §2.3);
+/// there is no frame depth here because a CPS continuation is not a stack.
 #[derive(Debug, Clone)]
 pub struct PromptFrame {
-    /// The tag identifying this prompt
-    pub tag: Rc<PromptTag>,
-    /// Continuation to invoke when prompt is reached
+    /// Which boundary this frame answers to. A `call-with-continuation-prompt`
+    /// mints one; a composable invoke re-uses the id its continuation's
+    /// chain ends at, so the same chain can be resumed any number of times,
+    /// nested or not, and each resumption's boundary finds its own frame.
+    pub id: u64,
+    /// The tag an `abort-current-continuation` searches for.
+    ///
+    /// `None` for the frame a composable invoke pushes: a delimited
+    /// continuation does not include its prompt (Racket, Guile and the VM
+    /// agree), so an abort inside the resumed computation must find the
+    /// enclosing prompt with that tag at the invoke site, or none.
+    pub tag: Option<Rc<PromptTag>>,
+    /// The prompt's handler, called as `(handler value k)` on an abort.
+    /// `#f` when the call gave none, and for an invoke's frame.
+    pub handler: TaggedValue,
+    /// Where the body's value goes on normal return, and where the handler's
+    /// value goes after an abort.
     pub cont: ContValue,
-    /// Dynamic wind records active at this prompt
-    pub dynamic_winds: Vec<DynamicWindRecord>,
+    /// `dynamic_winds.len()` when the prompt was pushed: an abort travels to
+    /// this depth, and a delimited capture carries the records above it.
+    pub wind_depth: usize,
+    /// `exception_handlers.len()` when the prompt was pushed — the same
+    /// boundary for the handler stack. Recorded, not inferred: the VM learned
+    /// that no frame-depth comparison separates a handler installed in tail
+    /// position of the prompt body from one whose thunk tail-called the
+    /// prompt (`docs/VM_RUNTIME.md` §5.6).
+    pub handler_depth: usize,
 }
 
 /// An exception handler installed by with-exception-handler
@@ -284,5 +317,59 @@ pub enum ContValue {
         original_cont: Box<ContValue>,
         /// The handler that was popped, so it can be re-pushed after continuable raise
         popped_handler: Option<ExceptionHandler>,
+    },
+    /// The continuation of a prompt body: the boundary a delimited
+    /// continuation is delimited by.
+    ///
+    /// Reaching it pops the [`PromptFrame`] with this `id` and delivers the
+    /// value to that frame's `cont`. The frame is looked up by id rather than
+    /// taken from the top so that a mismatch is an internal error and not a
+    /// silent misdelivery; in a consistent machine it *is* the top, because
+    /// every transfer that changes the continuation also sets the prompt
+    /// stack to match — a full invoke restores its snapshot, an abort cuts
+    /// back to below its prompt, a composable invoke pushes.
+    PromptBoundary { id: u64 },
+    /// Where an abort lands: call the prompt's handler with the abort's value
+    /// and the delimited continuation, then deliver its result to the
+    /// prompt's own continuation.
+    ///
+    /// The abort *travels* here through `jump_to_continuation`, which is what
+    /// runs the after-thunks of every extent between the abort and its
+    /// prompt, each under its own record's handler stack (the VM's #165).
+    /// The arrival restores the dynamic environment below the prompt, so the
+    /// handler runs there — which is A1 in `docs/VM_RUNTIME.md` §5.6.
+    AbortLanding {
+        /// The prompt's handler.
+        handler: TaggedValue,
+        /// The delimited continuation the handler receives as its second
+        /// argument.
+        delimited: TaggedValue,
+        /// The prompt's continuation, which the handler's value goes to.
+        cont: Box<ContValue>,
+    },
+    /// A composable invoke in progress: the `before` thunk of the captured
+    /// extent at `index` has just returned, so its record is entered now and
+    /// the next one's thunk runs, until the chain itself can be resumed with
+    /// `value`.
+    ///
+    /// The thunks run as ordinary steps with this as their continuation, so
+    /// a continuation captured inside one and re-entered later finishes the
+    /// thunk and then the invoke — the analogue of the VM's
+    /// `ResumeComposableInvoke` stub, and of `Jump` for a full continuation's
+    /// travel. Not `Jump` itself: a jump's thunks run under their record's
+    /// own handler stack because the target replaces the machine, while an
+    /// invoke's target *extends* it, so these run under the invoke site's
+    /// stack. Both backends pin that in `cps_features.rs`.
+    ComposableInvokeStep {
+        /// The delimited continuation being invoked.
+        target: Rc<CpsContinuation>,
+        /// The value to deliver into the captured chain once every extent
+        /// has been re-entered.
+        value: TaggedValue,
+        /// Which of `target.dynamic_winds` this step has just entered.
+        index: usize,
+        /// The invoke site's continuation: where the resumed chain returns
+        /// when it reaches its boundary.
+        cont: Box<ContValue>,
     },
 }

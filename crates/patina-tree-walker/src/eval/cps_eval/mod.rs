@@ -1,8 +1,9 @@
 //! CPS Evaluator - Evaluates CPS (Continuation-Passing Style) expressions
 //!
 //! This module implements evaluation of CpsExpr, which is the IR used for
-//! implementing first-class continuations (call/cc) and delimited continuations
-//! (shift/reset, prompt/control).
+//! implementing first-class continuations (call/cc). Delimited continuations
+//! — the prompt API — are not IR forms but apply-time control primitives
+//! over the same machine; see `prompts.rs`.
 //!
 //! # Architecture
 //!
@@ -29,9 +30,6 @@
 //!
 //! **Control operators**:
 //! - `CallCC` - Capture current continuation
-//! - `Prompt` - Establish delimiter for shift/reset
-//! - `Control` - Capture delimited continuation
-//! - `Abort` - Abort to prompt
 //!
 //! - `PrimOp` - Primitive operations
 //! - `Halt` - Program termination
@@ -59,6 +57,7 @@
 //! - `application.rs` - apply_cps_step (procedure application)
 //! - `continuation.rs` - Continuation capture/restore, reification
 //! - `wind.rs` - Dynamic-wind handling, promise forcing
+//! - `prompts.rs` - The prompt API: prompts, aborts, composable continuations
 //! - `exceptions.rs` - Exception routing through CPS handlers
 //! - `quasiquote.rs` - Quasiquote template evaluation
 
@@ -67,6 +66,7 @@ mod continuation;
 mod environment;
 mod exceptions;
 mod gc_roots;
+mod prompts;
 pub mod quasiquote;
 mod step;
 mod types;
@@ -304,13 +304,15 @@ impl<'a> CpsEvaluator<'a> {
                         // any raise *after* an earlier `guard` had fired went
                         // unhandled.
                         //
-                        // This restores the stack at the escape, and no more:
-                        // `prompt_stack` is still reset (delimited
-                        // continuations are a separate question, and nothing
-                        // measured asks for it). The wind thunks between the
-                        // jump and here have already run, as steps of the
-                        // trampoline the jump was made on, each in its own
-                        // `dynamic-wind` call's environment (`wind.rs`).
+                        // `prompt_stack` likewise — the third stack of the
+                        // dynamic environment, and the one this arm reset to
+                        // empty until the tree-walker had a prompt API. An
+                        // abort lands here too (`prompts.rs`), with a
+                        // continuation whose stacks are cut back to its
+                        // prompt. The wind thunks between the jump and here
+                        // have already run, as steps of the trampoline the
+                        // jump was made on, each in its own `dynamic-wind`
+                        // call's environment (`wind.rs`).
                         //
                         // `resume` holds an effect-carrying continuation that
                         // must be re-established rather than jumped past; the
@@ -329,7 +331,7 @@ impl<'a> CpsEvaluator<'a> {
                             value: value_tagged,
                             env: k.env.clone(),
                             cont_env: k.captured_cont_env.clone(),
-                            prompt_stack: Vec::new(),
+                            prompt_stack: k.prompt_stack.clone(),
                             dynamic_winds: k.dynamic_winds.clone(),
                             exception_handlers: k.exception_handlers.clone(),
                         };

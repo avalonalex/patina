@@ -2,31 +2,33 @@
 
 This document covers the design for implementing full delimited continuation support (shift/reset, prompts).
 
-**Status**: **Done on the VM. Open on the tree-walker — issue #169.**
+**Status**: **Done on both backends.** VM: PRs #158–#172 (2026-09-02/03).
+Tree-walker: issue #169, closed 2026-09-04.
 
 Written December 2025, when neither backend had prompts. Everything below the
-next section is a *design sketch from then*, and the VM did not follow it:
-Option A was chosen but implemented in the bytecode VM against
-`docs/VM_RUNTIME.md` §5.5–§5.6 rather than in the CPS evaluator this document
-assumes. **Read `docs/VM_RUNTIME.md` §5.6 and
-`crates/patina-tests/tests/control_flow_matrix.rs` before this file.** The
-sections here that were measured and corrected on 2026-09-03 are marked; the
-rest is unverified 2025 sketch.
+next section is a *design sketch from then*, and neither implementation
+followed it: Option A was chosen, but the VM implemented it against
+`docs/VM_RUNTIME.md` §5.5–§5.6, and the tree-walker as a boundary value in
+the CPS continuation (`crates/patina-tree-walker/src/eval/cps_eval/prompts.rs`,
+whose header is the design). **Read `docs/VM_RUNTIME.md` §5.6,
+`crates/patina-tests/tests/control_flow_matrix.rs` and that header before
+this file.** The sections here that were measured and corrected on
+2026-09-03/04 are marked; the rest is unverified 2025 sketch.
 
 ---
 
 ## Problem Statement
 
-Current continuation support (**re-measured 2026-09-03**; the 2025 list this
+Current continuation support (**re-measured 2026-09-04**; the 2025 list this
 replaces claimed partial prompt support on both backends, which was never
-true):
+true, and the 2026-09-03 table recorded the tree-walker as lacking all of it):
 
 | | VM | tree-walker |
 |---|---|---|
 | `call/cc`, `dynamic-wind` | ✅ | ✅ |
-| `call-with-continuation-prompt` | ✅ | ❌ issue #169 |
-| `abort-current-continuation` | ✅ | ❌ issue #169 |
-| delimited capture, composable invoke | ✅ (#160, #164, #166) | ❌ issue #169 |
+| `call-with-continuation-prompt` | ✅ | ✅ (2026-09-04, #169) |
+| `abort-current-continuation` | ✅ | ✅ (2026-09-04, #169) |
+| delimited capture, composable invoke | ✅ (#160, #164, #166) | ✅ (2026-09-04, #169) |
 | `call/cc` used as a *value* | ✅ | ❌ Track Q §1.2 |
 
 The TODO comments in the codebase identify:
@@ -54,10 +56,10 @@ The TODO comments in the codebase identify:
 
 ## Current Implementation Status
 
-**Corrected 2026-09-03.** The list this replaces said basic prompt
-installation, prompt tags and abort-to-prompt all worked. On the tree-walker
-none of it did; on the VM it works by a mechanism this document does not
-describe.
+**Corrected 2026-09-03, and again 2026-09-04.** The list this replaces said
+basic prompt installation, prompt tags and abort-to-prompt all worked. On the
+tree-walker none of it did until 2026-09-04; on both backends it now works by
+a mechanism this document does not describe.
 
 **The VM**: complete. `call-with-continuation-prompt` and
 `abort-current-continuation` are intercepted by name in `vm_control_primitive`
@@ -66,45 +68,43 @@ whose top frame calls the prompt handler, and a composable invoke appends the
 captured region in place. See `docs/VM_RUNTIME.md` §5.5–§5.6. The last defect against it, #167, was closed
 by PR #172; `control_flow_matrix.rs` is where the next one shows up.
 
-**The tree-walker**: nothing works, and the scaffolding that exists is dead
-**but not absent** — an earlier version of this section said `Abort` had no
-arm, which is wrong and worth correcting carefully, because "there is nothing
-there" is what stops anyone auditing what *is*:
+**The tree-walker**: complete as of 2026-09-04 (issue #169), by the
+apply-time route the 2026-09-03 version of this section predicted. The two
+names are claimed in `cps_eval/application.rs`'s short-name match beside
+`dynamic-wind`, so they work as values too, and the implementation is
+`cps_eval/prompts.rs`, whose module header is the design: a prompt is a
+boundary *value* in the continuation (`ContValue::PromptBoundary`) with the
+caller's continuation waiting in a `PromptFrame`; a delimited continuation is
+the aborting call's own continuation chain plus the dynamic state above the
+frame; an abort *jumps* to a landing whose stacks are cut back to the frame;
+a composable invoke re-enters the captured extents one step each and returns
+through its boundary. `CpsContinuation` carries the prompt stack now, which
+it always should have.
 
-- `CpsExprKind::Prompt` and `CpsExprKind::Abort` are both in the CPS IR, and
-  `cps_eval/step.rs` has an arm for **each**. `Prompt` pushes a `PromptFrame`;
-  `Abort` finds the prompt by tag, reifies its continuation and jumps to it.
-- The evaluator threads a `prompt_stack` through every step and roots it for
-  GC. It is always empty, because **nothing emits either form**.
-- The `Abort` arm had a real bug the whole time — it truncated the prompt
-  stack to the *matched* index, discarding the frame it had just found, and
-  then popped the enclosing prompt, panicking outright when the match was the
-  only prompt on the stack. Dead code, so nothing caught it; it would have
-  fired on the first program a #169 fix made reach there. Corrected
-  2026-09-03.
+What went with it: the `Prompt`/`Control`/`Abort` CPS IR nodes and their
+evaluator arms, which nothing ever emitted (the `Abort` arm had panicked on
+its only-prompt case since it was written; corrected 2026-09-03 and deleted
+2026-09-04); the placeholder delimited capture in `wind.rs`; and the #170
+"not implemented" registrations. Acceptance was the twelve
+`control_flow_matrix.rs` rows and the seven prompt tests in
+`cps_features.rs`, all of which now run on both backends and agree.
 
-**Which name is claimed where.** This is the part to get right before
-starting, and the reason `dynamic-wind` works in value position while
-`call/cc` does not:
+**Which name is claimed where**, for the next control primitive:
 
 | | VM | tree-walker |
 |---|---|---|
 | `call/cc`, `call-with-current-continuation` | `vm_control_primitive` | **syntactically**, `cps_transform.rs`'s `is_callcc_reference` |
-| `dynamic-wind`, `apply`, `raise`, `error`, `force`, `call-with-values` | `vm_control_primitive` | at **apply** time, short-name match in `cps_eval/application.rs` |
-| the two prompt names | `vm_control_primitive` | nowhere — a registry miss until #170 gave them a deliberate error |
+| `dynamic-wind`, `apply`, `raise`, `error`, `force`, `call-with-values`, the two prompt names | `vm_control_primitive` | at **apply** time, short-name match in `cps_eval/application.rs` |
 
 An apply-time match sees the primitive whatever name reached it; a syntactic
-one only sees the call it was written in. So the site that decides this is
-`application.rs`'s match, not the CPS transform — adding the prompt names
-there is the likely shape of the fix, not teaching `cps_transform` a new
-special case.
+one only sees the call it was written in — which is why `call/cc` still does
+not work as a value (Track Q §1.2).
 
-**What implementing it involves**: emit `Prompt`/`Abort` (or handle the names
-at apply time), make delimited capture actually delimited, and integrate with
-`dynamic-wind` and the exception-handler stack — which is where every one of
-the VM's four prompt PRs went wrong. Acceptance criteria already exist: twelve
-`UNSUPPORTED` rows in `control_flow_matrix.rs` with values measured against
-Guile.
+**What is still shared with `call/cc`**: a nested trampoline
+(`apply_from_direct_tagged`, which Rust primitives call back through) starts
+every stack empty, so an abort from inside such a callback to a prompt outside
+it reports no matching prompt. Winds and handlers have had that gap since
+before prompts (the "primitive's callback" entry in the triage doc).
 
 ---
 
@@ -186,11 +186,15 @@ From POST_CPS_TECH_DEBT.md Item 3:
 
 ## Success Criteria
 
-- [ ] `call-with-continuation-prompt` captures up to prompt
-- [ ] `abort-current-continuation` works correctly
-- [ ] `shift`/`reset` can be implemented as library
-- [ ] All 7 ignored `cps_features.rs` tests pass
-- [ ] `dynamic-wind` interacts correctly with delimited escapes
+- [x] `call-with-continuation-prompt` captures up to prompt — both backends
+- [x] `abort-current-continuation` works correctly — both backends
+- [ ] `shift`/`reset` can be implemented as library — nothing stops it now;
+      not done, not tested
+- [x] The seven prompt tests in `cps_features.rs` and the twelve prompt rows of
+      `control_flow_matrix.rs` pass on both backends (the "7 ignored tests"
+      this line used to name no longer exist)
+- [x] `dynamic-wind` interacts correctly with delimited escapes — both
+      backends, measured against Guile and Racket
 
 ---
 

@@ -41,7 +41,7 @@ pub mod vfs;
 pub use compiled_macro::{
     CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
 };
-pub use continuation::{CpsContinuation, DynamicWindRecord, next_dynamic_wind_id};
+pub use continuation::{CpsContinuation, DynamicWindRecord, next_dynamic_wind_id, next_prompt_id};
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
@@ -63,7 +63,7 @@ pub use heap::gc::{
 };
 pub use heap::{
     GcFreedBits, Heap, SharedHeap,
-    gc::{trace_cont_env, trace_cont_value, trace_exception_handler},
+    gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
     new_shared_heap,
 };
 pub use tagged_value::TaggedValue;

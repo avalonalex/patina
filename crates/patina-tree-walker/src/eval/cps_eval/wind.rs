@@ -3,14 +3,12 @@
 //! This module contains functions for:
 //! - Jumping to a captured continuation, running the wind thunks on the way
 //! - Forcing promises in CPS mode
-//! - Creating delimited continuations
 
 use super::CpsEvaluator;
 use super::types::{
     ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
 };
 use crate::eval::error::EvalError;
-use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::rc::Rc;
@@ -28,6 +26,13 @@ impl<'a> CpsEvaluator<'a> {
     /// Take the next step of a jump to `target`: run one wind thunk between
     /// the live wind stack and the target's, or, with none left, park the
     /// escape and unwind the Rust stack to the outermost trampoline.
+    ///
+    /// `target` is a full continuation or an abort's landing (`prompts.rs`),
+    /// never a composable one: those *return* to their invoker, so they are
+    /// entered by `resume_composable` rather than jumped to. `prompt_stack`
+    /// rides along untouched — a thunk on the way may itself abort, and it
+    /// needs the prompt it aborts to still findable; arrival replaces the
+    /// stack with the target's.
     ///
     /// This is chibi's "travel to point", one thunk per step: leave the
     /// innermost extent not shared with the target (pop its record, run its
@@ -176,49 +181,6 @@ impl<'a> CpsEvaluator<'a> {
                 exception_handlers,
             })
         }
-    }
-
-    /// Create a delimited continuation value as Rc<CpsContinuation>
-    pub(super) fn make_delimited_continuation(
-        &self,
-        _captured_frames: Vec<PromptFrame>,
-        _current_winds: Vec<DynamicWindRecord>,
-        _prompt_winds: Vec<DynamicWindRecord>,
-    ) -> Rc<CpsContinuation> {
-        // TODO: Implement proper delimited continuation capture
-        // For now, return a placeholder
-        Rc::new(CpsContinuation {
-            body: CpsExpr::rc(CpsExprKind::Halt(CpsExpr::rc(CpsExprKind::Literal(
-                patina_core::TaggedValue::UNSPECIFIED,
-            )))),
-            param: Rc::from("__delimited__"),
-            env: self.evaluator.global_env.clone(),
-            prompt_tag: None,
-            dynamic_winds: vec![],
-            // Empty is not "no opinion": re-entry restores what is stored, so
-            // this would erase the caller's handlers. Harmless only because
-            // this placeholder is unreachable — no `Control`/`Prompt` node is
-            // ever emitted. Give it the real stack when delimited capture is
-            // implemented.
-            exception_handlers: vec![],
-            captured_cont_env: ContEnv::new(),
-            resume: None,
-        })
-    }
-
-    /// Create a delimited continuation value, returning TaggedValue directly
-    pub(super) fn make_delimited_continuation_tagged(
-        &self,
-        captured_frames: Vec<PromptFrame>,
-        current_winds: Vec<DynamicWindRecord>,
-        prompt_winds: Vec<DynamicWindRecord>,
-    ) -> TaggedValue {
-        let k = self.make_delimited_continuation(captured_frames, current_winds, prompt_winds);
-        self.evaluator
-            .global_env
-            .heap()
-            .borrow_mut()
-            .alloc_continuation(k)
     }
 
     /// Apply a procedure from direct (non-CPS) context

@@ -48,9 +48,10 @@ use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
-const TREE_WALKER_PROMPTS: &str = "issue #169";
 // HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
 // converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
+// TREE_WALKER_PROMPTS (issue #169) likewise, on 2026-09-04, when the
+// tree-walker gained the prompt API.
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
@@ -1002,113 +1003,190 @@ fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
     );
 }
 
-// ─── the prompt API is VM-only (issue #169) ──────────────────────────────────
+// ─── the prompt API, on both backends (issue #169, closed 2026-09-04) ────────
 
-/// `(scheme base)` exports the prompt API and only the VM implements it.
+/// `(scheme base)` exports the prompt API, and both backends implement it.
 ///
-/// Here rather than left as a bare failure because of what the tree-walker
-/// used to say: `Undefined variable:
-/// patina.internal.control/call-with-continuation-prompt` — an internal
-/// library path, and "undefined" of a name the library does define. Neither
-/// backend *registers* these two; control primitives are claimed by name
-/// before dispatch, and the tree-walker's CPS transform does not know them.
-/// It now registers a deliberate not-implemented error instead
-/// (`primitives::unsupported`), which is what makes this a divergence with a
-/// recorded stage rather than a lookup accident.
-///
-/// A `SchemeException`, so `guard` can catch it — behaviour a program is
-/// entitled to from anything `(scheme base)` exports.
+/// Until 2026-09-04 only the VM did, and four quarantines stood here: two
+/// `assert_divergence` calls pinning the tree-walker's deliberate
+/// not-implemented error (#170), one asserting that error's wording, one
+/// that `guard` could catch it. They failed together the moment the API
+/// landed, which is what `assert_divergence` is designed to do, and became
+/// this. The behaviour itself is scored by `control_flow_matrix.rs` and the
+/// prompt tests in `cps_features.rs`; what stays here is the pair of programs
+/// that used to be the divergence, held to one answer.
 #[test]
-fn call_with_continuation_prompt_is_vm_only() {
-    assert_divergence(
+fn the_prompt_api_answers_the_same_on_both_backends() {
+    assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v))",
-        On::Vm,
         "42",
-        ErrorClass::AtRuntime,
-        TREE_WALKER_PROMPTS,
     );
-}
-
-/// The message itself, which `assert_divergence` cannot check.
-///
-/// It compares [`ErrorClass`], deliberately never error text — and
-/// `UndefinedVariable` and `SchemeException` are both `AtRuntime`, so the two
-/// tests around this one pass identically with the fix reverted. The whole of
-/// what changed is the wording, so the wording is what has to be asserted.
-///
-/// Three things, each load-bearing:
-///
-/// - it **names the procedure**, which `control_flow_matrix.rs` depends on:
-///   its `answer()` classifies a row as `UNSUPPORTED` by looking for
-///   `call-with-continuation-prompt` in the message. Drop that and twelve
-///   matrix rows silently flip to `ERROR: …`.
-/// - it **does not name an internal library path**, which is the defect.
-/// - it **says which backend does implement it**, which is the actionable
-///   part. It names the backend rather than a CLI flag: an embedder reaching
-///   this through `TreeWalkInterpreter` directly has no `--tree-walker` to
-///   drop.
-#[test]
-fn the_prompt_api_says_what_is_missing() {
-    let err = try_eval_program_tree_walker(
-        "(define t (make-continuation-prompt-tag 'p))\n\
-         (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v))",
-    )
-    .expect_err("the tree-walker does not implement prompts");
-
-    assert!(
-        err.contains("call-with-continuation-prompt"),
-        "must name the procedure — control_flow_matrix.rs keys on it: {err}"
-    );
-    assert!(
-        err.contains("not implemented") && err.contains("tree-walker"),
-        "must say what is missing and where: {err}"
-    );
-    assert!(
-        err.contains("bytecode VM"),
-        "must say which backend implements it: {err}"
-    );
-    assert!(
-        !err.contains("patina.internal"),
-        "must not leak an internal library path — that is the defect: {err}"
-    );
-    assert!(
-        !err.contains("Undefined variable"),
-        "must not be a lookup failure — the name is bound: {err}"
-    );
-}
-
-/// …and a program can catch it, as it can catch anything `(scheme base)`
-/// raises.
-///
-/// Not a change — the `UndefinedVariable` this replaced was catchable too
-/// (only `Internal` and `ControlFlow` are not). Asserted because it is a
-/// property the replacement had to preserve and could easily have lost by
-/// reaching for `InternalError`, not because the fix introduced it.
-#[test]
-fn the_prompt_api_error_is_catchable() {
-    assert_eq!(
-        eval_program_tree_walker(
-            "(define t (make-continuation-prompt-tag 'p))\n\
-             (guard (e (#t (list 'caught (error-object? e))))\n\
-             \x20 (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v)))"
-        ),
-        "(caught #t)"
-    );
-}
-
-/// The other half of the same gap. Separate because a fix could plausibly
-/// land one without the other, and then only one of these should go red.
-#[test]
-fn abort_current_continuation_is_vm_only() {
-    assert_divergence(
+    assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (call-with-continuation-prompt\n\
          \x20 (lambda () (abort-current-continuation t 'ab))\n\
          \x20 t (lambda (v k) (list 'handler v)))",
-        On::Vm,
         "(handler ab)",
+    );
+}
+
+/// An abort with no prompt to go to is an ordinary raised error, so a
+/// program can catch it — the property the #170 error had and its
+/// replacement had to keep. Both backends: the VM raises
+/// `NoMatchingPrompt` through the same route as any runtime error.
+#[test]
+fn an_abort_with_no_matching_prompt_is_catchable() {
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (guard (e (#t (list 'caught (error-object? e))))\n\
+         \x20 (abort-current-continuation t 'nowhere))",
+        "(caught #t)",
+    );
+}
+
+/// Two answers the review of #175 found the backends giving differently,
+/// both fixed on the side that was wrong, and held together here.
+///
+/// Extra arguments to `call-with-continuation-prompt` go to the body, which
+/// is Racket's signature (`proc [prompt-tag handler] arg ...`); the
+/// tree-walker rejected them with an arity error and the VM dropped them, so
+/// a one-argument body was called with none. And `continuation?` answers
+/// `#t` for a continuation whichever backend captured it: the VM's are
+/// `VmContinuationRef`s, which the predicate did not know.
+#[test]
+fn the_prompt_apis_edges_agree_on_both_backends() {
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt (lambda (a b) (list 'body a b)) t (lambda (v k) v) 1 2)",
+        "(body 1 2)",
+    );
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (call-with-continuation-prompt\n\
+         \x20 (lambda () (abort-current-continuation t 'x))\n\
+         \x20 t (lambda (v k) (list (procedure? k) (continuation? k))))",
+        "(#t #t)",
+    );
+    assert_program_eval_to(
+        "(call/cc (lambda (c) (list (procedure? c) (continuation? c))))",
+        "(#t #t)",
+    );
+}
+
+// ─── VM prompt defects found by the review of #175 (issues #176–#179) ────────
+//
+// The VM is untouched by that PR; these reproduce on `main`. Each is pinned
+// so the divergence is on the inventory, and each names its issue. Guile
+// 3.0.11 backs the tree-walker's answer wherever it is cited.
+
+/// #176: after a continuation captured inside a prompt body is re-entered
+/// and the body returns a second time, the VM keeps the prompt frame, and a
+/// later abort outside any prompt lands on it.
+#[test]
+fn a_re_entered_prompt_body_leaves_its_frame_behind_on_the_vm() {
+    assert_divergence(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (define saved #f) (define n 0)\n\
+         (define r (call-with-continuation-prompt\n\
+         \x20           (lambda () (call/cc (lambda (c) (set! saved c) 'first)))\n\
+         \x20           t (lambda (v k) (list 'h v))))\n\
+         (set! n (+ n 1))\n\
+         (if (= n 1) (saved 'second))\n\
+         (list 'r r (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))",
+        On::TreeWalker,
+        "(r second no-prompt)",
         ErrorClass::AtRuntime,
-        TREE_WALKER_PROMPTS,
+        "issue #176",
+    );
+}
+
+/// #177: an abort from a `force`d thunk in tail position of the prompt body
+/// is a type error on the VM. The non-tail spelling works on both.
+#[test]
+fn an_abort_from_a_forced_thunk_in_tail_position_is_a_type_error_on_the_vm() {
+    const PRELUDE: &str = "(import (scheme lazy))\n(define t (make-continuation-prompt-tag 'p))\n";
+    assert_divergence(
+        &format!(
+            "{PRELUDE}(call-with-continuation-prompt\n\
+             \x20 (lambda () (force (delay (abort-current-continuation t 'a1))))\n\
+             \x20 t (lambda (v k) (list 'h v)))"
+        ),
+        On::TreeWalker,
+        "(h a1)",
+        ErrorClass::AtRuntime,
+        "issue #177",
+    );
+    assert_program_eval_to(
+        &format!(
+            "{PRELUDE}(call-with-continuation-prompt\n\
+             \x20 (lambda () (list 'y (force (delay (abort-current-continuation t 'a3)))))\n\
+             \x20 t (lambda (v k) (list 'h v)))"
+        ),
+        "(h a3)",
+    );
+}
+
+/// #178: a composable continuation captured from inside an exception handler.
+/// Resuming it returns from the handler; R7RS 6.11 then reinstalls the
+/// handler after a continuable raise, and raises a secondary exception after
+/// a non-continuable one. The tree-walker and Guile do both; the VM does
+/// neither. Recorded as a pair of answers rather than through
+/// `assert_divergence`, because the VM's wrong answer is a *value* in the
+/// first case and the tree-walker's right answer is an *error* in the second
+/// — neither is a shape that helper can express.
+#[test]
+fn a_composable_continuation_captured_inside_a_raise_handler() {
+    const CONTINUABLE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
+        (guard (e (#t (list 'caught e)))\n\
+        \x20 (call-with-continuation-prompt\n\
+        \x20   (lambda ()\n\
+        \x20     (with-exception-handler\n\
+        \x20       (lambda (e) (if (eq? e 'rc)\n\
+        \x20                       (abort-current-continuation t (list 'aborted e))\n\
+        \x20                       (list 'handled-again e)))\n\
+        \x20       (lambda () (list 'body (raise-continuable 'rc) (raise-continuable 'rc2)))))\n\
+        \x20   t (lambda (v k) (list 'h (k 'resumed)))))";
+    assert_eq!(
+        eval_program_tree_walker(CONTINUABLE),
+        "(h (body resumed (handled-again rc2)))",
+        "Guile answers this"
+    );
+    assert_eq!(
+        eval_program_vm(CONTINUABLE),
+        "(caught rc2)",
+        "the VM's recorded wrong answer — issue #178; a change here is a move in one direction or the other"
+    );
+
+    const NON_CONTINUABLE: &str = "(define t (make-continuation-prompt-tag 'p))\n\
+        (guard (e (#t (list 'caught (error-object? e))))\n\
+        \x20 (call-with-continuation-prompt\n\
+        \x20   (lambda ()\n\
+        \x20     (with-exception-handler\n\
+        \x20       (lambda (e) (abort-current-continuation t (list 'aborted e)))\n\
+        \x20       (lambda () (list 'body (raise 'nc)))))\n\
+        \x20   t (lambda (v k) (list 'h (k 'resumed)))))";
+    assert_eq!(
+        eval_program_tree_walker(NON_CONTINUABLE),
+        "(caught #t)",
+        "the secondary exception, caught by the guard — Guile answers an error object too"
+    );
+    assert_eq!(
+        eval_program_vm(NON_CONTINUABLE),
+        "(h (body resumed))",
+        "the VM's recorded wrong answer — issue #178"
+    );
+}
+
+/// #179: the VM's prompt body must be a closure; a parameter object (or any
+/// primitive) is rejected. Racket accepts any procedure.
+#[test]
+fn a_parameter_object_as_the_prompt_body_is_rejected_by_the_vm() {
+    assert_divergence(
+        "(call-with-continuation-prompt (make-parameter 7))",
+        On::TreeWalker,
+        "7",
+        ErrorClass::AtRuntime,
+        "issue #179",
     );
 }
