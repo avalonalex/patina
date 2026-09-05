@@ -1127,29 +1127,86 @@ fn a_tail_position_prompt_is_still_live() {
     );
 }
 
-/// #177: an abort from a `force`d thunk in tail position of the prompt body
-/// is a type error on the VM. The non-tail spelling works on both.
+/// An abort out of a Rust primitive's callback reaches its prompt — issue
+/// #177, fixed 2026-09-05.
+///
+/// `force` runs its thunk through `ApplyContext::apply_proc`, a re-entry
+/// boundary with a nested dispatch loop under it. An abort there is not a
+/// return: it cuts every stack back to its prompt and pushes one stub frame
+/// that has yet to run, so the primitive must be abandoned rather than handed
+/// a value.
+///
+/// The **tail** spelling is the one that broke. The tail call pops the prompt
+/// body's frame before `force` runs, so the abort's landing sits at exactly
+/// the depth a callback returning normally would leave — and every check on
+/// the way out was a frame-depth comparison. `force` cached the abort's value
+/// as its thunk's result and ran on, over the registers the landing was about
+/// to use: `expected a procedure, got object`. The non-tail spelling leaves a
+/// frame behind and always worked, which is what made the depth reading look
+/// sufficient.
 #[test]
-fn an_abort_from_a_forced_thunk_in_tail_position_is_a_type_error_on_the_vm() {
+fn an_abort_out_of_a_primitives_callback_reaches_its_prompt() {
     const PRELUDE: &str = "(import (scheme lazy))\n(define t (make-continuation-prompt-tag 'p))\n";
-    assert_divergence(
-        &format!(
-            "{PRELUDE}(call-with-continuation-prompt\n\
-             \x20 (lambda () (force (delay (abort-current-continuation t 'a1))))\n\
+    for (body, expected) in [
+        (
+            "(force (delay (abort-current-continuation t 'a1)))",
+            "(h a1)",
+        ),
+        (
+            "(list 'y (force (delay (abort-current-continuation t 'a3))))",
+            "(h a3)",
+        ),
+    ] {
+        assert_program_eval_to(
+            &format!(
+                "{PRELUDE}(call-with-continuation-prompt (lambda () {body})\n\
+                 \x20 t (lambda (v k) (list 'h v)))"
+            ),
+            expected,
+        );
+    }
+}
+
+/// Tree-walker: an abort out of a callback reached through a *nested
+/// trampoline* does not find its prompt.
+///
+/// The VM answers this since #177. The tree-walker's
+/// `apply_from_direct_tagged` — the trampoline a Rust primitive's callback
+/// runs on — starts every stack empty, so the abort searches a prompt stack
+/// that has none of the caller's prompts and raises "no matching prompt tag",
+/// which the `guard` then catches. `dynamic-wind` records and exception
+/// handlers have the same hole on that path and predate prompts entirely; it
+/// is the "primitive's callback" entry in {GUARD_UNWIND_ORDER}, and
+/// `cps_eval/prompts.rs` names it as inherited rather than added.
+///
+/// `force` is not the probe here: the tree-walker routes it through the CPS
+/// evaluator rather than the trampoline, so it answers `(h a1)` there. A
+/// comparator passed to `assoc` does go through the trampoline.
+#[test]
+fn an_abort_out_of_a_nested_trampoline_callback_is_lost_on_the_tree_walker() {
+    assert_eq!(
+        eval_program_vm(
+            "(define t (make-continuation-prompt-tag 'p))\n\
+             (call-with-continuation-prompt\n\
+             \x20 (lambda () (assoc 1 '((1 . a)) (lambda (a b) (abort-current-continuation t 'x))))\n\
              \x20 t (lambda (v k) (list 'h v)))"
         ),
-        On::TreeWalker,
-        "(h a1)",
-        ErrorClass::AtRuntime,
-        "issue #177",
+        "(h x)",
+        "the VM reaches the prompt; if this changed, it regressed"
     );
-    assert_program_eval_to(
-        &format!(
-            "{PRELUDE}(call-with-continuation-prompt\n\
-             \x20 (lambda () (list 'y (force (delay (abort-current-continuation t 'a3)))))\n\
-             \x20 t (lambda (v k) (list 'h v)))"
+    assert_eq!(
+        eval_program_tree_walker(
+            "(define t (make-continuation-prompt-tag 'p))\n\
+             (guard (e (#t (list 'caught (error-object? e))))\n\
+             \x20 (call-with-continuation-prompt\n\
+             \x20   (lambda () (assoc 1 '((1 . a)) (lambda (a b) (abort-current-continuation t 'x))))\n\
+             \x20   t (lambda (v k) (list 'h v))))"
         ),
-        "(h a3)",
+        "(caught #t)",
+        "\n[tree-walker] NO LONGER DIVERGES — the abort now finds its prompt \
+         through the nested trampoline.\nReplace both assertions with a single \
+         assert_program_eval_to on `(h x)` and close the \"primitive's callback\" \
+         entry in PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
     );
 }
 

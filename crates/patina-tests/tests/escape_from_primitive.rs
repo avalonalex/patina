@@ -22,32 +22,86 @@ mod common;
 use common::{assert_program_eval_to, eval_program_vm, scratch_path};
 use tempfile::TempDir;
 
-/// Every re-entrant primitive reachable without a file, escaped out of. `'x`
-/// is what the continuation is given, so it is also what the whole expression
-/// must produce.
+/// Every re-entrant primitive reachable without a file, **left by both kinds
+/// of transfer**: a full continuation escaping out, and an
+/// `abort-current-continuation` reaching a prompt outside. `'x` is what each
+/// carries, so it is also what the whole expression must produce.
+///
+/// The escape half is the original sweep. The abort half is issue #177, and
+/// the reason the sweep is parameterised rather than duplicated: the two
+/// leave a re-entry boundary by *different* routes, and the boundary check
+/// that catches one need not catch the other. It did not — an abort lands at
+/// exactly the depth a callback returning normally leaves, so the frame-depth
+/// test every boundary used read it as a return. `force` was fixed first and
+/// alone; `eval` kept the old failure verbatim, and a parameter *set* stored
+/// the abort's value into the parameter and never ran the handler.
+///
+/// That is twice this file's own promise — "every re-entrant primitive" — has
+/// been narrower than it sounds. `eval` and the parameter set are listed now
+/// because they were missing, not only because they broke.
 #[test]
-fn test_a_continuation_can_escape_out_of_every_re_entrant_primitive() {
+fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     let dir = TempDir::new().expect("temp dir");
     let input = scratch_path(&dir, "in.txt");
     std::fs::write(&input, "seed\n").expect("seed file");
     let output = scratch_path(&dir, "out.txt");
 
-    for body in [
-        "(member 2 '(1 2 3) (lambda (a b) (k 'x)))".to_string(),
-        "(assoc 2 '((1 . a) (2 . b)) (lambda (a b) (k 'x)))".to_string(),
-        "(force (delay (k 'x)))".to_string(),
-        "(make-parameter 1 (lambda (v) (k 'x)))".to_string(),
-        "(call-with-port (open-output-string) (lambda (p) (k 'x)))".to_string(),
-        format!(r#"(call-with-input-file "{input}" (lambda (p) (k 'x)))"#),
-        format!(r#"(call-with-output-file "{output}" (lambda (p) (k 'x)))"#),
+    // `LEAVE` is what the callback evaluates. Both transfers are spelled
+    // through globals so that the `eval` row — which runs its form in a fresh
+    // environment — can reach them like any other.
+    const PRELUDE: &str = "(import (scheme base) (scheme lazy) (scheme file) \
+                           (scheme eval) (scheme repl)) \
+                           (define esc #f) \
+                           (define t (make-continuation-prompt-tag 'p))";
+
+    let bodies = [
+        "(member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
+        "(assoc 2 '((1 . a) (2 . b)) (lambda (a b) LEAVE))".to_string(),
+        "(force (delay LEAVE))".to_string(),
+        "(make-parameter 1 (lambda (v) LEAVE))".to_string(),
+        // A parameter *set*, which reaches its converter through a different
+        // boundary than `parameterize` does — the one that stored the abort's
+        // value into the parameter.
+        "(let ((q (make-parameter 0 (lambda (v) (if (= v 5) LEAVE v))))) (q 5))".to_string(),
+        "(eval 'LEAVE (interaction-environment))".to_string(),
+        "(call-with-port (open-output-string) (lambda (p) LEAVE))".to_string(),
+        format!(r#"(call-with-input-file "{input}" (lambda (p) LEAVE))"#),
+        format!(r#"(call-with-output-file "{output}" (lambda (p) LEAVE))"#),
+    ];
+
+    for (transfer, wrap, leave, both_backends) in [
+        (
+            "escape",
+            "(call/cc (lambda (k) (set! esc k) BODY))",
+            "(esc 'x)",
+            true,
+        ),
+        (
+            "abort",
+            "(call-with-continuation-prompt (lambda () BODY) t (lambda (v k2) v))",
+            "(abort-current-continuation t 'x)",
+            // VM-only. The tree-walker runs most of these callbacks on a
+            // nested trampoline that starts every stack empty, so the abort
+            // finds no prompt — the "primitive's callback" hole its winds and
+            // handlers have had since before prompts, pinned in
+            // `backend_divergence.rs`. Escaping works there because a full
+            // continuation carries its own target rather than searching for
+            // one.
+            false,
+        ),
     ] {
-        assert_program_eval_to(
-            &format!(
-                "(import (scheme base) (scheme lazy) (scheme file)) \
-                 (call/cc (lambda (k) {body}))"
-            ),
-            "x",
-        );
+        for body in &bodies {
+            let program = format!(
+                "{PRELUDE} {}",
+                wrap.replace("BODY", &body.replace("LEAVE", leave))
+            );
+            let got = if both_backends {
+                common::eval_program(&program)
+            } else {
+                eval_program_vm(&program)
+            };
+            assert_eq!(got, "x", "[{transfer}] {body}");
+        }
     }
 }
 
