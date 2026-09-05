@@ -68,6 +68,10 @@ pub struct VmState {
     /// extent re-entry runs in ([`invoke_step_stub`]). Built on the first
     /// invoke that has a `before` thunk to run.
     pub(crate) invoke_step_code: Option<CodeObjectId>,
+    /// Id of the three-instruction stub a raise's handler is called in
+    /// ([`raise_step_stub`]). Built on the first raise that reaches a
+    /// handler; a program that never raises never builds one.
+    pub(crate) raise_step_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -145,6 +149,7 @@ impl VmState {
             value_wind_code: None,
             abort_handler_code: None,
             invoke_step_code: None,
+            raise_step_code: None,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -1386,6 +1391,52 @@ fn dispatch_one_instruction(
             // separate Call instruction emitted after this in the codegen.
             if !state.dynamic_winds.is_empty() {
                 state.dynamic_winds.pop();
+            }
+        }
+
+        Instruction::ResumeRaise => {
+            // The handler of a raise has returned. Its stub frame says which
+            // raise this was and what that still owes; see
+            // [`Instruction::ResumeRaise`].
+            let handler = state.reg_at(base, raise_step::HANDLER);
+            let exception = state.reg_at(base, raise_step::EXCEPTION);
+            let continuable = state.reg_at(base, raise_step::CONTINUABLE);
+            let below = state
+                .reg_at(base, raise_step::DEPTH_BELOW)
+                .as_fixnum()
+                .ok_or_else(|| VmError::Runtime {
+                    message: "raise step: stub register is not a fixnum".into(),
+                })? as usize;
+
+            if continuable.is_truthy() {
+                // R7RS 6.11: the handler is installed again for the rest of
+                // the thunk's extent once it has returned from a
+                // `raise-continuable`. Its depth is restored from a distance
+                // below this frame rather than from an absolute index,
+                // because this frame may have been captured and replayed
+                // somewhere else — resumed through a composable continuation,
+                // or re-entered through the `handler-k` a declining `guard`
+                // clause invokes. An absolute index would name a frame in the
+                // stack the raise happened on, and after either of those the
+                // live stack is a different one.
+                let stub_index = state.frames.len().saturating_sub(1);
+                state.exception_handlers.push(ExceptionHandler {
+                    handler,
+                    stack_depth: stub_index.saturating_sub(below),
+                });
+                // The `Return` after this one delivers the handler's value as
+                // the value of `(raise-continuable …)`.
+            } else {
+                // R7RS 6.11: "If the handler returns, a secondary exception
+                // is raised in the same dynamic environment as the handler."
+                // That environment is the one standing right here — the entry
+                // this raise popped has deliberately not been put back.
+                let secondary = state.heap.borrow_mut().alloc_exception(
+                    patina_core::ExceptionKind::Error,
+                    "exception handler returned from non-continuable exception".to_string(),
+                    vec![exception],
+                );
+                vm_raise_value(state, secondary, raise_step::RESULT, false)?;
             }
         }
 
@@ -2658,18 +2709,21 @@ fn vm_raise(
 
 /// Raise an exception value through the handler stack.
 ///
-/// For non-continuable raise, this pushes the handler frame and returns Ok —
-/// the caller's run loop will drive the handler to completion. The handler is
-/// expected to escape via `call/cc` continuation or similar. **If it returns
-/// normally nothing notices**: R7RS 6.11 wants a secondary exception raised
-/// in the handler's dynamic environment, but no path here detects the return
-/// — `Return` delivers the handler's value to `dst` as though the raise had
-/// been continuable, and the popped handler is not restored. The tree-walker
-/// raises the secondary; recorded in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6
-/// and pinned in `backend_divergence.rs`.
+/// Pops the handler, then pushes the frame that calls it — `raise_step_stub`,
+/// whose instructions after the call are what this raise still owes: putting
+/// the handler back for a continuable raise, raising the secondary exception
+/// for a non-continuable one. This returns as soon as that frame is pushed;
+/// the caller's run loop drives it, exactly as it does for any other call.
 ///
-/// For continuable raise, this runs the handler synchronously and returns its
-/// value as the result of `raise-continuable`.
+/// **The debt is a frame because it has to be captured.** Until issue #178 it
+/// was Rust: the continuable path ran the handler on a nested
+/// `run_loop_until_outcome` and did its bookkeeping after, and the
+/// non-continuable path could only notice a handler that returned when it was
+/// a primitive that never pushed a frame at all. A continuation captured
+/// inside the handler — `guard`'s `handler-k`, or a composable continuation
+/// captured by an abort — replayed the handler's frames and returned straight
+/// past all of it. Three divergences came from that one shape, and they are
+/// one fix.
 fn vm_raise_value(
     state: &mut VmState,
     exception: TaggedValue,
@@ -2693,70 +2747,32 @@ fn vm_raise_value(
         // belongs. `guard-k` is an ordinary continuation, and jumping to it
         // runs the after-thunks through the wind machinery that already
         // handles every other control transfer.
-        if continuable {
-            // Continuable: run handler synchronously, return its value.
-            //
-            // Read before the call, not as `frames.len() - 1` after it: a
-            // handler that is a composable continuation pushes as many frames
-            // as it captured, and the depth to run back down to is the one
-            // this raise started at either way.
-            let depth_before = state.frames.len();
-            let handler_result = match call_any(state, handler_entry.handler, &[exception], dst)? {
-                Some(result) => result,
-                None => {
-                    // Handler is a VM closure — run it
-                    match run_loop_until_outcome(state, depth_before)? {
-                        LoopExit::Returned(v) => v,
-                        // The handler escaped: the continuation restored its
-                        // own handler stack, so this entry must not be
-                        // re-pushed, and `dst` names a register in a frame
-                        // that is gone.
-                        //
-                        // Right for a jump *out* (`guard-k`), wrong for a
-                        // jump back *in*: `guard`'s declining clause invokes
-                        // `handler-k`, captured inside this handler with the
-                        // entry popped, and the handler then returns to the
-                        // raise point through the restored frames — with no
-                        // re-push on that path, the `guard` is gone for the
-                        // rest of its body. The tree-walker's cleanup
-                        // continuation restores it. Recorded in
-                        // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, pinned in
-                        // `backend_divergence.rs`.
-                        LoopExit::Escaped(v) => return Err(park_escape(state, v)),
-                    }
-                }
-            };
-            // Re-push the handler
-            state.exception_handlers.push(handler_entry);
-            state.set_reg(dst, handler_result);
-            Ok(())
-        } else {
-            // Non-continuable: push handler frame and let the run loop drive it.
-            // If the handler returns normally, that's an error (R7RS §6.11)
-            // which would be caught by the next iteration.
-            // Typically the handler escapes via call/cc.
-            match call_any(state, handler_entry.handler, &[exception], dst)? {
-                Some(_result) => {
-                    // Handler was a primitive that returned immediately.
-                    // Non-continuable handler returning is itself an error.
-                    let msg = "handler returned from non-continuable exception raise";
-                    let secondary = state.heap.borrow_mut().alloc_exception(
-                        patina_core::ExceptionKind::Error,
-                        msg.to_string(),
-                        vec![exception],
-                    );
-                    vm_raise_value(state, secondary, dst, false)
-                }
-                None => {
-                    // Handler frame was pushed — the run loop will drive it.
-                    // The handler is expected to escape (via call/cc or
-                    // abort). If it returns normally, `Return` delivers its
-                    // value to `dst` unremarked — the gap the doc comment
-                    // above records.
-                    Ok(())
-                }
-            }
-        }
+        // One shape for both kinds of raise: push the stub that calls the
+        // handler, and let the run loop drive it like any other call. The
+        // difference between them is a register the stub reads afterwards.
+        let code = raise_step_stub(state)?;
+        // How far below the stub's own frame the handler was installed.
+        // Stored as a distance because the stub frame can be captured and
+        // replayed at another depth; see `raise_step::DEPTH_BELOW`.
+        let below = state.frames.len().saturating_sub(handler_entry.stack_depth);
+        let base = push_stub_frame(state, code, raise_step::NUM_REGS);
+        // `push_stub_frame` leaves `return_reg` at 0, which is right for the
+        // stubs that deliver their own value. This one returns through the
+        // ordinary `Return`, so it needs the raise's own destination.
+        state.frames.last_mut().expect("just pushed").return_reg = dst;
+        state.set_reg_at(base, raise_step::HANDLER, handler_entry.handler);
+        state.set_reg_at(base, raise_step::EXCEPTION, exception);
+        state.set_reg_at(
+            base,
+            raise_step::DEPTH_BELOW,
+            TaggedValue::fixnum(below as i64),
+        );
+        state.set_reg_at(
+            base,
+            raise_step::CONTINUABLE,
+            TaggedValue::boolean(continuable),
+        );
+        Ok(())
     } else {
         // No handler — format and propagate as Rust error
         use patina_primitives::primitives::io::datum_writer::format_display_tagged;
@@ -3716,6 +3732,61 @@ fn push_abort_stub(
         return_reg,
         code,
     });
+}
+
+/// The registers of the stub frame a raise's handler is called in.
+/// See [`Instruction::ResumeRaise`] and [`raise_step_stub`].
+mod raise_step {
+    /// The handler being called, held so that a continuable raise can put it
+    /// back once it returns.
+    pub(super) const HANDLER: u16 = 0;
+    /// The raised object: the handler's argument, and the irritant of the
+    /// secondary exception if the handler returns from a non-continuable
+    /// raise.
+    pub(super) const EXCEPTION: u16 = 1;
+    /// How far *below this frame* the handler's own `stack_depth` sat when
+    /// the raise popped it. A distance, not an index: the frame can be
+    /// captured and replayed at another depth, and only a distance survives
+    /// that (see the `ResumeRaise` arm).
+    pub(super) const DEPTH_BELOW: u16 = 2;
+    /// Whether this was `raise-continuable`.
+    pub(super) const CONTINUABLE: u16 = 3;
+    /// The handler's value. Returned to the raise's own destination for a
+    /// continuable raise; for a non-continuable one the `Return` is never
+    /// reached with it.
+    pub(super) const RESULT: u16 = 4;
+    /// Window size of the stub frame.
+    pub(super) const NUM_REGS: u16 = 5;
+}
+
+/// `(handler exception)`, then whatever the raise still owes, then return —
+/// the three instructions a raise's handler runs under.
+///
+/// A frame, for the same reason the value form of `dynamic-wind` became one
+/// in #158 and an abort's handler call in #165: what the raise still owes is
+/// then a **pc**, which a continuation captured inside the handler restores
+/// along with the frames. See [`Instruction::ResumeRaise`] for the three
+/// divergences that cost while it was Rust (issue #178).
+fn raise_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    let instructions = vec![
+        Instruction::Call {
+            func: raise_step::HANDLER,
+            args: vec![raise_step::EXCEPTION],
+            dst: raise_step::RESULT,
+        },
+        Instruction::ResumeRaise,
+        Instruction::Return {
+            val: raise_step::RESULT,
+        },
+    ];
+    runtime_stub(
+        state,
+        |s| s.raise_step_code,
+        |s, id| s.raise_step_code = Some(id),
+        "raise-step",
+        instructions,
+        raise_step::NUM_REGS,
+    )
 }
 
 /// The registers of the stub frame each `before` thunk of a composable

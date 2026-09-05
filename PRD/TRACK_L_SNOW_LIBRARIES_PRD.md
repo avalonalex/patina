@@ -1115,41 +1115,46 @@ cheap: 111 MB against 312 MB). Per-`guard` memory in a loop is at or below
 for the success path, or an `else`-only fast path — is the follow-up if a
 corpus program shows the cost; none has.
 
-**VM: three gaps in `vm_raise_value`** — ❌ **open**, VM only. Found by the
-second review of #151 (2026-09-01); all three predate families 22/28, and the
-reference `guard` changed their symptoms without causing them. Pinned in
-`crates/patina-tests/tests/backend_divergence.rs` where the tree-walker is
-right.
+**VM: three gaps in `vm_raise_value`** — ✅ **closed 2026-09-05**, by one
+change (issue #178). Found by the second review of #151 (2026-09-01); all
+three predated families 22/28, and the reference `guard` changed their
+symptoms without causing them.
+
+They were one defect wearing three faces, which is why the fix is one line of
+design rather than the three separate patches proposed here. **What a raise
+still owed once its handler returned was Rust** — the continuable path ran the
+handler on a nested `run_loop_until_outcome` and did its bookkeeping after it,
+and the non-continuable path could only notice a handler that returned when it
+was a primitive that never pushed a frame. A continuation captured inside the
+handler replayed the handler's frames and returned straight past all of it.
+
+The fix is the VM's own idiom, used four times before it (#157, #158, #165,
+#167): **make the remainder a frame**. `raise_step_stub` is `Call handler` /
+`ResumeRaise` / `Return`, so the debt is a pc that a captured continuation
+carries wherever it goes.
 
 1. **A `guard` is gone after one of its clauses declines a
-   `raise-continuable`.** The continuable path pops the handler to run it and
-   re-pushes it only when the handler *returns*; `guard`'s handler leaves
-   through `handler-k`, so the re-push is skipped and the body continues
-   without its `guard`. `(with-exception-handler (lambda (e) (list 'I e))
-   (lambda () (guard (e ((eq? e 'y) 'caught-y)) (list (raise-continuable 'x)
-   (raise-continuable 'y)))))` — tree-walker, chibi, Gauche `caught-y`; VM
-   `((I x) (I y))`. Fix: re-push on the `Escaped` arm too, or have the handler
-   run *without* popping and let the raise's handler lookup skip the top one.
+   `raise-continuable`.** ✅ — `handler-k` now captures the stub frame, so
+   re-entering it runs the re-push. `(with-exception-handler (lambda (e) (list
+   'I e)) (lambda () (guard (e ((eq? e 'y) 'caught-y)) (list
+   (raise-continuable 'x) (raise-continuable 'y)))))` answers `caught-y` on
+   both backends, as chibi and Gauche do. Neither proposed fix was taken:
+   re-pushing on the `Escaped` arm would have re-pushed for a jump *out* as
+   well, which is wrong.
 2. **A handler that returns from a non-continuable `raise` is not an error.**
-   R7RS 6.11 raises a secondary exception; the tree-walker does, the VM
-   delivers the handler's value to the raise's destination register as if the
-   raise were continuable — `(list (raise 'x))` under `(lambda (e) 'returned)`
-   answers `(returned)`, and `(+ 1 (raise 'x))` fails inside `+`. The
-   non-continuable path pushes the handler's frame and lets the run loop drive
-   it, so nothing is there when it returns; the fix is a marker on that frame
-   (or a sentinel return register) that `Return` recognises. Reached from a
-   *primitive's* error the same hole is worse: the run loop routes a catchable
-   `VmError` through `vm_raise_value` with **register 0** as the destination,
-   so `(list (car 5))` under the same handler answers `(())` — the handler's
-   value overwrote register 0 and `car`'s own destination kept `()`.
-3. **A continuation used as the handler for a primitive's error is fatal** —
-   `(call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))`
-   dies with `continuation escaped past a synchronous boundary`, where the
-   same idiom over `(raise 'obj)` works since family 24. The run loop's error
-   route does not catch `call_any`'s continuation signal. Tree-walker, chibi
-   and Gauche deliver the error object.
+   ✅ — the return lands on `ResumeRaise`, which raises the secondary whatever
+   the handler was and whichever route the raise took. That covers the
+   primitive-error case (`(list (car 5))` under `(lambda (e) 'returned)`) with
+   no separate work: it was the same hole reached with register 0 as the
+   destination.
+3. **A continuation used as the handler for a primitive's error is fatal.**
+   ✅ — and not deliberately. The handler used to be called through `call_any`,
+   the narrow dispatcher that rejects continuations; the stub calls it with the
+   ordinary `Call` instruction, which does not. This one came free with the
+   shape change, which is the argument for the shape change.
 
-None has a Larceny row; all three are pinned.
+All four are now both-backend assertions in `backend_divergence.rs` rather
+than quarantines. None had a Larceny row.
 
 
 **Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌

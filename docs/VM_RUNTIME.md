@@ -302,15 +302,31 @@ intercepted at call dispatch time.
 | `Values` | `values` | Store in `value_buffer`, return primary value |
 | `CallWithValues` | `call-with-values` | Clear buffer, run producer, unpack values, call consumer |
 | `WithExceptionHandler` | `with-exception-handler` | Push handler, run thunk, pop on return |
-| `Raise` | `raise` | Pop handler, push handler frame — **no unwind** (§5.2) |
+| `Raise` | `raise` | Pop handler, push `raise_step_stub` — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
 | `Error` | `error` | Construct error object, then Raise |
 
 ### 5.2 Exception Handling
 
 - `ExceptionHandler` stack on VmState, pushed/popped by `WithExceptionHandler`
-- `vm_raise_value()`: pops the handler and pushes the handler frame. It does
-  **not** touch the wind stack: R7RS 6.11 calls the handler "in the dynamic
+- `vm_raise_value()`: pops the handler and pushes `raise_step_stub` — three
+  instructions, `Call handler` / `ResumeRaise` / `Return` — then returns. Both
+  kinds of raise take that one shape; a register says which. **What the raise
+  still owes is therefore a pc**, and a continuation captured inside the
+  handler carries it: `ResumeRaise` re-pushes the handler for a continuable
+  raise (R7RS 6.11 reinstalls it once the handler returns) and raises the
+  secondary exception for a non-continuable one. Until 2026-09-05 both were
+  Rust after a nested `run_loop_until_outcome`, which cost four divergences at
+  once — a `guard` silently uninstalled after a declining clause, a composable
+  continuation that lost its handler, a non-continuable handler allowed to
+  return, and (because that call went through the narrow `call_any`) a
+  continuation rejected as a handler for a primitive's error. Issue #178; the
+  same "make the remainder a frame" move as #157, #158, #165 and #167
+- The handler's recorded depth is restored from a **distance below the stub's
+  own frame**, not an absolute index: the stub can be captured and replayed
+  somewhere else — resumed through a composable continuation, re-entered
+  through `handler-k` — and only a distance relocates with it
+- A raise does **not** touch the wind stack: R7RS 6.11 calls the handler "in the dynamic
   environment of the call to `raise`", and a raise crosses no dynamic extent,
   so no `after` thunk is due. Popping the handler is the only change a raise
   makes. `guard` unwinds by escaping through `guard-k`, an ordinary
@@ -501,7 +517,7 @@ component nobody carried, that one catches a shape nobody tried.
 | delimited capture | save | save | save | save | save |
 | composable invoke | append | append | append (re-enter) | append | append |
 | abort unwind | *builds a landing and travels to it* — the `full invoke` row, with a stub frame on top that calls the prompt handler | | | | |
-| `raise` | — | — | — | — | pop one, re-push on continuable return |
+| `raise` | push the stub that calls the handler (§5.2) | — | — | — | pop one; `ResumeRaise` re-pushes on a continuable return |
 | normal `Return` | pop | free | by `PopWind` | by depth | by depth |
 | wind thunk (jump, abort) | push stub | — | — | — | replaced by the record's own |
 | wind thunk (invoke re-entry) | — | — | — | — | the invoke site's |
