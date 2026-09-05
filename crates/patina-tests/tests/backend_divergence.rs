@@ -1035,9 +1035,12 @@ fn the_prompt_apis_edges_agree_on_both_backends() {
 
 // ─── VM prompt defects found by the review of #175 (issues #176–#179) ────────
 //
-// The VM is untouched by that PR; these reproduce on `main`. Each is pinned
-// so the divergence is on the inventory, and each names its issue. Guile
-// 3.0.11 backs the tree-walker's answer wherever it is cited.
+// Four were filed; #176 and #178 are fixed and their entries below are plain
+// both-backend assertions now. **#177 and #179 are the two still pinned** —
+// count those, not the tests in this block. Guile 3.0.11 backs the
+// tree-walker's answer wherever it is cited; chibi and Gauche cannot express
+// a tagged prompt at all, so they are never among the oracles here
+// (`control_flow_matrix.rs` says the same, per row).
 
 /// A prompt does not outlive its body when a continuation captured inside
 /// the body is re-entered — issue #176, fixed 2026-09-05.
@@ -1051,27 +1054,70 @@ fn the_prompt_apis_edges_agree_on_both_backends() {
 /// `(call/cc …)` is in **tail position** of the prompt body, which is what
 /// made it reachable: the body's frame is popped before the capture, so the
 /// prompt's `stack_depth` already equals `frames.len()` while the body is
-/// still running. An abort at that moment must still find the prompt — the
-/// second assertion, which every implementation answers `(h x)` — and the
-/// same depth reading holds once the body is finished. No comparison of
-/// depths tells the two apart, so the prompt rides into the continuation's
-/// snapshot and the ordinary sweep never reaches it again. The loop closes
-/// the prompts it did not open, as it already did for handlers.
+/// still running. An abort at that moment must still find the prompt —
+/// `a_tail_position_prompt_is_still_live` beside this, which **Guile 3.0.11
+/// and Racket 9.3** both answer `(h x)` — and the same depth reading holds
+/// once the body is finished. No comparison of depths tells the two apart.
+///
+/// So the prompt rides into the continuation's snapshot, and no later sweep
+/// reaches it: the frames that would have crossed its depth are gone. The
+/// arrival of a full continuation is the one moment the reading *is* exact —
+/// the value is being delivered right then, so a prompt with no frame above
+/// it has already delivered its own — and that is where the snapshot's
+/// resolved prompts are dropped (`restore_continuation`).
+///
+/// Both spellings are asserted: the two-top-level-form version from the
+/// issue, and the same sequence inside a single `let` body. The first fix
+/// tried closed only the first — it truncated the prompt stack when a
+/// dispatch loop returned, and inside one loop no loop returns between the
+/// re-entry and the abort.
 #[test]
 fn a_prompt_does_not_outlive_a_re_entered_body() {
-    assert_program_eval_to(
-        "(define t (make-continuation-prompt-tag 'p))\n\
+    const PROGRAM: &str = "(define t (make-continuation-prompt-tag 'p))\n\
          (define saved #f) (define n 0)\n\
          (define r (call-with-continuation-prompt\n\
          \x20           (lambda () (call/cc (lambda (c) (set! saved c) 'first)))\n\
          \x20           t (lambda (v k) (list 'h v))))\n\
          (set! n (+ n 1))\n\
          (if (= n 1) (saved 'second))\n\
-         (list 'r r (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))",
+         (list 'r r (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))";
+
+    // Two top-level forms, as the issue filed it.
+    assert_program_eval_to(PROGRAM, "(r second no-prompt)");
+
+    // …and the same sequence inside one `let` body, where no dispatch loop
+    // returns between the re-entry and the abort. This spelling is why the
+    // fix is at the continuation's arrival rather than at a loop's exit: a
+    // loop-exit backstop passes the program above and leaves this one dying
+    // with `expected a procedure, got null`.
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (define saved #f) (define n 0)\n\
+         (let ()\n\
+         \x20 (define r (call-with-continuation-prompt\n\
+         \x20             (lambda () (call/cc (lambda (c) (set! saved c) 'first)))\n\
+         \x20             t (lambda (v k) (list 'h v))))\n\
+         \x20 (set! n (+ n 1))\n\
+         \x20 (if (= n 1) (saved 'second))\n\
+         \x20 (list 'r r (guard (e (#t 'no-prompt)) \
+             (abort-current-continuation t 'stale))))",
         "(r second no-prompt)",
     );
-    // The window the fix must not close: the body has tail-called away, so
-    // its frame is gone, and the prompt is still the one an abort belongs to.
+}
+
+/// The window the #176 fix must not close: a prompt whose body has
+/// **tail-called** away is still the prompt an abort belongs to, even though
+/// its `stack_depth` already equals `frames.len()`.
+///
+/// Its own test rather than a second assertion in the one above, so that a
+/// regression in either direction is reported on its own: if the two shared a
+/// test, reintroducing #176 would panic before this ever ran, and the report
+/// would not say whether the over-aggressive direction had broken too.
+///
+/// **Guile 3.0.11 and Racket 9.3** both answer `(h x)`. chibi and Gauche have
+/// no tagged prompt API, so they cannot be asked.
+#[test]
+fn a_tail_position_prompt_is_still_live() {
     assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (call-with-continuation-prompt\n\
