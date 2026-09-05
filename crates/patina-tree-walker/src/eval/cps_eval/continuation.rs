@@ -545,6 +545,26 @@ impl<'a> CpsEvaluator<'a> {
                     "a prompt boundary is reached with its own frame on top"
                 );
                 let frame = prompt_stack.split_off(idx).swap_remove(0);
+
+                // Leaving the region closes anything installed inside it that
+                // did not close itself. Normally there is nothing to do: a
+                // handler installed in the body is popped by its own
+                // `ExceptionHandlerCleanup` before the body's value gets
+                // here, so the stack is already back to `handler_depth`.
+                //
+                // The exception is a handler *re-pushed* by
+                // `RaiseHandlerReturn` after a continuable raise, which has no
+                // cleanup pending — its `with-exception-handler` returned long
+                // ago. When that re-push is replayed by resuming a composable
+                // continuation, and the handler was installed *outside* this
+                // prompt, the entry belongs to an extent this region does not
+                // contain and nothing else would ever remove it: a later raise
+                // then reaches a handler whose thunk is over. The VM has the
+                // same rule by another route — its entries carry a depth, and
+                // `pop_exception_handlers` sweeps them (`vm_state.rs`).
+                let mut exception_handlers = exception_handlers;
+                exception_handlers.truncate(frame.handler_depth.min(exception_handlers.len()));
+
                 Ok(StepResult::InvokeContinuation {
                     cont: frame.cont,
                     value,

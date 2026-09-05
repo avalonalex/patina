@@ -918,7 +918,23 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
                         .heap
                         .borrow_mut()
                         .alloc_exception(kind, message, vec![]);
-                    // The raise will invoke the handler (push frame or escape via call/cc)
+                    // The raise pushes `raise_step_stub` and the loop drives
+                    // it. Register 0 as the destination is a placeholder: this
+                    // error has no result slot, and a non-continuable raise
+                    // has no value to deliver — `ResumeRaise` raises the
+                    // secondary rather than reaching the stub's `Return`.
+                    //
+                    // It used to be delivered: the old path let a returning
+                    // handler write its value here, which is how `(list
+                    // (car 5))` under a returning handler answered `(())`
+                    // with the handler's value in r0 (Track L §6). That is
+                    // closed. What is left is narrower than what it replaced
+                    // — the `Return` is reachable only if the *secondary's*
+                    // own handler returns a value here — and an attempt to
+                    // build that (a composable continuation as the secondary's
+                    // handler) raises a tertiary instead and terminates at the
+                    // enclosing `guard`. Give the stub a sentinel destination
+                    // if a program is ever found that reaches it.
                     vm_raise_value(state, exception, 0, false)?;
                     continue;
                 }
@@ -961,11 +977,12 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 ///
 /// The innermost frame is not always the one that *has* a source map. The
 /// stubs the runtime builds rather than compiles carry none at all —
-/// [`value_wind_stub`], [`wind_jump_stub`], [`invoke_step_stub`] and
-/// [`abort_handler_stub`] — and any of them can be the top frame when an
-/// error is raised: the value form's thunks tail-call out of their own
-/// frames, leaving the stub innermost, and a jump's, a composable invoke's
-/// re-entry thunks and an abort's handler do the same. Read
+/// [`value_wind_stub`], [`wind_jump_stub`], [`invoke_step_stub`],
+/// [`abort_handler_stub`] and [`raise_step_stub`] — and any of them can be
+/// the top frame when an error is raised: the value form's thunks tail-call
+/// out of their own frames, leaving the stub innermost, and a jump's, a
+/// composable invoke's re-entry thunks, an abort's handler and a raise's
+/// handler do the same. Read
 /// literally, that costs the error its caret entirely — `(dw (lambda () 1)
 /// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
 /// head-position `dynamic-wind` printed file, line and source line.
@@ -1401,14 +1418,17 @@ fn dispatch_one_instruction(
             let handler = state.reg_at(base, raise_step::HANDLER);
             let exception = state.reg_at(base, raise_step::EXCEPTION);
             let continuable = state.reg_at(base, raise_step::CONTINUABLE);
-            let below = state
-                .reg_at(base, raise_step::DEPTH_BELOW)
-                .as_fixnum()
-                .ok_or_else(|| VmError::Runtime {
-                    message: "raise step: stub register is not a fixnum".into(),
-                })? as usize;
 
             if continuable.is_truthy() {
+                // Read here rather than above: the non-continuable branch
+                // never uses it, and decoding it there would report a
+                // malformed register on a path that does not read one.
+                let below = state
+                    .reg_at(base, raise_step::DEPTH_BELOW)
+                    .as_fixnum()
+                    .ok_or_else(|| VmError::Runtime {
+                        message: "raise step: stub register is not a fixnum".into(),
+                    })? as usize;
                 // R7RS 6.11: the handler is installed again for the rest of
                 // the thunk's extent once it has returned from a
                 // `raise-continuable`. Its depth is restored from a distance
@@ -2754,7 +2774,26 @@ fn vm_raise_value(
         // How far below the stub's own frame the handler was installed.
         // Stored as a distance because the stub frame can be captured and
         // replayed at another depth; see `raise_step::DEPTH_BELOW`.
-        let below = state.frames.len().saturating_sub(handler_entry.stack_depth);
+        // Measured from the floor of the smallest region that could replay
+        // this frame, not from the handler's own installation.
+        //
+        // A delimited capture is bounded below by a prompt, so a handler
+        // installed *outside* the innermost prompt sits at a depth no such
+        // region contains. Reinstating at that depth on a replay puts the
+        // entry below every frame the region owns, where
+        // `pop_exception_handlers` never reaches it — the handler then
+        // outlives the extent it belongs to, and which handler answers a
+        // later raise depends on how many frames happened to separate the
+        // `with-exception-handler` from the prompt. Clamping to the prompt's
+        // own depth makes the entry go when the resumed region does, which is
+        // what Guile answers.
+        let floor = state
+            .prompt_stack
+            .last()
+            .map_or(handler_entry.stack_depth, |prompt| {
+                handler_entry.stack_depth.max(prompt.stack_depth)
+            });
+        let below = state.frames.len().saturating_sub(floor);
         let base = push_stub_frame(state, code, raise_step::NUM_REGS);
         // `push_stub_frame` leaves `return_reg` at 0, which is right for the
         // stubs that deliver their own value. This one returns through the
@@ -3137,8 +3176,9 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 /// Both callers want the same three properties, and stating them once is the
 /// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — neither stub has constants to trace, but the
-/// invariant is cheaper to keep than to caveat. It is built at most once per
+/// without qualification — none of its five stubs has constants to trace, but
+/// the invariant is cheaper to keep than to caveat, and a stub that ever does
+/// need them inherits the rule rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
 /// `code_store` is the one owner. And its `source_map` is empty, which
 /// `attach_source_location` reads as "not a place in the program" and steps
@@ -3180,8 +3220,16 @@ fn runtime_stub(
 /// it. Passing that as a flag would read as a knob; leaving it as one line at
 /// one of two call sites reads as the decision it is.
 ///
-/// Nothing ever returns *into* one of these frames: the instruction pops the
-/// frame itself and either starts the next thunk or finishes the transfer.
+/// The two thunk-stepping stubs leave `return_reg` at 0 and nothing ever
+/// returns *into* their frames: the instruction pops the frame itself and
+/// either starts the next thunk or finishes the transfer.
+///
+/// `raise_step_stub` is the third caller and breaks that: its `Call handler`
+/// **does** return into the frame, and its own `Return` delivers the
+/// handler's value to the raise's destination — so `vm_raise_value` patches
+/// `return_reg` straight after this call. Anything here that assumed the
+/// old invariant (dropping `return_reg` for stub frames, freeing the window
+/// in a Resume arm) would break the raise path silently.
 fn push_stub_frame(state: &mut VmState, code: Rc<CodeObject>, num_regs: u16) -> usize {
     let base = state.alloc_registers(num_regs);
     state.frames.push(CallFrame {

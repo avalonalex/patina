@@ -272,9 +272,13 @@ fn test_apply_invokes_a_continuation() {
 /// `apply` reached through `call_any` — the VM's third and narrowest dispatcher
 /// — still fails. `call_any` kept the exact primitive → parameter → closure
 /// probe that the apply instructions shed, and it is what runs
-/// `call-with-values`' consumer, prompt handlers and exception handlers. So the
-/// callee set is uniform across the two apply *instructions* and not yet across
-/// the VM.
+/// `call-with-values`' consumer and prompt handlers. So the callee set is
+/// uniform across the two apply *instructions* and not yet across the VM.
+///
+/// **Exception** handlers left that list on 2026-09-05: issue #178 moved the
+/// handler call into `raise_step_stub`, whose `Call` is the ordinary
+/// instruction, so a continuation can be an exception handler — including for
+/// a primitive's error, which is pinned in `backend_divergence.rs`.
 ///
 /// Found by review, not by the tests: the first version of this work claimed
 /// "`apply` accepts every callee a direct call accepts", and a five-token
