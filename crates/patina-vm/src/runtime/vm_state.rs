@@ -40,6 +40,29 @@ pub struct VmState {
     /// `take_pending_escape` pair (`cps_eval/types.rs`) — same split, same
     /// reason, and rooted for the same reason (`gc_roots.rs`).
     pub(crate) pending_escape: Option<TaggedValue>,
+    /// Set while an `abort-current-continuation` is travelling to the landing
+    /// it built, and only then.
+    ///
+    /// An abort is not a return. It cuts every stack back to its prompt and
+    /// pushes one stub frame that has yet to run, so a Rust primitive whose
+    /// callback it left must be abandoned, not handed a value. The frame
+    /// depths cannot say that: the landing sits at exactly the depth a
+    /// callback returning normally would leave, and a continuation captured
+    /// *and* invoked inside a callback — `member` with a comparator that does
+    /// it, pinned in `escape_from_primitive.rs` — leaves the identical stack
+    /// while genuinely being a return. Two opposite meanings, one shape; the
+    /// only thing that can distinguish them is the transfer itself (#177).
+    ///
+    /// Read in exactly one place — `run_apply_proc`, the nested loop under a
+    /// Rust primitive's callback, which is the only boundary a program has
+    /// been built to break. `across_reentry`'s frame-depth test covers the
+    /// others as far as anything measured shows: an abort out of a
+    /// `parameterize` converter reaches its prompt with or without a check
+    /// here, so one is not written on the strength of the argument alone.
+    ///
+    /// Cleared by whichever dispatch loop resumes into the landing, which is
+    /// the point past which no boundary is owed the news.
+    pub(crate) pending_transfer: bool,
     /// Stack of active continuation prompts (SRFI-226).
     pub prompt_stack: Vec<PromptFrame>,
     /// Stack of active `dynamic-wind` records.
@@ -141,6 +164,7 @@ impl VmState {
             registers: Vec::new(),
             frames: Vec::new(),
             pending_escape: None,
+            pending_transfer: false,
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
@@ -676,6 +700,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     });
 
     let result = run_loop_until(state, 0);
+    state.pending_transfer = false;
     if result.is_err() {
         // An error that reaches the top level abandons whatever the machine
         // was doing: the frames it was running, the handlers and wind
@@ -903,7 +928,10 @@ fn run_loop_until_outcome(state: &mut VmState, exit_depth: usize) -> Result<Loop
                     if state.frames.len() <= exit_depth {
                         return Ok(LoopExit::Escaped(value));
                     }
-                    // Control resumed in a frame this loop still owns.
+                    // Control resumed in a frame this loop still owns, so
+                    // the landing (if this was one) is about to run and no
+                    // boundary further out is owed the news.
+                    state.pending_transfer = false;
                     cur_code = state.current_code()?;
                     continue;
                 }
@@ -3532,7 +3560,17 @@ fn run_apply_proc(
         return Ok(result);
     }
     // VM closure was pushed; run until it returns.
-    run_loop_until(state, depth_before)
+    //
+    // A loop that exits at its own floor reports `Escaped`, and that alone
+    // does not say whether this call is over: a continuation captured and
+    // invoked *inside* the callback delivers its value into the very register
+    // this call is waiting on, which is a return by another route. Only a
+    // transfer that built a landing has abandoned us (see
+    // `VmState::pending_transfer`).
+    match run_loop_until_outcome(state, depth_before)? {
+        LoopExit::Escaped(v) if state.pending_transfer => Err(park_escape(state, v)),
+        LoopExit::Returned(v) | LoopExit::Escaped(v) => Ok(v),
+    }
 }
 
 /// Recognized VM-intercepted control primitives.
@@ -3736,7 +3774,7 @@ fn abort_to_prompt(state: &mut VmState, prompt_idx: usize, val: TaggedValue, dst
             val,
             cont_tv,
         );
-        return park_escape(state, val);
+        return park_transfer(state, val);
     }
 
     // Otherwise the same landing has to be described rather than applied: the
@@ -3766,7 +3804,7 @@ fn abort_to_prompt(state: &mut VmState, prompt_idx: usize, val: TaggedValue, dst
     };
     let target_tv = state.alloc_vm_continuation(target);
     match step_wind_jump(state, target_tv, val) {
-        Ok(()) => park_escape(state, val),
+        Ok(()) => park_transfer(state, val),
         Err(e) => e,
     }
 }
@@ -4301,6 +4339,13 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
 fn park_escape(state: &mut VmState, value: TaggedValue) -> VmError {
     state.pending_escape = Some(value);
     VmError::ContinuationEscape
+}
+
+/// [`park_escape`] for a transfer that installed a landing to run, rather than
+/// unwinding to one that was already there. See [`VmState::pending_transfer`].
+fn park_transfer(state: &mut VmState, value: TaggedValue) -> VmError {
+    state.pending_transfer = true;
+    park_escape(state, value)
 }
 
 /// Dispatch a call to an arbitrary callee value — the body of the `Call`

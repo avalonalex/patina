@@ -512,6 +512,35 @@ two-top-level-form spelling of the issue and leaves the same sequence inside a
 single `let` body dying exactly as before, since no loop returns between the
 re-entry and the abort. Both spellings are pinned in `backend_divergence.rs`.
 
+#### Aborting out of a Rust primitive's callback
+
+A primitive that calls back into Scheme — `force`, `map`, `assoc` with a
+comparator, a `parameterize` converter — runs a **nested dispatch loop** under
+a Rust frame it will lose if control leaves. `across_reentry` guards those
+boundaries by frame depth: a stack shorter than the one the call started with
+means the frames the Rust code owned are gone.
+
+**An abort is the shape that depth cannot see** (issue #177). It cuts every
+stack back to its prompt and pushes one stub frame that has yet to run, so
+when the prompt sits one frame below the boundary the landing sits at exactly
+the depth a callback returning normally would leave. Written in tail position
+— `(call-with-continuation-prompt (lambda () (force (delay
+(abort-current-continuation t 'v)))) t handler)`, where the tail call pops the
+body's frame before `force` runs — `force` read that as its thunk returning,
+cached the abort's value as the result, and ran on over the registers the
+landing was about to use.
+
+The frames genuinely cannot say which happened, because the opposite case
+leaves the identical stack: a continuation captured **and** invoked inside a
+callback delivers its value into the register the call is waiting on, which is
+a return by another route, and the primitive must run on (`member` with such a
+comparator, pinned in `escape_from_primitive.rs`). So the transfer says it
+itself — `VmState::pending_transfer`, set by `abort_to_prompt` and cleared by
+whichever loop resumes into the landing. `run_apply_proc` is its one reader:
+`Escaped` alone does not end the call, `Escaped` during a transfer does.
+
+---
+
 ### 5.6 The dynamic-state matrix
 
 `VmState` carries five components that belong to a *dynamic extent* rather
