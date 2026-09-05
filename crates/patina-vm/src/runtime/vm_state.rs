@@ -2394,7 +2394,7 @@ fn handle_control_primitive(
         }
 
         VmControlPrimitive::CallWithContinuationPrompt => {
-            // (call-with-continuation-prompt body tag [handler])
+            // (call-with-continuation-prompt body [tag [handler] arg ...])
             if args.is_empty() {
                 return Err(VmError::ArityMismatch {
                     expected: "1+".into(),
@@ -2425,7 +2425,10 @@ fn handle_control_primitive(
                 handler,
                 dst,
             });
-            call_closure(state, body, &[], dst)?;
+            // Anything past the handler goes to the body, as Racket's does.
+            // These were dropped on the floor until the review of #175 — a
+            // one-argument body was called with none.
+            call_closure(state, body, args.get(3..).unwrap_or(&[]), dst)?;
             // When body returns normally, pop_resolved_prompts will clean up the prompt.
         }
 

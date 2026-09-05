@@ -1497,10 +1497,22 @@ impl Heap {
         self.is_procedure(tv) || self.is_continuation(tv)
     }
 
-    /// Check if value is a continuation
+    /// Check if value is a continuation — either backend's, full or
+    /// composable. This is what `continuation?` answers. It used to match the
+    /// tree-walker's `Continuation` alone, so the VM answered `#f` for every
+    /// continuation it had ever captured (found by review of #175).
+    ///
+    /// The tree-walker's typed dispatch (`get_continuation`) is unaffected:
+    /// it asks for the payload, not the predicate.
     #[inline]
     pub fn is_continuation(&self, tv: TaggedValue) -> bool {
-        tv.is_object() && matches!(self.get_object(tv), HeapObjectData::Continuation(_))
+        tv.is_object()
+            && matches!(
+                self.get_object(tv),
+                HeapObjectData::Continuation(_)
+                    | HeapObjectData::VmContinuationRef(_)
+                    | HeapObjectData::VmDelimitedContinuationRef(_)
+            )
     }
 
     /// Check if value is a continuation prompt tag

@@ -74,12 +74,14 @@ use patina_core::{CpsContinuation, DynamicWindRecord, ExceptionKind, next_prompt
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
-    /// `(call-with-continuation-prompt body [tag [handler]])`
+    /// `(call-with-continuation-prompt body [tag [handler] arg ...])`
     ///
     /// Push a frame and run `body` with the boundary as its continuation.
     /// The same defaults as the VM: a fresh tag when none is given — nothing
     /// can abort to it, which is the point of a fresh one — and `#f` for a
-    /// missing handler, which an abort then reports as not a procedure.
+    /// missing handler, which an abort then reports as not a procedure. Any
+    /// further arguments are passed to `body`, as Racket's are; until the
+    /// review of #175 this backend rejected them and the VM dropped them.
     pub(super) fn apply_call_with_prompt(
         &self,
         args: Vec<TaggedValue>,
@@ -89,11 +91,11 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        if args.is_empty() || args.len() > 3 {
+        if args.is_empty() {
             return self.maybe_route_error_through_cps(
                 EvalError::WrongArity {
-                    expected: "1 to 3".to_string(),
-                    actual: args.len(),
+                    expected: "at least 1".to_string(),
+                    actual: 0,
                 },
                 cont,
                 cont_env,
@@ -147,7 +149,7 @@ impl<'a> CpsEvaluator<'a> {
         });
         Ok(StepResult::ApplyProc {
             proc: body,
-            args: vec![],
+            args: args.get(3..).unwrap_or(&[]).to_vec(),
             cont: ContValue::PromptBoundary { id },
             env: self.evaluator.global_env.clone(),
             cont_env,
