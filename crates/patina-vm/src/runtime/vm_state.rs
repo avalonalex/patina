@@ -2213,8 +2213,9 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// **Narrower than [`call_value`]**, and knowingly so for now: it probes
 /// primitive → parameter → closure, which is the probe set the `apply`
 /// instructions shed when they moved to `call_value`. A VM-intercepted control
-/// primitive or a continuation reached through one of this function's callers
-/// — `call-with-values`' consumer, a prompt handler, an exception handler —
+/// primitive reached through one of this function's callers —
+/// `call-with-values`' consumer, a prompt handler, a prompt *body* (issue
+/// #179, which is why that one is here rather than at `call_closure`) —
 /// still fails, e.g.
 /// `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
 /// `patina-tests/tests/callability.rs`; the fix is to give this function
@@ -2543,8 +2544,21 @@ fn handle_control_primitive(
             // Anything past the handler goes to the body, as Racket's does.
             // These were dropped on the floor until the review of #175 — a
             // one-argument body was called with none.
-            call_closure(state, body, args.get(3..).unwrap_or(&[]), dst)?;
-            // When body returns normally, pop_resolved_prompts will clean up the prompt.
+            //
+            // `call_any`, not `call_closure`: the body is any procedure, which
+            // is what Racket, Guile and the tree-walker all take — a
+            // primitive, a parameter object, a continuation. `call_closure`
+            // took a compiled closure and nothing else (issue #179).
+            // `Some` is a body that needed no frame and has already finished —
+            // a primitive, a parameter object, a delimited continuation that
+            // was the identity. No `Return` is coming to carry the prompt off
+            // by depth, so this is the one call site that closes its own
+            // prompt. `None` means a frame was pushed and the ordinary sweep
+            // will do it.
+            if let Some(result) = call_any(state, body, args.get(3..).unwrap_or(&[]), dst)? {
+                state.prompt_stack.pop();
+                state.set_reg(dst, result);
+            }
         }
 
         VmControlPrimitive::AbortCurrentContinuation => {

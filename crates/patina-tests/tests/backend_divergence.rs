@@ -1247,15 +1247,43 @@ fn a_composable_continuation_captured_inside_a_raise_handler_carries_it() {
     );
 }
 
-/// #179: the VM's prompt body must be a closure; a parameter object (or any
-/// primitive) is rejected. Racket accepts any procedure.
+/// The prompt body is any procedure — issue #179, fixed 2026-09-05.
+///
+/// **Racket 9.3 and Guile 3.0.11** both take one, and so did the tree-walker;
+/// the VM called it through `call_closure`, which accepts a compiled closure
+/// and nothing else. It goes through `call_any` now, the same dispatcher that
+/// already served the prompt's *handler*.
+///
+/// What that costs is the one thing worth remembering here: a primitive or a
+/// parameter object finishes without a frame, so no `Return` comes to carry
+/// the prompt off by depth, and `call-with-continuation-prompt` is the single
+/// call site that closes its own prompt.
 #[test]
-fn a_parameter_object_as_the_prompt_body_is_rejected_by_the_vm() {
-    assert_divergence(
-        "(call-with-continuation-prompt (make-parameter 7))",
-        On::TreeWalker,
-        "7",
-        ErrorClass::AtRuntime,
-        "issue #179",
+fn the_prompt_body_is_any_procedure() {
+    const T: &str = "(define t (make-continuation-prompt-tag 'p))\n";
+    // A parameter object, and a primitive given the arguments that follow the
+    // handler.
+    assert_program_eval_to("(call-with-continuation-prompt (make-parameter 7))", "7");
+    assert_program_eval_to(
+        &format!("{T}(call-with-continuation-prompt + t (lambda (v k) v) 1 2 3)"),
+        "6",
+    );
+    // …and the prompt does not outlive such a body: nothing is left for a
+    // later abort to find, which is the half a depth sweep cannot do here.
+    assert_program_eval_to(
+        &format!(
+            "{T}(list (call-with-continuation-prompt (make-parameter 9) t (lambda (v k) 'h))\n\
+             \x20     (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))"
+        ),
+        "(9 no-prompt)",
+    );
+    // A closure body still reaches its handler through an abort, which is the
+    // path that does get a frame.
+    assert_program_eval_to(
+        &format!(
+            "{T}(call-with-continuation-prompt\n\
+             \x20 (lambda () (abort-current-continuation t 'ab)) t (lambda (v k) (list 'h v)))"
+        ),
+        "(h ab)",
     );
 }
