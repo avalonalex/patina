@@ -546,15 +546,21 @@ so it would only add a sixth mark to rows that are already unanimous.
 | P1 | a full continuation carries the handler stack | ✓ | ✓ | ✓ | ✓ | — | ✓ (both backends) |
 | P2 | escaping a handler's extent uninstalls it | ✓ | ✓ | ✓ | ✓ | — | ✓ (both backends) |
 | P3 | re-entering that extent re-installs it | ✓ | ✓ | ✓ | ✓ | — | ✓ (both backends) |
-| A1 | **aborting** out of that extent uninstalls it | n/a | n/a | n/a | ✓ | ✓ | ✓ |
-| D1 | a composable continuation carries the handler stack | n/a | n/a | ✓ | ✓ | ✓ | ✓ |
-| D2 | a composable continuation re-enters its wind extents | n/a | n/a | ✓ | ✓ | ✓ | ✓ |
-| D3 | a composable continuation carries a delimiter inside it | n/a | n/a | n/e | ✓ | ✓ | ✓ |
+| A1 | **aborting** out of that extent uninstalls it | n/a | n/a | n/a | ✓ | ✓ | ✓ (both backends) |
+| D1 | a composable continuation carries the handler stack | n/a | n/a | ✓ | ✓ | ✓ | ✓ (both backends) |
+| D2 | a composable continuation re-enters its wind extents | n/a | n/a | ✓ | ✓ | ✓ | ✓ (both backends) |
+| D3 | a composable continuation carries a delimiter inside it | n/a | n/a | n/e | ✓ | ✓ | ✓ (both backends) |
 
 `n/a` — no delimited-continuation facility. `n/e` — not expressible: Gauche's
 `shift`/`reset` is untagged, so a `shift` cannot reach past the nearest
 `reset`. `—` for Racket on P1–P3: it has no `raise-continuable`, and its
 escaping `with-handlers` answers a different question.
+
+The tree-walker's marks date from 2026-09-04 (issue #169). Its prompt is not
+a depth in three stacks but a boundary *value* in the continuation, with the
+wind and handler depths recorded on the frame (`cps_eval/prompts.rs`); the
+same matrix rows and the same seven `cps_features.rs` tests score it, so the
+column is one answer reached two ways.
 
 Two things worth taking from this. **P1–P3 are unanimous across six
 implementations**, so those cells are settled behaviour rather than a Patina

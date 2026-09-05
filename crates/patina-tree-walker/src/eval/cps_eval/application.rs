@@ -2,7 +2,16 @@
 //!
 //! This module contains `apply_cps_step` which handles CPS-mode procedure
 //! application, including special handling for CPS-sensitive primitives like
-//! `call-with-values`, `force`, `dynamic-wind`, and exception handling.
+//! `call-with-values`, `force`, `dynamic-wind`, the prompt API, and
+//! exception handling.
+//!
+//! The short-name match below is where this backend claims its control
+//! primitives, and it claims them at *apply* time: the match sees the
+//! primitive whatever name reached it, so `(define dw dynamic-wind)` and
+//! `(dw …)` work. `call/cc` is the one exception — the CPS transform claims
+//! it syntactically (`is_callcc_reference`), which is why it does not work as
+//! a value (Track Q §1.2). The VM claims the same names, plus `values` and
+//! `call-with-values`, by qualified name in `vm_control_primitive`.
 
 use super::CpsEvaluator;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
@@ -232,6 +241,24 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
+                        "call-with-continuation-prompt" => self.apply_call_with_prompt(
+                            args,
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        ),
+
+                        "abort-current-continuation" => self.apply_abort_current_continuation(
+                            args,
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        ),
+
                         _ => {
                             // For other primitives, delegate to direct evaluator
                             self.apply_other_primitive(
@@ -261,8 +288,23 @@ impl<'a> CpsEvaluator<'a> {
             // `%cars+cdrs` bails out with `(abort '() '())`.
             let val_tagged = heap.borrow_mut().values_from(args);
 
-            // Travel from the live winds to the captured ones, one thunk per
-            // step, then park the escape (`wind.rs`).
+            // A composable continuation *returns* to its invoker — it extends
+            // the machine rather than replacing it — so it is entered as a
+            // step, with `cont` as where its chain comes back to
+            // (`prompts.rs`). A full one is a jump: travel from the live
+            // winds to the captured ones, one thunk per step, then park the
+            // escape (`wind.rs`).
+            if k.boundary.is_some() {
+                return self.invoke_composable(
+                    k,
+                    val_tagged,
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
+            }
             self.jump_to_continuation(val_tagged, k, cont_env, prompt_stack, dynamic_winds)
         } else if let Some((values, converter)) = param_opt {
             // Parameters are callable - pass TaggedValue args directly

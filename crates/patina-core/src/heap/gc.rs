@@ -34,7 +34,7 @@ use rustc_hash::FxHashSet;
 use std::cell::{Cell, RefCell};
 
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
-use crate::cont_value::{ContEnv, ContValue, ExceptionHandler};
+use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, DynamicWindRecord};
 use crate::environment::Environment;
 use crate::library::Library;
@@ -772,6 +772,9 @@ impl<'h> GcVisitor<'h> {
         for handler in &k.exception_handlers {
             trace_exception_handler(handler, self);
         }
+        for frame in &k.prompt_stack {
+            trace_prompt_frame(frame, self);
+        }
         trace_cont_env(&k.captured_cont_env, self);
         // Today `resume` always aliases a value that is also reachable through
         // `captured_cont_env` — every reify site stores the wrapper it read out
@@ -1179,8 +1182,38 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 }
                 original_cont
             }
+
+            ContValue::PromptBoundary { .. } => return,
+
+            ContValue::AbortLanding {
+                handler,
+                delimited,
+                cont,
+            } => {
+                visitor.visit(*handler);
+                visitor.visit(*delimited);
+                cont
+            }
+
+            ContValue::ComposableInvokeStep {
+                target,
+                value,
+                cont,
+                ..
+            } => {
+                visitor.visit_continuation(target);
+                visitor.visit(*value);
+                cont
+            }
         };
     }
+}
+
+/// Trace a prompt frame: its handler and the continuation below it. The tag
+/// is a plain Rust struct shared by `Rc`, not a heap value.
+pub fn trace_prompt_frame(frame: &PromptFrame, visitor: &mut GcVisitor<'_>) {
+    visitor.visit(frame.handler);
+    trace_cont_value(&frame.cont, visitor);
 }
 
 /// Trace an exception handler: the handler procedure it holds, which is all

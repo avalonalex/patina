@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
-use crate::cps_expr::{CpsExpr, PromptTag};
+use crate::cont_value::{ContValue, PromptFrame};
+use crate::cps_expr::CpsExpr;
 use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
 
@@ -30,13 +31,37 @@ pub struct CpsContinuation {
     /// The captured environment at the point of continuation capture
     pub env: Rc<Environment>,
 
-    /// For delimited continuations: the prompt tag this was captured at
-    /// None for full continuations (call/cc)
-    pub prompt_tag: Option<Rc<PromptTag>>,
+    /// `Some(id)` for a composable continuation: its chain ends at the
+    /// [`ContValue::PromptBoundary`] with this id, and invoking it pushes a
+    /// [`PromptFrame`] with the same id so the chain returns to the invoker.
+    /// `None` for a full continuation, whose invocation replaces the machine.
+    ///
+    /// The two share this type because they share everything else — a
+    /// continuation chain and the dynamic state to run it under — and differ
+    /// only in what the stacks below mean: a full continuation's are the
+    /// whole stacks at capture, a composable one's are the slices *above*
+    /// its prompt, appended to the invoke site's.
+    pub boundary: Option<u64>,
 
     /// Dynamic wind handlers that were active when this continuation was captured
     /// These need to be reinstalled when the continuation is invoked
     pub dynamic_winds: Vec<DynamicWindRecord>,
+
+    /// The prompts established where this continuation was captured, restored
+    /// on re-entry exactly as `dynamic_winds` and `exception_handlers` are
+    /// (`docs/VM_RUNTIME.md` §5.6, the first row: a `call/cc` capture saves
+    /// all of the dynamic state). Until the tree-walker had a prompt API the
+    /// arrival reset this to empty, which was harmless only because the stack
+    /// was always empty.
+    ///
+    /// For a composable continuation these are the prompts *inside* the
+    /// captured region, with `wind_depth` / `handler_depth` relative to the
+    /// region's base — an invoke adds the invoke site's lengths back. Carrying
+    /// them is what lets a resumed computation abort to a prompt its own code
+    /// established (the VM's #163); relocating them is what keeps such an
+    /// abort from truncating the invoke site's stacks at depths that meant
+    /// something else (#164).
+    pub prompt_stack: Vec<PromptFrame>,
 
     /// The exception handlers installed where this continuation was captured.
     ///
@@ -78,11 +103,24 @@ pub struct CpsContinuation {
     /// bindings named `__dw_after__` / `__dw_wind_id__` / `__dw_original__`
     /// behind a `__dynamic_wind_cleanup__` marker body, which three separate
     /// places had to recognise and decode. Now the value is simply stored.
-    pub resume: Option<crate::cont_value::ContValue>,
+    pub resume: Option<ContValue>,
 }
 
 /// Global counter for generating unique dynamic-wind IDs
 static DYNAMIC_WIND_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Global counter for prompt boundary ids.
+static PROMPT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Mint a fresh prompt boundary identity, for a `PromptFrame` and the
+/// `ContValue::PromptBoundary` that answers to it.
+///
+/// Not the prompt's *tag*: one tag serves any number of prompts, and a
+/// composable continuation captured under one of them must come back to its
+/// own frame, not to the innermost with that tag.
+pub fn next_prompt_id() -> u64 {
+    PROMPT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
 
 /// Mint a fresh `dynamic-wind` identity.
 ///

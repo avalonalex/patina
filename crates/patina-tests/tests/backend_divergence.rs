@@ -48,9 +48,10 @@ use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
-const TREE_WALKER_PROMPTS: &str = "issue #169";
 // HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
 // converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
+// TREE_WALKER_PROMPTS (issue #169) likewise, on 2026-09-04, when the
+// tree-walker gained the prompt API.
 
 // ─── call/cc in value position (Track Q §1.2) ────────────────────────────────
 
@@ -1002,113 +1003,44 @@ fn a_continuation_as_the_handler_for_a_primitive_error_is_fatal_on_the_vm() {
     );
 }
 
-// ─── the prompt API is VM-only (issue #169) ──────────────────────────────────
+// ─── the prompt API, on both backends (issue #169, closed 2026-09-04) ────────
 
-/// `(scheme base)` exports the prompt API and only the VM implements it.
+/// `(scheme base)` exports the prompt API, and both backends implement it.
 ///
-/// Here rather than left as a bare failure because of what the tree-walker
-/// used to say: `Undefined variable:
-/// patina.internal.control/call-with-continuation-prompt` — an internal
-/// library path, and "undefined" of a name the library does define. Neither
-/// backend *registers* these two; control primitives are claimed by name
-/// before dispatch, and the tree-walker's CPS transform does not know them.
-/// It now registers a deliberate not-implemented error instead
-/// (`primitives::unsupported`), which is what makes this a divergence with a
-/// recorded stage rather than a lookup accident.
-///
-/// A `SchemeException`, so `guard` can catch it — behaviour a program is
-/// entitled to from anything `(scheme base)` exports.
+/// Until 2026-09-04 only the VM did, and four quarantines stood here: two
+/// `assert_divergence` calls pinning the tree-walker's deliberate
+/// not-implemented error (#170), one asserting that error's wording, one
+/// that `guard` could catch it. They failed together the moment the API
+/// landed, which is what `assert_divergence` is designed to do, and became
+/// this. The behaviour itself is scored by `control_flow_matrix.rs` and the
+/// prompt tests in `cps_features.rs`; what stays here is the pair of programs
+/// that used to be the divergence, held to one answer.
 #[test]
-fn call_with_continuation_prompt_is_vm_only() {
-    assert_divergence(
+fn the_prompt_api_answers_the_same_on_both_backends() {
+    assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v))",
-        On::Vm,
         "42",
-        ErrorClass::AtRuntime,
-        TREE_WALKER_PROMPTS,
     );
-}
-
-/// The message itself, which `assert_divergence` cannot check.
-///
-/// It compares [`ErrorClass`], deliberately never error text — and
-/// `UndefinedVariable` and `SchemeException` are both `AtRuntime`, so the two
-/// tests around this one pass identically with the fix reverted. The whole of
-/// what changed is the wording, so the wording is what has to be asserted.
-///
-/// Three things, each load-bearing:
-///
-/// - it **names the procedure**, which `control_flow_matrix.rs` depends on:
-///   its `answer()` classifies a row as `UNSUPPORTED` by looking for
-///   `call-with-continuation-prompt` in the message. Drop that and twelve
-///   matrix rows silently flip to `ERROR: …`.
-/// - it **does not name an internal library path**, which is the defect.
-/// - it **says which backend does implement it**, which is the actionable
-///   part. It names the backend rather than a CLI flag: an embedder reaching
-///   this through `TreeWalkInterpreter` directly has no `--tree-walker` to
-///   drop.
-#[test]
-fn the_prompt_api_says_what_is_missing() {
-    let err = try_eval_program_tree_walker(
-        "(define t (make-continuation-prompt-tag 'p))\n\
-         (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v))",
-    )
-    .expect_err("the tree-walker does not implement prompts");
-
-    assert!(
-        err.contains("call-with-continuation-prompt"),
-        "must name the procedure — control_flow_matrix.rs keys on it: {err}"
-    );
-    assert!(
-        err.contains("not implemented") && err.contains("tree-walker"),
-        "must say what is missing and where: {err}"
-    );
-    assert!(
-        err.contains("bytecode VM"),
-        "must say which backend implements it: {err}"
-    );
-    assert!(
-        !err.contains("patina.internal"),
-        "must not leak an internal library path — that is the defect: {err}"
-    );
-    assert!(
-        !err.contains("Undefined variable"),
-        "must not be a lookup failure — the name is bound: {err}"
-    );
-}
-
-/// …and a program can catch it, as it can catch anything `(scheme base)`
-/// raises.
-///
-/// Not a change — the `UndefinedVariable` this replaced was catchable too
-/// (only `Internal` and `ControlFlow` are not). Asserted because it is a
-/// property the replacement had to preserve and could easily have lost by
-/// reaching for `InternalError`, not because the fix introduced it.
-#[test]
-fn the_prompt_api_error_is_catchable() {
-    assert_eq!(
-        eval_program_tree_walker(
-            "(define t (make-continuation-prompt-tag 'p))\n\
-             (guard (e (#t (list 'caught (error-object? e))))\n\
-             \x20 (call-with-continuation-prompt (lambda () 42) t (lambda (v k) v)))"
-        ),
-        "(caught #t)"
-    );
-}
-
-/// The other half of the same gap. Separate because a fix could plausibly
-/// land one without the other, and then only one of these should go red.
-#[test]
-fn abort_current_continuation_is_vm_only() {
-    assert_divergence(
+    assert_program_eval_to(
         "(define t (make-continuation-prompt-tag 'p))\n\
          (call-with-continuation-prompt\n\
          \x20 (lambda () (abort-current-continuation t 'ab))\n\
          \x20 t (lambda (v k) (list 'handler v)))",
-        On::Vm,
         "(handler ab)",
-        ErrorClass::AtRuntime,
-        TREE_WALKER_PROMPTS,
+    );
+}
+
+/// An abort with no prompt to go to is an ordinary raised error, so a
+/// program can catch it — the property the #170 error had and its
+/// replacement had to keep. Both backends: the VM raises
+/// `NoMatchingPrompt` through the same route as any runtime error.
+#[test]
+fn an_abort_with_no_matching_prompt_is_catchable() {
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag 'p))\n\
+         (guard (e (#t (list 'caught (error-object? e))))\n\
+         \x20 (abort-current-continuation t 'nowhere))",
+        "(caught #t)",
     );
 }

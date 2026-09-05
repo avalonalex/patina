@@ -23,11 +23,11 @@ impl<'a> CpsEvaluator<'a> {
         expr: &Rc<CpsExpr>,
         env: Rc<Environment>,
         mut cont_env: ContEnv,
-        mut prompt_stack: Vec<PromptFrame>,
+        prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
-        // Process LetVal/LetCont/If/Set/Define/Prompt in a local loop
+        // Process LetVal/LetCont/If/Set/Define in a local loop
         // since they just update state and continue with a new expression
         let mut current_expr = Rc::clone(expr);
         let mut current_env = env.clone();
@@ -97,6 +97,7 @@ impl<'a> CpsEvaluator<'a> {
                         &cont_env,
                         &current_winds,
                         &exception_handlers,
+                        &prompt_stack,
                     );
                     return Ok(StepResult::Done(tagged));
                 }
@@ -218,21 +219,6 @@ impl<'a> CpsEvaluator<'a> {
                     // same cell — see `Environment::define_scoped_definition`.
                     def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
                     current_expr = Rc::clone(cont);
-                }
-
-                CpsExprKind::Prompt { tag, body, cont } => {
-                    let k = cont_env
-                        .get(cont)
-                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
-                        .clone();
-
-                    prompt_stack.push(PromptFrame {
-                        tag: Rc::new(tag.clone()),
-                        cont: k,
-                        dynamic_winds: current_winds.clone(),
-                    });
-
-                    current_expr = Rc::clone(body);
                 }
 
                 // Note: CpsExpr::Parameterize has been removed.
@@ -377,6 +363,7 @@ impl<'a> CpsEvaluator<'a> {
                         &cont_env,
                         &current_winds,
                         &exception_handlers,
+                        &prompt_stack,
                     );
 
                     return Ok(StepResult::ApplyProc {
@@ -389,85 +376,6 @@ impl<'a> CpsEvaluator<'a> {
                         dynamic_winds: current_winds,
                         exception_handlers,
                     });
-                }
-
-                CpsExprKind::Control { tag, proc } => {
-                    let procedure =
-                        try_catchable!(self.eval_trivial_tagged(proc, &current_env, &cont_env));
-
-                    let prompt_idx = prompt_stack
-                        .iter()
-                        .rposition(|frame| frame.tag.as_ref() == tag)
-                        .ok_or_else(|| {
-                            EvalError::InternalError(format!("No prompt found for tag: {}", tag))
-                        })?;
-
-                    let captured_frames: Vec<PromptFrame> =
-                        prompt_stack.drain(prompt_idx + 1..).collect();
-
-                    let prompt_frame = prompt_stack.pop().unwrap();
-                    let prompt_cont = prompt_frame.cont;
-
-                    let delimited_k_tagged = self.make_delimited_continuation_tagged(
-                        captured_frames,
-                        current_winds.clone(),
-                        prompt_frame.dynamic_winds.clone(),
-                    );
-
-                    return Ok(StepResult::ApplyProc {
-                        proc: procedure,
-                        args: vec![delimited_k_tagged],
-                        cont: prompt_cont,
-                        env: current_env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds: prompt_frame.dynamic_winds,
-                        exception_handlers,
-                    });
-                }
-
-                CpsExprKind::Abort { tag, value } => {
-                    let val_tagged =
-                        try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
-
-                    let prompt_idx = prompt_stack
-                        .iter()
-                        .rposition(|frame| frame.tag.as_ref() == tag)
-                        .ok_or_else(|| {
-                            EvalError::InternalError(format!("No prompt found for tag: {}", tag))
-                        })?;
-
-                    // `split_off` rather than truncate-then-pop: the frames
-                    // above the match go, and the matched frame *is* the one
-                    // being aborted to. Truncating to `prompt_idx` dropped it
-                    // and then popped the **enclosing** prompt instead, which
-                    // delivered to the wrong continuation and wind stack — and
-                    // panicked outright on `pop().unwrap()` when the matching
-                    // prompt was the only one on the stack. Dead code, so
-                    // nothing caught it; the first program #169 makes reach
-                    // here would have.
-                    let prompt_frame = prompt_stack.split_off(prompt_idx).remove(0);
-
-                    // Travel to the prompt's wind stack the way a continuation
-                    // jump does — one thunk per step, each in its own
-                    // `dynamic-wind` call's environment — then deliver to the
-                    // prompt's continuation. Unreachable today: no `Abort`
-                    // node is emitted. When delimited continuations are
-                    // implemented, the arrival in `mod.rs` resets
-                    // `prompt_stack` where this needs it kept truncated.
-                    let k = self.reify_continuation(
-                        &prompt_frame.cont,
-                        &cont_env,
-                        &prompt_frame.dynamic_winds,
-                        &exception_handlers,
-                    );
-                    return self.jump_to_continuation(
-                        val_tagged,
-                        k,
-                        cont_env,
-                        prompt_stack,
-                        current_winds,
-                    );
                 }
 
                 CpsExprKind::Quasiquote { template, cont } => {

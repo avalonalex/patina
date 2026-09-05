@@ -24,7 +24,7 @@ use patina_core::{DynamicWindRecord, GcRoots, GcVisitor};
 use super::types::{ExceptionHandler, PromptFrame, StepResult, trace_pending_escape};
 use crate::eval::Evaluator;
 // Continuation-value tracing moved to patina-core with ContValue itself.
-use patina_core::{trace_cont_env, trace_cont_value, trace_exception_handler};
+use patina_core::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame};
 
 impl GcRoots for Evaluator {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
@@ -122,9 +122,7 @@ fn trace_stacks(
     visitor: &mut GcVisitor<'_>,
 ) {
     for frame in prompt_stack {
-        // `tag: Rc<PromptTag>` is a plain Rust struct, not a heap value.
-        trace_cont_value(&frame.cont, visitor);
-        visitor.visit_winds(&frame.dynamic_winds);
+        trace_prompt_frame(frame, visitor);
     }
     visitor.visit_winds(dynamic_winds);
     for handler in exception_handlers {

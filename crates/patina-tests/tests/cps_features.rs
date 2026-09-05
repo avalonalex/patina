@@ -891,11 +891,11 @@ fn test_dynamic_wind_callcc_escape_runs_after() {
 }
 
 /// Aborting to a prompt out of each of the value form's three thunks —
-/// VM-only, and measured against Racket.
+/// measured against Racket.
 ///
-/// `call-with-continuation-prompt` and `abort-current-continuation` are
-/// exported from `(scheme base)` but implemented only on the VM, so this uses
-/// `eval_program_vm` rather than holding both backends to it. Nothing in the
+/// On both backends since 2026-09-04, when the tree-walker's prompt API
+/// landed (issue #169); VM-only before that, the two names being exported
+/// from `(scheme base)` but implemented on the VM alone. Nothing in the
 /// suite covered the *value* form under a prompt at all before 2026-09-02,
 /// which is how three defects survived:
 ///
@@ -933,7 +933,7 @@ fn test_abort_to_a_prompt_out_of_each_value_form_wind_thunk() {
               (list r l))))
     "#;
     let probe = |body: &str| {
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{PRELUDE}
              (probe (lambda (note)
                (call-with-continuation-prompt
@@ -984,8 +984,8 @@ fn test_abort_to_a_prompt_out_of_each_value_form_wind_thunk() {
     );
 }
 
-/// Invoking the composable continuation a prompt handler receives — VM-only,
-/// and measured against Racket.
+/// Invoking the composable continuation a prompt handler receives —
+/// measured against Racket, on both backends since 2026-09-04.
 ///
 /// Its neighbour above covers the *abort* half of this API and deliberately
 /// never resumes `k`, which is how issue #160 survived. Appending the
@@ -1017,7 +1017,7 @@ fn test_abort_to_a_prompt_out_of_each_value_form_wind_thunk() {
 #[test]
 fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
     let probe = |body: &str, handler: &str| {
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "(define t (make-continuation-prompt-tag 'p))
              (call-with-continuation-prompt (lambda () {body}) t (lambda (v k) {handler}))"
         ))
@@ -1085,7 +1085,7 @@ fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
         "(list 'got (abort-current-continuation t 'ab))",
         "(list 'handler (call-with-values k list))",
     );
-    let value_form = eval_program_vm(
+    let value_form = eval_program(
         "(define t (make-continuation-prompt-tag 'p))
          (define cwv call-with-values)
          (call-with-continuation-prompt
@@ -1115,7 +1115,7 @@ fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
     // or not the live stack already shares the extent — and left when the
     // resumed computation returns through it.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             r#"
             (define t (make-continuation-prompt-tag 'p))
             (define log '())
@@ -1137,7 +1137,8 @@ fn test_a_prompt_handlers_composable_continuation_resumes_its_computation() {
 }
 
 /// What an abort leaves behind, and what a composable continuation carries —
-/// VM-only, measured against Racket 9.3 and Gauche 0.9.15.
+/// measured against Racket 9.3 and Gauche 0.9.15, on both backends since
+/// 2026-09-04.
 ///
 /// Both are cells of the dynamic-state matrix in `docs/VM_RUNTIME.md` §5.6:
 /// of the five components of `VmState` that belong to a dynamic extent rather
@@ -1176,7 +1177,7 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
     // The enclosing handler here reaches the prompt by a *tail* call, so it
     // shares the prompt's frame depth and must survive anyway.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{T}
              (with-exception-handler
                (lambda (e) (list 'ESCAPED-TO-TOP e))
@@ -1197,7 +1198,7 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
     // for the opposite reason — this is the row that a depth test gets wrong
     // in whichever direction the other row gets right.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{T}
              (with-exception-handler
                (lambda (e) (list 'TOP e))
@@ -1219,7 +1220,7 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
     // ordinary depth sweep before the resume, so a wrong answer here cannot be
     // rescued by a wrong answer there. The two used to mask each other.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{T}
              (define k* #f)
              (define captured
@@ -1244,7 +1245,7 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
     // And it carries a prompt established inside the captured region: the
     // resumed frames abort to a delimiter their own code set up.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 't))
              (define u (make-continuation-prompt-tag 'u))
              (call-with-continuation-prompt
@@ -1263,7 +1264,10 @@ fn test_a_prompt_transfers_carry_the_dynamic_environment() {
 }
 
 /// Resuming a composable continuation somewhere its captured depths do not
-/// already fit — VM-only, measured against Guile 3.0.11.
+/// already fit — measured against Guile 3.0.11, on both backends since
+/// 2026-09-04. The tree-walker's carried prompts record two depths rather
+/// than three (a CPS continuation is not a stack) and relocate them the same
+/// way; these five rows are what hold that to the same answers.
 ///
 /// The test above pins the *semantics*. Every one of its rows happens to
 /// resume at wind depth 0 and handler depth 0, with the carried prompt's
@@ -1309,7 +1313,7 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     // truncate the live wind stack at *its* extent, not at the depth it
     // recorded against another stack. Unrelocated, `OUT` ran twice.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{CAPTURE}
              (define log '())
              (capture!)
@@ -1324,7 +1328,7 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     // uninstall handlers that enclose the invoke. Unrelocated, the raise after
     // it was unhandled.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{CAPTURE}
              (capture!)
              (with-exception-handler
@@ -1337,7 +1341,7 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     // carried prompt records a wind depth the live stack cannot reach, and
     // slicing at it panicked.
     assert_eq!(
-        eval_program_vm(&format!(
+        eval_program(&format!(
             "{CAPTURE}
              (define captured
                (dynamic-wind (lambda () #f)
@@ -1352,7 +1356,7 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     // answer the `call/cc` path gives for the same shape, because a jump runs
     // each thunk under its own record's handler stack.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define log '())
              (define r
@@ -1379,7 +1383,7 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
     // stack is shorter than the prompt recorded. Slicing at the recorded
     // length panicked.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (with-exception-handler
                (lambda (e) (abort-current-continuation t (list 'aborted e)))
@@ -1394,8 +1398,8 @@ fn test_a_composable_continuation_relocates_the_depths_it_carries() {
 }
 
 /// An abort's after-thunks: the dynamic environment they run in, and what
-/// happens when a continuation captured inside one is re-entered. VM-only,
-/// measured against Guile 3.0.11.
+/// happens when a continuation captured inside one is re-entered. Measured
+/// against Guile 3.0.11, on both backends since 2026-09-04.
 ///
 /// A jump has run each wind thunk under its own record's handler stack, in a
 /// frame of its own, since #156; the value form of `dynamic-wind` since #158.
@@ -1423,7 +1427,7 @@ fn test_an_aborts_after_thunks_run_as_frames() {
     // program left by a jump instead of an abort answers `MID` on both
     // backends, chibi, Gauche and Guile.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define log '())
              (define (note x) (set! log (cons x log)))
@@ -1451,7 +1455,7 @@ fn test_an_aborts_after_thunks_run_as_frames() {
     // still delivers its value. On main the thunk restarted from the top and
     // `r` came out `#<unspecified>`: #157's signature, on the abort.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define k #f) (define n 0) (define log '())
              (define (note x) (set! log (cons x log)))
@@ -1473,7 +1477,7 @@ fn test_an_aborts_after_thunks_run_as_frames() {
     // has to keep working: the travel reports the escape sentinel like any
     // other, rather than swallowing it.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define esc #f)
              (define r (call/cc (lambda (c) (set! esc c) 'first)))
@@ -1492,7 +1496,10 @@ fn test_an_aborts_after_thunks_run_as_frames() {
 }
 
 /// A composable invoke's re-entry `before` thunks run under the **invoke
-/// site's** handler stack — VM-only, measured against Guile 3.0.11.
+/// site's** handler stack — measured against Guile 3.0.11, on both backends
+/// since 2026-09-04. The tree-walker's `resume_composable` runs them under
+/// the live stack for the reason given here; `jump_to_continuation` installs
+/// the record's.
 ///
 /// This is the row that says why the abort's fix does not generalise. Routing
 /// the abort through `step_wind_jump` is right: its target *replaces* the
@@ -1514,7 +1521,7 @@ fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
     // A `guard` around the invoke must see a raise from the re-entered
     // extent's before-thunk.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define log '())
              (define (note x) (set! log (cons x log)))
@@ -1534,7 +1541,7 @@ fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
     // And a handler at the invoke site wins over one whose extent ended when
     // the continuation was captured.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 'p))
              (define k* #f) (define seen #f)
              (define cap
@@ -1557,7 +1564,7 @@ fn test_a_re_entry_thunk_runs_under_the_invoke_sites_handlers() {
 }
 
 /// Two shapes that only work once a composable invoke's re-entry thunks are
-/// frames — VM-only, measured against Guile 3.0.11.
+/// frames — measured against Guile 3.0.11, on both backends since 2026-09-04.
 ///
 /// `control_flow_matrix.rs` covers issue #167 in four spellings, all of them
 /// one extent re-entered and returned from normally. These are the two shapes
@@ -1583,7 +1590,7 @@ fn a_transfer_out_of_a_re_entry_thunk_behaves() {
     // the extent it was entering is left without running its `after`, because
     // a `before` that does not return never entered.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 't))
              (define t2 (make-continuation-prompt-tag 't2))
              (define k* #f) (define log '())
@@ -1607,7 +1614,7 @@ fn a_transfer_out_of_a_re_entry_thunk_behaves() {
     // entering the inner extent too — on `main` the inner one was never
     // re-entered and the resumed value was lost.
     assert_eq!(
-        eval_program_vm(
+        eval_program(
             "(define t (make-continuation-prompt-tag 't))
              (define k* #f) (define kt #f) (define n 0) (define log '())
              (define (note x) (set! log (cons x log)))

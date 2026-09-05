@@ -34,8 +34,8 @@ impl<'a> CpsEvaluator<'a> {
                 let cont = cont_env
                     .get(k)
                     .ok_or_else(|| EvalError::UndefinedVariable(k.to_string()))?;
-                // Empty winds and an empty handler stack because this
-                // trivial-eval path carries no machine state to fill them from.
+                // Empty winds, handlers and prompts because this trivial-eval
+                // path carries no machine state to fill them from.
                 //
                 // **Unreachable today**, which is the only reason that is
                 // safe: `CpsExprKind::ContRef` is constructed nowhere outside
@@ -47,7 +47,7 @@ impl<'a> CpsEvaluator<'a> {
                 // restores whatever is stored, it *erases* the caller's
                 // handlers. So if `ContRef` is ever made live, thread the
                 // machine state in rather than leaving this as it stands.
-                Ok(self.reify_continuation_tagged(cont, cont_env, &[], &[]))
+                Ok(self.reify_continuation_tagged(cont, cont_env, &[], &[], &[]))
             }
 
             CpsExprKind::Lambda {

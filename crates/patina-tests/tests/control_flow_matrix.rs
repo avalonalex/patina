@@ -74,21 +74,22 @@
 //! than as a failure to be explained — which is the half of "fails in both
 //! directions" that only gets exercised on a good day.
 //!
-//! # What the tree-walker does here
+//! # The tree-walker
 //!
-//! It has no prompt API at all, so the twelve prompt rows record
-//! [`UNSUPPORTED`] — a classification, not the error's prose. That is an
-//! absent feature, not a wrong answer, and
-//! [`the_defect_count_is_what_it_says`] keeps the two apart: a count of wrong
-//! rows per backend, plus an assertion that every prompt row says exactly
-//! "unsupported". When the tree-walker grows prompts those twelve go red
-//! together, which is a request to measure them rather than a failure.
+//! It had no prompt API until 2026-09-04, and the twelve prompt rows recorded
+//! an `UNSUPPORTED` classification instead of an answer — an absent feature,
+//! kept apart from a wrong one. They went red together when the API landed
+//! (issue #169), each reporting `FIXED` with the reference answer, which is
+//! the "request to measure them" this header used to promise; now every row
+//! records an answer on both backends. The two backends reach those answers
+//! by different mechanisms — the VM's prompt is a depth in three stacks, the
+//! tree-walker's a boundary value in the continuation (`cps_eval/prompts.rs`)
+//! — which is what makes their agreement here worth something.
 //!
-//! Those twelve rows are pinned-known-absent assertions that
-//! `assert_divergence` does not know about — `common/mod.rs` names this file
-//! as the second inventory for that reason. They are all that is left of it:
-//! the four #167 rows were pinned-known-*wrong* until that issue was fixed,
-//! and no row records a wrong answer today.
+//! No row records a wrong answer today, on either backend, and none records
+//! an absent feature. `common/mod.rs` names this file as the second inventory
+//! of assertions `assert_divergence` does not know about; the inventory is
+//! empty, and the file is what keeps it that way.
 //!
 //! # Adding axes
 //!
@@ -119,19 +120,12 @@ mod common;
 
 use common::{try_eval_program_tree_walker, try_eval_program_vm};
 
-/// The tree-walker has no prompt API, so every shape needing one fails there
-/// before running a line of the program.
+/// How a rejection is rendered, so a row that starts failing says which.
+/// Composed into messages rather than repeated as a literal.
 ///
-/// A **classification**, not the error's prose. `common/mod.rs` says why text
-/// is never compared — "pinning prose would turn every message improvement
-/// into a test break" — and its `ErrorClass` is too coarse to help here, being
-/// two buckets that both say "at run time". So [`answer`] recognises this one
-/// failure by the primitive's own name, which survives rewording `Undefined
-/// variable` and renaming the `patina.internal.control` path alike.
-const UNSUPPORTED: &str = "<unsupported: no prompt API>";
-
-/// How any other rejection is rendered, so a row that starts failing says
-/// which. Composed into messages rather than repeated as a literal.
+/// The message is kept rather than collapsed to a token, and never compared
+/// against a recorded value: `common/mod.rs` says why text is never compared
+/// — "pinning prose would turn every message improvement into a test break".
 const ERROR: &str = "<error>";
 
 /// How the `dynamic-wind` call is reached.
@@ -213,7 +207,9 @@ impl Transfer {
             Transfer::ResumeThenReenterThunk => "resume+thunk-reenter",
         }
     }
-    /// Whether the shape needs the prompt API, which only the VM has.
+    /// Whether the shape needs the prompt API — which chibi and Gauche do not
+    /// have, so [`dump_programs`] writes no file for them, and which the
+    /// tree-walker did not have until 2026-09-04.
     fn needs_prompts(self) -> bool {
         matches!(
             self,
@@ -418,32 +414,32 @@ const MATRIX: &[Shape] = &[
     // and the tail spelling pops its frame first and survived — which is why
     // both axes are here rather than either alone.
     Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::Abort,
-            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: UNSUPPORTED,
+            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: "((h ab) (in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::Abort,
-            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: UNSUPPORTED,
+            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: "((h ab) (in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::Abort,
-            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: UNSUPPORTED,
+            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: "((h ab) (in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::Abort,
-            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: UNSUPPORTED,
+            correct: "((h ab) (in out))", vm: "((h ab) (in out))", tw: "((h ab) (in out))",
             oracles: "guile, racket", issue: "" },
 
     // ---- resume: invoke the composable continuation --------------------
     // Issue #160's shape: the value has to reach the hole *and* come back out.
     // The captured extent is re-entered, so the log doubles.
     Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::Resume,
-            correct: "((got resumed) (in out in out))", vm: "((got resumed) (in out in out))", tw: UNSUPPORTED,
+            correct: "((got resumed) (in out in out))", vm: "((got resumed) (in out in out))", tw: "((got resumed) (in out in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::Resume,
-            correct: "((w (got resumed)) (in out in out))", vm: "((w (got resumed)) (in out in out))", tw: UNSUPPORTED,
+            correct: "((w (got resumed)) (in out in out))", vm: "((w (got resumed)) (in out in out))", tw: "((w (got resumed)) (in out in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::Resume,
-            correct: "((got resumed) (in out in out))", vm: "((got resumed) (in out in out))", tw: UNSUPPORTED,
+            correct: "((got resumed) (in out in out))", vm: "((got resumed) (in out in out))", tw: "((got resumed) (in out in out))",
             oracles: "guile, racket", issue: "" },
     Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::Resume,
-            correct: "((w (got resumed)) (in out in out))", vm: "((w (got resumed)) (in out in out))", tw: UNSUPPORTED,
+            correct: "((w (got resumed)) (in out in out))", vm: "((w (got resumed)) (in out in out))", tw: "((w (got resumed)) (in out in out))",
             oracles: "guile, racket", issue: "" },
 
     // ---- resume, then re-enter a continuation captured in a thunk ------
@@ -456,16 +452,16 @@ const MATRIX: &[Shape] = &[
     // through `step_wind_jump`, which is what fixed the abort's thunks in #165
     // and which is wrong here: see `install_thunk_handlers`.
     Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))",
             oracles: "guile", issue: "" },
     Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))",
             oracles: "guile", issue: "" },
     Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            correct: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((got resumed) (in-1 in-2 out in-1 in-2 out in-2 out))",
             oracles: "guile", issue: "" },
     Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ResumeThenReenterThunk,
-            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: UNSUPPORTED,
+            correct: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((w (got resumed)) (in-1 in-2 out in-1 in-2 out in-2 out))",
             oracles: "guile", issue: "" },
 ];
 
@@ -547,10 +543,6 @@ fn dump_programs() {
 }
 
 /// Run one shape on one backend, rendering a rejection as [`ERROR`].
-///
-/// The message is kept rather than collapsed to a token: the twelve
-/// tree-walker rows are errors *by design*, and a bare marker would not
-/// distinguish "no prompt API" from a crash in one.
 fn answer(code: &str, vm: bool) -> String {
     let ok = if vm {
         try_eval_program_vm(code)
@@ -559,11 +551,7 @@ fn answer(code: &str, vm: bool) -> String {
     };
     ok.unwrap_or_else(|e| {
         let first = e.lines().next().unwrap_or("").trim();
-        if first.contains("call-with-continuation-prompt") {
-            UNSUPPORTED.to_string()
-        } else {
-            format!("{ERROR}: {first}")
-        }
+        format!("{ERROR}: {first}")
     })
 }
 
@@ -627,27 +615,20 @@ fn the_defect_count_is_what_it_says() {
     // about, whichever direction it moved.
     assert_eq!(vm.len(), 0, "VM shapes wrong: {vm:?}");
 
-    // The tree-walker: zero wrong among the shapes it can run.
-    let tw = wrong(|s| s.tw, false);
+    // The tree-walker: zero as well. Its twelve prompt rows recorded
+    // `UNSUPPORTED` until 2026-09-04 — an absent feature, not a wrong answer
+    // — and went red together when the API landed, as the header promised.
+    let tw: Vec<String> = wrong(|s| s.tw, true)
+        .into_iter()
+        .chain(wrong(|s| s.tw, false))
+        .collect();
     assert_eq!(tw.len(), 0, "tree-walker shapes wrong: {tw:?}");
-
-    // …and the shapes it cannot run say exactly that. When it grows a prompt
-    // API these twelve go red together, which is a request to measure them.
-    for shape in MATRIX.iter().filter(|s| s.transfer.needs_prompts()) {
-        assert_eq!(
-            shape.tw,
-            UNSUPPORTED,
-            "{}: the tree-walker has no prompt API, so this row records that",
-            shape.name()
-        );
-    }
 
     // Every wrong row names its issue, so the table doubles as the index from
     // defect to surface count; and every row names the implementations behind
     // its `correct` value, so no row borrows another's confidence.
     for shape in MATRIX {
-        let wrong_somewhere = shape.vm != shape.correct
-            || (!shape.transfer.needs_prompts() && shape.tw != shape.correct);
+        let wrong_somewhere = shape.vm != shape.correct || shape.tw != shape.correct;
         assert_eq!(
             wrong_somewhere,
             !shape.issue.is_empty(),
