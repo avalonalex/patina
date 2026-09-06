@@ -102,6 +102,38 @@ finishes: writing a PR description that states a result, bumping
 re-running `cargo test --all` after each edit costs 5–10 minutes an iteration
 to learn what a push would have told you anyway.
 
+**What each command costs, measured** (2026-09-06, 10-core Apple silicon,
+after touching `patina-vm/src/runtime/vm_state.rs` — a file every test binary
+links, so this is the worst realistic case):
+
+| Command | Time |
+|---|---|
+| `cargo build --release` — the repro, the chibi lanes, the benchmarks | **3.4 s** |
+| `cargo test -p patina-tests --test <one file> --no-run` | **9.3 s** |
+| `cargo test --all --lib --tests` | 493 s |
+| `cargo clippy --all-targets --all-features` | 580 s |
+| any of them again with no edit in between | ~0.3 s |
+
+The two big numbers are **87 integration binaries × ~6 s**: every `.rs` file
+directly in a `tests/` directory is its own crate and its own executable, and
+each statically links the whole workspace. Do not go looking for a cache bug —
+there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
+**not** evict each other's artifacts; the workspace's only non-default feature
+(`patina-tree-walker/verbose-tracing`) gates no code at all; and `patina-tests`
+depends on every crate, so "rebuild only what my change affects" is all 87 of
+them. `clippy` edges out `cargo test` because `--all-targets` adds the Criterion
+bench target that `--lib --tests` never builds.
+
+Selecting the one test file you touched is therefore the entire lever, and it
+is ~50× cheaper than the suite. CI is not faster at any of this — it runs seven
+jobs on seven machines: **685 s of work in 270 s of wall clock**.
+
+**This table has a shelf life.** Issue #193 proposes moving the suite's 2,328
+eval assertions into `.scm` files behind a single Rust driver — 87 binaries
+would become one, and both big numbers would go with them. The *reasoning*
+above survives (one link per `tests/*.rs` file is why they are big); the
+figures do not. Re-measure before quoting them if that lands.
+
 ## Documentation
 
 **Do not create new markdown files without user approval.**
