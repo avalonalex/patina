@@ -26,7 +26,8 @@
 
 mod common;
 use common::{
-    assert_program_eval_error, assert_program_eval_to, eval_program_tree_walker, eval_program_vm,
+    ErrorClass, assert_program_eval_error, assert_program_eval_error_at, assert_program_eval_to,
+    eval_program_tree_walker, eval_program_vm,
 };
 
 /// `dynamic-wind` performs no up-front validation on either backend — neither
@@ -326,11 +327,14 @@ fn test_apply_through_call_with_values_accepts_a_control_primitive() {
 /// `Undefined variable: patina.internal.control/…`, or the `Internal error`
 /// that name lookup becomes when it is a primitive callback that fails.
 ///
-/// Two call sites are missing from this list and cannot be added: a
-/// `call-with-values` **producer** and a **wind thunk** are called with no
-/// arguments, and `values` is the only control primitive that takes none —
-/// which is also in the registry, so the old probe found it and those two
-/// sites could never show the defect.
+/// **A zero-argument call site cannot appear here, and that is not the same
+/// as its being unaffected** — an earlier draft of this comment said "those
+/// sites could never show the defect", which is false, and
+/// [`a_wind_thunk_reaches_the_probe_it_cannot_satisfy`] below is the program
+/// that falsifies it. A wind thunk and a `call-with-values` producer take no
+/// arguments, and every control primitive but `values` requires at least one,
+/// so none of them can *succeed* there. Reaching the probe and satisfying it
+/// are different questions, and the arity is only an answer to the second.
 #[test]
 fn every_frameless_call_site_takes_a_control_primitive() {
     // `call/cc`'s own procedure argument, given `call/cc`.
@@ -350,4 +354,43 @@ fn every_frameless_call_site_takes_a_control_primitive() {
         "((1 2))"
     );
     assert_eq!(eval_program_vm("(member + (list '(1 2)) apply)"), "((1 2))");
+}
+
+/// A wind thunk does reach the probe — it just cannot satisfy it.
+///
+/// The row that makes the point the neighbour above gets wrong. `apply` as a
+/// jump's `after` thunk goes through `push_wind_step` → `call_any` and is
+/// called with **no arguments**, so it fails either way; *how* it fails is the
+/// whole difference, and it is the same difference every other row in this
+/// file shows:
+///
+/// ```text
+///   main 30e0bd6 => Undefined variable: patina.internal.control/apply
+///   with #186    => wrong number of arguments: expected at least 2, got 0
+/// ```
+///
+/// The first is the name never resolving. The second is `apply` being reached,
+/// recognised, and told it was called wrongly — which is what the tree-walker
+/// has always said here, so the two backends now agree on the diagnosis and
+/// not merely on the fact of failure.
+///
+/// The message is the assertion because nothing else can be: `values` is the
+/// only control primitive a 0-argument call site can call successfully, and it
+/// is in the registry, so it was found by the old probe too. That is the one
+/// shape where this file's usual rule — never assert on error text — has no
+/// alternative to fall back on, and the diagnosis is the behaviour under test.
+#[test]
+fn a_wind_thunk_reaches_the_probe_it_cannot_satisfy() {
+    assert_program_eval_error_at(
+        "(define k #f)\n\
+         (define done #f)\n\
+         (define v (call/cc (lambda (c) (set! k c) 0)))\n\
+         (if (not done)\n\
+         \x20   (begin (set! done #t)\n\
+         \x20          (dynamic-wind (lambda () 'b) (lambda () (k 1)) apply)))\n\
+         v",
+        ErrorClass::AtRuntime,
+        ErrorClass::AtRuntime,
+        "number of arguments: expected at least 2, got 0",
+    );
 }

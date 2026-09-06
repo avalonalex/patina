@@ -754,8 +754,13 @@ pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<Tagg
 
 /// Call a closure (heap index) with `args`, returning its result.
 ///
-/// Used by the VM internally for calls to Scheme closures from the execution
-/// loop and for `CallWithPrompt` body thunks.
+/// Takes a compiled closure and nothing else, so it is the wrong dispatcher
+/// for anything user code names as a procedure. Two callers remain:
+/// `with-exception-handler`'s thunk, which is issue #190 — the hole issue #186
+/// closed for [`call_any`], at a call site that never had a dispatcher — and
+/// `Instruction::CallWithPrompt`, which no pass emits (also #190). The
+/// `CallWithPrompt` body thunks this comment used to advertise are the value
+/// arm's business now, through `call_any`.
 fn call_closure(
     state: &mut VmState,
     closure_val: TaggedValue,
@@ -1430,11 +1435,13 @@ fn dispatch_one_instruction(
             if state.frames.len() == exit_depth {
                 // At exit depth — call consumer; if it returns immediately,
                 // return the result.
+                // One test, not two: `call_any` answers `Some` exactly when
+                // the depth is unchanged, and the depth here *is* `exit_depth`
+                // — so a `None` says the consumer pushed a frame and the loop
+                // has to run it. A second `frames.len() == exit_depth` check
+                // used to follow this, unreachable under that contract and
+                // reading a register the frame it names may not have.
                 if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)? {
-                    return Ok(Some(result));
-                }
-                if state.frames.len() == exit_depth {
-                    let result = state.reg(return_reg);
                     return Ok(Some(result));
                 }
             } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
@@ -2213,9 +2220,14 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
         })
 }
 
-/// Call any callable value from a site that has no instruction behind it —
-/// `call-with-values`' consumer and producer, a prompt body, `call/cc`'s
-/// procedure, a wind thunk, a higher-order primitive's callback.
+/// Call any callable value from a site that has no instruction behind it.
+/// Nine such sites: `call-with-values`' consumer (both the instruction and the
+/// tail instruction), its producer, a prompt body, `call/cc`'s procedure
+/// argument, a jump's wind thunks ([`push_wind_step`]), a composable invoke's
+/// re-entry thunks ([`push_invoke_step`] — a separate site with a different
+/// handler-stack policy, not the same one), a higher-order primitive's
+/// callback ([`run_apply_proc`]), and a parameter converter (through
+/// [`call_any_sync`]).
 ///
 /// **[`call_value`] plus the one thing those callers need and the dispatch
 /// loop's callers get for free: whether the callee is finished.** `Some(v)` is
@@ -2229,6 +2241,15 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// pushes lengthens it. That is the whole of this function — it holds no probe
 /// of its own, so a callee is callable here exactly when it is callable from a
 /// `Call` instruction.
+///
+/// **A live frame is a precondition**, for the read below and for the
+/// `set_reg` inside `call_value` that it reads back. It holds because the only
+/// dispatch loop whose `exit_depth` is 0 is [`execute`]'s, and that loop's one
+/// frame is never popped by a tail call: pass 3 marks top-level expressions as
+/// **not** in tail position (`pass3_tail.rs`), so `TailCallWithValues` and
+/// `tail_call_value_with_probe` — the two paths that pop before dispatching —
+/// always leave a caller behind. Every other loop exits at a depth of 1 or
+/// more.
 ///
 /// It did hold its own until 2026-09-05, one probe short: primitive →
 /// parameter → continuation → closure, with **no control primitive**, which is
@@ -2296,11 +2317,14 @@ fn try_call_parameter(
 /// Synchronously call a callable value and return its result.
 /// Used for parameter converters and similar internal callbacks.
 ///
-/// [`call_any`] with the nested loop attached, so the callee set is the same
-/// one: a parameter converter may be a primitive, a closure, a parameter
-/// object or a control primitive. It probed primitive → closure until
-/// 2026-09-05 and nothing else, which is `call_any`'s hole (issue #186) one
-/// dispatcher over.
+/// [`call_any`] with the nested loop attached, so the callee set is not this
+/// function's to state — it is whatever `call_any` takes. It probed primitive
+/// → closure until 2026-09-05 and nothing else, which is `call_any`'s hole
+/// (issue #186) one dispatcher over.
+///
+/// Only reached from [`try_call_parameter`], i.e. from *setting* a parameter
+/// by calling it. `make-parameter`'s own initial conversion is a registry
+/// primitive and goes through [`run_apply_proc`] instead.
 fn call_any_sync(
     state: &mut VmState,
     func_val: TaggedValue,
@@ -2478,8 +2502,6 @@ fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOut
 /// [`call_any`] went without control primitives for as long as it did
 /// (issue #186). The tail path does make exit-depth decisions, and makes them
 /// itself, around this call rather than inside it.
-///
-/// `is_tail` is currently unused (all are handled as non-tail for A6).
 fn handle_control_primitive(
     state: &mut VmState,
     ctrl: VmControlPrimitive,
@@ -4675,8 +4697,9 @@ fn self_tail_call(
 /// `CallPrimitive` and every inline opcode's slow path. Checks the shadow
 /// bit — a rebound name deoptimizes to name-lookup dispatch, preserving
 /// redefinition semantics — otherwise dispatches through the registry by
-/// index. Returns `Some(value)` on a continuation escape, as `call_value`
-/// does.
+/// index. Returns `Some(value)` on a continuation escape from the **tail**
+/// deopt path, which is [`tail_call_value`]'s to report; the non-tail path
+/// signals one as an `Err`, as `call_value` does.
 #[allow(clippy::too_many_arguments)]
 fn exec_call_primitive(
     state: &mut VmState,

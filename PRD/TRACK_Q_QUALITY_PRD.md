@@ -108,9 +108,11 @@ callability.rs` carries the callee-set tests, `backend_divergence.rs` the one
 remaining pin.
 
 **Update 2026-09-05 — the third VM dispatcher, `call_any`, is converged too
-(issue #186).** It had kept the narrow probe set, and is what runs
-`call-with-values`' consumer and producer, a prompt body, `call/cc`'s
-procedure, a wind thunk and a higher-order primitive's callback. So for three
+(issue #186).** It had kept the narrow probe set, and it is what runs the nine
+calls that have no instruction behind them: a `call-with-values` consumer
+(instruction and tail instruction) or producer, a prompt body, `call/cc`'s
+procedure, a jump's wind thunks, a composable invoke's re-entry thunks, a
+higher-order primitive's callback, and a parameter converter. So for three
 weeks this row was fixed and its sibling was not:
 
 | Expression | VM before | VM now | Tree-walker |
@@ -130,7 +132,16 @@ whole dispatcher look unreachable from most of the VM.
 
 Held by `callability.rs::test_apply_through_call_with_values_accepts_a_control_primitive`
 and `backend_divergence.rs::a_control_primitive_can_be_the_prompt_body`, both
-collapsed out of the quarantines that had pinned the failures.
+collapsed out of the quarantines that had pinned the failures, plus
+`every_frameless_call_site_takes_a_control_primitive` for the remaining sites.
+
+**One dispatcher is not the VM, and Q2 should not read this update as saying
+otherwise.** `with-exception-handler`'s *thunk* still goes through
+`call_closure` — a compiled closure and nothing else — so
+`(with-exception-handler h values)` answers `#<values>` on the tree-walker and
+fails on the VM. Filed as **issue #190**, together with
+`Instruction::CallWithPrompt`, which has the same narrow body call and is
+emitted by no pass.
 
 **The lesson is the one §1.2 already teaches, applied to itself, three times.**
 Every row in that table was measured, but the *cause* attached to two of them

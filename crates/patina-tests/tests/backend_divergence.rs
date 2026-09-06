@@ -35,13 +35,21 @@
 //! tree-walker is its genuine registry hole, still Q2 part 1's to fix, and
 //! `apply` is simply a third way to reach it.
 //!
-//! **The VM had one narrow dispatcher left**, `call_any`, with the same probe
-//! set the apply instructions shed — so a **control primitive** reached
-//! through `call-with-values` or a prompt body failed there, e.g.
-//! `(call-with-values (lambda () (values + '(1 2))) apply)`. Closed
-//! 2026-09-05 by issue #186: `call_any` holds no probe of its own now, it is
+//! **`call_any`, the VM's dispatcher for calls with no instruction behind
+//! them**, kept the probe set the apply instructions shed — so a **control
+//! primitive** reached through `call-with-values` or a prompt body failed
+//! there, e.g. `(call-with-values (lambda () (values + '(1 2))) apply)`.
+//! Closed 2026-09-05 by issue #186: it holds no probe of its own now, being
 //! `call_value` plus a frame-depth test that says whether the callee finished.
-//! Two neighbouring claims were wrong before that and are worth keeping
+//!
+//! **That is one dispatcher, not the VM.** `with-exception-handler`'s *thunk*
+//! still goes through `call_closure`, which takes a compiled closure and
+//! nothing else, so `(with-exception-handler h values)` answers `#<values>`
+//! on the tree-walker and fails on the VM — issue #190, unpinned here only
+//! because it is #179's shape at a site that never had a dispatcher, and the
+//! fix carries a handler-cleanup half of its own.
+//!
+//! Two neighbouring claims were wrong before #186 and are worth keeping
 //! straight — a *continuation* did work, `call_any` having grown probes for
 //! the full and delimited kinds; and an **exception** handler stopped being a
 //! `call_any` caller at all when issue #178 moved the handler call into
