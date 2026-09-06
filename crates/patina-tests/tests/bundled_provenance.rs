@@ -9,10 +9,14 @@
 //!
 //! The adapted ports one directory over (SRFI 1, 69, 113, 128, 133, 158, …)
 //! are deliberately not pinned — they are not byte-identical to anything;
-//! see `lib/srfi/PROVENANCE.md` for that boundary. `lib/srfi/130.chibi-string.scm`
-//! sits on the same side of it: a subset of `(chibi string)` with renames, so
-//! there is no upstream file to compare it to. `130.scm` beside it is pinned
-//! and unchanged by that inlining.
+//! see `lib/srfi/PROVENANCE.md` for that boundary.
+//!
+//! `lib/srfi/130.chibi-string.scm` is pinned despite having no upstream file to
+//! compare against, for the reason `132.sld` is: the pin freezes the
+//! *provenance record*, so editing 250 lines of verbatim upstream bodies -- or
+//! letting them drift from the byte-identical `test-lib/chibi/string.scm` the
+//! records call a deliberate duplication -- becomes a deliberate act rather
+//! than a silent one. `130.scm` beside it is unchanged by that inlining.
 //!
 //! The hash is FNV-1a 64 — not tamper-proof, just drift-proof, and stable by
 //! specification (unlike `DefaultHasher`), with no new dependency.
@@ -108,12 +112,16 @@ const PINNED: &[(&str, u64)] = &[
     // is not byte-identical would make the deviation the reason its whole tree
     // goes unwatched.
     ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
+    // Not byte-identical to anything: the subset of `(chibi string)` that
+    // `(srfi 130)` needs, with `%` renames and a header (#198). Pinned anyway,
+    // as `132.sld` is -- see the module docs.
+    ("lib/srfi/130.chibi-string.scm", 0x1056940f79ecb4fb),
     // Re-pinned 2026-09-06 (#198): the import of `(chibi string)` became an
     // `(include "130.chibi-string.scm")` of the inlined subset, plus `(srfi 14)`
     // directly. The header moved with it. `130.scm` below is untouched by that
     // work — its hash is the one it has had all along, which is the evidence
     // the inlining changed the library's *dependencies* and not its code.
-    ("lib/srfi/130.sld", 0x91e9677edfd58a28),
+    ("lib/srfi/130.sld", 0x2377d56b49134388),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.

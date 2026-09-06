@@ -38,8 +38,8 @@ The encouraging finding from evaluation: Patina's library *machinery* is already
 
 **Snapshot as of Track L's start; do not read as current.** Both bundling rows
 below have since been overtaken — `lib/srfi/` is far past nine, and
-`lib/chibi/` is now `string` alone, with `test` and the rest supplied from
-`test-lib/` (#196, #197). Kept unedited as the baseline the track's numbers are
+`lib/chibi/` no longer exists at all — every `(chibi …)` library is supplied
+from `test-lib/` (#196, #197, #198). Kept unedited as the baseline the track's numbers are
 measured against; `PRD/phase2/R7RS_LARGE_STATUS.md` is the live bundling
 tracker, and `test-lib/README.md` the live answer for `(chibi …)`.
 

@@ -159,9 +159,17 @@ pub fn eval_program_shipped_only(code: &str) -> String {
 /// path. The negative counterpart of [`eval_program_shipped_only`], for tests
 /// asserting that something is *not* reachable without a supplied root.
 pub fn eval_program_shipped_only_err(code: &str) -> String {
-    match run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program) {
-        Err(e) => e.message,
-        Ok(v) => panic!("expected {code:?} to fail with only lib/ on the path, got {v}"),
+    let tw = run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program);
+    let vm = run_on(Interpreter::new(VmBackend::new()), code, Mode::Program);
+    match (tw, vm) {
+        // Both must fail. The two resolvers word it differently, so the caller
+        // gets both texts to match against rather than one.
+        (Err(tw), Err(vm)) => format!("{} | {}", tw.message, vm.message),
+        (tw, vm) => panic!(
+            "expected {code:?} to fail on BOTH backends with only lib/ on the path — \
+             a resolver that leaks a supplied root is exactly what this checks\n\
+             tree-walker: {tw:?}\nvm: {vm:?}"
+        ),
     }
 }
 

@@ -274,7 +274,7 @@ that carries the attribution and the full licence text.
 
 | What | Licence | Attribution and full text |
 |---|---|---|
-| `test-lib/chibi/` — chibi libraries the test lanes supply with `-A`, not shipped (`test`, `diff`, `optional`, `term ansi`, `filesystem`) | BSD 3-Clause, © Alex Shinn | `test-lib/chibi/PROVENANCE.md` |
+| `test-lib/chibi/` — chibi libraries the test lanes supply with `-A`, not shipped (`test`, `string`, `diff`, `optional`, `term ansi`, `filesystem`) | BSD 3-Clause, © Alex Shinn | `test-lib/chibi/PROVENANCE.md` |
 | `lib/srfi/` — SRFI reference implementations and ports, including the `(chibi string)` subset inlined into `(srfi 130)` | MIT, MIT Scheme 1988–1995, Shivers' sort notice, BSD 3-Clause © Alex Shinn | `lib/srfi/PROVENANCE.md` and the per-library `.sld` headers |
 | `compat/vendor/` — 161 snow-fort packages, test corpus only | BSD, MIT, SLIB, ISC, public domain, … | `compat/vendor/LICENSES.md` (terms, evidence, obligations) |
 | `scheme_tests/chibi/r7rs-tests.scm` — the conformance suite | BSD 3-Clause, © Alex Shinn | `scheme_tests/README.md` |

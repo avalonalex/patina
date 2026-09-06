@@ -64,7 +64,7 @@ own code with no `(chibi …)` namespace at all, which was the point of #194.
 | Lane | How |
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |
-| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build — except `eval_program_shipped_only`, for the tests whose subject is that something resolves *without* it |
+| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build — except `eval_program_shipped_only` and `eval_program_shipped_only_err`, for the tests whose subject is what does and does not resolve *without* it |
 | `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`, plus a `[ -d ]` check on the root. The suite reports *through* `(chibi test)`, so a bad path yields no tally and the run dies at "Could not parse a total from the suite output" |
 | `scripts/run_gc_differential.sh` | `-A test-lib`, plus `assert_suite_ran` on every lane, pinning the count at 1226 — the lane compares runs for *equality*, so identical failures would otherwise pass |
 

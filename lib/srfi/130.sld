@@ -19,9 +19,10 @@
 ;;
 ;; It is written against `(chibi string)`. Patina no longer ships that library
 ;; (#194): the subset this one needs is inlined beside it in
-;; `130.chibi-string.scm`, which carries its own header, and
-;; lib/srfi/PROVENANCE.md holds the record — including why its cursors are
-;; integers.
+;; `130.chibi-string.scm`, which carries its own header and says at its
+;; cursor definitions why they are plain integers here (the non-chibi
+;; `cond-expand` branch, the fast-random-access path the library was written
+;; for). lib/srfi/PROVENANCE.md holds the tree's record.
 
 (define-library (srfi 130)
   (export
@@ -66,9 +67,14 @@
    string-filter       string-remove)
   (import (scheme base)
           (scheme char) (scheme write)
-          ;; `make-char-predicate` in 130.chibi-string.scm, for the two names
-          ;; the SRFI 14 record names: `char-set?` and `char-set-contains?`.
-          (srfi 14))
+          ;; `make-char-predicate` in 130.chibi-string.scm needs exactly these
+          ;; two of SRFI 14, which is what lib/srfi/PROVENANCE.md records as the
+          ;; reason SRFI 14 is bundled; `only` keeps that claim true rather than
+          ;; pulling ~60 char-set names into a body defining 70-odd string ones.
+          (only (srfi 14) char-set? char-set-contains?)
+          ;; `%string-fold`'s multi-string branch, as upstream's own
+          ;; `(except (srfi 1) make-list list-copy)` supplied it.
+          (only (srfi 1) any))
   (begin
     (define (string-cursor-next str cursor)
       (if (string-cursor? cursor)

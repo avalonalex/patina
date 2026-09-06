@@ -4,7 +4,7 @@
 ;; Alex Shinn's code, from the sha256-pinned `(chibi string)` 0.9.0 snowball
 ;; (`string.sld`'s non-chibi `cond-expand` branch and `string.scm`). BSD
 ;; 3-Clause, the same licence and the same author as `130.scm` beside it; the
-;; full text is in `lib/srfi/PROVENANCE.md` § Licence, reproduced there rather
+;; full text is in `lib/srfi/PROVENANCE.md` § Licences, reproduced there rather
 ;; than only linked. `string.scm`'s own copyright line is kept below.
 ;;
 ;; **This is a subset, not a copy.** The 28 exported names here are exactly
@@ -16,12 +16,18 @@
 ;; `string-concatenate`). Bodies are verbatim.
 ;;
 ;; Verified minimal: dropping any one definition fails upstream's
-;; 219-assertion suite -- with one deliberate exception. `string-index->cursor`
-;; is unreachable here, because it is the other arm of
-;; `(if (string-cursor? x) x (string-index->cursor str x))` and cursors are
-;; integers in this branch, so `string-cursor?` is `integer?`. It is kept
-;; anyway: deleting it would leave `->cursor` naming an unbound variable on a
-;; path that is live in the source even though no test reaches it.
+;; 219-assertion suite. `%string-index->cursor` is the one whose reachability
+;; is indirect -- `->cursor`'s other arm never runs here, since cursors are
+;; integers so `string-cursor?` is `integer?` -- but `130.sld`'s own
+;; `string-index->cursor` wrapper calls it, so it is reached, and it is
+;; `%`-prefixed for that reason.
+;;
+;; **What that check does not establish.** A suite pass says the code paths it
+;; runs are bound; it says nothing about free variables on paths it does not
+;; reach. `%string-fold`'s multi-string branch is the case in point: it calls
+;; SRFI 1's `any`, upstream imports SRFI 1 for it, and nothing here reaches
+;; that branch through `(srfi 130)`. `130.sld` therefore imports
+;; `(only (srfi 1) any)` deliberately rather than on the loader's say-so.
 ;;
 ;; **Seven are `%`-prefixed** — `%string-contains`, `%string-cursor->index`,
 ;; `%string-cursor-next`, `%string-cursor-prev`, `%string-fold`,
@@ -53,7 +59,7 @@
 ;; ---------------------------------------------------------------------------
 
 (define (%string-cursor->index str i) i)
-(define (string-index->cursor str i) i)
+(define (%string-index->cursor str i) i)
 (define string-cursor? integer?)
 (define string-cursor<? <)
 (define string-cursor>? >)
@@ -67,7 +73,7 @@
 (define (%string-cursor-prev s i) (- i 1))
 (define (substring-cursor s start . o)
   (substring s start (if (pair? o) (car o) (string-length s))))
-(define (string-concatenate orig-ls . o)
+(define (%string-concatenate orig-ls . o)
   (let ((sep (if (pair? o) (car o) ""))
         (out (open-output-string)))
     (let lp ((ls orig-ls))
@@ -95,10 +101,6 @@
 ;; From `string.scm`, verbatim apart from the `%` renames described above.
 ;; ---------------------------------------------------------------------------
 
-;; strings.scm -- cursor-oriented string library
-;; Copyright (c) 2012-2015 Alex Shinn.  All rights reserved.
-;; BSD-style license: http://synthcode.com/license.txt
-
 ;;> \section{High-level API}
 
 ;;> The procedures below are similar to those in SRFI 13 or other
@@ -114,7 +116,7 @@
 (define (->cursor str x)
   (if (string-cursor? x)
       x
-      (string-index->cursor str x)))
+      (%string-index->cursor str x)))
 
 (define (make-char-predicate x)
   (cond ((procedure? x) x)
@@ -130,6 +132,14 @@
 ;;> \var{char-set-contains?}).  Always returns false if \var{str} is
 ;;> empty.
 
+;; INHERITED UPSTREAM DEFECT, not a local edit: the `start` argument is used
+;; for the emptiness guard below and then *ignored* by the scan, which starts
+;; at `string-cursor-start`. So `(string-any char-numeric? "1abc" 1 4)` answers
+;; `#t` where SRFI 130 requires `#f`, and `string-every` inherits it by
+;; delegation. Present identically in the `(chibi string)` this was taken from,
+;; and upstream's 219-assertion suite does not cover the bounded forms.
+;; Recorded rather than fixed here: #198 moved this code, and changing what it
+;; computes is a conformance fix that wants its own commit and its own test.
 (define (string-any check str . o)
   (let ((pred (make-char-predicate check))
         (end (if (and (pair? o) (pair? (cdr o)))
@@ -202,7 +212,7 @@
 ;;> single string.  If \var{separator} is provided it is inserted
 ;;> between each pair of strings.
 
-(define %string-join string-concatenate)
+(define %string-join %string-concatenate)
 
 ;;> Returns two values: the first cursors from the left in
 ;;> \var{prefix} and in \var{str} where the two strings don't match.

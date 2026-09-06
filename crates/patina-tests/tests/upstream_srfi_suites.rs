@@ -287,7 +287,6 @@ suite_tests! {
     // dropped these suites from everything that runs. string-test is
     // verbatim; the other three had their inline framework shims replaced
     // by the real (chibi test), documented in scheme_tests/upstream/README.md.
-
     (chibi_string, "chibi string", "(chibi string-test)", 0, 52),
     (chibi_optional, "chibi optional", "(chibi optional-test)", 0, 11),
     // Two of its assertions expect ANSI escapes in edits->string/color's
