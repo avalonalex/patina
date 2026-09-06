@@ -1187,9 +1187,12 @@ is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
 at `#xAC00`, regional indicators at `#x1F1E6`), which the port would refuse
 or silently truncate. **Blocked on a full-Unicode char-set story** (SRFI 14
 beyond Latin-1, or an iset-compatible representation); not a macro defect.
-Two cosmetic defects rode along and are worth fixing sooner: the raised
-error displays as `#<unknown>`, and the message doubles its "unhandled
-exception:" prefix.
+Two cosmetic defects rode along. The first — the raised error displaying as
+`#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
+an error object, and now names its message. The second is still open: the
+message doubles its "unhandled exception:" prefix. Neither backend doubles it
+for a plain uncaught raise, so the second copy is added somewhere along this
+entry's path and the mechanism is not yet identified.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.

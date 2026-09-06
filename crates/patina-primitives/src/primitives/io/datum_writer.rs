@@ -269,121 +269,107 @@ fn write_symbol_name(name: &str, display_mode: bool, out: &mut String) {
     }
 }
 
-/// Format a leaf (non-compound) TAG_OBJECT using Heap methods directly.
-/// Handles Symbol, BigInt, Rational, Real, Complex, Bytevector, Record, etc.
+/// Format a heap value that the datum writer treats as a leaf — one whose
+/// parts, if any, it does not descend into.
+///
+/// Dispatches on the `HeapObjectData` variant rather than probing accessors in
+/// turn, so that a heap variant with no rendering here is a non-exhaustive
+/// `match` at compile time instead of `#<unknown>` in a user's output. It was
+/// a probe chain until issue #181, and the chain had lost three kinds of value
+/// an ordinary program can hold: an error object (`(guard (e (#t e)) (error
+/// "boom"))`), a continuation, and — on the VM, where a `lambda` allocates
+/// `VmClosure` rather than the tree-walker's `Procedure` — every user-defined
+/// procedure. Two earlier misses were repaired by adding one more probe
+/// (procedures in record fields, then environment specifiers), which is the
+/// argument for dispatching instead.
+///
+/// Renderings agree with `patina_core::debug_format` except where that
+/// formatter deliberately shows more for debugging (`#<procedure:{code_id}>`,
+/// a cell's contents). Nothing here is `read`-able syntax; R7RS gives these
+/// types no external representation.
 fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mut String) {
-    // Closure (TAG_CLOSURE)
+    use patina_core::heap::HeapObjectData;
+    use std::fmt::Write;
+
+    // A closure has its own tag, so it never reaches the object dispatch.
     if tv.is_closure() {
         out.push_str("#<procedure>");
         return;
     }
-    // Procedure (HeapObjectData::Procedure — CPS lambdas, primitives)
-    if heap.get_procedure(tv).is_some() {
-        out.push_str("#<procedure>");
+    // Pairs, vectors and strings are tagged too, and every caller has already
+    // handled them. Anything else non-object here has no rendering to give.
+    if !tv.is_object() {
+        out.push_str("#<unknown>");
         return;
     }
-    // Environment specifier
-    if heap.is_environment(tv) {
-        out.push_str("#<environment>");
-        return;
-    }
-    // Symbol
-    if let Some(name) = heap.get_symbol_name(tv) {
-        write_symbol_name(name, display_mode, out);
-        return;
-    }
-    // Identifier
-    if let Some((name, _)) = heap.get_identifier_data_any(tv) {
-        write_symbol_name(&name, display_mode, out);
-        return;
-    }
-    // BigInt
-    if let Some(n) = heap.get_bigint(tv) {
-        out.push_str(&n.to_string());
-        return;
-    }
-    // Rational
-    if let Some(r) = heap.get_rational(tv) {
-        out.push_str(&r.to_string());
-        return;
-    }
-    // Real
-    if let Some(f) = heap.get_real(tv) {
-        format_real_number(f, out);
-        return;
-    }
-    // Complex
-    if let Some((real_tv, imag_tv)) = heap.get_complex(tv) {
-        format_complex(real_tv, imag_tv, heap, out);
-        return;
-    }
-    // Bytevector
-    if let Some(bytes) = heap.get_bytevector(tv) {
-        out.push_str("#u8(");
-        for (i, b) in bytes.iter().enumerate() {
-            if i > 0 {
-                out.push(' ');
+
+    match heap.get_object(tv) {
+        HeapObjectData::Symbol(name) => write_symbol_name(name, display_mode, out),
+        HeapObjectData::Identifier { name, .. } => write_symbol_name(name, display_mode, out),
+        HeapObjectData::BigInt(n) => out.push_str(&n.to_string()),
+        HeapObjectData::Rational(r) => out.push_str(&r.to_string()),
+        HeapObjectData::Real(f) => format_real_number(*f, out),
+        HeapObjectData::Complex { real, imag } => format_complex(*real, *imag, heap, out),
+        HeapObjectData::Bytevector(bytes) => {
+            out.push_str("#u8(");
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&b.to_string());
             }
-            out.push_str(&b.to_string());
+            out.push(')');
         }
-        out.push(')');
-        return;
+        // The message only. `error-object-irritants` is how a program reads the
+        // rest, and printing them here would need the cycle-aware writer that
+        // formats every other nested value — this function holds a plain
+        // `&Heap`, and an irritant can be a circular list.
+        HeapObjectData::Exception { message, .. } => {
+            write!(out, "#<error-object: {}>", message).unwrap()
+        }
+        // Every kind of procedure prints alike, so the two backends agree:
+        // `Procedure` is the tree-walker's CPS lambdas and both backends'
+        // primitives, `VmClosure` is a `lambda` compiled by the VM.
+        HeapObjectData::Procedure(_) | HeapObjectData::VmClosure { .. } => {
+            out.push_str("#<procedure>")
+        }
+        HeapObjectData::Port(_) => out.push_str("#<port>"),
+        HeapObjectData::RecordType(rtd) => write!(out, "#<record-type {}>", rtd.name).unwrap(),
+        HeapObjectData::Record { record_type, .. } => {
+            write!(out, "#<record {}>", record_type.name).unwrap()
+        }
+        // Opaque, see the `HeapObjectData::Ephemeron` doc.
+        HeapObjectData::Ephemeron(_) => out.push_str("#<ephemeron>"),
+        HeapObjectData::Promise(_) => out.push_str("#<promise>"),
+        HeapObjectData::Macro(_) => out.push_str("#<macro>"),
+        // Syntactic keyword. Not dead, though it is hard to reach: a variable
+        // reference to syntax is refused at desugar time, so this formats the
+        // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`
+        // (a forward reference, a shadowed spelling). Names the form rather
+        // than the binding it arrived through, so `blk` still writes
+        // `#<syntax:begin>`.
+        HeapObjectData::CoreSyntax(form) => write!(out, "#<syntax:{}>", form).unwrap(),
+        HeapObjectData::Values(_) => out.push_str("#<values>"),
+        // A procedure per R7RS §4.2.6, named for what it is.
+        HeapObjectData::Parameter { .. } => out.push_str("#<parameter>"),
+        HeapObjectData::EnvironmentSpecifier { .. } => out.push_str("#<environment>"),
+        // One spelling for all three: the tree-walker captures into
+        // `Continuation`, the VM into a store it reaches by handle, and a
+        // program cannot tell which backend it is running on.
+        HeapObjectData::Continuation(_)
+        | HeapObjectData::VmContinuationRef(_)
+        | HeapObjectData::VmDelimitedContinuationRef(_) => out.push_str("#<continuation>"),
+        HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),
+        HeapObjectData::Library(lib) => write!(out, "{}", lib).unwrap(),
+        // The rest are internal and should reach no program's output — a
+        // freed slot is a use-after-free that `get_object` debug-asserts
+        // against, so that arm only renders in a release build. They are
+        // spelled out anyway, because the point of the match is that the next
+        // variant added cannot quietly become `#<unknown>`.
+        HeapObjectData::MutableCell(_) => out.push_str("#<cell>"),
+        HeapObjectData::LabelPlaceholder(n) => write!(out, "#<label-placeholder:{}>", n).unwrap(),
+        HeapObjectData::Free => out.push_str("#<gc-freed-slot>"),
     }
-    // Port
-    if heap.get_port(tv).is_some() {
-        out.push_str("#<port>");
-        return;
-    }
-    // RecordType
-    if let Some(rtd) = heap.get_record_type(tv) {
-        use std::fmt::Write;
-        write!(out, "#<record-type {}>", rtd.name).unwrap();
-        return;
-    }
-    // Record
-    if let Some((rtd, _)) = heap.get_record(tv) {
-        use std::fmt::Write;
-        write!(out, "#<record {}>", rtd.name).unwrap();
-        return;
-    }
-    // Ephemeron — opaque, see the `HeapObjectData::Ephemeron` doc.
-    if heap.is_ephemeron(tv) {
-        out.push_str("#<ephemeron>");
-        return;
-    }
-    // Promise
-    if heap.get_promise(tv).is_some() {
-        out.push_str("#<promise>");
-        return;
-    }
-    // Macro
-    if heap.get_macro(tv).is_some() {
-        out.push_str("#<macro>");
-        return;
-    }
-    // Syntactic keyword. Not dead, though it is hard to reach: a variable
-    // reference to syntax is refused at desugar time, so this formats the
-    // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`
-    // (a forward reference, a shadowed spelling). Names the form rather than
-    // the binding it arrived through, so `blk` still writes `#<syntax:begin>`.
-    if let Some(form) = heap.get_core_syntax(tv) {
-        use std::fmt::Write;
-        write!(out, "#<syntax:{}>", form).unwrap();
-        return;
-    }
-    // Values
-    if heap.get_values(tv).is_some() {
-        out.push_str("#<values>");
-        return;
-    }
-    // Parameter object — a procedure per R7RS §4.2.6, named for what it is.
-    // Last in the chain: every probe above it is paid by every leaf formatted.
-    if heap.is_parameter(tv) {
-        out.push_str("#<parameter>");
-        return;
-    }
-    // Unknown
-    out.push_str("#<unknown>");
 }
 
 /// Format a TaggedValue as a leaf (non-compound) for numeric display.
