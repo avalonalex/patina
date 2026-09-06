@@ -610,8 +610,7 @@ impl<'a> DatumLabelWriter<'a> {
                 }
             }
 
-            if let Some(shorthand) = self.check_quote_shorthand_tagged(tv) {
-                out.push_str(&shorthand);
+            if self.write_quote_shorthand_tagged(tv, out, emitted) {
                 return;
             }
 
@@ -745,14 +744,27 @@ impl<'a> DatumLabelWriter<'a> {
         if cdr_tv.is_null() {
             // End of proper list
         } else if cdr_tv.is_pair() {
-            // Native heap pair — continue list
             let addr = cdr_tv.raw() as usize;
-            if let Some(&label) = self.labels.get(&addr)
-                && emitted.get(&addr).copied().unwrap_or(false)
-            {
-                out.push_str(&format!(" . #{}#", label));
+            if self.labels.contains_key(&addr) {
+                // A labelled tail leaves the list notation, because a label
+                // has to be written where the pair it names is written:
+                // `(1 . #0=(2 3 . #0#))`.
+                //
+                // Only the back-reference used to be handled here, and the
+                // definition was skipped — the tail carried on inline as if
+                // unlabelled. A shared tail then lost its sharing entirely
+                // (`((1 3) (2 3))` for what chibi and Gauche both write as
+                // `((1 . #0=(3)) (2 . #0#))`), and a *circular* one never
+                // terminated: nothing ever marked the pair emitted, so the
+                // back-reference case it was waiting for could not arrive.
+                //
+                // `write_tagged` is the one place that writes either form, so
+                // hand the pair to it rather than deciding here.
+                out.push_str(" . ");
+                self.write_tagged(cdr_tv, out, emitted);
                 return;
             }
+            // Unlabelled — continue the list inline.
             out.push(' ');
             self.write_tagged_list_contents(cdr_tv, out, emitted);
         } else {
@@ -762,8 +774,21 @@ impl<'a> DatumLabelWriter<'a> {
         }
     }
 
-    /// Check for quote shorthand on a native heap pair
-    fn check_quote_shorthand_tagged(&self, tv: TaggedValue) -> Option<String> {
+    /// Write `(quote x)` as `'x` (and the other three), reporting whether it
+    /// applied. Nothing is written unless it does.
+    ///
+    /// Writes into the caller's `emitted` map. It used to build the form in a
+    /// scratch `String` with a `HashMap::new()` of its own, which lost every
+    /// label the enclosing datum had already defined — so a label was defined
+    /// a second time inside the shorthand (`(#0=(1) '#0=(1))`, two definitions
+    /// of one label), and a cycle that re-entered through the quoted form kept
+    /// re-defining it until the stack ran out (issue #188).
+    fn write_quote_shorthand_tagged(
+        &self,
+        tv: TaggedValue,
+        out: &mut String,
+        emitted: &mut HashMap<usize, bool>,
+    ) -> bool {
         let (car_tv, cdr_tv) = {
             let heap_ref = self.heap.borrow();
             (heap_ref.car(tv), heap_ref.cdr(tv))
@@ -780,23 +805,36 @@ impl<'a> DatumLabelWriter<'a> {
                 _ => None,
             }
         };
-        let prefix = prefix?;
+        let Some(prefix) = prefix else {
+            return false;
+        };
 
-        // Check that cdr is a single-element list (pair with null cdr)
-        if cdr_tv.is_pair() {
-            let (inner_car, inner_cdr) = {
-                let heap_ref = self.heap.borrow();
-                (heap_ref.car(cdr_tv), heap_ref.cdr(cdr_tv))
-            };
-            if inner_cdr.is_null() {
-                let mut result = String::from(prefix);
-                let mut local_emitted = HashMap::new();
-                self.write_tagged(inner_car, &mut result, &mut local_emitted);
-                return Some(result);
-            }
+        // The cdr must be a single-element list (a pair with a null cdr).
+        if !cdr_tv.is_pair() {
+            return false;
         }
 
-        None
+        // ...and it must carry no label of its own. `'x` writes no pair for
+        // the cdr, so a label belonging to it would have nowhere to go: the
+        // sharing it records would be silently lost, or a `#n#` elsewhere
+        // would refer to a definition that never got written. Declining sends
+        // the datum through the list notation, which has somewhere to put it
+        // — `(quote . #0=((1)))`, which is what chibi and Gauche both answer.
+        if self.labels.contains_key(&(cdr_tv.raw() as usize)) {
+            return false;
+        }
+
+        let (inner_car, inner_cdr) = {
+            let heap_ref = self.heap.borrow();
+            (heap_ref.car(cdr_tv), heap_ref.cdr(cdr_tv))
+        };
+        if !inner_cdr.is_null() {
+            return false;
+        }
+
+        out.push_str(prefix);
+        self.write_tagged(inner_car, out, emitted);
+        true
     }
 }
 
