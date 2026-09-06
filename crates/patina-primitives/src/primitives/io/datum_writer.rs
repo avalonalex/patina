@@ -10,7 +10,7 @@
 use patina_core::debug_format::format_real;
 use patina_core::{Heap, TaggedValue};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Format a Real (f64) number in R7RS style (delegates to patina_core::debug_format::format_real)
 fn format_real_number(f: f64, out: &mut String) {
@@ -458,32 +458,53 @@ impl<'a> DatumLabelWriter<'a> {
     /// strings, and closures have no sub-structure to traverse.
     pub(super) fn find_circular_tagged(&mut self, tv: TaggedValue) {
         if tv.is_pair() {
-            let addr = tv.raw() as usize;
+            // The cdr chain is walked, not recursed into. A list's spine is
+            // length, not nesting, and spending a frame per element on it is
+            // what made `(write <100_000-element list>)` abort the process —
+            // a stack overflow, which is not a Scheme error and which no
+            // `guard` can catch. Only the cars recurse.
+            //
+            // Every pair of the spine stays on `on_stack` until the walk
+            // ends, which is what the recursion's unwind did; the collected
+            // addresses are cleared together at the end.
+            let mut spine: Vec<usize> = Vec::new();
+            let mut current = tv;
+            loop {
+                let addr = current.raw() as usize;
 
-            if self.on_stack.get(&addr).copied().unwrap_or(false) {
-                if !self.labels.contains_key(&addr) {
-                    self.labels.insert(addr, self.next_label);
-                    self.next_label += 1;
+                if self.on_stack.get(&addr).copied().unwrap_or(false) {
+                    if !self.labels.contains_key(&addr) {
+                        self.labels.insert(addr, self.next_label);
+                        self.next_label += 1;
+                    }
+                    break;
                 }
-                return;
-            }
 
-            if self.on_stack.contains_key(&addr) {
-                if self.label_shared && !self.labels.contains_key(&addr) {
-                    self.labels.insert(addr, self.next_label);
-                    self.next_label += 1;
+                if self.on_stack.contains_key(&addr) {
+                    if self.label_shared && !self.labels.contains_key(&addr) {
+                        self.labels.insert(addr, self.next_label);
+                        self.next_label += 1;
+                    }
+                    break;
                 }
-                return;
-            }
 
-            self.on_stack.insert(addr, true);
-            let (car_tv, cdr_tv) = {
-                let heap_ref = self.heap.borrow();
-                (heap_ref.car(tv), heap_ref.cdr(tv))
-            };
-            self.find_circular_tagged(car_tv);
-            self.find_circular_tagged(cdr_tv);
-            self.on_stack.insert(addr, false);
+                self.on_stack.insert(addr, true);
+                spine.push(addr);
+
+                let (car_tv, cdr_tv) = {
+                    let heap_ref = self.heap.borrow();
+                    (heap_ref.car(current), heap_ref.cdr(current))
+                };
+                self.find_circular_tagged(car_tv);
+                if !cdr_tv.is_pair() {
+                    self.find_circular_tagged(cdr_tv);
+                    break;
+                }
+                current = cdr_tv;
+            }
+            for addr in spine {
+                self.on_stack.insert(addr, false);
+            }
         } else if tv.is_vector() {
             let addr = tv.raw() as usize;
 
@@ -562,7 +583,7 @@ impl<'a> DatumLabelWriter<'a> {
         &self,
         tv: TaggedValue,
         out: &mut String,
-        emitted: &mut HashMap<usize, bool>,
+        emitted: &mut HashSet<usize>,
     ) {
         // Immediate types — format directly
         if tv.is_fixnum() {
@@ -598,16 +619,8 @@ impl<'a> DatumLabelWriter<'a> {
 
         // Native heap pair
         if tv.is_pair() {
-            let addr = tv.raw() as usize;
-
-            if let Some(&label) = self.labels.get(&addr) {
-                if emitted.get(&addr).copied().unwrap_or(false) {
-                    out.push_str(&format!("#{}#", label));
-                    return;
-                } else {
-                    emitted.insert(addr, true);
-                    out.push_str(&format!("#{}=", label));
-                }
+            if self.emit_label(tv, out, emitted) {
+                return;
             }
 
             if self.write_quote_shorthand_tagged(tv, out, emitted) {
@@ -622,16 +635,8 @@ impl<'a> DatumLabelWriter<'a> {
 
         // Native heap vector
         if tv.is_vector() {
-            let addr = tv.raw() as usize;
-
-            if let Some(&label) = self.labels.get(&addr) {
-                if emitted.get(&addr).copied().unwrap_or(false) {
-                    out.push_str(&format!("#{}#", label));
-                    return;
-                } else {
-                    emitted.insert(addr, true);
-                    out.push_str(&format!("#{}=", label));
-                }
+            if self.emit_label(tv, out, emitted) {
+                return;
             }
 
             let elements: Vec<TaggedValue> = {
@@ -689,15 +694,8 @@ impl<'a> DatumLabelWriter<'a> {
                 .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
         };
         if let Some((message, irritants)) = exception {
-            let addr = tv.raw() as usize;
-            if let Some(&label) = self.labels.get(&addr) {
-                if emitted.get(&addr).copied().unwrap_or(false) {
-                    out.push_str(&format!("#{}#", label));
-                    return;
-                } else {
-                    emitted.insert(addr, true);
-                    out.push_str(&format!("#{}=", label));
-                }
+            if self.emit_label(tv, out, emitted) {
+                return;
             }
             out.push_str(ERROR_OBJECT_OPEN);
             out.push_str(&message);
@@ -712,6 +710,41 @@ impl<'a> DatumLabelWriter<'a> {
         // HeapObjectData leaf types — format using heap methods
         let heap_ref = self.heap.borrow();
         format_leaf_object(tv, &heap_ref, self.display_mode, out);
+    }
+
+    /// Write whatever label `tv` carries, and say whether that finished the
+    /// job: `true` means a back-reference `#n#` was written and the caller
+    /// must write nothing more, `false` means the caller writes the value
+    /// (behind a `#n=` if this wrote one, or bare if there is no label).
+    ///
+    /// The one place either form of a label is written. Every kind of value
+    /// the writer descends into needs the same three lines, and a fourth copy
+    /// of them is how the rule drifts.
+    fn emit_label(&self, tv: TaggedValue, out: &mut String, emitted: &mut HashSet<usize>) -> bool {
+        use std::fmt::Write;
+        let addr = tv.raw() as usize;
+        let Some(&label) = self.labels.get(&addr) else {
+            return false;
+        };
+        if emitted.insert(addr) {
+            write!(out, "#{}=", label).unwrap();
+            false
+        } else {
+            write!(out, "#{}#", label).unwrap();
+            true
+        }
+    }
+
+    /// Whether `tv` carries a datum label — the question both elision sites
+    /// have to ask.
+    ///
+    /// **A pair the writer elides must not carry a label.** A label can only
+    /// be written where the pair it names is written, so eliding a labelled
+    /// pair either loses the sharing it records or strands a `#n#` whose
+    /// definition never appears. The two elisions are the quote shorthand's
+    /// cdr and the list notation's inlined tail, and both consult this.
+    fn is_labelled(&self, tv: TaggedValue) -> bool {
+        self.labels.contains_key(&(tv.raw() as usize))
     }
 
     /// Whether `tv` is an error object, without extracting anything from it.
@@ -730,74 +763,66 @@ impl<'a> DatumLabelWriter<'a> {
         &self,
         tv: TaggedValue,
         out: &mut String,
-        emitted: &mut HashMap<usize, bool>,
+        emitted: &mut HashSet<usize>,
     ) {
-        let (car_tv, cdr_tv) = {
-            let heap_ref = self.heap.borrow();
-            (heap_ref.car(tv), heap_ref.cdr(tv))
-        };
+        // The unlabelled spine is walked, not recursed into: it writes no
+        // nesting, so it should cost no stack. `write` on a 100_000-element
+        // list used to abort the process — a stack overflow is not a Scheme
+        // error and no `guard` can catch it. Depth is now the datum's nesting
+        // rather than its length.
+        let mut current = tv;
+        loop {
+            let (car_tv, cdr_tv) = {
+                let heap_ref = self.heap.borrow();
+                (heap_ref.car(current), heap_ref.cdr(current))
+            };
 
-        // Write the car
-        self.write_tagged(car_tv, out, emitted);
+            self.write_tagged(car_tv, out, emitted);
 
-        // Handle the cdr
-        if cdr_tv.is_null() {
-            // End of proper list
-        } else if cdr_tv.is_pair() {
-            let addr = cdr_tv.raw() as usize;
-            if self.labels.contains_key(&addr) {
-                // A labelled tail leaves the list notation, because a label
-                // has to be written where the pair it names is written:
-                // `(1 . #0=(2 3 . #0#))`.
-                //
-                // Only the back-reference used to be handled here, and the
-                // definition was skipped — the tail carried on inline as if
-                // unlabelled. A shared tail then lost its sharing entirely
-                // (`((1 3) (2 3))` for what chibi and Gauche both write as
-                // `((1 . #0=(3)) (2 . #0#))`), and a *circular* one never
-                // terminated: nothing ever marked the pair emitted, so the
-                // back-reference case it was waiting for could not arrive.
-                //
-                // `write_tagged` is the one place that writes either form, so
-                // hand the pair to it rather than deciding here.
+            if cdr_tv.is_null() {
+                // End of proper list
+                return;
+            }
+            if !cdr_tv.is_pair() {
+                // Non-pair, non-null — dotted pair
                 out.push_str(" . ");
                 self.write_tagged(cdr_tv, out, emitted);
                 return;
             }
-            // Unlabelled — continue the list inline.
+            if self.is_labelled(cdr_tv) {
+                // A labelled tail leaves the list notation, because a label
+                // has to be written where the pair it names is written:
+                // `(1 . #0=(2 3 . #0#))`. Inlining it instead would elide a
+                // labelled pair — see `is_labelled`. This one does nest, so
+                // it is the one tail that recurses.
+                out.push_str(" . ");
+                self.write_tagged(cdr_tv, out, emitted);
+                return;
+            }
             out.push(' ');
-            self.write_tagged_list_contents(cdr_tv, out, emitted);
-        } else {
-            // Non-pair, non-null — dotted pair
-            out.push_str(" . ");
-            self.write_tagged(cdr_tv, out, emitted);
+            current = cdr_tv;
         }
     }
 
-    /// Write `(quote x)` as `'x` (and the other three), reporting whether it
-    /// applied. Nothing is written unless it does.
+    /// Write `(quote x)` as `'x`, and the same for the other three prefixes,
+    /// reporting whether it applied. Nothing is written unless it does.
     ///
-    /// Writes into the caller's `emitted` map. It used to build the form in a
-    /// scratch `String` with a `HashMap::new()` of its own, which lost every
-    /// label the enclosing datum had already defined — so a label was defined
-    /// a second time inside the shorthand (`(#0=(1) '#0=(1))`, two definitions
-    /// of one label), and a cycle that re-entered through the quoted form kept
-    /// re-defining it until the stack ran out (issue #188).
+    /// Writes into the caller's `emitted` set: the shorthand is part of the
+    /// enclosing datum, so it has to know which labels that datum has already
+    /// defined. Rendering it separately defines one label twice (issue #188).
+    ///
+    /// Runs for every pair the writer meets, so the cheap disqualifier — the
+    /// car is not one of four symbols — is tested before anything else is
+    /// read.
     fn write_quote_shorthand_tagged(
         &self,
         tv: TaggedValue,
         out: &mut String,
-        emitted: &mut HashMap<usize, bool>,
+        emitted: &mut HashSet<usize>,
     ) -> bool {
-        let (car_tv, cdr_tv) = {
-            let heap_ref = self.heap.borrow();
-            (heap_ref.car(tv), heap_ref.cdr(tv))
-        };
-
-        // Check if car is a quote-like symbol
         let prefix = {
             let heap_ref = self.heap.borrow();
-            match heap_ref.get_symbol_or_identifier_name(car_tv) {
+            match heap_ref.get_symbol_or_identifier_name(heap_ref.car(tv)) {
                 Some("quote") => Some("'"),
                 Some("quasiquote") => Some("`"),
                 Some("unquote") => Some(","),
@@ -809,18 +834,17 @@ impl<'a> DatumLabelWriter<'a> {
             return false;
         };
 
-        // The cdr must be a single-element list (a pair with a null cdr).
+        // The cdr must be a single-element list: a pair, with a null cdr...
+        let cdr_tv = self.heap.borrow().cdr(tv);
         if !cdr_tv.is_pair() {
             return false;
         }
 
-        // ...and it must carry no label of its own. `'x` writes no pair for
-        // the cdr, so a label belonging to it would have nowhere to go: the
-        // sharing it records would be silently lost, or a `#n#` elsewhere
-        // would refer to a definition that never got written. Declining sends
-        // the datum through the list notation, which has somewhere to put it
-        // — `(quote . #0=((1)))`, which is what chibi and Gauche both answer.
-        if self.labels.contains_key(&(cdr_tv.raw() as usize)) {
+        // ...and carrying no label, because `'x` writes no pair for it and a
+        // label has to be written where its pair is. Declining sends the datum
+        // through the list notation, which has somewhere to put it:
+        // `(quote . #0=((1)))`, which is what chibi and Gauche both answer.
+        if self.is_labelled(cdr_tv) {
             return false;
         }
 
@@ -832,6 +856,10 @@ impl<'a> DatumLabelWriter<'a> {
             return false;
         }
 
+        debug_assert!(
+            !self.is_labelled(cdr_tv),
+            "the quote shorthand elided a labelled pair"
+        );
         out.push_str(prefix);
         self.write_tagged(inner_car, out, emitted);
         true
@@ -848,7 +876,7 @@ pub fn format_write_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
     writer.find_circular_tagged(tv);
 
     let mut output = String::new();
-    let mut emitted = HashMap::new();
+    let mut emitted = HashSet::new();
     writer.write_tagged(tv, &mut output, &mut emitted);
     output
 }
@@ -859,7 +887,7 @@ pub fn format_display_tagged(tv: TaggedValue, heap: &RefCell<Heap>) -> String {
     writer.find_circular_tagged(tv);
 
     let mut output = String::new();
-    let mut emitted = HashMap::new();
+    let mut emitted = HashSet::new();
     writer.write_tagged(tv, &mut output, &mut emitted);
     output
 }
@@ -870,7 +898,7 @@ pub(super) fn format_write_shared_tagged(tv: TaggedValue, heap: &RefCell<Heap>) 
     writer.find_circular_tagged(tv);
 
     let mut output = String::new();
-    let mut emitted = HashMap::new();
+    let mut emitted = HashSet::new();
     writer.write_tagged(tv, &mut output, &mut emitted);
     output
 }

@@ -261,9 +261,96 @@ fn test_the_new_label_forms_round_trip_through_read() {
         (define y (list 1 2 3))
         (set-cdr! (cddr y) (cdr y))
         (define c (list (list 1)))
+        (define cyc (list 'quote 1))
+        (set-car! (cdr cyc) cyc)
+        (define a (list 1))
+        (define q (list 'quote a))
         (list (round-trips? (list (cons 1 t) (cons 2 t)))
               (round-trips? y)
-              (round-trips? (list (cons 'quote c) c)))
+              (round-trips? (list (cons 'quote c) c))
+              (round-trips? cyc)
+              (round-trips? (list a q))
+              (round-trips? (list q a)))
     "##;
-    assert_program_eval_to(code, "(#t #t #t)");
+    // The last three are the shapes this fix newly emits: a label defined
+    // immediately before an abbreviation, and one referenced inside one.
+    assert_program_eval_to(code, "(#t #t #t #t #t #t)");
+}
+
+/// The guard that makes the shorthand decline covers all four abbreviations,
+/// so the test does too. Naming the function for `quote` makes narrowing the
+/// guard to that one arm look reasonable, and nothing else here would notice:
+/// `write-shared` would go back to emitting a `#n=` inside a form whose pair
+/// it elides.
+#[test]
+fn test_every_abbreviation_declines_when_its_elided_pair_is_labelled() {
+    for (head, prefix) in [
+        ("quote", "'"),
+        ("quasiquote", "`"),
+        ("unquote", ","),
+        ("unquote-splicing", ",@"),
+    ] {
+        // Shared, so the elided pair is labelled: the shorthand must decline.
+        let code = format!(
+            r##"(import (scheme write))
+                (define c (list (list 1)))
+                (define q (cons '{head} c))
+                (let ((out (open-output-string)))
+                  (write-shared (list q c) out)
+                  (get-output-string out))"##
+        );
+        assert_program_eval_to(&code, &format!(r##""(({head} . #0=((1))) #0#)""##));
+
+        // Unshared, so it applies — the same guard, answering the other way.
+        let code = format!(
+            r##"(import (scheme write))
+                (let ((out (open-output-string)))
+                  (write-shared (list '{head} (list 1)) out)
+                  (get-output-string out))"##
+        );
+        assert_program_eval_to(&code, &format!(r##""{prefix}(1)""##));
+    }
+}
+
+/// Plain `write` labels only what is circular, so a merely-shared tail stays
+/// unlabelled and is written out twice.
+///
+/// The counterpart to `test_write_shared_labels_a_shared_tail`, and the reason
+/// it is here: the tail rule was widened from "labelled *and* already emitted"
+/// to "labelled", so its correctness now rests entirely on pass 1 not labelling
+/// shared pairs unless `write-shared` asked. Without this, that could regress
+/// into noisy non-conforming `write` output with every other test still green.
+#[test]
+fn test_plain_write_leaves_a_merely_shared_tail_unlabelled() {
+    let code = r##"
+        (import (scheme write))
+        (define t (list 3))
+        (let ((out (open-output-string)))
+          (write (list (cons 1 t) (cons 2 t)) out)
+          (get-output-string out))
+    "##;
+    assert_program_eval_to(code, r##""((1 3) (2 3))""##);
+}
+
+/// A list's spine costs no stack, in either pass.
+///
+/// Both passes used to walk the cdr chain by recursion, so depth was the
+/// list's *length* and `write` on 100_000 elements overflowed the stack —
+/// which aborts the process rather than raising anything a `guard` could
+/// catch. Length and nesting are different things, and only nesting is
+/// allowed to cost a frame now.
+///
+/// The assertion is on the length of the output rather than its text: what is
+/// under test is that the writer returns at all.
+#[test]
+fn test_a_long_list_does_not_exhaust_the_stack() {
+    let code = r##"
+        (import (scheme write))
+        (define xs (let loop ((i 0) (acc '())) (if (= i 100000) acc (loop (+ i 1) (cons 0 acc)))))
+        (let ((out (open-output-string)))
+          (write xs out)
+          (string-length (get-output-string out)))
+    "##;
+    // 100000 digits + 99999 separators + 2 parens.
+    assert_program_eval_to(code, "200001");
 }
