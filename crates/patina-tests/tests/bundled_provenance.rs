@@ -1,6 +1,6 @@
 //! Pin every third-party file claimed byte-identical to upstream, so an
 //! unrecorded edit fails. The rule being enforced lives in
-//! `lib/chibi/PROVENANCE.md` § The rule; the failure message below is the
+//! `lib/srfi/PROVENANCE.md` § The rule; the failure message below is the
 //! complete update procedure.
 //!
 //! The scope is "files claimed byte-identical to an upstream release", not
@@ -9,7 +9,10 @@
 //!
 //! The adapted ports one directory over (SRFI 1, 69, 113, 128, 133, 158, …)
 //! are deliberately not pinned — they are not byte-identical to anything;
-//! see `lib/srfi/PROVENANCE.md` for that boundary.
+//! see `lib/srfi/PROVENANCE.md` for that boundary. `lib/srfi/130.chibi-string.scm`
+//! sits on the same side of it: a subset of `(chibi string)` with renames, so
+//! there is no upstream file to compare it to. `130.scm` beside it is pinned
+//! and unchanged by that inlining.
 //!
 //! The hash is FNV-1a 64 — not tamper-proof, just drift-proof, and stable by
 //! specification (unlike `DefaultHasher`), with no new dependency.
@@ -30,8 +33,6 @@ fn fnv1a(data: &[u8]) -> u64 {
 
 /// (repo-relative path, FNV-1a 64 of the file bytes, recorded 2026-08-12)
 const PINNED: &[(&str, u64)] = &[
-    ("lib/chibi/string.scm", 0x40519db9f7f6ea77),
-    ("lib/chibi/string.sld", 0x547187363ef72f66),
     // SRFI 162's own sample implementation, byte-identical. The rest of
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
@@ -107,10 +108,12 @@ const PINNED: &[(&str, u64)] = &[
     // is not byte-identical would make the deviation the reason its whole tree
     // goes unwatched.
     ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
-    // Re-pinned 2026-08-15: its Patina-authored header now cites the in-repo
-    // BSD text instead of a bare URL. Header only; the library form below it
-    // is untouched upstream.
-    ("lib/srfi/130.sld", 0x1fe6cb5ef2698643),
+    // Re-pinned 2026-09-06 (#198): the import of `(chibi string)` became an
+    // `(include "130.chibi-string.scm")` of the inlined subset, plus `(srfi 14)`
+    // directly. The header moved with it. `130.scm` below is untouched by that
+    // work — its hash is the one it has had all along, which is the evidence
+    // the inlining changed the library's *dependencies* and not its code.
+    ("lib/srfi/130.sld", 0x91e9677edfd58a28),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.
@@ -140,6 +143,8 @@ const PINNED: &[(&str, u64)] = &[
     ("test-lib/chibi/diff.sld", 0xf23c1551ba46f31b),
     ("test-lib/chibi/optional.scm", 0xc690d10b2fa58f49),
     ("test-lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
+    ("test-lib/chibi/string.scm", 0x40519db9f7f6ea77),
+    ("test-lib/chibi/string.sld", 0x547187363ef72f66),
     ("test-lib/chibi/term/ansi.scm", 0xb611532f45ff4b36),
     ("test-lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
     ("test-lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
@@ -166,7 +171,6 @@ const PINNED: &[(&str, u64)] = &[
 /// means first establishing what they are byte-identical to, which is not this
 /// list's job to assume.
 const PINNED_TREES: &[&str] = &[
-    "lib/chibi",
     "lib/srfi/116",
     "lib/srfi/117",
     "lib/srfi/125",
@@ -210,7 +214,7 @@ fn bundled_files_match_their_provenance_records() {
          Restore upstream if possible (the provenance records name the pinned\n\
          tarballs/commit to diff against). Otherwise: mark the edit site with\n\
          ';; PATINA LOCAL EDIT:', describe the deviation in the tree's\n\
-         provenance home (lib/chibi/PROVENANCE.md, lib/srfi/PROVENANCE.md,\n\
+         provenance home (lib/srfi/PROVENANCE.md,\n\
          test-lib/chibi/PROVENANCE.md, or\n\
          the library's .sld header), and update the pinned hash above.",
         drifted.join("\n  ")

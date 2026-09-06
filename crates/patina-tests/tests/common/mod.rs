@@ -155,6 +155,16 @@ pub fn eval_program_shipped_only(code: &str) -> String {
     }
 }
 
+/// The error from evaluating `code` with only the shipped tree on the search
+/// path. The negative counterpart of [`eval_program_shipped_only`], for tests
+/// asserting that something is *not* reachable without a supplied root.
+pub fn eval_program_shipped_only_err(code: &str) -> String {
+    match run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program) {
+        Err(e) => e.message,
+        Ok(v) => panic!("expected {code:?} to fail with only lib/ on the path, got {v}"),
+    }
+}
+
 /// A VM interpreter with [`test_lib_root`] on its search path.
 pub fn vm_interpreter() -> Interpreter<VmBackend> {
     let interp = Interpreter::new(VmBackend::new());

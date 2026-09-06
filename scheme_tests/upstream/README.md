@@ -14,7 +14,7 @@ is 145 assertions against the 13 in
 The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
 from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`); the `chibi/`
 suites are from the same sha256-pinned snowballs the libraries themselves
-came from (`lib/chibi/PROVENANCE.md`, `test-lib/chibi/PROVENANCE.md`), so each
+came from (`test-lib/chibi/PROVENANCE.md`), so each
 suite is version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
 every adaptation is described under the table. All of them report through
 `(chibi test)`, taken verbatim from the snow-fort 0.9.0 snowball (sha256-pinned

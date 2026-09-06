@@ -3,8 +3,8 @@
 Libraries whose bundled files are **all** byte-identical to upstream are
 recorded here — with no local edit, there is no file to carry an in-file
 note. Libraries that do deviate document themselves in their own `.sld`
-header instead (`lib/srfi/132.sld` is the model), and `lib/chibi/` has its
-own record. One home per tree.
+header instead (`lib/srfi/132.sld` is the model), and `test-lib/chibi/` has
+its own record. One home per tree.
 
 | Package | Version | Files | Upstream | Tarball sha256 |
 |---|---|---|---|---|
@@ -275,8 +275,8 @@ four marked local edits.** Upstream ships `srfi/135.sld` beside
 here in exactly that arrangement, so every `(include "…")` resolves without
 being touched. That is worth doing — SRFI 144's `.sld` needed its include
 paths rewritten because its bodies went into a subdirectory — but it is not
-unique: `27.sld`, `41.sld` and most of `lib/chibi/` are upstream's verbatim
-too, and an earlier version of this note claimed a uniqueness that does not
+unique: `27.sld`, `41.sld` and most of `test-lib/chibi/` are upstream's
+verbatim too, and an earlier version of this note claimed a uniqueness that does not
 hold.
 
 The library selects a kernel; `135.sld` imports `(srfi 135 kernel8)`, and that
@@ -359,7 +359,7 @@ under chibi's `COPYING`, BSD 3-Clause, whose first condition requires that
 redistributions "retain the above copyright notice, this list of conditions and
 the following disclaimer". The file cannot, so the text is reproduced here
 rather than linked, verbatim from `COPYING` at chibi 0.12.0. The same text
-appears in `lib/chibi/PROVENANCE.md` for that tree; one copy per tree, as
+appears in `test-lib/chibi/PROVENANCE.md` for that tree; one copy per tree, as
 elsewhere in this file.
 
 ```
@@ -422,21 +422,27 @@ The adapted ports named under **The boundary** below carry their upstream
 notices in-file where upstream has one; `lib/srfi/132.sld` is the model for
 recording a tree whose licence lives in a per-file notice, including its note
 that `select.scm` has none upstream either. `lib/srfi/130.sld` records the one
-BSD-licensed port, whose text is in `lib/chibi/PROVENANCE.md` § Licence — same
-author, same licence.
+BSD-licensed port, whose text is in § Licences above — same author, same
+licence. Its `130.chibi-string.scm` is covered by the same notice.
 
 `(srfi 14)` was bundled 2026-08-14 as a dependency of `(chibi string)`, which
-`(srfi 130)` is written against — it is imported for exactly two names,
-`char-set?` and `char-set-contains?`. That is a thin use of a large library,
-but the alternative was a hand-maintained subset, and SRFI 14 was already an
-L1 bundling target on its own in-degree.
+`(srfi 130)` was written against. Since #198 inlined the subset of that
+library which `(srfi 130)` uses (`130.chibi-string.scm`, after which
+`(chibi string)` itself moved to `test-lib/`), SRFI 14 is **a dependency of
+`(srfi 130)` directly** —
+still for exactly two names, `char-set?` and `char-set-contains?`, both used
+by the inlined `make-char-predicate`, and `lib/srfi/130.sld` now imports
+`(srfi 14)` itself rather than inheriting it. That is a thin use of a large
+library, but the alternative was a hand-maintained subset, and SRFI 14 was
+already an L1 bundling target on its own in-degree — so it stays bundled
+either way; only the reason moved.
 
 The package ships no test suite; conformance is covered by
 `crates/patina-tests/tests/srfi_27.rs` (both backends must agree on exact
 pseudo-randomized streams) and by the SRFI 132 suite, whose quickselect
 draws its pivots from `random-integer`.
 
-The rule and its enforcement: `lib/chibi/PROVENANCE.md` § The rule, and
+The rule and its enforcement: § The rule below, and
 `crates/patina-tests/tests/bundled_provenance.rs`, whose `PINNED` table is
 the authoritative scope.
 
@@ -445,3 +451,23 @@ the authoritative scope.
 deliberately unpinned; their sources and known deviations are Track L
 territory (`PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`) until each is reconciled to
 this standard or recorded here.
+
+## The rule (audit 2026-08-10, group E)
+
+*Canonical home. This section lived in `lib/chibi/PROVENANCE.md` until #198
+emptied that tree — its last library moved to `test-lib/chibi/`, whose record
+defers here rather than restating the wording, so there is one to edit.*
+
+Vendored library files **match upstream** — the ones Patina bundles and the
+ones it only supplies from `test-lib/`. If a change is unavoidable, mark the
+edit site with `;; PATINA LOCAL EDIT:` and record the deviation in the tree's
+provenance home — this file, `test-lib/chibi/PROVENANCE.md`, or the library's
+`.sld` header (as `lib/srfi/132.sld` does); one home per tree. Files claimed
+byte-identical are pinned by
+`crates/patina-tests/tests/bundled_provenance.rs` (its `PINNED` table is the
+authoritative scope), so an unrecorded edit fails the suite.
+
+A file that is *derived* from upstream rather than copied — `130.scm`'s
+sibling `130.chibi-string.scm`, an inlined subset with renames — is not
+byte-identical to anything and so is not pinned, the same boundary the adapted
+ports above sit on. Its header carries what it was derived from and how.

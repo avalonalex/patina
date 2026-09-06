@@ -3,7 +3,7 @@
 ;; Alex Shinn's implementation, from chibi-scheme's own tree
 ;; (lib/srfi/130.sld and lib/srfi/130.scm) pinned at commit
 ;; f26603620cc479b4e404db5790a35f06946368bf. BSD 3-Clause; the full text is in
-;; lib/chibi/PROVENANCE.md § Licence (same author, same licence), rather than
+;; lib/srfi/PROVENANCE.md § Licences (same author, same licence), rather than
 ;; only behind a link. There is no snowball release of this
 ;; one, which is why it is recorded here rather than in PROVENANCE.md with
 ;; the tarball-pinned trees.
@@ -17,8 +17,11 @@
 ;; reader rather than a gap in Patina — see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md
 ;; section 6 for the same verdict applied to other chibi-only constructs.
 ;;
-;; It is written against `(chibi string)`, bundled here; lib/chibi/PROVENANCE.md
-;; is where that tree's record lives, including why its cursors are integers.
+;; It is written against `(chibi string)`. Patina no longer ships that library
+;; (#194): the subset this one needs is inlined beside it in
+;; `130.chibi-string.scm`, which carries its own header, and
+;; lib/srfi/PROVENANCE.md holds the record — including why its cursors are
+;; integers.
 
 (define-library (srfi 130)
   (export
@@ -63,17 +66,9 @@
    string-filter       string-remove)
   (import (scheme base)
           (scheme char) (scheme write)
-          (rename (chibi string)
-                  (string-index->cursor %string-index->cursor)
-                  (string-cursor->index %string-cursor->index)
-                  (string-cursor-next %string-cursor-next)
-                  (string-cursor-prev %string-cursor-prev)
-                  (string-fold %string-fold)
-                  (string-fold-right %string-fold-right)
-                  (string-contains %string-contains)
-                  (string-join %string-join)
-                  (string-prefix? %string-prefix?)
-                  (string-suffix? %string-suffix?)))
+          ;; `make-char-predicate` in 130.chibi-string.scm, for the two names
+          ;; the SRFI 14 record names: `char-set?` and `char-set-contains?`.
+          (srfi 14))
   (begin
     (define (string-cursor-next str cursor)
       (if (string-cursor? cursor)
@@ -91,4 +86,7 @@
       (if (string-cursor? cursor)
           (%string-cursor->index str cursor)
           cursor)))
+  ;; The `(chibi string)` subset this library is written against, inlined —
+  ;; included first, since 130.scm's definitions are written over it.
+  (include "130.chibi-string.scm")
   (include "130.scm"))

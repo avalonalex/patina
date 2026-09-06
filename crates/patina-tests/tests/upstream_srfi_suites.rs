@@ -282,12 +282,12 @@ suite_tests! {
     // and not the coverage argument an earlier version of this comment made.
     (srfi_27_random, "srfi 27", "(srfi 27 test)", 0, 224),
     // The chibi suites are from the same pinned snowballs as the libraries
-    // themselves — `string` in lib/chibi/PROVENANCE.md, the other three in
-    // test-lib/chibi/PROVENANCE.md since #197 — restored after the
+    // themselves (test-lib/chibi/PROVENANCE.md) — restored after the
     // corpus stopped vendoring packages Patina bundles — which had silently
     // dropped these suites from everything that runs. string-test is
     // verbatim; the other three had their inline framework shims replaced
     // by the real (chibi test), documented in scheme_tests/upstream/README.md.
+
     (chibi_string, "chibi string", "(chibi string-test)", 0, 52),
     (chibi_optional, "chibi optional", "(chibi optional-test)", 0, 11),
     // Two of its assertions expect ANSI escapes in edits->string/color's
