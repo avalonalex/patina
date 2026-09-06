@@ -30,21 +30,45 @@ definitions `(srfi 130)` actually uses into `lib/srfi/130.scm` and deletes
 with the others.
 
 **What #198 must relocate, not just delete.** § The rule and § Licence below
-are the canonical copies, and eight references point at this file. They all
-dangle the moment it goes, so relocating those two sections is part of the
-deletion, not a follow-up:
+are the canonical copies. **14 references in 9 files** point at this file, and
+they all dangle the moment it goes, so relocating those two sections is part
+of the deletion, not a follow-up.
+
+Licence references first, because these are obligations rather than broken
+links — each cites the BSD text below as the notice for files that carry none
+of their own:
+
+- `README.md` — the repository's licence-attribution table
+- `compat/vendor/LICENSES.md` — names this file as the origin of the BSD text
+  most vendored packages share
+- `lib/srfi/130.sld` ×2 — header, for a port with no in-file notice
+- `lib/srfi/PROVENANCE.md` — the BSD text for its own port
+
+The rest:
 
 - `test-lib/chibi/PROVENANCE.md` § The rule — defers here rather than
   restating the wording, deliberately
-- `crates/patina-tests/tests/bundled_provenance.rs` — module doc and the
+- `crates/patina-tests/tests/bundled_provenance.rs` ×2 — module doc and the
   assertion failure message
-- `lib/srfi/PROVENANCE.md` ×3 — the one-copy-per-tree note, the BSD text for
-  its own port, and § The rule's enforcement pointer
-- `lib/srfi/130.sld` ×2 — its header cites the BSD text here as the licence
-  for a file carrying no in-file notice, so this one is a licence obligation
-  rather than a broken link
+- `lib/srfi/PROVENANCE.md` ×2 — the one-copy-per-tree note and § The rule's
+  enforcement pointer
+- `crates/patina-tests/tests/upstream_srfi_suites.rs` — the chibi suites' pin
+- `scheme_tests/upstream/README.md` — suite/library version matching
+- `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` ×2
 
-`grep -rn 'lib/chibi/PROVENANCE' .` is the check.
+Run the check rather than trusting this list — it was written once with eight
+entries and was wrong, missing both licence references, which is precisely the
+failure it exists to prevent:
+
+```console
+$ grep -rnE '(^|[^-])lib/chibi/PROVENANCE' --exclude-dir=ARCHIVE . \
+    | sed 's|^\./||' | grep -v '^lib/chibi/PROVENANCE\.md:'
+```
+
+The `[^-]` matters: a plain `lib/chibi/PROVENANCE` also matches every mention
+of `test-lib/chibi/PROVENANCE.md`, which is a different file and not affected
+by the deletion. As of #197 the command prints 14 lines across the 9 files
+above.
 
 ## Licence
 

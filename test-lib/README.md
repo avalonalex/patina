@@ -56,15 +56,20 @@ then the row is real and the rule above does not reach it.
 | Lane | How |
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |
-| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build |
-| `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`, plus a check that the root exists; the suite reports *through* `(chibi test)`, so a wrong path yields no tally at all and the script's pinned-total check fails |
-| `scripts/run_gc_differential.sh` | `-A test-lib`, plus `assert_suite_ran` on every lane — it compares runs for *equality*, so identical failures would otherwise pass |
+| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build — except `eval_program_shipped_only`, for the tests whose subject is that something resolves *without* it |
+| `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`, plus a `[ -d ]` check on the root. The suite reports *through* `(chibi test)`, so a bad path yields no tally and the run dies at "Could not parse a total from the suite output" |
+| `scripts/run_gc_differential.sh` | `-A test-lib`, plus `assert_suite_ran` on every lane, pinning the count at 1226 — the lane compares runs for *equality*, so identical failures would otherwise pass |
 
-Note what the last row is guarding. A missing root does not make patina exit
-non-zero: it reports the unresolved library, keeps evaluating, and exits 0
-with deterministic output. A lane that only diffs two such runs finds them
-byte-identical and reports success. Every lane therefore checks that the suite
-actually produced a tally, not merely that two runs agreed.
+Note what the last two rows are guarding, and where each stops. A missing root
+does not make patina exit non-zero: it reports the unresolved library, keeps
+evaluating, and exits 0 with deterministic output. A lane that only diffs two
+such runs finds them byte-identical and reports success. So each lane checks
+that the suite reached its expected total — not that the directory exists (a
+present-but-empty `test-lib/` passes that), and not merely that two runs
+agreed.
+
+The `[ -d ]` check is a courtesy that names the likely cause early; the tally
+is the actual guard.
 
 Each is the same statement in its own dialect: *this lane runs third-party
 code, so it supplies third-party libraries.*

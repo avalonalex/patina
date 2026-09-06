@@ -133,6 +133,28 @@ fn tree_walker_interpreter_with(interp: TreeWalkInterpreter) -> TreeWalkInterpre
     interp
 }
 
+/// Evaluate `code` on both backends with **only the shipped tree** on the
+/// search path — no `test-lib/`, no supplied root of any kind.
+///
+/// For the handful of tests whose subject *is* that something resolves
+/// unaided. Every other helper here supplies the root, which is right for
+/// them and fatal for these: a test asserting "this chain resolves from
+/// `lib/` with no help" passes vacuously the moment the helper hands it help.
+pub fn eval_program_shipped_only(code: &str) -> String {
+    let tw = run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program);
+    let vm = run_on(Interpreter::new(VmBackend::new()), code, Mode::Program);
+    match (tw, vm) {
+        (Ok(tw), Ok(vm)) => {
+            assert_eq!(tw, vm, "backends disagree with only lib/ on the path");
+            tw
+        }
+        (tw, vm) => panic!(
+            "expected {code:?} to evaluate with only lib/ on the search path\n\
+             tree-walker: {tw:?}\nvm: {vm:?}"
+        ),
+    }
+}
+
 /// A VM interpreter with [`test_lib_root`] on its search path.
 pub fn vm_interpreter() -> Interpreter<VmBackend> {
     let interp = Interpreter::new(VmBackend::new());

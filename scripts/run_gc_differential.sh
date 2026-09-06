@@ -40,7 +40,8 @@ SUITE=scheme_tests/chibi/r7rs-tests.scm
 # rather than bundling (see test-lib/README.md).
 SUPPLIED=(-A test-lib)
 
-# Every lane must show the framework's grand total before anything is diffed.
+# Every lane must show the framework's grand total, and the *expected* total,
+# before anything is diffed.
 #
 # This lane compares runs for *equality*, so it passes hardest when both sides
 # fail the same way. Measured: with the -A above removed, patina reports
@@ -50,12 +51,27 @@ SUPPLIED=(-A test-lib)
 # A missing root is only the cheapest way to reach that state; a suite that
 # aborts midway reaches it too, which is why this asserts the tally rather
 # than the directory.
+#
+# And the tally alone is still not enough: (chibi test) honours TEST_FILTER /
+# TEST_GROUP_FILTER / TEST_GROUP_REMOVE from the environment, and a truncated
+# suite file has the same effect, so a two-assertion run also prints a
+# well-formed "2 out of 2 ... tests passed" and diffs clean. Pin the count, as
+# run_chibi_tests.sh does with EXPECTED_TOTAL and for the same reason. Update
+# both deliberately when the suite grows.
+EXPECTED_TOTAL=1226
 assert_suite_ran() {
-    local label="$1" file="$2"
-    if ! grep -qE '^[0-9]+ out of [0-9]+ .*tests passed' "$file"; then
+    local label="$1" file="$2" total
+    total=$(awk '/^[0-9]+ out of [0-9]+ .*tests passed/ { print $4; exit }' "$file")
+    if [ -z "$total" ]; then
         echo "FAIL $label: no suite tally in the output -- the run did not"
         echo "     complete, so comparing it to another lane proves nothing."
         head -3 "$file"
+        return 1
+    fi
+    if [ "$total" -ne "$EXPECTED_TOTAL" ]; then
+        echo "FAIL $label: suite reported $total tests, expected $EXPECTED_TOTAL."
+        echo "     A filtered or truncated run diffs clean while exercising"
+        echo "     almost nothing, so the count is pinned, not just its presence."
         return 1
     fi
     return 0

@@ -20,15 +20,27 @@ fn srfi130(expr: &str) -> String {
 /// Importing `(srfi 130)` alone must pull in `(chibi string)` and `(srfi 14)`
 /// from the bundled tree. Nothing else here would fail differently if the
 /// chain were unresolvable — every test would — but this one says why.
+///
+/// It runs with **only `lib/` on the search path**, which is the whole point
+/// and is not what the other helpers give it. Since #197 moved the rest of
+/// `lib/chibi/` to `test-lib/`, `(chibi string)` is the only reason that
+/// directory still exists, and this is the one test that would notice it
+/// being moved too — but only while it refuses the supplied root. Through
+/// `common::eval_program` it would resolve the chain from `test-lib/` and
+/// pass either way.
 #[test]
 fn test_the_bundled_chain_resolves_unaided() {
-    assert_eq!(srfi130("(string-null? \"\")"), "#t");
+    use common::eval_program_shipped_only as shipped;
     assert_eq!(
-        eval("(import (scheme base) (chibi string)) (string-count \"aab\" #\\a)"),
+        shipped("(import (scheme base) (scheme char) (srfi 130)) (string-null? \"\")"),
+        "#t"
+    );
+    assert_eq!(
+        shipped("(import (scheme base) (chibi string)) (string-count \"aab\" #\\a)"),
         "2"
     );
     assert_eq!(
-        eval("(import (scheme base) (srfi 14)) (char-set-contains? char-set:digit #\\7)"),
+        shipped("(import (scheme base) (srfi 14)) (char-set-contains? char-set:digit #\\7)"),
         "#t"
     );
 }
