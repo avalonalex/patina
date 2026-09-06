@@ -29,6 +29,23 @@ definitions `(srfi 130)` actually uses into `lib/srfi/130.scm` and deletes
 `(chibi string)` is genuinely runtime-forced, which is why it did not move
 with the others.
 
+**What #198 must relocate, not just delete.** § The rule and § Licence below
+are the canonical copies, and eight references point at this file. They all
+dangle the moment it goes, so relocating those two sections is part of the
+deletion, not a follow-up:
+
+- `test-lib/chibi/PROVENANCE.md` § The rule — defers here rather than
+  restating the wording, deliberately
+- `crates/patina-tests/tests/bundled_provenance.rs` — module doc and the
+  assertion failure message
+- `lib/srfi/PROVENANCE.md` ×3 — the one-copy-per-tree note, the BSD text for
+  its own port, and § The rule's enforcement pointer
+- `lib/srfi/130.sld` ×2 — its header cites the BSD text here as the licence
+  for a file carrying no in-file notice, so this one is a licence obligation
+  rather than a broken link
+
+`grep -rn 'lib/chibi/PROVENANCE' .` is the check.
+
 ## Licence
 
 All files in this tree are covered by the following, from chibi-scheme's

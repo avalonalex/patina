@@ -28,13 +28,17 @@ runtime-forced*, on the grounds that they work fine from a `-A` directory.
 Most of `lib/chibi/` was a standing exception to that rule. Measured importers
 (#194):
 
-| Library | `lib/` importers | `compat/` importers | |
+Importers are **as measured before any of it moved**, which is what the
+policy question turns on — the paths below are the pre-move ones and several
+no longer exist:
+
+| Library | importers then in `lib/` | `compat/` importers | Outcome |
 |---|---|---|---|
 | `(chibi test)` | none | 79 | moved, #197 |
 | `(chibi filesystem)` | none | 16 | moved, #196 |
-| `(chibi diff)` | `test.sld` only | 0 | moved, #197 |
-| `(chibi term ansi)` | `diff.sld`, `test.sld` only | 0 | moved, #197 |
-| `(chibi optional)` | `diff.sld` only | 13 | moved, #197 |
+| `(chibi diff)` | `lib/chibi/test.sld` only | 0 | moved, #197 |
+| `(chibi term ansi)` | `lib/chibi/{diff,test}.sld` only | 0 | moved, #197 |
+| `(chibi optional)` | `lib/chibi/diff.sld` only | 13 | moved, #197 |
 | `(chibi string)` | **`lib/srfi/130.sld`** | 35 | stays in `lib/` |
 
 Everything but the last row is forced by a **test lane**, which is not the same
@@ -53,8 +57,14 @@ then the row is real and the rule above does not reach it.
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |
 | `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build |
-| `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`; the suite reports through `(chibi test)`, so a wrong path aborts the run rather than shrinking it |
-| `scripts/run_gc_differential.sh` | `-A test-lib`, for the same suite |
+| `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`, plus a check that the root exists; the suite reports *through* `(chibi test)`, so a wrong path yields no tally at all and the script's pinned-total check fails |
+| `scripts/run_gc_differential.sh` | `-A test-lib`, plus `assert_suite_ran` on every lane — it compares runs for *equality*, so identical failures would otherwise pass |
+
+Note what the last row is guarding. A missing root does not make patina exit
+non-zero: it reports the unresolved library, keeps evaluating, and exits 0
+with deterministic output. A lane that only diffs two such runs finds them
+byte-identical and reports success. Every lane therefore checks that the suite
+actually produced a tally, not merely that two runs agreed.
 
 Each is the same statement in its own dialect: *this lane runs third-party
 code, so it supplies third-party libraries.*

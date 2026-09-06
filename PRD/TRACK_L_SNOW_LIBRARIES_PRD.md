@@ -36,6 +36,13 @@ The encouraging finding from evaluation: Patina's library *machinery* is already
 
 ### Verified current-state evidence
 
+**Snapshot as of Track L's start; do not read as current.** Both bundling rows
+below have since been overtaken — `lib/srfi/` is far past nine, and
+`lib/chibi/` is now `string` alone, with `test` and the rest supplied from
+`test-lib/` (#196, #197). Kept unedited as the baseline the track's numbers are
+measured against; `PRD/phase2/R7RS_LARGE_STATUS.md` is the live bundling
+tracker, and `test-lib/README.md` the live answer for `(chibi …)`.
+
 | Observation | Evidence |
 |---|---|
 | Only **9 SRFIs** bundled. | `lib/srfi/` = 1, 8, 69, 111, 113, 128, 132, 133, 158. |
@@ -146,8 +153,9 @@ the re-export shims `(srfi 23)`, `(srfi 98)`, `(srfi 142)` and `(scheme small)`;
 Red/Tangerine set the Larceny suites
 demanded — 41 `stream`, 101 `rlist`, 116 `ilist`, 117 `list-queue`, 124 `ephemeron` (Rust — an
 ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideque`, 135 `text`,
-144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md` /
-`lib/chibi/PROVENANCE.md`.
+144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md`,
+`lib/chibi/PROVENANCE.md` and — for the `(chibi …)` libraries supplied rather
+than bundled since #196/#197 — `test-lib/chibi/PROVENANCE.md`.
 
 **Still open in L1:** SRFI 115 regex — large, and only if the corpus justifies it — the
 low-demand Tangerine trio 146/159/160, and the near-free re-export shims `(srfi 6)`, `(srfi 9)`,
