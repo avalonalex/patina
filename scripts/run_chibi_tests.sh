@@ -86,8 +86,11 @@ echo "Test file: $TEST_FILE"
 echo "Results:   $RESULTS_FILE"
 echo ""
 
-# (chibi test) exits non-zero when any test fails; keep going so the report is
-# still written. It also colourises, so strip escapes on the way to disk -- the
+# The exit status carries no information here: the suite ends with bare
+# (test-end) and never calls (test-exit), and the CLI runs a file whose name
+# contains "test" resiliently, exiting 0 whatever happened. Failures are learnt
+# from the parsed tally below, and an aborted run from TRUE_TOTAL being 0.
+# The pipeline also colourises, so strip escapes on the way to disk -- the
 # saved log stays readable and every parse below sees the same plain text.
 if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
     echo -e "${GREEN}Suite completed${NC}"

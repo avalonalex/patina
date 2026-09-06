@@ -6,66 +6,64 @@
 //! for it.
 //!
 //! Patina supplies that library from `test-lib/` rather than bundling it, so
-//! the interpreters here come from `common`, which puts that root on the
-//! search path — this lane's spelling of the `-A test-lib` the shell lanes
-//! pass.
+//! the interpreters come from `common`, which puts that root on the search
+//! path — this lane's spelling of the `-A test-lib` the shell lanes pass. The
+//! shared helpers also run both backends and require them to agree, which
+//! matters here: loading this library is macro expansion plus library
+//! resolution, which is where the two diverge.
 //!
-//! Both backends, per `common`'s convention: loading this library exercises
-//! macro expansion and library resolution, which is exactly where the two
-//! diverge, and the VM is the default backend the R7RS lane runs on.
+//! **Every program below ends in `(test-failure-count)`.** `test-end` prints a
+//! tally and returns normally — only `test-exit` exits non-zero — so a test
+//! that checks nothing but "the program ran and returned #t" stays green with
+//! every assertion inside it failing. Asserting the count is what makes these
+//! tests of the framework rather than of the loader.
 
 mod common;
-use common::{tree_walker_interpreter, vm_interpreter};
-use patina_interpreter::Interpreter;
-use patina_runtime::Backend;
+use common::assert_program_eval_to;
 
-/// Run `program` on both backends and hand each result to `check`, labelled.
-fn on_both_backends(program: &str, check: impl Fn(&str, Result<patina_core::TaggedValue, String>)) {
-    fn run<B: Backend>(
-        interp: &Interpreter<B>,
-        program: &str,
-    ) -> Result<patina_core::TaggedValue, String> {
-        interp.eval_program(program).map_err(|e| e.to_string())
-    }
-    check("tree-walker", run(&tree_walker_interpreter(), program));
-    check("vm", run(&vm_interpreter(), program));
-}
-
+/// The framework loads, and its `test` form both runs and passes.
 #[test]
 fn test_chibi_test_framework_loads() {
-    on_both_backends(
+    assert_program_eval_to(
         r#"
         (import (scheme base) (chibi test))
         (test-begin "test-suite")
         (test 3 (+ 1 2))
         (test-end)
+        (test-failure-count)
     "#,
-        |backend, result| {
-            assert!(
-                result.is_ok(),
-                "[{backend}] failed to run chibi test: {:?}",
-                result
-            );
-        },
+        "0",
     );
 }
 
 #[test]
 fn test_chibi_test_basic_functionality() {
-    on_both_backends(
+    assert_program_eval_to(
         r#"
         (import (scheme base) (chibi test))
-
         (test-begin "arithmetic")
         (test 6 (+ 1 2 3))
         (test 10 (* 2 5))
         (test-end)
-
-        #t
+        (test-failure-count)
     "#,
-        |backend, result| {
-            let value = result.unwrap_or_else(|e| panic!("[{backend}] failed: {e}"));
-            assert_eq!(value, patina_core::TaggedValue::TRUE, "[{backend}]");
-        },
+        "0",
+    );
+}
+
+/// The counter the two tests above rely on is itself load-bearing: if it
+/// stayed 0 through a real failure they would pass vacuously.
+#[test]
+fn test_a_failing_assertion_is_counted() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (chibi test))
+        (test-begin "deliberate")
+        (test 1 2)
+        (test 3 3)
+        (test-end)
+        (test-failure-count)
+    "#,
+        "1",
     );
 }
