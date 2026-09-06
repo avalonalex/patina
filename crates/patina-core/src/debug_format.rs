@@ -151,6 +151,11 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
             }
         }
         HeapObjectData::Bytevector(bv) => write!(buf, "#u8({:?})", bv).unwrap(),
+        // The message alone, where `display` and `write` also print the
+        // irritants. This formatter has no cycle detection — `format_tagged`
+        // on a circular list does not terminate — so it must not open a new
+        // way into user data. An irritant is user data, and
+        // `(error "cycle" xs)` with a circular `xs` is one call away.
         HeapObjectData::Exception { message, .. } => {
             write!(buf, "#<error-object: {}>", message).unwrap()
         }

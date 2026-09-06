@@ -269,6 +269,16 @@ fn write_symbol_name(name: &str, display_mode: bool, out: &mut String) {
     }
 }
 
+/// `#<error-object: {message}`, without the closing `>`.
+///
+/// The irritants and the `>` belong to the caller, because only a caller that
+/// can recurse into a value can render them — and there are three callers,
+/// which is the reason the fixed part is written in one place.
+fn write_error_object_prefix(message: &str, out: &mut String) {
+    out.push_str("#<error-object: ");
+    out.push_str(message);
+}
+
 /// Format a heap value that the datum writer treats as a leaf — one whose
 /// parts, if any, it does not descend into.
 ///
@@ -320,12 +330,15 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
             }
             out.push(')');
         }
-        // The message only. `error-object-irritants` is how a program reads the
-        // rest, and printing them here would need the cycle-aware writer that
-        // formats every other nested value — this function holds a plain
-        // `&Heap`, and an irritant can be a circular list.
+        // The message alone, without irritants: this function cannot render a
+        // nested value, so both callers that can intercept an error object
+        // before it arrives here — `write_tagged` and
+        // `format_simple_recursive_tagged` — and print the whole thing. What
+        // is left reaching this arm is the numeric path in
+        // `format_tagged_leaf`, where an exception is not a real possibility.
         HeapObjectData::Exception { message, .. } => {
-            write!(out, "#<error-object: {}>", message).unwrap()
+            write_error_object_prefix(message, out);
+            out.push('>');
         }
         // Every kind of procedure prints alike, so the two backends agree:
         // `Procedure` is the tree-walker's CPS lambdas and both backends'
@@ -484,6 +497,24 @@ impl<'a> DatumLabelWriter<'a> {
                 self.find_circular_tagged(*elem_tv);
             }
             self.on_stack.insert(addr, false);
+        } else if tv.is_object() {
+            // An error object's irritants are ordinary values that the writer
+            // prints, so a circular one needs a label like any other:
+            // `(error "cycle" xs)` where `xs` points at itself.
+            //
+            // The exception itself is not put on the stack, because it cannot
+            // be part of a cycle: `alloc_exception` takes its irritants by
+            // value at construction and nothing mutates them afterwards, so
+            // an exception can only ever be a leaf of someone else's cycle.
+            let irritants = {
+                let heap_ref = self.heap.borrow();
+                heap_ref
+                    .get_exception(tv)
+                    .map(|(_, _, irritants)| irritants.to_vec())
+            };
+            for irritant in irritants.into_iter().flatten() {
+                self.find_circular_tagged(irritant);
+            }
         }
         // Immediate types, strings, closures, other objects: no compound structure to traverse
     }
@@ -616,6 +647,22 @@ impl<'a> DatumLabelWriter<'a> {
 
         // HeapObjectData leaf types — format using heap methods
         let heap_ref = self.heap.borrow();
+        // An error object is the one "leaf" holding values the writer prints.
+        // It is rendered here rather than in `format_leaf_object` because only
+        // this function can render them properly: the irritants get the
+        // ambient display/write mode and datum labels, the same treatment a
+        // vector's elements get.
+        if let Some((_, message, irritants)) = heap_ref.get_exception(tv) {
+            let (message, irritants) = (message.to_string(), irritants.to_vec());
+            drop(heap_ref);
+            write_error_object_prefix(&message, out);
+            for irritant in irritants {
+                out.push(' ');
+                self.write_tagged(irritant, out, emitted);
+            }
+            out.push('>');
+            return;
+        }
         format_leaf_object(tv, &heap_ref, self.display_mode, out);
     }
 
@@ -824,6 +871,22 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
 
     // HeapObjectData leaf types
     let hr = heap.borrow();
+    // See `write_tagged` for why the error object is rendered here. This is
+    // `write-simple`'s path, so its irritants get no datum labels — R7RS
+    // §6.13.3 lets `write-simple` diverge on a cycle, and a circular irritant
+    // is a cycle like any other.
+    if let Some((_, message, irritants)) = hr.get_exception(tv) {
+        let (message, irritants) = (message.to_string(), irritants.to_vec());
+        drop(hr);
+        let mut result = String::new();
+        write_error_object_prefix(&message, &mut result);
+        for irritant in irritants {
+            result.push(' ');
+            result.push_str(&format_simple_recursive_tagged(irritant, heap, display));
+        }
+        result.push('>');
+        return result;
+    }
     let mut result = String::new();
     format_leaf_object(tv, &hr, display, &mut result);
     result

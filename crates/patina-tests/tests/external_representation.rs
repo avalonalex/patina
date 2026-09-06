@@ -16,6 +16,12 @@
 //! the two allocate different heap objects for the same Scheme value, so a
 //! spelling that agrees is a property of the language and not of the backend
 //! a program happened to run on.
+//!
+//! An error object is the one value here with parts, and the tests say where
+//! its irritants are rendered as much as how: by the writer that assigns
+//! datum labels, so that a circular irritant terminates. `debug_format`, the
+//! REPL's printer, stops at the message for the opposite reason — it has no
+//! cycle detection at all.
 
 mod common;
 use common::{
@@ -27,23 +33,45 @@ use common::{
 
 /// The repro from the issue. `display` said `#<unknown>` on both backends.
 #[test]
-fn test_an_error_object_displays_its_message() {
+fn test_an_error_object_displays_its_message_and_irritants() {
     assert_program_eval_to(
         r#"(guard (e (#t e)) (error "boom" 1 2))"#,
+        "#<error-object: boom 1 2>",
+    );
+}
+
+/// No irritants, nothing trailing the message.
+#[test]
+fn test_an_error_object_with_no_irritants_shows_only_its_message() {
+    assert_program_eval_to(
+        r#"(guard (e (#t e)) (error "boom"))"#,
         "#<error-object: boom>",
     );
 }
 
-/// `write` goes through the same writer, so it must say the same thing —
-/// there is no readable syntax to write instead.
+/// The irritants are nested values, so they follow the ambient mode the way a
+/// list's elements do: `write` distinguishes a string from a symbol from a
+/// character, `display` does not. Only the irritants change — the message is
+/// prose about the error, not a datum, and stays unquoted in both.
 #[test]
-fn test_an_error_object_writes_its_message() {
+fn test_the_irritants_follow_the_ambient_write_or_display_mode() {
+    let capture = |writer: &str| {
+        format!(
+            r#"(import (scheme write))
+               (let ((p (open-output-string)))
+                 ({writer} (guard (e (#t e)) (error "bad key:" "foo" 'bar #\c)) p)
+                 (get-output-string p))"#
+        )
+    };
+    // The harness `write`s the captured string back, so the expectations carry
+    // that second round of escaping.
     assert_program_eval_to(
-        r#"(import (scheme write))
-           (let ((p (open-output-string)))
-             (write (guard (e (#t e)) (error "boom" 1 2)) p)
-             (get-output-string p))"#,
-        "\"#<error-object: boom>\"",
+        &capture("display"),
+        r##""#<error-object: bad key: foo bar c>""##,
+    );
+    assert_program_eval_to(
+        &capture("write"),
+        r##""#<error-object: bad key: \"foo\" bar #\\c>""##,
     );
 }
 
@@ -70,17 +98,28 @@ fn test_the_accessors_still_see_message_and_irritants() {
     );
 }
 
-/// The irritants are deliberately *not* in the printed form. An irritant can
-/// be a circular list, and the leaf writer that renders an error object holds
-/// a plain heap reference rather than the cycle-aware writer that renders
-/// every nested value — so printing them there could not terminate.
+/// A circular irritant gets a datum label, like a circular value anywhere
+/// else. This is what makes printing the irritants safe at all: the error
+/// object is rendered by the writer that already assigns labels, not by the
+/// leaf formatter, which cannot recurse. Without that, `(error "cycle" xs)`
+/// would be one call away from a non-terminating `display`.
 #[test]
-fn test_a_circular_irritant_still_prints() {
+fn test_a_circular_irritant_gets_a_datum_label() {
     assert_program_eval_to(
         r#"(define xs (list 1 2))
            (set-cdr! (cdr xs) xs)
            (guard (e (#t e)) (error "cycle" xs))"#,
-        "#<error-object: cycle>",
+        "#<error-object: cycle #0=(1 2 . #0#)>",
+    );
+}
+
+/// The error object nests both ways: inside a list, and around a compound
+/// irritant. Neither is a special case in the writer — it recurses.
+#[test]
+fn test_an_error_object_nests_in_both_directions() {
+    assert_program_eval_to(
+        r#"(list (guard (e (#t e)) (error "nested" (list 1 (vector 2 3)))))"#,
+        "(#<error-object: nested (1 #(2 3))>)",
     );
 }
 
@@ -114,7 +153,7 @@ fn test_a_re_raised_error_object_names_its_message() {
     ] {
         let message = result.expect_err("nothing handles the re-raise");
         assert!(
-            message.contains("#<error-object: boom>"),
+            message.contains("#<error-object: boom 1 2>"),
             "[{backend}] uncaught error object was not named: {message}"
         );
     }
