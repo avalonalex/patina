@@ -1,6 +1,9 @@
 # R7RS-Large Status Tracking
 
-**Last Updated:** 2026-09-01 — bookkeeping: the header had read 2026-08-08 while the tables
+**Last Updated:** 2026-09-06 — the bundling policy gained a third addition, the standard testing
+API (SRFI 64). That one is a **decision, not a state**: the tables below still describe what `lib/`
+holds today, and SRFI 64 is not in it until #193's Phase 0 puts it there. Previously 2026-09-01 —
+bookkeeping: the header had read 2026-08-08 while the tables
 underneath were kept current through the 2026-08-24…26 bundling wave; they now agree. Reconciled
 against `lib/` on this date: **Red 16 of 17 shipped** (17 counting SRFI 158 for the superseded
 121), **Tangerine 4 of 8**; the measured priority order below is spent and marked as history.
@@ -163,26 +166,66 @@ must work:
    thin shims over the same primitives — cheap to add, and the reason to add them is demand, not
    standards. Same shape for SRFI 69 (shipped, in-degree 16) versus the standard-track SRFI 125.
 
-3. **The testing API, and only the standard one.** Amendment of 2026-09-06, made deliberately because
-   it widens the set; #194 is where the question was raised and settled. **SRFI 64** is bundled even
-   though no ratified edition names it, because the alternative is worse in a specific way: a test
-   library is what every *other* implementation must also provide for a portable suite to run, so
-   the one Patina ships should be the one they already have. SRFI 64 is that; `(chibi test)` is one
-   implementation's house framework.
+3. **The testing API — one library, and the standard one.** Amendment of 2026-09-06, made
+   deliberately because it widens the set; #194 raised the question and this settles it. **SRFI 64 is
+   to be bundled** — a decision, not yet a state: `lib/srfi/64` does not exist, and #193's Phase 0 is
+   the work that creates it.
 
-   The rule this creates is narrow, and the narrowness is the point: **`lib/` ships exactly one
-   testing library, the standard one.** Non-standard test frameworks stay out no matter how much our
-   own lanes want them — which is why #194 moved `(chibi test)`, `(chibi diff)`, `(chibi optional)`
-   and `(chibi term ansi)` to `test-lib/` and supplies them with `-A` (`test-lib/README.md`). Being
-   forced by a test lane is still not the same as being runtime-forced; what changed is that *one*
-   testing API is now standard-track by this clause rather than by an edition table.
+   **Why bundled rather than supplied from `test-lib/`.** This is the load-bearing part, because the
+   `-A` mechanism #194's trio built would serve *our* lanes just as well. It would not serve a user.
+   A test library is the one thing nearly every user needs and cannot reasonably write, and
+   `test-lib/` is test data rather than a shipped artifact (`test-lib/README.md`) — so supplying it
+   there answers "how do Patina's suites run" while leaving "how do I test my own program" answered
+   by #195's gap. Bundling is what makes `patina my-test.scm` work with no `-A` and nothing to
+   obtain. That is a user-facing capability, which is the distinction this whole policy turns on.
 
-   Two consequences worth stating. `(patina test)` — #193's portability shim — must therefore be a
-   shim over SRFI 64 rather than over `(chibi test)`: a `lib/` library re-exporting a `test-lib/`
-   one would make it runtime-forced and reverse #194 entirely. And SRFI 64 earns this on the same
-   grounds #193 independently requires it: `(chibi test)` has no `test-expect-fail`, so xfail/xpass
-   — the property that makes a quarantined divergence fail once its bug is fixed — is only
-   expressible in SRFI 64.
+   **Why SRFI 64 rather than `(chibi test)`.** Implementation neutrality: a test library is also what
+   every *other* implementation must provide for a portable suite to run, so the one Patina ships
+   should be the one they already have. SRFI 64 is that; `(chibi test)` is one implementation's house
+   framework. Neutrality settles *which*, and the paragraph above settles *where*; they are separate
+   questions and the amendment needs both.
+
+   **The rule this creates is narrow, and the narrowness is the point:** `lib/` ships **one
+   third-party testing library, the standard one**, plus Patina's own thin shim over it
+   (`(patina test)`, #193). Non-standard frameworks stay out however much our own lanes want them,
+   which is why #196, #197 and #198 moved `(chibi test)`, `(chibi diff)`, `(chibi optional)`,
+   `(chibi term ansi)`, `(chibi filesystem)` and `(chibi string)` to `test-lib/`. Being forced by a
+   test lane is still not being runtime-forced; what changed is that one testing API is now in scope
+   by this clause rather than by an edition table.
+
+   **In-degree does not decide this one, and says so.** The Ordering rule below fixes order by
+   measured in-degree over `compat/vendor/`, where `(srfi 64)` is 5 and `(chibi test)` is 79 — which
+   would invert this decision. It is the wrong instrument here: in-degree counts what *vendored
+   packages* import, and the demand being served is from users writing their own tests, who appear in
+   no corpus. Recorded rather than glossed, since the numbers are real and point the other way.
+
+   **Consequences, all of which Phase 0 owns:**
+
+   - **`(patina test)` must shim over SRFI 64, not `(chibi test)`.** Not merely a policy violation:
+     `test-lib/` is not on the default search path, so a `lib/` library importing a `test-lib/` one
+     makes every plain `patina script.scm` that imports `(patina test)` fail to resolve outright.
+   - **`(test-exit)` is required for xfail/xpass to bite.** This clause buys the property that a
+     quarantined divergence fails once its bug is fixed — but in SRFI 64 an unexpected pass reaches
+     the process *only* through `test-exit`, which exits 1 when `xpass-count` or `fail-count` is
+     non-zero (`compat/vendor/srfi-64/srfi/64.scm`). `test-end` displays
+     `# of unexpected successes` and returns normally, exit code 0. A driver that runs a file to
+     `test-end` and reads the exit status gets a false green, which is the same shape as audit E1.
+     #193's driver must call `test-exit` or read the runner's counts directly.
+   - **The corpus loses a package.** `bundled_libraries()` in `compat/tools/build_corpus.py` globs
+     both roots and drops every vendored package providing a bundled library, so `compat/vendor/srfi-64`
+     leaves the corpus and its currently-passing row goes with it: 127 of 161 becomes 126 of 160. Not
+     a regression — the package is excluded because we provide it — but it must be stated before the
+     tally moves, exactly as `test-lib/README.md` states the nine-pass cost that made `(chibi string)`
+     move rather than be deleted.
+   - **The compat classifier becomes coupled to a file we can edit.** `test_suite_failed` in
+     `crates/patina-compat/src/run.rs` detects SRFI 64 failures by matching that runner's literal
+     summary wording, a shape audit E1 recorded getting wrong once. While SRFI 64 was a byte-identical
+     vendored tarball, the wording could not drift; bundled, it can. Keep the bundled copy
+     byte-identical and pinned, and treat its output shape as an interface.
+   - **Provenance and licence, as for any bundled third-party file.** SRFI 64 is MIT: it needs a row
+     in `lib/srfi/PROVENANCE.md` with its tarball sha256, coverage under `lib/srfi/LICENSE`, and a
+     pin in `crates/patina-tests/tests/bundled_provenance.rs`. `test-lib/README.md`'s rule applies
+     unchanged — a notice obligation does not care which directory the file is in.
 
 **Explicitly out of scope:** pure-Scheme leaf libraries that are neither standard-track nor
 runtime-forced. They work fine from a `-A` directory or the vendored corpus, and bundling them makes
@@ -192,8 +235,10 @@ explicitly includes **non-standard testing libraries**: `(chibi test)` is suppli
 ### Ordering
 
 The policy fixes the *set*; measured dependency in-degree over `compat/vendor/` fixes the *order*.
-**This queue is spent (2026-09-01)** — every numbered item below shipped except the two that were
-always conditional, which are the whole remaining list: **SRFI 115** (large; only if the corpus
+**This queue is spent (2026-09-01), with one item added since** — every numbered item below shipped
+except the two that were always conditional, and the amendment above adds a third: **SRFI 64**
+(decided 2026-09-06, unshipped, tracked by #193's Phase 0 — and the one item in-degree does not
+order, for the reason that clause gives). The other two: **SRFI 115** (large; only if the corpus
 justifies it) and the **Tangerine trio 146/159/160** (standard-track, little measured demand —
 159/`(scheme show)` would also clear two corpus rows via `(chibi show)`/SRFI 166, which is the
 likeliest reason to take it). The near-free shims `(srfi 6/9/11/39)` at the end also remain, for
