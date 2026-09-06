@@ -148,8 +148,8 @@ bundled library is a permanent compatibility promise you cannot withdraw without
 does not apply. That gives a bounded, principled set: the Red and Tangerine tables above, extended as
 later editions are ratified.
 
-Two additions are needed, because standard-track membership alone does not cover everything that must
-work:
+Three additions are needed, because standard-track membership alone does not cover everything that
+must work:
 
 1. **Runtime-forced SRFIs off the standard track.** Libraries that cannot exist as portable Scheme,
    regardless of what any edition names. SRFI 27 (random) needs an RNG primitive; SRFI 170 (POSIX)
@@ -163,9 +163,31 @@ work:
    thin shims over the same primitives — cheap to add, and the reason to add them is demand, not
    standards. Same shape for SRFI 69 (shipped, in-degree 16) versus the standard-track SRFI 125.
 
+3. **The testing API, and only the standard one.** Amendment of 2026-09-06, made deliberately because
+   it widens the set; #194 is where the question was raised and settled. **SRFI 64** is bundled even
+   though no ratified edition names it, because the alternative is worse in a specific way: a test
+   library is what every *other* implementation must also provide for a portable suite to run, so
+   the one Patina ships should be the one they already have. SRFI 64 is that; `(chibi test)` is one
+   implementation's house framework.
+
+   The rule this creates is narrow, and the narrowness is the point: **`lib/` ships exactly one
+   testing library, the standard one.** Non-standard test frameworks stay out no matter how much our
+   own lanes want them — which is why #194 moved `(chibi test)`, `(chibi diff)`, `(chibi optional)`
+   and `(chibi term ansi)` to `test-lib/` and supplies them with `-A` (`test-lib/README.md`). Being
+   forced by a test lane is still not the same as being runtime-forced; what changed is that *one*
+   testing API is now standard-track by this clause rather than by an edition table.
+
+   Two consequences worth stating. `(patina test)` — #193's portability shim — must therefore be a
+   shim over SRFI 64 rather than over `(chibi test)`: a `lib/` library re-exporting a `test-lib/`
+   one would make it runtime-forced and reverse #194 entirely. And SRFI 64 earns this on the same
+   grounds #193 independently requires it: `(chibi test)` has no `test-expect-fail`, so xfail/xpass
+   — the property that makes a quarantined divergence fail once its bug is fixed — is only
+   expressible in SRFI 64.
+
 **Explicitly out of scope:** pure-Scheme leaf libraries that are neither standard-track nor
 runtime-forced. They work fine from a `-A` directory or the vendored corpus, and bundling them makes
-Patina a slow package manager for code it does not need to own.
+Patina a slow package manager for code it does not need to own. Since the amendment above, that
+explicitly includes **non-standard testing libraries**: `(chibi test)` is supplied, not shipped.
 
 ### Ordering
 
