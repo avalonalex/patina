@@ -1314,11 +1314,7 @@ fn dispatch_one_instruction(
             } else {
                 let arg_vals: Vec<TaggedValue> =
                     args.iter().map(|&r| state.reg_at(base, r)).collect();
-                if let Some(escaped) =
-                    call_value_with_probe(state, func_val, None, &arg_vals, dst, exit_depth)?
-                {
-                    return Ok(Some(escaped));
-                }
+                call_value_with_probe(state, func_val, None, &arg_vals, dst)?;
             }
         }
 
@@ -1373,9 +1369,7 @@ fn dispatch_one_instruction(
             // The same dispatcher `Call` uses, so `apply` accepts every
             // callee a direct call accepts — continuations and VM-intercepted
             // control primitives included.
-            if let Some(escaped) = call_value(state, func_val, &arg_vals, dst, exit_depth)? {
-                return Ok(Some(escaped));
-            }
+            call_value(state, func_val, &arg_vals, dst)?;
         }
 
         Instruction::TailApply { func, ref args } => {
@@ -2219,52 +2213,44 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
         })
 }
 
-/// Call any callable value (VmClosure or Primitive). For VmClosures, pushes a
-/// frame and returns `Ok(None)` — the caller must continue in the run loop.
-/// For primitives, calls immediately and returns `Ok(Some(result))`.
+/// Call any callable value from a site that has no instruction behind it —
+/// `call-with-values`' consumer and producer, a prompt body, `call/cc`'s
+/// procedure, a wind thunk, a higher-order primitive's callback.
 ///
-/// **Narrower than [`call_value`]**, and knowingly so for now: it probes
-/// primitive → parameter → closure, which is the probe set the `apply`
-/// instructions shed when they moved to `call_value`. A VM-intercepted control
-/// primitive reached through one of this function's callers —
-/// `call-with-values`' consumer, a prompt handler, a prompt *body* (issue
-/// #179, which is why that one is here rather than at `call_closure`) —
-/// still fails, e.g.
-/// `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
-/// `patina-tests/tests/callability.rs`; the fix is to give this function
-/// `call_value`'s probe set, which needs an `exit_depth` its callers do not all
-/// have today.
+/// **[`call_value`] plus the one thing those callers need and the dispatch
+/// loop's callers get for free: whether the callee is finished.** `Some(v)` is
+/// a callee that delivered `v` here and now — a primitive, a parameter object,
+/// `values`, an identity composable continuation — and there is nothing left to
+/// run. `None` is a frame on the stack, which the loop that owns this call must
+/// drive to its `Return`. A control transfer out is an `Err`, as everywhere.
+///
+/// The frame depth is what answers that question, and it can: no `Ok` path
+/// through `call_value` shortens the stack, and every one that resumes or
+/// pushes lengthens it. That is the whole of this function — it holds no probe
+/// of its own, so a callee is callable here exactly when it is callable from a
+/// `Call` instruction.
+///
+/// It did hold its own until 2026-09-05, one probe short: primitive →
+/// parameter → continuation → closure, with **no control primitive**, which is
+/// claimed by name before any of those and so matched nothing and fell through
+/// to a registry lookup that missed. `(call-with-values (lambda () (values +
+/// '(1 2))) apply)` was `Undefined variable:
+/// patina.internal.control/apply`, and every caller added since inherited it —
+/// the prompt body most recently (issue #179). Issue #186, and the `exit_depth`
+/// it named as the obstacle turned out to be a parameter nothing read; see
+/// [`handle_control_primitive`].
 fn call_any(
     state: &mut VmState,
     func_val: TaggedValue,
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // Try as primitive first
-    if let Some(prim) = primitive_procedure(state, func_val) {
-        return Ok(Some(call_primitive_proc(state, &prim, args)?));
+    let depth_before = state.frames.len();
+    call_value(state, func_val, args, return_reg)?;
+    if state.frames.len() != depth_before {
+        return Ok(None);
     }
-    // Try as parameter
-    if let Some(result) = try_call_parameter(state, func_val, args) {
-        return Ok(Some(result?));
-    }
-    // Try as VM closure
-    // A continuation is callable wherever a procedure is — as an exception
-    // handler, a call-with-values consumer, a wind thunk. A full one replaces
-    // the stack, so this caller's own frame is gone: signal the dispatch loop
-    // the same way the instruction-level call paths do.
-    if let Some(delivered) = try_invoke_full_continuation(state, func_val, args)? {
-        return Err(park_escape(state, delivered));
-    }
-    if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
-        let value = deliver_value(state, args);
-        return match invoke_delimited(state, func_val, dc, value, return_reg)? {
-            DelimitedInvoke::Resumed => Ok(None),
-            DelimitedInvoke::Identity => Ok(Some(value)),
-        };
-    }
-    call_closure(state, func_val, args, return_reg)?;
-    Ok(None)
+    Ok(Some(state.reg(return_reg)))
 }
 
 /// Try to call a parameter object. Returns `Some(Ok(result))` if `func_val`
@@ -2309,17 +2295,17 @@ fn try_call_parameter(
 
 /// Synchronously call a callable value and return its result.
 /// Used for parameter converters and similar internal callbacks.
+///
+/// [`call_any`] with the nested loop attached, so the callee set is the same
+/// one: a parameter converter may be a primitive, a closure, a parameter
+/// object or a control primitive. It probed primitive → closure until
+/// 2026-09-05 and nothing else, which is `call_any`'s hole (issue #186) one
+/// dispatcher over.
 fn call_any_sync(
     state: &mut VmState,
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, VmError> {
-    // Try as primitive first
-    if let Some(prim) = primitive_procedure(state, func_val) {
-        return call_primitive_proc(state, &prim, args);
-    }
-    // Must be a VM closure — run it on a nested loop, as `run_thunk_outcome`
-    // does.
     // Use a return_reg beyond the caller's window to avoid clobbering live regs.
     let depth_before = state.frames.len();
     let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
@@ -2329,7 +2315,10 @@ fn call_any_sync(
             state.registers.resize(needed, TaggedValue::UNSPECIFIED);
         }
     }
-    call_closure(state, func_val, args, return_reg)?;
+    // A callee that needs no frame is finished here and now.
+    if let Some(result) = call_any(state, func_val, args, return_reg)? {
+        return Ok(result);
+    }
     // run_loop_until returns the value directly from Return instruction dispatch.
     // Routed through the re-entry boundary: this is how a parameter converter
     // runs during `parameterize`, and a continuation can escape out of it.
@@ -2470,15 +2459,25 @@ fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOut
 
 /// Handle a VM-intercepted control primitive call.
 ///
-/// Returns `Ok(None)` for normal completion (result written to `dst`).
-/// Returns `Ok(Some(val))` when a continuation escape completed the entire
-/// computation — the caller should propagate this as the final value and
-/// not attempt to access the (now-empty) frame stack.
+/// Returns `Ok(())` for normal completion — either the result is in `dst`, or
+/// a frame is on the stack for the dispatch loop to run. Which of the two it
+/// is, is the frame depth's to say, and [`call_any`] is where that question
+/// gets asked; nothing here reports it.
 ///
 /// And `Err(VmError::ContinuationEscape)` when the arm transferred control:
 /// `abort-current-continuation` always does, so the close-out its callers run
 /// after the call — `pop_resolved_extents`, the exit-depth check in
 /// `tail_call_value_with_probe` — is unreachable for that one.
+///
+/// **No `exit_depth`.** One was threaded in from `call_value` until 2026-09-05
+/// and read by nothing: the only arm that took it was `Apply`, which handed it
+/// straight back to `call_value`, which had no other use for it either. It
+/// could not have had one — the non-tail path pops no frames, so it can never
+/// reach an exit depth — and its cost was to make this dispatcher look
+/// unreachable from the callers that have no such depth to give, which is why
+/// [`call_any`] went without control primitives for as long as it did
+/// (issue #186). The tail path does make exit-depth decisions, and makes them
+/// itself, around this call rather than inside it.
 ///
 /// `is_tail` is currently unused (all are handled as non-tail for A6).
 fn handle_control_primitive(
@@ -2486,8 +2485,7 @@ fn handle_control_primitive(
     ctrl: VmControlPrimitive,
     args: &[TaggedValue],
     dst: u16,
-    exit_depth: usize,
-) -> Result<Option<TaggedValue>, VmError> {
+) -> Result<(), VmError> {
     match ctrl {
         VmControlPrimitive::DynamicWind => {
             if args.len() != 3 {
@@ -2696,7 +2694,7 @@ fn handle_control_primitive(
             call_args.extend(spread_apply_tail(state, *args.last().unwrap())?);
             // The same dispatcher `Instruction::Apply` uses, so the value form
             // and the head-position form accept the same callees.
-            return call_value(state, callee, &call_args, dst, exit_depth);
+            return call_value(state, callee, &call_args, dst);
         }
 
         // ── Exception handling ────────────────────────────────────────────
@@ -2787,7 +2785,7 @@ fn handle_control_primitive(
             vm_raise_value(state, exception_tv, dst, false)?;
         }
     }
-    Ok(None)
+    Ok(())
 }
 
 /// Implement `raise` / `raise-continuable`.
@@ -4411,16 +4409,19 @@ fn park_transfer(state: &mut VmState, value: TaggedValue) -> VmError {
 }
 
 /// Dispatch a call to an arbitrary callee value — the body of the `Call`
-/// instruction, also used by `CallPrimitive`'s deopt path. Returns
-/// `Some(value)` when an invoked continuation unwound to or past
-/// `exit_depth` and the enclosing `run_loop_until` must exit with `value`.
+/// instruction, also used by `CallPrimitive`'s deopt path and, through
+/// [`call_any`], by every caller that dispatches a callee without an
+/// instruction behind it.
+///
+/// On return the callee has either delivered its value into `dst` or pushed a
+/// frame for the dispatch loop to run; a control transfer out of it is an
+/// `Err` ([`park_escape`]), never an `Ok`.
 fn call_value(
     state: &mut VmState,
     func_val: TaggedValue,
     arg_vals: &[TaggedValue],
     dst: u16,
-    exit_depth: usize,
-) -> Result<Option<TaggedValue>, VmError> {
+) -> Result<(), VmError> {
     // The callee is almost always a plain closure, and the callable heap
     // types are mutually exclusive — so probe the closure case first and
     // let the common path pay one type check instead of failing the four
@@ -4428,7 +4429,7 @@ fn call_value(
     // continuation) on every call. Keep the probed code id so the closure
     // branch doesn't resolve it a second time.
     let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
-    call_value_with_probe(state, func_val, closure_code_id, arg_vals, dst, exit_depth)
+    call_value_with_probe(state, func_val, closure_code_id, arg_vals, dst)
 }
 
 /// `call_value` for a callee whose closure probe already ran — the `Call`
@@ -4439,34 +4440,35 @@ fn call_value_with_probe(
     closure_code_id: Option<u32>,
     arg_vals: &[TaggedValue],
     dst: u16,
-    exit_depth: usize,
-) -> Result<Option<TaggedValue>, VmError> {
+) -> Result<(), VmError> {
     if closure_code_id.is_none() {
         // Intercept higher-order control primitives that need VM cooperation.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
-            return handle_control_primitive(state, ctrl, arg_vals, dst, exit_depth);
+            return handle_control_primitive(state, ctrl, arg_vals, dst);
         }
         if let Some(prim) = primitive_procedure(state, func_val) {
             let result = call_primitive_proc(state, &prim, arg_vals);
             state.set_reg(dst, result?);
-            return Ok(None);
+            return Ok(());
         }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             state.set_reg(dst, result?);
-            return Ok(None);
+            return Ok(());
         }
         if let Some(delivered) = try_invoke_full_continuation(state, func_val, arg_vals)? {
             return Err(park_escape(state, delivered));
         }
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
             let value = deliver_value(state, arg_vals);
-            return match invoke_delimited(state, func_val, dc, value, dst)? {
-                DelimitedInvoke::Resumed => Ok(None),
-                DelimitedInvoke::Identity => {
-                    state.set_reg(dst, value);
-                    Ok(None)
-                }
-            };
+            if matches!(
+                invoke_delimited(state, func_val, dc, value, dst)?,
+                DelimitedInvoke::Identity
+            ) {
+                // The identity continuation resumes nothing, so nothing will
+                // deliver `value` but this.
+                state.set_reg(dst, value);
+            }
+            return Ok(());
         }
     }
     let code_id = match closure_code_id {
@@ -4474,8 +4476,7 @@ fn call_value_with_probe(
         // Not callable: resolve_closure produces the standard type error.
         None => resolve_closure(state, func_val)?,
     };
-    call_closure_resolved(state, func_val, code_id, arg_vals, dst)?;
-    Ok(None)
+    call_closure_resolved(state, func_val, code_id, arg_vals, dst)
 }
 
 /// Dispatch a call to an arbitrary callee value in tail position — the body
@@ -4523,11 +4524,7 @@ fn tail_call_value_with_probe(
             // The extents keyed on the popped frame stay open across the
             // dispatch: a `raise` in tail position must still find the
             // handler its thunk was called under.
-            if let Some(escaped) =
-                handle_control_primitive(state, ctrl, arg_vals, return_reg, exit_depth)?
-            {
-                return Ok(Some(escaped));
-            }
+            handle_control_primitive(state, ctrl, arg_vals, return_reg)?;
             // The control primitive has completed. If it delivered its
             // result without pushing a frame, the tail call has returned and
             // the popped frame's extents close now, as after `Return`; a
@@ -4712,7 +4709,8 @@ fn exec_call_primitive(
         if is_tail_site {
             return tail_call_value(state, func_val, arg_vals, exit_depth);
         }
-        return call_value(state, func_val, arg_vals, dst, exit_depth);
+        call_value(state, func_val, arg_vals, dst)?;
+        return Ok(None);
     }
     exec_call_primitive_direct(state, base, func_id, arg_vals, dst)
 }

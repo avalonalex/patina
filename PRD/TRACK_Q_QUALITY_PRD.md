@@ -107,26 +107,42 @@ fix; `apply` was just a third way to reach it. `crates/patina-tests/tests/
 callability.rs` carries the callee-set tests, `backend_divergence.rs` the one
 remaining pin.
 
-**A third VM dispatcher, `call_any`, still has the narrow probe set** and is
-what runs `call-with-values`' consumer, prompt handlers and exception handlers.
-So this row is fixed and its sibling is not:
+**Update 2026-09-05 — the third VM dispatcher, `call_any`, is converged too
+(issue #186).** It had kept the narrow probe set, and is what runs
+`call-with-values`' consumer and producer, a prompt body, `call/cc`'s
+procedure, a wind thunk and a higher-order primitive's callback. So for three
+weeks this row was fixed and its sibling was not:
 
-| Expression | VM | Tree-walker |
-|---|---|---|
-| `(let ((f apply)) (f + '(1 2 3)))` | `6` | `6` |
-| `(call-with-values (lambda () (values + '(1 2))) apply)` | ❌ `Undefined variable: patina.internal.control/apply` | `3` |
+| Expression | VM before | VM now | Tree-walker |
+|---|---|---|---|
+| `(let ((f apply)) (f + '(1 2 3)))` | `6` | `6` | `6` |
+| `(call-with-values (lambda () (values + '(1 2))) apply)` | ❌ `Undefined variable: patina.internal.control/apply` | `3` | `3` |
 
-Pinned in `crates/patina-tests/tests/callability.rs`. The fix is to give
-`call_any` `call_value`'s probe set, which needs an `exit_depth` its eleven call
-sites do not all have — a Q2 item, not a rider on the apply change.
+**The `exit_depth` this section named as the obstacle did not exist.** It was
+threaded from `call_value` into `handle_control_primitive`, whose only use for
+it was to hand it back to `call_value` — a cycle no arm ever read, and none
+could: the non-tail path pops no frames, so it can never reach an exit depth.
+The same induction shows the `Option` those two returned was always `None`.
+Both are gone, and `call_any` is now `call_value` plus a frame-depth test that
+answers the one question its callers have and the dispatch loop's callers do
+not: whether the callee finished or left a frame. A dead parameter had made a
+whole dispatcher look unreachable from most of the VM.
 
-**The lesson is the one §1.2 already teaches, applied to itself, twice.** Every
-row in that table was measured, but the *cause* attached to two of them was
-inferred from the error text and never checked — a registry name in an error
-message is not evidence the registry was reached. And the first draft of this
-update generalised from the rows it had fixed to "every callee a direct call
-accepts", which the `call-with-values` row above falsifies in five tokens. Two
-dispatchers converging is not the same as the VM converging.
+Held by `callability.rs::test_apply_through_call_with_values_accepts_a_control_primitive`
+and `backend_divergence.rs::a_control_primitive_can_be_the_prompt_body`, both
+collapsed out of the quarantines that had pinned the failures.
+
+**The lesson is the one §1.2 already teaches, applied to itself, three times.**
+Every row in that table was measured, but the *cause* attached to two of them
+was inferred from the error text and never checked — a registry name in an
+error message is not evidence the registry was reached. The first draft of the
+apply change then generalised from the rows it had fixed to "every callee a
+direct call accepts", which the `call-with-values` row falsified in five
+tokens: two dispatchers converging is not the same as the VM converging. And
+the obstacle recorded here for the third dispatcher — the `exit_depth` — was
+read off a signature rather than traced to a use, which is the same mistake a
+third time: it kept the fix filed as a Q2 item for three weeks, and the work
+turned out to be deleting the parameter.
 
 **Shared root cause with an open Track L defect.** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
 §6 records that Rust registry primitives ignore the import set at top level.

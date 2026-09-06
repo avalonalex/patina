@@ -26,8 +26,7 @@
 
 mod common;
 use common::{
-    ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program_tree_walker, eval_program_vm,
+    assert_program_eval_error, assert_program_eval_to, eval_program_tree_walker, eval_program_vm,
 };
 
 /// `dynamic-wind` performs no up-front validation on either backend — neither
@@ -267,37 +266,88 @@ fn test_apply_invokes_a_continuation() {
     assert_program_eval_to("(call/cc (lambda (k) (let ((f apply)) (f k '(42)))))", "42");
 }
 
-/// The hole the fix above does *not* close, pinned so the claim stays honest.
+/// The hole the fix above did *not* close, closed 2026-09-05 by issue #186.
 ///
 /// `apply` reached through `call_any` — the VM's third and narrowest dispatcher
-/// — still fails. `call_any` kept the exact primitive → parameter → closure
-/// probe that the apply instructions shed, and it is what runs
-/// `call-with-values`' consumer, prompt handlers and — since issue #179 made
-/// it a caller — prompt **bodies**. So the callee set is uniform across the
-/// two apply *instructions* and not yet across the VM. Issue #186 lists the
-/// three call sites; the body row is pinned in `backend_divergence.rs`.
+/// — used to fail here. `call_any` had kept the exact primitive → parameter →
+/// closure probe that the apply instructions shed, and it is what runs
+/// `call-with-values`' consumer, `call/cc`'s procedure, a wind thunk and —
+/// since issue #179 made it a caller — a prompt **body**. So the callee set was
+/// uniform across the two apply *instructions* and not across the VM.
 ///
-/// **Exception** handlers left that list on 2026-09-05: issue #178 moved the
-/// handler call into `raise_step_stub`, whose `Call` is the ordinary
-/// instruction, so a continuation can be an exception handler — including for
-/// a primitive's error, which is pinned in `backend_divergence.rs`.
+/// It holds no probe of its own now: it calls `call_value` and reads the frame
+/// depth to learn whether the callee finished. The `exit_depth` that this
+/// comment used to name as the obstacle was a parameter nothing read.
 ///
-/// Found by review, not by the tests: the first version of this work claimed
+/// Found by review, not by the tests: the first version of *that* work claimed
 /// "`apply` accepts every callee a direct call accepts", and a five-token
 /// program falsified it — with the same error string the change had just
-/// declared fixed, one dispatcher over.
-///
-/// Not in `backend_divergence.rs` because the backends do not *disagree* about
-/// what is right here: the tree-walker and chibi both answer 3, and only the VM
-/// is wrong. The fix is to give `call_any` `call_value`'s probe set, which
-/// needs an `exit_depth` its eleven call sites do not all have.
+/// declared fixed, one dispatcher over. Which is why the row is here as a
+/// program rather than as a sentence.
 #[test]
-fn test_apply_through_call_with_values_is_still_broken_on_the_vm() {
-    assert_divergence(
+fn test_apply_through_call_with_values_accepts_a_control_primitive() {
+    // The consumer.
+    assert_program_eval_to(
         "(call-with-values (lambda () (values + '(1 2))) apply)",
-        On::TreeWalker,
         "3",
-        ErrorClass::AtRuntime,
-        "PRD/TRACK_Q_QUALITY_PRD.md §1.2",
     );
+    // …in tail position, which pops the frame before dispatching.
+    assert_program_eval_to(
+        "((lambda () (call-with-values (lambda () (values + '(1 2))) apply)))",
+        "3",
+    );
+    // …and `call-with-values` itself reached as a value, so the consumer is
+    // dispatched from `handle_control_primitive` rather than an instruction.
+    assert_program_eval_to(
+        "(let ((f call-with-values)) (f (lambda () (values + '(1 2))) apply))",
+        "3",
+    );
+    // The producer is the same dispatcher: `values` with no arguments.
+    assert_program_eval_to("(call-with-values values list)", "()");
+}
+
+/// The rest of the VM's frameless call sites take a control primitive too.
+///
+/// `call_any` is one dispatcher with several callers, and the neighbouring
+/// tests exercise the two whose answers both backends agree on. These are the
+/// remainder, one program apiece, because "the same function serves them all"
+/// is the kind of claim this file exists to distrust: the prompt body only
+/// *became* a caller in issue #179, and inherited the hole in silence.
+///
+/// **VM-only assertions, and not because the tree-walker disagrees about the
+/// answer.** Each of these names a control primitive in value position, which
+/// the tree-walker resolves through a registry binding that is not there —
+/// the hole `backend_divergence.rs::callcc_bound_with_define` and its two
+/// neighbours already pin, still Q2 part 1's to fix. Pinning three more rows
+/// of that one family here would just be three more things to collapse when
+/// it lands.
+///
+/// Every row was measured against `main` at `30e0bd6` before the fix: each was
+/// `Undefined variable: patina.internal.control/…`, or the `Internal error`
+/// that name lookup becomes when it is a primitive callback that fails.
+///
+/// Two call sites are missing from this list and cannot be added: a
+/// `call-with-values` **producer** and a **wind thunk** are called with no
+/// arguments, and `values` is the only control primitive that takes none —
+/// which is also in the registry, so the old probe found it and those two
+/// sites could never show the defect.
+#[test]
+fn every_frameless_call_site_takes_a_control_primitive() {
+    // `call/cc`'s own procedure argument, given `call/cc`.
+    assert_eq!(eval_program_vm("(procedure? (call/cc call/cc))"), "#t");
+    // A parameter converter, the one caller that must have its value
+    // synchronously, so it runs a nested dispatch loop for a callee that
+    // pushed a frame. The converter runs on the initial value too (R7RS 4.2.6).
+    assert_eq!(
+        eval_program_vm("(define q (make-parameter (lambda (k) 5) call/cc))\n(q)"),
+        "5"
+    );
+    // A higher-order primitive's callback, which re-enters the VM from Rust:
+    // `assoc`'s and `member`'s comparator. `(apply + '(1 2))` is 3, so the
+    // first entry matches.
+    assert_eq!(
+        eval_program_vm("(assoc + (list (list '(1 2))) apply)"),
+        "((1 2))"
+    );
+    assert_eq!(eval_program_vm("(member + (list '(1 2)) apply)"), "((1 2))");
 }
