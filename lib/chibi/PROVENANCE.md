@@ -1,33 +1,33 @@
 # Provenance of `lib/chibi/`
 
-Every file in this tree is **byte-identical** to its pinned upstream snowball
-package (verified 2026-08-12 by diffing against the sha256-checked tarballs
-below). All are by Alex Shinn under the BSD 3-Clause licence, reproduced in
-full under [Licence](#licence) below.
+This tree holds **one library**, and it is here for exactly one reason: it is
+the implementation `lib/srfi/130.sld` is written against. Everything else that
+used to live here was a test-lane dependency with no `lib/` importer, and moved
+to `test-lib/chibi/` in #196 (`filesystem`) and #197 (`test`, `diff`,
+`optional`, `term ansi`); those records moved with the files.
 
-Only `test.scm`, `string.scm` and `term/ansi.scm` carry an in-file copyright
-notice — upstream's own files for `diff`, `optional` and every `.sld` have
-none, and we have not removed any. For those files **this record is the only
-notice**, which is why the licence text lives here rather than behind a link.
-
-`(chibi filesystem)` used to live here. It moved to `test-lib/chibi/` — no
-`lib/` library imported it, so it was a test-lane dependency wearing a bundled
-library's clothes; its record moved with it.
+`string.scm` and `string.sld` are **byte-identical** to their pinned upstream
+snowball package (verified 2026-08-12 by diffing against the sha256-checked
+tarball below), by Alex Shinn under the BSD 3-Clause licence, reproduced in
+full under [Licence](#licence) below. `string.scm` carries its own in-file
+copyright notice; `string.sld` does not, so for that file **this record is the
+only notice**, which is why the licence text lives here rather than behind a
+link.
 
 | Package | Version | Files here | Tarball sha256 |
 |---|---|---|---|
-| `(chibi test)` | 0.9.0 | `test.scm`, `test.sld` | `86997714be7fb6ade1b094d91727f9c9becd9051a41d1703986643d1ed09865d` |
-| `(chibi diff)` | 0.9.1.3 | `diff.scm`, `diff.sld` | `07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac` |
-| `(chibi optional)` | 0.9.1.3 | `optional.scm`, `optional.sld` | `30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c` |
 | `(chibi string)` | 0.9.0 | `string.scm`, `string.sld` | `86a73c53b2e7a4e1201ff10115a5488890993c0020051b3abe0fc785a077ec11` |
-| `(chibi term ansi)` | 0.9.0 | `term/ansi.scm`, `term/ansi.sld` | `805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599` |
 
-Tarball URLs follow the pattern
-`http://snow-fort.org/s/gmail.com/alexshinn/chibi/<name>/<version>/chibi-<name>-<version>.tgz`
-(for `term ansi`: `chibi/term/ansi/…/chibi-term-ansi-0.9.0.tgz`). These are
-snow-fort snowball releases, older than chibi-scheme's git head — e.g.
-`test.scm`'s copyright runs 2010-2020 — and the simplified SRFI-1 `any` at the
-top of `test.scm` is upstream's own portability shim, not a local edit.
+The tarball URL follows the pattern
+`http://snow-fort.org/s/gmail.com/alexshinn/chibi/<name>/<version>/chibi-<name>-<version>.tgz`.
+These are snow-fort snowball releases, older than chibi-scheme's git head.
+
+**This tree is scheduled to disappear.** #198 inlines the `else`-branch
+definitions `(srfi 130)` actually uses into `lib/srfi/130.scm` and deletes
+`lib/chibi/`, folding what remains of this record into
+`lib/srfi/PROVENANCE.md`. Until then the single importer is real and
+`(chibi string)` is genuinely runtime-forced, which is why it did not move
+with the others.
 
 ## Licence
 
@@ -75,12 +75,6 @@ snowball (`compat/vendor/` recorded it unmodified, and it is byte-identical to
 chibi-scheme's own tree at `f266036`), so the corpus no longer carries it. Its
 `cond-expand` takes the non-chibi branch here, where string cursors are plain
 integers — the fast-random-access path the library was written to support.
-
-Two known upstream defects are inherited, not local: `test.scm`'s
-`string-search` misses last-position matches (affects `TEST_FILTER`-family
-matching only), and `(chibi optional)` does not desugar under Patina (see
-`scheme_tests/upstream/README.md`). Fixes belong upstream or in a
-deliberately-marked local edit, not in silent patches.
 
 ## The rule (audit 2026-08-10, group E)
 

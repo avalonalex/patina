@@ -36,6 +36,11 @@ BIN="${1:-target/release/patina}"
 # allocations, so it holds only while this stays <= 16.
 STRESS="${PATINA_GC_STRESS_INTERVAL:-16}"
 SUITE=scheme_tests/chibi/r7rs-tests.scm
+# The suite reports through (chibi test), which Patina supplies from test-lib/
+# rather than bundling (see test-lib/README.md). Without this the suite cannot
+# load, and every lane below would compare two identical import failures and
+# call them byte-identical.
+SUPPLIED=(-A test-lib)
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
@@ -51,9 +56,9 @@ for backend_flag in "" "--tree-walker"; do
     name=${backend_flag:-"vm"}
     name=${name#--}
 
-    PATINA_GC=0 "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
-    "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
-    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
+    PATINA_GC=0 "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
+    "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
+    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
 
     for lane in default stress; do
         if diff -u "$OUT/$name-off.txt" "$OUT/$name-$lane.txt" > "$OUT/diff.txt"; then

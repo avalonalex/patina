@@ -2,14 +2,20 @@
 //!
 //! These were `#[ignore]`d as "requires the module system", which stopped being
 //! true long before the ignore was removed. They now exercise the real upstream
-//! `(chibi test)` that Patina bundles, rather than the hand-written subset that
-//! used to stand in for it.
+//! `(chibi test)`, rather than the hand-written subset that used to stand in
+//! for it.
+//!
+//! Patina supplies that library from `test-lib/` rather than bundling it, so
+//! the interpreters here come from `common`, which puts that root on the
+//! search path — this lane's spelling of the `-A test-lib` the shell lanes
+//! pass.
 
-use patina_interpreter::TreeWalkInterpreter;
+mod common;
+use common::tree_walker_interpreter;
 
 #[test]
 fn test_chibi_test_framework_loads() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
+    let interp = tree_walker_interpreter();
 
     let result = interp.eval_program(
         r#"
@@ -26,7 +32,7 @@ fn test_chibi_test_framework_loads() {
 
 #[test]
 fn test_chibi_test_basic_functionality() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
+    let interp = tree_walker_interpreter();
 
     let result = interp.eval_program(
         r#"

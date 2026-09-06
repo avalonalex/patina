@@ -6,23 +6,47 @@ who puts it on the search path.
 
 Every file here is **byte-identical** to its pinned upstream snowball package
 (verified 2026-08-12, before the move, by diffing against the sha256-checked
-tarball below), with one exception: `filesystem.sld` carries a Patina
+tarballs below), with one exception: `filesystem.sld` carries a Patina
 `cond-expand` branch, described at the end of this file. All are by Alex Shinn
 under the BSD 3-Clause licence, reproduced in full under
 [Licence](#licence) below.
 
-`filesystem.sld` carries **no in-file copyright notice** — upstream's own file
-has none, and we have not removed one — so for that file **this record is the
+Only `test.scm` and `term/ansi.scm` carry an in-file copyright notice —
+upstream's own files for `diff`, `optional`, `filesystem` and every `.sld`
+have none, and we have not removed any. For those files **this record is the
 only notice**, which is why the licence text lives here rather than behind a
 link.
 
 | Package | Version | Files here | Tarball sha256 |
 |---|---|---|---|
+| `(chibi test)` | 0.9.0 | `test.scm`, `test.sld` | `86997714be7fb6ade1b094d91727f9c9becd9051a41d1703986643d1ed09865d` |
+| `(chibi diff)` | 0.9.1.3 | `diff.scm`, `diff.sld` | `07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac` |
+| `(chibi optional)` | 0.9.1.3 | `optional.scm`, `optional.sld` | `30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c` |
+| `(chibi term ansi)` | 0.9.0 | `term/ansi.scm`, `term/ansi.sld` | `805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599` |
 | `(chibi filesystem)` | 0.9.0 | `filesystem.sld` (+ local branch) | `dad608a7fbc00fe8e9929ff6124edad13bedfdc58cc14042be29b33f64c13483` |
 
 Tarball URLs follow the pattern
-`http://snow-fort.org/s/gmail.com/alexshinn/chibi/<name>/<version>/chibi-<name>-<version>.tgz`.
-These are snow-fort snowball releases, older than chibi-scheme's git head.
+`http://snow-fort.org/s/gmail.com/alexshinn/chibi/<name>/<version>/chibi-<name>-<version>.tgz`
+(for `term ansi`: `chibi/term/ansi/…/chibi-term-ansi-0.9.0.tgz`). These are
+snow-fort snowball releases, older than chibi-scheme's git head — e.g.
+`test.scm`'s copyright runs 2010-2020 — and the simplified SRFI-1 `any` at the
+top of `test.scm` is upstream's own portability shim, not a local edit.
+
+## Why these four are here rather than in `lib/`
+
+`(chibi test)` has **no `lib/` importer at all**: it is forced by the test
+lanes, which is not the same as being runtime-forced, and that distinction is
+the whole of the policy `test-lib/README.md` cites. `diff`, `term ansi` and
+`optional` follow it — the first two had no importer outside this subgraph,
+and `optional`'s only one was `diff`. Measured in #194, moved in #197.
+
+## Two inherited upstream defects
+
+Not local, and not to be silently patched: `test.scm`'s `string-search` misses
+last-position matches (affects `TEST_FILTER`-family matching only), and
+`(chibi optional)` does not desugar under Patina (see
+`scheme_tests/upstream/README.md`). Fixes belong upstream or in a
+deliberately-marked local edit.
 
 ## Licence
 

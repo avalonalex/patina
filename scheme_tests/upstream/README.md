@@ -1,8 +1,8 @@
 # Upstream test suites
 
 The reference test suites for the SRFIs Patina bundles, and for the
-`(chibi …)` libraries it bundles or supplies from `test-lib/`, run against
-Patina's implementations by
+`(chibi …)` libraries it bundles (`string`) or supplies from `test-lib/`
+(everything else), run against Patina's implementations by
 `crates/patina-tests/tests/upstream_srfi_suites.rs`.
 
 These are the specification authors' own tests, not ours. That is the point:
@@ -17,9 +17,11 @@ suites are from the same sha256-pinned snowballs the libraries themselves
 came from (`lib/chibi/PROVENANCE.md`, `test-lib/chibi/PROVENANCE.md`), so each
 suite is version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
 every adaptation is described under the table. All of them report through
-`(chibi test)`, which Patina bundles verbatim from the snow-fort 0.9.0
-snowball (sha256-pinned in `lib/chibi/PROVENANCE.md`, guarded by
-`bundled_provenance.rs`); running these suites at all is a consequence of
+`(chibi test)`, taken verbatim from the snow-fort 0.9.0 snowball (sha256-pinned
+in `test-lib/chibi/PROVENANCE.md`, guarded by `bundled_provenance.rs`). Patina
+supplies it from `test-lib/` rather than bundling it (#197) — the shared test
+helpers put that root on the search path, exactly as the shell lanes pass
+`-A test-lib`. Running these suites at all is a consequence of
 that adoption, since the hand-written subset it replaced could not express
 `test-group` or report a failure count.
 
@@ -62,7 +64,7 @@ file — how it decides is described under "Suites not included" below.
 imports only**: upstream wraps its `(chibi test)` import in
 `(cond-expand (chibi …) (else …))` where the else branch inlines a minimal
 framework shim "to avoid circular dependencies in snow installations". Patina
-bundles `(chibi test)` but does not advertise the `chibi` feature, so the
+supplies `(chibi test)` but does not advertise the `chibi` feature, so the
 else branch would win — and the shim neither counts failures nor reports
 through `current-test-reporter`, which the counting harness requires (in
 optional-test the shim's own `test-error` also lacks the two-argument form

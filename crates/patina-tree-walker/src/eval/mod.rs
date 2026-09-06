@@ -367,7 +367,7 @@ impl Evaluator {
     ///
     /// Note: Some libraries are fully defined as .sld files:
     /// - (scheme case-lambda) → lib/scheme/case-lambda.sld
-    /// - (chibi test) → lib/chibi/test.sld
+    /// - (srfi 130) → lib/srfi/130.sld
     ///
     /// This allows any library to have:
     /// - Rust primitives (performance-critical operations)

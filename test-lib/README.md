@@ -28,14 +28,14 @@ runtime-forced*, on the grounds that they work fine from a `-A` directory.
 Most of `lib/chibi/` was a standing exception to that rule. Measured importers
 (#194):
 
-| Library | `lib/` importers | `compat/` importers |
-|---|---|---|
-| `(chibi test)` | none | 79 |
-| `(chibi filesystem)` | none | 16 |
-| `(chibi diff)` | `lib/chibi/test.sld` only | 0 |
-| `(chibi term ansi)` | `diff.sld`, `test.sld` only | 0 |
-| `(chibi optional)` | `lib/chibi/diff.sld` only | 13 |
-| `(chibi string)` | **`lib/srfi/130.sld`** | 35 |
+| Library | `lib/` importers | `compat/` importers | |
+|---|---|---|---|
+| `(chibi test)` | none | 79 | moved, #197 |
+| `(chibi filesystem)` | none | 16 | moved, #196 |
+| `(chibi diff)` | `test.sld` only | 0 | moved, #197 |
+| `(chibi term ansi)` | `diff.sld`, `test.sld` only | 0 | moved, #197 |
+| `(chibi optional)` | `diff.sld` only | 13 | moved, #197 |
+| `(chibi string)` | **`lib/srfi/130.sld`** | 35 | stays in `lib/` |
 
 Everything but the last row is forced by a **test lane**, which is not the same
 as being runtime-forced — that is exactly the reasoning the policy exists to
@@ -53,6 +53,8 @@ then the row is real and the rule above does not reach it.
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |
 | `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build |
+| `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`; the suite reports through `(chibi test)`, so a wrong path aborts the run rather than shrinking it |
+| `scripts/run_gc_differential.sh` | `-A test-lib`, for the same suite |
 
 Each is the same statement in its own dialect: *this lane runs third-party
 code, so it supplies third-party libraries.*

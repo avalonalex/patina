@@ -20,7 +20,7 @@
 //!   reports zero failures and looks like a pass.
 //!
 //! The count comes from a wrapper installed around `current-test-reporter`
-//! rather than from a patch to the framework — the bundled `(chibi test)`
+//! rather than from a patch to the framework — the supplied `(chibi test)`
 //! stays verbatim (see `scheme_tests/upstream/README.md`).
 //!
 //! One `#[test]` per suite, so a load failure in one cannot hide the
@@ -30,10 +30,9 @@
 mod common;
 
 use common::repo_root;
-use patina_interpreter::{Interpreter, TreeWalkInterpreter};
+use patina_interpreter::Interpreter;
 use patina_primitives::primitives::io::datum_writer::format_display_tagged;
 use patina_runtime::Backend;
-use patina_vm::VmBackend;
 use std::path::PathBuf;
 
 fn upstream_root() -> PathBuf {
@@ -130,10 +129,12 @@ fn check_suite(
         root.display()
     );
 
-    let tw = TreeWalkInterpreter::new_tree_walker();
-    tw.backend()
-        .evaluator()
-        .add_library_search_path(root.clone());
+    // From `common`, so `test-lib/` is already on the path: every suite here
+    // reports through `(chibi test)`, which Patina supplies rather than
+    // bundles. `scheme_tests/upstream/` is this file's own root, holding the
+    // suites themselves.
+    let tw = common::tree_walker_interpreter();
+    tw.backend().add_library_search_path(root.clone());
     let tw_assertions = assert_suite(
         &tw,
         "tree-walker",
@@ -144,7 +145,7 @@ fn check_suite(
         min_assertions,
     );
 
-    let vm = Interpreter::new(VmBackend::new());
+    let vm = common::vm_interpreter();
     vm.backend().add_library_search_path(root);
     let vm_assertions = assert_suite(
         &vm,
@@ -456,9 +457,11 @@ fn test_harness_reports_failures_and_counts() {
         );
     }
 
-    let tw = TreeWalkInterpreter::new_tree_walker();
+    // `harness_program` imports `(chibi test)`, so these need `test-lib/` on
+    // the path like every other interpreter in this file.
+    let tw = common::tree_walker_interpreter();
     expect_one_failure_of_three(&tw, "self-check on tree-walker");
 
-    let vm = Interpreter::new(VmBackend::new());
+    let vm = common::vm_interpreter();
     expect_one_failure_of_three(&vm, "self-check on vm");
 }

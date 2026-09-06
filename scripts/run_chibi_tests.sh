@@ -7,9 +7,15 @@
 # Exits non-zero if any test fails or errors, so CI and the wrapper script can
 # gate on it.
 #
-# The suite reports itself through (chibi test), which Patina bundles verbatim
-# from upstream, so the totals are the framework's own rather than a count this
-# script derives -- they cannot drift from what was actually asserted.
+# The suite reports itself through (chibi test), taken verbatim from upstream,
+# so the totals are the framework's own rather than a count this script derives
+# -- they cannot drift from what was actually asserted.
+#
+# Patina does not bundle (chibi test): it is a pure-Scheme leaf library nothing
+# in lib/ imports, so it lives in test-lib/ and this lane supplies it with -A
+# (see test-lib/README.md). That is why SUPPLIED_LIB below is not optional --
+# without it the suite cannot report at all, which is the loud failure this
+# arrangement is meant to have.
 
 set -eo pipefail
 
@@ -52,6 +58,7 @@ done
 EXPECTED_TOTAL=1226
 
 PATINA_BIN="./target/release/patina"
+SUPPLIED_LIB="test-lib"
 TEST_FILE="scheme_tests/chibi/r7rs-tests.scm"
 REPORT_DIR="scheme_tests/reports"
 RESULTS_FILE="${REPORT_DIR}/results${SUFFIX}.txt"
@@ -66,6 +73,11 @@ if [ ! -f "$TEST_FILE" ]; then
     echo -e "${RED}Error: Test file not found at $TEST_FILE${NC}"
     exit 1
 fi
+if [ ! -d "$SUPPLIED_LIB" ]; then
+    echo -e "${RED}Error: supplied library root not found at $SUPPLIED_LIB${NC}"
+    echo "It holds (chibi test), which the suite reports through; see test-lib/README.md"
+    exit 1
+fi
 
 mkdir -p "$REPORT_DIR"
 
@@ -77,7 +89,7 @@ echo ""
 # (chibi test) exits non-zero when any test fails; keep going so the report is
 # still written. It also colourises, so strip escapes on the way to disk -- the
 # saved log stays readable and every parse below sees the same plain text.
-if "$PATINA_BIN" "${BACKEND_ARGS[@]}" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
+if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
     echo -e "${GREEN}Suite completed${NC}"
 else
     echo -e "${YELLOW}Suite completed with failures${NC}"
