@@ -277,12 +277,36 @@ On `Return { val }`:
 
 ### 4.5 Helper Functions
 
-- **`call_any()`** — dispatches to primitive, parameter, full or delimited continuation, or closure; **not** to a VM-intercepted control primitive, which is issue #186's hole at each of its call sites; used by
-  control primitives for sub-calls
-- **`call_any_sync()`** — calls and waits for result (primitives return
-  immediately; closures run via `run_loop_until()`)
-- **`run_thunk()`** — calls a 0-arg closure to completion; used by dynamic-wind
-  and wind transitions
+There are **two** probe sets, one per call shape, and they differ in order:
+
+- **`call_value()`** — the `Call` instruction's dispatcher. Closure first (a
+  probe hoisted into the caller so the common path pays one type check), then
+  control primitive → primitive → parameter → full continuation → delimited
+  continuation. It either writes the callee's value into `dst` or leaves a
+  frame for the dispatch loop; a control transfer out is an `Err`
+- **`tail_call_value()`** — the `TailCall` shape, which pops the frame first.
+  Same members, different order — closure, control primitive, primitive, full
+  continuation, delimited continuation, **parameter last** — because each
+  non-closure arm has its own frame bookkeeping to do. Both functions carry a
+  comment on why the order is free to differ (the callable heap variants are
+  mutually exclusive), so this is two probe sets by choice, not by drift
+- **`call_any()`** — `call_value()` for the nine call sites that have no
+  instruction behind them: a `call-with-values` consumer (instruction and tail
+  instruction) or producer, a prompt body, `call/cc`'s procedure, a jump's wind
+  thunks, a composable invoke's re-entry thunks, a higher-order primitive's
+  callback, and a parameter converter. It adds the one thing those callers
+  cannot get from the dispatch loop: whether the callee finished. `Some(v)` is
+  a callee that needed no frame, `None` a frame still to run — and the **frame
+  depth** is what decides, since no `Ok` path through `call_value()` shortens
+  the stack. It carried its own narrower probe set until 2026-09-05 (no control
+  primitive: issue #186), so `(call-with-values (lambda () (values + '(1 2)))
+  apply)` failed at a name lookup
+- **`call_any_sync()`** — `call_any()` plus the nested `run_loop_until()` for a
+  callee that did push a frame; reached when a parameter is *set* by calling it
+- **`call_closure()`** — a compiled closure and nothing else, so the wrong
+  dispatcher for anything user code names as a procedure. Two callers left, both
+  issue #190: `with-exception-handler`'s thunk, and the `CallWithPrompt`
+  instruction that no pass emits
 
 ---
 
@@ -296,7 +320,7 @@ intercepted at call dispatch time.
 | Variant | Scheme form | Behavior |
 |---|---|---|
 | `DynamicWind` | `dynamic-wind` | Push wind record, run body, pop on return |
-| `CallWithContinuationPrompt` | `call-with-continuation-prompt` | Push prompt, call the body through `call_any` — any procedure, not only a closure (§5.5) |
+| `CallWithContinuationPrompt` | `call-with-continuation-prompt` | Push prompt, call the body through `call_any` — any procedure a `Call` instruction accepts, control primitives included (§5.5) |
 | `AbortCurrentContinuation` | `abort-current-continuation` | Find prompt, capture delimited cont, unwind, call handler |
 | `CallWithCurrentContinuation` | `call/cc` | Snapshot full stack, deliver to proc |
 | `Values` | `values` | Store in `value_buffer`, return primary value |

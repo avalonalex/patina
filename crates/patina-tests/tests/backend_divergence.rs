@@ -35,18 +35,25 @@
 //! tree-walker is its genuine registry hole, still Q2 part 1's to fix, and
 //! `apply` is simply a third way to reach it.
 //!
-//! **The VM keeps one narrow dispatcher**, `call_any`, with the same probe set
-//! the apply instructions shed — so a **control primitive** reached through
-//! `call-with-values`, a prompt handler or a prompt body still fails there
-//! (issue #186). A *continuation* does not: `call_any` grew probes for the
-//! full and delimited kinds, so this sentence naming them was wrong until
-//! 2026-09-05.
-//! `(call-with-values (lambda () (values + '(1 2))) apply)`. Pinned in
-//! `callability.rs`, not here, because both backends do not disagree about it
-//! — only the VM is wrong, and the tree-walker is right. An **exception**
-//! handler left that list on 2026-09-05: issue #178 moved the handler call
-//! into `raise_step_stub`, whose `Call` is the ordinary instruction, so a
-//! continuation can be a handler for a primitive's error too.
+//! **`call_any`, the VM's dispatcher for calls with no instruction behind
+//! them**, kept the probe set the apply instructions shed — so a **control
+//! primitive** reached through `call-with-values` or a prompt body failed
+//! there, e.g. `(call-with-values (lambda () (values + '(1 2))) apply)`.
+//! Closed 2026-09-05 by issue #186: it holds no probe of its own now, being
+//! `call_value` plus a frame-depth test that says whether the callee finished.
+//!
+//! **That is one dispatcher, not the VM.** `with-exception-handler`'s *thunk*
+//! still goes through `call_closure`, which takes a compiled closure and
+//! nothing else, so `(with-exception-handler h values)` answers `#<values>`
+//! on the tree-walker and fails on the VM — issue #190, unpinned here only
+//! because it is #179's shape at a site that never had a dispatcher, and the
+//! fix carries a handler-cleanup half of its own.
+//!
+//! Two neighbouring claims were wrong before #186 and are worth keeping
+//! straight — a *continuation* did work, `call_any` having grown probes for
+//! the full and delimited kinds; and an **exception** handler stopped being a
+//! `call_any` caller at all when issue #178 moved the handler call into
+//! `raise_step_stub`, whose `Call` is the ordinary instruction.
 
 mod common;
 use common::*;
@@ -1348,8 +1355,8 @@ fn the_prompt_body_may_be_a_primitive_or_a_parameter() {
     );
 }
 
-/// VM: a VM-intercepted **control** primitive as the prompt body is not
-/// callable there.
+/// A VM-intercepted **control** primitive as the prompt body — issue #186,
+/// closed 2026-09-05.
 ///
 /// ```text
 ///   (call-with-continuation-prompt apply t (lambda (v k) 'h) + '(1 2 3))
@@ -1357,27 +1364,54 @@ fn the_prompt_body_may_be_a_primitive_or_a_parameter() {
 ///   VM          => Undefined variable: patina.internal.control/apply
 /// ```
 ///
-/// Not introduced by #179 and not its to fix: `call_any` probes primitive →
+/// Not introduced by #179 and not its to fix: `call_any` probed primitive →
 /// parameter → continuation → closure, and a control primitive is claimed by
-/// name *before* any of that. Every caller of that dispatcher has the same
-/// hole — `call-with-values`' consumer and a prompt handler already did, and
-/// #179 made the prompt *body* a third. Closing it means giving `call_any`
-/// `call_value`'s probe set, which needs an `exit_depth` its call sites do not
-/// all have; the sibling row is
-/// `callability.rs`'s `test_apply_through_call_with_values_is_still_broken_on_the_vm`.
-/// Filed as issue #186, which lists all three call sites; the work is
-/// {CONTROL_OPS}.
+/// name *before* any of that, so it matched nothing and fell through to a
+/// registry lookup that missed. Every caller of that dispatcher had the same
+/// hole — `call-with-values`' consumer already did, and #179 made the prompt
+/// *body* a second. `call_any` holds no probe of its own now; it is
+/// `call_value` plus a frame-depth test, so a callee is callable here exactly
+/// when it is callable from a `Call` instruction. The sibling row is
+/// `callability.rs`'s `test_apply_through_call_with_values_accepts_a_control_primitive`.
 ///
-/// Pinned here rather than left inside the neighbouring test's name, which
-/// used to say "any procedure" and so denied this row existed.
+/// Kept as its own test rather than folded into the neighbour above, whose
+/// name used to say "any procedure" and so denied this row existed.
 #[test]
-fn a_control_primitive_as_the_prompt_body_fails_on_the_vm() {
-    assert_divergence(
-        "(define t (make-continuation-prompt-tag 'p))\n\
-         (call-with-continuation-prompt apply t (lambda (v k) 'h) + '(1 2 3))",
-        On::TreeWalker,
+fn a_control_primitive_can_be_the_prompt_body() {
+    const T: &str = "(define t (make-continuation-prompt-tag 'p))\n";
+    // `apply`, whose callee needs a frame the prompt must not close early.
+    assert_program_eval_to(
+        &format!("{T}(call-with-continuation-prompt apply t (lambda (v k) 'h) + '(1 2 3))"),
         "6",
-        ErrorClass::AtRuntime,
-        "issue #186",
+    );
+    // `dynamic-wind`, which pushes a stub frame of the VM's own.
+    assert_program_eval_to(
+        &format!(
+            "{T}(call-with-continuation-prompt dynamic-wind t (lambda (v k) 'h)\n\
+             \x20 (lambda () 1) (lambda () 2) (lambda () 3))"
+        ),
+        "2",
+    );
+    // `values`, which needs no frame at all — the case that makes
+    // `call-with-continuation-prompt` close its own prompt.
+    assert_program_eval_to(
+        &format!("{T}(call-with-continuation-prompt values t (lambda (v k) 'h) 5)"),
+        "5",
+    );
+    // …and that prompt is gone: nothing is left for a later abort to land on.
+    assert_program_eval_to(
+        &format!(
+            "{T}(list (call-with-continuation-prompt values t (lambda (v k) 'h) 5)\n\
+             \x20     (guard (e (#t 'no-prompt)) (abort-current-continuation t 'stale)))"
+        ),
+        "(5 no-prompt)",
+    );
+    // A body that aborts to the prompt this very call pushed.
+    assert_program_eval_to(
+        &format!(
+            "{T}(call-with-continuation-prompt abort-current-continuation t\n\
+             \x20 (lambda (v k) (list 'h v)) t 'ab)"
+        ),
+        "(h ab)",
     );
 }

@@ -26,7 +26,7 @@
 
 mod common;
 use common::{
-    ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
+    ErrorClass, assert_program_eval_error, assert_program_eval_error_at, assert_program_eval_to,
     eval_program_tree_walker, eval_program_vm,
 };
 
@@ -267,37 +267,130 @@ fn test_apply_invokes_a_continuation() {
     assert_program_eval_to("(call/cc (lambda (k) (let ((f apply)) (f k '(42)))))", "42");
 }
 
-/// The hole the fix above does *not* close, pinned so the claim stays honest.
+/// The hole the fix above did *not* close, closed 2026-09-05 by issue #186.
 ///
 /// `apply` reached through `call_any` — the VM's third and narrowest dispatcher
-/// — still fails. `call_any` kept the exact primitive → parameter → closure
-/// probe that the apply instructions shed, and it is what runs
-/// `call-with-values`' consumer, prompt handlers and — since issue #179 made
-/// it a caller — prompt **bodies**. So the callee set is uniform across the
-/// two apply *instructions* and not yet across the VM. Issue #186 lists the
-/// three call sites; the body row is pinned in `backend_divergence.rs`.
+/// — used to fail here. `call_any` had kept the exact primitive → parameter →
+/// closure probe that the apply instructions shed, and it is what runs
+/// `call-with-values`' consumer, `call/cc`'s procedure, a wind thunk and —
+/// since issue #179 made it a caller — a prompt **body**. So the callee set was
+/// uniform across the two apply *instructions* and not across the VM.
 ///
-/// **Exception** handlers left that list on 2026-09-05: issue #178 moved the
-/// handler call into `raise_step_stub`, whose `Call` is the ordinary
-/// instruction, so a continuation can be an exception handler — including for
-/// a primitive's error, which is pinned in `backend_divergence.rs`.
+/// It holds no probe of its own now: it calls `call_value` and reads the frame
+/// depth to learn whether the callee finished. The `exit_depth` that this
+/// comment used to name as the obstacle was a parameter nothing read.
 ///
-/// Found by review, not by the tests: the first version of this work claimed
+/// Found by review, not by the tests: the first version of *that* work claimed
 /// "`apply` accepts every callee a direct call accepts", and a five-token
 /// program falsified it — with the same error string the change had just
-/// declared fixed, one dispatcher over.
-///
-/// Not in `backend_divergence.rs` because the backends do not *disagree* about
-/// what is right here: the tree-walker and chibi both answer 3, and only the VM
-/// is wrong. The fix is to give `call_any` `call_value`'s probe set, which
-/// needs an `exit_depth` its eleven call sites do not all have.
+/// declared fixed, one dispatcher over. Which is why the row is here as a
+/// program rather than as a sentence.
 #[test]
-fn test_apply_through_call_with_values_is_still_broken_on_the_vm() {
-    assert_divergence(
+fn test_apply_through_call_with_values_accepts_a_control_primitive() {
+    // The consumer.
+    assert_program_eval_to(
         "(call-with-values (lambda () (values + '(1 2))) apply)",
-        On::TreeWalker,
         "3",
+    );
+    // …in tail position, which pops the frame before dispatching.
+    assert_program_eval_to(
+        "((lambda () (call-with-values (lambda () (values + '(1 2))) apply)))",
+        "3",
+    );
+    // …and `call-with-values` itself reached as a value, so the consumer is
+    // dispatched from `handle_control_primitive` rather than an instruction.
+    assert_program_eval_to(
+        "(let ((f call-with-values)) (f (lambda () (values + '(1 2))) apply))",
+        "3",
+    );
+    // The producer is the same dispatcher: `values` with no arguments.
+    assert_program_eval_to("(call-with-values values list)", "()");
+}
+
+/// The rest of the VM's frameless call sites take a control primitive too.
+///
+/// `call_any` is one dispatcher with several callers, and the neighbouring
+/// tests exercise the two whose answers both backends agree on. These are the
+/// remainder, one program apiece, because "the same function serves them all"
+/// is the kind of claim this file exists to distrust: the prompt body only
+/// *became* a caller in issue #179, and inherited the hole in silence.
+///
+/// **VM-only assertions, and not because the tree-walker disagrees about the
+/// answer.** Each of these names a control primitive in value position, which
+/// the tree-walker resolves through a registry binding that is not there —
+/// the hole `backend_divergence.rs::callcc_bound_with_define` and its two
+/// neighbours already pin, still Q2 part 1's to fix. Pinning three more rows
+/// of that one family here would just be three more things to collapse when
+/// it lands.
+///
+/// Every row was measured against `main` at `30e0bd6` before the fix: each was
+/// `Undefined variable: patina.internal.control/…`, or the `Internal error`
+/// that name lookup becomes when it is a primitive callback that fails.
+///
+/// **A zero-argument call site cannot appear here, and that is not the same
+/// as its being unaffected** — an earlier draft of this comment said "those
+/// sites could never show the defect", which is false, and
+/// [`a_wind_thunk_reaches_the_probe_it_cannot_satisfy`] below is the program
+/// that falsifies it. A wind thunk and a `call-with-values` producer take no
+/// arguments, and every control primitive but `values` requires at least one,
+/// so none of them can *succeed* there. Reaching the probe and satisfying it
+/// are different questions, and the arity is only an answer to the second.
+#[test]
+fn every_frameless_call_site_takes_a_control_primitive() {
+    // `call/cc`'s own procedure argument, given `call/cc`.
+    assert_eq!(eval_program_vm("(procedure? (call/cc call/cc))"), "#t");
+    // A parameter converter, the one caller that must have its value
+    // synchronously, so it runs a nested dispatch loop for a callee that
+    // pushed a frame. The converter runs on the initial value too (R7RS 4.2.6).
+    assert_eq!(
+        eval_program_vm("(define q (make-parameter (lambda (k) 5) call/cc))\n(q)"),
+        "5"
+    );
+    // A higher-order primitive's callback, which re-enters the VM from Rust:
+    // `assoc`'s and `member`'s comparator. `(apply + '(1 2))` is 3, so the
+    // first entry matches.
+    assert_eq!(
+        eval_program_vm("(assoc + (list (list '(1 2))) apply)"),
+        "((1 2))"
+    );
+    assert_eq!(eval_program_vm("(member + (list '(1 2)) apply)"), "((1 2))");
+}
+
+/// A wind thunk does reach the probe — it just cannot satisfy it.
+///
+/// The row that makes the point the neighbour above gets wrong. `apply` as a
+/// jump's `after` thunk goes through `push_wind_step` → `call_any` and is
+/// called with **no arguments**, so it fails either way; *how* it fails is the
+/// whole difference, and it is the same difference every other row in this
+/// file shows:
+///
+/// ```text
+///   main 30e0bd6 => Undefined variable: patina.internal.control/apply
+///   with #186    => wrong number of arguments: expected at least 2, got 0
+/// ```
+///
+/// The first is the name never resolving. The second is `apply` being reached,
+/// recognised, and told it was called wrongly — which is what the tree-walker
+/// has always said here, so the two backends now agree on the diagnosis and
+/// not merely on the fact of failure.
+///
+/// The message is the assertion because nothing else can be: `values` is the
+/// only control primitive a 0-argument call site can call successfully, and it
+/// is in the registry, so it was found by the old probe too. That is the one
+/// shape where this file's usual rule — never assert on error text — has no
+/// alternative to fall back on, and the diagnosis is the behaviour under test.
+#[test]
+fn a_wind_thunk_reaches_the_probe_it_cannot_satisfy() {
+    assert_program_eval_error_at(
+        "(define k #f)\n\
+         (define done #f)\n\
+         (define v (call/cc (lambda (c) (set! k c) 0)))\n\
+         (if (not done)\n\
+         \x20   (begin (set! done #t)\n\
+         \x20          (dynamic-wind (lambda () 'b) (lambda () (k 1)) apply)))\n\
+         v",
         ErrorClass::AtRuntime,
-        "PRD/TRACK_Q_QUALITY_PRD.md §1.2",
+        ErrorClass::AtRuntime,
+        "number of arguments: expected at least 2, got 0",
     );
 }
