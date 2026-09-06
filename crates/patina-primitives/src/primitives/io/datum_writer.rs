@@ -421,12 +421,26 @@ fn format_tagged_leaf(tv: TaggedValue, heap: &Heap, out: &mut String) {
     }
 }
 
+/// What pass 1 found at an address it reached.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Entry {
+    /// Not seen before — descend into it.
+    Fresh,
+    /// On the path from the root to here: reaching it again closes a cycle.
+    OnPath,
+    /// Fully walked already, from somewhere else: shared, not circular.
+    Seen,
+}
+
 /// Writer that handles circular/shared structures using datum labels
 pub(super) struct DatumLabelWriter<'a> {
     /// Maps pointer addresses to label numbers for circular structures
     labels: HashMap<usize, usize>,
     /// Set of addresses currently on the traversal stack (for detecting cycles)
     on_stack: HashMap<usize, bool>,
+    /// Scratch for pass 1's iterative walk down a cons chain. A field so that
+    /// walking many short lists costs one allocation, not one per list.
+    spine: Vec<usize>,
     /// Next label number to assign
     next_label: usize,
     /// Whether we're in display mode (strings without quotes, chars without #\)
@@ -442,6 +456,7 @@ impl<'a> DatumLabelWriter<'a> {
         Self {
             labels: HashMap::new(),
             on_stack: HashMap::new(),
+            spine: Vec::new(),
             next_label: 0,
             display_mode,
             label_shared,
@@ -453,9 +468,60 @@ impl<'a> DatumLabelWriter<'a> {
     // Pass 1: Find circular (and optionally shared) structures
     // =========================================================================
 
+    /// What pass 1 found when it reached an address.
+    fn enter(&mut self, addr: usize) -> Entry {
+        // One lookup for a three-way answer. The two-lookup form this
+        // replaces (`get(..) == Some(true)` then `contains_key`) had to be
+        // spelled out per branch, and one branch was written with only half
+        // of it — see `Entry::OnPath`.
+        match self.on_stack.get(&addr) {
+            Some(true) => Entry::OnPath,
+            Some(false) => Entry::Seen,
+            None => {
+                self.on_stack.insert(addr, true);
+                Entry::Fresh
+            }
+        }
+    }
+
+    /// Give `addr` a label if it has none.
+    fn assign_label(&mut self, addr: usize) {
+        if !self.labels.contains_key(&addr) {
+            self.labels.insert(addr, self.next_label);
+            self.next_label += 1;
+        }
+    }
+
+    /// Decide `addr` and report whether the caller should descend into it.
+    ///
+    /// The whole labelling rule, in one place for every kind of value the
+    /// writer descends into. It was open-coded per branch, and the error
+    /// object's copy was missing the `OnPath` arm — so a cycle running
+    /// through an irritant got no label and pass 2 recursed until the process
+    /// aborted. Three copies of a rule are three chances to write two of it.
+    fn visit(&mut self, addr: usize) -> bool {
+        match self.enter(addr) {
+            // Reached itself: a cycle, which must be labelled whichever
+            // procedure is writing — `write` labels exactly these.
+            Entry::OnPath => {
+                self.assign_label(addr);
+                false
+            }
+            // Reached again, but not from within itself: shared, not
+            // circular. Only `write-shared` labels these.
+            Entry::Seen => {
+                if self.label_shared {
+                    self.assign_label(addr);
+                }
+                false
+            }
+            Entry::Fresh => true,
+        }
+    }
+
     /// Find circular structures starting from a TaggedValue (primary path).
-    /// Only recurses into compound types (pairs, vectors). Immediate types,
-    /// strings, and closures have no sub-structure to traverse.
+    /// Only recurses into compound types (pairs, vectors, error objects).
+    /// Immediate types, strings, and closures have no sub-structure.
     pub(super) fn find_circular_tagged(&mut self, tv: TaggedValue) {
         if tv.is_pair() {
             // The cdr chain is walked, not recursed into. A list's spine is
@@ -465,31 +531,18 @@ impl<'a> DatumLabelWriter<'a> {
             // `guard` can catch. Only the cars recurse.
             //
             // Every pair of the spine stays on `on_stack` until the walk
-            // ends, which is what the recursion's unwind did; the collected
-            // addresses are cleared together at the end.
-            let mut spine: Vec<usize> = Vec::new();
+            // ends, which is what the recursion's unwind did; the addresses
+            // are cleared together at the end. `spine` is a field rather than
+            // a local so that a datum full of small lists does not allocate
+            // once per list.
+            let base = self.spine.len();
             let mut current = tv;
             loop {
                 let addr = current.raw() as usize;
-
-                if self.on_stack.get(&addr).copied().unwrap_or(false) {
-                    if !self.labels.contains_key(&addr) {
-                        self.labels.insert(addr, self.next_label);
-                        self.next_label += 1;
-                    }
+                if !self.visit(addr) {
                     break;
                 }
-
-                if self.on_stack.contains_key(&addr) {
-                    if self.label_shared && !self.labels.contains_key(&addr) {
-                        self.labels.insert(addr, self.next_label);
-                        self.next_label += 1;
-                    }
-                    break;
-                }
-
-                self.on_stack.insert(addr, true);
-                spine.push(addr);
+                self.spine.push(addr);
 
                 let (car_tv, cdr_tv) = {
                     let heap_ref = self.heap.borrow();
@@ -502,29 +555,15 @@ impl<'a> DatumLabelWriter<'a> {
                 }
                 current = cdr_tv;
             }
-            for addr in spine {
-                self.on_stack.insert(addr, false);
+            for i in base..self.spine.len() {
+                self.on_stack.insert(self.spine[i], false);
             }
+            self.spine.truncate(base);
         } else if tv.is_vector() {
             let addr = tv.raw() as usize;
-
-            if self.on_stack.get(&addr).copied().unwrap_or(false) {
-                if !self.labels.contains_key(&addr) {
-                    self.labels.insert(addr, self.next_label);
-                    self.next_label += 1;
-                }
+            if !self.visit(addr) {
                 return;
             }
-
-            if self.on_stack.contains_key(&addr) {
-                if self.label_shared && !self.labels.contains_key(&addr) {
-                    self.labels.insert(addr, self.next_label);
-                    self.next_label += 1;
-                }
-                return;
-            }
-
-            self.on_stack.insert(addr, true);
             let elements: Vec<TaggedValue> = {
                 let heap_ref = self.heap.borrow();
                 heap_ref.vector_slice(tv).to_vec()
@@ -535,29 +574,25 @@ impl<'a> DatumLabelWriter<'a> {
             self.on_stack.insert(addr, false);
         } else if tv.is_object() && self.is_exception(tv) {
             // An error object's irritants are ordinary values that the writer
-            // prints, so a circular one needs a label like any other:
-            // `(error "cycle" xs)` where `xs` points at itself.
+            // prints, so it is labelled on the same terms as the pair and the
+            // vector above: the rule is about what the writer descends into.
             //
-            // The exception is labelled on the same terms as the pair and the
-            // vector above, because the rule is about what the writer descends
-            // into, not about what can form a cycle. It cannot form one —
-            // `alloc_exception` takes its irritants by value and nothing
-            // mutates them afterwards — so only the `label_shared` arm can
-            // ever fire. Leaving it out made `write-shared` re-emit a shared
-            // error object in full at every occurrence, which is exponential
-            // in the nesting depth and is exactly what that procedure exists
-            // to avoid.
+            // Including cycles. An earlier comment here reasoned that an
+            // exception could not be part of one, because `alloc_exception`
+            // takes its irritants by value and nothing mutates them
+            // afterwards. That is true of the `Vec` and false of the values
+            // in it — an irritant is an ordinary mutable pair:
+            //
+            //   (define xs (list 1))
+            //   (define e (guard (c (#t c)) (error "boom" xs)))
+            //   (set-car! xs e)          ; e -> xs -> e
+            //
+            // which aborted the process on `(write e)`, `(display e)` and on
+            // reporting `(raise e)`.
             let addr = tv.raw() as usize;
-
-            if self.on_stack.contains_key(&addr) {
-                if self.label_shared && !self.labels.contains_key(&addr) {
-                    self.labels.insert(addr, self.next_label);
-                    self.next_label += 1;
-                }
+            if !self.visit(addr) {
                 return;
             }
-
-            self.on_stack.insert(addr, true);
             let irritants = {
                 let heap_ref = self.heap.borrow();
                 heap_ref
@@ -687,16 +722,21 @@ impl<'a> DatumLabelWriter<'a> {
         // this function can render them properly: the irritants get the
         // ambient display/write mode and the datum labels, the same treatment
         // a vector's elements get.
-        let exception = {
-            let heap_ref = self.heap.borrow();
-            heap_ref
-                .get_exception(tv)
-                .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
-        };
-        if let Some((message, irritants)) = exception {
+        // `is_exception` first, and `emit_label` before the contents are
+        // extracted: a back-reference writes `#n#` and nothing else, so a
+        // second occurrence must not pay to copy a message and irritants it
+        // will throw away.
+        if self.is_exception(tv) {
             if self.emit_label(tv, out, emitted) {
                 return;
             }
+            let (message, irritants) = {
+                let heap_ref = self.heap.borrow();
+                heap_ref
+                    .get_exception(tv)
+                    .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
+                    .expect("is_exception just said so")
+            };
             out.push_str(ERROR_OBJECT_OPEN);
             out.push_str(&message);
             for irritant in irritants {
@@ -765,11 +805,19 @@ impl<'a> DatumLabelWriter<'a> {
         out: &mut String,
         emitted: &mut HashSet<usize>,
     ) {
-        // The unlabelled spine is walked, not recursed into: it writes no
-        // nesting, so it should cost no stack. `write` on a 100_000-element
-        // list used to abort the process — a stack overflow is not a Scheme
-        // error and no `guard` can catch it. Depth is now the datum's nesting
-        // rather than its length.
+        // The spine is walked, not recursed into: no tail costs a frame, so
+        // depth is the datum's nesting and never its length. `write` on a
+        // 100_000-element list used to abort the process, and a stack
+        // overflow is not a Scheme error — no `guard` can catch it.
+        //
+        // A *labelled* tail leaves the list notation, because a label has to
+        // be written where the pair it names is written: `(1 . #0=(2 3 .
+        // #0#))`. That opens a paren, so it looks like it has to recurse —
+        // but the paren only has to be *closed* eventually, not closed by a
+        // returning call. Counting the ones still open and emitting them at
+        // the end keeps a fully shared spine flat too, which is what
+        // `write-shared` produces from a list consed with all of its tails.
+        let mut deferred_closes = 0usize;
         let mut current = tv;
         loop {
             let (car_tv, cdr_tv) = {
@@ -779,28 +827,42 @@ impl<'a> DatumLabelWriter<'a> {
 
             self.write_tagged(car_tv, out, emitted);
 
+            // End of a proper list.
             if cdr_tv.is_null() {
-                // End of proper list
-                return;
+                break;
             }
+
+            // An improper tail is written as itself, after a dot.
             if !cdr_tv.is_pair() {
-                // Non-pair, non-null — dotted pair
                 out.push_str(" . ");
                 self.write_tagged(cdr_tv, out, emitted);
-                return;
+                break;
             }
-            if self.is_labelled(cdr_tv) {
-                // A labelled tail leaves the list notation, because a label
-                // has to be written where the pair it names is written:
-                // `(1 . #0=(2 3 . #0#))`. Inlining it instead would elide a
-                // labelled pair — see `is_labelled`. This one does nest, so
-                // it is the one tail that recurses.
-                out.push_str(" . ");
-                self.write_tagged(cdr_tv, out, emitted);
-                return;
+
+            // An unlabelled tail continues the list inline — the common case,
+            // and the one that must not nest.
+            if !self.is_labelled(cdr_tv) {
+                out.push(' ');
+                current = cdr_tv;
+                continue;
             }
-            out.push(' ');
+
+            out.push_str(" . ");
+            // Already written once: a back-reference finishes the datum.
+            if self.emit_label(cdr_tv, out, emitted) {
+                break;
+            }
+            // `#n='x` is self-contained, so there is no paren to defer.
+            if self.write_quote_shorthand_tagged(cdr_tv, out, emitted) {
+                break;
+            }
+            out.push('(');
+            deferred_closes += 1;
             current = cdr_tv;
+        }
+
+        for _ in 0..deferred_closes {
+            out.push(')');
         }
     }
 
@@ -856,10 +918,6 @@ impl<'a> DatumLabelWriter<'a> {
             return false;
         }
 
-        debug_assert!(
-            !self.is_labelled(cdr_tv),
-            "the quote shorthand elided a labelled pair"
-        );
         out.push_str(prefix);
         self.write_tagged(inner_car, out, emitted);
         true

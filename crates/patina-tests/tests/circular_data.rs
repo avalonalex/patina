@@ -332,6 +332,32 @@ fn test_plain_write_leaves_a_merely_shared_tail_unlabelled() {
     assert_program_eval_to(code, r##""((1 3) (2 3))""##);
 }
 
+/// A cycle running through an error object's irritants.
+///
+/// Pass 1 labels pairs, vectors and error objects, and its rule was written
+/// out once per kind — with the error object's copy missing the arm that
+/// labels a *cycle*. So this got no label and pass 2 recursed until the
+/// process aborted, on `(write e)`, on `(display e)`, and on the diagnostic
+/// for an uncaught `(raise e)`.
+///
+/// The comment that stood where the missing arm belonged argued the case was
+/// impossible: `alloc_exception` takes its irritants by value and nothing
+/// mutates them afterwards. True of the `Vec`, false of what is in it — an
+/// irritant is an ordinary mutable pair, and `set-car!` closes the loop.
+#[test]
+fn test_a_cycle_through_an_error_objects_irritants_terminates() {
+    let code = r##"
+        (import (scheme write))
+        (define xs (list 1))
+        (define e (guard (c (#t c)) (error "boom" xs)))
+        (set-car! xs e)
+        (let ((out (open-output-string)))
+          (write e out)
+          (get-output-string out))
+    "##;
+    assert_program_eval_to(code, r##""#0=#<error-object: boom (#0#)>""##);
+}
+
 /// A list's spine costs no stack, in either pass.
 ///
 /// Both passes used to walk the cdr chain by recursion, so depth was the
@@ -353,4 +379,45 @@ fn test_a_long_list_does_not_exhaust_the_stack() {
     "##;
     // 100000 digits + 99999 separators + 2 parens.
     assert_program_eval_to(code, "200001");
+}
+
+/// The same, for the other two procedures that drive the same two walks.
+///
+/// `display`, `write` and `write-shared` all build a `DatumLabelWriter` and
+/// run the identical passes, but only `write` was pinned — so a depth
+/// regression reachable only under `display_mode` or `label_shared` would
+/// have passed the suite.
+///
+/// `write-shared` gets the harder shape on purpose: a list consed with every
+/// one of its tails, so *every* tail is shared and therefore labelled. A
+/// labelled tail opens a paren, which looks like it must nest — the writer
+/// counts the open parens instead of recursing for them. Before that, this
+/// aborted the process above about 25_000.
+#[test]
+fn test_display_and_write_shared_do_not_exhaust_the_stack_either() {
+    let build = "(define xs (let loop ((i 0) (acc '())) \
+                   (if (= i 50000) acc (loop (+ i 1) (cons 0 acc)))))";
+    assert_program_eval_to(
+        &format!(
+            r##"(import (scheme write))
+                {build}
+                (let ((out (open-output-string)))
+                  (display xs out)
+                  (string-length (get-output-string out)))"##
+        ),
+        "100001",
+    );
+    assert_program_eval_to(
+        &format!(
+            r##"(import (scheme write))
+                {build}
+                (define tails
+                  (let loop ((l xs) (acc '()))
+                    (if (null? l) (reverse acc) (loop (cdr l) (cons l acc)))))
+                (let ((out (open-output-string)))
+                  (write-shared (cons xs tails) out)
+                  (> (string-length (get-output-string out)) 100000))"##
+        ),
+        "#t",
+    );
 }
