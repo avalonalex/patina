@@ -39,24 +39,32 @@ no longer exist:
 | `(chibi diff)` | `lib/chibi/test.sld` only | 0 | moved, #197 |
 | `(chibi term ansi)` | `lib/chibi/{diff,test}.sld` only | 0 | moved, #197 |
 | `(chibi optional)` | `lib/chibi/diff.sld` only | 13 | moved, #197 |
-| `(chibi string)` | **`lib/srfi/130.sld`** | 35 | stays in `lib/` |
+| `(chibi string)` | **`lib/srfi/130.sld`** | 35 | importer inlined, then moved, #198 |
 
 Everything but the last row is forced by a **test lane**, which is not the same
 as being runtime-forced — that is exactly the reasoning the policy exists to
 reject. So those libraries move here and the lanes pass `-A`.
 
-`(chibi string)` is the exception and stays in `lib/`: `lib/srfi/130.sld`
-imports it, so it is genuinely runtime-forced, and SRFI 130 is standard-track
-and legitimately bundled. #198 removes that last importer by inlining what
-`(srfi 130)` uses, at which point `lib/chibi/` goes away entirely — but until
-then the row is real and the rule above does not reach it.
+`(chibi string)` was the exception for two steps: `lib/srfi/130.sld` imported
+it, so it was genuinely runtime-forced, and SRFI 130 is standard-track and
+legitimately bundled. #198 removed that importer by inlining the 28 names
+`(srfi 130)` actually used into `lib/srfi/130.chibi-string.scm` — and with the
+last `lib/` importer gone, the library had this table's own profile and moved
+here like the rest.
+
+#198 as filed said to *delete* it. Measured, that costs nine corpus passes
+(127 of 161 down to 118): 35 vendored packages import `(chibi string)` and had
+been resolving it from the bundled tree. Moving instead of deleting gets the
+same result for `lib/` — which is what the policy is about — at no cost to the
+corpus. `lib/chibi/` no longer exists, and `lib/` holds standards and Patina's
+own code with no `(chibi …)` namespace at all, which was the point of #194.
 
 ## Who supplies it
 
 | Lane | How |
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |
-| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build — except `eval_program_shipped_only`, for the tests whose subject is that something resolves *without* it |
+| `crates/patina-tests` | `common::test_lib_root()`, added to every interpreter the shared helpers build — except `eval_program_shipped_only` and `eval_program_shipped_only_err`, for the tests whose subject is what does and does not resolve *without* it |
 | `scripts/run_chibi_tests.sh` (+ the tree-walker wrapper) | `-A test-lib`, plus a `[ -d ]` check on the root. The suite reports *through* `(chibi test)`, so a bad path yields no tally and the run dies at "Could not parse a total from the suite output" |
 | `scripts/run_gc_differential.sh` | `-A test-lib`, plus `assert_suite_ran` on every lane, pinning the count at 1226 — the lane compares runs for *equality*, so identical failures would otherwise pass |
 

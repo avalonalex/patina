@@ -11,9 +11,9 @@ tarballs below), with one exception: `filesystem.sld` carries a Patina
 under the BSD 3-Clause licence, reproduced in full under
 [Licence](#licence) below.
 
-Only `test.scm` and `term/ansi.scm` carry an in-file copyright notice —
-upstream's own files for `diff`, `optional`, `filesystem` and every `.sld`
-have none, and we have not removed any. For those files **this record is the
+Only `test.scm`, `string.scm` and `term/ansi.scm` carry an in-file copyright
+notice — upstream's own files for `diff`, `optional`, `filesystem` and every
+`.sld` have none, and we have not removed any. For those files **this record is the
 only notice**, which is why the licence text lives here rather than behind a
 link.
 
@@ -23,6 +23,7 @@ link.
 | `(chibi diff)` | 0.9.1.3 | `diff.scm`, `diff.sld` | `07b62a03d280924f0bd42ca6375c752884a480779984dd7e9889e150f892fbac` |
 | `(chibi optional)` | 0.9.1.3 | `optional.scm`, `optional.sld` | `30b58c0bbecbe37560fc24086417d2ab908536b74d8775670da55f1eb6971e9c` |
 | `(chibi term ansi)` | 0.9.0 | `term/ansi.scm`, `term/ansi.sld` | `805e33d6b87c6d54337bf0c89002f13c323e6d836291d2e88a252140d1552599` |
+| `(chibi string)` | 0.9.0 | `string.scm`, `string.sld` | `86a73c53b2e7a4e1201ff10115a5488890993c0020051b3abe0fc785a077ec11` |
 | `(chibi filesystem)` | 0.9.0 | `filesystem.sld` (+ local branch) | `dad608a7fbc00fe8e9929ff6124edad13bedfdc58cc14042be29b33f64c13483` |
 
 Tarball URLs follow the pattern
@@ -32,13 +33,25 @@ snow-fort snowball releases, older than chibi-scheme's git head — e.g.
 `test.scm`'s copyright runs 2010-2020 — and the simplified SRFI-1 `any` at the
 top of `test.scm` is upstream's own portability shim, not a local edit.
 
-## Why these four are here rather than in `lib/`
+## Why these five are here rather than in `lib/`
 
 `(chibi test)` has **no `lib/` importer at all**: it is forced by the test
 lanes, which is not the same as being runtime-forced, and that distinction is
 the whole of the policy `test-lib/README.md` cites. `diff`, `term ansi` and
 `optional` follow it — the first two had no importer outside this subgraph,
 and `optional`'s only one was `diff`. Measured in #194, moved in #197.
+
+`(chibi string)` arrived last, in #198, and by the same rule rather than as an
+exception to it. It *was* runtime-forced: `lib/srfi/130.sld` imported it, which
+is why #196 and #197 left it alone. #198 removed that importer by inlining the
+28 names `(srfi 130)` actually used into `lib/srfi/130.chibi-string.scm`, and
+with its last `lib/` importer gone the library has the same profile as the
+others here — zero `lib/` importers, 35 in `compat/`. So it moved rather than
+being deleted: #198 as written said delete, but deleting cost nine corpus
+passes (127 of 161 to 118) for no gain, since `lib/` is equally free of it
+either way. The duplication is deliberate and one-directional — the inlined
+subset is frozen and documented as derived; this copy stays byte-identical and
+pinned, and is what the corpus and `chibi/string-test.sld` resolve.
 
 ## Two inherited upstream defects
 
@@ -133,7 +146,7 @@ so shipping them would put unreachable C-dependent Scheme in the library tree.
 
 ## The rule
 
-The one in `lib/chibi/PROVENANCE.md` § The rule (audit 2026-08-10, group E),
+The one in `lib/srfi/PROVENANCE.md` § The rule (audit 2026-08-10, group E),
 unchanged — not restated here, so there is one wording to edit rather than
 two. This file is the provenance home it names for this tree.
 

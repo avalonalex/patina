@@ -1,12 +1,13 @@
-//! SRFI 130 — cursor-based string library, plus the `(chibi string)` and
-//! `(srfi 14)` chain it is written against.
+//! SRFI 130 — cursor-based string library, plus the `(srfi 14)` dependency
+//! it is written against. The `(chibi string)` half of that chain was inlined
+//! into `130.chibi-string.scm` and deleted by #198.
 //!
 //! Bundled because it was the largest measured gap in the vendored corpus at
 //! in-degree 6. Conformance is not this file's job: upstream's own 219-assertion
 //! suite runs in `upstream_srfi_suites.rs`, and hand-written tests beside a
 //! ported library check only what the porter thought of. What is left for here
-//! is what upstream cannot check — that the three-library chain resolves from
-//! `lib/` with no search-path help — and the one place the port deviates.
+//! is what upstream cannot check — that the chain resolves from `lib/` with no
+//! search-path help — and the one place the port deviates.
 
 mod common;
 use common::eval_program as eval;
@@ -17,17 +18,19 @@ fn srfi130(expr: &str) -> String {
     ))
 }
 
-/// Importing `(srfi 130)` alone must pull in `(chibi string)` and `(srfi 14)`
-/// from the bundled tree. Nothing else here would fail differently if the
-/// chain were unresolvable — every test would — but this one says why.
+/// Importing `(srfi 130)` alone must pull in `(srfi 14)` from the bundled
+/// tree. Nothing else here would fail differently if the chain were
+/// unresolvable — every test would — but this one says why.
 ///
 /// It runs with **only `lib/` on the search path**, which is the whole point
-/// and is not what the other helpers give it. Since #197 moved the rest of
-/// `lib/chibi/` to `test-lib/`, `(chibi string)` is the only reason that
-/// directory still exists, and this is the one test that would notice it
-/// being moved too — but only while it refuses the supplied root. Through
-/// `common::eval_program` it would resolve the chain from `test-lib/` and
-/// pass either way.
+/// and is not what the other helpers give it: through `common::eval_program`
+/// the chain could resolve from `test-lib/` and the test would pass either way.
+///
+/// #198 shortened the chain. The subset of `(chibi string)` that `(srfi 130)`
+/// used is inlined into `130.chibi-string.scm`, so `lib/chibi/` is gone and
+/// the only bundled dependency left is `(srfi 14)` — for the two char-set
+/// names the inlined `make-char-predicate` uses. The companion test below
+/// pins the other half: the library itself is *supplied*, not bundled.
 #[test]
 fn test_the_bundled_chain_resolves_unaided() {
     use common::eval_program_shipped_only as shipped;
@@ -36,12 +39,30 @@ fn test_the_bundled_chain_resolves_unaided() {
         "#t"
     );
     assert_eq!(
-        shipped("(import (scheme base) (chibi string)) (string-count \"aab\" #\\a)"),
-        "2"
-    );
-    assert_eq!(
         shipped("(import (scheme base) (srfi 14)) (char-set-contains? char-set:digit #\\7)"),
         "#t"
+    );
+}
+
+/// `(chibi string)` moved to `test-lib/` in #198 rather than being deleted:
+/// 35 corpus packages import it, and deleting it cost nine of them. So it is
+/// supplied like the rest of `test-lib/chibi/` — unreachable from `lib/`
+/// alone, reachable with the root. Both halves matter: the first is why
+/// `(srfi 130)` had to stop importing it, the second is why the corpus tally
+/// did not move.
+#[test]
+fn test_chibi_string_is_supplied_not_bundled() {
+    let err = common::eval_program_shipped_only_err(
+        r#"(import (scheme base) (chibi string)) (string-count "aab" #\a)"#,
+    );
+    assert!(
+        err.contains("chibi string"),
+        "(chibi string) resolved from lib/ alone — it is supplied from test-lib/: {err}"
+    );
+    // And it does resolve once the root is supplied, which every shared helper does.
+    assert_eq!(
+        common::eval_program(r#"(import (scheme base) (chibi string)) (string-count "aab" #\a)"#),
+        "2"
     );
 }
 

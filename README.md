@@ -274,9 +274,8 @@ that carries the attribution and the full licence text.
 
 | What | Licence | Attribution and full text |
 |---|---|---|
-| `lib/chibi/` — one bundled chibi library (`string`), the implementation `(srfi 130)` is written against | BSD 3-Clause, © Alex Shinn | `lib/chibi/PROVENANCE.md` |
-| `test-lib/chibi/` — chibi libraries the test lanes supply with `-A`, not shipped (`test`, `diff`, `optional`, `term ansi`, `filesystem`) | BSD 3-Clause, © Alex Shinn | `test-lib/chibi/PROVENANCE.md` |
-| `lib/srfi/` — SRFI reference implementations and ports | MIT, MIT Scheme 1988–1995, Shivers' sort notice, BSD 3-Clause | `lib/srfi/PROVENANCE.md` and the per-library `.sld` headers |
+| `test-lib/chibi/` — chibi libraries the test lanes supply with `-A`, not shipped (`test`, `string`, `diff`, `optional`, `term ansi`, `filesystem`) | BSD 3-Clause, © Alex Shinn | `test-lib/chibi/PROVENANCE.md` |
+| `lib/srfi/` — SRFI reference implementations and ports, including the `(chibi string)` subset inlined into `(srfi 130)` | MIT, MIT Scheme 1988–1995, Shivers' sort notice, BSD 3-Clause © Alex Shinn | `lib/srfi/PROVENANCE.md` and the per-library `.sld` headers |
 | `compat/vendor/` — 161 snow-fort packages, test corpus only | BSD, MIT, SLIB, ISC, public domain, … | `compat/vendor/LICENSES.md` (terms, evidence, obligations) |
 | `scheme_tests/chibi/r7rs-tests.scm` — the conformance suite | BSD 3-Clause, © Alex Shinn | `scheme_tests/README.md` |
 | `crates/patina-tests/bench_programs/{nboyer,sboyer}.scm` — Boyer benchmarks | Public domain, original headers retained | vendored via [ecraven/r7rs-benchmarks](https://github.com/ecraven/r7rs-benchmarks) |

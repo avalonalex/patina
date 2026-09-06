@@ -162,7 +162,7 @@ the bodies are the standard ones.
 
 ### BSD 3-Clause — 61 packages
 
-Reproduced from chibi-scheme's `COPYING`, the origin of most BSD packages here. `lib/chibi/PROVENANCE.md`
+Reproduced from chibi-scheme's `COPYING`, the origin of most BSD packages here. `lib/srfi/PROVENANCE.md`
 carries the same text for the libraries Patina actually bundles.
 
 ```

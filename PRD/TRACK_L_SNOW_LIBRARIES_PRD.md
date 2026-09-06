@@ -38,8 +38,8 @@ The encouraging finding from evaluation: Patina's library *machinery* is already
 
 **Snapshot as of Track L's start; do not read as current.** Both bundling rows
 below have since been overtaken — `lib/srfi/` is far past nine, and
-`lib/chibi/` is now `string` alone, with `test` and the rest supplied from
-`test-lib/` (#196, #197). Kept unedited as the baseline the track's numbers are
+`lib/chibi/` no longer exists at all — every `(chibi …)` library is supplied
+from `test-lib/` (#196, #197, #198). Kept unedited as the baseline the track's numbers are
 measured against; `PRD/phase2/R7RS_LARGE_STATUS.md` is the live bundling
 tracker, and `test-lib/README.md` the live answer for `(chibi …)`.
 
@@ -154,8 +154,8 @@ Red/Tangerine set the Larceny suites
 demanded — 41 `stream`, 101 `rlist`, 116 `ilist`, 117 `list-queue`, 124 `ephemeron` (Rust — an
 ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideque`, 135 `text`,
 144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md`,
-`lib/chibi/PROVENANCE.md` and — for the `(chibi …)` libraries supplied rather
-than bundled since #196/#197 — `test-lib/chibi/PROVENANCE.md`.
+and — for the `(chibi …)` libraries supplied rather than bundled since
+#196/#197 — `test-lib/chibi/PROVENANCE.md`.
 
 **Still open in L1:** SRFI 115 regex — large, and only if the corpus justifies it — the
 low-demand Tangerine trio 146/159/160, and the near-free re-export shims `(srfi 6)`, `(srfi 9)`,
@@ -188,7 +188,7 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
 - `(chibi match)` — pure Scheme, pervasive in chibi-authored packages. Highest leverage in this group. (✅ `(chibi optional)` turns out to have shipped long ago, with `(chibi test)` in #39 — noticed in the 2026-09-01 bookkeeping sweep; whether the SRFI ports' ad-hoc `:optional`/`let-optionals` shims can now be retired onto it is unchecked.)
 - ✅ `(chibi string)` — **done 2026-08-14**, bundled as `(srfi 130)`'s dependency rather than on its
   own schedule, though it earned a place either way at in-degree 16, the highest in the corpus after
-  `(slib common)`. Byte-identical to the 0.9.0 snowball; `lib/chibi/PROVENANCE.md` carries the
+  `(slib common)`. Byte-identical to the 0.9.0 snowball; `lib/srfi/PROVENANCE.md` carries the
   record. Bundling it also retired `(srfi 13)` from the missing-library queue — chibi-binary-record and chibi-tar were asking for SRFI 13 only as the
   fallback their `cond-expand` reaches when `(chibi string)` is absent.
 - `(chibi io)`, `(chibi pathname)` — mostly pure Scheme over R7RS + SRFIs present after L1.
