@@ -303,10 +303,9 @@ default. The non-obvious entries:
   4 of its assertions pass and the directory half — the part Patina actually
   implements — is never reached. `chibi/filesystem-test.sld` is staged here
   verbatim (it is in no table row and nothing runs it) so that when FFI
-  lands, enabling it is one `suite_tests!` row. This entry is the *only*
-  record of that now: the library moved to `test-lib/` (#196), so it is no
-  longer bundled and `every_bundled_library_has_a_suite_or_a_recorded_reason`
-  no longer asks about it.
+  lands, enabling it is one `suite_tests!` row. The library moved to
+  `test-lib/` in #196 and is supplied rather than bundled; the guard walks
+  both roots, so it is still under the suite-or-reason obligation.
 
 (An earlier note here said `(chibi optional)`'s suite "fails to desugar with
 'Parameter must be a symbol, got pair'". Re-run 2026-08-19: the actual

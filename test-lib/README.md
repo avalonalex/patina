@@ -25,13 +25,27 @@ boundary is a checked claim rather than a stated one.
 `PRD/phase2/R7RS_LARGE_STATUS.md` § "Explicitly out of scope" rules out
 bundling *pure-Scheme leaf libraries that are neither standard-track nor
 runtime-forced*, on the grounds that they work fine from a `-A` directory.
-`lib/chibi/` was a standing exception to our own rule: the libraries there are
-imported by the compat corpus and the chibi compliance lanes, never by
-anything in `lib/`. Being forced by a **test lane** is not the same as being
-runtime-forced, and that is exactly the reasoning the policy exists to reject.
+Most of `lib/chibi/` was a standing exception to that rule. Measured importers
+(#194):
 
-So the libraries move here and the lanes pass `-A`. See #194 for the full
-argument and the measured importer counts.
+| Library | `lib/` importers | `compat/` importers |
+|---|---|---|
+| `(chibi test)` | none | 79 |
+| `(chibi filesystem)` | none | 16 |
+| `(chibi diff)` | `lib/chibi/test.sld` only | 0 |
+| `(chibi term ansi)` | `diff.sld`, `test.sld` only | 0 |
+| `(chibi optional)` | `lib/chibi/diff.sld` only | 13 |
+| `(chibi string)` | **`lib/srfi/130.sld`** | 35 |
+
+Everything but the last row is forced by a **test lane**, which is not the same
+as being runtime-forced — that is exactly the reasoning the policy exists to
+reject. So those libraries move here and the lanes pass `-A`.
+
+`(chibi string)` is the exception and stays in `lib/`: `lib/srfi/130.sld`
+imports it, so it is genuinely runtime-forced, and SRFI 130 is standard-track
+and legitimately bundled. #198 removes that last importer by inlining what
+`(srfi 130)` uses, at which point `lib/chibi/` goes away entirely — but until
+then the row is real and the rule above does not reach it.
 
 ## Who supplies it
 

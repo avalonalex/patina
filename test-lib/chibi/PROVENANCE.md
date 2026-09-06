@@ -109,11 +109,11 @@ so shipping them would put unreachable C-dependent Scheme in the library tree.
 
 ## The rule
 
-The same one the bundled trees follow (audit 2026-08-10, group E): files here
-**match upstream**. If a change is unavoidable, mark the edit site with
-`;; PATINA LOCAL EDIT:` and record the deviation in this file. Files claimed
-byte-identical are pinned by `crates/patina-tests/tests/bundled_provenance.rs`
-(its `PINNED` table is the authoritative scope), so an unrecorded edit fails
-the suite. Supplying a library with `-A` rather than shipping it changes
-nothing about that: drift is as worth catching here, and BSD 3-Clause
-condition 1 applies whatever directory the file sits in.
+The one in `lib/chibi/PROVENANCE.md` § The rule (audit 2026-08-10, group E),
+unchanged — not restated here, so there is one wording to edit rather than
+two. This file is the provenance home it names for this tree.
+
+Supplying a library with `-A` rather than shipping it exempts it from nothing:
+drift is as worth catching here, and BSD 3-Clause condition 1 applies whatever
+directory the file sits in. `bundled_provenance.rs` pins this tree for that
+reason.

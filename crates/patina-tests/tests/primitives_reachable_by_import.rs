@@ -39,7 +39,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// with a *different* library (`prim.library` is the qualified-name prefix,
 /// not the exporting library).
 ///
-/// Only the ones that are some primitive's sole import route need listing.
+/// The list is deliberately minimal, and stays honest without a completeness
+/// check: naming a library here can only *remove* orphans, so omitting one
+/// makes this guard stricter, not weaker. A library that becomes some
+/// primitive's sole import route announces itself by failing the assertion
+/// below — which is exactly how this entry was found. Deriving the set from
+/// the loader instead is blocked on the duplicated registration lists
+/// `RustLibraryLoader::with_standard_libraries` records as deferred work.
+///
 /// `(patina internal io)` is here for the seven directory procedures
 /// — `directory-files`, `create-directory`, `delete-directory`,
 /// `current-directory`, `change-directory`, `file-directory?`,

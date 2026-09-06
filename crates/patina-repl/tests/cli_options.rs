@@ -3,7 +3,9 @@
 
 mod common;
 
-use common::{run_both_backends, run_patina, run_patina_env};
+use common::{
+    expect_failure_on_both_backends, repo_root, run_both_backends, run_patina, run_patina_env,
+};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -178,11 +180,7 @@ fn eval_print_rejects_script_file() {
 /// back under `lib/` would break nothing here.
 #[test]
 fn supplied_libraries_need_an_explicit_root() {
-    let test_lib = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("repo root")
-        .join("test-lib");
+    let test_lib = repo_root().join("test-lib");
     assert!(test_lib.is_dir(), "{} is missing", test_lib.display());
 
     // The cwd is a scratch directory, so `./lib` cannot resolve anything; what
@@ -197,18 +195,17 @@ fn supplied_libraries_need_an_explicit_root() {
     .unwrap();
     let script = script.to_str().unwrap();
 
-    let (_, stderr, ok) = run_patina(dir.path(), &[script]);
-    assert!(
-        !ok,
-        "(chibi filesystem) resolved without -A — it is supplied from test-lib/, not bundled"
-    );
-    assert!(
-        stderr.contains("(chibi filesystem)"),
-        "expected the unresolved library to be named, got: {}",
-        stderr
-    );
+    expect_failure_on_both_backends(dir.path(), &[script], |stderr| {
+        assert!(
+            stderr.contains("(chibi filesystem)"),
+            "expected the unresolved library to be named, got: {}",
+            stderr
+        );
+    });
 
-    let (stdout, stderr, ok) = run_patina(dir.path(), &["-A", test_lib.to_str().unwrap(), script]);
-    assert!(ok, "stderr: {}", stderr);
-    assert_eq!(stdout.trim(), "#t");
+    run_both_backends(
+        dir.path(),
+        &["-A", test_lib.to_str().unwrap(), script],
+        "#t",
+    );
 }

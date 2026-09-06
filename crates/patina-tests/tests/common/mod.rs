@@ -107,18 +107,29 @@ pub fn test_lib_root() -> std::path::PathBuf {
 /// spelling of the `-A test-lib` the shell lanes pass.
 ///
 /// Every interpreter the helpers below build goes through here, so a test can
-/// import a supplied library without arranging anything. What that does *not*
-/// blur is the shipped/supplied line: the guards that enforce it
-/// (`bundled_provenance.rs`, `upstream_srfi_suites.rs`,
-/// `primitives_reachable_by_import.rs`) walk `lib/` by path rather than
-/// asking what happens to resolve, and `crates/patina-repl/tests/cli_options.rs`
-/// pins the binary's behaviour with no `-A` at all.
+/// import a supplied library without arranging anything. What keeps that from
+/// blurring the shipped/supplied line is that the guards enforcing it decide
+/// by *path* rather than by what happens to resolve:
+/// `primitives_reachable_by_import.rs` walks `lib/` alone, and
+/// `upstream_srfi_suites.rs` walks both roots but knows which is which.
+/// (`bundled_provenance.rs` deliberately spans both — its subject is upstream
+/// drift, not the shipped surface.) The binary's own behaviour, with no `-A`
+/// at all, is pinned in `crates/patina-repl/tests/cli_options.rs`.
 pub fn tree_walker_interpreter() -> TreeWalkInterpreter {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    interp
-        .backend()
-        .evaluator()
-        .add_library_search_path(test_lib_root());
+    tree_walker_interpreter_with(TreeWalkInterpreter::new_tree_walker())
+}
+
+/// [`tree_walker_interpreter`] over a caller-supplied filesystem, for tests
+/// that need an `OverlayFs`. Shares the wiring so a change to the supplied
+/// roots cannot reach one constructor and miss the other.
+pub fn tree_walker_interpreter_with_fs(
+    fs: std::sync::Arc<dyn patina_core::FileSystem>,
+) -> TreeWalkInterpreter {
+    tree_walker_interpreter_with(TreeWalkInterpreter::new_tree_walker_with_fs(fs))
+}
+
+fn tree_walker_interpreter_with(interp: TreeWalkInterpreter) -> TreeWalkInterpreter {
+    interp.backend().add_library_search_path(test_lib_root());
     interp
 }
 
