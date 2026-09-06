@@ -38,7 +38,8 @@
    ;; PATINA LOCAL EDIT: this branch is ours; everything else in the file is
    ;; upstream. Upstream has branches for chibi, chicken and sagittarius and no
    ;; `else`, so on any other implementation the library loads defining nothing
-   ;; and every importer fails on the first export. See lib/chibi/PROVENANCE.md.
+   ;; and every importer fails on the first export. See
+   ;; test-lib/chibi/PROVENANCE.md.
    ;;
    ;; The split below is not a matter of effort. `(chibi filesystem)` is two
    ;; libraries wearing one name: a portable directory API, and a POSIX layer of

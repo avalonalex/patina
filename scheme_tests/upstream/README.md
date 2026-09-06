@@ -1,7 +1,8 @@
 # Upstream test suites
 
-The reference test suites for the libraries Patina bundles — SRFIs and
-`(chibi …)` libraries — run against Patina's implementations by
+The reference test suites for the SRFIs Patina bundles, and for the
+`(chibi …)` libraries it bundles or supplies from `test-lib/`, run against
+Patina's implementations by
 `crates/patina-tests/tests/upstream_srfi_suites.rs`.
 
 These are the specification authors' own tests, not ours. That is the point:
@@ -12,9 +13,9 @@ is 145 assertions against the 13 in
 
 The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
 from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`); the `chibi/`
-suites are from the same sha256-pinned snowballs the bundled libraries
-themselves came from (`lib/chibi/PROVENANCE.md`), so each suite is
-version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
+suites are from the same sha256-pinned snowballs the libraries themselves
+came from (`lib/chibi/PROVENANCE.md`, `test-lib/chibi/PROVENANCE.md`), so each
+suite is version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
 every adaptation is described under the table. All of them report through
 `(chibi test)`, which Patina bundles verbatim from the snow-fort 0.9.0
 snowball (sha256-pinned in `lib/chibi/PROVENANCE.md`, guarded by
@@ -298,11 +299,13 @@ default. The non-obvious entries:
   retires when either suite is ported or reconciled.
 - **`(chibi filesystem)`** — its suite opens a raw file descriptor
   (`(open tmp-file open/write)`) before its directory tests, hitting the
-  bundled library's FFI stub *outside any test form*, which aborts the run:
+  library's FFI stub *outside any test form*, which aborts the run:
   4 of its assertions pass and the directory half — the part Patina actually
   implements — is never reached. `chibi/filesystem-test.sld` is staged here
   verbatim (it is in no table row and nothing runs it) so that when FFI
-  lands, enabling it is one `suite_tests!` row.
+  lands, enabling it is one `suite_tests!` row. The library moved to
+  `test-lib/` in #196 and is supplied rather than bundled; the guard walks
+  both roots, so it is still under the suite-or-reason obligation.
 
 (An earlier note here said `(chibi optional)`'s suite "fails to desugar with
 'Parameter must be a symbol, got pair'". Re-run 2026-08-19: the actual

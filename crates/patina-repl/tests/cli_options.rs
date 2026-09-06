@@ -3,7 +3,9 @@
 
 mod common;
 
-use common::{run_both_backends, run_patina, run_patina_env};
+use common::{
+    expect_failure_on_both_backends, repo_root, run_both_backends, run_patina, run_patina_env,
+};
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
@@ -166,4 +168,44 @@ fn eval_print_rejects_script_file() {
     let (_, stderr, ok) = run_patina(temp.path(), &["-p", "1", script.to_str().unwrap()]);
     assert!(!ok);
     assert!(stderr.contains("cannot be combined"), "stderr: {}", stderr);
+}
+
+/// `test-lib/` is supplied, not shipped — and this is the pair of assertions
+/// that makes the difference real rather than stated.
+///
+/// The first half is the user-visible consequence of #196: a plain script run
+/// cannot import `(chibi filesystem)`, because it is no longer under `lib/`,
+/// which is a default search path. The second half is what every test lane
+/// does instead. Both are needed: without the failing half, moving the file
+/// back under `lib/` would break nothing here.
+#[test]
+fn supplied_libraries_need_an_explicit_root() {
+    let test_lib = repo_root().join("test-lib");
+    assert!(test_lib.is_dir(), "{} is missing", test_lib.display());
+
+    // The cwd is a scratch directory, so `./lib` cannot resolve anything; what
+    // finds `lib/` is the walk up from the binary to the workspace root, and
+    // that walk is exactly what must not reach `test-lib`.
+    let dir = TempDir::new().unwrap();
+    let script = dir.path().join("prog.scm");
+    fs::write(
+        &script,
+        "(import (scheme base) (chibi filesystem))\n(display (procedure? directory-files))\n",
+    )
+    .unwrap();
+    let script = script.to_str().unwrap();
+
+    expect_failure_on_both_backends(dir.path(), &[script], |stderr| {
+        assert!(
+            stderr.contains("(chibi filesystem)"),
+            "expected the unresolved library to be named, got: {}",
+            stderr
+        );
+    });
+
+    run_both_backends(
+        dir.path(),
+        &["-A", test_lib.to_str().unwrap(), script],
+        "#t",
+    );
 }

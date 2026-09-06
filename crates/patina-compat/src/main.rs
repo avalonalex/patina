@@ -251,11 +251,31 @@ fn run_command(opts: &Options) {
     } else {
         "vm"
     };
+    // Exit rather than run without it. A missing root does not fail loudly:
+    // `(chibi filesystem)` would simply not resolve, and since it is in
+    // `FFI_BOUND` the packages that import it reclassify to `out-of-scope`
+    // instead of erroring — a plausible-looking tally, written into the
+    // committed `results.scm`, understating our own coverage. Understating
+    // defects is the failure mode this harness exists not to produce (audit
+    // E3), so the one configuration that could cause it is checked up front.
+    let supplied_lib_root = workspace_root().join("test-lib");
+    if !supplied_lib_root.is_dir() {
+        eprintln!(
+            "Error: supplied library root not found at {}\n\
+             It holds the third-party libraries the corpus needs but Patina does\n\
+             not bundle (see test-lib/README.md). Running without it would score\n\
+             their importers as out-of-scope rather than reporting this.",
+            supplied_lib_root.display()
+        );
+        process::exit(2);
+    }
+
     let config = RunConfig {
         patina: opts.patina.clone(),
         tree_walker: opts.tree_walker,
         timeout: opts.timeout,
         jobs: opts.jobs,
+        supplied_lib_root,
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 

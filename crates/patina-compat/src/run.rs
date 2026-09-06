@@ -99,6 +99,10 @@ pub struct RunConfig {
     pub tree_walker: bool,
     pub timeout: Duration,
     pub jobs: usize,
+    /// The root holding third-party libraries Patina supplies but does not
+    /// bundle (`test-lib/`). Every package gets it, the way every package
+    /// used to get them for free from the bundled `lib/`.
+    pub supplied_lib_root: PathBuf,
 }
 
 /// Libraries that are C-backed in their upstream implementation. A package
@@ -196,7 +200,14 @@ fn run_package(
         Some(path) => (path.clone(), "test"),
         None => (write_probe(&scratch, package), "probe"),
     };
-    let search_roots = search_roots(package, universe, providers, &scratch, mode == "test");
+    let search_roots = search_roots(
+        package,
+        universe,
+        providers,
+        &scratch,
+        mode == "test",
+        &config.supplied_lib_root,
+    );
 
     let mut cmd = Command::new(&config.patina);
     for root in &search_roots {
@@ -244,6 +255,7 @@ fn search_roots(
     providers: &BTreeMap<String, usize>,
     scratch: &Path,
     is_test_run: bool,
+    supplied_lib_root: &Path,
 ) -> Vec<PathBuf> {
     let mut closure = vec![package];
     let mut seen = vec![false; all.len()];
@@ -268,7 +280,17 @@ fn search_roots(
         queue.extend(all[idx].depends.iter().map(String::as_str));
     }
 
-    let mut roots = Vec::with_capacity(closure.len());
+    // The supplied root leads, ahead of every package's own. Not a preference
+    // between the two — nothing in the corpus provides a library it holds —
+    // but the order these libraries already had: they were bundled, and
+    // `lib/` is a default search path, which every `-A` follows. Reproducing
+    // that means moving them out of `lib/` cannot shift a tally by reordering,
+    // and a reordering that does matter later has to be an argued change
+    // rather than a side effect. It is placed here rather than at the
+    // `Command` so the ordering is part of what this function returns, which
+    // is what the tests below inspect.
+    let mut roots = Vec::with_capacity(closure.len() + 1);
+    roots.push(supplied_lib_root.to_path_buf());
     for pkg in closure {
         roots.extend(stage_off_path_libraries(scratch, pkg));
         roots.push(pkg.root.clone());
@@ -461,9 +483,9 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::WrongResult;
     }
 
-    // A bundled library can be honest about its own limits. `(chibi filesystem)`
+    // A supplied library can be honest about its own limits. `(chibi filesystem)`
     // implements its portable half and stubs the POSIX half with this marker
-    // (lib/chibi/filesystem.sld), so a package that reaches one of those stubs
+    // (test-lib/chibi/filesystem.sld), so a package that reaches one of those stubs
     // is FFI-bound in exactly the sense FFI_BOUND means — it just proved it by
     // running instead of by failing to import. Without this it would be filed
     // as a runtime-error, i.e. as our defect.
@@ -733,6 +755,32 @@ mod tests {
         assert!(stage_off_path_libraries(&temp.path().join("scratch"), &pkg).is_none());
     }
 
+    /// Stand-in for `RunConfig::supplied_lib_root` in the tests below. Its
+    /// contents are irrelevant here — `search_roots` only places it.
+    const SUPPLIED_STR: &str = "/supplied-lib-root";
+
+    fn supplied() -> &'static Path {
+        Path::new(SUPPLIED_STR)
+    }
+
+    /// The supplied root leads every package's own, which is the order the
+    /// libraries had while they were bundled (`lib/` is a default search path,
+    /// and every `-A` follows the defaults). Pinned because `run_package`
+    /// turns this vector into `-A` flags in order, so the claim is only as
+    /// real as this assertion.
+    #[test]
+    fn the_supplied_library_root_leads_every_package_root() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let scratch = temp.path().join("scratch");
+        let subject = package("lassik-string-inflection", &temp.path().join("subject"));
+        let universe = vec![];
+        let providers = corpus::providers(&universe);
+
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
+        assert_eq!(roots.first().map(PathBuf::as_path), Some(supplied()));
+        assert!(roots.contains(&subject.root));
+    }
+
     /// A test-only dependency has to reach the search path, or the package is
     /// filed as `missing-library` naming something the corpus provides.
     #[test]
@@ -746,11 +794,11 @@ mod tests {
 
         let universe = vec![framework];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true, supplied());
         assert!(roots.contains(&framework_root));
 
         // With no test program to run, they are irrelevant and stay off.
-        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
         assert!(!roots.contains(&framework_root));
     }
 
@@ -767,7 +815,7 @@ mod tests {
 
         let universe = vec![dependency];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, false);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
 
         assert!(
             roots.iter().any(|r| r.join("chibi/irregex.sld").is_file()),
@@ -793,7 +841,7 @@ mod tests {
 
         let universe = vec![library, framework];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, true);
+        let roots = search_roots(&subject, &universe, &providers, &scratch, true, supplied());
         assert!(roots.contains(&library_root));
         assert!(!roots.contains(&framework_root));
     }

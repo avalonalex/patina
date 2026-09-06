@@ -13,6 +13,8 @@ All runtime values are `TaggedValue` — NaN-boxed 8-byte `Copy` types. No `Valu
 ```
 patina/
 ├── lib/scheme/             # R7RS .sld library files + .scm macro implementations
+├── test-lib/               # third-party libraries the test lanes supply with
+│                           # `-A`, NOT bundled — see test-lib/README.md
 └── crates/
     ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr, CpsExpr, scope sets
     ├── patina-runtime/     # Backend trait, LibraryRegistry, internal stdlib primitives

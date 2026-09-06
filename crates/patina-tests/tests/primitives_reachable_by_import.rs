@@ -33,6 +33,32 @@ use common::{repo_root, shipped_libraries};
 use patina_interpreter::{Backend, TreeWalkInterpreter};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Libraries built in Rust rather than declared in a `.sld`, named here
+/// because neither way the test below derives a candidate can find them: they
+/// are not a `.sld` under `lib/`, and the primitives they export are labelled
+/// with a *different* library (`prim.library` is the qualified-name prefix,
+/// not the exporting library).
+///
+/// The list is deliberately minimal, and stays honest without a completeness
+/// check: naming a library here can only *remove* orphans, so omitting one
+/// makes this guard stricter, not weaker. A library that becomes some
+/// primitive's sole import route announces itself by failing the assertion
+/// below — which is exactly how this entry was found. Deriving the set from
+/// the loader instead is blocked on the duplicated registration lists
+/// `RustLibraryLoader::with_standard_libraries` records as deferred work.
+///
+/// `(patina internal io)` is here for the seven directory procedures
+/// — `directory-files`, `create-directory`, `delete-directory`,
+/// `current-directory`, `change-directory`, `file-directory?`,
+/// `file-regular?` — which are registered under `scheme.file` and
+/// deliberately not exported by `(scheme file)`, since they are not R7RS.
+///
+/// Until #196 this list was unnecessary, for a bad reason: the bundled
+/// `lib/chibi/filesystem.sld` re-exported all seven, so a *third-party*
+/// library was this guard's only evidence that seven Patina primitives were
+/// importable. Moving that library to `test-lib/` is what exposed it.
+const RUST_SIDE_LIBRARIES: &[&[&str]] = &[&["patina", "internal", "io"]];
+
 #[test]
 fn every_registered_primitive_is_reachable_by_some_import() {
     let mut registry = patina_primitives::PrimitiveRegistry::new();
@@ -53,6 +79,9 @@ fn every_registered_primitive_is_reachable_by_some_import() {
     // Every library Patina ships is a candidate, not only the labelled ones.
     for sld in shipped_libraries(&repo_root().join("lib")) {
         candidates.insert(sld);
+    }
+    for library in RUST_SIDE_LIBRARIES {
+        candidates.insert(library.iter().map(|s| s.to_string()).collect());
     }
 
     let interp = TreeWalkInterpreter::new_tree_walker();

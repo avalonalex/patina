@@ -194,8 +194,8 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
 
   What landed: directory primitives routed through the VFS `FileSystem` trait as this entry
   intended (`directory-files`, `create-directory`, `delete-directory`, `current-directory`,
-  `change-directory`, `file-directory?`, `file-regular?`), and a `(patina …)` branch in the bundled
-  `lib/chibi/filesystem.sld` implementing the directory API over them. The POSIX layer — file
+  `change-directory`, `file-directory?`, `file-regular?`), and a `(patina …)` branch in
+  `test-lib/chibi/filesystem.sld` implementing the directory API over them. The POSIX layer — file
   descriptors, `stat` fields, symlinks, pipes, permissions — is stubbed with upstream's own
   `define-unimplemented` idiom, borrowed from its sagittarius branch, which stubs the same fd
   procedures for the same reason. That half is FFI work (`PRD/FFI_DESIGN.md`), and deliberately
@@ -203,8 +203,10 @@ Third-party packages frequently `(import (chibi …))`; today only `(chibi test)
   would defeat the testability this entry asked for.
 
   Result: slib-directory, slib-uri and chibi-temp-file pass; chibi-tar advanced to an unrelated
-  macro defect. Provenance and the boundary are recorded in `lib/chibi/PROVENANCE.md`; the branch is
-  the largest local edit in the bundled tree and is pinned post-edit.
+  macro defect. Provenance and the boundary are recorded in `test-lib/chibi/PROVENANCE.md`; the
+  branch is the largest local edit in either chibi tree and is pinned post-edit. (The library was
+  bundled in `lib/chibi/` until #196 moved it to `test-lib/`, the root the harness supplies with
+  `-A`: nothing in `lib/` ever imported it.)
 - `(chibi process)` — needs process primitives; the same VFS routing applies to whatever part of it
   is portable, and the same warning applies about checking for an `else` branch first.
 - `(chibi uri)` — pure Scheme.

@@ -320,10 +320,15 @@ const NO_SUITE_TREES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Every library bundled in a `lib/` tree not excused above either has its
+/// Every library Patina provides from a tree not excused above either has its
 /// upstream suite in the table above or a recorded reason here for not
 /// having one. Before this guard, "add a suite when Patina bundles the
 /// library" was a comment.
+///
+/// "Provides" spans both roots — `lib/`, which is shipped, and `test-lib/`,
+/// which the test lanes supply with `-A`. Scoping it to `lib/` would let a
+/// library escape the obligation by moving, which is exactly what #196 did
+/// with `(chibi filesystem)`.
 ///
 /// Each reason is a claim to re-verify when circumstances change, not a
 /// permanent pass — several name the event that retires them.
@@ -372,7 +377,7 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "chibi filesystem",
-        "upstream suite opens a raw file descriptor before its directory tests, hitting the bundled FFI stub outside any test form, which aborts the run; add the suite when FFI lands",
+        "upstream suite opens a raw file descriptor before its directory tests, hitting the FFI stub outside any test form, which aborts the run; add the suite when FFI lands",
     ),
     (
         "chibi test",
@@ -381,9 +386,18 @@ const NO_SUITE: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
-    let all = common::shipped_libraries(&repo_root().join("lib"));
-    assert!(!all.is_empty(), "found no bundled .sld files — wrong root?");
+fn every_provided_library_has_a_suite_or_a_recorded_reason() {
+    let mut all = common::shipped_libraries(&repo_root().join("lib"));
+    let supplied = common::shipped_libraries(&common::test_lib_root());
+    assert!(
+        !supplied.is_empty(),
+        "found no .sld files under test-lib/ — wrong root?"
+    );
+    all.extend(supplied);
+    assert!(
+        !all.is_empty(),
+        "found no provided .sld files — wrong root?"
+    );
 
     let excused_trees: Vec<&str> = NO_SUITE_TREES.iter().map(|(tree, _)| *tree).collect();
     let bundled: Vec<String> = all
@@ -398,7 +412,7 @@ fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
         let has_excuse = excused.contains(&lib.as_str());
         assert!(
             covered || has_excuse,
-            "({lib}) is bundled but its upstream suite does not run: add a suite_tests! \
+            "({lib}) is provided but its upstream suite does not run: add a suite_tests! \
              row (see scheme_tests/upstream/README.md) or a NO_SUITE reason"
         );
         assert!(
@@ -411,13 +425,13 @@ fn every_bundled_library_has_a_suite_or_a_recorded_reason() {
     for lib in &excused {
         assert!(
             bundled.iter().any(|b| b == lib),
-            "NO_SUITE names ({lib}), which is not bundled — delete the entry"
+            "NO_SUITE names ({lib}), which Patina does not provide — delete the entry"
         );
     }
     for tree in &excused_trees {
         assert!(
             all.iter().any(|name| name[0] == *tree),
-            "NO_SUITE_TREES names ({tree}), which holds no bundled libraries — delete the entry"
+            "NO_SUITE_TREES names ({tree}), which holds no provided libraries — delete the entry"
         );
     }
 }
