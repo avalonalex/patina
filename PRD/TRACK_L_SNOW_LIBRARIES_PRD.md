@@ -36,6 +36,13 @@ The encouraging finding from evaluation: Patina's library *machinery* is already
 
 ### Verified current-state evidence
 
+**Snapshot as of Track L's start; do not read as current.** Both bundling rows
+below have since been overtaken — `lib/srfi/` is far past nine, and
+`lib/chibi/` is now `string` alone, with `test` and the rest supplied from
+`test-lib/` (#196, #197). Kept unedited as the baseline the track's numbers are
+measured against; `PRD/phase2/R7RS_LARGE_STATUS.md` is the live bundling
+tracker, and `test-lib/README.md` the live answer for `(chibi …)`.
+
 | Observation | Evidence |
 |---|---|
 | Only **9 SRFIs** bundled. | `lib/srfi/` = 1, 8, 69, 111, 113, 128, 132, 133, 158. |
@@ -146,8 +153,9 @@ the re-export shims `(srfi 23)`, `(srfi 98)`, `(srfi 142)` and `(scheme small)`;
 Red/Tangerine set the Larceny suites
 demanded — 41 `stream`, 101 `rlist`, 116 `ilist`, 117 `list-queue`, 124 `ephemeron` (Rust — an
 ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideque`, 135 `text`,
-144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md` /
-`lib/chibi/PROVENANCE.md`.
+144 `flonum`. Provenance for every import is in `lib/srfi/PROVENANCE.md`,
+`lib/chibi/PROVENANCE.md` and — for the `(chibi …)` libraries supplied rather
+than bundled since #196/#197 — `test-lib/chibi/PROVENANCE.md`.
 
 **Still open in L1:** SRFI 115 regex — large, and only if the corpus justifies it — the
 low-demand Tangerine trio 146/159/160, and the near-free re-export shims `(srfi 6)`, `(srfi 9)`,
@@ -167,7 +175,9 @@ Three lessons this queue recorded, kept because each corrected a filed premise:
   put 130/14 first and the corpus agreed.
 
 *Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
-test with `(chibi test)`, which Patina **already ships**. Primitive-backed work goes under
+test with `(chibi test)`, which Patina **supplies from `test-lib/`** (#197; it is not bundled, since
+nothing in `lib/` imports it — see `test-lib/README.md`). Whether SRFI 64 should be bundled for
+Patina's own suite under #193, or supplied the same way, is #194's open question and unsettled. Primitive-backed work goes under
 `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
 library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 - **Porting patterns to reapply** (from `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`): import `(scheme r5rs)` for R5RS naming (`exact->inexact` etc.); shim `:optional`/`let-optionals`/`receive`/`check-arg`; treat form-feed as whitespace (already fixed); defer arity rejection so `guard` can catch `apply` errors (already fixed); watch the VM control-op edge cases in `PRD/phase2/INSTRUCTION_LEVEL_CONTROL_OPS.md`.

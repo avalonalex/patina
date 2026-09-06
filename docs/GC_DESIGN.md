@@ -726,10 +726,17 @@ visitor exists, and the stress lane is the real safety net.
    bit-identical to today; `PATINA_GC_STRESS=1` must produce identical output
    on the full chibi suite for **both** backends. Tree-walker:
    ```bash
-   ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > base.txt
-   PATINA_GC_STRESS=1 ./target/release/patina --tree-walker scheme_tests/chibi/r7rs-tests.scm > stress.txt
+   S=(-A test-lib scheme_tests/chibi/r7rs-tests.scm)   # (chibi test) is supplied, not bundled
+   ./target/release/patina --tree-walker "${S[@]}" > base.txt
+   PATINA_GC_STRESS=1 ./target/release/patina --tree-walker "${S[@]}" > stress.txt
+   grep -q 'out of .*tests passed' base.txt || echo "suite did not run — the diff below proves nothing"
    diff base.txt stress.txt   # must be empty
    ```
+   The `grep` is not decoration. This is an *equality* check, so it passes
+   hardest when both sides fail identically: drop the `-A` and patina reports
+   `Library (chibi test) not found`, keeps going, and exits 0 with the same
+   4537 lines each time — an empty diff that tested no GC behaviour.
+   `scripts/run_gc_differential.sh` asserts the tally for the same reason.
    Run the stress lane in a **debug build too**, not just release. Release
    tolerates a use-after-free silently (the swept slot reads back as a
    `Free`/poisoned value and surfaces later as a confusing type error at an

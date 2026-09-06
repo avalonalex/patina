@@ -30,16 +30,8 @@ fn fnv1a(data: &[u8]) -> u64 {
 
 /// (repo-relative path, FNV-1a 64 of the file bytes, recorded 2026-08-12)
 const PINNED: &[(&str, u64)] = &[
-    ("lib/chibi/diff.scm", 0x2050c85c4e050d74),
-    ("lib/chibi/diff.sld", 0xf23c1551ba46f31b),
-    ("lib/chibi/optional.scm", 0xc690d10b2fa58f49),
-    ("lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
     ("lib/chibi/string.scm", 0x40519db9f7f6ea77),
     ("lib/chibi/string.sld", 0x547187363ef72f66),
-    ("lib/chibi/term/ansi.scm", 0xb611532f45ff4b36),
-    ("lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
-    ("lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
-    ("lib/chibi/test.sld", 0xf810b0f46bc155d7),
     // SRFI 162's own sample implementation, byte-identical. The rest of
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
@@ -142,10 +134,20 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/132/vqsort3.scm", 0xa62eaad1e7385451),
     // Supplied by `-A test-lib`, not bundled (see test-lib/README.md) — pinned
     // all the same, because moving a file off the shipped path does not make
-    // upstream drift less worth catching. Pinned post-edit: upstream apart from
-    // the `(patina …)` cond-expand branch recorded in
-    // test-lib/chibi/PROVENANCE.md. Same reason as lib/srfi/130.scm — a
-    // recorded deviation must not be why the rest of a file goes unwatched.
+    // upstream drift less worth catching. Hashes below are unchanged from when
+    // these lived in `lib/chibi/`: the files moved byte-for-byte.
+    ("test-lib/chibi/diff.scm", 0x2050c85c4e050d74),
+    ("test-lib/chibi/diff.sld", 0xf23c1551ba46f31b),
+    ("test-lib/chibi/optional.scm", 0xc690d10b2fa58f49),
+    ("test-lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
+    ("test-lib/chibi/term/ansi.scm", 0xb611532f45ff4b36),
+    ("test-lib/chibi/term/ansi.sld", 0xcb7a30ac04c2fb00),
+    ("test-lib/chibi/test.scm", 0x41e9de8d4b7cc1ec),
+    ("test-lib/chibi/test.sld", 0xf810b0f46bc155d7),
+    // Pinned post-edit: upstream apart from the `(patina …)` cond-expand
+    // branch recorded in test-lib/chibi/PROVENANCE.md. Same reason as
+    // lib/srfi/130.scm — a recorded deviation must not be why the rest of a
+    // file goes unwatched.
     ("test-lib/chibi/filesystem.sld", 0x030d79584ffe6de0),
 ];
 

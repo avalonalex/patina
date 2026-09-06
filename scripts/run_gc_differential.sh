@@ -36,6 +36,30 @@ BIN="${1:-target/release/patina}"
 # allocations, so it holds only while this stays <= 16.
 STRESS="${PATINA_GC_STRESS_INTERVAL:-16}"
 SUITE=scheme_tests/chibi/r7rs-tests.scm
+# The suite reports through (chibi test), which Patina supplies from test-lib/
+# rather than bundling (see test-lib/README.md).
+SUPPLIED=(-A test-lib)
+
+# Every lane must show the framework's grand total before anything is diffed.
+#
+# This lane compares runs for *equality*, so it passes hardest when both sides
+# fail the same way. Measured: with the -A above removed, patina reports
+# `Library (chibi test) not found`, keeps evaluating, emits 4537 deterministic
+# lines and exits 0 -- so all three lanes are byte-identical, every diff below
+# reports OK, and the job goes green having exercised no GC behaviour at all.
+# A missing root is only the cheapest way to reach that state; a suite that
+# aborts midway reaches it too, which is why this asserts the tally rather
+# than the directory.
+assert_suite_ran() {
+    local label="$1" file="$2"
+    if ! grep -qE '^[0-9]+ out of [0-9]+ .*tests passed' "$file"; then
+        echo "FAIL $label: no suite tally in the output -- the run did not"
+        echo "     complete, so comparing it to another lane proves nothing."
+        head -3 "$file"
+        return 1
+    fi
+    return 0
+}
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
@@ -51,9 +75,13 @@ for backend_flag in "" "--tree-walker"; do
     name=${backend_flag:-"vm"}
     name=${name#--}
 
-    PATINA_GC=0 "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
-    "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
-    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
+    PATINA_GC=0 "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
+    "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
+    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
+
+    for lane in off default stress; do
+        assert_suite_ran "$name $lane lane" "$OUT/$name-$lane.txt" || fail=1
+    done
 
     for lane in default stress; do
         if diff -u "$OUT/$name-off.txt" "$OUT/$name-$lane.txt" > "$OUT/diff.txt"; then
