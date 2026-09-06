@@ -269,15 +269,14 @@ fn write_symbol_name(name: &str, display_mode: bool, out: &mut String) {
     }
 }
 
-/// `#<error-object: {message}`, without the closing `>`.
+/// The opening of an error object's printed form, shared by the three places
+/// that write one.
 ///
-/// The irritants and the `>` belong to the caller, because only a caller that
-/// can recurse into a value can render them — and there are three callers,
-/// which is the reason the fixed part is written in one place.
-fn write_error_object_prefix(message: &str, out: &mut String) {
-    out.push_str("#<error-object: ");
-    out.push_str(message);
-}
+/// A constant rather than a function, deliberately: the rest of the form is
+/// the irritants and the closing `>`, and only a caller that can recurse into
+/// a value can write those. A helper that emitted this much and left the `>`
+/// to the caller would be an abstraction hiding half a delimiter pair.
+const ERROR_OBJECT_OPEN: &str = "#<error-object: ";
 
 /// Format a heap value that the datum writer treats as a leaf — one whose
 /// parts, if any, it does not descend into.
@@ -293,9 +292,14 @@ fn write_error_object_prefix(message: &str, out: &mut String) {
 /// (procedures in record fields, then environment specifiers), which is the
 /// argument for dispatching instead.
 ///
-/// Renderings agree with `patina_core::debug_format` except where that
-/// formatter deliberately shows more for debugging (`#<procedure:{code_id}>`,
-/// a cell's contents). Nothing here is `read`-able syntax; R7RS gives these
+/// This is not the only formatter over `HeapObjectData`:
+/// `patina_core::debug_format` has its own match, and the two deliberately
+/// differ — that one names things for a person debugging the interpreter
+/// (`#<procedure:{code_id}>`, `#<macro:{name}>`, `#<continuation:{id}>`, a
+/// cell's contents, a port's direction and source, an identifier's scope
+/// set), where this one gives a Scheme program a stable answer that says
+/// nothing about which backend produced the value. Adding a heap variant
+/// means teaching both. Nothing here is `read`-able syntax; R7RS gives these
 /// types no external representation.
 fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mut String) {
     use patina_core::heap::HeapObjectData;
@@ -330,14 +334,25 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
             }
             out.push(')');
         }
-        // The message alone, without irritants: this function cannot render a
-        // nested value, so both callers that can intercept an error object
-        // before it arrives here — `write_tagged` and
-        // `format_simple_recursive_tagged` — and print the whole thing. What
-        // is left reaching this arm is the numeric path in
-        // `format_tagged_leaf`, where an exception is not a real possibility.
+        // Unreachable, and asserted rather than merely commented. This
+        // function cannot render a nested value, so an error object's
+        // irritants would be silently dropped here — which is the failure the
+        // exhaustive match exists to prevent, arriving through a different
+        // door. Both callers that can render them intercept the exception
+        // first (`write_tagged`, `format_simple_recursive_tagged`), leaving
+        // only `format_tagged_leaf`'s numeric path, where a complex number's
+        // parts are never exceptions. A fourth caller must intercept it too;
+        // the assertion is how that is found in a debug build, and the lossy
+        // rendering below is what a release build degrades to rather than
+        // panicking inside a formatter.
         HeapObjectData::Exception { message, .. } => {
-            write_error_object_prefix(message, out);
+            debug_assert!(
+                false,
+                "an error object reached the leaf formatter, which cannot \
+                 render its irritants: intercept it in the caller"
+            );
+            out.push_str(ERROR_OBJECT_OPEN);
+            out.push_str(message);
             out.push('>');
         }
         // Every kind of procedure prints alike, so the two backends agree:
@@ -497,24 +512,42 @@ impl<'a> DatumLabelWriter<'a> {
                 self.find_circular_tagged(*elem_tv);
             }
             self.on_stack.insert(addr, false);
-        } else if tv.is_object() {
+        } else if tv.is_object() && self.is_exception(tv) {
             // An error object's irritants are ordinary values that the writer
             // prints, so a circular one needs a label like any other:
             // `(error "cycle" xs)` where `xs` points at itself.
             //
-            // The exception itself is not put on the stack, because it cannot
-            // be part of a cycle: `alloc_exception` takes its irritants by
-            // value at construction and nothing mutates them afterwards, so
-            // an exception can only ever be a leaf of someone else's cycle.
+            // The exception is labelled on the same terms as the pair and the
+            // vector above, because the rule is about what the writer descends
+            // into, not about what can form a cycle. It cannot form one —
+            // `alloc_exception` takes its irritants by value and nothing
+            // mutates them afterwards — so only the `label_shared` arm can
+            // ever fire. Leaving it out made `write-shared` re-emit a shared
+            // error object in full at every occurrence, which is exponential
+            // in the nesting depth and is exactly what that procedure exists
+            // to avoid.
+            let addr = tv.raw() as usize;
+
+            if self.on_stack.contains_key(&addr) {
+                if self.label_shared && !self.labels.contains_key(&addr) {
+                    self.labels.insert(addr, self.next_label);
+                    self.next_label += 1;
+                }
+                return;
+            }
+
+            self.on_stack.insert(addr, true);
             let irritants = {
                 let heap_ref = self.heap.borrow();
                 heap_ref
                     .get_exception(tv)
                     .map(|(_, _, irritants)| irritants.to_vec())
+                    .unwrap_or_default()
             };
-            for irritant in irritants.into_iter().flatten() {
+            for irritant in irritants {
                 self.find_circular_tagged(irritant);
             }
+            self.on_stack.insert(addr, false);
         }
         // Immediate types, strings, closures, other objects: no compound structure to traverse
     }
@@ -645,17 +678,30 @@ impl<'a> DatumLabelWriter<'a> {
             return;
         }
 
-        // HeapObjectData leaf types — format using heap methods
-        let heap_ref = self.heap.borrow();
         // An error object is the one "leaf" holding values the writer prints.
         // It is rendered here rather than in `format_leaf_object` because only
         // this function can render them properly: the irritants get the
-        // ambient display/write mode and datum labels, the same treatment a
-        // vector's elements get.
-        if let Some((_, message, irritants)) = heap_ref.get_exception(tv) {
-            let (message, irritants) = (message.to_string(), irritants.to_vec());
-            drop(heap_ref);
-            write_error_object_prefix(&message, out);
+        // ambient display/write mode and the datum labels, the same treatment
+        // a vector's elements get.
+        let exception = {
+            let heap_ref = self.heap.borrow();
+            heap_ref
+                .get_exception(tv)
+                .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
+        };
+        if let Some((message, irritants)) = exception {
+            let addr = tv.raw() as usize;
+            if let Some(&label) = self.labels.get(&addr) {
+                if emitted.get(&addr).copied().unwrap_or(false) {
+                    out.push_str(&format!("#{}#", label));
+                    return;
+                } else {
+                    emitted.insert(addr, true);
+                    out.push_str(&format!("#{}=", label));
+                }
+            }
+            out.push_str(ERROR_OBJECT_OPEN);
+            out.push_str(&message);
             for irritant in irritants {
                 out.push(' ');
                 self.write_tagged(irritant, out, emitted);
@@ -663,7 +709,20 @@ impl<'a> DatumLabelWriter<'a> {
             out.push('>');
             return;
         }
+
+        // HeapObjectData leaf types — format using heap methods
+        let heap_ref = self.heap.borrow();
         format_leaf_object(tv, &heap_ref, self.display_mode, out);
+    }
+
+    /// Whether `tv` is an error object, without extracting anything from it.
+    ///
+    /// Pass 1 asks this of every object-tagged leaf it meets — every symbol,
+    /// bignum, flonum, record, port and procedure in the datum — so it must
+    /// not allocate. Copying the irritants unconditionally made the common
+    /// answer (`no`) pay for a `Vec`.
+    fn is_exception(&self, tv: TaggedValue) -> bool {
+        self.heap.borrow().is_exception(tv)
     }
 
     /// Write list contents from a native heap pair (TaggedValue).
@@ -878,8 +937,8 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
     if let Some((_, message, irritants)) = hr.get_exception(tv) {
         let (message, irritants) = (message.to_string(), irritants.to_vec());
         drop(hr);
-        let mut result = String::new();
-        write_error_object_prefix(&message, &mut result);
+        let mut result = String::from(ERROR_OBJECT_OPEN);
+        result.push_str(&message);
         for irritant in irritants {
             result.push(' ');
             result.push_str(&format_simple_recursive_tagged(irritant, heap, display));

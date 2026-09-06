@@ -25,7 +25,7 @@
 
 mod common;
 use common::{
-    ErrorClass, assert_program_eval_error_at, assert_program_eval_to, eval_program,
+    assert_program_eval_to, eval_program, eval_program_tree_walker, eval_program_vm,
     try_eval_program_tree_walker, try_eval_program_vm,
 };
 
@@ -77,12 +77,23 @@ fn test_the_irritants_follow_the_ambient_write_or_display_mode() {
 
 /// An error the runtime raised itself, not one `error` built, prints the same
 /// way — it is the same heap object.
+///
+/// The `car` diagnostic's exact wording is deliberately not pinned: it is not
+/// this file's property, and pinning it would turn any rewording of that
+/// message into a failure here — reported, confusingly, as "backends
+/// disagree" rather than as this assertion.
 #[test]
 fn test_a_runtime_error_object_displays_its_message() {
-    assert_eq!(
-        eval_program("(guard (e (#t e)) (car '()))"),
-        "#<error-object: car expects a pair>"
+    let printed = eval_program("(guard (e (#t e)) (car '()))");
+    assert!(
+        printed.starts_with("#<error-object: ") && printed.ends_with('>'),
+        "a runtime-raised error printed as {printed}"
     );
+    assert!(
+        printed.contains("pair"),
+        "the message did not survive into the printed form: {printed}"
+    );
+    assert_program_eval_to("(guard (e (#t (error-object? e))) (car '()))", "#t");
 }
 
 /// Printing the message is not a substitute for the accessors, and must not
@@ -123,21 +134,87 @@ fn test_an_error_object_nests_in_both_directions() {
     );
 }
 
+/// `write-shared` labels a shared error object, because the writer now
+/// *descends* into one. Its contract (R7RS §6.13.3) is to label all shared
+/// structure, and a value the writer descends into but refuses to label is
+/// re-emitted in full at every occurrence — here `e1` four times, and
+/// 2^N times at N levels.
+#[test]
+fn test_write_shared_labels_a_shared_error_object() {
+    assert_program_eval_to(
+        r#"(import (scheme write))
+           (define e1 (guard (c (#t c)) (error "a" 1)))
+           (define e2 (guard (c (#t c)) (error "b" e1 e1)))
+           (define e3 (guard (c (#t c)) (error "c" e2 e2)))
+           (let ((p (open-output-string))) (write-shared e3 p) (get-output-string p))"#,
+        r##""#<error-object: c #1=#<error-object: b #0=#<error-object: a 1> #0#> #1#>""##,
+    );
+}
+
+/// Plain `write` labels only what is *circular*, so the same shared structure
+/// is written out twice — the treatment a shared pair gets. The contrast with
+/// the test above is the whole difference between the two procedures.
+#[test]
+fn test_plain_write_does_not_label_merely_shared_error_objects() {
+    assert_program_eval_to(
+        r#"(import (scheme write))
+           (define e1 (guard (c (#t c)) (error "a" 1)))
+           (define e2 (guard (c (#t c)) (error "b" e1 e1)))
+           (let ((p (open-output-string))) (write e2 p) (get-output-string p))"#,
+        r##""#<error-object: b #<error-object: a 1> #<error-object: a 1>>""##,
+    );
+}
+
+/// `write-simple` renders the irritants with no labels at all. R7RS §6.13.3
+/// lets it diverge on a cycle, which is why the circular case is not tested
+/// here — but the ordinary case still has to come out right.
+#[test]
+fn test_write_simple_renders_the_irritants_without_labels() {
+    assert_program_eval_to(
+        r#"(import (scheme write))
+           (let ((p (open-output-string)))
+             (write-simple (guard (e (#t e)) (error "boom" (list 1 2) "x")) p)
+             (get-output-string p))"#,
+        r##""#<error-object: boom (1 2) \"x\">""##,
+    );
+}
+
 // ─── The uncaught-error diagnostic ───────────────────────────────────────────
 
 /// Where the gap cost the most: an error nothing handles ends the program, and
 /// on the VM the message that ended it was `unhandled exception: #<unknown>`.
-/// The VM formats the raised object with the datum writer; the tree-walker's
-/// `error` has a shortcut that prints the message directly, which is why this
-/// looked like a backend difference rather than the shared writer bug it was.
+///
+/// The two backends still word this differently, and the test says so rather
+/// than settling for a substring both happen to contain. The VM formats the
+/// raised object with the datum writer, so it now carries the irritants; the
+/// tree-walker's `error` never builds the heap object at all — it raises an
+/// `EvalError` whose `Display` drops the `irritants_display` it computed. The
+/// wording is not the property under test, but neither diagnostic may fall
+/// back to `#<unknown>`, and that part holds on both.
 #[test]
 fn test_an_uncaught_error_names_its_message() {
-    assert_program_eval_error_at(
-        r#"(error "boom" 1 2)"#,
-        ErrorClass::AtRuntime,
-        ErrorClass::AtRuntime,
-        "boom",
-    );
+    for (backend, result, expected) in [
+        (
+            "tree-walker",
+            try_eval_program_tree_walker(r#"(error "boom" 1 2)"#),
+            "Scheme exception (Error): boom",
+        ),
+        (
+            "vm",
+            try_eval_program_vm(r#"(error "boom" 1 2)"#),
+            "unhandled exception: #<error-object: boom 1 2>",
+        ),
+    ] {
+        let message = result.expect_err("nothing handles the error");
+        assert!(
+            message.contains(expected),
+            "[{backend}] expected the diagnostic to contain {expected:?}, got: {message}"
+        );
+        assert!(
+            !message.contains("#<unknown>"),
+            "[{backend}] diagnostic fell back to #<unknown>: {message}"
+        );
+    }
 }
 
 /// Re-raising a caught error object takes *both* backends through the writer,
@@ -194,46 +271,99 @@ fn test_a_continuation_prints_as_a_continuation() {
     );
 }
 
+/// A *delimited* continuation is a third heap variant again — the one an
+/// abort hands its prompt's handler — and prints as the same thing. Anything
+/// else would let a program read the capture's flavour out of its output.
+#[test]
+fn test_a_delimited_continuation_prints_as_a_continuation() {
+    assert_program_eval_to(
+        "(define t (make-continuation-prompt-tag))
+         (call-with-continuation-prompt
+           (lambda () (abort-current-continuation t 1))
+           t
+           (lambda (v k) k))",
+        "#<continuation>",
+    );
+}
+
 // ─── The property behind the individual spellings ────────────────────────────
 
 /// No value a program can hold prints as `#<unknown>`.
 ///
 /// The individual tests above each pin one spelling; this one pins the
-/// property they exist for, over every value shape this file could reach.
-/// It is the check that would have caught all three misses at once, and the
-/// one that keeps catching a new heap variant that reaches user output —
-/// though the exhaustive dispatch in the writer is what makes that unlikely
-/// enough to be a backstop rather than the defence.
+/// property they exist for, over every value shape this file can reach. It is
+/// the check that would have caught all three misses at once, and the one
+/// that keeps catching a new heap variant reaching user output — though the
+/// exhaustive dispatch in the writer is what makes that unlikely enough to be
+/// a backstop rather than the defence.
+///
+/// The count is asserted, not just the absence of `#<unknown>`: without it an
+/// empty capture passes, and a capture can go empty for reasons that have
+/// nothing to do with the property (a port that never received anything, a
+/// `for-each` that stopped early).
+///
+/// Each backend is checked on its own rather than through the both-backends
+/// helper, because the property is per-backend and one of these renderings
+/// legitimately differs: a prompt tag prints an allocation-order id
+/// (`#<prompt-tag:prompt/2>` on one, `/3` on the other). Requiring agreement
+/// would exclude the tag from the sweep to protect an assertion the sweep is
+/// not making.
 #[test]
 fn test_nothing_reachable_prints_as_unknown() {
-    let printed = eval_program(
+    // One line per value, so a spelling that came out empty is a length
+    // mismatch rather than a silent pass.
+    let values = [
+        r#"(guard (e (#t e)) (error "boom" 1 2))"#,
+        "(guard (e (#t e)) (car '()))",
+        "(lambda (x) x)",
+        "car",
+        "(case-lambda ((x) x))",
+        "(call-with-current-continuation (lambda (k) k))",
+        "(call-with-continuation-prompt
+           (lambda () (abort-current-continuation tag 1)) tag (lambda (v k) k))",
+        "tag",
+        "(make-parameter 1)",
+        "(delay 1)",
+        "(make-point 1)",
+        "<point>",
+        r#"(open-input-string "x")"#,
+        "(current-output-port)",
+        "(environment '(scheme base))",
+        r#"(string->symbol "sym")"#,
+        "(bytevector 1 2)",
+        "3.5",
+        "1/2",
+        "(* 1000000000000 1000000000000)",
+    ];
+    let code = format!(
         r#"(import (scheme write) (scheme lazy) (scheme case-lambda) (scheme eval))
            (define-record-type <point> (make-point x) point? (x point-x))
+           (define tag (make-continuation-prompt-tag))
            (define p (open-output-string))
            (for-each
-             (lambda (v) (write v p) (write-char #\space p))
-             (list (guard (e (#t e)) (error "boom" 1 2))
-                   (guard (e (#t e)) (car '()))
-                   (lambda (x) x)
-                   car
-                   (case-lambda ((x) x))
-                   (call-with-current-continuation (lambda (k) k))
-                   (make-parameter 1)
-                   (delay 1)
-                   (make-point 1)
-                   <point>
-                   (open-input-string "x")
-                   (current-output-port)
-                   (environment '(scheme base))
-                   (string->symbol "sym")
-                   (bytevector 1 2)
-                   3.5
-                   1/2
-                   (* 1000000000000 1000000000000)))
+             (lambda (v) (write v p) (newline p))
+             (list {}))
            (get-output-string p)"#,
+        values.join("\n")
     );
-    assert!(
-        !printed.contains("#<unknown>"),
-        "some value still prints as #<unknown>: {printed}"
-    );
+
+    for (backend, printed) in [
+        ("tree-walker", eval_program_tree_walker(&code)),
+        ("vm", eval_program_vm(&code)),
+    ] {
+        let lines: Vec<&str> = printed.trim_matches('"').split("\\n").collect();
+        // `split` leaves a trailing empty piece after the final newline.
+        let lines = &lines[..lines.len() - 1];
+        assert_eq!(
+            lines.len(),
+            values.len(),
+            "[{backend}] expected one rendering per value, got: {printed}"
+        );
+        for (source, rendering) in values.iter().zip(lines) {
+            assert!(
+                !rendering.is_empty() && !rendering.contains("#<unknown>"),
+                "[{backend}] {source} printed as {rendering:?}"
+            );
+        }
+    }
 }
