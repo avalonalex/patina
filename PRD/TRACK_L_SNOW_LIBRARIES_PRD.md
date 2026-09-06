@@ -1187,9 +1187,21 @@ is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
 at `#xAC00`, regional indicators at `#x1F1E6`), which the port would refuse
 or silently truncate. **Blocked on a full-Unicode char-set story** (SRFI 14
 beyond Latin-1, or an iset-compatible representation); not a macro defect.
-Two cosmetic defects rode along and are worth fixing sooner: the raised
-error displays as `#<unknown>`, and the message doubles its "unhandled
-exception:" prefix.
+Two cosmetic defects rode along. The first — the raised error displaying as
+`#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
+an error object, and now names its message and irritants. The second is still open: the
+message doubles its "unhandled exception:" prefix. Neither backend doubles it
+for a plain uncaught raise, so something along this entry's path adds the
+second copy. The candidate is the tree-walker's raise/convert round trip:
+`cps_eval/application.rs` bakes the prefix into the *message field* of
+`EvalError::SchemeException` rather than leaving it to `Display`, and
+`cps_eval/exceptions.rs` converts that error back into an exception object
+with the same message — so a raise the interpreter reports and then re-raises
+carries the prefix into the next report, and `error-object-message` hands a
+Scheme program the interpreter's own diagnostic text. The VM does not have
+this shape: `patina-vm/src/error.rs` supplies the prefix from `Display`.
+Unverified — no program has been found that traverses the round trip twice,
+so this is where to look, not a diagnosis.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.

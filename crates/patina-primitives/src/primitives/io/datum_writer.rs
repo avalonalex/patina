@@ -269,121 +269,135 @@ fn write_symbol_name(name: &str, display_mode: bool, out: &mut String) {
     }
 }
 
-/// Format a leaf (non-compound) TAG_OBJECT using Heap methods directly.
-/// Handles Symbol, BigInt, Rational, Real, Complex, Bytevector, Record, etc.
+/// The opening of an error object's printed form, shared by the three places
+/// that write one.
+///
+/// A constant rather than a function, deliberately: the rest of the form is
+/// the irritants and the closing `>`, and only a caller that can recurse into
+/// a value can write those. A helper that emitted this much and left the `>`
+/// to the caller would be an abstraction hiding half a delimiter pair.
+const ERROR_OBJECT_OPEN: &str = "#<error-object: ";
+
+/// Format a heap value that the datum writer treats as a leaf — one whose
+/// parts, if any, it does not descend into.
+///
+/// Dispatches on the `HeapObjectData` variant rather than probing accessors in
+/// turn, so that a heap variant with no rendering here is a non-exhaustive
+/// `match` at compile time instead of `#<unknown>` in a user's output. It was
+/// a probe chain until issue #181, and the chain had lost three kinds of value
+/// an ordinary program can hold: an error object (`(guard (e (#t e)) (error
+/// "boom"))`), a continuation, and — on the VM, where a `lambda` allocates
+/// `VmClosure` rather than the tree-walker's `Procedure` — every user-defined
+/// procedure. Two earlier misses were repaired by adding one more probe
+/// (procedures in record fields, then environment specifiers), which is the
+/// argument for dispatching instead.
+///
+/// This is not the only formatter over `HeapObjectData`:
+/// `patina_core::debug_format` has its own match, and the two deliberately
+/// differ — that one names things for a person debugging the interpreter
+/// (`#<procedure:{code_id}>`, `#<macro:{name}>`, `#<continuation:{id}>`, a
+/// cell's contents, a port's direction and source, an identifier's scope
+/// set), where this one gives a Scheme program a stable answer that says
+/// nothing about which backend produced the value. Adding a heap variant
+/// means teaching both. Nothing here is `read`-able syntax; R7RS gives these
+/// types no external representation.
 fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mut String) {
-    // Closure (TAG_CLOSURE)
+    use patina_core::heap::HeapObjectData;
+    use std::fmt::Write;
+
+    // A closure has its own tag, so it never reaches the object dispatch.
     if tv.is_closure() {
         out.push_str("#<procedure>");
         return;
     }
-    // Procedure (HeapObjectData::Procedure — CPS lambdas, primitives)
-    if heap.get_procedure(tv).is_some() {
-        out.push_str("#<procedure>");
+    // Pairs, vectors and strings are tagged too, and every caller has already
+    // handled them. Anything else non-object here has no rendering to give.
+    if !tv.is_object() {
+        out.push_str("#<unknown>");
         return;
     }
-    // Environment specifier
-    if heap.is_environment(tv) {
-        out.push_str("#<environment>");
-        return;
-    }
-    // Symbol
-    if let Some(name) = heap.get_symbol_name(tv) {
-        write_symbol_name(name, display_mode, out);
-        return;
-    }
-    // Identifier
-    if let Some((name, _)) = heap.get_identifier_data_any(tv) {
-        write_symbol_name(&name, display_mode, out);
-        return;
-    }
-    // BigInt
-    if let Some(n) = heap.get_bigint(tv) {
-        out.push_str(&n.to_string());
-        return;
-    }
-    // Rational
-    if let Some(r) = heap.get_rational(tv) {
-        out.push_str(&r.to_string());
-        return;
-    }
-    // Real
-    if let Some(f) = heap.get_real(tv) {
-        format_real_number(f, out);
-        return;
-    }
-    // Complex
-    if let Some((real_tv, imag_tv)) = heap.get_complex(tv) {
-        format_complex(real_tv, imag_tv, heap, out);
-        return;
-    }
-    // Bytevector
-    if let Some(bytes) = heap.get_bytevector(tv) {
-        out.push_str("#u8(");
-        for (i, b) in bytes.iter().enumerate() {
-            if i > 0 {
-                out.push(' ');
+
+    match heap.get_object(tv) {
+        HeapObjectData::Symbol(name) => write_symbol_name(name, display_mode, out),
+        HeapObjectData::Identifier { name, .. } => write_symbol_name(name, display_mode, out),
+        HeapObjectData::BigInt(n) => out.push_str(&n.to_string()),
+        HeapObjectData::Rational(r) => out.push_str(&r.to_string()),
+        HeapObjectData::Real(f) => format_real_number(*f, out),
+        HeapObjectData::Complex { real, imag } => format_complex(*real, *imag, heap, out),
+        HeapObjectData::Bytevector(bytes) => {
+            out.push_str("#u8(");
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&b.to_string());
             }
-            out.push_str(&b.to_string());
+            out.push(')');
         }
-        out.push(')');
-        return;
+        // Unreachable, and asserted rather than merely commented. This
+        // function cannot render a nested value, so an error object's
+        // irritants would be silently dropped here — which is the failure the
+        // exhaustive match exists to prevent, arriving through a different
+        // door. Both callers that can render them intercept the exception
+        // first (`write_tagged`, `format_simple_recursive_tagged`), leaving
+        // only `format_tagged_leaf`'s numeric path, where a complex number's
+        // parts are never exceptions. A fourth caller must intercept it too;
+        // the assertion is how that is found in a debug build, and the lossy
+        // rendering below is what a release build degrades to rather than
+        // panicking inside a formatter.
+        HeapObjectData::Exception { message, .. } => {
+            debug_assert!(
+                false,
+                "an error object reached the leaf formatter, which cannot \
+                 render its irritants: intercept it in the caller"
+            );
+            out.push_str(ERROR_OBJECT_OPEN);
+            out.push_str(message);
+            out.push('>');
+        }
+        // Every kind of procedure prints alike, so the two backends agree:
+        // `Procedure` is the tree-walker's CPS lambdas and both backends'
+        // primitives, `VmClosure` is a `lambda` compiled by the VM.
+        HeapObjectData::Procedure(_) | HeapObjectData::VmClosure { .. } => {
+            out.push_str("#<procedure>")
+        }
+        HeapObjectData::Port(_) => out.push_str("#<port>"),
+        HeapObjectData::RecordType(rtd) => write!(out, "#<record-type {}>", rtd.name).unwrap(),
+        HeapObjectData::Record { record_type, .. } => {
+            write!(out, "#<record {}>", record_type.name).unwrap()
+        }
+        // Opaque, see the `HeapObjectData::Ephemeron` doc.
+        HeapObjectData::Ephemeron(_) => out.push_str("#<ephemeron>"),
+        HeapObjectData::Promise(_) => out.push_str("#<promise>"),
+        HeapObjectData::Macro(_) => out.push_str("#<macro>"),
+        // Syntactic keyword. Not dead, though it is hard to reach: a variable
+        // reference to syntax is refused at desugar time, so this formats the
+        // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`
+        // (a forward reference, a shadowed spelling). Names the form rather
+        // than the binding it arrived through, so `blk` still writes
+        // `#<syntax:begin>`.
+        HeapObjectData::CoreSyntax(form) => write!(out, "#<syntax:{}>", form).unwrap(),
+        HeapObjectData::Values(_) => out.push_str("#<values>"),
+        // A procedure per R7RS §4.2.6, named for what it is.
+        HeapObjectData::Parameter { .. } => out.push_str("#<parameter>"),
+        HeapObjectData::EnvironmentSpecifier { .. } => out.push_str("#<environment>"),
+        // One spelling for all three: the tree-walker captures into
+        // `Continuation`, the VM into a store it reaches by handle, and a
+        // program cannot tell which backend it is running on.
+        HeapObjectData::Continuation(_)
+        | HeapObjectData::VmContinuationRef(_)
+        | HeapObjectData::VmDelimitedContinuationRef(_) => out.push_str("#<continuation>"),
+        HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),
+        HeapObjectData::Library(lib) => write!(out, "{}", lib).unwrap(),
+        // The rest are internal and should reach no program's output — a
+        // freed slot is a use-after-free that `get_object` debug-asserts
+        // against, so that arm only renders in a release build. They are
+        // spelled out anyway, because the point of the match is that the next
+        // variant added cannot quietly become `#<unknown>`.
+        HeapObjectData::MutableCell(_) => out.push_str("#<cell>"),
+        HeapObjectData::LabelPlaceholder(n) => write!(out, "#<label-placeholder:{}>", n).unwrap(),
+        HeapObjectData::Free => out.push_str("#<gc-freed-slot>"),
     }
-    // Port
-    if heap.get_port(tv).is_some() {
-        out.push_str("#<port>");
-        return;
-    }
-    // RecordType
-    if let Some(rtd) = heap.get_record_type(tv) {
-        use std::fmt::Write;
-        write!(out, "#<record-type {}>", rtd.name).unwrap();
-        return;
-    }
-    // Record
-    if let Some((rtd, _)) = heap.get_record(tv) {
-        use std::fmt::Write;
-        write!(out, "#<record {}>", rtd.name).unwrap();
-        return;
-    }
-    // Ephemeron — opaque, see the `HeapObjectData::Ephemeron` doc.
-    if heap.is_ephemeron(tv) {
-        out.push_str("#<ephemeron>");
-        return;
-    }
-    // Promise
-    if heap.get_promise(tv).is_some() {
-        out.push_str("#<promise>");
-        return;
-    }
-    // Macro
-    if heap.get_macro(tv).is_some() {
-        out.push_str("#<macro>");
-        return;
-    }
-    // Syntactic keyword. Not dead, though it is hard to reach: a variable
-    // reference to syntax is refused at desugar time, so this formats the
-    // residual cases pinned in `patina-tests/tests/syntax_as_a_value.rs`
-    // (a forward reference, a shadowed spelling). Names the form rather than
-    // the binding it arrived through, so `blk` still writes `#<syntax:begin>`.
-    if let Some(form) = heap.get_core_syntax(tv) {
-        use std::fmt::Write;
-        write!(out, "#<syntax:{}>", form).unwrap();
-        return;
-    }
-    // Values
-    if heap.get_values(tv).is_some() {
-        out.push_str("#<values>");
-        return;
-    }
-    // Parameter object — a procedure per R7RS §4.2.6, named for what it is.
-    // Last in the chain: every probe above it is paid by every leaf formatted.
-    if heap.is_parameter(tv) {
-        out.push_str("#<parameter>");
-        return;
-    }
-    // Unknown
-    out.push_str("#<unknown>");
 }
 
 /// Format a TaggedValue as a leaf (non-compound) for numeric display.
@@ -496,6 +510,42 @@ impl<'a> DatumLabelWriter<'a> {
             };
             for elem_tv in &elements {
                 self.find_circular_tagged(*elem_tv);
+            }
+            self.on_stack.insert(addr, false);
+        } else if tv.is_object() && self.is_exception(tv) {
+            // An error object's irritants are ordinary values that the writer
+            // prints, so a circular one needs a label like any other:
+            // `(error "cycle" xs)` where `xs` points at itself.
+            //
+            // The exception is labelled on the same terms as the pair and the
+            // vector above, because the rule is about what the writer descends
+            // into, not about what can form a cycle. It cannot form one —
+            // `alloc_exception` takes its irritants by value and nothing
+            // mutates them afterwards — so only the `label_shared` arm can
+            // ever fire. Leaving it out made `write-shared` re-emit a shared
+            // error object in full at every occurrence, which is exponential
+            // in the nesting depth and is exactly what that procedure exists
+            // to avoid.
+            let addr = tv.raw() as usize;
+
+            if self.on_stack.contains_key(&addr) {
+                if self.label_shared && !self.labels.contains_key(&addr) {
+                    self.labels.insert(addr, self.next_label);
+                    self.next_label += 1;
+                }
+                return;
+            }
+
+            self.on_stack.insert(addr, true);
+            let irritants = {
+                let heap_ref = self.heap.borrow();
+                heap_ref
+                    .get_exception(tv)
+                    .map(|(_, _, irritants)| irritants.to_vec())
+                    .unwrap_or_default()
+            };
+            for irritant in irritants {
+                self.find_circular_tagged(irritant);
             }
             self.on_stack.insert(addr, false);
         }
@@ -628,9 +678,51 @@ impl<'a> DatumLabelWriter<'a> {
             return;
         }
 
+        // An error object is the one "leaf" holding values the writer prints.
+        // It is rendered here rather than in `format_leaf_object` because only
+        // this function can render them properly: the irritants get the
+        // ambient display/write mode and the datum labels, the same treatment
+        // a vector's elements get.
+        let exception = {
+            let heap_ref = self.heap.borrow();
+            heap_ref
+                .get_exception(tv)
+                .map(|(_, message, irritants)| (message.to_string(), irritants.to_vec()))
+        };
+        if let Some((message, irritants)) = exception {
+            let addr = tv.raw() as usize;
+            if let Some(&label) = self.labels.get(&addr) {
+                if emitted.get(&addr).copied().unwrap_or(false) {
+                    out.push_str(&format!("#{}#", label));
+                    return;
+                } else {
+                    emitted.insert(addr, true);
+                    out.push_str(&format!("#{}=", label));
+                }
+            }
+            out.push_str(ERROR_OBJECT_OPEN);
+            out.push_str(&message);
+            for irritant in irritants {
+                out.push(' ');
+                self.write_tagged(irritant, out, emitted);
+            }
+            out.push('>');
+            return;
+        }
+
         // HeapObjectData leaf types — format using heap methods
         let heap_ref = self.heap.borrow();
         format_leaf_object(tv, &heap_ref, self.display_mode, out);
+    }
+
+    /// Whether `tv` is an error object, without extracting anything from it.
+    ///
+    /// Pass 1 asks this of every object-tagged leaf it meets — every symbol,
+    /// bignum, flonum, record, port and procedure in the datum — so it must
+    /// not allocate. Copying the irritants unconditionally made the common
+    /// answer (`no`) pay for a `Vec`.
+    fn is_exception(&self, tv: TaggedValue) -> bool {
+        self.heap.borrow().is_exception(tv)
     }
 
     /// Write list contents from a native heap pair (TaggedValue).
@@ -838,6 +930,22 @@ fn format_simple_recursive_tagged(tv: TaggedValue, heap: &RefCell<Heap>, display
 
     // HeapObjectData leaf types
     let hr = heap.borrow();
+    // See `write_tagged` for why the error object is rendered here. This is
+    // `write-simple`'s path, so its irritants get no datum labels — R7RS
+    // §6.13.3 lets `write-simple` diverge on a cycle, and a circular irritant
+    // is a cycle like any other.
+    if let Some((_, message, irritants)) = hr.get_exception(tv) {
+        let (message, irritants) = (message.to_string(), irritants.to_vec());
+        drop(hr);
+        let mut result = String::from(ERROR_OBJECT_OPEN);
+        result.push_str(&message);
+        for irritant in irritants {
+            result.push(' ');
+            result.push_str(&format_simple_recursive_tagged(irritant, heap, display));
+        }
+        result.push('>');
+        return result;
+    }
     let mut result = String::new();
     format_leaf_object(tv, &hr, display, &mut result);
     result
