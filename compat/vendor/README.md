@@ -39,10 +39,12 @@ vendored; there is no popularity cutoff, since at 8 MB the tail costs nothing an
 | No licence statement found | 53 | **no** |
 | Document licence only (`srfi 5`) | 1 | **no** — see `LICENSES.md` |
 
-**Libraries Patina bundles itself are excluded**, computed from `lib/` rather than listed here.
-Patina's copy is canonical, so a vendored duplicate has no role: nothing tests it, and anything
-importing it resolves to the bundled version. Thirteen are excluded on that basis, including
-`(chibi test)`, `(chibi string)`, `(srfi 1)` and `(srfi 130)`'s dependencies.
+**Libraries Patina provides itself are excluded**, computed from `lib/` and `test-lib/` rather than
+listed here. Patina's copy is canonical, so a vendored duplicate has no role: nothing tests it, and
+anything importing it resolves to Patina's copy. Thirteen are excluded on that basis, including
+`(chibi test)`, `(chibi string)`, `(srfi 1)` and `(srfi 130)`'s dependencies. Both roots count,
+because the test is whether Patina supplies the library, not whether it ships it — `test-lib/`
+holds the ones the harness puts on the search path with `-A` (see `test-lib/README.md`).
 
 Copyleft is excluded to keep this MIT-licensed repository's licence story simple, not because of any
 judgement about the code. Packages with no discoverable licence are excluded because absence of a

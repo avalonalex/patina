@@ -256,6 +256,7 @@ fn run_command(opts: &Options) {
         tree_walker: opts.tree_walker,
         timeout: opts.timeout,
         jobs: opts.jobs,
+        supplied_lib_root: workspace_root().join("test-lib"),
     };
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 

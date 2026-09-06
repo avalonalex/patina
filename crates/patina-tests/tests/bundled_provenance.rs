@@ -1,7 +1,11 @@
-//! Pin every bundled file claimed byte-identical to upstream, so an
+//! Pin every third-party file claimed byte-identical to upstream, so an
 //! unrecorded edit fails. The rule being enforced lives in
 //! `lib/chibi/PROVENANCE.md` § The rule; the failure message below is the
 //! complete update procedure.
+//!
+//! The scope is "files claimed byte-identical to an upstream release", not
+//! "files Patina ships": `test-lib/` holds libraries supplied to the test
+//! lanes with `-A` rather than bundled, and they are watched the same way.
 //!
 //! The adapted ports one directory over (SRFI 1, 69, 113, 128, 133, 158, …)
 //! are deliberately not pinned — they are not byte-identical to anything;
@@ -28,10 +32,6 @@ fn fnv1a(data: &[u8]) -> u64 {
 const PINNED: &[(&str, u64)] = &[
     ("lib/chibi/diff.scm", 0x2050c85c4e050d74),
     ("lib/chibi/diff.sld", 0xf23c1551ba46f31b),
-    // Pinned post-edit: upstream apart from the `(patina …)` cond-expand branch
-    // recorded in lib/chibi/PROVENANCE.md. Same reason as lib/srfi/130.scm —
-    // a recorded deviation must not be why the rest of a file goes unwatched.
-    ("lib/chibi/filesystem.sld", 0x6081884933750547),
     ("lib/chibi/optional.scm", 0xc690d10b2fa58f49),
     ("lib/chibi/optional.sld", 0x90f9ebb211b8bc6e),
     ("lib/chibi/string.scm", 0x40519db9f7f6ea77),
@@ -140,6 +140,13 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/132/vmsort.scm", 0xb8afa53199eb635a),
     ("lib/srfi/132/vqsort2.scm", 0x2fd671d4fb02ad1a),
     ("lib/srfi/132/vqsort3.scm", 0xa62eaad1e7385451),
+    // Supplied by `-A test-lib`, not bundled (see test-lib/README.md) — pinned
+    // all the same, because moving a file off the shipped path does not make
+    // upstream drift less worth catching. Pinned post-edit: upstream apart from
+    // the `(patina …)` cond-expand branch recorded in
+    // test-lib/chibi/PROVENANCE.md. Same reason as lib/srfi/130.scm — a
+    // recorded deviation must not be why the rest of a file goes unwatched.
+    ("test-lib/chibi/filesystem.sld", 0x030d79584ffe6de0),
 ];
 
 /// The trees whose `.scm`/`.sld` files must ALL appear in [`PINNED`]. The
@@ -166,6 +173,7 @@ const PINNED_TREES: &[&str] = &[
     "lib/srfi/134",
     "lib/srfi/135",
     "lib/srfi/144",
+    "test-lib/chibi",
 ];
 
 fn scheme_files_under(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
@@ -200,7 +208,8 @@ fn bundled_files_match_their_provenance_records() {
          Restore upstream if possible (the provenance records name the pinned\n\
          tarballs/commit to diff against). Otherwise: mark the edit site with\n\
          ';; PATINA LOCAL EDIT:', describe the deviation in the tree's\n\
-         provenance home (lib/chibi/PROVENANCE.md, lib/srfi/PROVENANCE.md, or\n\
+         provenance home (lib/chibi/PROVENANCE.md, lib/srfi/PROVENANCE.md,\n\
+         test-lib/chibi/PROVENANCE.md, or\n\
          the library's .sld header), and update the pinned hash above.",
         drifted.join("\n  ")
     );

@@ -3,7 +3,11 @@
 //! Upstream's `cond-expand` has branches for chibi, chicken and sagittarius and
 //! no `else`, so before this the library loaded defining nothing and every
 //! importer failed on its first export. The `(patina …)` branch implements the
-//! directory API and stubs the POSIX layer; see `lib/chibi/PROVENANCE.md`.
+//! directory API and stubs the POSIX layer; see `test-lib/chibi/PROVENANCE.md`.
+//!
+//! The library is supplied by `-A test-lib`, not bundled — the shared helpers
+//! put that root on the search path, and `eval_on` below does it by hand
+//! because it builds its own interpreter over an `OverlayFs`.
 //!
 //! The directory tests run against an `OverlayFs`, not the real filesystem —
 //! that is the point of routing the primitives through the VFS trait, and a
@@ -20,6 +24,10 @@ fn overlay() -> std::sync::Arc<patina_core::OverlayFs> {
 
 fn eval_on(fs: &std::sync::Arc<patina_core::OverlayFs>, code: &str) -> String {
     let interp = patina_interpreter::TreeWalkInterpreter::new_tree_walker_with_fs(fs.clone());
+    interp
+        .backend()
+        .evaluator()
+        .add_library_search_path(test_lib_root());
     let result = interp
         .eval_program(code)
         .unwrap_or_else(|e| panic!("failed to evaluate:\n{code}\n{e}"));

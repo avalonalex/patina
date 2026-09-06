@@ -320,11 +320,18 @@ def load_index(offline: bool) -> list[dict]:
 
 
 def bundled_libraries() -> set[str]:
-    """Library names Patina ships itself, read from lib/ rather than hardcoded.
+    """Library names Patina provides itself, read from the tree rather than
+    hardcoded.
 
-    These are excluded from the corpus. Patina's copy is canonical, so a
-    vendored duplicate has no role: nothing tests it, and anything importing it
-    resolves to the bundled version anyway.
+    Two roots, because "Patina provides it" is the test, not "Patina ships it":
+    `lib/` is the bundled surface, and `test-lib/` holds third-party libraries
+    the harness supplies with `-A` (see test-lib/README.md). A library reached
+    from either root makes its upstream package redundant here for the same
+    reason -- Patina's copy is canonical, so a vendored duplicate has no role:
+    nothing tests it, and anything importing it resolves to Patina's copy
+    anyway. For `test-lib/` the duplicate would also be worse than useless:
+    `(chibi filesystem)` is there precisely because upstream's `cond-expand`
+    has no `else` branch and defines nothing under Patina.
 
     Keeping both was briefly useful as a drift check, but the premise expired.
     Patina's `(srfi 60)` is a rename over SRFI 151 while the vendored one is
@@ -332,9 +339,10 @@ def bundled_libraries() -> set[str]:
     comparing them measures a decision rather than a defect.
     """
     out = set()
-    for sld in (ROOT / "lib").rglob("*.sld"):
-        rel = sld.relative_to(ROOT / "lib").with_suffix("")
-        out.add(" ".join(rel.parts))
+    for root in (ROOT / "lib", ROOT / "test-lib"):
+        for sld in root.rglob("*.sld"):
+            rel = sld.relative_to(root).with_suffix("")
+            out.add(" ".join(rel.parts))
     return out
 
 

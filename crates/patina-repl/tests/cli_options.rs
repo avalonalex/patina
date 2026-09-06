@@ -167,3 +167,48 @@ fn eval_print_rejects_script_file() {
     assert!(!ok);
     assert!(stderr.contains("cannot be combined"), "stderr: {}", stderr);
 }
+
+/// `test-lib/` is supplied, not shipped — and this is the pair of assertions
+/// that makes the difference real rather than stated.
+///
+/// The first half is the user-visible consequence of #196: a plain script run
+/// cannot import `(chibi filesystem)`, because it is no longer under `lib/`,
+/// which is a default search path. The second half is what every test lane
+/// does instead. Both are needed: without the failing half, moving the file
+/// back under `lib/` would break nothing here.
+#[test]
+fn supplied_libraries_need_an_explicit_root() {
+    let test_lib = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .join("test-lib");
+    assert!(test_lib.is_dir(), "{} is missing", test_lib.display());
+
+    // The cwd is a scratch directory, so `./lib` cannot resolve anything; what
+    // finds `lib/` is the walk up from the binary to the workspace root, and
+    // that walk is exactly what must not reach `test-lib`.
+    let dir = TempDir::new().unwrap();
+    let script = dir.path().join("prog.scm");
+    fs::write(
+        &script,
+        "(import (scheme base) (chibi filesystem))\n(display (procedure? directory-files))\n",
+    )
+    .unwrap();
+    let script = script.to_str().unwrap();
+
+    let (_, stderr, ok) = run_patina(dir.path(), &[script]);
+    assert!(
+        !ok,
+        "(chibi filesystem) resolved without -A — it is supplied from test-lib/, not bundled"
+    );
+    assert!(
+        stderr.contains("(chibi filesystem)"),
+        "expected the unresolved library to be named, got: {}",
+        stderr
+    );
+
+    let (stdout, stderr, ok) = run_patina(dir.path(), &["-A", test_lib.to_str().unwrap(), script]);
+    assert!(ok, "stderr: {}", stderr);
+    assert_eq!(stdout.trim(), "#t");
+}

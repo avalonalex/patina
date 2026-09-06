@@ -99,6 +99,10 @@ pub struct RunConfig {
     pub tree_walker: bool,
     pub timeout: Duration,
     pub jobs: usize,
+    /// The root holding third-party libraries Patina supplies but does not
+    /// bundle (`test-lib/`). Every package gets it, the way every package
+    /// used to get them for free from the bundled `lib/`.
+    pub supplied_lib_root: PathBuf,
 }
 
 /// Libraries that are C-backed in their upstream implementation. A package
@@ -199,6 +203,14 @@ fn run_package(
     let search_roots = search_roots(package, universe, providers, &scratch, mode == "test");
 
     let mut cmd = Command::new(&config.patina);
+    // The supplied root goes first, ahead of the package's own. Not a
+    // preference between the two — nothing in the corpus provides a library
+    // this root holds — but the order these libraries already had: they were
+    // bundled, and `lib/` is a default search path, which every `-A` follows.
+    // Reproducing that means the move cannot shift a tally by reordering, and
+    // a reordering that does matter later has to be an argued change rather
+    // than a side effect of this one.
+    cmd.arg("-A").arg(&config.supplied_lib_root);
     for root in &search_roots {
         cmd.arg("-A").arg(root);
     }
@@ -461,9 +473,9 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::WrongResult;
     }
 
-    // A bundled library can be honest about its own limits. `(chibi filesystem)`
+    // A supplied library can be honest about its own limits. `(chibi filesystem)`
     // implements its portable half and stubs the POSIX half with this marker
-    // (lib/chibi/filesystem.sld), so a package that reaches one of those stubs
+    // (test-lib/chibi/filesystem.sld), so a package that reaches one of those stubs
     // is FFI-bound in exactly the sense FFI_BOUND means — it just proved it by
     // running instead of by failing to import. Without this it would be filed
     // as a runtime-error, i.e. as our defect.

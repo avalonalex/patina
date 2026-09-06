@@ -96,6 +96,39 @@ pub fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+/// The library root the test lanes supply with `-A`: third-party libraries
+/// Patina needs in order to run other people's code, but does not bundle.
+/// See `test-lib/README.md`.
+pub fn test_lib_root() -> std::path::PathBuf {
+    repo_root().join("test-lib")
+}
+
+/// A tree-walker with [`test_lib_root`] on its search path — this lane's
+/// spelling of the `-A test-lib` the shell lanes pass.
+///
+/// Every interpreter the helpers below build goes through here, so a test can
+/// import a supplied library without arranging anything. What that does *not*
+/// blur is the shipped/supplied line: the guards that enforce it
+/// (`bundled_provenance.rs`, `upstream_srfi_suites.rs`,
+/// `primitives_reachable_by_import.rs`) walk `lib/` by path rather than
+/// asking what happens to resolve, and `crates/patina-repl/tests/cli_options.rs`
+/// pins the binary's behaviour with no `-A` at all.
+pub fn tree_walker_interpreter() -> TreeWalkInterpreter {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    interp
+        .backend()
+        .evaluator()
+        .add_library_search_path(test_lib_root());
+    interp
+}
+
+/// A VM interpreter with [`test_lib_root`] on its search path.
+pub fn vm_interpreter() -> Interpreter<VmBackend> {
+    let interp = Interpreter::new(VmBackend::new());
+    interp.backend().add_library_search_path(test_lib_root());
+    interp
+}
+
 /// A path inside a caller-owned [`tempfile::TempDir`], which deletes the
 /// whole directory when it drops. Tests that hand a path to a Scheme program
 /// need it as a `String`; the guard stays with the caller so the directory
@@ -318,13 +351,8 @@ where
 /// Matched exhaustively rather than tested with `!=`, so adding a backend is a
 /// compile error here instead of silently defaulting to running both.
 fn outcomes(which: Which, code: &str, mode: Mode) -> Vec<(&'static str, Outcome)> {
-    let tree_walker = || {
-        (
-            "tree-walker",
-            run_on(TreeWalkInterpreter::new_tree_walker(), code, mode),
-        )
-    };
-    let vm = || ("vm", run_on(Interpreter::new(VmBackend::new()), code, mode));
+    let tree_walker = || ("tree-walker", run_on(tree_walker_interpreter(), code, mode));
+    let vm = || ("vm", run_on(vm_interpreter(), code, mode));
     match which {
         Which::Both => vec![tree_walker(), vm()],
         Which::TreeWalker => vec![tree_walker()],
@@ -497,8 +525,8 @@ pub fn assert_divergence(
 /// The agreement check is what makes callers that compare the return value
 /// against their own expectation differential for free.
 pub fn eval_program(code: &str) -> String {
-    let tw = run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program);
-    let vm = run_on(Interpreter::new(VmBackend::new()), code, Mode::Program);
+    let tw = run_on(tree_walker_interpreter(), code, Mode::Program);
+    let vm = run_on(vm_interpreter(), code, Mode::Program);
 
     // Both failing is a shared bug in the program under test, not a
     // divergence — report both errors, since the two backends can fail for
@@ -535,18 +563,18 @@ pub fn eval_program(code: &str) -> String {
 /// Racket both refuse it. Named per backend to match the panicking pair
 /// beside it, so one idiom covers both.
 pub fn try_eval_program_vm(code: &str) -> Result<String, String> {
-    run_on(Interpreter::new(VmBackend::new()), code, Mode::Program).map_err(|e| e.message)
+    run_on(vm_interpreter(), code, Mode::Program).map_err(|e| e.message)
 }
 
 /// The tree-walker half of [`try_eval_program_vm`].
 pub fn try_eval_program_tree_walker(code: &str) -> Result<String, String> {
-    run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program).map_err(|e| e.message)
+    run_on(tree_walker_interpreter(), code, Mode::Program).map_err(|e| e.message)
 }
 
 /// Evaluate a program on the tree-walker only and `write` the result. For
 /// tests that target tree-walker-specific machinery.
 pub fn eval_program_tree_walker(code: &str) -> String {
-    match run_on(TreeWalkInterpreter::new_tree_walker(), code, Mode::Program) {
+    match run_on(tree_walker_interpreter(), code, Mode::Program) {
         Ok(v) => v,
         Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }
@@ -555,7 +583,7 @@ pub fn eval_program_tree_walker(code: &str) -> String {
 /// Evaluate a program on the VM only and `write` the result. For tests that
 /// exercise VM-only machinery (CallPrimitive deopt, inline opcodes).
 pub fn eval_program_vm(code: &str) -> String {
-    match run_on(Interpreter::new(VmBackend::new()), code, Mode::Program) {
+    match run_on(vm_interpreter(), code, Mode::Program) {
         Ok(v) => v,
         Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
     }

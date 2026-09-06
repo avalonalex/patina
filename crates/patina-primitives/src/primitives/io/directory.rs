@@ -3,7 +3,7 @@
 //! These back the portable half of `(chibi filesystem)` — the half that can be
 //! given an in-memory implementation. The POSIX half (file descriptors, stat
 //! fields, symlinks, pipes) is deliberately not here; see the `patina`
-//! `cond-expand` branch in `lib/chibi/filesystem.sld` for where that boundary
+//! `cond-expand` branch in `test-lib/chibi/filesystem.sld` for where that boundary
 //! is drawn and why.
 //!
 //! Names follow `(chibi filesystem)`, which is what the ecosystem imports:
@@ -21,10 +21,10 @@
 //! The cost is real and belongs here rather than in a commit message:
 //! chibi-ecosystem code that *branches* on `#f` gets an exception instead —
 //! including upstream's own `create-directory*` idiom, `(or (file-directory?
-//! dir) … (create-directory dir))`. `lib/chibi/filesystem.sld`'s `(patina …)`
+//! dir) … (create-directory dir))`. `test-lib/chibi/filesystem.sld`'s `(patina …)`
 //! branch is written against the raising form (its `delete-file-hierarchy`
 //! spells tolerance with `guard` rather than a return-value test), and
-//! `lib/chibi/PROVENANCE.md` records it for that tree.
+//! `test-lib/chibi/PROVENANCE.md` records it for that tree.
 
 use crate::apply_context::ApplyContext;
 use patina_core::{Heap, TaggedValue};

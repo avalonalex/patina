@@ -463,7 +463,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // Directories. Named and shaped after `(chibi filesystem)`, which is what
-    // the ecosystem imports; `lib/chibi/filesystem.sld`'s `patina` branch is
+    // the ecosystem imports; `test-lib/chibi/filesystem.sld`'s `patina` branch is
     // the only consumer today.
     for (name, arity, doc, f) in [
         (

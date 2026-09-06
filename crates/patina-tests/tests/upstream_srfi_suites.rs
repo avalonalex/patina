@@ -371,10 +371,6 @@ const NO_SUITE: &[(&str, &str)] = &[
         "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the bitwise-if swap",
     ),
     (
-        "chibi filesystem",
-        "upstream suite opens a raw file descriptor before its directory tests, hitting the bundled FFI stub outside any test form, which aborts the run; add the suite when FFI lands",
-    ),
-    (
         "chibi test",
         "the framework itself — exercised by every suite above, the self-check below, and the chibi R7RS gate",
     ),
