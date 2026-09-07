@@ -104,6 +104,15 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
     // `parameterize`'s binding position. Guarded half — "a non-parameter in the
     // binding position is an error" in `tests/scheme/control/parameters.scm`.
     assert_program_eval_error(r#"(parameterize ((42 20)) (write-string "hello"))"#);
+
+    // A non-string name for `get-environment-variable`. Guarded half — "a
+    // non-string name raises an error object" in
+    // `tests/scheme/stdlib/process-context.scm`.
+    //
+    // Not migrated from anywhere: that guarded row was *added* in #193 Phase 1,
+    // from one the `.rs` file had commented out, and a new guarded row needs
+    // its unguarded half as much as a migrated one does.
+    assert_program_eval_error("(import (scheme process-context)) (get-environment-variable 123)");
 }
 
 /// `parameterize` with no body is rejected **before the program runs**, so it
