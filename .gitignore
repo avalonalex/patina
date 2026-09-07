@@ -27,3 +27,7 @@ scheme_tests/reports/larceny_r6rs_tree_walker/
 # crates/patina-tests/<suite>.log therefore means that install regressed. That
 # one should stay visible in `git status` rather than be ignored with the rest.
 /*.log
+# Running a suite file from its own directory -- the other natural way to check
+# it against an oracle -- drops the log there instead. That one carries no
+# signal, so ignore it without weakening the rule above.
+crates/patina-tests/tests/scheme/**/*.log

@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  80 as of 2026-09-07.
+  79 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -122,8 +122,10 @@ directory is one of the seven above and says what *sort* of thing the file is
 about; the filename keeps the concern name the test has always had
 (`tail-recursion.scm`, `wind-thunk-exceptions.scm`), because several of these
 files are named after defect classes rather than spec sections and the name is
-the documentation. Deliberately *not* by R7RS section: `conversion` alone spans
-§6.2, 6.6, 6.7 and 6.8, and a section number would delete why the file exists.
+the documentation. Deliberately *not* by R7RS section: a concern often spans several — `data/`
+holds conversions from §6.2 today and would hold §6.6, 6.7 and 6.8's
+(`char->integer`, `string->list`, `vector->list`) beside them — and a section
+number would delete why the file exists.
 
 Two migration rules learned the hard way in #193 Phase 1, both from rows that
 passed while asserting something else:
