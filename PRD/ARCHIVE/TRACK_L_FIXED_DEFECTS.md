@@ -968,7 +968,8 @@ already admitted `.` and non-ASCII letters — both themselves deviations from a
 7.1.1, so this is consistent with what the lexer already did rather than a new posture. `,@` is
 lexed before identifiers and so is unaffected, as is `⟨real⟩@⟨real⟩` polar notation (`@` is an
 identifier *start*; a leading digit still reads as a number). Both are covered by unit tests
-alongside `crates/patina-tests/tests/at_identifiers.rs`.
+alongside `crates/patina-tests/tests/scheme/reader/at-identifiers.scm` (a `.rs`
+file until #193 Phase 1 migrated it).
 
 
 

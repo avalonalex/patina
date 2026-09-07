@@ -934,8 +934,8 @@ impl Lexer {
     /// contains a token they admit — so none can change an existing program's
     /// meaning. The reasoning for the non-ASCII rule, and what the three
     /// reference implementations do, is in `PRD/ARCHIVE/TRACK_L_FIXED_
-    /// DEFECTS.md`; `@` is in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, with
-    /// cases in `crates/patina-tests/tests/at_identifiers.rs`.
+    /// DEFECTS.md`; `@` is in `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`, with
+    /// cases in `crates/patina-tests/tests/scheme/reader/at-identifiers.scm`.
     ///
     /// Whitespace is the one exclusion, and the one place Patina is *stricter*
     /// than every reference: chibi welds `a<U+00A0>b` into one symbol, Gauche

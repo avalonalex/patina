@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  79 as of 2026-09-07.
+  77 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -94,13 +94,26 @@ Two reasons to reach for a `.scm` file first:
   `dynamic-wind`/continuation shapes, so each says which rows it corroborates
   and which it dies on.
 
-  **One thing a `.scm` row gives up.** `assert_program_eval_to` compared the
-  datum writer's *printed* output; `test-equal` compares with `equal?`. So a
-  migrated row no longer notices a printing regression that leaves `equal?`
-  intact — the class #187 and #189 were about. That coverage belongs to
-  `external_representation.rs` and `circular_data.rs`, which assert on rendering
-  deliberately; it was only ever incidental in the rows being migrated, but it
-  is a real loss and not a free move.
+  **A `.scm` row can keep printed-form coverage, and should where the row is
+  about it.** `assert_program_eval_to` compared the datum writer's *printed*
+  output; `test-equal` compares with `equal?`, so a bare migration stops
+  noticing a printing regression that leaves `equal?` intact — the class #187
+  and #189 were about. Where that is the point of the row, put the writer back
+  under test with this exact three-line helper, copied verbatim:
+
+  ```scheme
+  (define (written x)
+    (let ((p (open-output-string))) (write x p) (get-output-string p)))
+  ```
+
+  It needs `(scheme write)` in the import set — which resolves without one on
+  Patina (issue #211), so an omission is invisible here and fails on both
+  oracles. `reader/vertical-bar-identifiers.scm` is the worked example: it could
+  not migrate at all until this existed, and the round-trip row it enabled found
+  a live writer bug. Copies must stay identical; one using `display` would
+  change what a whole file asserts. Where printing is *incidental* to the row,
+  the loss is real and that coverage belongs in `external_representation.rs` and
+  `circular_data.rs`, which assert on rendering deliberately.
 
   A file that disclaims a property should say where the property is checked
   instead. `tail-recursion.scm` is the case in point: its rows pin that each
