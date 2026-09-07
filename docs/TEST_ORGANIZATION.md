@@ -52,8 +52,41 @@ workspace/
 │           ├── common/       # Test utilities
 │           ├── compliance/   # R7RS compliance tests
 │           ├── integration/  # Chibi comparison tests
+│           ├── scheme/       # *.scm test files, run by scheme_suite.rs
 │           └── *.rs          # Feature-specific tests
 ```
+
+### Scheme test files (`tests/scheme/`, driven by `scheme_suite.rs`)
+
+**Prefer these for new tests of the language.** They are ordinary, portable
+SRFI 64 programs — `(import (scheme base) (srfi 64))`, `test-begin`,
+`test-equal`, `test-end` — and one Rust driver runs every one of them on every
+backend. Adding a backend touches the driver; adding a test touches neither.
+
+Two reasons to reach for a `.scm` file first:
+
+- **Cost.** Measured on a warm build, adding one `.scm` file rebuilds in
+  **0.098 s**; adding one `.rs` test file costs **8.96 s**, because every `.rs`
+  file directly in a `tests/` directory is its own crate and its own link
+  against the whole workspace. That is the 88-binaries problem CLAUDE.md's
+  build-cost table describes, and #193's reason for existing.
+- **Portability.** The same file runs under chibi and Gauche unchanged, which
+  makes it an oracle and not only a suite. Differences are real findings — for
+  `callability.scm`, Gauche's three disagreements are the deliberate
+  divergences its own comments already document.
+
+**What still belongs in a `.rs` file**, because a `.scm` file cannot express
+it: a row whose backends give *different values*; a row deliberately asserted
+on one backend; that an error escapes an *unguarded* program (observable only
+from outside it); and anything asserting *which stage* rejected a program, or
+touching `Heap`, `VmState`, `Instruction`, `SourceMap`, GC counters or the
+library registry. The rule of thumb #193 uses: what is about the **language**
+goes to Scheme, what is about the **implementation** stays in Rust.
+
+Every file is listed in `scheme_suite.rs`'s `SUITE` table with a minimum
+assertion count. That floor is not bookkeeping — a file that stops running
+reports no failures, so without it a truncated or skipped file passes. Skips
+are rejected outright for the same reason.
 
 ## Test Categories
 

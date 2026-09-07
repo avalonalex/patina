@@ -1380,8 +1380,9 @@ captured, which `DynamicWindRecord` now carries. That is R7RS 6.10's rule ("call
 dynamic environment as the call to dynamic-wind") applied to the one part of the dynamic
 environment the record did not already hold, and it is what makes the `finally` behaviour below
 fall out of the unwinder rather than be patched onto it. Gauche arbitrates `caught` (chibi loops
-forever on the repro). Now `test_an_error_inside_a_wind_thunk_reaches_the_enclosing_guard` in
-`callability.rs`, one expectation on both backends.
+forever on the repro). Now the "an error in a wind thunk reaches the enclosing guard" row in
+`crates/patina-tests/tests/scheme/callability.scm` (migrated from
+`callability.rs` by #193 Phase 0) holds it, one expectation on both backends.
 
 The same change closed triage family 30 — a `k` invoked from an *after* thunk skipped the enclosing
 after thunk on the tree-walker. The whole unwind used to run on the nested trampoline, and the second

@@ -130,7 +130,7 @@ answers the one question its callers have and the dispatch loop's callers do
 not: whether the callee finished or left a frame. A dead parameter had made a
 whole dispatcher look unreachable from most of the VM.
 
-Held by `callability.rs::test_apply_through_call_with_values_accepts_a_control_primitive`
+Held by `tests/scheme/callability.scm`'s "apply as call-with-values' consumer" rows (migrated from `callability.rs` by #193 Phase 0)
 and `backend_divergence.rs::a_control_primitive_can_be_the_prompt_body`, both
 collapsed out of the quarantines that had pinned the failures, plus
 `every_frameless_call_site_takes_a_control_primitive` for the remaining sites.
