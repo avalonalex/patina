@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  77 as of 2026-09-07.
+  76 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -112,8 +112,9 @@ Two reasons to reach for a `.scm` file first:
   not migrate at all until this existed, and the round-trip row it enabled found
   a live writer bug. Copies must stay identical; one using `display` would
   change what a whole file asserts. Where printing is *incidental* to the row,
-  the loss is real and that coverage belongs in `external_representation.rs` and
-  `circular_data.rs`, which assert on rendering deliberately.
+  the loss is real and that coverage belongs somewhere that asserts on rendering
+  deliberately — `external_representation.rs`, or `data/circular-data.scm`,
+  which is what `circular_data.rs` became once these three helpers existed.
 
   A file that disclaims a property should say where the property is checked
   instead. `tail-recursion.scm` is the case in point: its rows pin that each

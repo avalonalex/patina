@@ -83,6 +83,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/parameters.scm", 18),
     ("control/tail-recursion.scm", 36),
     ("control/wind-thunk-exceptions.scm", 12),
+    ("data/circular-data.scm", 27),
     ("data/conversion.scm", 59),
     ("expansion/define-values.scm", 14),
     ("reader/at-identifiers.scm", 11),
