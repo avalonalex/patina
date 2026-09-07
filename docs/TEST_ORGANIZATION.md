@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  84 as of 2026-09-07.
+  83 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -93,6 +93,14 @@ Two reasons to reach for a `.scm` file first:
   control-flow files are the case in point: chibi cannot survive some deep
   `dynamic-wind`/continuation shapes, so each says which rows it corroborates
   and which it dies on.
+
+  **One thing a `.scm` row gives up.** `assert_program_eval_to` compared the
+  datum writer's *printed* output; `test-equal` compares with `equal?`. So a
+  migrated row no longer notices a printing regression that leaves `equal?`
+  intact — the class #187 and #189 were about. That coverage belongs to
+  `external_representation.rs` and `circular_data.rs`, which assert on rendering
+  deliberately; it was only ever incidental in the rows being migrated, but it
+  is a real loss and not a free move.
 
   A file that disclaims a property should say where the property is checked
   instead. `tail-recursion.scm` is the case in point: its rows pin that each

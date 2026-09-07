@@ -83,7 +83,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/parameters.scm", 18),
     ("control/tail-recursion.scm", 36),
     ("control/wind-thunk-exceptions.scm", 12),
-    ("stdlib/lazy-evaluation.scm", 26),
+    ("stdlib/lazy-evaluation.scm", 29),
 ];
 
 fn scheme_dir() -> PathBuf {
