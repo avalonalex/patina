@@ -82,6 +82,19 @@ Two reasons to reach for a `.scm` file first:
   `callability.scm`, Gauche's three disagreements are the deliberate
   divergences its own comments already document.
 
+  Not every file gets *both* oracles, and which ones it gets belongs **in the
+  file**, measured, not restated here where the two copies drift apart. The
+  control-flow files are the case in point: chibi cannot survive some deep
+  `dynamic-wind`/continuation shapes, so each says which rows it corroborates
+  and which it dies on.
+
+  Two things follow for a new file. **Order a row an oracle cannot survive
+  last**, because SRFI 64 stops the file where it dies — in
+  `internal-escape-boundaries.scm` that one move took chibi from 6 rows to 10.
+  And **do not generalise one bad row to the file**: the first draft of that
+  file claimed chibi could not arbitrate it at all, which threw away ten rows of
+  corroboration that were there for the asking.
+
 **Where a new `.scm` file goes: directory by kind, filename by concern.** The
 directory is one of the seven above and says what *sort* of thing the file is
 about; the filename keeps the concern name the test has always had

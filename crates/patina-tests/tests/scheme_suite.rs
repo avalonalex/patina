@@ -79,7 +79,9 @@ use std::path::{Path, PathBuf};
 const SUITE: &[(&str, i64)] = &[
     ("control/callability.scm", 26),
     ("control/case-lambda.scm", 20),
+    ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
+    ("control/wind-thunk-exceptions.scm", 12),
 ];
 
 fn scheme_dir() -> PathBuf {

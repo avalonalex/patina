@@ -134,8 +134,8 @@ fn test_gcd_with_let_values() {
 ///
 /// The after-thunk shape has no handler at all, on purpose: with a `guard`
 /// around it the secondary is *caught* under the `finally` rule (R7RS 6.10,
-/// `wind_thunk_exceptions.rs`), so that form stops being an error on a
-/// backend that meets the rule, and it did on the tree-walker.
+/// `tests/scheme/control/wind-thunk-exceptions.scm`), so that form stops being
+/// an error on a backend that meets the rule, and it did on the tree-walker.
 #[test]
 fn an_error_leaves_the_interpreter_ready_for_the_next_form() {
     fn check<B: Backend>(interp: Interpreter<B>, name: &str) {

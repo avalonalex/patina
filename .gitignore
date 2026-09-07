@@ -17,3 +17,13 @@ scheme_tests/reports/larceny/
 scheme_tests/reports/larceny_r6rs/
 scheme_tests/reports/larceny_tree_walker/
 scheme_tests/reports/larceny_r6rs_tree_walker/
+
+# SRFI 64 writes <suite-name>.log beside the process's cwd. Running a
+# tests/scheme/ file by hand -- which is how each one is checked against chibi
+# and Gauche -- drops one in the repo root, so ignore those.
+#
+# Anchored to the root deliberately. The driver's cwd is the *crate* root, and
+# it installs `test-runner-null` precisely so no log is written; a
+# crates/patina-tests/<suite>.log therefore means that install regressed. That
+# one should stay visible in `git status` rather than be ignored with the rest.
+/*.log

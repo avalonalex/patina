@@ -1402,7 +1402,7 @@ escape-catching arm and resumes a continuation *inside* itself, so `(k 'x)` unde
 wind lands as `#<unspecified>` on the tree-walker where the VM answers `x`. The wind thunks
 themselves run under the record's stack now, on both backends; a raise *inside such a callback* in
 a wind thunk is still outside the `finally` rule, which is the limit of the entry above and of
-`wind_thunk_exceptions.rs`. (The VM's own callback boundary, `VmApplyContext`, re-enters the same
+`wind-thunk-exceptions.scm`. (The VM's own callback boundary, `VmApplyContext`, re-enters the same
 machine and so does *not* fabricate empty stacks — this row is the tree-walker's alone.)
 
 Its sibling row closed on 2026-09-01: `reentered_continuation_keeps_exception_handler` was
@@ -1556,8 +1556,10 @@ records and handlers carry frame depths that a jump makes meaningless:
 
 **Acceptance (VM), all met.** Rows 1, 2, 5, 6, 10 and 11 answer as Gauche
 does; every row is pinned in
-`crates/patina-tests/tests/wind_thunk_exceptions.rs`, now as a single
-`assert_program_eval_to` per row against both backends. The two shapes found
+`crates/patina-tests/tests/scheme/control/wind-thunk-exceptions.scm` (a `.rs`
+file of `assert_program_eval_to` calls until #193 Phase 1 migrated it), now as
+a single SRFI 64 `test-equal` per row, run on both backends by
+`scheme_suite.rs`. The two shapes found
 by review of the tree-walker PR also answer as Gauche does and have moved to
 `backend_divergence.rs`' "Not divergences": a continuation captured *inside*
 an after-thunk while a jump is running it (the VM used to run the thunk again
