@@ -150,8 +150,10 @@ figures do not. Re-measure before quoting them if that lands.
 - `PRD/phase2/R7RS_LARGE_STATUS.md` — **the bundling policy and edition
   tracker.** The answer to "does Patina ship this library, and why (not)":
   Red 16/17, Tangerine 4/8 as of 2026-09-01, with the policy (standard-track
-  + runtime-forced + demanded legacy aliases; leaf libraries stay out) that
-  Track L's L1 defers to. Check it before bundling anything.
+  + runtime-forced + demanded legacy aliases + the standard testing API —
+  SRFI 64, added 2026-09-06 and not shipped until #193's Phase 0; other leaf
+  libraries stay out) that Track L's L1 defers to. Check it before bundling
+  anything.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker (Priorities 1–5 status)
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`

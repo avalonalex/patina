@@ -176,8 +176,9 @@ Three lessons this queue recorded, kept because each corrected a filed premise:
 
 *Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
 test with `(chibi test)`, which Patina **supplies from `test-lib/`** (#197; it is not bundled, since
-nothing in `lib/` imports it — see `test-lib/README.md`). Whether SRFI 64 should be bundled for
-Patina's own suite under #193, or supplied the same way, is #194's open question and unsettled. Primitive-backed work goes under
+nothing in `lib/` imports it — see `test-lib/README.md`). **Settled 2026-09-06:** SRFI 64 *is* to be
+bundled, by a deliberate amendment to `PRD/phase2/R7RS_LARGE_STATUS.md` § Bundling policy addition 3,
+which L1 defers to; `(chibi test)` stays supplied. The work is #193's Phase 0. Primitive-backed work goes under
 `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
 library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 - **Porting patterns to reapply** (from `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`): import `(scheme r5rs)` for R5RS naming (`exact->inexact` etc.); shim `:optional`/`let-optionals`/`receive`/`check-arg`; treat form-feed as whitespace (already fixed); defer arity rejection so `guard` can catch `apply` errors (already fixed); watch the VM control-op edge cases in `PRD/phase2/INSTRUCTION_LEVEL_CONTROL_OPS.md`.
