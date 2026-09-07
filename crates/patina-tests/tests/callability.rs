@@ -121,15 +121,24 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
     // `(write e)`, `tests/scheme/data/circular-data.scm` added `(display e)`
     // when it migrated (#193 Phase 1), and this is the diagnostic for an
     // uncaught raise — which is the top-level path, so no `.scm` file can
-    // reach it. `expect_error` calls `e.to_string()`, so the object really is
-    // rendered here; a return to the unlabelled walk aborts the process rather
-    // than failing this row, which is what makes it worth stating separately
-    // from the two guarded halves.
-    assert_program_eval_error(
+    // reach it.
+    //
+    // Asserting on `#0=` rather than merely on "it errored", because the two
+    // are not the same claim: the backend error's `Display` could report an
+    // unhandled exception without rendering the irritants at all, and the
+    // weaker helper would pass while exercising none of the writer. Measured
+    // 2026-09-07 — both backends put the label in the message — so the row
+    // states it. A return to the unlabelled walk would abort the process
+    // instead of failing here, which is the other half of why this is worth
+    // stating separately from the two guarded halves.
+    assert_program_eval_error_at(
         "(define xs (list 1))
          (define e (guard (c (#t c)) (error \"boom\" xs)))
          (set-car! xs e)
          (raise e)",
+        ErrorClass::AtRuntime,
+        ErrorClass::AtRuntime,
+        "#0=",
     );
 }
 

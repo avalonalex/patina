@@ -106,6 +106,18 @@ Two reasons to reach for a `.scm` file first:
     (let ((p (open-output-string))) (write x p) (get-output-string p)))
   ```
 
+  Two siblings exist for the other procedures that share the writer's passes,
+  recorded here for the same reason and subject to the same rule — a `shared`
+  that quietly used `write` would change what a whole file asserts, and the
+  three differ by exactly one procedure name:
+
+  ```scheme
+  (define (shared x)
+    (let ((p (open-output-string))) (write-shared x p) (get-output-string p)))
+  (define (displayed x)
+    (let ((p (open-output-string))) (display x p) (get-output-string p)))
+  ```
+
   It needs `(scheme write)` in the import set — which resolves without one on
   Patina (issue #211), so an omission is invisible here and fails on both
   oracles. `reader/vertical-bar-identifiers.scm` is the worked example: it could

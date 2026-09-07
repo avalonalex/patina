@@ -301,6 +301,11 @@
 (define (zeros n)
   (let loop ((i 0) (acc '())) (if (= i n) acc (loop (+ i 1) (cons 0 acc)))))
 
+;; One list for the two rows below, which is the point they make together:
+;; `display` and `write-shared` run the same passes over the *same* spine, and
+;; only `write` used to be pinned.
+(define fifty-thousand (zeros 50000))
+
 ;; 100000 digits + 99999 separators + 2 parens.
 (test-equal "write on a 100000-element list does not exhaust the stack"
   200001 (string-length (written (zeros 100000))))
@@ -309,14 +314,14 @@
 ;; passes, but only `write` used to be pinned — so a depth regression reachable
 ;; only under `display_mode` or `label_shared` would have passed the suite.
 (test-equal "display does not either"
-  100001 (string-length (displayed (zeros 50000))))
+  100001 (string-length (displayed fifty-thousand)))
 
 ;; The harder shape on purpose: a list consed with every one of its tails, so
 ;; *every* tail is shared and therefore labelled. A labelled tail opens a paren,
 ;; which looks like it must nest — the writer counts the open parens instead of
 ;; recursing for them. Before that, this aborted the process above about 25_000.
 (test-assert "nor does write-shared with every tail labelled"
-  (let* ((xs (zeros 50000))
+  (let* ((xs fifty-thousand)
          (tails (let loop ((l xs) (acc '()))
                   (if (null? l) (reverse acc) (loop (cdr l) (cons l acc))))))
     (> (string-length (shared (cons xs tails))) 100000)))

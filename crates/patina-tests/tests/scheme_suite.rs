@@ -20,6 +20,18 @@
 //! under chibi or Gauche and it does the same, which is the property that
 //! makes these files an oracle rather than only a suite (#193 Phase 3).
 //!
+//! **That property is exercised by hand, and nothing here re-checks it.** Each
+//! file's header records the tallies its oracles produced, on a stated date,
+//! and those numbers are what the next person runs it against — but this driver
+//! runs only the two Patina backends, and `run_chibi_tests.sh` covers the chibi
+//! R7RS suite rather than `tests/scheme/`. So a row edited after the header was
+//! written leaves the claim stale with nothing to catch it. All 14 files make
+//! such a claim — every one names chibi or Gauche — and four carry an explicit
+//! pass/fail tally: `reader/at-identifiers.scm`,
+//! `reader/vertical-bar-identifiers.scm`, `data/conversion.scm` and
+//! `data/circular-data.scm`. Closing this is what Phase 3 is for; until then the
+//! rule is that a PR touching a file's rows re-measures its header.
+//!
 //! # How the driver reads the result, and why not the obvious way
 //!
 //! Not from the exit status. Measured on SRFI 64's own runner: **`test-end`
@@ -179,9 +191,18 @@ fn run_on<B: Backend>(
 /// Both backends' counts, or the first problem that stopped one of them.
 ///
 /// Returns rather than panics so that one file which fails to *run at all* —
-/// a resource limit, an abort, an error escaping to the top level — costs its
-/// own row and not every file after it. `every_scheme_file_passes_on_both_backends`
-/// collects these for the same reason it collects assertion failures.
+/// a resource limit, an error escaping to the top level — costs its own row and
+/// not every file after it. `every_scheme_file_passes_on_both_backends` collects
+/// these for the same reason it collects assertion failures.
+///
+/// **An abort is the exception, and it is not one a `Result` can carry.** A
+/// stack overflow or a SIGSEGV takes the test process down: no `Err` is built,
+/// no counts are read, and every other file in [`SUITE`] loses its report too.
+/// That is not hypothetical — `data/circular-data.scm`'s three stack-depth rows
+/// exist because the writer used to overflow on a 100_000-element list, so the
+/// suite now contains the shape. It is the isolation a migration gives up:
+/// those rows used to have a binary of their own, and a regression killed only
+/// that one.
 fn run_on_both_backends(label: &str, program: &str) -> Result<Counts, String> {
     let tw = run_on(
         &common::tree_walker_interpreter(),
