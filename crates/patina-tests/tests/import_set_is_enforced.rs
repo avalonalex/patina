@@ -21,10 +21,27 @@ use common::{assert_program_eval_error, assert_program_eval_to, eval_program as 
 /// #193's migration is what surfaced the difference.
 #[test]
 fn case_lambda_needs_its_import() {
-    assert_program_eval_error("(case-lambda)");
+    // Unbound without the import. Asserted as "fails", not by matching the
+    // diagnostic: the backends word it differently — `Undefined variable:
+    // case-lambda` on the tree-walker, ``unbound variable: `case-lambda` `` on
+    // the VM — which is the same reason `test_unimported_names_do_not_resolve`
+    // below does not match text either. What keeps this row honest about
+    // *which* failure it sees is the pair below: with the import, the same
+    // expression is a procedure, so the failure here can only be resolution.
+    assert_program_eval_error("(import (scheme base)) (case-lambda)");
+
+    // With the import it is a procedure — including with *no* clauses, which is
+    // the fact the old name got wrong. `(case-lambda)` expands to
+    // `(lambda args (error …))` (lib/scheme/case-lambda.sld), so it accepts
+    // every call and raises on each, rather than being an error to write.
     assert_program_eval_to(
-        "(import (scheme case-lambda)) (procedure? (case-lambda ((x) x)))",
+        "(import (scheme case-lambda)) (procedure? (case-lambda))",
         "#t",
+    );
+    assert_program_eval_to(
+        "(import (scheme base) (scheme case-lambda))
+         (guard (e (#t 'raised)) ((case-lambda)))",
+        "raised",
     );
 }
 

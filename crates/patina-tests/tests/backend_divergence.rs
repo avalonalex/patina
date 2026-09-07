@@ -1372,7 +1372,7 @@ fn the_prompt_body_may_be_a_primitive_or_a_parameter() {
 /// *body* a second. `call_any` holds no probe of its own now; it is
 /// `call_value` plus a frame-depth test, so a callee is callable here exactly
 /// when it is callable from a `Call` instruction. The sibling row is
-/// `tests/scheme/callability.scm`'s "apply as call-with-values' consumer"
+/// `tests/scheme/control/callability.scm`'s "apply as call-with-values' consumer"
 /// rows (migrated from `callability.rs` by #193 Phase 0).
 ///
 /// Kept as its own test rather than folded into the neighbour above, whose

@@ -184,47 +184,61 @@ fn read(path: &Path) -> String {
 
 #[test]
 fn every_scheme_file_passes_on_both_backends() {
+    // Collected, not asserted in the loop: a panic on the first file would hide
+    // every later one, and the point of a suite is to learn what *all* of it
+    // says in one run. Same reason `cargo test` needs `--no-fail-fast`.
+    let mut problems: Vec<String> = Vec::new();
+
     for (name, floor) in SUITE {
         let path = scheme_dir().join(name);
         let counts = run_on_both_backends(name, &read(&path));
+        // SRFI 64 names its log after the *suite*, not the path, and writes it
+        // to the cwd — so the repro below says `<basename>.log`, not
+        // `control/<name>.log`, which would not exist.
+        let stem = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(name);
 
-        assert_eq!(
-            counts.fail,
-            0,
-            "[{name}] {} assertion(s) failed. To see which, run it from a scratch \
-             directory — SRFI 64 puts the per-assertion detail in a log file \
-             beside the cwd, not on stdout, and running from the repo root would \
-             leave it there:\n  \
-             (cd $(mktemp -d) && $OLDPWD/target/release/patina \
-             -A $OLDPWD/test-lib $OLDPWD/crates/patina-tests/tests/scheme/{name} \
-             && cat {stem}.log)",
-            counts.fail,
-            stem = name.trim_end_matches(".scm")
-        );
-        assert_eq!(
-            counts.xpass, 0,
-            "[{name}] {} test(s) marked `test-expect-fail` now pass. That is the \
-             quarantine doing its job: delete the expectation, and the row it \
-             guarded becomes an ordinary assertion.",
-            counts.xpass
-        );
-        assert_eq!(
-            counts.skip, 0,
-            "[{name}] {} test(s) skipped. Nothing here should skip: a skipped \
-             row asserts nothing while still looking like a row, which is how a \
-             file stops testing without failing. If a row genuinely cannot run \
-             on a backend, mark it `test-expect-fail` so it is visible and \
-             retires itself.",
-            counts.skip
-        );
-        assert!(
-            counts.ran() >= *floor,
-            "[{name}] ran {} assertions, expected at least {floor} — a file that \
-             stops running reports no failures, so the floor is what tells the \
-             difference between passing and not happening. Counts: {counts:?}",
-            counts.ran()
-        );
+        if counts.fail != 0 {
+            problems.push(format!(
+                "[{name}] {} assertion(s) failed. To see which, run it from a \
+                 scratch directory — SRFI 64 puts per-assertion detail in a log \
+                 beside the cwd, not on stdout:\n  \
+                 (cd $(mktemp -d) && $OLDPWD/target/release/patina -A $OLDPWD/test-lib \
+                 $OLDPWD/crates/patina-tests/tests/scheme/{name} && cat {stem}.log)",
+                counts.fail
+            ));
+        }
+        if counts.xpass != 0 {
+            problems.push(format!(
+                "[{name}] {} test(s) marked `test-expect-fail` now pass. That is \
+                 the quarantine doing its job: delete the expectation, and the \
+                 row it guarded becomes an ordinary assertion.",
+                counts.xpass
+            ));
+        }
+        if counts.skip != 0 {
+            problems.push(format!(
+                "[{name}] {} test(s) skipped. Nothing here should skip: a skipped \
+                 row asserts nothing while still looking like a row. If a row \
+                 genuinely cannot run on a backend, mark it `test-expect-fail` \
+                 so it is visible and retires itself.",
+                counts.skip
+            ));
+        }
+        if counts.ran() < *floor {
+            problems.push(format!(
+                "[{name}] ran {} assertions, expected at least {floor} — a file \
+                 that stops running reports no failures, so the floor is what \
+                 tells the difference between passing and not happening. \
+                 Counts: {counts:?}",
+                counts.ran()
+            ));
+        }
     }
+
+    assert!(problems.is_empty(), "\n{}", problems.join("\n\n"));
 }
 
 /// Every file declares its own imports, sufficient to reach its first
@@ -288,14 +302,20 @@ fn every_file_carries_its_own_imports() {
 #[test]
 fn the_suite_table_and_the_directory_agree() {
     let dir = scheme_dir();
+    // Joined with `/` from components rather than `to_string_lossy()`: the
+    // relative path has more than one component now, and a platform separator
+    // would not match SUITE's literals. `common::shipped_libraries` exists
+    // because three tests had already grown three copies of this mistake.
     let mut on_disk: Vec<String> = common::files_under(&dir)
         .into_iter()
         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("scm"))
         .map(|p| {
             p.strip_prefix(&dir)
                 .expect("under tests/scheme")
-                .to_string_lossy()
-                .into_owned()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
         })
         .collect();
     on_disk.sort();

@@ -53,6 +53,13 @@ workspace/
 │           ├── compliance/   # R7RS compliance tests
 │           ├── integration/  # Chibi comparison tests
 │           ├── scheme/       # *.scm test files, run by scheme_suite.rs
+│           │   ├── control/  #   evaluation order, tail calls, wind, parameters
+│           │   ├── reader/   #   identifier syntax
+│           │   ├── expansion/#   macros, include, core syntactic bindings
+│           │   ├── data/     #   values and conversions
+│           │   ├── stdlib/   #   the (scheme …) libraries
+│           │   ├── srfi/     #   bundled SRFI behaviour
+│           │   └── libraries/#   import/export machinery visible from Scheme
 │           └── *.rs          # Feature-specific tests
 ```
 
@@ -74,6 +81,26 @@ Two reasons to reach for a `.scm` file first:
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
   divergences its own comments already document.
+
+**Where a new `.scm` file goes: directory by kind, filename by concern.** The
+directory is one of the seven above and says what *sort* of thing the file is
+about; the filename keeps the concern name the test has always had
+(`tail-recursion.scm`, `wind-thunk-exceptions.scm`), because several of these
+files are named after defect classes rather than spec sections and the name is
+the documentation. Deliberately *not* by R7RS section: `conversion` alone spans
+§6.2, 6.6, 6.7 and 6.8, and a section number would delete why the file exists.
+
+Two migration rules learned the hard way in #193 Phase 1, both from rows that
+passed while asserting something else:
+
+- **Keep top-level `define`s at top level.** A top-level self-reference
+  resolves through the global environment at call time; an internal `define` is
+  `letrec*` and compiles to a local slot. Wrapping a recursive row in
+  `(let () (define …) …)` silently moves it off the path it was written for.
+- **Sequence side effects with `let*`, never argument positions.** R7RS leaves
+  argument evaluation order unspecified and chibi evaluates right to left, so
+  `(list (c) (c 5) (c 3) (c))` answers differently there — reporting a
+  difference between implementations that is not one.
 
 **What still belongs in a `.rs` file**, because a `.scm` file cannot express
 it: a row whose backends give *different values*; a row deliberately asserted
@@ -150,7 +177,6 @@ R7RS specification compliance organized by category:
 - `lazy_evaluation.rs` - delay/force
 - `parameters.rs` - Parameter objects
 - `scheme_eval.rs` - (scheme eval) library
-- `case_lambda.rs` - case-lambda macro
 
 #### **Library Tests**
 - `sld_file_loading.rs` - Library loading (~50 tests)
