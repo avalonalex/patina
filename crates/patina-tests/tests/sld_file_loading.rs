@@ -1412,3 +1412,33 @@ fn test_a_malformed_include_shared_is_still_refused() {
         .expect_err("a malformed include-shared must not be skipped");
     assert!(err.to_string().contains("cannot skip"), "got: {err}");
 }
+
+/// A library body importing only `(scheme r5rs)` can still reach `define`,
+/// `lambda`, `if` and `quote`.
+///
+/// Syntax keywords are real bindings, so a library that claims to provide R5RS
+/// has to export them; srfi-78's reference implementation in the vendored
+/// corpus is exactly this shape, and failed with `unbound variable: define`
+/// before they were exported.
+///
+/// From `scheme_r5rs.rs` when it migrated (#193 Phase 1). The rest of that file
+/// is `tests/scheme/stdlib/scheme-r5rs.scm`, but this row cannot go there: it
+/// needs a library whose import set is *only* `(scheme r5rs)`, and a `.scm`
+/// file in the suite has already imported `(srfi 64)` to have `test-equal` at
+/// all. It lands here rather than keeping a binary alive for one row — this
+/// file already owns library-body and import resolution, per its own header.
+///
+/// The top level cannot show this either: core syntax is seeded there, so the
+/// keywords resolve whether the library exports them or not.
+#[test]
+fn a_library_body_importing_only_scheme_r5rs_has_core_syntax() {
+    common::assert_program_eval_to(
+        "(define-library (t r5rs-only)
+           (export f)
+           (import (scheme r5rs))
+           (begin (define (f) (if #t 'ok 'no))))
+         (import (t r5rs-only))
+         (f)",
+        "ok",
+    );
+}
