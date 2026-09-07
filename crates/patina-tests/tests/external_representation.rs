@@ -1,5 +1,6 @@
 //! What `display` and `write` print for values R7RS gives no external
-//! representation: error objects, procedures, continuations, ports.
+//! representation: error objects, procedures, parameters, continuations,
+//! ports.
 //!
 //! The standard lets an implementation print these however it likes, so none
 //! of the spellings here is required — but *something informative* is, and
@@ -250,6 +251,25 @@ fn test_a_user_defined_procedure_prints_as_a_procedure() {
         "(import (scheme case-lambda)) (case-lambda ((x) x))",
         "#<procedure>",
     );
+}
+
+/// A parameter object prints as what it is.
+///
+/// From `parameters.rs` when it migrated (#193 Phase 1): the rest of that file
+/// is `tests/scheme/control/parameters.scm`, but this row asserts Patina's own
+/// spelling for a value R7RS gives no external representation, which is this
+/// file's subject and not a claim another implementation can be held to.
+///
+/// It sits with the procedures because that is the company it keeps: a
+/// parameter fell through the writer's probe chain to `#<unknown>` until #72
+/// made `procedure?` answer `#t` for one, at which point a value claiming to be
+/// a procedure printed as nothing in particular and the same commit gave it
+/// this spelling. It is **not** one of the three values issue #181 fixed —
+/// those are the error object, the continuation and the VM closure named in
+/// this file's opening comment.
+#[test]
+fn test_a_parameter_prints_as_a_parameter() {
+    assert_program_eval_to("(make-parameter 1)", "#<parameter>");
 }
 
 /// A primitive prints the same as a `lambda`. Nothing in the printed form says

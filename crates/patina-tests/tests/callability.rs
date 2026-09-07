@@ -8,9 +8,10 @@
 //!
 //! What stayed is what a `.scm` file cannot express:
 //!
-//! - a row whose two backends give **different values** — expressible in
-//!   Scheme only once a backend names itself to `cond-expand`, which #206
-//!   reverted and is not yet rebuilt;
+//! - a row whose two backends give **different values**. #208 has since given
+//!   each backend a `cond-expand` identifier, so this is now expressible in
+//!   Scheme; these rows stay here until someone moves them deliberately, which
+//!   is a change about divergences and not about file layout;
 //! - rows deliberately asserted on **one backend**, for a reason that is not a
 //!   disagreement about the answer;
 //! - that an error escapes an **unguarded top-level program**, which is
@@ -54,7 +55,14 @@ use common::{
 /// answers until that is fixed. Not `assert_divergence` — the tree-walker
 /// returns a value, not a failure.
 /// The unguarded halves of the catchable-error pairs whose guarded halves are
-/// in `tests/scheme/control/callability.scm`.
+/// in `tests/scheme/control/*.scm`.
+///
+/// **This is where a migrated file's unguarded rows land.** Phase 1 briefly
+/// gave them a file of their own (`unguarded_errors.rs`); that split one class
+/// across two homes that did not cross-reference each other, and since this
+/// file exists either way it also meant a migration that deleted one binary
+/// added one back — a net zero against the only thing #193 is trying to buy.
+/// Adding a row here costs nothing.
 ///
 /// They stayed in Rust because they assert something a `.scm` file cannot:
 /// that the error escapes an **unguarded top-level program**. SRFI 64's
@@ -90,6 +98,34 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
         "(import (scheme case-lambda))
          (define f (case-lambda ((x) x) ((x y) (cons x y))))
          (f 1 2 3)",
+    );
+
+    // From `parameters.rs` when it migrated (#193 Phase 1): a non-parameter in
+    // `parameterize`'s binding position. Guarded half — "a non-parameter in the
+    // binding position is an error" in `tests/scheme/control/parameters.scm`.
+    assert_program_eval_error(r#"(parameterize ((42 20)) (write-string "hello"))"#);
+}
+
+/// `parameterize` with no body is rejected **before the program runs**, so it
+/// is not the same claim as the rows above and does not pair with anything.
+///
+/// R7RS §4.2.6 gives `parameterize` a ⟨body⟩, which requires at least one
+/// expression; Patina rejects it while desugaring, and the diagnostic names
+/// `lambda` rather than `parameterize` because that is what the expansion
+/// builds — pinned here only in the part both backends share, since one says
+/// `desugar error` and the other `Desugar error`.
+///
+/// It has no guarded half by construction rather than by choice: a program
+/// that never compiles cannot reach a handler, which is exactly why the stage
+/// is the assertion and why `test-error` in a `.scm` file could never have
+/// stated this one.
+#[test]
+fn parameterize_with_no_body_is_rejected_before_the_program_runs() {
+    assert_program_eval_error_at(
+        "(define p (make-parameter 10)) (parameterize ((p 20)))",
+        ErrorClass::BeforeRun,
+        ErrorClass::BeforeRun,
+        "body cannot be empty",
     );
 }
 
