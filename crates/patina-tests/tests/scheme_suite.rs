@@ -81,6 +81,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/case-lambda.scm", 20),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
+    ("control/tail-recursion.scm", 36),
     ("control/wind-thunk-exceptions.scm", 12),
 ];
 
@@ -117,14 +118,18 @@ impl Counts {
 /// can be nested inside a wrapper. Sharing the interpreter is what lets the
 /// driver set up before and inspect after while the file stays a plain
 /// top-level program.
-fn run_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) -> Counts {
+fn run_on<B: Backend>(
+    interp: &Interpreter<B>,
+    label: &str,
+    program: &str,
+) -> Result<Counts, String> {
     interp
         .eval_program("(import (scheme base) (srfi 64)) (test-runner-current (test-runner-null))")
-        .unwrap_or_else(|e| panic!("[{label}] could not install the null runner: {e}"));
+        .map_err(|e| format!("[{label}] could not install the null runner: {e}"))?;
 
     interp
         .eval_program(program)
-        .unwrap_or_else(|e| panic!("[{label}] failed to run: {e}"));
+        .map_err(|e| format!("[{label}] failed to run: {e}"))?;
 
     let value = interp
         .eval_program(
@@ -133,32 +138,28 @@ fn run_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) -> Co
                      (test-runner-xpass-count r) (test-runner-xfail-count r)
                      (test-runner-skip-count r)))",
         )
-        .unwrap_or_else(|e| panic!("[{label}] could not read the runner counts: {e}"));
+        .map_err(|e| format!("[{label}] could not read the runner counts: {e}"))?;
 
     let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
         value,
         interp.backend().global_env().heap(),
     );
-    let nums: Vec<i64> = text
+    let parsed: Option<Vec<i64>> = text
         .trim_matches(|c| c == '(' || c == ')')
         .split_whitespace()
-        .map(|n| {
-            n.parse()
-                .unwrap_or_else(|_| panic!("[{label}] expected five integers, got {text:?}"))
-        })
+        .map(|n| n.parse().ok())
         .collect();
-    assert_eq!(
-        nums.len(),
-        5,
-        "[{label}] expected five counts, got {text:?}"
-    );
-    Counts {
+    let nums = match parsed {
+        Some(nums) if nums.len() == 5 => nums,
+        _ => return Err(format!("[{label}] expected five counts, got {text:?}")),
+    };
+    Ok(Counts {
         pass: nums[0],
         fail: nums[1],
         xpass: nums[2],
         xfail: nums[3],
         skip: nums[4],
-    }
+    })
 }
 
 /// Run `program` on both backends, requiring them to agree.
@@ -167,22 +168,29 @@ fn run_on<B: Backend>(interp: &Interpreter<B>, label: &str, program: &str) -> Co
 /// Two backends can reach zero failures having run different numbers of
 /// assertions — a `cond-expand` that skips a group on one of them would do
 /// exactly that — and that divergence is the kind this suite exists to expose.
-fn run_on_both_backends(label: &str, program: &str) -> Counts {
+/// Both backends' counts, or the first problem that stopped one of them.
+///
+/// Returns rather than panics so that one file which fails to *run at all* —
+/// a resource limit, an abort, an error escaping to the top level — costs its
+/// own row and not every file after it. `every_scheme_file_passes_on_both_backends`
+/// collects these for the same reason it collects assertion failures.
+fn run_on_both_backends(label: &str, program: &str) -> Result<Counts, String> {
     let tw = run_on(
         &common::tree_walker_interpreter(),
         &format!("{label} (tree-walker)"),
         program,
-    );
-    let vm = run_on(&common::vm_interpreter(), &format!("{label} (vm)"), program);
-    assert_eq!(
-        tw, vm,
-        "[{label}] the backends disagree on what ran: tree-walker {tw:?}, vm {vm:?}"
-    );
-    vm
+    )?;
+    let vm = run_on(&common::vm_interpreter(), &format!("{label} (vm)"), program)?;
+    if tw != vm {
+        return Err(format!(
+            "[{label}] the backends disagree on what ran: tree-walker {tw:?}, vm {vm:?}"
+        ));
+    }
+    Ok(vm)
 }
 
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+fn read(path: &Path) -> Result<String, String> {
+    std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
 #[test]
@@ -194,7 +202,13 @@ fn every_scheme_file_passes_on_both_backends() {
 
     for (name, floor) in SUITE {
         let path = scheme_dir().join(name);
-        let counts = run_on_both_backends(name, &read(&path));
+        let counts = match read(&path).and_then(|src| run_on_both_backends(name, &src)) {
+            Ok(counts) => counts,
+            Err(problem) => {
+                problems.push(problem);
+                continue;
+            }
+        };
         // SRFI 64 names its log after the *suite*, not the path, and writes it
         // to the cwd — so the repro below says `<basename>.log`, not
         // `control/<name>.log`, which would not exist.
@@ -262,7 +276,7 @@ fn every_scheme_file_passes_on_both_backends() {
 #[test]
 fn every_file_carries_its_own_imports() {
     for (name, _) in SUITE {
-        let text = read(&scheme_dir().join(name));
+        let text = read(&scheme_dir().join(name)).unwrap_or_else(|e| panic!("[{name}] {e}"));
         let cut = text.find("(test-begin").unwrap_or_else(|| {
             panic!("[{name}] has no `(test-begin` — every file is an SRFI 64 program")
         });
@@ -351,7 +365,8 @@ fn harness_reports_each_result_kind() {
            (test-expect-fail 1)
            (test-equal 3 4)              ; xfail — still broken, as expected
            (test-end)"#,
-    );
+    )
+    .expect("the deliberate probe must run on both backends");
     assert_eq!(
         counts,
         Counts {

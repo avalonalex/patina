@@ -70,13 +70,19 @@ SRFI 64 programs — `(import (scheme base) (srfi 64))`, `test-begin`,
 `test-equal`, `test-end` — and one Rust driver runs every one of them on every
 backend. Adding a backend touches the driver; adding a test touches neither.
 
+**`scheme_suite.rs`'s `SUITE` table is the enumeration of these files** — the
+list below covers `tests/*.rs` only, and does not carry notes about files that
+have migrated out of it. `the_suite_table_and_the_directory_agree` keeps `SUITE`
+and the directory in step, which no prose list can do.
+
 Two reasons to reach for a `.scm` file first:
 
 - **Cost.** Measured on a warm build, adding one `.scm` file rebuilds in
   **0.098 s**; adding one `.rs` test file costs **8.96 s**, because every `.rs`
   file directly in a `tests/` directory is its own crate and its own link
-  against the whole workspace. That is the 88-binaries problem CLAUDE.md's
-  build-cost table describes, and #193's reason for existing.
+  against the whole workspace. That is the problem CLAUDE.md's build-cost table
+  describes, and #193's reason for existing — 88 binaries when it was measured,
+  84 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -87,6 +93,14 @@ Two reasons to reach for a `.scm` file first:
   control-flow files are the case in point: chibi cannot survive some deep
   `dynamic-wind`/continuation shapes, so each says which rows it corroborates
   and which it dies on.
+
+  A file that disclaims a property should say where the property is checked
+  instead. `tail-recursion.scm` is the case in point: its rows pin that each
+  special form evaluates correctly when its last expression recurses, not that
+  the call is a *tail* call in constant space — that one is
+  `vm_callprimitive.rs::tail_deopt_runs_deep_mutual_recursion` at 100 000 deep,
+  with the space measurement itself recorded out-of-band in PRD TRACK_P §P8.2
+  (5.49 MB against 109 MB before the fix).
 
   Two things follow for a new file. **Order a row an oracle cannot survive
   last**, because SRFI 64 stops the file where it dies — in
@@ -204,12 +218,10 @@ R7RS specification compliance organized by category:
 #### **Feature Tests** (top-level `tests/`)
 - `cps_features.rs` - CPS-specific behavior (31 tests)
 - `hygiene.rs` - Macro hygiene (~108 tests)
-- `tail_recursion.rs` - TCO correctness (~36 tests)
 - `numeric_operations.rs` - Numeric tower (~25 tests)
 - `complex_numbers.rs` - Complex number support (~20 tests)
 - `record_types.rs` - define-record-type (~40 tests)
 - `lazy_evaluation.rs` - delay/force
-- (parameters migrated to `tests/scheme/control/parameters.scm` in #193 Phase 1)
 - `scheme_eval.rs` - (scheme eval) library
 
 #### **Library Tests**
@@ -267,7 +279,7 @@ assert_eval_type(expr, check, name)      // Verify result type
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | ~50 | 985 |
 | record_types.rs | ~40 | 747 |
-| tail_recursion.rs | ~36 | 698 |
+| tail-recursion.scm | 36 | 301 |
 | cps_features.rs | 31 | 580 |
 
 ## Running Tests

@@ -440,7 +440,8 @@ The Criterion harness benchmarks the tree-walker. Parameterize `scheme_benchmark
 ### P1 — Near-free clone removals  *(done — PRs #150, #155)*
 1. ~~**`free_vars` clone.**~~ **Done — PR #155** (`Heap::get_vm_closure_code_id` reads only `code_id`; `resolve_closure` uses it; slot reads stay via `get_vm_closure_free_var`).
 2. ~~**`arg_vals.clone()`**~~ **Done — PR #150** (as `primitive_procedure` + `call_primitive_proc` check-then-move split; same effect as the planned `&[TaggedValue]` signature).
-- **Acceptance:** `cargo test` green; closure/tail tests (`tail_recursion.rs`, `cps_features.rs`) unchanged.
+- **Acceptance:** `cargo test` green; closure/tail tests (`tests/scheme/control/tail-recursion.scm`,
+  `cps_features.rs`) unchanged.
 
 ### P2 — Fast primitive dispatch: integer IDs + wire `CallPrimitive`  *(done — #149 runtime index cache; #158 compile-time wiring, 2026-07-29)*
 Eliminate the string `HashMap` lookup on the hot path. **Status:** PR #149 delivered item 1 in an alternate form (Vec-indexed registry, `resolve_index`/`apply_by_index`/`apply_cached`, index cached per `Procedure::Primitive` instance). PR #158 delivered items 2–3: pass 5 emits `CallPrimitive { func_id, name, args, dst }` for `GlobalRef` callees that resolve to registry primitives (`compiler/primitive_calls.rs`), skipping the callee `LoadGlobal`, `get_procedure`, and the frame push; tail position emits `CallPrimitive` + `Return`.
