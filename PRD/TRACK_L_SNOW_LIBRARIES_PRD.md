@@ -1381,7 +1381,7 @@ dynamic environment as the call to dynamic-wind") applied to the one part of the
 environment the record did not already hold, and it is what makes the `finally` behaviour below
 fall out of the unwinder rather than be patched onto it. Gauche arbitrates `caught` (chibi loops
 forever on the repro). Now the "an error in a wind thunk reaches the enclosing guard" row in
-`crates/patina-tests/tests/scheme/callability.scm` (migrated from
+`crates/patina-tests/tests/scheme/control/callability.scm` (migrated from
 `callability.rs` by #193 Phase 0) holds it, one expectation on both backends.
 
 The same change closed triage family 30 — a `k` invoked from an *after* thunk skipped the enclosing

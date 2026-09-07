@@ -1,6 +1,6 @@
 //! Which sites decide "is this callable" — the rows that must stay in Rust.
 //!
-//! Most of this file is now `tests/scheme/callability.scm`, run by
+//! Most of this file is now `tests/scheme/control/callability.scm`, run by
 //! `scheme_suite.rs` on both backends (#193 Phase 0). **The rationale and the
 //! three rules this section encodes live there**, with the rows they govern;
 //! restating them here is how two copies drift apart, and this file's history
@@ -54,7 +54,7 @@ use common::{
 /// answers until that is fixed. Not `assert_divergence` — the tree-walker
 /// returns a value, not a failure.
 /// The unguarded halves of the catchable-error pairs whose guarded halves are
-/// in `tests/scheme/callability.scm`.
+/// in `tests/scheme/control/callability.scm`.
 ///
 /// They stayed in Rust because they assert something a `.scm` file cannot:
 /// that the error escapes an **unguarded top-level program**. SRFI 64's
@@ -81,6 +81,16 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
     ] {
         assert_program_eval_error(body);
     }
+    // From `case_lambda.rs` when it migrated (#193 Phase 1): a `case-lambda`
+    // call matching no clause. Its catchable half is
+    // `tests/scheme/control/case-lambda.scm`'s "no clause matches the call";
+    // this is the half a `.scm` file cannot state, so it lands in the file that
+    // already owns the class rather than keeping a binary alive for one row.
+    assert_program_eval_error(
+        "(import (scheme case-lambda))
+         (define f (case-lambda ((x) x) ((x y) (cons x y))))
+         (f 1 2 3)",
+    );
 }
 
 #[test]

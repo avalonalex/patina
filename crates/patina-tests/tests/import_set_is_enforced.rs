@@ -9,7 +9,41 @@
 //! is that they now agree. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
-use common::{assert_program_eval_error, eval_program as eval};
+use common::{assert_program_eval_error, assert_program_eval_to, eval_program as eval};
+
+/// `case-lambda` is unavailable until `(scheme case-lambda)` is imported.
+///
+/// Migrated from `case_lambda.rs`, where it was named
+/// `test_case_lambda_empty_clause_list` and believed to assert that
+/// `(case-lambda)` with no clauses is an error. It is not — with the library
+/// imported that returns a procedure matching no call. The row passed because
+/// it ran without the import, so the property it actually held is this one.
+/// #193's migration is what surfaced the difference.
+#[test]
+fn case_lambda_needs_its_import() {
+    // Unbound without the import. Asserted as "fails", not by matching the
+    // diagnostic: the backends word it differently — `Undefined variable:
+    // case-lambda` on the tree-walker, ``unbound variable: `case-lambda` `` on
+    // the VM — which is the same reason `test_unimported_names_do_not_resolve`
+    // below does not match text either. What keeps this row honest about
+    // *which* failure it sees is the pair below: with the import, the same
+    // expression is a procedure, so the failure here can only be resolution.
+    assert_program_eval_error("(import (scheme base)) (case-lambda)");
+
+    // With the import it is a procedure — including with *no* clauses, which is
+    // the fact the old name got wrong. `(case-lambda)` expands to
+    // `(lambda args (error …))` (lib/scheme/case-lambda.sld), so it accepts
+    // every call and raises on each, rather than being an error to write.
+    assert_program_eval_to(
+        "(import (scheme case-lambda)) (procedure? (case-lambda))",
+        "#t",
+    );
+    assert_program_eval_to(
+        "(import (scheme base) (scheme case-lambda))
+         (guard (e (#t 'raised)) ((case-lambda)))",
+        "raised",
+    );
+}
 
 /// Names a program never imported must not resolve, whether they are backed by
 /// Rust primitives or by Scheme.
