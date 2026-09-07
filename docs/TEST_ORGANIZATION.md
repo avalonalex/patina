@@ -145,6 +145,46 @@ Two reasons to reach for a `.scm` file first:
   file claimed chibi could not arbitrate it at all, which threw away ten rows of
   corroboration that were there for the asking.
 
+#### The oracle lane (`scripts/run_suite_oracles.sh`, #193 Phase 3)
+
+Running these files under chibi and Gauche is what makes them an oracle rather
+than only a suite, and until Phase 3 it happened *by hand*: every file header
+recorded tallies that nothing re-measured, and stale ones were caught only by
+someone re-running four interpreters.
+
+The lane checks **the classified set of differing rows**, not the tallies.
+That distinction is the design, not a shortcut:
+
+- Gating on an oracle's numbers makes its *bugfix* break our build, and the
+  natural repair is to edit a number — which trains mechanical updating and
+  says nothing about which side moved. It also promotes "chibi says X" from
+  commentary to constraint.
+- Gating on the divergence set asks the useful question: did a difference
+  appear that nobody has explained, or did an explained one go away?
+
+`crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is the register: one row per
+file, oracle and differing test, each with a class — `latitude` (R7RS permits
+both), `spec-silent`, `oracle-defect`, `patina-defect`, `needs-investigation`,
+or `incomplete` for a file an oracle cannot finish. **The class is the point.**
+A count says "3 rows differ" and gives no signal about who should change; an
+`oracle-defect` row is a record that someone investigated and concluded the
+*oracle* is wrong, so nobody later "fixes" Patina to match it. Reach for that
+class only with evidence — the register carries one, and its note states what
+R7RS does *and does not* require, so anyone reporting it upstream argues the
+accurate case.
+
+**The rule the lane cannot enforce, and the one that matters most:** a row's
+expected value comes from the specification or from intended behaviour, never
+from asking an oracle what it prints. Oracles are consulted afterwards, to
+explain a difference. That polarity is what keeps their bugs out of our tests,
+and no check here can substitute for it.
+
+`every_registered_divergence_names_a_real_row` in `scheme_suite.rs` keeps the
+register honest without needing either interpreter installed: it pins the class
+vocabulary, requires a note, and checks that every registered row still names a
+test that exists — a rename would otherwise leave the lane reporting one edit
+as two mismatches.
+
 **Where a new `.scm` file goes: directory by kind, filename by concern.** The
 directory is one of the seven above and says what *sort* of thing the file is
 about; the filename keeps the concern name the test has always had
