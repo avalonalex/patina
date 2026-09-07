@@ -1412,3 +1412,45 @@ fn test_a_malformed_include_shared_is_still_refused() {
         .expect_err("a malformed include-shared must not be skipped");
     assert!(err.to_string().contains("cannot skip"), "got: {err}");
 }
+
+/// A library body importing only `(scheme r5rs)` can still reach `define`,
+/// `lambda`, `if` and `quote`.
+///
+/// Syntax keywords are real bindings, so a library that claims to provide R5RS
+/// has to export them; srfi-78's reference implementation in the vendored
+/// corpus is exactly this shape, and failed with `unbound variable: define`
+/// before they were exported.
+///
+/// From `scheme_r5rs.rs` when it migrated (#193 Phase 1). The rest of that file
+/// is `tests/scheme/stdlib/scheme-r5rs.scm`; **this is the row's record, and
+/// that file points here rather than repeating it.**
+///
+/// It cannot be a suite row because **chibi cannot run it**: an inline
+/// `define-library` in a program that has already imported is rejected —
+/// `exception inside undefined operator: define-library`, then `unexpected
+/// define` on the library's own body. The suite runs its files on chibi, so a
+/// row chibi cannot compile does not belong in one.
+///
+/// A first draft of this comment gave a different reason — that the suite file
+/// has already imported `(srfi 64)`, so the library could not import *only*
+/// `(scheme r5rs)`. That is wrong: a library body sees its own import set and
+/// nothing else, and the row written into an SRFI 64 program passes on both
+/// backends and on Gauche. The conclusion held; the reason did not.
+///
+/// It lands in this file rather than keeping a binary alive for one row — this
+/// file already owns library-body and import resolution, per its own header.
+///
+/// The top level cannot show this either: core syntax is seeded there, so the
+/// keywords resolve whether the library exports them or not.
+#[test]
+fn test_a_library_body_importing_only_scheme_r5rs_has_core_syntax() {
+    common::assert_program_eval_to(
+        "(define-library (t r5rs-only)
+           (export f)
+           (import (scheme r5rs))
+           (begin (define (f) (if #t 'ok 'no))))
+         (import (t r5rs-only))
+         (f)",
+        "ok",
+    );
+}

@@ -168,7 +168,9 @@ full of defines — is exactly this shape in the wild.
 
 The fix is inventory, not mechanism: the keyword set R5RS defines, taken from chibi's
 `(scheme r5rs)`, added to the export list. Guard test:
-`scheme_r5rs.rs::test_r5rs_provides_core_syntax_inside_a_library_body`. Worth keeping for the
+`sld_file_loading.rs::test_a_library_body_importing_only_scheme_r5rs_has_core_syntax`
+(it was `scheme_r5rs.rs::test_r5rs_provides_core_syntax_inside_a_library_body` until #193
+Phase 1 migrated that file). Worth keeping for the
 pattern: a comment recording *why a list is short* is a premise, and when the premise expires
 nothing fails — the list just stays silently wrong until a corpus package walks into the gap.
 
