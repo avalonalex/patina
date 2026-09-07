@@ -1,8 +1,8 @@
 # R7RS-Large Status Tracking
 
 **Last Updated:** 2026-09-06 — the bundling policy gained a third addition, the standard testing
-API (SRFI 64). That one is a **decision, not a state**: the tables below still describe what `lib/`
-holds today, and SRFI 64 is not in it until #193's Phase 0 puts it there. Previously 2026-09-01 —
+API (SRFI 64), and #193's Phase 0 then shipped it: `lib/srfi/64.{sld,scm}` exist and
+`(import (srfi 64))` resolves with no `-A`. Previously 2026-09-01 —
 bookkeeping: the header had read 2026-08-08 while the tables
 underneath were kept current through the 2026-08-24…26 bundling wave; they now agree. Reconciled
 against `lib/` on this date: **Red 16 of 17 shipped** (17 counting SRFI 158 for the superseded
@@ -168,8 +168,8 @@ must work:
 
 3. **The testing API — one library, and the standard one.** Amendment of 2026-09-06, made
    deliberately because it widens the set; #194 raised the question and this settles it. **SRFI 64 is
-   to be bundled** — a decision, not yet a state: `lib/srfi/64` does not exist, and #193's Phase 0 is
-   the work that creates it.
+   bundled**, and is: `lib/srfi/64.{sld,scm}`, byte-identical to the snow-fort 0.2.1 snowball, with
+   a provenance row and both files pinned. Decided here, shipped by #193's Phase 0.
 
    **Why bundled rather than supplied from `test-lib/`.** This is the load-bearing part, because the
    `-A` mechanism #194's trio built would serve *our* lanes just as well. It would not serve a user.
@@ -211,12 +211,15 @@ must work:
      `# of unexpected successes` and returns normally, exit code 0. A driver that runs a file to
      `test-end` and reads the exit status gets a false green, which is the same shape as audit E1.
      #193's driver must call `test-exit` or read the runner's counts directly.
-   - **The corpus loses a package.** `bundled_libraries()` in `compat/tools/build_corpus.py` globs
-     both roots and drops every vendored package providing a bundled library, so `compat/vendor/srfi-64`
-     leaves the corpus and its currently-passing row goes with it: 127 of 161 becomes 126 of 160. Not
-     a regression — the package is excluded because we provide it — but it must be stated before the
-     tally moves, exactly as `test-lib/README.md` states the nine-pass cost that made `(chibi string)`
-     move rather than be deleted.
+   - **The corpus loses a package, but not yet.** `bundled_libraries()` in
+     `compat/tools/build_corpus.py` globs both roots and drops every vendored package providing a
+     bundled library — and that runs at corpus *build* time, not at run time. Measured after bundling:
+     the committed corpus is untouched, still **127 of 161** with `srfi-64` passing. The next
+     `build_corpus.py` run drops it, taking the tally to 126 of 160. Not a regression — the package
+     is excluded because we provide it — but it costs something real that the headline number does
+     not show: **SRFI 64's own 259-line conformance suite (`compat/vendor/srfi-64/test.scm`) runs
+     today only as that corpus package**, and loses its home with it. #193's driver is the intended
+     new home, since that file is exactly the kind of thing it runs.
    - **The compat classifier becomes coupled to a file we can edit.** `test_suite_failed` in
      `crates/patina-compat/src/run.rs` detects SRFI 64 failures by matching that runner's literal
      summary wording, a shape audit E1 recorded getting wrong once. While SRFI 64 was a byte-identical
@@ -237,8 +240,8 @@ explicitly includes **non-standard testing libraries**: `(chibi test)` is suppli
 The policy fixes the *set*; measured dependency in-degree over `compat/vendor/` fixes the *order*.
 **This queue is spent (2026-09-01), with one item added since** — every numbered item below shipped
 except the two that were always conditional, and the amendment above adds a third: **SRFI 64**
-(decided 2026-09-06, unshipped, tracked by #193's Phase 0 — and the one item in-degree does not
-order, for the reason that clause gives). The other two: **SRFI 115** (large; only if the corpus
+(decided and shipped 2026-09-06 by #193's Phase 0 — and the one item in-degree does not order, for
+the reason that clause gives). The other two: **SRFI 115** (large; only if the corpus
 justifies it) and the **Tangerine trio 146/159/160** (standard-track, little measured demand —
 159/`(scheme show)` would also clear two corpus rows via `(chibi show)`/SRFI 166, which is the
 likeliest reason to take it). The near-free shims `(srfi 6/9/11/39)` at the end also remain, for

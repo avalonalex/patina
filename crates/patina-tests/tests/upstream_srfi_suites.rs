@@ -381,6 +381,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite opens a raw file descriptor before its directory tests, hitting the FFI stub outside any test form, which aborts the run; add the suite when FFI lands",
     ),
     (
+        "srfi 64",
+        "its upstream suite is a *program* (compat/vendor/srfi-64/test.scm, 259 lines testing SRFI 64 through SRFI 64's own runner API), not a `(… test)` library, so it does not fit suite_tests!'s shape. It runs today as the srfi-64 corpus package; the next build_corpus.py run drops that package because we now bundle the library, and #193's driver is the intended new home. This entry retires when it lands there",
+    ),
+    (
         "chibi test",
         "the framework itself — exercised by every suite above, the self-check below, and the chibi R7RS gate",
     ),
