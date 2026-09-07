@@ -571,16 +571,25 @@ fn every_registered_divergence_names_a_real_row() {
     let register = read(&path).unwrap_or_else(|e| panic!("{e}"));
     let listed: Vec<&str> = SUITE.iter().map(|(n, _)| *n).collect();
     let mut seen = 0;
+    // A duplicated entry puts the same row twice into the lane's `expected`
+    // list, and `comm` against one actual occurrence then reports it as "no
+    // longer differs" — a row that in fact still does, blamed for a
+    // copy-paste in a hand-edited file.
+    let mut keys: std::collections::HashSet<(String, String, String)> = Default::default();
 
     for (n, line) in register.lines().enumerate() {
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
         }
         let cols: Vec<&str> = line.split('\t').collect();
-        assert!(
-            cols.len() >= 5,
-            "DIVERGENCES.tsv:{} has {} tab-separated columns, expected 5 \
-             (file, oracle, row, class, note): {line:?}",
+        assert_eq!(
+            cols.len(),
+            5,
+            "DIVERGENCES.tsv:{} has {} tab-separated columns, expected exactly 5 \
+             (file, oracle, row, class, note): {line:?}. Exactly, not at least: \
+             a tab pasted into the note splits it into further columns, and both \
+             this check and the script's awk read only the fifth — so the note \
+             that carries a class's evidence would silently lose its tail.",
             n + 1,
             cols.len()
         );
@@ -611,8 +620,17 @@ fn every_registered_divergence_names_a_real_row() {
             n + 1
         );
 
+        assert!(
+            keys.insert((file.to_string(), oracle.to_string(), row.to_string())),
+            "DIVERGENCES.tsv:{} repeats ({file}, {oracle}, {row:?}). A duplicate \
+             makes the lane report that row as \"no longer differs\" while it \
+             still does.",
+            n + 1
+        );
+
         // `*` means the file does not complete on that oracle, so there is no
-        // row to find.
+        // row to find — but it is still a register key, so uniqueness is
+        // checked above this point rather than below it.
         if row == "*" {
             assert_eq!(
                 class,

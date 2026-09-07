@@ -4,9 +4,10 @@
 #
 #   ./scripts/run_suite_oracles.sh              # every file, every oracle found
 #   ./scripts/run_suite_oracles.sh data/        # only files under data/
-#   ./scripts/run_suite_oracles.sh --list       # print what the oracles answer,
-#                                               # check nothing (for triage and
-#                                               # for writing new register rows)
+#   ./scripts/run_suite_oracles.sh --list       # print what the oracles answer
+#                                               # and exit 0 whatever it is —
+#                                               # for triage, and for writing
+#                                               # new register rows
 #
 # Environment:
 #   SUITE_ORACLE_TIMEOUT   seconds per file per oracle (default 60)
@@ -105,17 +106,39 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 REPO=$(pwd)
 
+# Prove each oracle actually runs SRFI 64 before trusting a single result from
+# it. Without this, an oracle that produces nothing at all is indistinguishable
+# from one running a file that legitimately dies — and the files registered as
+# `incomplete` expect exactly no output, so they would report green against a
+# broken interpreter. Measured: `CHIBI=true ./scripts/run_suite_oracles.sh
+# control/wind-thunk` passed and exited 0 before this existed.
+cat >"$WORK/smoke.scm" <<'SMOKE'
+(import (scheme base) (srfi 64))
+(test-begin "smoke")
+(test-equal 1 1)
+(test-end)
+SMOKE
+for oracle in "${ORACLES[@]}"; do
+    if ! (cd "$WORK" && run_oracle "$oracle" "$WORK/smoke.scm") \
+        | grep -q '# of expected passes'; then
+        echo -e "${RED}$oracle cannot run a three-line SRFI 64 program.${NC}" >&2
+        echo -e "${DIM}  Every result from it would be meaningless, so this lane stops here${NC}" >&2
+        echo -e "${DIM}  rather than reporting the files it expects to fail as passing.${NC}" >&2
+        exit 2
+    fi
+done
+
 registered_rows() {  # $1=file $2=oracle -> the rows the register expects
     awk -F'\t' -v f="$1" -v o="$2" \
-        '!/^#/ && NF>=4 && $1==f && $2==o { print $3 }' "$REPO/$REGISTER"
+        '!/^#/ && NF>=5 && $5!="" && $1==f && $2==o { print $3 }' "$REPO/$REGISTER"
 }
 registered_class() {  # $1=file $2=oracle $3=row
     awk -F'\t' -v f="$1" -v o="$2" -v r="$3" \
-        '!/^#/ && NF>=4 && $1==f && $2==o && $3==r { print $4 }' "$REPO/$REGISTER"
+        '!/^#/ && NF>=5 && $5!="" && $1==f && $2==o && $3==r { print $4 }' "$REPO/$REGISTER"
 }
 
 FILES=$(cd "$SUITE_DIR" && find . -name '*.scm' | sed 's|^\./||' | sort)
-[ -n "$FILTER" ] && FILES=$(echo "$FILES" | grep -- "$FILTER" || true)
+[ -n "$FILTER" ] && FILES=$(echo "$FILES" | grep -F -- "$FILTER" || true)
 [ -n "$FILES" ] || { echo "no suite files match '$FILTER'" >&2; exit 2; }
 
 problems=0
@@ -123,7 +146,12 @@ checked=0
 
 for f in $FILES; do
     for oracle in "${ORACLES[@]}"; do
+        # Printed before the run, not after: two chibi pairs loop forever and
+        # cost the whole timeout, and a line that only appears on completion
+        # makes a 60 s wait look like a hang with nothing to blame it on.
+        printf "  %-42s %-7s ..." "$f" "$oracle"
         out=$(cd "$WORK" && run_oracle "$oracle" "$REPO/$SUITE_DIR/$f")
+        printf "\r%*s\r" 72 ""
         pass=$(echo "$out" | grep -oE '# of expected passes +[0-9]+' | grep -oE '[0-9]+$' || true)
         fails=$(echo "$out" | grep -oE '# of unexpected failures +[0-9]+' | grep -oE '[0-9]+$' || true)
         skips=$(echo "$out" | grep -oE '# of skipped tests +[0-9]+' | grep -oE '[0-9]+$' || true)
@@ -137,8 +165,8 @@ for f in $FILES; do
             # No SRFI 64 summary. Either the file legitimately dies here (and
             # the register says so), or the oracle produced nothing at all —
             # which is an invocation failure wearing the same clothes.
-            if [ "$expects_incomplete" = 1 ]; then
-                printf "  %-42s %-7s ${DIM}incomplete (registered)${NC}\n" "$f" "$oracle"
+            if [ "$expects_incomplete" = 1 ] || [ "$LIST_ONLY" = 1 ]; then
+                printf "  %-42s %-7s ${DIM}does not complete${NC}\n" "$f" "$oracle"
                 checked=$((checked + 1))
             elif [ -z "$out" ]; then
                 printf "  %-42s %-7s ${RED}ORACLE PRODUCED NO OUTPUT${NC}\n" "$f" "$oracle"
@@ -164,15 +192,24 @@ for f in $FILES; do
         new=$(comm -13 <(echo "$expected" | sort) <(echo "$actual" | sort))
         gone=$(comm -23 <(echo "$expected" | sort) <(echo "$actual" | sort))
 
+        # --list reports and never judges: it exists for triage and for
+        # writing new register rows, which is exactly when the rows do not
+        # match yet. Checking there would refuse to show what you came to see.
+        if [ "$LIST_ONLY" = 1 ]; then
+            printf "  %-42s %-7s ${DIM}pass=%s fail=%s skip=%s${NC}\n" \
+                "$f" "$oracle" "$pass" "${fails:-0}" "${skips:-0}"
+            echo "$actual" | grep -v '^$' | while read -r r; do
+                cls=$(registered_class "$f" "$oracle" "$r")
+                echo -e "      ${DIM}[${cls:-UNREGISTERED}] $r${NC}"
+            done
+            checked=$((checked + 1))
+            continue
+        fi
+
         if [ -z "$new" ] && [ -z "$gone" ]; then
             printf "  %-42s %-7s ${GREEN}ok${NC} ${DIM}(pass=%s fail=%s skip=%s)${NC}\n" \
                 "$f" "$oracle" "$pass" "${fails:-0}" "${skips:-0}"
             checked=$((checked + 1))
-            if [ "$LIST_ONLY" = 1 ]; then
-                echo "$actual" | grep -v '^$' | while read -r r; do
-                    echo -e "      ${DIM}[$(registered_class "$f" "$oracle" "$r")] $r${NC}"
-                done
-            fi
         else
             printf "  %-42s %-7s ${RED}register mismatch${NC} ${DIM}(pass=%s fail=%s skip=%s)${NC}\n" \
                 "$f" "$oracle" "$pass" "${fails:-0}" "${skips:-0}"
@@ -184,6 +221,10 @@ for f in $FILES; do
 done
 
 echo
+if [ "$LIST_ONLY" = 1 ]; then
+    echo -e "${DIM}--list: reported $checked file/oracle pairs, checked nothing.${NC}"
+    exit 0
+fi
 if [ "$problems" -eq 0 ]; then
     echo -e "${GREEN}Oracle divergences match the register${NC} ($checked file/oracle pairs, oracles: ${ORACLES[*]})"
     exit 0
