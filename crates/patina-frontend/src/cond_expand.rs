@@ -11,8 +11,8 @@
 //! - `(not <req>)` - true if the requirement is false
 
 use crate::ParseError;
+use patina_core::features::FeatureRegistry;
 use patina_core::{SharedHeap, TaggedValue};
-use patina_runtime::features::FeatureRegistry;
 
 /// Evaluate a feature requirement from TaggedValue.
 ///

@@ -451,7 +451,7 @@ impl LibraryDefinition {
         // The heap's registry, the same one the desugarer and `(features)` read
         // — so a `cond-expand` in a `.sld` declaration and one in its `begin`
         // body cannot answer differently.
-        let features = heap.borrow().features().clone();
+        let features = heap.borrow_mut().features_and_close().clone();
 
         for &clause in clauses {
             let clause_list = tagged_list_to_vec(clause, heap)?;

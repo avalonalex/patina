@@ -36,9 +36,11 @@ pub use error::RuntimeError;
 pub use eval_error::EvalError;
 pub use library_loader::{LibraryLoader, LibraryLoaderRegistry, RustLibraryBuilder};
 pub use library_registry::{LibraryError, LibraryRegistry, NATIVE_EXTENSION_MARKER};
+pub use patina_core::features::FeatureRegistry;
 /// Re-exported from `patina-core`, where the registry moved so that
 /// [`patina_core::Heap`] can carry one per interpreter instance — see its
 /// `features` field. Existing `patina_runtime::FeatureRegistry` paths keep
 /// working.
-pub use patina_core::features::{FeatureRegistry, default_features};
+#[allow(deprecated)]
+pub use patina_core::features::default_features;
 pub use rust_library_loader::RustLibraryLoader;

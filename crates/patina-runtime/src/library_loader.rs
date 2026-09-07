@@ -288,13 +288,32 @@ pub trait EvaluatingLibraryLoader {
     /// This eliminates the need for cross-heap conversion when evaluating.
     ///
     /// Default implementation ignores the heap and calls `parse_with_library_checker()`.
+    /// **Overriding this is effectively mandatory for a loader that parses
+    /// `.sld` source.** The heap is not merely an allocation arena: it carries
+    /// the feature registry `cond-expand` resolves against
+    /// (`patina_core::Heap::features`), so a default implementation that drops
+    /// it parses declarations with default features and silently takes the
+    /// `else` branch — no error, no warning, and a library that compiles to the
+    /// wrong half of a `cond-expand`.
+    ///
+    /// The default is kept for loaders that do not parse source at all (an
+    /// in-memory or precompiled loader, for which the heap genuinely carries
+    /// nothing they need), and asserts the caller's heap is not one that would
+    /// have mattered.
     fn parse_with_heap_and_library_checker(
         &self,
         name: &[String],
         search_paths: &[PathBuf],
-        _heap: SharedHeap,
+        heap: SharedHeap,
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
+        debug_assert!(
+            !heap.borrow().features().has_feature("patina-vm")
+                && !heap.borrow().features().has_feature("patina-tree-walker"),
+            "this loader dropped a heap carrying a backend identity, so any \
+             `cond-expand` it parses will silently take `else`; override \
+             `parse_with_heap_and_library_checker` and pass the heap through"
+        );
         self.parse_with_library_checker(name, search_paths, can_load_library)
     }
 }

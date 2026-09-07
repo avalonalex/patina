@@ -29,6 +29,8 @@
 //! | a `.sld` *declaration* | `library_parser.rs`, a different code path |
 //! | inside a quasiquote | the quasiquote sub-expression desugarers |
 //! | a nested binding form | child desugarers |
+//! | an `include`d file | `desugar_include_tagged`, which re-enters the desugarer |
+//! | `include-library-declarations` | `parse_library_declarations_file`, recursing into the parser |
 //! | `(features)` | the primitive, which R7RS §4.2.1 ties to `cond-expand` |
 //!
 //! A missed shape does not error — `cond-expand` falls through to `else`,
@@ -84,11 +86,61 @@ fn a_nested_binding_form_sees_the_backend() {
 /// on each backend. Both were missed before; the same file gave two answers.
 #[test]
 fn a_quasiquoted_subexpression_sees_the_backend() {
-    assert_eq!(eval_program_vm(&format!("(car `(,{WHICH}))")), "vm");
-    assert_eq!(
-        eval_program_tree_walker(&format!("(car `(,{WHICH}))")),
-        "tw"
-    );
+    each_backend_sees_itself("quasiquote unquote", |w| format!("(car `(,{w}))"));
+}
+
+/// An `include`d file, which re-enters the desugarer on the included forms.
+#[test]
+fn an_included_file_sees_the_backend() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let part = dir.path().join("part.scm");
+    std::fs::write(&part, format!("(define included {WHICH})")).expect("write include");
+    each_backend_sees_itself("included file", |_| {
+        format!("(include \"{}\") included", part.display())
+    });
+}
+
+/// `include-library-declarations`, which recurses back into the *library
+/// parser* rather than the desugarer — a fifth route, and the one this file's
+/// table named before it had a test, which is the overclaim this whole file
+/// exists to avoid making.
+#[test]
+fn included_library_declarations_see_the_backend() {
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    let lib = dir.path().join("probe");
+    std::fs::create_dir_all(&lib).expect("mkdir");
+    std::fs::write(
+        lib.join("decls.scm"),
+        "(cond-expand (patina-vm (begin (define from-included-decls 'incl-vm)))
+                      (patina-tree-walker (begin (define from-included-decls 'incl-tw)))
+                      (else (begin (define from-included-decls 'incl-neither))))",
+    )
+    .expect("write decls");
+    std::fs::write(
+        lib.join("outer.sld"),
+        r#"(define-library (probe outer)
+             (import (scheme base))
+             (export from-included-decls)
+             (include-library-declarations "decls.scm"))"#,
+    )
+    .expect("write library");
+
+    for (backend, expected) in [("tree-walker", "incl-tw"), ("vm", "incl-vm")] {
+        let root = dir.path().to_path_buf();
+        let out = if backend == "vm" {
+            let vm = common::vm_interpreter();
+            vm.backend().add_library_search_path(root);
+            run(&vm, "(import (probe outer)) from-included-decls")
+        } else {
+            let tw = common::tree_walker_interpreter();
+            tw.backend().add_library_search_path(root);
+            run(&tw, "(import (probe outer)) from-included-decls")
+        };
+        assert_eq!(
+            out, expected,
+            "[{backend}] include-library-declarations does not see the backend"
+        );
+    }
 }
 
 /// `(features)` must agree with `cond-expand` — R7RS §4.2.1 defines it as

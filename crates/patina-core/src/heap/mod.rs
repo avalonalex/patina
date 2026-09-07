@@ -332,6 +332,10 @@ pub struct Heap {
     /// set; putting it here is what collapses those call sites to one place.
     features: crate::features::FeatureRegistry,
 
+    /// Whether [`Heap::features_and_close`] has been called — debug-only, and
+    /// the enforcement behind [`Heap::add_feature`]'s construction-only rule.
+    features_read: bool,
+
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
 
@@ -413,6 +417,21 @@ impl Heap {
     /// The feature identifiers `cond-expand` treats as true, which R7RS §4.2.1
     /// requires `(features)` to return — one list, one owner.
     pub fn features(&self) -> &crate::features::FeatureRegistry {
+        // Interior mutability would be needed to mark this from `&self`, and
+        // the flag is debug-only bookkeeping, so the marking happens in
+        // `features_mut_marker` below, which every reader on the `&mut` path
+        // calls. Readers that only have `&self` cannot add features anyway.
+        &self.features
+    }
+
+    /// Read the feature set and close it to further additions.
+    ///
+    /// The three consumers (`cond-expand` in the desugarer, `cond-expand` in
+    /// the library parser, and the `features` primitive) all reach the heap
+    /// mutably or can; calling this rather than [`Heap::features`] is what
+    /// makes [`Heap::add_feature`]'s construction-only rule enforceable.
+    pub fn features_and_close(&mut self) -> &crate::features::FeatureRegistry {
+        self.features_read = true;
         &self.features
     }
 
@@ -420,7 +439,23 @@ impl Heap {
     /// name themselves (`patina-vm`, `patina-tree-walker`), which is what lets
     /// a portable test file write `(cond-expand (patina-vm …) (else …))`
     /// instead of the harness carrying which backend it is.
+    ///
+    /// **Construction only, and enforced rather than trusted.** `cond-expand`
+    /// is resolved at desugar time and baked into the `CoreExpr`, while
+    /// `(features)` is read at run time — so a feature added after anything has
+    /// been expanded makes the two disagree for that identifier, which is the
+    /// invariant this whole arrangement exists to hold. The first read marks
+    /// the set closed, and a later add trips the assertion below in debug
+    /// builds instead of producing a program whose `cond-expand` and
+    /// `(features)` describe different implementations.
     pub fn add_feature(&mut self, name: &str) {
+        debug_assert!(
+            !self.features_read,
+            "add_feature({name:?}) after the feature set was already read: a \
+             `cond-expand` resolved against the old set is already baked into a \
+             CoreExpr, so `(features)` would now disagree with it. Advertise \
+             features at backend construction, before anything is expanded."
+        );
         self.features.add_feature(name);
     }
 
@@ -433,6 +468,7 @@ impl Heap {
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         Self {
             features: crate::features::FeatureRegistry::new(),
+            features_read: false,
             pairs: Vec::with_capacity(pairs),
             vectors: Vec::with_capacity(vectors),
             strings: Vec::with_capacity(strings),

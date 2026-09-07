@@ -2094,7 +2094,7 @@ impl Desugarer {
         // From the heap, which is per interpreter instance — so a backend that
         // named itself is visible here, and to `(features)`, and to the library
         // parser, without any of them being threaded through the others.
-        let features = shared_heap.borrow().features().clone();
+        let features = shared_heap.borrow_mut().features_and_close().clone();
 
         let can_load_library = |_lib_name: &[String]| false;
 

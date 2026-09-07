@@ -24,10 +24,16 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 /// R7RS §6.13: Returns a list of the feature identifiers which cond-expand
 /// treats as true. It is an error to modify this list.
 ///
-/// Example:
+/// The advertised set is per interpreter instance and includes the backend's
+/// own identifier — `patina-vm` or `patina-tree-walker` — which is what makes
+/// `(cond-expand (patina-vm …) (else …))` selectable. R7RS §4.2.1 requires this
+/// list and `cond-expand` to agree, which is why both read `Heap::features()`.
+///
+/// Example (macOS/arm64, VM backend; the exact set is platform-dependent):
 /// ```scheme
-/// (features) => (aarch64 darwin exact-closed full-unicode ieee-float
-///                little-endian macosx patina posix r7rs ratios unix)
+/// (features) => (aarch64 darwin exact-closed full-unicode full-unicode-strings
+///                ieee-float little-endian macosx patina patina-vm posix r7rs
+///                ratios unix)
 /// ```
 fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {
@@ -43,7 +49,7 @@ fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
     // true", and `cond-expand` reads the same field. Building a fresh default
     // here is how the two came to disagree about the backend identifier.
     let sym_tvs: Vec<TaggedValue> = h
-        .features()
+        .features_and_close()
         .all_features()
         .into_iter()
         .map(|name| h.intern_symbol(&name))

@@ -135,6 +135,12 @@ impl Default for FeatureRegistry {
 
 /// Global feature registry instance
 /// Using a function to avoid lazy_static dependency
+#[deprecated(
+    since = "0.1.0",
+    note = "read `Heap::features()` instead — a feature set is per interpreter \
+            instance, and building a fresh default is how `(features)` and \
+            `cond-expand` came to disagree about the backend identifier"
+)]
 pub fn default_features() -> FeatureRegistry {
     FeatureRegistry::new()
 }
