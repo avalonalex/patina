@@ -319,6 +319,123 @@ fn every_file_carries_its_own_imports() {
     }
 }
 
+/// Every `test-skip` is the count form, sitting immediately above its row.
+///
+/// A scoped row is written `(cond-expand (patina) (else (test-skip 1)))` above
+/// the row it guards, so that other implementations *report* a skip rather than
+/// losing the row silently. The whole construct has one blind spot: Patina takes
+/// the `(patina)` branch and never evaluates the `else`, so nothing in a normal
+/// run ever looks inside it. Whatever is wrong in there is wrong only on chibi
+/// and Gauche, which nobody runs per-PR. Hence a text check.
+///
+/// **What it catches, and what it cannot.** Two rules, and they are not equally
+/// strong:
+///
+/// - **The specifier must be a count.** SRFI 64 also accepts a *name*, and
+///   `(test-skip "the row's name")` keeps a second copy of the row's title that
+///   has to stay character-identical to the `test-equal` beneath it. Rename the
+///   row and the specifier matches nothing, so the row runs on the oracles after
+///   all — the guard is gone and the file still looks scoped. This half is
+///   airtight: the text says which form was written.
+/// - **It must sit directly above a test form.** The count binds to the next
+///   test the runner *reaches*, so this is a conservative rule against anything
+///   drifting into the gap. It is genuinely weaker than it sounds, and the
+///   weakness is worth stating rather than discovering: it cannot tell *which*
+///   test form follows, so inserting another assertion directly beneath the skip
+///   still passes here while moving the skip onto the wrong row. Text cannot
+///   know which row was intended. What would is the deeper fix — running each
+///   file a second time with the `patina` feature absent, so the `else` branches
+///   actually execute and the skip count can be asserted against the number of
+///   scoped rows. That needs a mutation path through `Heap`'s feature registry,
+///   which is closed on first read by design (see `Heap::add_feature`), so it is
+///   its own change and not this one's.
+///
+/// Line-oriented deliberately: it reads the file the way the person editing it
+/// does. The cost is that it only sees `test-skip` written on one line, which is
+/// how all four scoped rows are written and how the doc shows it.
+#[test]
+fn every_scoped_row_skips_by_count_and_sits_above_its_row() {
+    for (name, _) in SUITE {
+        let text = read(&scheme_dir().join(name)).unwrap_or_else(|e| panic!("[{name}] {e}"));
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            // Comments are prose about the row, not the row: several of these
+            // files discuss their own skips at length.
+            if line.trim_start().starts_with(';') {
+                continue;
+            }
+            let Some(rest) = line.split_once("(test-skip") else {
+                continue;
+            };
+            let spec = rest.1.split(')').next().unwrap_or_default().trim();
+            assert!(
+                spec.parse::<u32>().is_ok(),
+                "[{name}:{}] `(test-skip {spec})` is not the count form. A name has \
+                 to be kept identical to the row beneath it and desyncs silently \
+                 when the row is renamed — and Patina never evaluates this branch, \
+                 so nothing but this check would notice.",
+                i + 1
+            );
+            let next = lines[i + 1..]
+                .iter()
+                .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with(';'));
+            let next = next
+                .unwrap_or_else(|| panic!("[{name}:{}] `test-skip` with no row beneath it", i + 1));
+            assert!(
+                next.trim_start().starts_with("(test-"),
+                "[{name}:{}] the count binds to the next test the runner reaches, \
+                 but the next form here is `{}`. Keep the skip directly above the \
+                 row it guards, with nothing in the gap — this check cannot tell \
+                 *which* test form follows, so adjacency is the only part of \
+                 \"it guards that row\" that text can hold on to.",
+                i + 1,
+                next.trim()
+            );
+        }
+    }
+}
+
+/// The count form actually skips exactly the next row — on *our* SRFI 64.
+///
+/// Nothing else pins this. The driver rejects `skip != 0` outright, and every
+/// scoped row hides its `test-skip` behind `(cond-expand (patina) (else …))`, so
+/// no file in `tests/scheme/` ever evaluates one on Patina. Upstream's own suite
+/// does not cover it either: `compat/vendor/srfi-64/test.scm` exercises
+/// `test-match-nth` explicitly and the *string* shorthand at "6.2. Shorthand
+/// specifiers", and uses the integer shorthand nowhere. So `make-pred`'s
+/// `(integer? spec)` branch and `test-match-nth`'s counter could both regress
+/// with every scoped row still green here and wrong on chibi and Gauche.
+///
+/// The skipped row is a deliberate failure, so a skip that lands on the wrong
+/// row — or does not happen — shows up as a `fail`, not merely as a count that
+/// moved.
+#[test]
+fn the_count_form_skips_exactly_the_next_row() {
+    let counts = run_on_both_backends(
+        "skip-by-count",
+        r#"(import (scheme base) (srfi 64))
+           (test-begin "deliberate")
+           (test-skip 1)
+           (test-assert "skipped, and would fail if it ran" #f)
+           (test-assert "the count is spent" #t)
+           (test-assert "and stays spent" #t)
+           (test-end)"#,
+    )
+    .expect("the deliberate probe must run on both backends");
+    assert_eq!(
+        counts,
+        Counts {
+            pass: 2,
+            fail: 0,
+            xpass: 0,
+            xfail: 0,
+            skip: 1
+        },
+        "`(test-skip 1)` no longer means \"the next row\" on our SRFI 64, which \
+         is the form every scoped row in tests/scheme/ uses on chibi and Gauche"
+    );
+}
+
 /// Every `.scm` file on disk is in [`SUITE`], and vice versa.
 ///
 /// Without this a file can be added and never run — passing by absence, which
