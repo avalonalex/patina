@@ -9,7 +9,24 @@
 //! is that they now agree. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
-use common::{assert_program_eval_error, eval_program as eval};
+use common::{assert_program_eval_error, assert_program_eval_to, eval_program as eval};
+
+/// `case-lambda` is unavailable until `(scheme case-lambda)` is imported.
+///
+/// Migrated from `case_lambda.rs`, where it was named
+/// `test_case_lambda_empty_clause_list` and believed to assert that
+/// `(case-lambda)` with no clauses is an error. It is not — with the library
+/// imported that returns a procedure matching no call. The row passed because
+/// it ran without the import, so the property it actually held is this one.
+/// #193's migration is what surfaced the difference.
+#[test]
+fn case_lambda_needs_its_import() {
+    assert_program_eval_error("(case-lambda)");
+    assert_program_eval_to(
+        "(import (scheme case-lambda)) (procedure? (case-lambda ((x) x)))",
+        "#t",
+    );
+}
 
 /// Names a program never imported must not resolve, whether they are backed by
 /// Rust primitives or by Scheme.

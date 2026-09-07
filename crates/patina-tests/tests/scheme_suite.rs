@@ -76,7 +76,10 @@ use std::path::{Path, PathBuf};
 ///
 /// A minimum rather than an exact count so that adding an assertion to a file
 /// does not require editing Rust; lowering one still does.
-const SUITE: &[(&str, i64)] = &[("callability.scm", 26)];
+const SUITE: &[(&str, i64)] = &[
+    ("control/callability.scm", 26),
+    ("control/case-lambda.scm", 20),
+];
 
 fn scheme_dir() -> PathBuf {
     repo_root().join("crates/patina-tests/tests/scheme")
