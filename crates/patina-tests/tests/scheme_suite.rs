@@ -81,6 +81,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/case-lambda.scm", 20),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
+    ("control/tail-recursion.scm", 36),
     ("control/wind-thunk-exceptions.scm", 12),
 ];
 

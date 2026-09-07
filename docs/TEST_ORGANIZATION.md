@@ -204,7 +204,7 @@ R7RS specification compliance organized by category:
 #### **Feature Tests** (top-level `tests/`)
 - `cps_features.rs` - CPS-specific behavior (31 tests)
 - `hygiene.rs` - Macro hygiene (~108 tests)
-- `tail_recursion.rs` - TCO correctness (~36 tests)
+- (tail recursion migrated to `tests/scheme/control/tail-recursion.scm` in #193 Phase 1)
 - `numeric_operations.rs` - Numeric tower (~25 tests)
 - `complex_numbers.rs` - Complex number support (~20 tests)
 - `record_types.rs` - define-record-type (~40 tests)
@@ -267,7 +267,7 @@ assert_eval_type(expr, check, name)      // Verify result type
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | ~50 | 985 |
 | record_types.rs | ~40 | 747 |
-| tail_recursion.rs | ~36 | 698 |
+| tail-recursion.scm | 36 | 289 |
 | cps_features.rs | 31 | 580 |
 
 ## Running Tests
