@@ -10,27 +10,41 @@
 ;; error assertions become one `test-error` each, because `test-error` takes a
 ;; single expression — except the six that pin Patina's *strictness* about
 ;; radices, which are one scoped row together, for the reason recorded there.
-;; 44 value rows + 12 error rows = **56**, the extra being a `-0.0` row the
-;; `.rs` file did not have.
+;; **59 rows**: 43 migrated value rows, 12 error rows, and 4 added — `-0.0`, the
+;; two `write`/`number->string` agreement rows, and a split of the complex row
+;; so the half an oracle can corroborate is not scoped away with the half it
+;; cannot.
 ;;
-;; **Nothing is weakened by the move**, which is worth saying because it is not
-;; true of every migrated file: `assert_eval_to` compared the datum writer's
-;; output, and half this file is *about* how numbers print — but
-;; `number->string` returns a string, so comparing strings is comparing the
-;; printed form. On the `string->number` side `equal?` reduces to `eqv?` for
-;; numbers, which distinguishes exactness, so `100` and `100.0` stay distinct.
+;; **What the move costs, precisely.** `assert_eval_to` compared the datum
+;; writer's output. For the `number->string` rows nothing is lost — the
+;; procedure *returns* a string, so comparing strings is comparing the printed
+;; form. For the `string->number` rows something is: `(test-equal '(1/2 …) …)`
+;; compares with `equal?`, so a writer regression that leaves values intact —
+;; the #187/#189 class — is no longer caught here. That is the standing cost
+;; `docs/TEST_ORGANIZATION.md` records for the whole migration, and this file is
+;; not exempt from it; `equal?` does still reduce to `eqv?` for numbers, so
+;; `100` and `100.0` stay distinct.
+;;
+;; The error rows lose something too: `assert_eval_error` required both backends
+;; to fail at the same `ErrorClass`, and `test-error` cannot say that. The
+;; driver compares the two backends' count vectors, so a divergence in *which*
+;; rows failed would still surface — a divergence in the stage would not.
 ;;
 ;; Oracles, measured 2026-09-07. Three rows are scoped to Patina and report a
-;; *skip* elsewhere — the two about complex printing and the one about radix
-;; strictness, each because R7RS leaves the answer to the implementation.
+;; *skip* elsewhere — complex-part elision, complex radix, and radix strictness
+;; — each because R7RS leaves the answer to the implementation.
 ;;
-;;   patina VM / tree-walker   56 pass
-;;   Gauche                    53 pass, 3 skip, no failures
-;;   chibi                     51 pass, 3 skip, 2 fail — it alone tolerates a
-;;                             third argument to either procedure, noted where
-;;                             those two rows sit.
+;;   patina VM / tree-walker   58 pass, 1 expected failure (the defect below)
+;;   Gauche                    55 pass, 3 skip, 1 fail — it has no exact complex
+;;                             numbers, so "3+4i" prints as "3.0+4.0i"
+;;   chibi                     54 pass, 3 skip, 2 fail — it alone tolerates a
+;;                             third argument to either procedure
+;;
+;; The two oracle failures are each one implementation against the other three,
+;; and are noted where those rows sit. Neither is scoped away: doing so would
+;; also drop the agreement of the oracle that *does* corroborate the row.
 
-(import (scheme base) (srfi 64))
+(import (scheme base) (scheme write) (srfi 64))
 
 (test-begin "conversion")
 
@@ -60,11 +74,40 @@
 (test-equal "inexact reals" '("3.14" "100.0" "-2.5")
   (list (number->string 3.14) (number->string 100.0) (number->string -2.5)))
 
-;; Negative zero keeps its sign, and reads back as itself. `debug_format.rs`
-;; names `-0.0` as one of the two cases `number->string` handles that the
-;; display path does not, and no row covered it. Portable — all four agree.
+;; Negative zero keeps its sign, and reads back as itself. Portable — all four
+;; agree, `write` and `number->string` included. (`debug_format.rs:81` and
+;; `conversion.rs:199` both say `-0.0` is a case `number->string` handles that
+;; the display path does not; measured, that is not true — `(write -0.0)` is
+;; `-0.0` on both backends. The comments are stale.)
 (test-equal "negative zero keeps its sign, both ways" '("-0.0" "0.0" -0.0)
   (list (number->string -0.0) (number->string 0.0) (string->number "-0.0")))
+
+;; The other half of that stale comment names scientific notation, and there the
+;; two paths really do disagree — which is a defect, not a property to pin:
+;;
+;;   (write 1e21)            1000000000000000000000.0
+;;   (number->string 1e21)   "1.0e+21"
+;;
+;; One number, two external representations, on both backends. chibi is
+;; self-consistent (`1e+21` either way) and so is Gauche (`1.0e21`). R7RS §6.2.6
+;; requires only that the result read back, which both spellings do, so this is
+;; a quality defect rather than a conformance one — but a program that writes a
+;; number and one that converts it should not disagree.
+;;
+;; `(scheme write)` is in this file's import set for this row alone. It resolves
+;; without one on Patina — the top level carries `(scheme base)`, and `write` is
+;; exported from there (issue #211) — so the omission is invisible here and
+;; fails on both oracles. Third time in this migration; see #211.
+;;
+;; Asserted as the property that *should* hold, with the failure expected on
+;; Patina only, so the row retires itself when the defect is fixed: an xpass is
+;; something `scheme_suite.rs` reports. Both oracles pass it today.
+(define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
+(cond-expand (patina (test-expect-fail 1)) (else))
+(test-equal "write and number->string agree on a number needing an exponent" #t
+  (string=? (written 1e21) (number->string 1e21)))
+(test-equal "…and on one that does not" #t
+  (string=? (written 3.14) (number->string 3.14)))
 
 ;; The infinities and NaN have written forms R7RS §6.2.5 fixes exactly, so
 ;; these are the one place in the file where the spelling is required rather
@@ -98,15 +141,20 @@
 ;; part. Both are defensible — R7RS §6.2.6 requires only that the result parse
 ;; back — so these rows pin Patina's spelling rather than a portable one, and
 ;; the others report a skip instead of a difference.
-(cond-expand (patina) (else (test-skip "complex numbers, and the parts we elide")))
-(test-equal "complex numbers, and the parts we elide" '("3+4i" "3.0+4.0i" "+i" "-i" "5")
-  (list (number->string 3+4i)
-        (number->string 3.0+4.0i)
-        (number->string 0+1i)      ; a zero real part is elided
+;; Unscoped: chibi agrees with both of these, and scoping would throw that away
+;; — the mistake #212 was corrected for. Gauche alone differs, because it has no
+;; exact complex numbers, so it answers "3.0+4.0i" to both.
+(test-equal "a complex number keeps the exactness of its parts" '("3+4i" "3.0+4.0i")
+  (list (number->string 3+4i) (number->string 3.0+4.0i)))
+
+;; Scoped: here all three part company, so there is no corroboration to lose.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "the parts we elide" '("+i" "-i" "5")
+  (list (number->string 0+1i)      ; a zero real part is elided
         (number->string 0-1i)
         (number->string 5+0i)))    ; an exact zero imaginary part is elided
 
-(cond-expand (patina) (else (test-skip "a complex number has no non-decimal radix")))
+(cond-expand (patina) (else (test-skip 1)))
 (test-error "a complex number has no non-decimal radix" #t (number->string 3+4i 16))
 
 ;; ── number->string: what it refuses ─────────────────────────────────────────
@@ -123,16 +171,21 @@
 ;;
 ;; All three conform. Scoped rather than left failing because there is no
 ;; corroboration to lose — both oracles differ — unlike the arity rows below.
-(define (raises? thunk) (guard (e (#t 'raises)) (thunk) 'no-error))
+;; `error-object?` rather than a catch-all: with six claims sharing one row, a
+;; thunk that failed for an unrelated reason — a typo, a later arity change —
+;; would still answer `raises` and hide the degraded element.
+(define (raises? thunk)
+  (guard (e ((error-object? e) 'raises)) (thunk) 'no-error))
 
-(cond-expand (patina) (else (test-skip "a radix outside R7RS's four is rejected")))
-(test-equal "a radix outside R7RS's four is rejected"
-  '(raises raises raises raises raises)
-  (list (raises? (lambda () (number->string 100 3)))
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "radix rules R7RS leaves to the implementation are enforced"
+  '(raises raises raises raises raises raises)
+  (list (raises? (lambda () (number->string 100 3)))     ; outside 2/8/10/16
         (raises? (lambda () (number->string 100 17)))
-        (raises? (lambda () (number->string 3.14 16)))
-        (raises? (lambda () (number->string 100.0 2)))
-        (raises? (lambda () (string->number "100" 3)))))
+        (raises? (lambda () (string->number "100" 3)))
+        (raises? (lambda () (string->number "100" 17)))
+        (raises? (lambda () (number->string 3.14 16)))   ; inexact wants radix 10
+        (raises? (lambda () (number->string 100.0 2)))))
 
 ;; Radix 0 is the one all three reject, so it needs no scoping.
 (test-error "radix 0 is not allowed" #t (number->string 100 0))
@@ -152,7 +205,7 @@
 
 ;; ── string->number: radices ─────────────────────────────────────────────────
 
-(test-equal "decimal is the default radix" '(100 0 -42)
+(test-equal "string->number: decimal is the default radix" '(100 0 -42)
   (list (string->number "100") (string->number "0") (string->number "-42")))
 
 (test-equal "an explicit radix argument" '(256 12 64)
@@ -169,14 +222,14 @@
 
 ;; ── string->number: the numeric tower ───────────────────────────────────────
 
-(test-equal "inexact reals" '(3.14 100.0 100.0 -2.5)
+(test-equal "string->number: inexact reals" '(3.14 100.0 100.0 -2.5)
   (list (string->number "3.14") (string->number "1e2")
         (string->number "1E2") (string->number "-2.5")))
 
 (test-equal "exponent notation" '(100.0 150.0 0.2)
   (list (string->number "1e2") (string->number "1.5e2") (string->number "2e-1")))
 
-(test-equal "exact rationals" '(1/2 3/4 -2/3)
+(test-equal "string->number: exact rationals" '(1/2 3/4 -2/3)
   (list (string->number "1/2") (string->number "3/4") (string->number "-2/3")))
 
 (test-equal "an integer past a machine word" 99999999999999999999
@@ -217,8 +270,12 @@
         (string->number "abc") (string->number "12 34") (string->number "1 2")))
 
 ;; Whitespace is not number syntax (R7RS §6.2.7), so a padded string is not a
-;; number. Gauche and Chez answer #f; chibi tolerates *leading* whitespace only.
-;; This row used to assert the trimmed answer.
+;; number. This row used to assert the trimmed answer.
+;;
+;; chibi tolerates *leading* whitespace, but nothing here shows that: both
+;; probes also have trailing padding, which chibi rejects, so it answers #f like
+;; everyone else. Isolating it would take `(string->number " 100")` and a scope,
+;; and the row is about our answer rather than about chibi's.
 (test-equal "padding is not part of number syntax" '(#f #f 100)
   (list (string->number "  100  ") (string->number "\t42\n") (string->number "100")))
 
