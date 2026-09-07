@@ -179,6 +179,15 @@ impl SchemeLibraryLoader {
     ///
     /// This method creates a fresh heap for parsing. Use `parse_sld_file_with_heap_and_checker`
     /// to provide a shared heap for TaggedValue compatibility with the global environment.
+    ///
+    /// **A fresh heap has no backend identity.** Since the feature registry
+    /// `cond-expand` reads lives on the heap (`patina_core::Heap::features`), a
+    /// `.sld` parsed here sees only the default features — so a declaration
+    /// `(cond-expand (patina-vm …) (else …))` silently takes `else` while the
+    /// same file's `begin` body, parsed with the interpreter's heap, takes the
+    /// other branch. Nothing in the shipped backends reaches this today; the
+    /// assertion below is what keeps it that way, because the failure has no
+    /// symptom at the point of the mistake.
     fn parse_sld_file_with_checker(
         &self,
         name: &[String],
@@ -186,6 +195,12 @@ impl SchemeLibraryLoader {
         can_load_library: &dyn Fn(&[String]) -> bool,
     ) -> Result<ParsedLibrary, LibraryError> {
         let heap = patina_core::new_shared_heap();
+        debug_assert!(
+            !heap.borrow().features().has_feature("patina-vm")
+                && !heap.borrow().features().has_feature("patina-tree-walker"),
+            "a fresh heap should carry no backend identity; if it does, this \
+             method is no longer the odd one out and should take the caller's heap"
+        );
         self.parse_sld_file_with_heap_and_checker(name, path, heap, can_load_library)
     }
 

@@ -23,6 +23,7 @@ pub mod cps_expr;
 pub mod debug_format;
 pub mod environment;
 pub mod error;
+pub mod features;
 pub mod heap;
 pub mod library;
 pub mod macro_debug;

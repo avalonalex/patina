@@ -441,7 +441,6 @@ impl LibraryDefinition {
         heap: &SharedHeap,
     ) -> Result<(), ParseError> {
         use crate::cond_expand::evaluate_feature_requirement_tagged;
-        use patina_runtime::default_features;
 
         if clauses.is_empty() {
             return Err(ParseError::InvalidSyntax(
@@ -449,7 +448,10 @@ impl LibraryDefinition {
             ));
         }
 
-        let features = default_features();
+        // The heap's registry, the same one the desugarer and `(features)` read
+        // — so a `cond-expand` in a `.sld` declaration and one in its `begin`
+        // body cannot answer differently.
+        let features = heap.borrow_mut().features_and_close().clone();
 
         for &clause in clauses {
             let clause_list = tagged_list_to_vec(clause, heap)?;

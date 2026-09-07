@@ -71,6 +71,11 @@ impl Evaluator {
     /// filesystem for browser targets.
     pub fn with_fs(fs: Arc<dyn patina_core::FileSystem>) -> Self {
         let global_env = Rc::new(Environment::new());
+        // Counterpart of the VM's, on the same seam — see that comment.
+        global_env
+            .heap()
+            .borrow_mut()
+            .add_feature("patina-tree-walker");
 
         // Create primitive registry and register all primitives
         let mut primitive_registry = patina_primitives::PrimitiveRegistry::new();
