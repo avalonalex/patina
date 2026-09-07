@@ -17,3 +17,9 @@ scheme_tests/reports/larceny/
 scheme_tests/reports/larceny_r6rs/
 scheme_tests/reports/larceny_tree_walker/
 scheme_tests/reports/larceny_r6rs_tree_walker/
+
+# SRFI 64 writes <suite-name>.log beside the process's cwd. The suite driver
+# uses `test-runner-null` and writes none, but running a tests/scheme/ file by
+# hand -- which is how each one is checked against chibi and Gauche -- drops one
+# in the repo root.
+/*.log

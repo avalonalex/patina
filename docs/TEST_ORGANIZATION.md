@@ -82,6 +82,14 @@ Two reasons to reach for a `.scm` file first:
   `callability.scm`, Gauche's three disagreements are the deliberate
   divergences its own comments already document.
 
+  Not every file gets *both* oracles, and that is worth recording in the file
+  rather than rediscovering. `internal-escape-boundaries.scm` and
+  `wind-thunk-exceptions.scm` are about deep continuation and `dynamic-wind`
+  interactions that chibi cannot run at all — it answers `out of stack space`
+  on one and does not terminate on the other — so Gauche alone arbitrates them.
+  A file no external implementation can run is not thereby wrong; it is a file
+  whose oracle has to be named explicitly.
+
 **Where a new `.scm` file goes: directory by kind, filename by concern.** The
 directory is one of the seven above and says what *sort* of thing the file is
 about; the filename keeps the concern name the test has always had
