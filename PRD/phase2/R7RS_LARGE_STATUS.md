@@ -211,12 +211,15 @@ must work:
      `# of unexpected successes` and returns normally, exit code 0. A driver that runs a file to
      `test-end` and reads the exit status gets a false green, which is the same shape as audit E1.
      #193's driver must call `test-exit` or read the runner's counts directly.
-   - **The corpus loses a package.** `bundled_libraries()` in `compat/tools/build_corpus.py` globs
-     both roots and drops every vendored package providing a bundled library, so `compat/vendor/srfi-64`
-     leaves the corpus and its currently-passing row goes with it: 127 of 161 becomes 126 of 160. Not
-     a regression — the package is excluded because we provide it — but it must be stated before the
-     tally moves, exactly as `test-lib/README.md` states the nine-pass cost that made `(chibi string)`
-     move rather than be deleted.
+   - **The corpus loses a package, but not yet.** `bundled_libraries()` in
+     `compat/tools/build_corpus.py` globs both roots and drops every vendored package providing a
+     bundled library — and that runs at corpus *build* time, not at run time. Measured after bundling:
+     the committed corpus is untouched, still **127 of 161** with `srfi-64` passing. The next
+     `build_corpus.py` run drops it, taking the tally to 126 of 160. Not a regression — the package
+     is excluded because we provide it — but it costs something real that the headline number does
+     not show: **SRFI 64's own 259-line conformance suite (`compat/vendor/srfi-64/test.scm`) runs
+     today only as that corpus package**, and loses its home with it. #193's driver is the intended
+     new home, since that file is exactly the kind of thing it runs.
    - **The compat classifier becomes coupled to a file we can edit.** `test_suite_failed` in
      `crates/patina-compat/src/run.rs` detects SRFI 64 failures by matching that runner's literal
      summary wording, a shape audit E1 recorded getting wrong once. While SRFI 64 was a byte-identical
