@@ -221,7 +221,6 @@ R7RS specification compliance organized by category:
 - `numeric_operations.rs` - Numeric tower (~25 tests)
 - `complex_numbers.rs` - Complex number support (~20 tests)
 - `record_types.rs` - define-record-type (~40 tests)
-- `lazy_evaluation.rs` - delay/force
 - `scheme_eval.rs` - (scheme eval) library
 
 #### **Library Tests**
