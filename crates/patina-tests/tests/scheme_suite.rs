@@ -85,6 +85,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/wind-thunk-exceptions.scm", 12),
     ("expansion/define-values.scm", 14),
     ("stdlib/lazy-evaluation.scm", 29),
+    ("stdlib/process-context.scm", 12),
     ("stdlib/scheme-r5rs.scm", 20),
 ];
 

@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  81 as of 2026-09-07.
+  80 as of 2026-09-07.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -235,7 +235,6 @@ R7RS specification compliance organized by category:
 - `sld_file_loading.rs` - Library loading (~50 tests)
 - `r7rs_libraries.rs` - R7RS library compliance
 - `scheme_base.rs` - (scheme base) library
-- `scheme_process_context.rs` - Process context
 
 #### **Integration Tests** (`tests/integration/`)
 - Compare Patina output with chibi-scheme
