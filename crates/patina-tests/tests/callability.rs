@@ -142,6 +142,37 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
     );
 }
 
+/// A non-breaking space is **not** an identifier character, and the reader
+/// says so before the program runs.
+///
+/// From `unicode_identifiers.rs` when it migrated (#193 Phase 1). Everything
+/// else in that file is now `tests/scheme/reader/unicode-identifiers.scm`;
+/// this row could not go, because a lex error is not a raise — no `guard`
+/// reaches it and `test-error` cannot state it. It is here rather than in a
+/// file of its own for the reason the section above gives.
+///
+/// The claim is what the rule's *edge* is. Patina reads any character above
+/// ASCII as an identifier constituent, and whitespace is the one exception —
+/// without it a stray U+00A0 would silently weld two identifiers into one.
+/// Measured 2026-09-07 on all three, chibi 0.12 / Gauche `gosh -r7` / Chez
+/// `chez --script`: Patina is stricter than every reference here. chibi welds
+/// `a<U+00A0>b` into the symbol `|a b|` and then reports it undefined, while
+/// Gauche and Chez both split it and evaluate `3`.
+///
+/// `assert_program_eval_error_at` rather than `assert_program_eval_error`,
+/// because the stage *is* the claim: an implementation that accepted the
+/// character and failed later — chibi's answer — would satisfy the weaker
+/// helper while having exactly the behaviour this row exists to reject.
+#[test]
+fn a_non_breaking_space_is_rejected_before_the_program_runs() {
+    assert_program_eval_error_at(
+        "(define a 1) (define b 2) (+ a\u{00A0}b)",
+        ErrorClass::BeforeRun,
+        ErrorClass::BeforeRun,
+        "U+00A0",
+    );
+}
+
 /// `parameterize` with no body is rejected **before the program runs**, so it
 /// is not the same claim as the rows above and does not pair with anything.
 ///
