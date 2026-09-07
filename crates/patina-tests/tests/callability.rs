@@ -113,6 +113,24 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
     // from one the `.rs` file had commented out, and a new guarded row needs
     // its unguarded half as much as a migrated one does.
     assert_program_eval_error("(import (scheme process-context)) (get-environment-variable 123)");
+
+    // Raising an error object whose irritants contain a **cycle**, uncaught.
+    //
+    // Third of the three paths the missing label arm aborted on, and the only
+    // one that had never been covered anywhere: `circular_data.rs` asserted
+    // `(write e)`, `tests/scheme/data/circular-data.scm` added `(display e)`
+    // when it migrated (#193 Phase 1), and this is the diagnostic for an
+    // uncaught raise — which is the top-level path, so no `.scm` file can
+    // reach it. `expect_error` calls `e.to_string()`, so the object really is
+    // rendered here; a return to the unlabelled walk aborts the process rather
+    // than failing this row, which is what makes it worth stating separately
+    // from the two guarded halves.
+    assert_program_eval_error(
+        "(define xs (list 1))
+         (define e (guard (c (#t c)) (error \"boom\" xs)))
+         (set-car! xs e)
+         (raise e)",
+    );
 }
 
 /// `parameterize` with no body is rejected **before the program runs**, so it

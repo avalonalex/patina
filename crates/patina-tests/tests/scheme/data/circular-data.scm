@@ -10,15 +10,24 @@
 ;; duplicate, and one row is new — the portable half of the error-object claim,
 ;; which is what lets that bug keep any coverage at all on chibi and Gauche.
 ;;
-;; **This file needed `written` before it could migrate.** Every row but three
-;; asserts a *printed* form, and `test-equal` compares with `equal?` — which on
-;; a circular structure does not terminate at all, and on the rest would have
-;; left the rows asserting that a list is itself. So the three helpers below put
-;; the writer back under test. `written` is the shared one and is copied
-;; verbatim from `docs/TEST_ORGANIZATION.md`; `shared` and `displayed` are the
-;; same shape over the other two procedures this file is about, and exist
-;; because `write`, `display` and `write-shared` drive the same two passes and
-;; only `write` used to be pinned.
+;; **This file needed `written` before it could migrate.** 20 of the 27 rows
+;; assert an exact *printed* form, and `test-equal` compares with `equal?`,
+;; which cannot see any of what they are about: `equal?` is required to
+;; terminate on circular data (R7RS §6.1) and does — measured 2026-09-07,
+;; `(equal? '#0=(x . #0#) '#0=(x . #0#))` answers `#t` at once on Patina, chibi
+;; and Gauche — and it answers on *structure*, so a mislabelled `#0=`, a
+;; dropped label, or a lost abbreviation leaves two structurally identical
+;; values that compare equal however they print. That is the #187/#189 class,
+;; and it is sharpest here: the `write` and `write-shared` rows differ in
+;; nothing but printing, so without `written` several of them would be the same
+;; assertion twice.
+;;
+;; So the three writer helpers below put the writer back under test. `written`
+;; is the shared one and is copied verbatim from `docs/TEST_ORGANIZATION.md`;
+;; `shared` and `displayed` are the same shape over the other two procedures
+;; this file is about, and exist because `write`, `display` and `write-shared`
+;; drive the same two passes and only `write` used to be pinned. (`read-back`
+;; below is a fourth helper, but a reader's, not a writer's.)
 ;;
 ;; ── Measured 2026-09-07 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
@@ -49,9 +58,9 @@
 ;;
 ;; Note what does **not** diverge, because the first draft of this header
 ;; assumed it would: the four rows where the abbreviation *declines* agree on
-;; all three implementations, and so do both round-trip and all three
-;; stack-depth rows. Generalising the abbreviation difference to the file would
-;; have scoped eleven rows that need no scoping.
+;; all three implementations, and so do the round-trip row and all three
+;; stack-depth rows. Only 4 of the 27 rows diverge at all, so generalising the
+;; difference to the file would have scoped 22 rows that need no scoping.
 ;;
 ;; The one scoped row is the error object's printed form, whose premise really
 ;; is ours: R7RS gives error objects no external representation at all, and the
@@ -243,11 +252,20 @@
 
 ;; Portable half: that writing it *returns at all* is the whole bug, and it is
 ;; observable without agreeing on the text. Both oracles corroborate this.
-(test-assert "writing an error object with a cyclic irritant terminates"
-  (and (string? (written cyclic-error))
-       (string? (displayed cyclic-error))
-       (error-object? cyclic-error)
-       (equal? "boom" (error-object-message cyclic-error))))
+;;
+;; A list rather than one `and` of four claims: the first two are an
+;; abort-detector — `written` ends in `get-output-string`, so reaching the
+;; comparison at all is the assertion — while the last two are ordinary value
+;; claims about the object. Bundled behind `test-assert` a failure reports a
+;; bare `#f` and a regression in `error-object-message` would look exactly like
+;; a regression in the writer, which is the shape `data/conversion.scm` already
+;; carries a comment against.
+(test-equal "writing an error object with a cyclic irritant terminates"
+  '(#t #t #t "boom")
+  (list (string? (written cyclic-error))
+        (string? (displayed cyclic-error))
+        (error-object? cyclic-error)
+        (error-object-message cyclic-error)))
 
 ;; **Scoped to Patina, because its premise is.** R7RS gives error objects no
 ;; external representation, and measured 2026-09-07 the three share none:
@@ -272,8 +290,12 @@
 ;; the process rather than raising anything a `guard` could catch. Only nesting
 ;; is allowed to cost a frame now.
 ;;
-;; Last in the file deliberately. These are the rows whose regression mode is an
-;; abort rather than a failure, and an abort takes everything after it with it.
+;; Last in the file deliberately — but only the oracle runs benefit, and it is
+;; worth being exact about which. These are the rows whose regression mode is an
+;; abort rather than a failure. Run standalone, ordering last means the 26 rows
+;; above still report. Under `scheme_suite.rs` it buys nothing: the driver runs
+;; each file in-process and reads the SRFI 64 counts only after it returns, so
+;; an abort here takes the whole test binary down and no counts are read at all.
 ;; The assertions are on output *length*, not text: what is under test is that
 ;; the writer returns. All three implementations agree on every number here.
 (define (zeros n)
