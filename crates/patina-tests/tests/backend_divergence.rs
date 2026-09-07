@@ -604,9 +604,9 @@ fn a_continuation_captured_inside_a_running_after_thunk_resumes_it() {
 /// The inner `guard` was not installed when `dynamic-wind` was called, so
 /// R7RS 6.10 puts the before thunk's `raise` outside it. This is the
 /// complement of `tests/scheme/control/wind-thunk-exceptions.scm`, whose rows
-/// all have a handler
-/// *missing* at the jump; here one is *extra*, and the VM's old "handlers
-/// from the machine, not the record" answered wrong in that direction too.
+/// all have a handler *missing* at the jump; here one is *extra*, and the VM's
+/// old "handlers from the machine, not the record" answered wrong in that
+/// direction too.
 /// Both backends now take the thunk's handler stack from the wind record.
 /// Recorded in {GUARD_UNWIND_ORDER}.
 #[test]

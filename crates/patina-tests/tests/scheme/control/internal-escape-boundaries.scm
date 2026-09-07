@@ -11,9 +11,9 @@
 ;; `assert_program_eval_to`, which is a claim about the language.
 ;;
 ;; The tree-walker answered all of these correctly before the fix, so it is the
-;; expectation. **chibi cannot arbitrate this file** — it loops forever on the
-;; after-thunk-during-raise row below and dies with "out of stack space" — so
-;; the external oracle is Gauche, which agrees with every row.
+;; expectation. Gauche agrees with all 11 rows. **chibi agrees with 10 of them**
+;; and dies with `out of stack space` on the last, which is why that row is
+;; ordered last — see the note above it.
 ;;
 ;; ## The sweep (audit item A4)
 ;;
@@ -31,8 +31,9 @@
 ;;       *not a boundary any more* — since 2026-09-02 each thunk is an ordinary
 ;;       frame under a `ResumeWindJump` stub, so an escape out of one is an
 ;;       ordinary escape and a continuation captured in one is resumable
-;;   `AbortCurrentContinuation` exit winds (the control primitive and
-;;   `Instruction::Abort`)      `run_thunk` — pops before running
+;;   `AbortCurrentContinuation` exit winds — both the control primitive and
+;;   `Instruction::Abort`, one boundary with two call sites
+;;       `run_thunk` — pops before running
 ;;   `try_invoke_continuation` delimited enter thunks    `run_thunk`
 ;;   `Instruction::InvokeContinuation` enter thunks      `run_thunk`
 ;;
@@ -50,9 +51,16 @@
 
 ;; A2 — `dynamic-wind` called as a value, escaped out of from its body.
 ;;
-;; The register file is wide enough here that the write through the dead frame
-;; lands out of bounds: before the fix this was a process abort in `set_reg_at`,
-;; not a wrong answer.
+;; The fifteen live locals are not decoration: in the `.rs` form this row came
+;; from, they made the register file wide enough that the write through the dead
+;; frame landed out of bounds, so before the fix this was a process abort in
+;; `set_reg_at` rather than a wrong answer.
+;;
+;; **That history is not what this row now pins.** Inside `test-equal` the
+;; expression runs nested in SRFI 64's own `call/cc` and handler, at a different
+;; frame depth from the top-level program it used to be, and the abort was never
+;; something a green run could demonstrate anyway. What is pinned is the answer:
+;; the escape delivers 7. Reproducing the original abort needs the pre-fix VM.
 (define dw dynamic-wind)
 
 (define (escape-from-a-wide-frame k)
@@ -87,10 +95,10 @@
 ;; abandoned call must *not* run its own cleanup as well.
 (define once-log '())
 (test-equal "the after thunk runs once on escape" '(escaped (in out))
-  (let* ((r (call/cc (lambda (k)
-              (dw (lambda () (set! once-log (cons 'in once-log)))
-                  (lambda () (k 'escaped))
-                  (lambda () (set! once-log (cons 'out once-log))))))))
+  (let ((r (call/cc (lambda (k)
+             (dw (lambda () (set! once-log (cons 'in once-log)))
+                 (lambda () (k 'escaped))
+                 (lambda () (set! once-log (cons 'out once-log))))))))
     (list r (reverse once-log))))
 
 ;; C3 — `call-with-values` as a value, producer escapes. The consumer ran
@@ -98,29 +106,10 @@
 (define cwv call-with-values)
 (define consumer-ran 'no)
 (test-equal "escape from a call-with-values producer called as a value" '(42 no)
-  (let* ((r (call/cc (lambda (k)
-              (cwv (lambda () (k 42))
-                   (lambda vs (set! consumer-ran 'consumer-ran) 99))))))
+  (let ((r (call/cc (lambda (k)
+             (cwv (lambda () (k 42))
+                  (lambda vs (set! consumer-ran 'consumer-ran) 99))))))
     (list r consumer-ran)))
-
-;; A3 — a continuation invoked from an after-thunk while `raise` unwinds.
-;;
-;; The record was still on `dynamic_winds` while its own after-thunk ran, so the
-;; escape re-entered it and re-ran the same thunk, with no depth guard:
-;; `run_thunk → try_invoke_continuation → run_wind_transition → run_thunk` until
-;; the native stack gave out and aborted the process. Popping the record first
-;; closed it; running the thunks as frames rather than nested Rust calls
-;; (2026-09-02) means the recursion has nowhere to build up either.
-;;
-;; **This is the row chibi cannot arbitrate.** Re-verified 2026-09-07: run on
-;; its own, chibi answers `ERROR: out of stack space`. Both Patina backends
-;; answer; the tree-walker always did; Gauche agrees.
-(test-equal "escape from an after thunk during raise unwinding" 'escaped-from-after
-  (call/cc (lambda (k)
-    (guard (e (#t (list 'caught e)))
-      (dynamic-wind (lambda () 0)
-                    (lambda () (raise 'boom))
-                    (lambda () (k 'escaped-from-after)))))))
 
 ;; A4 — the continuable-`raise` handler path, which runs its handler
 ;; synchronously and then re-pushes the handler and writes a register.
@@ -137,9 +126,9 @@
 (define no-escape-log '())
 (test-equal "the value form of dynamic-wind still works without any escape"
   '(body (in out))
-  (let* ((r (dw (lambda () (set! no-escape-log (cons 'in no-escape-log)))
-                (lambda () 'body)
-                (lambda () (set! no-escape-log (cons 'out no-escape-log))))))
+  (let ((r (dw (lambda () (set! no-escape-log (cons 'in no-escape-log)))
+               (lambda () 'body)
+               (lambda () (set! no-escape-log (cons 'out no-escape-log))))))
     (list r (reverse no-escape-log))))
 
 (test-equal "the value form of call-with-values still works" '(1 2)
@@ -156,5 +145,28 @@
                  (set! retries (+ retries 1))
                  (if (procedure? r) (r retries) (list 'retried retries))))
     (lambda () 0)))
+
+;; ── Last, on purpose: the row chibi dies on ─────────────────────────────────
+
+;; A3 — a continuation invoked from an after-thunk while `raise` unwinds.
+;;
+;; The record was still on `dynamic_winds` while its own after-thunk ran, so the
+;; escape re-entered it and re-ran the same thunk, with no depth guard:
+;; `run_thunk → try_invoke_continuation → run_wind_transition → run_thunk` until
+;; the native stack gave out and aborted the process. Popping the record first
+;; closed it; running the thunks as frames rather than nested Rust calls
+;; (2026-09-02) means the recursion has nowhere to build up either.
+;;
+;; **This row is last because chibi dies on it** — `ERROR: out of stack space`,
+;; measured 2026-09-07 — and SRFI 64 stops the file where that happens. In the
+;; middle of the file it cost the ten rows after it their second oracle; at the
+;; end it costs nothing, and chibi still corroborates 10 of 11. Keep it here,
+;; and put any future row chibi cannot survive beside it.
+(test-equal "escape from an after thunk during raise unwinding" 'escaped-from-after
+  (call/cc (lambda (k)
+    (guard (e (#t (list 'caught e)))
+      (dynamic-wind (lambda () 0)
+                    (lambda () (raise 'boom))
+                    (lambda () (k 'escaped-from-after)))))))
 
 (test-end)

@@ -1557,8 +1557,9 @@ records and handlers carry frame depths that a jump makes meaningless:
 **Acceptance (VM), all met.** Rows 1, 2, 5, 6, 10 and 11 answer as Gauche
 does; every row is pinned in
 `crates/patina-tests/tests/scheme/control/wind-thunk-exceptions.scm` (a `.rs`
-file until #193 Phase 1 migrated it), now as a single
-`assert_program_eval_to` per row against both backends. The two shapes found
+file of `assert_program_eval_to` calls until #193 Phase 1 migrated it), now as
+a single SRFI 64 `test-equal` per row, run on both backends by
+`scheme_suite.rs`. The two shapes found
 by review of the tree-walker PR also answer as Gauche does and have moved to
 `backend_divergence.rs`' "Not divergences": a continuation captured *inside*
 an after-thunk while a jump is running it (the VM used to run the thunk again

@@ -13,10 +13,27 @@
 ;; (#193 Phase 1). Nothing had to stay behind: every row was one
 ;; `assert_program_eval_to`.
 ;;
-;; **Gauche is the oracle for this file; chibi cannot arbitrate it** — case 1
-;; alone does not terminate there (measured 2026-09-07). That is chibi's own
-;; limit, not a disagreement about the rule. Gauche implements the rule
-;; consistently across every shape below and agrees with all twelve rows.
+;; **Gauche is the oracle for this file.** It implements the rule consistently
+;; across every shape below and agrees with all twelve rows.
+;;
+;; **chibi arbitrates almost none of it**, unlike the sibling
+;; `internal-escape-boundaries.scm`, where ordering one row last recovers ten.
+;; Measured per row, 2026-09-07: cases 1, 2 and 4 do not terminate at all; case
+;; 3 — the normal-exit shape, the one that never needed a fix — completes and
+;; agrees. Ordering buys nothing here because the hangs are the rule and not the
+;; exception, and a hang is worse than an error: it has to be killed by hand
+;; rather than stopping the file. These are chibi's limits on deep
+;; `dynamic-wind`/continuation interaction, not disagreements about the rule.
+;;
+;; **Every row raises a bare symbol, and that is deliberate** — it is what the
+;; defect reports and the Gauche comparisons used. The cost is that a regression
+;; letting one escape its guard stops the whole file rather than failing one
+;; row: SRFI 64's `false-if-error` calls `error-object-message` on whatever was
+;; raised, which on a symbol is itself a type error (`scheme_suite.rs` documents
+;; this edge). The usual remedy — an enclosing `guard` per row — is **not**
+;; available here: it would add a handler to the very stack these rows measure,
+;; and case 1 wrapped in a guard is literally case 2, which has a different
+;; expected answer. Detection is not lost, only its granularity.
 ;;
 ;; **Both backends meet the rule on every shape here**, by the same two
 ;; mechanisms: a wind record captures the handler stack of its `dynamic-wind`
@@ -108,17 +125,18 @@
 ;; from the wind stack the first jump had got to — the inner record already
 ;; popped — so it runs `out1` and then delivers `sec2`.
 (define nested-log '())
-(define nested-caught
-  (guard (e (#t (list 'caught e)))
-    (dynamic-wind (lambda () (set! nested-log (cons 'in1 nested-log)))
-      (lambda ()
-        (dynamic-wind (lambda () (set! nested-log (cons 'in2 nested-log)))
-          (lambda () (raise 'primary))
-          (lambda () (set! nested-log (cons 'out2 nested-log)) (raise 'sec2))))
-      (lambda () (set! nested-log (cons 'out1 nested-log))))))
 (test-equal "nested winds finish unwinding before delivering the replacement"
   '((caught sec2) (in1 in2 out2 out1))
-  (list nested-caught (reverse nested-log)))
+  (let* ((caught
+          (guard (e (#t (list 'caught e)))
+            (dynamic-wind (lambda () (set! nested-log (cons 'in1 nested-log)))
+              (lambda ()
+                (dynamic-wind (lambda () (set! nested-log (cons 'in2 nested-log)))
+                  (lambda () (raise 'primary))
+                  (lambda () (set! nested-log (cons 'out2 nested-log)) (raise 'sec2))))
+              (lambda () (set! nested-log (cons 'out1 nested-log))))))
+         (entered (reverse nested-log)))
+    (list caught entered)))
 
 ;; The same program wrapped in an outer guard, which is what separated the two
 ;; halves of the old VM answer: the VM always finished the unwind when something
@@ -128,18 +146,19 @@
 ;; exception stops the program where it is raised. Both forms are kept: the pair
 ;; is what says the unwind was never the defect, only who catches.
 (define outer-log '())
-(define outer-caught
-  (guard (o (#t (list 'outer o)))
-    (guard (e (#t (list 'caught e)))
-      (dynamic-wind (lambda () (set! outer-log (cons 'in1 outer-log)))
-        (lambda ()
-          (dynamic-wind (lambda () (set! outer-log (cons 'in2 outer-log)))
-            (lambda () (raise 'primary))
-            (lambda () (set! outer-log (cons 'out2 outer-log)) (raise 'sec2))))
-        (lambda () (set! outer-log (cons 'out1 outer-log)))))))
 (test-equal "…and an enclosing guard does not change where it is delivered"
   '((caught sec2) (in1 in2 out2 out1))
-  (list outer-caught (reverse outer-log)))
+  (let* ((caught
+          (guard (o (#t (list 'outer o)))
+            (guard (e (#t (list 'caught e)))
+              (dynamic-wind (lambda () (set! outer-log (cons 'in1 outer-log)))
+                (lambda ()
+                  (dynamic-wind (lambda () (set! outer-log (cons 'in2 outer-log)))
+                    (lambda () (raise 'primary))
+                    (lambda () (set! outer-log (cons 'out2 outer-log)) (raise 'sec2))))
+                (lambda () (set! outer-log (cons 'out1 outer-log)))))))
+         (entered (reverse outer-log)))
+    (list caught entered)))
 
 ;; ── Handlers around and inside the body ─────────────────────────────────────
 
@@ -166,16 +185,16 @@
 ;; stack. Both now run the thunk as a step with the call's handlers, so the
 ;; handler's return goes back into the thunk.
 (define continuable-log '())
-(define continuable-r
-  (with-exception-handler
-    (lambda (c) (set! continuable-log (cons c continuable-log)) 'ignored)
-    (lambda ()
-      (call/cc (lambda (k)
-        (dynamic-wind (lambda () #f)
-                      (lambda () (k 'x))
-                      (lambda () (raise-continuable 'sec))))))))
 (test-equal "raise-continuable in an after thunk resumes the thunk" '(x (sec))
-  (list continuable-r (reverse continuable-log)))
+  (let* ((r (with-exception-handler
+              (lambda (c) (set! continuable-log (cons c continuable-log)) 'ignored)
+              (lambda ()
+                (call/cc (lambda (k)
+                  (dynamic-wind (lambda () #f)
+                                (lambda () (k 'x))
+                                (lambda () (raise-continuable 'sec))))))))
+         (seen (reverse continuable-log)))
+    (list r seen)))
 
 ;; A `guard` declines, its `handler-k` re-enters the wind, and the *before*-thunk
 ;; raises on that second entry.
@@ -249,17 +268,17 @@
 ;; `dynamic-wind` sequence, which ran the after-thunk a second time and lost the
 ;; escape's value — `(() (secondary secondary))`.
 (define deciding-log '())
-(define deciding-r
-  (with-exception-handler
-    (lambda (c) (set! deciding-log (cons c deciding-log)) 'ignored)
-    (lambda ()
-      (guard (e ((eq? e 'never) 'never))
-        (call/cc (lambda (k)
-          (dynamic-wind (lambda () #f)
-                        (lambda () (k 'escaped))
-                        (lambda () (raise-continuable 'secondary)))))))))
 (test-equal "the after thunk resumes after a declining guard and a returning handler"
   '(escaped (secondary))
-  (list deciding-r (reverse deciding-log)))
+  (let* ((r (with-exception-handler
+              (lambda (c) (set! deciding-log (cons c deciding-log)) 'ignored)
+              (lambda ()
+                (guard (e ((eq? e 'never) 'never))
+                  (call/cc (lambda (k)
+                    (dynamic-wind (lambda () #f)
+                                  (lambda () (k 'escaped))
+                                  (lambda () (raise-continuable 'secondary)))))))))
+         (seen (reverse deciding-log)))
+    (list r seen)))
 
 (test-end)
