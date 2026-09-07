@@ -2176,7 +2176,7 @@ impl Desugarer {
             let matches = evaluate_feature_requirement_tagged(
                 requirement_tv,
                 shared_heap,
-                &features,
+                features,
                 &can_load_library,
             )
             .map_err(|e| {
