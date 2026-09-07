@@ -170,7 +170,7 @@ differs between our two backends — can stay in Scheme, scoped with the
 `cond-expand` identifier #208 added:
 
 ```scheme
-(cond-expand (patina) (else (test-skip "the row's name")))
+(cond-expand (patina) (else (test-skip 1)))
 (test-equal "the row's name" ...)
 ```
 
@@ -180,6 +180,15 @@ quietly is what the skip and floor checks exist to prevent; with it, chibi and
 Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
+
+**Skip the count, not the name.** SRFI 64's `test-skip` takes a count, a name
+or a predicate, and the count form is the one that cannot rot: `(test-skip 1)`
+means "the next row", where `(test-skip "the row's name")` has to be kept
+character-identical to the `test-equal` beneath it. Rename the row and the two
+desync silently — the specifier matches nothing, the row runs on chibi and
+Gauche after all, and *nothing here catches it*, because Patina takes the
+`(patina)` branch and never evaluates the `else` at all. The count form has no
+second copy to keep in step.
 
 Every file is listed in `scheme_suite.rs`'s `SUITE` table with a minimum
 assertion count. That floor is not bookkeeping — a file that stops running
