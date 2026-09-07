@@ -15,6 +15,12 @@ use crate::eval::{EvalError, Evaluator, eval_cps};
 use patina_core::TaggedValue;
 use patina_frontend::SourceMap;
 use patina_runtime::{Backend, Environment};
+
+/// The `cond-expand` identifier this backend advertises — counterpart of
+/// `patina-vm`, so a portable test file can express a per-backend expectation
+/// without the harness knowing about it. See `crates/patina-vm/src/backend.rs`
+/// for the guard that a construction site was not missed.
+const PATINA_TREE_WALKER_FEATURE: &str = "patina-tree-walker";
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -129,8 +135,11 @@ impl TreeWalker {
 
         let desugarer = match source_map {
             Some(sm) => Desugarer::with_env_and_source_map(env.clone(), sm.clone())
+                .with_feature(PATINA_TREE_WALKER_FEATURE)
                 .with_fs(self.evaluator.fs.clone()),
-            None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
+            None => Desugarer::with_env(env.clone())
+                .with_feature(PATINA_TREE_WALKER_FEATURE)
+                .with_fs(self.evaluator.fs.clone()),
         };
 
         let core_expr = desugarer

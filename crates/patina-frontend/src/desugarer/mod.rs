@@ -239,6 +239,15 @@ pub struct Desugarer {
     /// Defaults to `NativeFs` when not explicitly set.
     fs: std::sync::Arc<dyn patina_core::FileSystem>,
 
+    /// Feature identifiers `cond-expand` is resolved against.
+    ///
+    /// Carried here rather than built at the `cond-expand` site because the
+    /// backend identifier (`patina-vm` / `patina-tree-walker`) is not a
+    /// property of the process — both backends exist in one test binary — so
+    /// there is no global that could hold it. The desugarer is the narrowest
+    /// thing constructed per backend, which makes it the right owner.
+    features: patina_runtime::features::FeatureRegistry,
+
     /// Directories a relative `include` path is resolved against, innermost
     /// last: the directory of the file being desugared, then of each file an
     /// `include` has opened on the way here. Shared (not cloned) with the
@@ -278,8 +287,22 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            features: patina_runtime::default_features(),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    /// Advertise an extra `cond-expand` feature identifier — the backends use
+    /// this to name themselves, so a test file can write
+    /// `(cond-expand (patina-vm …) (else …))` in portable R7RS instead of the
+    /// harness carrying the distinction.
+    ///
+    /// Scope, stated because it is easy to over-read: this reaches
+    /// `cond-expand` in *programs*, which is what a `.scm` test file is.
+    /// `cond-expand` inside a `.sld` goes through `library_parser.rs`, which
+    /// builds its own registry and so still sees only the default features.
+    pub fn add_feature(&mut self, name: &str) {
+        self.features.add_feature(name);
     }
 
     /// Create a new desugarer with environment and source map
@@ -296,8 +319,16 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: Some(source_map),
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            features: patina_runtime::default_features(),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    /// Builder form of [`Desugarer::add_feature`], for the backends' desugarer
+    /// construction chains.
+    pub fn with_feature(mut self, name: &str) -> Self {
+        self.features.add_feature(name);
+        self
     }
 
     /// Set the virtual filesystem for `include` handling.
@@ -335,6 +366,7 @@ impl Desugarer {
             shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
+            features: patina_runtime::default_features(),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
         }
     }
@@ -357,6 +389,10 @@ impl Desugarer {
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            // Inherited, not defaulted: a child desugarer is made for every
+            // nested binding form, so defaulting here would silently drop the
+            // backend identifier for any `cond-expand` below the top level.
+            features: self.features.clone(),
             include_dirs: self.include_dirs.clone(),
         };
         (desugarer, scope)
@@ -454,6 +490,10 @@ impl Desugarer {
             shadowed_names: shadowed,
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            // Inherited, not defaulted: a child desugarer is made for every
+            // nested binding form, so defaulting here would silently drop the
+            // backend identifier for any `cond-expand` below the top level.
+            features: self.features.clone(),
             include_dirs: self.include_dirs.clone(),
         }
     }
@@ -665,6 +705,10 @@ impl Desugarer {
             shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
+            // Inherited, not defaulted: a child desugarer is made for every
+            // nested binding form, so defaulting here would silently drop the
+            // backend identifier for any `cond-expand` below the top level.
+            features: self.features.clone(),
             include_dirs: self.include_dirs.clone(),
         }
     }
@@ -2082,7 +2126,6 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
         use crate::cond_expand::evaluate_feature_requirement_tagged;
-        use patina_runtime::features::FeatureRegistry;
 
         let clauses = utils::list_to_vec_tagged(args, shared_heap)?;
 
@@ -2092,7 +2135,7 @@ impl Desugarer {
             ));
         }
 
-        let features = FeatureRegistry::new();
+        let features = &self.features;
 
         let can_load_library = |_lib_name: &[String]| false;
 
