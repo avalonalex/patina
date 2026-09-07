@@ -154,9 +154,10 @@ fn a_control_primitive_error_still_escapes_an_unguarded_program() {
 /// The claim is what the rule's *edge* is. Patina reads any character above
 /// ASCII as an identifier constituent, and whitespace is the one exception —
 /// without it a stray U+00A0 would silently weld two identifiers into one.
-/// Measured 2026-09-07, Patina is stricter than every reference here: chibi
-/// welds `a<U+00A0>b` into the symbol `|a b|` and then reports it undefined,
-/// while Gauche and Chez both split it and evaluate `3`.
+/// Measured 2026-09-07 on all three, chibi 0.12 / Gauche `gosh -r7` / Chez
+/// `chez --script`: Patina is stricter than every reference here. chibi welds
+/// `a<U+00A0>b` into the symbol `|a b|` and then reports it undefined, while
+/// Gauche and Chez both split it and evaluate `3`.
 ///
 /// `assert_program_eval_error_at` rather than `assert_program_eval_error`,
 /// because the stage *is* the claim: an implementation that accepted the

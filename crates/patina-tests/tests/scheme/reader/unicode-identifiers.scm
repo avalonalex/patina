@@ -16,8 +16,11 @@
 ;; and so is rejected before the program runs — no `guard` and no `test-error`
 ;; can reach it. It went to `callability.rs`, which the one-home rule gives to
 ;; rows about what a program cannot observe from inside itself, and it went as
-;; `assert_program_eval_error_at`, which names the stage. Two rows are new:
-;; `display`'s answer, below, and `write` on `“` separately from the rest.
+;; `assert_program_eval_error_at`, which names the stage. So 18 rows migrate,
+;; and two are new: `write` on `“`, split out from the other writer rows, and
+;; the round-trip row at the end. The `display` row is neither — it *replaces*
+;; the original's assertion that the program returned `done`, strengthened to
+;; check the text, which is what turned up chibi's answer.
 ;;
 ;; **This file needed `written` before it could migrate.** The writer rows are
 ;; about the bars, and `test-equal` with `equal?` compares symbols, which are
@@ -33,10 +36,17 @@
 ;; oracle corroborates us on the one the other disagrees with — so neither is
 ;; "the" reference here:
 ;;
-;;                        (write '→)   (display '→)
-;;     Patina             |→|          →
-;;     chibi              |→|          |→|
-;;     Gauche             →            →
+;;                        (write '→)   (display '→)   (write '“)
+;;     Patina             |→|          →              |“|
+;;     chibi              |→|          |→|            |“|
+;;     Gauche             →            →              |“|
+;;     Chez               →            →              \x201C;
+;;
+;; Chez is in the table because the paragraph above rests on it, and it earns
+;; its column twice: it splits the `write` question 2–2 rather than 2–1, and it
+;; is the only one of the four that neither bars nor writes `“` bare — it hex
+;; escapes. It has no tally row below because there is no SRFI 64 for it here;
+;; those two answers were measured directly.
 ;;
 ;; R7RS §6.13.3 requires `write` output to read back as the same object, which
 ;; `|→|` and `→` both do on an implementation that accepts the bare form — so
@@ -50,7 +60,7 @@
 ;; usual reason — a recorded difference outlives a row that vanishes, and the
 ;; driver runs only our two backends.
 
-(import (scheme base) (scheme write) (srfi 64))
+(import (scheme base) (scheme read) (scheme write) (srfi 64))
 
 (define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
 (define (displayed x) (let ((p (open-output-string))) (display x p) (get-output-string p)))
@@ -119,6 +129,11 @@
 ;; Deliberately not a tour of number syntax — rationals, complexes, radix
 ;; prefixes and exponents reach `read_number` through paths the change never
 ;; touched, and are covered in `compliance/`.
+;;
+;; These compare numbers where the `.rs` rows compared printed forms (`".3"`
+;; against `"0.3"`). The lexing claim is what the rows are for and it survives
+;; intact; the rendering half is deliberate coverage in `data/conversion.scm`,
+;; not something lost here.
 (test-equal "a bare integer still lexes as a number" 42 42)
 (test-equal "a leading decimal point still lexes as a number" 0.3 .3)
 (test-equal "and so does a signed one" -0.25 -.25)
@@ -131,10 +146,15 @@
 (test-equal "write bars a non-ASCII identifier" "|…₁|" (written '…₁))
 (test-equal "and bars a symbol-category one too" "|→|" (written '→))
 
-;; The one all three bar, because Gauche's rule is category-sensitive where
-;; ours is positional. Separate from the two above so the agreement is visible
-;; rather than buried in a row that Gauche fails for an unrelated character.
-(test-equal "every implementation bars the Pi-category one" "|“|" (written '“))
+;; The one every implementation refuses to write bare, because Gauche's rule is
+;; category-sensitive where ours is positional. Separate from the two above so
+;; the agreement is visible rather than buried in a row that Gauche fails for an
+;; unrelated character.
+;;
+;; "Refuses to write bare" rather than "bars": Chez escapes it as `\x201C;`
+;; instead, which this row would fail if Chez could run it. The three that can
+;; all answer `|“|`.
+(test-equal "no implementation writes the Pi-category one bare" "|“|" (written '“))
 
 ;; `display` is the other half of the strictness question, and the original
 ;; `.rs` row only checked that it did not raise. Asserting the text is what
@@ -144,8 +164,15 @@
   '("→" "…₁" "“")
   (list (displayed '→) (displayed '…₁) (displayed '“)))
 
-;; The round trip the strictness is *for*: our own output has to read back.
+;; The round trip the strictness is *for*: our own `write` output has to read
+;; back as the same object, which is the only thing R7RS §6.13.3 actually
+;; requires of it. Through `read`, not `string->symbol` — the first draft of
+;; this row wrote `(string->symbol (symbol->string '…₁))`, which never touches
+;; the writer at all and merely restated the interning row above it. All three
+;; symbols, because all three are written with bars and one of them (`“`) is
+;; barred by every implementation for a different reason than the others.
 (test-assert "our barred output reads back as the same symbol"
-  (eq? '…₁ (string->symbol (symbol->string '…₁))))
+  (equal? '(…₁ → “)
+          (map (lambda (s) (read (open-input-string (written s)))) '(…₁ → “))))
 
 (test-end)
