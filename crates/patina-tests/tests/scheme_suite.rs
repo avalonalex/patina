@@ -99,6 +99,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/conversion.scm", 59),
     ("expansion/define-values.scm", 14),
     ("reader/at-identifiers.scm", 11),
+    ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
     ("stdlib/lazy-evaluation.scm", 29),
     ("stdlib/process-context.scm", 12),
