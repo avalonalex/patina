@@ -18,13 +18,6 @@ use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
-
-/// The `cond-expand` identifier this backend advertises, so a portable test
-/// file can say `(cond-expand (patina-vm …) (else …))` instead of the harness
-/// carrying which backend it is. Every `Desugarer` this backend builds sets
-/// it; a missed site would silently resolve to the `else` branch, which
-/// `crates/patina-tests/tests/backend_feature.rs` is what catches.
-const PATINA_VM_FEATURE: &str = "patina-vm";
 use patina_runtime::library_loader::{ImportSet, build_library};
 use patina_runtime::library_registry::LibraryError;
 use patina_runtime::{
@@ -207,10 +200,8 @@ impl VmBackend {
         // Desugar: TaggedValue → CoreExpr.
         let desugarer = match source_map {
             Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone())
-                .with_feature(PATINA_VM_FEATURE)
                 .with_fs(self.state.borrow().fs.clone()),
             None => Desugarer::with_env(Rc::clone(&self.global_env))
-                .with_feature(PATINA_VM_FEATURE)
                 .with_fs(self.state.borrow().fs.clone()),
         };
         let core_expr = desugarer
@@ -451,7 +442,6 @@ impl VmBackend {
             .map_err(|e| VmBackendError::Compile(e.to_string()))?;
 
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
-            .with_feature(PATINA_VM_FEATURE)
             .with_fs(self.state.borrow().fs.clone());
         for tv in parsed {
             let core_expr = desugarer
@@ -565,7 +555,6 @@ impl VmBackend {
 
         // A relative `include` in the body resolves beside the `.sld`.
         let desugarer = Desugarer::with_env(lib_env.clone())
-            .with_feature(PATINA_VM_FEATURE)
             .with_fs(self.state.borrow().fs.clone())
             .with_include_base_of(parsed.source.as_deref());
         let shared_heap = lib_env.heap().clone();

@@ -39,9 +39,7 @@ impl ApplyContext for Evaluator {
         use super::cps_eval::eval_cps;
         use patina_frontend::Desugarer;
 
-        let desugarer = Desugarer::with_env(env.clone())
-            .with_feature("patina-tree-walker")
-            .with_fs(self.fs.clone());
+        let desugarer = Desugarer::with_env(env.clone()).with_fs(self.fs.clone());
         // Bad syntax handed to the `eval` primitive is the caller's error,
         // raised while the program runs — catchable, like the VM's path.
         // (`EvalError::DesugarError` is only for the Backend::eval entry.)

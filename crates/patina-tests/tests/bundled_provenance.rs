@@ -97,14 +97,14 @@ const PINNED: &[(&str, u64)] = &[
     // PROVENANCE.md. `41-match.scm` is chibi's, pinned post-edit for the same
     // reason as 130.scm below: a recorded deviation must not be why a file
     // goes unwatched.
+    ("lib/srfi/41-match.scm", 0xd3c7746a264796c7),
+    ("lib/srfi/41.scm", 0xe40e5826e7cc7130),
+    ("lib/srfi/41.sld", 0x8268bc8aba0fba5a),
     // SRFI 64, byte-identical to the snow-fort 0.2.1 snowball the corpus
     // vendored (`compat/vendor/srfi-64`, MIT, Per Bothner). Bundled by the
     // testing-API clause of the bundling policy, added 2026-09-06.
     ("lib/srfi/64.sld", 0x26141d34dea29f09),
     ("lib/srfi/64.scm", 0x02cc208e43562e3c),
-    ("lib/srfi/41-match.scm", 0xd3c7746a264796c7),
-    ("lib/srfi/41.scm", 0xe40e5826e7cc7130),
-    ("lib/srfi/41.sld", 0x8268bc8aba0fba5a),
     // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
     // set), recorded in lib/srfi/PROVENANCE.md.
     ("lib/srfi/14.scm", 0xb971a3e4e5280a08),
