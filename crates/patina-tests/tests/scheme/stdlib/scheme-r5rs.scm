@@ -1,25 +1,38 @@
 ;; `(scheme r5rs)` — the R7RS compatibility library, R7RS Appendix A.
 ;;
 ;; Migrated from `crates/patina-tests/tests/scheme_r5rs.rs` (#193 Phase 1).
-;; 20 rows there; 19 are here and one stayed in Rust — see the note at the end.
+;; 20 rows there; 19 are here, one stayed in Rust (see the note at the end), and
+;; one was added — `(scheme file)`, which the library re-exports and nothing
+;; tested. So 20 rows.
+;;
+;; Both oracles run it with one failure apiece, each their own and both recorded
+;; below: chibi 19/20, Gauche 19/20, both Patina backends 20/20.
 ;;
 ;; The library is a re-export surface, so what these rows mean to check is
 ;; *reachability*: that each name R5RS defines arrives through this one import,
 ;; whichever R7RS library it lives in now.
 ;;
-;; **On Patina, only some of them can.** The top level always carries
-;; `(scheme base)`'s exports whatever a program imports — deliberate, and pinned
-;; by `import_set_is_enforced.rs::test_the_default_baseline_still_works`. So a
-;; row naming a `(scheme base)` name would pass here with no import at all:
+;; **On Patina, only some of them can.** The top level carries `(scheme base)`'s
+;; exports whatever a program imports — measured, not merely assumed:
+;; `(import (scheme cxr)) (car (list 1 2))` answers 1.
+;; `import_set_is_enforced.rs::test_the_default_baseline_still_works` pins only
+;; the *no-import* half of that, so if import sets were ever tightened to narrow
+;; the top level, that test would still pass while the rows below quietly
+;; changed meaning. In the cargo lane there is a second masker besides: the
+;; driver evaluates `(import (scheme base) (srfi 64))` into the same interpreter
+;; before the file runs (`scheme_suite.rs`), so those rows would pass there even
+;; with the baseline gone. So a row naming a `(scheme base)` name shows nothing
+;; about this library:
 ;; `dynamic-wind`, the numeric predicates, `string-copy`, the vector procedures
 ;; and `eof-object?` are all in that set. What those rows pin is that the name
 ;; *works*, not that this library supplies it.
 ;;
 ;; The rows that do test reachability are the ones naming something outside
 ;; `(scheme base)` — `(scheme char)`, `(scheme complex)`, `(scheme inexact)`,
-;; `(scheme lazy)`, `(scheme cxr)`, `(scheme load)`, `(scheme eval)` — and the
-;; two `exact->inexact`/`inexact->exact` aliases, which exist nowhere else. They
-;; are marked below. On chibi and Gauche, where no such baseline exists, every
+;; `(scheme lazy)`, `(scheme cxr)`, `(scheme load)`, `(scheme eval)`,
+;; `(scheme file)` — and the two `exact->inexact`/`inexact->exact` aliases,
+;; which no *R7RS* library provides (`lib/rnrs/r5rs.sld`, `lib/r6rs/r5rs.sld`
+;; and `lib/srfi/113.sld` reach them, the last by importing this library). On chibi and Gauche, where no such baseline exists, every
 ;; row tests reachability, which is one reason to keep running it there.
 ;;
 ;; **Two rows fail on an oracle, both theirs rather than ours.** chibi's
@@ -59,8 +72,22 @@
 ;; here only through the baseline above; both oracles reject it, correctly. So
 ;; the portable row is the predicate on something that is not an eof object,
 ;; which is all R5RS gives a program to say.
+;;
+;; That is weaker than the row it replaces — a stub `(lambda (x) #f)` satisfies
+;; it — and R5RS offers no portable way to *make* an eof object to strengthen
+;; it. The positive case lives where a program can actually reach one:
+;; `read_consumption.rs`, `vfs_file_io.rs` and `binary_port_textual_reads.rs`.
 (test-equal "eof-object?, which is the part R5RS defines" #f (eof-object? 'not-eof))
 (test-equal "load is a procedure, from (scheme load)" #t (procedure? load))
+
+;; `(scheme file)` was re-exported and untested. Nothing masks it — with no
+;; import, `open-input-file` is an unbound variable — so this is one of the rows
+;; that does test reachability, and it would have gone unnoticed if the library
+;; stopped re-exporting it.
+(test-equal "file procedures, from (scheme file)" '(#t #t #t)
+  (list (procedure? open-input-file)
+        (procedure? call-with-output-file)
+        (procedure? with-input-from-file)))
 
 ;; ── eval and its environments ───────────────────────────────────────────────
 
@@ -74,19 +101,9 @@
 ;; ── Not here ────────────────────────────────────────────────────────────────
 ;;
 ;; One row could not come with the rest: that a *library body* importing only
-;; `(scheme r5rs)` can still reach `define`, `lambda`, `if` and `quote`. Syntax
-;; keywords are real bindings, so the library has to export them, and srfi-78's
-;; reference implementation in the vendored corpus is exactly that shape — it
-;; failed with `unbound variable: define` before they were exported.
-;;
-;; It cannot come here, and the reason is this file's own premise: the row needs
-;; a `define-library` whose import set is *only* `(scheme r5rs)`, while this
-;; file's top level has already imported `(srfi 64)` to have `test-equal` at
-;; all. Nesting a library definition inside an SRFI 64 program would also stop
-;; being the thing under test — the point is what the library body can see, not
-;; what the program around it can.
-;;
-;; It went to `sld_file_loading.rs`, which already owns library-body and import
-;; resolution, rather than keeping a whole test binary alive for one row.
+;; `(scheme r5rs)` still reaches `define`, `lambda`, `if` and `quote`. It is
+;; `sld_file_loading.rs::test_a_library_body_importing_only_scheme_r5rs_has_core_syntax`,
+;; which carries the reason — chibi cannot run it, so it cannot live in a file
+;; this suite runs on chibi. Recorded there rather than in both places.
 
 (test-end)

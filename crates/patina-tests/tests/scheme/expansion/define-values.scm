@@ -4,7 +4,7 @@
 ;; Phase 1). Every row was one `assert_program_eval_to`; 12 rows in, 12 out,
 ;; plus one added below.
 ;;
-;; The macro lives in `lib/scheme/base-extras.scm`, and the shapes here are its
+;; The macro lives in `lib/scheme/base/binding.scm`, and the shapes here are its
 ;; formals grammar: the empty list, one name, several names, a dotted tail, and
 ;; a bare symbol standing for the whole list.
 ;;
@@ -102,5 +102,23 @@
 (define-values (top-a top-b . top-rest) (values 'a 'b 'c 'd))
 (test-equal "define-values binds at the top level too" '(a b (c d))
   (list top-a top-b top-rest))
+
+;; `(x . y)` — a dotted formal with **no** fixed names, which is a different
+;; expansion from every row above: `binding.scm`'s `var1 ...` matches nothing,
+;; so the intermediate `set-cdr!` step is elided and `var-dot` reads `(cdr var0)`
+;; directly. Every other dotted row here drives `var1 ...` with one repetition.
+;;
+;; At the top level rather than in a `(let () …)` because Gauche rejects this
+;; shape as an *internal* definition — "proper list required for function
+;; application or macro use: (x . y)" — while accepting it at the top level, as
+;; do chibi and both backends. Measured 2026-09-07.
+(define-values (dotted-head . dotted-rest) (values 1 2 3))
+(test-equal "a dotted formal with no fixed names" '(1 (2 3))
+  (list dotted-head dotted-rest))
+
+;; Both top-level forms above run outside any assertion, which is the trade for
+;; testing the top-level path at all: if that expansion breaks, the file is
+;; reported as "failed to run" rather than as one bad row. They are last on
+;; purpose — anything appended below inherits that.
 
 (test-end)
