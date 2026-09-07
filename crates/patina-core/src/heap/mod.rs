@@ -315,6 +315,23 @@ pub struct Heap {
     /// [`CoreForm`]: crate::core_syntax::CoreForm
     core_syntax_table: std::collections::HashMap<crate::core_syntax::CoreForm, HeapIndex>,
 
+    /// Feature identifiers this interpreter advertises to `cond-expand` and to
+    /// `(features)`.
+    ///
+    /// Not heap storage, and here for a reason worth stating. A feature set is
+    /// a property of one **interpreter instance**, not of the process: both
+    /// backends exist in a single test binary, so `patina-vm` and
+    /// `patina-tree-walker` cannot be a global. It needs to reach three places
+    /// that never see each other — the desugarer's `cond-expand`, the library
+    /// parser's `cond-expand`, and the `features` primitive — and the heap is
+    /// the only per-instance thing all three already hold a `&SharedHeap` of.
+    ///
+    /// An earlier attempt threaded the identifier through each `Desugarer`
+    /// construction site instead. It missed four of them and left `(features)`
+    /// disagreeing with `cond-expand`, which R7RS §4.2.1 defines as the same
+    /// set; putting it here is what collapses those call sites to one place.
+    features: crate::features::FeatureRegistry,
+
     /// Free list for pairs (indices of freed pairs)
     free_pairs: Vec<HeapIndex>,
 
@@ -393,6 +410,20 @@ fn real_eqv(a: f64, b: f64) -> bool {
 }
 
 impl Heap {
+    /// The feature identifiers `cond-expand` treats as true, which R7RS §4.2.1
+    /// requires `(features)` to return — one list, one owner.
+    pub fn features(&self) -> &crate::features::FeatureRegistry {
+        &self.features
+    }
+
+    /// Advertise one more feature. Backends call this once at construction to
+    /// name themselves (`patina-vm`, `patina-tree-walker`), which is what lets
+    /// a portable test file write `(cond-expand (patina-vm …) (else …))`
+    /// instead of the harness carrying which backend it is.
+    pub fn add_feature(&mut self, name: &str) {
+        self.features.add_feature(name);
+    }
+
     /// Create a new empty heap
     pub fn new() -> Self {
         Self::with_capacity(0, 0, 0)
@@ -401,6 +432,7 @@ impl Heap {
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         Self {
+            features: crate::features::FeatureRegistry::new(),
             pairs: Vec::with_capacity(pairs),
             vectors: Vec::with_capacity(vectors),
             strings: Vec::with_capacity(strings),

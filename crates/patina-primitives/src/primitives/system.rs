@@ -7,7 +7,6 @@ use patina_core::TaggedValue;
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
-use patina_runtime::default_features;
 
 /// Register all system primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
@@ -39,8 +38,12 @@ fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Eval
     }
 
     let mut h = heap.borrow_mut();
-    let feature_registry = default_features();
-    let sym_tvs: Vec<TaggedValue> = feature_registry
+    // The heap's own registry, not `default_features()`: R7RS §4.2.1 defines
+    // this as "a list of the feature identifiers which `cond-expand` treats as
+    // true", and `cond-expand` reads the same field. Building a fresh default
+    // here is how the two came to disagree about the backend identifier.
+    let sym_tvs: Vec<TaggedValue> = h
+        .features()
         .all_features()
         .into_iter()
         .map(|name| h.intern_symbol(&name))

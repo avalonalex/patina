@@ -117,6 +117,12 @@ impl VmBackend {
     /// Create a VM backend with a custom filesystem.
     pub fn with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
         let global_env = Rc::new(Environment::new());
+        // Name this backend to `cond-expand` and `(features)`, once, on the
+        // heap they both read. `crates/patina-tests/tests/backend_feature.rs`
+        // covers every shape that reaches a `cond-expand` — a program, `eval`,
+        // a library body, a `.sld` declaration, a quasiquote — because a
+        // missed one does not error, it silently takes the `else` branch.
+        global_env.heap().borrow_mut().add_feature("patina-vm");
         let mut state = VmState::new(Rc::clone(&global_env));
         state.fs = fs.clone();
         // Deliberately *not* `install_primitives()` — that bound every

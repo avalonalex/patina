@@ -2082,7 +2082,6 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
         use crate::cond_expand::evaluate_feature_requirement_tagged;
-        use patina_runtime::features::FeatureRegistry;
 
         let clauses = utils::list_to_vec_tagged(args, shared_heap)?;
 
@@ -2092,7 +2091,10 @@ impl Desugarer {
             ));
         }
 
-        let features = FeatureRegistry::new();
+        // From the heap, which is per interpreter instance — so a backend that
+        // named itself is visible here, and to `(features)`, and to the library
+        // parser, without any of them being threaded through the others.
+        let features = shared_heap.borrow().features().clone();
 
         let can_load_library = |_lib_name: &[String]| false;
 
