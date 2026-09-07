@@ -165,7 +165,7 @@
 ;; can vanish quietly is the failure mode this suite's skip and floor checks
 ;; exist to prevent.
 (define sink (open-output-string))
-(cond-expand (patina) (else (test-skip "an install that raises leaves no binding changed")))
+(cond-expand (patina) (else (test-skip 1)))
 (test-equal "an install that raises leaves no binding changed" '(caught 0)
   (let* ((caught (guard (e (#t 'caught))
                    (parameterize ((current-output-port sink)

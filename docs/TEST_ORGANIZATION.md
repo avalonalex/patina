@@ -170,7 +170,7 @@ differs between our two backends — can stay in Scheme, scoped with the
 `cond-expand` identifier #208 added:
 
 ```scheme
-(cond-expand (patina) (else (test-skip "the row's name")))
+(cond-expand (patina) (else (test-skip 1)))
 (test-equal "the row's name" ...)
 ```
 
@@ -180,6 +180,48 @@ quietly is what the skip and floor checks exist to prevent; with it, chibi and
 Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
+
+**Skip the count, not the name, and put it immediately above its row.** SRFI
+64's `test-skip` takes a count, a name or a predicate; in this suite the count
+is **required**, not merely preferred, because it is the one form a check can
+verify. `(test-skip "the row's name")` keeps a second copy of the title that
+has to stay character-identical to the `test-equal` beneath it; `(test-skip 1)`
+has no second copy to keep in step. The same goes for `test-expect-fail`, which
+takes the same specifiers through the same code in `lib/srfi/64.scm`.
+
+Zero is barred too, and for a sharper reason than the others: `(test-skip 0)`
+is `(test-match-nth 1 0)`, a predicate that is never true, so it reads as a
+count while guarding nothing at all.
+
+Neither form is immune, and they rot in opposite directions. A desynced *name*
+matches nothing, so the row runs on chibi and Gauche after all — the guard is
+gone, but any real disagreement still surfaces there. A desynced *count* skips
+a **different** row, which can turn a genuine oracle failure green; that is the
+worse outcome, and it is why the count has to sit directly above what it
+guards. "The next row" is also loose: the count binds to the next test the
+runner *reaches*, and a `test-group` counts as one, so anything test-shaped in
+between takes the skip instead.
+
+Both ways of rotting are invisible from a normal run for the same reason —
+Patina takes the `(patina)` branch and never evaluates the `else` at all. Two
+tests in `scheme_suite.rs` take back as much of that as they can, and it is
+worth knowing which half is airtight:
+
+- `every_scoped_row_skips_by_count_and_sits_above_its_row` reads each file's
+  text, for both `test-skip` and `test-expect-fail`. It **pins** the positive
+  count form, because the text says which form was written. Adjacency it can
+  only approximate: it requires a test form directly beneath the specifier, but
+  cannot tell *which* one, so slipping another assertion in still passes there.
+  Treat adjacency as a rule you keep, not one you are caught breaking.
+- `the_count_form_skips_exactly_the_next_row` pins that `(test-skip 1)` still
+  means what this paragraph says on our own SRFI 64. Nothing else covers it: no
+  file in `tests/scheme/` ever evaluates a `test-skip` on Patina, and upstream's
+  suite uses the integer shorthand nowhere.
+
+What would close the gap properly is running each file a second time with the
+`patina` feature absent, so the `else` branches actually execute and the skip
+count can be checked against the number of scoped rows. That needs a mutation
+path through `Heap`'s feature registry, which is closed on first read by design.
 
 Every file is listed in `scheme_suite.rs`'s `SUITE` table with a minimum
 assertion count. That floor is not bookkeeping — a file that stops running

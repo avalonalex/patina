@@ -319,6 +319,205 @@ fn every_file_carries_its_own_imports() {
     }
 }
 
+/// Every skip and expectation specifier is a positive count, sitting
+/// immediately above its row.
+///
+/// A scoped row is written `(cond-expand (patina) (else (test-skip 1)))` above
+/// the row it guards, so that other implementations *report* a skip rather than
+/// losing the row silently. The whole construct has one blind spot: Patina takes
+/// the `(patina)` branch and never evaluates the `else`, so nothing in a normal
+/// run ever looks inside it. Whatever is wrong in there is wrong only on chibi
+/// and Gauche, which nobody runs per-PR. Hence a text check.
+///
+/// `test-expect-fail` is checked too, and not for symmetry: `lib/srfi/64.scm`
+/// routes both through the same `make-pred`, so a name specifier desyncs
+/// identically. Its usual shape puts the specifier on the *patina* branch
+/// (`data/conversion.scm`), where a desync fails loudly instead of silently —
+/// but the mirror shape has the same blind spot as a skip, and the check costs
+/// nothing.
+///
+/// **What it catches, and what it cannot.** Two rules, and they are not equally
+/// strong:
+///
+/// - **The specifier must be a positive count.** SRFI 64 also accepts a *name*
+///   and a *predicate*; in this suite the count is required, not merely
+///   preferred, and that is what this half enforces. A name keeps a second copy
+///   of the row's title that has to stay character-identical to the `test-equal`
+///   beneath it — rename the row and the specifier matches nothing, so the row
+///   runs on the oracles after all, the guard gone and the file still looking
+///   scoped. Zero is barred for a different reason and a sharper one:
+///   `(test-skip 0)` is `(test-match-nth 1 0)`, whose predicate is never true,
+///   so it type-checks as a count while guarding nothing at all. This half is
+///   airtight; the text says which form was written.
+/// - **It must sit directly above a test form.** The count binds to the next
+///   test the runner *reaches*, so this is a conservative rule against anything
+///   drifting into the gap. It is genuinely weaker than it sounds, and the
+///   weakness is worth stating rather than discovering: it cannot tell *which*
+///   test form follows, so inserting another assertion directly beneath the skip
+///   still passes here while moving the skip onto the wrong row. Text cannot
+///   know which row was intended. What would is the deeper fix — running each
+///   file a second time with the `patina` feature absent, so the `else` branches
+///   actually execute and the skip count can be asserted against the number of
+///   scoped rows. That needs a mutation path through `Heap`'s feature registry,
+///   which is closed on first read by design (see `Heap::add_feature`), so it is
+///   its own change and not this one's.
+///
+/// Line-oriented deliberately: it reads the file the way the person editing it
+/// does. The cost is that it only sees a specifier written on one line, which is
+/// how every scoped row is written and how the doc shows it.
+#[test]
+fn every_scoped_row_skips_by_count_and_sits_above_its_row() {
+    for (name, _) in SUITE {
+        let text = read(&scheme_dir().join(name)).unwrap_or_else(|e| panic!("[{name}] {e}"));
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let code = code_before_comment(line);
+            let specs = specifiers_in(code);
+            if specs.is_empty() {
+                continue;
+            }
+            for (form, spec) in &specs {
+                assert!(
+                    spec.parse::<u32>().is_ok_and(|n| n > 0),
+                    "[{name}:{}] `({form} {spec})` is {}. This suite requires a \
+                     positive count, and Patina never evaluates this branch, so \
+                     nothing but this check would notice.",
+                    i + 1,
+                    describe(spec)
+                );
+            }
+            let next = lines[i + 1..]
+                .iter()
+                .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with(';'));
+            let next = next
+                .unwrap_or_else(|| panic!("[{name}:{}] a specifier with no row beneath it", i + 1));
+            assert!(
+                next.trim_start().starts_with("(test-"),
+                "[{name}:{}] the count binds to the next test the runner reaches, \
+                 but the next form here is `{}`. Keep the specifier directly above \
+                 the row it guards, with nothing in the gap — this check cannot \
+                 tell *which* test form follows, so adjacency is the only part of \
+                 \"it guards that row\" that text can hold on to.",
+                i + 1,
+                next.trim()
+            );
+        }
+    }
+}
+
+/// The line with any trailing `;` comment removed, ignoring semicolons inside
+/// string literals.
+///
+/// Needed because these files discuss their own skips at length, and a prose
+/// mention of `(test-skip 2)` in a trailing comment would otherwise be read as
+/// a real one — which fails the adjacency rule while blaming the wrong line.
+/// Row names routinely contain no semicolon but may contain anything, so the
+/// scan tracks strings rather than cutting at the first `;`.
+///
+/// Not handled: a literal `#\;` character, which this treats as a comment
+/// start. No file contains one, and the machinery to know better is a lexer.
+fn code_before_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            // A continuation byte of a multi-byte character is never one of
+            // these, so walking by byte cannot mistake one for a delimiter.
+            b'\\' if in_string => i += 1,
+            b'"' => in_string = !in_string,
+            b';' if !in_string => return &line[..i],
+            _ => {}
+        }
+        i += 1;
+    }
+    line
+}
+
+/// Every `(test-skip …)` / `(test-expect-fail …)` on one line, as
+/// (form name, specifier text).
+///
+/// All of them, not just the first: two specifiers can share a line, and one
+/// checked plus one unchecked is worse than neither. The delimiter check after
+/// the name stops `(test-skip-everything …)` matching as `test-skip`.
+fn specifiers_in(code: &str) -> Vec<(&'static str, &str)> {
+    let mut found = Vec::new();
+    for form in ["test-skip", "test-expect-fail"] {
+        let opener = format!("({form}");
+        let mut rest = code;
+        while let Some(at) = rest.find(&opener) {
+            let after = &rest[at + opener.len()..];
+            rest = after;
+            match after.chars().next() {
+                Some(c) if c.is_whitespace() => {}
+                _ => continue, // `(test-skipping`, or `(test-skip)` with no spec
+            }
+            found.push((form, after.split(')').next().unwrap_or(after).trim()));
+        }
+    }
+    found
+}
+
+/// What a rejected specifier is, so the failure names the actual mistake.
+fn describe(spec: &str) -> String {
+    if spec.starts_with('"') {
+        "a name, which has to be kept identical to the row beneath it and \
+         desyncs silently when the row is renamed"
+            .to_string()
+    } else if spec.starts_with('(') {
+        "a predicate — legal SRFI 64, but this suite pins the count form so the \
+         guard below can check it"
+            .to_string()
+    } else if spec == "0" {
+        "zero, which is `(test-match-nth 1 0)` — a predicate that is never true, \
+         so it guards nothing while looking like a count"
+            .to_string()
+    } else {
+        "not a positive count".to_string()
+    }
+}
+
+/// The count form actually skips exactly the next row — on *our* SRFI 64.
+///
+/// Nothing else pins this. The driver rejects `skip != 0` outright, and every
+/// scoped row hides its `test-skip` behind `(cond-expand (patina) (else …))`, so
+/// no file in `tests/scheme/` ever evaluates one on Patina. Upstream's own suite
+/// does not cover it either: `compat/vendor/srfi-64/test.scm` exercises
+/// `test-match-nth` explicitly and the *string* shorthand at "6.2. Shorthand
+/// specifiers", and uses the integer shorthand nowhere. So `make-pred`'s
+/// `(integer? spec)` branch and `test-match-nth`'s counter could both regress
+/// with every scoped row still green here and wrong on chibi and Gauche.
+///
+/// The skipped row is a deliberate failure, so a skip that lands on the wrong
+/// row — or does not happen — shows up as a `fail`, not merely as a count that
+/// moved.
+#[test]
+fn the_count_form_skips_exactly_the_next_row() {
+    let counts = run_on_both_backends(
+        "skip-by-count",
+        r#"(import (scheme base) (srfi 64))
+           (test-begin "deliberate")
+           (test-skip 1)
+           (test-assert "skipped, and would fail if it ran" #f)
+           (test-assert "the count is spent" #t)
+           (test-assert "and stays spent" #t)
+           (test-end)"#,
+    )
+    .expect("the deliberate probe must run on both backends");
+    assert_eq!(
+        counts,
+        Counts {
+            pass: 2,
+            fail: 0,
+            xpass: 0,
+            xfail: 0,
+            skip: 1
+        },
+        "`(test-skip 1)` no longer means \"the next row\" on our SRFI 64, which \
+         is the form every scoped row in tests/scheme/ uses on chibi and Gauche"
+    );
+}
+
 /// Every `.scm` file on disk is in [`SUITE`], and vice versa.
 ///
 /// Without this a file can be added and never run — passing by absence, which
