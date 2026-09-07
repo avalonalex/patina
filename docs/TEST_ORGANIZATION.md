@@ -182,10 +182,16 @@ Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
 
 **Skip the count, not the name, and put it immediately above its row.** SRFI
-64's `test-skip` takes a count, a name or a predicate. Prefer the count:
-`(test-skip "the row's name")` keeps a second copy of the title that has to
-stay character-identical to the `test-equal` beneath it, and `(test-skip 1)`
-has no second copy to keep in step.
+64's `test-skip` takes a count, a name or a predicate; in this suite the count
+is **required**, not merely preferred, because it is the one form a check can
+verify. `(test-skip "the row's name")` keeps a second copy of the title that
+has to stay character-identical to the `test-equal` beneath it; `(test-skip 1)`
+has no second copy to keep in step. The same goes for `test-expect-fail`, which
+takes the same specifiers through the same code in `lib/srfi/64.scm`.
+
+Zero is barred too, and for a sharper reason than the others: `(test-skip 0)`
+is `(test-match-nth 1 0)`, a predicate that is never true, so it reads as a
+count while guarding nothing at all.
 
 Neither form is immune, and they rot in opposite directions. A desynced *name*
 matches nothing, so the row runs on chibi and Gauche after all — the guard is
@@ -202,11 +208,11 @@ tests in `scheme_suite.rs` take back as much of that as they can, and it is
 worth knowing which half is airtight:
 
 - `every_scoped_row_skips_by_count_and_sits_above_its_row` reads each file's
-  text. It **pins** the count form, because the text says which form was
-  written. Adjacency it can only approximate: it requires a test form directly
-  beneath the skip, but cannot tell *which* one, so slipping another assertion
-  in still passes there. Treat adjacency as a rule you keep, not one you are
-  caught breaking.
+  text, for both `test-skip` and `test-expect-fail`. It **pins** the positive
+  count form, because the text says which form was written. Adjacency it can
+  only approximate: it requires a test form directly beneath the specifier, but
+  cannot tell *which* one, so slipping another assertion in still passes there.
+  Treat adjacency as a rule you keep, not one you are caught breaking.
 - `the_count_form_skips_exactly_the_next_row` pins that `(test-skip 1)` still
   means what this paragraph says on our own SRFI 64. Nothing else covers it: no
   file in `tests/scheme/` ever evaluates a `test-skip` on Patina, and upstream's
