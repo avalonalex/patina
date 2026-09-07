@@ -65,9 +65,9 @@
 ;; rejects it as Patina does. R7RS leaves the case unspecified, so this is a
 ;; choice, not conformance; it is recorded here so nobody "fixes" Patina to
 ;; match chibi without knowing Chez sits on the other side.
-(test-error "with-exception-handler rejects a non-procedure handler"
+(test-error "with-exception-handler rejects a non-procedure handler" #t
   (with-exception-handler 5 (lambda () 'ok)))
-(test-error "with-exception-handler rejects a non-procedure thunk"
+(test-error "with-exception-handler rejects a non-procedure thunk" #t
   (with-exception-handler (lambda (e) e) 5))
 ;; And it accepts what `procedure?` accepts — the property the parameter fix
 ;; restored. `tests/parameters.rs` covers the parameter case.
@@ -99,30 +99,33 @@
 ;; lines below an arity check the sweep did route, in the same function. Grep
 ;; patterns are not a way to enumerate a defect class.
 ;;
-;; Written out rather than looped: `test-error` needs its expression
-;; unevaluated, so a loop would need a macro, and the pairs read better adjacent.
+;; Only the *guarded* halves are here. Their unguarded partners — the same
+;; bodies run as bare top-level programs, required to fail — stayed in
+;; `callability.rs`, because `test-error` runs its body inside `call/cc` and
+;; `with-exception-handler` (SRFI 64's `%test-error`), which is the very
+;; routing the guarded row already checks. Asserting both here would make each
+;; pair a near-duplicate, and a regression that routed these errors to handlers
+;; while breaking the unguarded top-level path — the exact shape of defect #71
+;; this section cites — would pass both halves. Whether an error escapes an
+;; unguarded program is observable only from outside it, which is what makes it
+;; the Rust half's job.
 
-;; handler is not a procedure
-(test-equal 'caught (guard (e (#t 'caught)) (with-exception-handler 5 (lambda () 'ok))))
-(test-error (with-exception-handler 5 (lambda () 'ok)))
-;; arity
-(test-equal 'caught (guard (e (#t 'caught)) (dynamic-wind (lambda () 1))))
-(test-error (dynamic-wind (lambda () 1)))
-(test-equal 'caught (guard (e (#t 'caught)) (call-with-values (lambda () 1))))
-(test-error (call-with-values (lambda () 1)))
-(test-equal 'caught (guard (e (#t 'caught)) (raise)))
-(test-error (raise))
-(test-equal 'caught (guard (e (#t 'caught)) (error)))
-(test-error (error))
-;; a parameter's own arity
-(test-equal 'caught (guard (e (#t 'caught)) ((make-parameter 1) 1 2 3)))
-(test-error ((make-parameter 1) 1 2 3))
-;; message is not a string
-(test-equal 'caught (guard (e (#t 'caught)) (error 5)))
-(test-error (error 5))
-;; ditto, the chibi-lenient shape
-(test-equal 'caught (guard (e (#t 'caught)) (error 'sym)))
-(test-error (error 'sym))
+(test-equal "catchable: handler is not a procedure"
+  'caught (guard (e (#t 'caught)) (with-exception-handler 5 (lambda () 'ok))))
+(test-equal "catchable: dynamic-wind arity"
+  'caught (guard (e (#t 'caught)) (dynamic-wind (lambda () 1))))
+(test-equal "catchable: call-with-values arity"
+  'caught (guard (e (#t 'caught)) (call-with-values (lambda () 1))))
+(test-equal "catchable: raise arity"
+  'caught (guard (e (#t 'caught)) (raise)))
+(test-equal "catchable: error arity"
+  'caught (guard (e (#t 'caught)) (error)))
+(test-equal "catchable: a parameter's own arity"
+  'caught (guard (e (#t 'caught)) ((make-parameter 1) 1 2 3)))
+(test-equal "catchable: error message is not a string"
+  'caught (guard (e (#t 'caught)) (error 5)))
+(test-equal "catchable: error message is a symbol, the chibi-lenient shape"
+  'caught (guard (e (#t 'caught)) (error 'sym)))
 
 ;; An error raised by user code inside a `dynamic-wind` after thunk reaches the
 ;; enclosing `guard` — converged 2026-09-01.
@@ -171,7 +174,10 @@
   (map (lambda (f) (f + '(1 2))) (list apply)))
 ;; In tail position, which takes a different dispatcher.
 (test-equal "apply in tail position" 15
-  (letrec ((call-it (lambda (g) (g + '(7 8))))) (call-it apply)))
+  ;; `define` deliberately, not `let`: the row's point is the dispatcher a
+  ;; *global* callee takes, and the VM compiles a global reference differently
+  ;; from a local slot.
+  (let () (define (call-it g) (g + '(7 8))) (call-it apply)))
 ;; Fixed arguments before the spread list.
 (test-equal "apply with fixed arguments" 10 (let ((f apply)) (f + 1 2 '(3 4))))
 
@@ -191,7 +197,7 @@
   (apply with-exception-handler
          (list (lambda (e) 43) (lambda () (raise-continuable 'x)))))
 (test-equal "apply of dynamic-wind" 2
-  (let ((r '()))
+  (let () (define r '())
     (apply dynamic-wind
            (list (lambda () (set! r 1)) (lambda () 2) (lambda () (set! r 3))))))
 ;; `apply` itself is one of them, so this is also the self-application case.
@@ -199,7 +205,7 @@
 ;; A parameter object — the one callee kind the old code already handled, and
 ;; covered on its own in `parameters.rs`. Kept to complete the set.
 (test-equal "apply of a parameter" 5
-  (let ((p (make-parameter 5))) (apply p '())))
+  (let () (define p (make-parameter 5)) (apply p '())))
 
 ;; A continuation reached through `apply`, on both backends.
 ;;

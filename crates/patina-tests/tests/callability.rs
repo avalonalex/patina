@@ -1,50 +1,32 @@
-//! Which sites decide "is this callable", and what they decide.
-//!
-//! This file exists because prose about those sites kept being wrong. Reviewing
-//! the `procedure?`-on-parameters fix turned up three claims in its own commit
-//! message that no test could have contradicted: that `dynamic-wind` validates
-//! its arguments (it does not), that a certain count of call sites "became
-//! correct together" (it was counting grep hits, not decisions), and that
-//! `Heap::is_procedure` had become the single source of truth for callability
-//! (it has not). Each was a statement about observable behaviour, so each is
-//! pinned below.
-//!
-//! The rule these encode: a claim about *which* check runs is testable by
-//! ordering or by what is accepted, without depending on error text — error
-//! messages are not a stable interface, and two sites here share one message
-//! verbatim.
-//!
-//! A second rule, learned the same way: "the other backend does X" is not a
-//! reason to believe X — the convergence test below was checked against chibi,
-//! Gauche and Chez before the tree-walker was changed to agree with the VM.
-//!
-//! A third: a defect class cannot be enumerated by grep. The first sweep of
-//! `cps_eval/application.rs` matched `return Err(…)` and missed three
-//! catchable errors that reach Rust through `?`.
-//!
-//! `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
-//!
-//! # What is left here, and what moved
+//! Which sites decide "is this callable" — the rows that must stay in Rust.
 //!
 //! Most of this file is now `tests/scheme/callability.scm`, run by
-//! `scheme_suite.rs` on both backends (#193 Phase 0). What stayed is what a
-//! `.scm` file cannot express:
+//! `scheme_suite.rs` on both backends (#193 Phase 0). **The rationale and the
+//! three rules this section encodes live there**, with the rows they govern;
+//! restating them here is how two copies drift apart, and this file's history
+//! is largely about claims that were true when written.
 //!
-//! - a row whose two backends give **different values** — expressible only
-//!   once a backend names itself to `cond-expand`, which is not yet built;
-//! - rows deliberately asserted on **one backend only**, for a reason that is
-//!   not a divergence about the answer;
+//! What stayed is what a `.scm` file cannot express:
+//!
+//! - a row whose two backends give **different values** — expressible in
+//!   Scheme only once a backend names itself to `cond-expand`, which #206
+//!   reverted and is not yet rebuilt;
+//! - rows deliberately asserted on **one backend**, for a reason that is not a
+//!   disagreement about the answer;
+//! - that an error escapes an **unguarded top-level program**, which is
+//!   observable only from outside the program;
 //! - `assert_program_eval_error_at`, which asserts *which stage* rejected the
-//!   program. Not observable from inside Scheme.
+//!   program.
 //!
-//! That split is the line #193 predicted the migration would fall on: what is
-//! about the *language* went to Scheme, what is about the *implementation*
-//! stayed in Rust.
+//! That is the line #193 predicted the migration would fall on: what is about
+//! the *language* went to Scheme, what is about the *implementation* stayed.
+//!
+//! `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
 
 mod common;
 use common::{
-    ErrorClass, assert_program_eval_error_at, assert_program_eval_to, eval_program_tree_walker,
-    eval_program_vm,
+    ErrorClass, assert_program_eval_error, assert_program_eval_error_at, assert_program_eval_to,
+    eval_program_tree_walker, eval_program_vm,
 };
 
 /// The known limit, stated as behaviour: `procedure?` is *wider* than what the
@@ -71,6 +53,36 @@ use common::{
 /// primitive callbacks"), so the clean rejection is the better of its two
 /// answers until that is fixed. Not `assert_divergence` — the tree-walker
 /// returns a value, not a failure.
+/// The unguarded halves of the catchable-error pairs whose guarded halves are
+/// in `tests/scheme/callability.scm`.
+///
+/// They stayed in Rust because they assert something a `.scm` file cannot:
+/// that the error escapes an **unguarded top-level program**. SRFI 64's
+/// `test-error` runs its body inside `call/cc` and `with-exception-handler`,
+/// which is the same routing the guarded row already checks — so migrating
+/// these would have turned each pair into a near-duplicate, and a regression
+/// that routed the errors to handlers while breaking the top-level path (the
+/// exact shape of defect #71 the section cites) would pass both halves.
+///
+/// Routing changes *where* a catchable error is delivered, never whether it is
+/// raised. Asserting only the guarded half would not notice a fix that
+/// swallowed errors instead of routing them.
+#[test]
+fn a_control_primitive_error_still_escapes_an_unguarded_program() {
+    for body in [
+        "(with-exception-handler 5 (lambda () 'ok))", // handler is not a procedure
+        "(dynamic-wind (lambda () 1))",               // arity
+        "(call-with-values (lambda () 1))",           // arity
+        "(raise)",                                    // arity
+        "(error)",                                    // arity
+        "((make-parameter 1) 1 2 3)",                 // a parameter's own arity
+        "(error 5)",                                  // message is not a string
+        "(error 'sym)",                               // ditto, the chibi-lenient shape
+    ] {
+        assert_program_eval_error(body);
+    }
+}
+
 #[test]
 fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
     assert_program_eval_to("(call/cc (lambda (k) (procedure? k)))", "#t");

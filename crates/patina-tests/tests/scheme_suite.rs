@@ -46,6 +46,18 @@
 //! After the file runs, the driver appends an expression that reads those
 //! counts back. Neither is visible to the file, which is why the file stays
 //! portable.
+//!
+//! # A sharp edge worth knowing before you hit it
+//!
+//! An assertion whose expression raises a **non-error object** aborts the rest
+//! of the file rather than recording one failure: SRFI 64's `false-if-error`
+//! calls `error-object-message` on whatever was raised, which is itself a type
+//! error. `(test-equal 1 (raise 'x))` stops the file at that line, and the
+//! driver then reports it as "failed to run" rather than as one bad row.
+//!
+//! Wrap such a raise in `guard` and assert on what the guard produces — which
+//! is what every row in `callability.scm` does, for reasons of its own. This
+//! is upstream SRFI 64 behaviour, not something the driver can paper over.
 
 mod common;
 use common::repo_root;
@@ -64,7 +76,7 @@ use std::path::{Path, PathBuf};
 ///
 /// A minimum rather than an exact count so that adding an assertion to a file
 /// does not require editing Rust; lowering one still does.
-const SUITE: &[(&str, i64)] = &[("callability.scm", 34)];
+const SUITE: &[(&str, i64)] = &[("callability.scm", 26)];
 
 fn scheme_dir() -> PathBuf {
     repo_root().join("crates/patina-tests/tests/scheme")
@@ -81,8 +93,14 @@ struct Counts {
 }
 
 impl Counts {
+    /// Assertions that actually *executed*. Skips are excluded deliberately:
+    /// counting them was a hole exactly the shape of the one the floor exists
+    /// to close — `(test-skip 100)` turns every row into a skip, so a file that
+    /// executed nothing still cleared a floor of 34. The floor now measures
+    /// what ran, and `skip` is asserted to be zero separately, so a file cannot
+    /// quietly stop testing by skipping instead of by breaking.
     fn ran(&self) -> i64 {
-        self.pass + self.fail + self.xpass + self.xfail + self.skip
+        self.pass + self.fail + self.xpass + self.xfail
     }
 }
 
@@ -168,10 +186,17 @@ fn every_scheme_file_passes_on_both_backends() {
         let counts = run_on_both_backends(name, &read(&path));
 
         assert_eq!(
-            counts.fail, 0,
-            "[{name}] {} assertion(s) failed — run it directly to see which:\n  \
-             ./target/release/patina crates/patina-tests/tests/scheme/{name}",
-            counts.fail
+            counts.fail,
+            0,
+            "[{name}] {} assertion(s) failed. To see which, run it from a scratch \
+             directory — SRFI 64 puts the per-assertion detail in a log file \
+             beside the cwd, not on stdout, and running from the repo root would \
+             leave it there:\n  \
+             (cd $(mktemp -d) && $OLDPWD/target/release/patina \
+             -A $OLDPWD/test-lib $OLDPWD/crates/patina-tests/tests/scheme/{name} \
+             && cat {stem}.log)",
+            counts.fail,
+            stem = name.trim_end_matches(".scm")
         );
         assert_eq!(
             counts.xpass, 0,
@@ -180,6 +205,15 @@ fn every_scheme_file_passes_on_both_backends() {
              guarded becomes an ordinary assertion.",
             counts.xpass
         );
+        assert_eq!(
+            counts.skip, 0,
+            "[{name}] {} test(s) skipped. Nothing here should skip: a skipped \
+             row asserts nothing while still looking like a row, which is how a \
+             file stops testing without failing. If a row genuinely cannot run \
+             on a backend, mark it `test-expect-fail` so it is visible and \
+             retires itself.",
+            counts.skip
+        );
         assert!(
             counts.ran() >= *floor,
             "[{name}] ran {} assertions, expected at least {floor} — a file that \
@@ -187,6 +221,60 @@ fn every_scheme_file_passes_on_both_backends() {
              difference between passing and not happening. Counts: {counts:?}",
             counts.ran()
         );
+    }
+}
+
+/// Every file declares its own imports, sufficient to reach its first
+/// `test-begin`.
+///
+/// The driver installs `(srfi 64)` into the same environment the file then
+/// runs in — it has to, because the null runner must exist before the file's
+/// `test-begin`, and the runner has to survive to the count-read afterwards,
+/// which means one interpreter. The cost is that a file which *omits or
+/// misspells its own import* would still pass here while failing standalone,
+/// and standalone is the whole oracle property: these files are supposed to
+/// run under `patina`, chibi and Gauche unchanged.
+///
+/// So the prelude — everything up to the first `(test-begin` — is evaluated in
+/// a *fresh* interpreter with nothing pre-imported. That is enough to catch a
+/// missing or wrong import, and stops short of running any assertion, so no
+/// SRFI 64 log file is written into the crate root.
+#[test]
+fn every_file_carries_its_own_imports() {
+    for (name, _) in SUITE {
+        let text = read(&scheme_dir().join(name));
+        let cut = text.find("(test-begin").unwrap_or_else(|| {
+            panic!("[{name}] has no `(test-begin` — every file is an SRFI 64 program")
+        });
+        let prelude = &text[..cut];
+        assert!(
+            prelude.contains("(import "),
+            "[{name}] declares no imports before its first `(test-begin`"
+        );
+        for (backend, result) in [
+            (
+                "tree-walker",
+                common::tree_walker_interpreter()
+                    .eval_program(prelude)
+                    .err()
+                    .map(|e| e.to_string()),
+            ),
+            (
+                "vm",
+                common::vm_interpreter()
+                    .eval_program(prelude)
+                    .err()
+                    .map(|e| e.to_string()),
+            ),
+        ] {
+            assert!(
+                result.is_none(),
+                "[{name}] its own prelude does not evaluate on {backend}, so the file \
+                 depends on something the driver happens to import for it and would \
+                 fail standalone: {}",
+                result.unwrap()
+            );
+        }
     }
 }
 
