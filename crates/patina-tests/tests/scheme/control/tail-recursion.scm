@@ -18,20 +18,33 @@
 ;;
 ;; So what each row actually pins is that the form evaluates *correctly* when
 ;; its last expression recurses, which is worth having and is what the row
-;; names say. Proper tail calls in the R7RS 3.5 sense — constant space — need
-;; an instrument these assertions do not have, because the failure they would
-;; look for is memory growth and not a wrong answer or a crash.
+;; names say. Constant space in the R7RS 3.5 sense is a different claim, and
+;; the failure it would look for is memory growth rather than a wrong answer.
 ;;
-;; Every row therefore keeps its original depth. Raising the numbers would buy
-;; nothing: there is no depth at which passing means more than it does now.
+;; **That property is not untested in this repo, only untested here.**
+;; `vm_callprimitive.rs::tail_deopt_runs_deep_mutual_recursion` pins the
+;; semantics at 100 000 through a rebound primitive, and PRD TRACK_P §P8.2
+;; records the measurement itself: 500 000 iterations at **5.49 MB** max RSS
+;; after the fix against **109 MB** before. What is missing is an automated
+;; in-suite check of the space property, not the property's verification.
+;;
+;; Every row therefore keeps its original depth. Raising the numbers within
+;; reach of a `test-equal` would buy nothing — the discrimination is by memory,
+;; and the retained frames cost on the order of a hundred bytes each, so a
+;; depth where exhaustion separates the two is far past anything belonging in
+;; a unit suite.
 ;;
 ;; Both backends and Gauche agree on all 36 rows; chibi agrees on all 36 too.
 ;;
-;; **Names are unique per row on purpose.** In the `.rs` form each row was its
-;; own program with its own top level, and a dozen of them defined `countdown`.
-;; Here they share one, so a later `define` would quietly replace an earlier
-;; row's helper. Two rows also defined `even?` and `odd?`, which at this file's
-;; top level would shadow the standard procedures for every row after them.
+;; **Helper names are unique per row on purpose.** In the `.rs` form each row
+;; was its own program with its own top level; seven of them defined
+;; `countdown` there. Here they share one top level, so a later `define` would
+;; quietly replace an earlier row's helper.
+;;
+;; The exception is `even?`/`odd?`, which keep their names deliberately — see
+;; the note on that row. Two rows defined them, but only one at the top level;
+;; the other binds them in a `letrec`, where they cannot leak and are left
+;; exactly as they were.
 
 (import (scheme base) (srfi 64))
 
@@ -219,8 +232,8 @@
   (complex-recurse 500))
 
 (define (validate-and-process n)
-  (let ((threshold 100))
-    (and (> n 0)
+  (let ((positive? (> n 0)))
+    (and positive?
          (or (= n 1) (validate-and-process (- n 1))))))
 (test-equal "and and or inside a let body, all in tail position" #t
   (validate-and-process 500))
@@ -250,16 +263,27 @@
   (foobar 900))
 
 ;; ── Mutual recursion at the top level ───────────────────────────────────────
+
+;; `even?` and `odd?` keep their names, and that is the row rather than an
+;; oversight: both are **registry primitives**
+;; (`patina-primitives/src/primitives/arithmetic/predicates.rs`), so defining
+;; them at the top level forces the VM to deoptimise the inlined
+;; `CallPrimitive` sites and then tail-call the Scheme replacements 5 000
+;; times. That is the shape PRD TRACK_P P8.2 exists for, and the one
+;; `vm_callprimitive.rs::tail_deopt_runs_deep_mutual_recursion` pins with
+;; `car` at 100 000. Renaming them to ordinary globals — which an earlier
+;; draft of this file did — silently drops that path while every row still
+;; passes.
 ;;
-;; Named `-via-if` and `ping`/`pong` rather than `even?`/`odd?`: these are
-;; top-level, and shadowing the standard predicates would leak into every row
-;; below them.
+;; Shadowing them here is safe because nothing below uses either name; the
+;; library's own references resolve inside the library, not through this top
+;; level. Anything added after this point must not call `even?` or `odd?`.
+(define (even? n) (if (= n 0) #t (odd? (- n 1))))
+(define (odd? n) (if (= n 0) #f (even? (- n 1))))
+(test-equal "mutual recursion through if, over redefined primitives" #t
+  (even? 5000))
 
-(define (even-via-if? n) (if (= n 0) #t (odd-via-if? (- n 1))))
-(define (odd-via-if? n) (if (= n 0) #f (even-via-if? (- n 1))))
-(test-equal "mutual recursion through if" #t
-  (even-via-if? 5000))
-
+;; `ping`/`pong` are the original names, not a rename — nothing here shadows.
 (define (ping n) (cond ((= n 0) 'done) (else (pong (- n 1)))))
 (define (pong n) (cond ((= n 0) 'done) (else (ping (- n 1)))))
 (test-equal "mutual recursion through cond" 'done
