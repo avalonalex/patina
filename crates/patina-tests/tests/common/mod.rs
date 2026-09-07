@@ -471,12 +471,20 @@ pub fn assert_eval_error(expr: &str) {
 /// Pin a program **both** backends reject but at different [`ErrorClass`]es,
 /// asserting each one's stage and that both diagnostics contain `message`.
 ///
-/// Deliberately narrower than [`assert_program_eval_error`], which requires
-/// the stages to agree. The one shape that legitimately cannot: the VM expands
-/// quasiquote templates during compilation while the tree-walker evaluates
-/// them, so a template whose *unquote* is bad is rejected before the run on
-/// one backend and during it on the other. Pinning the message keeps the
-/// diagnostic itself under test, which is the part that has to match.
+/// Deliberately narrower than [`assert_program_eval_error`], which asserts no
+/// more than "this failed". Two shapes want it:
+///
+/// - the stages legitimately *disagree* — the VM expands quasiquote templates
+///   during compilation while the tree-walker evaluates them, so a template
+///   whose *unquote* is bad is rejected before the run on one backend and
+///   during it on the other;
+/// - the stages agree and *which stage* is the claim, because a program
+///   rejected before it runs is a different fact from one that raises. Pass
+///   the same class twice.
+///
+/// Pinning the message keeps the diagnostic itself under test. Pin the part
+/// the backends share: they word the stage prefix differently (`desugar error`
+/// against `Desugar error`), so a substring spanning it would fail one.
 pub fn assert_program_eval_error_at(
     code: &str,
     tree_walker: ErrorClass,

@@ -1,12 +1,15 @@
 ;; Parameter objects: `make-parameter`, `parameterize`, and what follows from
 ;; R7RS §4.2.6 making a parameter a procedure.
 ;;
-;; Migrated from `crates/patina-tests/tests/parameters.rs` (#193 Phase 1). Two
-;; rows stayed in Rust and are named where they went: the malformed-`parameterize`
-;; pair, which asserts failure of an *unguarded* program
-;; (`unguarded_errors.rs`), and the one asserting a parameter prints as
-;; `#<parameter>`, which is Patina's own external representation and so is not a
-;; claim another implementation can be held to (`parameters.rs`).
+;; Migrated from `crates/patina-tests/tests/parameters.rs` (#193 Phase 1).
+;; Three assertions could not come along, and are named where they went:
+;;
+;;   - the two malformed-`parameterize` programs, which assert that an
+;;     *unguarded* program fails — `callability.rs`, which already owns that
+;;     class. The catchable half of the first is in this file, below;
+;;   - that a parameter prints as `#<parameter>`, which is Patina's own
+;;     external representation and not a claim another implementation can be
+;;     held to — `external_representation.rs`.
 ;;
 ;; The predicate's own truth table lives with the other predicates in
 ;; `compliance/predicates.rs`; this file covers what being a procedure lets a
@@ -25,15 +28,20 @@
 (test-equal "calling it with an argument sets it" 20
   (begin (p-set 20) (p-set)))
 
+;; Bind and restore are one row, not two. Split apart, the restore half reads
+;; `(test-equal 10 (p-simple))` — which also passes if `parameterize` never
+;; bound anything at all, and so is only an assertion in the presence of the
+;; row before it.
 (define p-simple (make-parameter 10))
-(test-equal "parameterize binds for the dynamic extent" 20
-  (parameterize ((p-simple 20)) (p-simple)))
-(test-equal "…and restores after it" 10 (p-simple))
+(test-equal "parameterize binds for the dynamic extent, and restores after" '(20 10)
+  (let* ((inside (parameterize ((p-simple 20)) (p-simple)))
+         (after (p-simple)))
+    (list inside after)))
 
-(define p1 (make-parameter 10))
-(define p2 (make-parameter 20))
+(define p-first (make-parameter 10))
+(define p-second (make-parameter 20))
 (test-equal "several parameters at once" '(100 200)
-  (parameterize ((p1 100) (p2 200)) (list (p1) (p2))))
+  (parameterize ((p-first 100) (p-second 200)) (list (p-first) (p-second))))
 
 (define p-nested (make-parameter 10))
 (test-equal "nested parameterize takes the inner value" 30
@@ -45,12 +53,24 @@
 (test-equal "a multi-expression body yields its last value" 20
   (parameterize ((p-body 20)) (p-body) (p-body) (p-body)))
 
+;; A non-parameter in the binding position raises, and the raise is catchable.
+;; The *unguarded* half — that the same program fails a top-level program with
+;; nothing to catch it — is `callability.rs`, because `test-error` runs its body
+;; inside `call/cc` and `with-exception-handler` and so cannot state it.
+(test-error "a non-parameter in the binding position is an error" #t
+  (parameterize ((42 20)) 'body))
+
 ;; ── Converters (R7RS §4.2.6) ────────────────────────────────────────────────
 
+;; A parameter apiece, so that neither row depends on the other having run:
+;; the second one *sets*, and setting the parameter the first row reads would
+;; make the pair order-dependent for no gain.
 (define p-conv (make-parameter 10 (lambda (x) (* x 2))))
 (test-equal "the converter is applied to the initial value" 20 (p-conv))
+
+(define p-conv-set (make-parameter 10 (lambda (x) (* x 2))))
 (test-equal "…and to a value assigned later" 10
-  (begin (p-conv 5) (p-conv)))
+  (begin (p-conv-set 5) (p-conv-set)))
 
 ;; ── A parameter is a procedure (R7RS §4.2.6) ────────────────────────────────
 
@@ -74,11 +94,18 @@
 
 ;; `make-parameter`'s converter check is the line the fix edited: it used to
 ;; read `is_procedure(c) || is_parameter(c)` and now relies on `is_procedure`
-;; alone. `(inner 5)` sets `inner`, so reading it back shows the converter was
-;; accepted *and* applied.
-(define inner (make-parameter 0))
-(define p-param-conv (make-parameter 5 inner))
-(test-equal "accepted as a converter" 5 (inner))
+;; alone.
+;;
+;; `converter-target` is itself a parameter, used here as another parameter's
+;; converter. Constructing `p-with-parameter-converter` calls it with 5, which
+;; *sets* it — so the evidence that the converter was accepted **and applied**
+;; is in the target, not in the parameter being constructed, which nothing ever
+;; reads. The row names it anyway, to say out loud that it is what makes the
+;; claim true.
+(define converter-target (make-parameter 0))
+(define p-with-parameter-converter (make-parameter 5 converter-target))
+(test-equal "accepted as a converter" 5
+  (begin p-with-parameter-converter (converter-target)))
 
 ;; ── Convert once, before the wind (R7RS §4.2.6) ─────────────────────────────
 
@@ -99,22 +126,23 @@
 ;; A type-changing converter makes the second application *raise*, so a
 ;; regression here fails the restore outright rather than producing a wrong
 ;; value.
-(define q (make-parameter 1 number->string))
+(define p-typed (make-parameter 1 number->string))
 (test-equal "a type-changing converter survives the restore" '("2" "1")
-  (let* ((inside (parameterize ((q 2)) (q)))
-         (after (q)))
+  (let* ((inside (parameterize ((p-typed 2)) (p-typed)))
+         (after (p-typed)))
     (list inside after)))
 
 ;; D1 — a `parameterize` that fails partway leaves nothing bound. The bindings
 ;; used to be installed inside `dynamic-wind`'s *before* thunk, so a later one
 ;; raising meant the after thunk never ran and the earlier ones stayed installed
 ;; for good.
-(define a (make-parameter 'a0))
-(define b (make-parameter 'b0 (lambda (v) (if (eq? v 'bad) (error "no") v))))
+(define p-unchanged (make-parameter 'a0))
+(define p-rejecting (make-parameter 'b0 (lambda (v) (if (eq? v 'bad) (error "no") v))))
 (test-equal "a converter that raises leaves no binding changed" '(caught a0 b0)
-  (let* ((caught (guard (e (#t 'caught)) (parameterize ((a 'a1) (b 'bad)) 'body)))
-         (av (a))
-         (bv (b)))
+  (let* ((caught (guard (e (#t 'caught))
+                   (parameterize ((p-unchanged 'a1) (p-rejecting 'bad)) 'body)))
+         (av (p-unchanged))
+         (bv (p-rejecting)))
     (list caught av bv)))
 
 ;; The same property when the *install* raises rather than the converter. This
@@ -127,34 +155,40 @@
 ;; it, so the `guard` never fires there and the row would report a difference
 ;; that is about port validation, not about `parameterize`. The property itself
 ;; is portable and the converter row above covers it; this one covers the path
-;; where the *install* is what fails.
+;; where the *install* is what fails. `write-string` rather than `display`
+;; because `(scheme base)` exports it and `(scheme write)` is where `display`
+;; lives — chibi warns about the undefined reference even though the row never
+;; runs there, which is how this file's import set stays honest.
+;;
+;; Elsewhere it is a **reported skip**, not a silent absence: `cond-expand`
+;; alone would delete the row with nothing anywhere saying so, and a row that
+;; can vanish quietly is the failure mode this suite's skip and floor checks
+;; exist to prevent.
 (define sink (open-output-string))
-(cond-expand
-  (patina
-   (test-equal "an install that raises leaves no binding changed" '(caught 0)
-     (let* ((caught (guard (e (#t 'caught))
-                      (parameterize ((current-output-port sink)
-                                     (current-input-port 5))
-                        'body)))
-            (_ (display "visible"))
-            (leaked (string-length (get-output-string sink))))
-       (list caught leaked))))
-  (else))
+(cond-expand (patina) (else (test-skip "an install that raises leaves no binding changed")))
+(test-equal "an install that raises leaves no binding changed" '(caught 0)
+  (let* ((caught (guard (e (#t 'caught))
+                   (parameterize ((current-output-port sink)
+                                  (current-input-port 5))
+                     'body)))
+         (_ (write-string "visible"))
+         (leaked (string-length (get-output-string sink))))
+    (list caught leaked)))
 
 ;; The converter runs once per `parameterize`, not once per entry — what
 ;; converting outside the wind buys beyond the two bugs above. A continuation
 ;; that re-enters the body re-installs the value; it must not re-convert it.
-;; One conversion for `(make-parameter 0 …)`, one for `(p 1)`.
-(define calls 0)
-(define p-count (make-parameter 0 (lambda (v) (set! calls (+ calls 1)) v)))
-(define k #f)
-(define n 0)
+;; One conversion for `(make-parameter 0 …)`, one for `(p-count 1)`.
+(define conversions 0)
+(define p-count (make-parameter 0 (lambda (v) (set! conversions (+ conversions 1)) v)))
+(define reenter-k #f)
+(define entries 0)
 (test-equal "the converter runs once per parameterize, not per entry" '(2 2)
   (begin
     (parameterize ((p-count 1))
-      (call/cc (lambda (c) (set! k c)))
-      (set! n (+ n 1))
-      (if (< n 2) (k #f)))
-    (list n calls)))
+      (call/cc (lambda (c) (set! reenter-k c)))
+      (set! entries (+ entries 1))
+      (if (< entries 2) (reenter-k #f)))
+    (list entries conversions)))
 
 (test-end)

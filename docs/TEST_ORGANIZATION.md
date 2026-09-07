@@ -110,6 +110,27 @@ touching `Heap`, `VmState`, `Instruction`, `SourceMap`, GC counters or the
 library registry. The rule of thumb #193 uses: what is about the **language**
 goes to Scheme, what is about the **implementation** stays in Rust.
 
+The unguarded rows have **one** home: `callability.rs`, whatever feature they
+came from. A file of their own would split the class across two places and,
+since `callability.rs` exists regardless, would give back the binary the
+migration just saved.
+
+**A row whose *premise* is Patina-specific** — as opposed to one whose answer
+differs between our two backends — can stay in Scheme, scoped with the
+`cond-expand` identifier #208 added:
+
+```scheme
+(cond-expand (patina) (else (test-skip "the row's name")))
+(test-equal "the row's name" ...)
+```
+
+The `test-skip` is not decoration. `cond-expand` alone deletes the row on other
+implementations with nothing anywhere saying so, and a row that can vanish
+quietly is what the skip and floor checks exist to prevent; with it, chibi and
+Gauche *report* a skip. Use this only where the premise genuinely is ours (a
+Patina-specific validation, say), never to paper over a difference in an
+answer — that is a divergence, and it belongs in Rust where it can be named.
+
 Every file is listed in `scheme_suite.rs`'s `SUITE` table with a minimum
 assertion count. That floor is not bookkeeping — a file that stops running
 reports no failures, so without it a truncated or skipped file passes. Skips
@@ -175,7 +196,7 @@ R7RS specification compliance organized by category:
 - `complex_numbers.rs` - Complex number support (~20 tests)
 - `record_types.rs` - define-record-type (~40 tests)
 - `lazy_evaluation.rs` - delay/force
-- `parameters.rs` - Parameter objects
+- (parameters migrated to `tests/scheme/control/parameters.scm` in #193 Phase 1)
 - `scheme_eval.rs` - (scheme eval) library
 
 #### **Library Tests**
