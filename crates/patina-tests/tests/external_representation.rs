@@ -32,6 +32,21 @@ use common::{
 // ─── Error objects (issue #181) ──────────────────────────────────────────────
 
 /// The repro from the issue. `display` said `#<unknown>` on both backends.
+/// A parameter object prints as what it is.
+///
+/// From `parameters.rs` when it migrated (#193 Phase 1): the rest of that file
+/// is `tests/scheme/control/parameters.scm`, but this row asserts Patina's own
+/// spelling for a value R7RS gives no external representation, which is this
+/// file's subject and not a claim another implementation can be held to.
+///
+/// It fell through the writer's probe chain to `#<unknown>` before issue #181 —
+/// harmless until `procedure?` started answering `#t` for parameters, at which
+/// point a value claiming to be a procedure printed as nothing in particular.
+#[test]
+fn test_a_parameter_prints_as_a_parameter() {
+    assert_program_eval_to("(make-parameter 1)", "#<parameter>");
+}
+
 #[test]
 fn test_an_error_object_displays_its_message_and_irritants() {
     assert_program_eval_to(
