@@ -2,7 +2,10 @@
 ;; the bars, and which symbols the writer puts bars back around.
 ;;
 ;; Migrated whole from `crates/patina-tests/tests/vertical_bar_identifiers.rs`
-;; (#193 Phase 1). 28 assertions there, 28 rows here.
+;; (#193 Phase 1). 28 assertions there; **32 rows here** — the 28, plus the
+;; round-trip invariant and three rows checking that an escape was *decoded*
+;; rather than interned as its own text. The `.5` cases review found are new
+;; entries in the invariant's symbol list, not new rows.
 ;;
 ;; **This file needed `written` before it could migrate.** Most of its rows
 ;; assert a *printed* form — `'|.|` writes as `|.|` — and `test-equal` compares
@@ -12,11 +15,25 @@
 ;;
 ;;   (test-equal "…" "|.|" (written '|.|))
 ;;
-;; That is the helper `docs/TEST_ORGANIZATION.md` names as the standing cost of
-;; this migration, paid back here.
+;; `written` is three lines and is copied into each file that needs it —
+;; `data/conversion.scm` and `reader/at-identifiers.scm` have the same
+;; definition. A shared library cannot be used: every suite file has to run
+;; unchanged under chibi and Gauche, which have no `-A` root of ours. The copies
+;; must stay identical; one quietly using `display` would change what a whole
+;; file asserts with nothing to catch it. `docs/TEST_ORGANIZATION.md` records
+;; the one-liner so a fourth copy is transcribed rather than reinvented.
 ;;
-;; 29 rows: 28 migrated, plus the round-trip invariant at the end. All agree on
-;; patina VM, patina tree-walker, chibi and Gauche.
+;; Measured 2026-09-07 (chibi 0.12, Gauche via `gosh -r7`):
+;;
+;;   patina VM / tree-walker   32 pass
+;;   Gauche                    32 pass
+;;   chibi                     31 pass, 1 fail — the round-trip row, because
+;;                             chibi writes `.5` bare and reads it back as the
+;;                             number 0.5. That is the gap this branch fixed in
+;;                             our own writer; Gauche bars it as we now do.
+;;
+;; Left unscoped: one oracle differing is a finding, and `cond-expand (patina)`
+;; would also drop Gauche's agreement — the reason #214, #217 and #218 give.
 ;;
 ;; The import set names `(scheme read)` and `(scheme write)` explicitly. Both
 ;; resolve without one on Patina, because the top level carries `(scheme base)`
@@ -42,9 +59,16 @@
 
 (define |\t\t| 999)
 (test-equal "mnemonic escapes" 999 |\t\t|)
+;; …and the escape was decoded, not interned literally. Without this, a reader
+;; that stored the name as the four characters `\`,`t`,`\`,`t` would satisfy the
+;; row above, since both halves would agree on the same wrong name.
+(test-equal "…decoded, not interned as the escape text" #t
+  (string=? (symbol->string '|\t\t|) "\t\t"))
 
 (define |foo\|bar| 777)
 (test-equal "an escaped bar, inside bars" 777 |foo\|bar|)
+(test-equal "…and the bar is one character in the name" #t
+  (string=? (symbol->string '|foo\|bar|) "foo|bar"))
 
 (define (|add two numbers| a b) (+ a b))
 (test-equal "a procedure name with spaces" 30 (|add two numbers| 10 20))
@@ -65,6 +89,8 @@
 
 (define |\x3BB;| "lambda symbol")
 (test-equal "a hex escape above ASCII" "lambda symbol" |\x3BB;|)
+(test-equal "…naming the same symbol as the character it stands for" #t
+  (eq? '|\x3BB;| (string->symbol "\x3BB;")))
 
 ;; ── Which symbols the writer bars ───────────────────────────────────────────
 ;;
@@ -110,11 +136,24 @@
 ;; spellings matter. Whatever the writer emits, the reader must take back as the
 ;; same symbol.
 
-(test-equal "every written symbol reads back as itself" #t
-  (let loop ((syms (list '|hello world| '|.| '|,a| '|2| '|+inf.0| '|123abc|
-                         '|test| '|a-b-c| '|foo(bar)baz| '||)))
-    (or (null? syms)
-        (and (eq? (read (open-input-string (written (car syms)))) (car syms))
-             (loop (cdr syms))))))
+(define round-trip-symbols
+  (list '|hello world| '|.| '|,a| '|2| '|+inf.0| '|123abc|
+        '|test| '|a-b-c| '|foo(bar)baz| '||
+        ;; Symbols whose *written* form has to be escaped, not merely barred.
+        ;; None of the above reaches that code: a writer that stopped escaping
+        ;; `|` would emit |foo|bar|, which reads as two symbols.
+        '|foo\|bar| '|"| '|\t\t|
+        ;; `.5` reads back as the number 0.5 unless it is barred. The writer
+        ;; barred `+.4` and `-.4` and had no case for the unsigned spelling, so
+        ;; this row failed when it was written — fixed in `datum_writer.rs`
+        ;; alongside it. Gauche bars it; chibi has the same gap we had.
+        '|.5| '|.0| '|.5+3i|))
+
+;; Mapped rather than folded, so a failure names the position instead of
+;; answering #f for the whole list.
+(test-equal "every written symbol reads back as itself"
+  (map (lambda (s) #t) round-trip-symbols)
+  (map (lambda (s) (eq? (read (open-input-string (written s))) s))
+       round-trip-symbols))
 
 (test-end)

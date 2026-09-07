@@ -12,9 +12,10 @@
 ;; Phase 1). 11 assertions there, 11 rows here.
 ;;
 ;; **chibi writes `@` bare**, where Patina and Gauche both bar it — measured
-;; 2026-09-07, and the one difference in this file. The three rows below that
-;; assert the written form are left unscoped for the reason #214 and #217
-;; settled: `cond-expand (patina)` would also drop Gauche's agreement, which is
+;; 2026-09-07, and the one difference in this file. The three rows that assert a
+;; literal spelling — "a bare @ writes as |@|", "@ inside a datum" and "@ and
+;; unquote-splicing in one form"; *not* the round-trip row, which chibi passes —
+;; are left unscoped for the reason #214 and #217 settled: `cond-expand (patina)` would also drop Gauche's agreement, which is
 ;; the more useful half. chibi reports exactly those three.
 ;;
 ;;   patina VM / tree-walker   11 pass
@@ -62,8 +63,15 @@
   (written `(@ ,@(list 2 3))))
 
 ;; The invariant behind reading `@` but writing `|@|`: our own output must read
-;; back as the same symbol. Stated as the property, so narrowing whatever the
-;; writer uses to decide cannot satisfy it while breaking the round trip.
+;; back as the same symbol.
+;;
+;; **This row alone does not protect the spelling**, and it is worth being clear
+;; about that, because for `|…|` symbols the same phrasing does. Our reader
+;; accepts a bare `@` — that is the whole point of the file — so a writer that
+;; stopped barring it would emit `@`, which still reads back as `'@`, and this
+;; row would pass. chibi is the live proof: it passes here and fails the three
+;; spelling rows above. Those three are what pin the spelling; this pins that
+;; whatever spelling is chosen, it survives a round trip.
 (test-equal "what we write reads back as @" #t
   (eq? (read (open-input-string (written '@))) '@))
 

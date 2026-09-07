@@ -123,7 +123,7 @@ executable, and each statically links the whole workspace. Do not go looking for
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
 **not** evict each other's artifacts; the workspace's only non-default feature
 (`patina-tree-walker/verbose-tracing`) gates no code at all; and `patina-tests`
-depends on every crate, so "rebuild only what my change affects" is all 87 of
+depends on every crate, so "rebuild only what my change affects" is all of
 them. `clippy` edges out `cargo test` because `--all-targets` adds the Criterion
 bench target that `--lib --tests` never builds.
 

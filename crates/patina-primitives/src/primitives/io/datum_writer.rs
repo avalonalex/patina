@@ -137,6 +137,17 @@ fn symbol_needs_vertical_bars(name: &str) -> bool {
         return true;
     }
 
+    // `.digit` -> number (e.g. `.5`, `.5+3i`). The unsigned twin of the
+    // `+/-.digit` case below, which was here without it: `(write (string->symbol
+    // ".5"))` emitted `.5`, and reading that back gave the flonum 0.5 rather
+    // than the symbol. A lone `.` is caught further down.
+    if first_char == '.' && name.len() > 1 {
+        let second_char = name.chars().nth(1).unwrap();
+        if second_char.is_ascii_digit() {
+            return true;
+        }
+    }
+
     // Check for +/- prefix (complex number or signed number)
     if (first_char == '+' || first_char == '-') && name.len() > 1 {
         let second_char = name.chars().nth(1).unwrap();
