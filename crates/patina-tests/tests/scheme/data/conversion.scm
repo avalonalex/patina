@@ -10,10 +10,12 @@
 ;; error assertions become one `test-error` each, because `test-error` takes a
 ;; single expression — except the six that pin Patina's *strictness* about
 ;; radices, which are one scoped row together, for the reason recorded there.
-;; **62 rows**: 43 migrated value rows, 12 error rows, 4 added — `-0.0`, the
-;; two `write`/`number->string` agreement rows, and a split of the complex row
-;; so the half an oracle can corroborate is not scoped away with the half it
-;; cannot.
+;; **62 rows**, and the arithmetic closes: 43 migrated value rows, 12 error
+;; rows, 4 added at migration time — `-0.0`, the two `write`/`number->string`
+;; agreement rows, and a split of the complex row so the half an oracle can
+;; corroborate is not scoped away with the half it cannot — and 3 that arrived
+;; later from `larceny_families.rs`: Larceny family 7's row, the
+;; one-number-token row, and the huge-exponent row split out of it.
 ;;
 ;; **What the move costs, precisely.** `assert_eval_to` compared the datum
 ;; writer's output. For the `number->string` rows nothing is lost — the
@@ -35,7 +37,7 @@
 ;; — each because R7RS leaves the answer to the implementation.
 ;;
 ;;   patina VM / tree-walker   61 pass, 1 expected failure (the defect below)
-;;   Gauche                    55 pass, 4 skip, 3 fail — it has no exact complex
+;;   Gauche                    56 pass, 3 skip, 3 fail — it has no exact complex
 ;;                             numbers, so "3+4i" prints as "3.0+4.0i"
 ;;   chibi                     54 pass, 4 skip, 4 fail — it alone tolerates a
 ;;                             third argument to either procedure
@@ -212,17 +214,26 @@
           (string->number "+123")
           (string->number "-99999999999999999999"))))
 
-;; **Scoped to Patina, and the scope is load-bearing for the lane rather than
-;; only for the answer.** We refuse an exponent no bignum should hold; chibi
-;; *computes* it. Measured 2026-09-07: `(string->number "#e1e1000000")` takes
-;; chibi **189 seconds** and yields a million-digit integer, which timed the
-;; oracle lane out at 60 s and cost chibi the arbitration of every other row in
-;; this file. `test-skip` prevents evaluation, so scoping keeps chibi's 60-odd
-;; other rows rather than trading them for one.
+;; **Skipped on chibi alone, and the scope is about the lane rather than the
+;; answer.** We refuse an exponent no bignum should hold; chibi *computes* it.
+;; Measured 2026-09-07: `(string->number "#e1e1000000")` takes chibi **189
+;; seconds** and yields a million-digit integer, which timed the oracle lane out
+;; at 60 s and cost chibi the arbitration of every other row in this file.
+;; `test-skip` prevents evaluation, so skipping keeps chibi's 60-odd other rows
+;; rather than trading them for one.
+;;
+;; `(cond-expand (chibi …))` rather than the usual `(patina)` form, because the
+;; reason is chibi's cost and nothing else: **Gauche answers `(#f #f)` here
+;; instantly**, exactly as we do. The first draft scoped to Patina and threw
+;; that corroboration away for a problem Gauche does not have.
+;;
+;; Values rather than `written`, unlike the row above: that one carries
+;; `3/2+2i` and `1.0+2.0i`, where exactness shows only in the printed form,
+;; and this one is two `#f`s.
 ;;
 ;; R7RS gives no bound on an exponent, so computing it conforms; refusing is a
 ;; resource decision, and ours.
-(cond-expand (patina) (else (test-skip 1)))
+(cond-expand (chibi (test-skip 1)) (else))
 (test-equal "an exponent no bignum should hold is refused, not computed"
   '(#f #f)
   (list (string->number "#e1e1000000")

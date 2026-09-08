@@ -144,15 +144,23 @@
 ;; a record terminates too — the third shape of the same defect family 2 covers
 ;; for lists and vectors.
 (define-record-type <box> (mk v) box? (v box-v box-set-v!))
+;; Top level, like the `.rs` original and like this PR's sibling change in
+;; `control/wind-thunk-exceptions.scm`: `docs/TEST_ORGANIZATION.md` asks
+;; migrations to leave bindings where they were. The cycle here is in a record
+;; *field* rather than through a variable, so the letrec* hazard the rule names
+;; does not apply — but two rows of the same kind disagreeing about it inside
+;; one PR is the drift the rule exists to stop.
+(define self-box-a (mk #f))
+(define self-box-b (mk #f))
+(define listy-box (mk 1))
+(box-set-v! self-box-a self-box-a)
+(box-set-v! self-box-b self-box-b)
+(box-set-v! listy-box (list listy-box))
 (test-equal "equal? terminates through a record field cycle" '(#t #f #t #f)
-  (let ((a (mk #f)) (b (mk #f)) (c (mk 1)))
-    (box-set-v! a a)
-    (box-set-v! b b)
-    (box-set-v! c (list c))
-    (list (equal? a b)          ; two self-cycles, same shape
-          (equal? a c)          ; self-cycle against a cycle through a list
-          (equal? (mk 1) (mk 1))
-          (equal? (mk 1) (mk 2)))))
+  (list (equal? self-box-a self-box-b)   ; two self-cycles, same shape
+        (equal? self-box-a listy-box)    ; self-cycle vs a cycle through a list
+        (equal? (mk 1) (mk 1))
+        (equal? (mk 1) (mk 2))))
 
 ;; ── Data with no sharing is untouched by any of it ──────────────────────────
 
