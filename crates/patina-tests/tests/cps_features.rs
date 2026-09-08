@@ -15,9 +15,17 @@
 //!   they belong in a file of their own rather than beside rows that do.
 //! - **Backtracking**, which is portable but sits between the two and moves
 //!   with the prompt rows.
-//! - **The deep-nesting tests**, which spawn a thread with an explicit
+//! - **One deep-nesting test**, which spawns a thread with an explicit
 //!   `stack_size`. Choosing a stack size is a harness act; a Scheme program
-//!   cannot ask for one, so this one stays here whatever happens to the rest.
+//!   cannot ask for one, so that one stays here whatever happens to the rest.
+//!   Its neighbour, `test_reentering_nested_value_form_winds_runs_each_thunk_once`,
+//!   spawns no thread and is migrable with the prompt rows.
+//!
+//! Review of the first pass caught four `call/cc` + `dynamic-wind` tests
+//! stranded here because they sat *below* the prompt sections rather than
+//! because they were unportable. Three went to the `.scm` file; the fourth,
+//! `test_dynamic_wind_callcc_escape_runs_after`, was a duplicate of a row
+//! already migrated and is simply gone.
 
 mod common;
 use common::*;
@@ -94,91 +102,9 @@ fn test_backtracking_pythagorean_triple() {
 // the tree-walker actually fails.
 // =============================================================================
 
-#[test]
-fn test_callcc_single_value_through_call_with_values() {
-    assert_program_eval_to(
-        r#"
-        (call-with-values
-          (lambda ()
-            (call-with-current-continuation
-              (lambda (k) (k 42))))
-          (lambda (x) x))
-        "#,
-        "42",
-    );
-}
-
 // =============================================================================
 // Instruction-level control ops: dynamic-wind + call/cc re-entry
 // =============================================================================
-
-#[test]
-fn test_dynamic_wind_callcc_reentry_delivers_value() {
-    // Continuation captured inside dynamic-wind body, re-invoked with new value
-    assert_program_eval_to(
-        r#"
-        (let ((k #f)
-              (results '()))
-          (let ((val
-                 (dynamic-wind
-                   (lambda () #f)
-                   (lambda ()
-                     (call-with-current-continuation
-                       (lambda (c) (set! k c) 'first)))
-                   (lambda () #f))))
-            (set! results (cons val results))
-            (when (and k (< (length results) 3))
-              (let ((saved k))
-                (set! k #f)
-                (saved 'second))))
-          (reverse results))
-        "#,
-        "(first second)",
-    );
-}
-
-#[test]
-fn test_dynamic_wind_callcc_before_after_run_on_reentry() {
-    // Before/after thunks run on each entry/exit including re-entry
-    assert_program_eval_to(
-        r#"
-        (let ((k #f)
-              (log '()))
-          (dynamic-wind
-            (lambda () (set! log (cons 'in log)))
-            (lambda ()
-              (if (not k)
-                  (call-with-current-continuation
-                    (lambda (c) (set! k c))))
-              'ok)
-            (lambda () (set! log (cons 'out log))))
-          (if (< (length log) 6)
-              (k 'again))
-          (reverse log))
-        "#,
-        "(in out in out in out)",
-    );
-}
-
-#[test]
-fn test_dynamic_wind_callcc_escape_runs_after() {
-    // Escaping from dynamic-wind body via call/cc runs after-thunk
-    assert_program_eval_to(
-        r#"
-        (let ((log '()))
-          (call-with-current-continuation
-            (lambda (escape)
-              (dynamic-wind
-                (lambda () (set! log (cons 'before log)))
-                (lambda ()
-                  (set! log (cons 'body log))
-                  (escape 'done))
-                (lambda () (set! log (cons 'after log))))))
-          (reverse log))
-        "#,
-        "(before body after)",
-    );
-}
 
 /// Aborting to a prompt out of each of the value form's three thunks —
 /// measured against Racket.

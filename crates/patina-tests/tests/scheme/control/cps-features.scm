@@ -5,7 +5,7 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 43 rows of plain R7RS control flow;
+;;   - **this file**, 46 rows of plain R7RS control flow;
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
 ;;     `call-with-continuation-prompt`, `abort-current-continuation` — which
 ;;     migrates separately, because measured 2026-09-07 all three procedures are
@@ -15,17 +15,15 @@
 ;;     `stack_size` to drive `dynamic-wind` 100_000 deep. Choosing a stack size
 ;;     is a harness act, not something a Scheme program can ask for.
 ;;
-;; The `.rs` rows compared printed forms through `assert_program_eval_to`. Most
-;; of these are lists of symbols, where `test-equal` on values says the same
-;; thing more directly and keeps exactness besides; the two rows that are about
-;; a *printed* form say so and use `written`.
+;; The `.rs` rows compared printed forms through `assert_program_eval_to`. These
+;; are lists, numbers, symbols and strings throughout, where `test-equal` on
+;; values says the same thing more directly — and `equal?` is type-sensitive, so
+;; nothing here needs the `written` helper the printing-heavy files carry.
 ;;
 ;; Divergences are recorded in `DIVERGENCES.tsv` and checked by
 ;; `scripts/run_suite_oracles.sh`, not restated here.
 
 (import (scheme base) (scheme write) (scheme file) (scheme read) (srfi 64))
-
-(define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
 
 (test-begin "cps-features")
 
@@ -189,6 +187,45 @@
     (lambda () (call-with-current-continuation (lambda (k) (k (values 1 2 3)))))
     list))
 
+;; These three came from the `.rs` file's "instruction-level control ops"
+;; sections, which sat below the prompt tests and were nearly left behind with
+;; them. They use nothing but `call/cc` and `dynamic-wind`.
+;;
+;; A fourth, `test_dynamic_wind_callcc_escape_runs_after`, is **not** here: it
+;; is the same program as "so does an escape through call/cc" above, differing
+;; only in the value handed to `escape`, which is discarded. The `.rs` file
+;; asserted it twice.
+
+(test-equal "a single value through call-with-values" 42
+  (call-with-values
+    (lambda () (call-with-current-continuation (lambda (k) (k 42))))
+    (lambda (x) x)))
+
+;; Re-entry delivers the value the continuation was *given*, not the one the
+;; original capture returned: `first` on the way through, `second` on re-entry.
+(test-equal "re-entry delivers the value it was handed" '(first second)
+  (let ((k #f) (results '()))
+    (let ((val (dynamic-wind
+                 (lambda () #f)
+                 (lambda () (call-with-current-continuation
+                              (lambda (c) (set! k c) 'first)))
+                 (lambda () #f))))
+      (set! results (cons val results))
+      (when (and k (< (length results) 3))
+        (let ((saved k)) (set! k #f) (saved 'second))))
+    (reverse results)))
+
+(test-equal "before and after run on every entry and exit" '(in out in out in out)
+  (let ((k #f) (log '()))
+    (dynamic-wind
+      (lambda () (set! log (cons 'in log)))
+      (lambda ()
+        (if (not k) (call-with-current-continuation (lambda (c) (set! k c))))
+        'ok)
+      (lambda () (set! log (cons 'out log))))
+    (if (< (length log) 6) (k 'again))
+    (reverse log)))
+
 ;; ── guard ──────────────────────────────────────────────────────────────────
 
 (test-equal "clauses are tried in order" '(number 42)
@@ -250,11 +287,13 @@
 
 ;; ── Error objects ──────────────────────────────────────────────────────────
 
-;; `written` rather than a bare comparison: the claim is that the message comes
-;; back as a *string*, and `test-equal` against `"test message"` would hold for
-;; a symbol of the same name under a writer that dropped the quotes.
-(test-equal "an error object carries its message" "\"test message\""
-  (guard (e ((error-object? e) (written (error-object-message e))) (else 'not-error))
+;; A bare comparison, like its sibling further down. The first draft used
+;; `written` here on the grounds that `test-equal` against a string "would hold
+;; for a symbol of the same name" — which is false: `(equal? "abc" 'abc)` is
+;; `#f`, so the comparison is already type-sensitive and `written` bought
+;; nothing but an inconsistency with the other message row.
+(test-equal "an error object carries its message" "test message"
+  (guard (e ((error-object? e) (error-object-message e)) (else 'not-error))
     (error "test message")))
 
 (test-equal "and its irritants" '(a b c)
