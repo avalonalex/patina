@@ -274,7 +274,9 @@
 ;; exact complex with an exact zero real part — `0+1i`, `0-1i`, `0+2i`, `0+3i`,
 ;; `(make-rectangular 0 2)` all die, while `1+1i`, `2+0i` and the inexact
 ;; `0.0+2.0i` all answer normally. Reproduced on chibi's master at
-;; 0.12-201-g6991e209, not only on the 0.12 release; tracked in issue #227.
+;; 0.12-201-g6991e209, not only on the 0.12 release. Tracked in issue #227 and
+;; filed upstream as ashinn/chibi-scheme#1197; if it is fixed there, this scope
+;; comes off and chibi gains a 37th row.
 ;;
 ;; Without the skip it takes the whole file down and chibi reports nothing at
 ;; all, because SRFI 64's summary only prints at `test-end` and never arrives —
