@@ -1,8 +1,9 @@
 ;; R7RS numeric operations — §6.2.6's procedures, and what they print.
 ;;
 ;; Migrated whole from `crates/patina-tests/tests/numeric_operations.rs`
-;; (#193 Phase 1). 39 `#[test]` functions over 145 assertions there; **37 rows
-;; here**, roughly one per operation, each carrying that test's cases as a list
+;; (#193 Phase 1). 39 `#[test]` functions over 145 assertions there; **38 rows
+;; here** (37 of them, plus Larceny family 8's `rationalize` row,
+;; moved in from `larceny_families.rs`), roughly one per operation, each carrying that test's cases as a list
 ;; so the expected value names which case drifted. Fewer rows than tests
 ;; because `sin`, `cos` and `tan` had a one-case test each and share a row
 ;; here, and because the six substring tests collapse into value assertions.

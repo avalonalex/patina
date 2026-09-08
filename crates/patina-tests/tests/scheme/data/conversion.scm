@@ -35,10 +35,14 @@
 ;; — each because R7RS leaves the answer to the implementation.
 ;;
 ;;   patina VM / tree-walker   58 pass, 1 expected failure (the defect below)
-;;   Gauche                    55 pass, 3 skip, 1 fail — it has no exact complex
+;;   Gauche                    55 pass, 3 skip, 2 fail — it has no exact complex
 ;;                             numbers, so "3+4i" prints as "3.0+4.0i"
-;;   chibi                     54 pass, 3 skip, 2 fail — it alone tolerates a
+;;   chibi                     54 pass, 3 skip, 3 fail — it alone tolerates a
 ;;                             third argument to either procedure
+;;
+;; The second failure on each is Larceny family 7's `string->number` row, which
+;; moved in from `larceny_families.rs`: chibi and Gauche each miss a different
+;; element of it, and the register says which.
 ;;
 ;; The two oracle failures are each one implementation against the other three,
 ;; and are noted where those rows sit. Neither is scoped away: doing so would

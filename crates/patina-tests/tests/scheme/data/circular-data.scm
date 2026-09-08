@@ -4,7 +4,9 @@
 ;; Migrated whole from `crates/patina-tests/tests/circular_data.rs` (#193
 ;; Phase 1). 21 `#[test]` functions there over 24 `assert_program_eval_to`
 ;; sites, 30 assertions executed — two sites sit inside a four-way loop.
-;; **27 rows here**, and the arithmetic is worth spelling out: the loop's eight
+;; **30 rows here** — 27 from that file, plus Larceny family 2's three, which
+;; moved in from `larceny_families.rs` because this is the file about circular
+;; data. The arithmetic for the 27 is worth spelling out: the loop's eight
 ;; executions become four named `declines` rows plus one combined `applies` row,
 ;; the standalone `quote`-declines test the loop already covered is gone as a
 ;; duplicate, and one row is new — the portable half of the error-object claim,
@@ -31,9 +33,9 @@
 ;;
 ;; ── Measured 2026-09-07 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   27 pass
-;;   Gauche                    23 pass, 3 fail, 1 skip
-;;   chibi                     22 pass, 4 fail, 1 skip
+;;   patina VM / tree-walker   30 pass
+;;   Gauche                    26 pass, 3 fail, 1 skip
+;;   chibi                     25 pass, 4 fail, 1 skip
 ;;
 ;; Every failure is one difference, and it is worth naming because it is a
 ;; three-way spread rather than "the oracles agree and we don't":
@@ -121,14 +123,20 @@
     (equal? a b)))
 
 ;; The vector shape of the same defect overflowed the Rust stack rather than
-;; hanging, which is why Larceny's `read` suite died instead of stalling. The
-;; negative matters as much as the positive: a cycle of a different shape must
-;; *not* compare equal.
-(test-equal "and on cyclic vectors, including the negative" '(#t #f #f)
-  (let* ((cyc (lambda (x) (let ((v (vector x #f))) (vector-set! v 1 v) v)))
-         (a (list 1 2)))
+;; hanging, which is why Larceny's `read` suite died instead of stalling.
+(define (cyc x) (let ((v (vector x #f))) (vector-set! v 1 v) v))
+(test-assert "equal? terminates on two distinct cyclic vectors"
+  (equal? (cyc 1) (cyc 1)))
+
+;; The negatives get their own row rather than riding along in a list: they are
+;; the half that says termination was not bought by answering #t to everything,
+;; and folded together a regression prints two lists to diff instead of naming
+;; which direction `equal?` broke in.
+(test-equal "and a cycle of a different shape is not equal" '(#f #f)
+  (let ((a (list 1 2)))
     (set-cdr! (cdr a) a)
-    (list (equal? (cyc 1) (cyc 1)) (equal? (cyc 1) (cyc 2)) (equal? a (cyc 1)))))
+    (list (equal? (cyc 1) (cyc 2))     ; same shape, different contents
+          (equal? a (cyc 1)))))        ; list against vector
 
 ;; ── Data with no sharing is untouched by any of it ──────────────────────────
 

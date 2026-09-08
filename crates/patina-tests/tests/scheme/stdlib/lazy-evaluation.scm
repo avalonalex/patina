@@ -17,7 +17,9 @@
 ;; identically. It is the shape under test in all three, not per-row state.
 ;;
 ;; Two rows fail under chibi by design — see the note on `force` of a
-;; non-promise. Gauche runs all 29.
+;; non-promise. Gauche runs all 30 — 29 from the
+;; migration, plus Larceny family 3's `delay-force` chain, moved in from
+;; `larceny_families.rs`.
 ;;
 ;; Some rows here are the same claim twice: the "R7RS examples" section repeats
 ;; what the sections above it establish. They are kept and marked rather than
