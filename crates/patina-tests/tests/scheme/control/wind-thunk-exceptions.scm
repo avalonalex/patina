@@ -281,4 +281,48 @@
          (seen (reverse deciding-log)))
     (list r seen)))
 
+;; **Larceny family 28** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs` because this file is about wind thunks and
+;; exceptions meeting.
+;;
+;; R7RS §6.11: a handler is called "in the dynamic environment of the call to
+;; `raise`, except that the current exception handler is the outer one". Both
+;; backends unwound to the handler's own wind depth *first*, so the handler ran
+;; outside the extent and the after-thunk ran twice. Fixed 2026-09-01.
+;;
+;; The fix removes work rather than adding it: a `raise` crosses no dynamic
+;; extent, so no raise path unwinds any more. Popping the handler stack is the
+;; only thing R7RS asks a raise to change; `guard`'s `guard-k` does the
+;; crossing, through the same wind machinery as every other control transfer.
+;;
+;; Found 2026-08-25 while attempting family 22, whose visible symptom this
+;; produces on the non-continuable path. Neither half fixed it alone, which was
+;; measured rather than deduced: R7RS §7.3's reference `guard` jumps a
+;; continuation back to the raise point and still gave family 22's wrong answer
+;; under the old raise path, because that continuation was captured after the
+;; unwind.
+;;
+;; Two neighbours deliberately not re-pinned here, both in
+;; `backend_divergence.rs`: the tree-walker's `error` path, whose opposite
+;; ordering converged with this (`a_guard_clause_runs_after_the_unwind`), and
+;; the VM wind machinery the fix leans on, which #149 converged
+;; (`a_continuation_within_its_own_wind_runs_the_thunks_once`). Plain re-entry
+;; is `compliance/control.rs`'s `test_dynamic_wind_with_callcc_reentry` (R7RS
+;; §6.10's own example) rather than re-derived here.
+;;
+;; All three implementations agree on this one.
+(test-equal "a handler runs inside the raise's dynamic extent"
+  '(handled (in handler out))
+  (let ()
+    (define v '())
+    (define (note x) (set! v (cons x v)))
+    (define answer
+      (with-exception-handler
+        (lambda (e) (note 'handler) 'handled)
+        (lambda ()
+          (dynamic-wind (lambda () (note 'in))
+                        (lambda () (raise-continuable 'x))
+                        (lambda () (note 'out))))))
+    (list answer (reverse v))))
+
 (test-end)
