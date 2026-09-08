@@ -4,7 +4,8 @@
 ;; Migrated whole from `crates/patina-tests/tests/circular_data.rs` (#193
 ;; Phase 1). 21 `#[test]` functions there over 24 `assert_program_eval_to`
 ;; sites, 30 assertions executed — two sites sit inside a four-way loop.
-;; **30 rows here** — 27 from that file, plus Larceny family 2's three, which
+;; **31 rows here** — 27 from that file, plus Larceny family 2's three and the
+;; record-cycle row from its "Review of #112" section, which
 ;; moved in from `larceny_families.rs` because this is the file about circular
 ;; data. The arithmetic for the 27 is worth spelling out: the loop's eight
 ;; executions become four named `declines` rows plus one combined `applies` row,
@@ -33,9 +34,9 @@
 ;;
 ;; ── Measured 2026-09-07 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   30 pass
-;;   Gauche                    26 pass, 3 fail, 1 skip
-;;   chibi                     25 pass, 4 fail, 1 skip
+;;   patina VM / tree-walker   31 pass
+;;   Gauche                    26 pass, 4 fail, 1 skip
+;;   chibi                     26 pass, 4 fail, 1 skip
 ;;
 ;; Every failure is one difference, and it is worth naming because it is a
 ;; three-way spread rather than "the oracles agree and we don't":
@@ -137,6 +138,29 @@
     (set-cdr! (cdr a) a)
     (list (equal? (cyc 1) (cyc 2))     ; same shape, different contents
           (equal? a (cyc 1)))))        ; list against vector
+
+;; **From `larceny_families.rs`'s "Review of #112" section.** `equal?` walks
+;; record fields on the same worklist as pairs and vectors, so a cycle through
+;; a record terminates too — the third shape of the same defect family 2 covers
+;; for lists and vectors.
+(define-record-type <box> (mk v) box? (v box-v box-set-v!))
+;; Top level, like the `.rs` original and like this PR's sibling change in
+;; `control/wind-thunk-exceptions.scm`: `docs/TEST_ORGANIZATION.md` asks
+;; migrations to leave bindings where they were. The cycle here is in a record
+;; *field* rather than through a variable, so the letrec* hazard the rule names
+;; does not apply — but two rows of the same kind disagreeing about it inside
+;; one PR is the drift the rule exists to stop.
+(define self-box-a (mk #f))
+(define self-box-b (mk #f))
+(define listy-box (mk 1))
+(box-set-v! self-box-a self-box-a)
+(box-set-v! self-box-b self-box-b)
+(box-set-v! listy-box (list listy-box))
+(test-equal "equal? terminates through a record field cycle" '(#t #f #t #f)
+  (list (equal? self-box-a self-box-b)   ; two self-cycles, same shape
+        (equal? self-box-a listy-box)    ; self-cycle vs a cycle through a list
+        (equal? (mk 1) (mk 1))
+        (equal? (mk 1) (mk 2))))
 
 ;; ── Data with no sharing is untouched by any of it ──────────────────────────
 

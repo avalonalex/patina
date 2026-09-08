@@ -195,6 +195,37 @@ holds conversions from §6.2 today and would hold §6.6, 6.7 and 6.8's
 (`char->integer`, `string->list`, `vector->list`) beside them — and a section
 number would delete why the file exists.
 
+#### A file organised by provenance gets redistributed, not migrated
+
+`larceny_families.rs` was the one place the suite departed from the rule above.
+It is Patina's own MIT-licensed reproduction of every defect family Larceny's
+R7RS suites surfaced — the suites are LGPL and are not vendored — and it was
+organised by **where a defect was found** rather than what it is about. So
+`equal?` on circular structures sat in a Larceny file while `data/circular-data
+.scm` argued about `equal?` on circular structures two directories away.
+
+Those rows are being moved to the file about their subject, one group at a
+time, each carrying a `Larceny family N` line so
+`scheme_tests/reports/larceny_triage.md` still maps — better than before, since
+the triage doc can now name a file rather than a 1497-line haystack.
+
+Three things that came out of doing it, worth knowing before the next one:
+
+- **Putting a row beside its subject is what makes it worth reading.**
+  `circular-data.scm`'s header already argued that `equal?` must terminate on
+  cycles, measured on the *easy* shape. Family 2 is the hard one — two distinct
+  cycles with the same unrolling — and it now sits under the claim it
+  substantiates. Neither file said anything new; the adjacency did.
+- **The move is where import bugs surface.** Family 2's program used `cdddr`,
+  which is `(scheme cxr)` and not `(scheme base)`. Patina resolves it anyway
+  (issue #211), so in Rust it was invisible; as a `.scm` file it failed on both
+  oracles at once.
+- **A row can be too expensive for the lane.** `(string->number "#e1e1000000")`
+  is `#f` here in no time, and chibi *computes* it — 189 s and a million-digit
+  integer, which timed the oracle lane out and cost chibi the arbitration of
+  every other row in that file. Scoping it to Patina returned them, because
+  `test-skip` prevents evaluation rather than discarding a result.
+
 Two migration rules learned the hard way in #193 Phase 1, both from rows that
 passed while asserting something else:
 

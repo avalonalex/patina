@@ -328,4 +328,29 @@
   '(handled (in handler out))
   (list extent-answer (reverse extent-log)))
 
+;; **From `larceny_families.rs`'s "What `base` found once it ran" section**, and
+;; the visible half of family 28 above.
+;;
+;; R7RS §4.2.7: a `guard` with no matching clause re-raises "in the dynamic
+;; environment of the original call to `raise`" — so the `dynamic-wind`
+;; before-thunk runs *again* on the way back in, and the after-thunk again on
+;; the way out to the outer guard. Hence four entries for one raise.
+;;
+;; Four changes together made this work, none of them alone; the first two
+;; landed ahead of it as #150 and #149. `CpsContinuation` carries the handler
+;; stack, so the jump back in still has handlers; the VM takes the common
+;; prefix of two wind stacks, so a jump that crosses nothing runs no thunks; no
+;; raise path unwinds, so the raise point is still there to jump back to; and
+;; `guard` is R7RS §7.3's expansion, whose `handler-k` is the thing that jumps.
+(define reraise-log '())
+(test-equal "a guard re-raise re-enters the raiser's dynamic extent"
+  '(out in out in)
+  (begin
+    (guard (exn ((equal? exn 5) 'five))
+      (guard (exn ((equal? exn 6) 'six))
+        (dynamic-wind (lambda () (set! reraise-log (cons 'in reraise-log)))
+                      (lambda () (raise 5))
+                      (lambda () (set! reraise-log (cons 'out reraise-log))))))
+    reraise-log))
+
 (test-end)

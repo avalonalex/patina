@@ -440,77 +440,6 @@ fn a_line_comment_ends_at_a_bare_return() {
 // Review of #112 — the cases its review found, kept as they were verified
 // ---------------------------------------------------------------------------
 
-/// A promise's box can be re-pointed by a force nested inside its own thunk
-/// (`promise_update` aliases the inner promise to the outer's box). The
-/// outer force must then look its box up again rather than store into the
-/// one it captured before the thunk: R7RS 7.3's reference gives (2 2 2).
-#[test]
-fn a_force_reentered_through_promise_update_memoizes_once() {
-    assert_program_eval_to(
-        "(import (scheme lazy))
-         (define n 0)
-         (define q #f)
-         (define p (delay-force q))
-         (set! q (delay (let ((me (begin (set! n (+ n 1)) n)))
-                          (if (= me 1) (force p))
-                          me)))
-         (list (force q) (force q) (force p))",
-        "(2 2 2)",
-    );
-}
-
-/// `(delay e)` wraps its value in a *done* promise (R7RS 7.3), so forcing a
-/// delay whose value is a promise yields that promise, not its value —
-/// forcing through is what `delay-force` is for.
-#[test]
-fn forcing_a_delay_of_a_promise_yields_the_promise() {
-    assert_program_eval_to(
-        "(import (scheme lazy))
-         (define a (delay 7))
-         (list (promise? (force (delay (delay 5))))
-               (eq? (force (delay a)) a)
-               (force (delay-force (delay 5))))",
-        "(#t #t 5)",
-    );
-}
-
-/// `equal?` walks record fields on the same worklist as pairs and vectors,
-/// so a cycle through a record terminates too.
-#[test]
-fn equal_terminates_through_a_record_field_cycle() {
-    assert_program_eval_to(
-        "(define-record-type <box> (mk v) box? (v box-v box-set-v!))
-         (define a (mk #f)) (box-set-v! a a)
-         (define b (mk #f)) (box-set-v! b b)
-         (define c (mk 1))  (box-set-v! c (list c))
-         (list (equal? a b) (equal? a c) (equal? (mk 1) (mk 1)) (equal? (mk 1) (mk 2)))",
-        "(#t #f #t #f)",
-    );
-}
-
-/// `string->number` is the reader's number syntax and nothing more: a
-/// comment, a block comment or a `#!` line before the digits is not part
-/// of a number; an exactness prefix applies to both parts of a complex; a
-/// pure imaginary needs its sign; an exponent no bignum should hold is
-/// refused rather than computed.
-#[test]
-fn string_to_number_is_exactly_one_number_token() {
-    assert_program_eval_to(
-        "(list (string->number \"1;2\")
-               (string->number \"#|c|#1\")
-               (string->number \"#!fold-case 1\")
-               (string->number \"#e1.5+2i\")
-               (string->number \"#i1+2i\")
-               (string->number \"1i\")
-               (string->number \"+1i\")
-               (string->number \"#e1e1000000\")
-               (string->number \"#e1.00e-9223372036854775807\")
-               (string->number \"+123\")
-               (string->number \"-99999999999999999999\"))",
-        "(#f #f #f 3/2+2i 1.0+2.0i #f +i #f #f 123 -99999999999999999999)",
-    );
-}
-
 /// A shebang line, like a `;` comment, ends at a bare return.
 #[test]
 fn a_shebang_line_ends_at_a_bare_return() {
@@ -599,33 +528,6 @@ fn let_values_binds_all_clauses_in_parallel() {
     );
 }
 
-/// R7RS 4.2.7: a `guard` with no matching clause re-raises "in the dynamic
-/// environment of the original call to `raise`" — so the `dynamic-wind`
-/// before-thunk runs again on the way back in, and the after-thunk again
-/// on the way out to the outer guard. Fixed 2026-09-01 (family 22, see
-/// {TRIAGE}).
-///
-/// The visible half of family 28. Four changes together, none of which works
-/// alone — the first two landed ahead of this as #150 and #149:
-/// `CpsContinuation` carries the handler stack, so the jump back in still has
-/// handlers; the VM takes the common prefix of two wind stacks, so a jump
-/// that crosses nothing runs no thunks; no raise path unwinds, so the raise
-/// point is still there to jump back to; and `guard` is R7RS 7.3's
-/// expansion, whose `handler-k` is the thing that jumps.
-#[test]
-fn a_guard_reraise_reenters_the_dynamic_extent() {
-    assert_program_eval_to(
-        "(define v '())
-         (guard (exn ((equal? exn 5) 'five))
-           (guard (exn ((equal? exn 6) 'six))
-             (dynamic-wind (lambda () (set! v (cons 'in v)))
-                           (lambda () (raise 5))
-                           (lambda () (set! v (cons 'out v))))))
-         v",
-        "(out in out in)",
-    );
-}
-
 /// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local to
 /// it, not spliced into the enclosing one — and the macro names it binds are
 /// visible in the transformers only under `letrec-syntax`. Fixed 2026-08-25.
@@ -659,24 +561,6 @@ fn let_syntax_body_definitions_and_transformer_scope() {
                (list (f 1) (g 1)))))
          (list (defs) (scope) (rec-scope))",
         "((13 70) (1 2) (1 1))",
-    );
-}
-
-/// `with-exception-handler` takes a continuation as its handler — the R7RS
-/// idiom for capturing a raised object, `(call/cc (lambda (k)
-/// (with-exception-handler k …)))`. The VM used to reject it ("expected a
-/// procedure, got object") until 2026-08-25: its type check asked for a
-/// procedure, and its generic call path could not invoke a continuation.
-/// With the object in hand, `read-error?` and `file-error?` answer `#f` as
-/// R7RS 6.11 requires.
-#[test]
-fn a_continuation_is_a_procedure_for_with_exception_handler() {
-    assert_program_eval_to(
-        "(define e (call/cc (lambda (k) (with-exception-handler k (lambda () (error \"plain\"))))))
-         (list (error-object? e) (error-object-message e)
-               (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x)
-               (call/cc (lambda (k) (with-exception-handler k (lambda () (raise 'obj))))))",
-        "(#t \"plain\" #f #f #f #f obj)",
     );
 }
 

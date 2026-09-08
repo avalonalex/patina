@@ -10,10 +10,12 @@
 ;; error assertions become one `test-error` each, because `test-error` takes a
 ;; single expression — except the six that pin Patina's *strictness* about
 ;; radices, which are one scoped row together, for the reason recorded there.
-;; **59 rows**: 43 migrated value rows, 12 error rows, and 4 added — `-0.0`, the
-;; two `write`/`number->string` agreement rows, and a split of the complex row
-;; so the half an oracle can corroborate is not scoped away with the half it
-;; cannot.
+;; **62 rows**, and the arithmetic closes: 43 migrated value rows, 12 error
+;; rows, 4 added at migration time — `-0.0`, the two `write`/`number->string`
+;; agreement rows, and a split of the complex row so the half an oracle can
+;; corroborate is not scoped away with the half it cannot — and 3 that arrived
+;; later from `larceny_families.rs`: Larceny family 7's row, the
+;; one-number-token row, and the huge-exponent row split out of it.
 ;;
 ;; **What the move costs, precisely.** `assert_eval_to` compared the datum
 ;; writer's output. For the `number->string` rows nothing is lost — the
@@ -34,10 +36,10 @@
 ;; *skip* elsewhere — complex-part elision, complex radix, and radix strictness
 ;; — each because R7RS leaves the answer to the implementation.
 ;;
-;;   patina VM / tree-walker   58 pass, 1 expected failure (the defect below)
-;;   Gauche                    55 pass, 3 skip, 2 fail — it has no exact complex
+;;   patina VM / tree-walker   61 pass, 1 expected failure (the defect below)
+;;   Gauche                    56 pass, 3 skip, 3 fail — it has no exact complex
 ;;                             numbers, so "3+4i" prints as "3.0+4.0i"
-;;   chibi                     54 pass, 3 skip, 3 fail — it alone tolerates a
+;;   chibi                     54 pass, 4 skip, 4 fail — it alone tolerates a
 ;;                             third argument to either procedure
 ;;
 ;; The second failure on each is Larceny family 7's `string->number` row, which
@@ -190,6 +192,52 @@
           (string->number "1 2")      ; two tokens, not one
           (string->number " 12")      ; leading space is not number syntax
           (string->number ""))))
+
+;; **From `larceny_families.rs`'s "Review of #112" section**, beside family 7's
+;; row above because it is the other half of the same claim.
+;;
+;; `string->number` is the reader's number syntax and *nothing more*: a
+;; comment, a block comment or a `#!` line before the digits is not part of a
+;; number; an exactness prefix applies to both parts of a complex; a pure
+;; imaginary needs its sign; and an exponent no bignum should hold is refused
+;; rather than computed.
+(test-equal "string->number reads exactly one number token"
+  "(#f #f #f 3/2+2i 1.0+2.0i #f +i 123 -99999999999999999999)"
+  (written
+    (list (string->number "1;2")            ; a comment is not part of a number
+          (string->number "#|c|#1")
+          (string->number "#!fold-case 1")
+          (string->number "#e1.5+2i")       ; the prefix reaches both parts
+          (string->number "#i1+2i")
+          (string->number "1i")             ; a pure imaginary needs its sign
+          (string->number "+1i")
+          (string->number "+123")
+          (string->number "-99999999999999999999"))))
+
+;; **Skipped on chibi alone, and the scope is about the lane rather than the
+;; answer.** We refuse an exponent no bignum should hold; chibi *computes* it.
+;; Measured 2026-09-07: `(string->number "#e1e1000000")` takes chibi **189
+;; seconds** and yields a million-digit integer, which timed the oracle lane out
+;; at 60 s and cost chibi the arbitration of every other row in this file.
+;; `test-skip` prevents evaluation, so skipping keeps chibi's 60-odd other rows
+;; rather than trading them for one.
+;;
+;; `(cond-expand (chibi …))` rather than the usual `(patina)` form, because the
+;; reason is chibi's cost and nothing else: **Gauche answers `(#f #f)` here
+;; instantly**, exactly as we do. The first draft scoped to Patina and threw
+;; that corroboration away for a problem Gauche does not have.
+;;
+;; Values rather than `written`, unlike the row above: that one carries
+;; `3/2+2i` and `1.0+2.0i`, where exactness shows only in the printed form,
+;; and this one is two `#f`s.
+;;
+;; R7RS gives no bound on an exponent, so computing it conforms; refusing is a
+;; resource decision, and ours.
+(cond-expand (chibi (test-skip 1)) (else))
+(test-equal "an exponent no bignum should hold is refused, not computed"
+  '(#f #f)
+  (list (string->number "#e1e1000000")
+        (string->number "#e1.00e-9223372036854775807")))
 
 ;; ── number->string: what it refuses ─────────────────────────────────────────
 
