@@ -157,6 +157,36 @@
 (cond-expand (patina) (else (test-skip 1)))
 (test-error "a complex number has no non-decimal radix" #t (number->string 3+4i 16))
 
+;; **Larceny family 7** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs` because this file is where `string->number`
+;; lives.
+;;
+;; The reader accepts `+inf.0`, `-nan.0`, `1+2i` and `#e1e400` as literals;
+;; `string->number` rejected the first three and read the last through a float.
+;; Fixed 2026-08-24: `string->number` *is* the reader's number syntax now — the
+;; whole string must lex as one number token — and `#e` on a decimal is the
+;; exact value of the text, not of the float it would round to.
+;;
+;; Through `written` rather than a value comparison, and not for the usual
+;; reason: `(equal? +nan.0 +nan.0)` is `#f`, so a list containing a NaN can
+;; never compare equal to itself. The printed form is the only way to state
+;; this row.
+(test-equal "string->number accepts what the reader accepts"
+  "(+inf.0 +nan.0 1+2i #t #t 3/2 31 31 #f #f #f #f)"
+  (written
+    (list (string->number "+inf.0")
+          (string->number "-nan.0")
+          (string->number "1+2i")
+          (exact? (string->number "#e1e400"))
+          (= (string->number "#e1e400") (expt 10 400))
+          (string->number "#e1.5")
+          (string->number "1F" 16)
+          (string->number "#x1F" 10)
+          (string->number "abc")      ; not a number at all
+          (string->number "1 2")      ; two tokens, not one
+          (string->number " 12")      ; leading space is not number syntax
+          (string->number ""))))
+
 ;; ── number->string: what it refuses ─────────────────────────────────────────
 
 ;; **Scoped to Patina: R7RS makes these "an error", which does not require

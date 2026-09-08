@@ -103,6 +103,33 @@
 (test-assert "the cdr of a circular literal is eq? to the pair"
   (let ((x '#0=(a . #0#))) (eq? x (cdr x))))
 
+;; ── equal? on cycles, which the header above rests on ──────────────────────
+;;
+;; **Larceny family 2** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs` because this is the file about circular data.
+;;
+;; The header's measurement — `(equal? '#0=(x . #0#) '#0=(x . #0#))` — is the
+;; easy case: same shape, same period. These are the hard one, and the reason
+;; the claim is worth testing at all. Two *distinct* cyclic lists with the same
+;; unrolling, period 2 against period 4: `(equal? a a)` would be fine because
+;; `eq?` short-circuits, and this looped forever until 2026-08-24, when an
+;; explicit worklist with a lazily allocated visited set replaced the walk.
+(test-assert "equal? terminates on two distinct cyclic lists"
+  (let ((a (list 1 2)) (b (list 1 2 1 2)))
+    (set-cdr! (cdr a) a)
+    (set-cdr! (cdr (cddr b)) b)   ; not cdddr: that is (scheme cxr), not base
+    (equal? a b)))
+
+;; The vector shape of the same defect overflowed the Rust stack rather than
+;; hanging, which is why Larceny's `read` suite died instead of stalling. The
+;; negative matters as much as the positive: a cycle of a different shape must
+;; *not* compare equal.
+(test-equal "and on cyclic vectors, including the negative" '(#t #f #f)
+  (let* ((cyc (lambda (x) (let ((v (vector x #f))) (vector-set! v 1 v) v)))
+         (a (list 1 2)))
+    (set-cdr! (cdr a) a)
+    (list (equal? (cyc 1) (cyc 1)) (equal? (cyc 1) (cyc 2)) (equal? a (cyc 1)))))
+
 ;; ── Data with no sharing is untouched by any of it ──────────────────────────
 
 (test-equal "an ordinary list gets no label" "(1 2 3)" (written '(1 2 3)))

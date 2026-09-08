@@ -67,56 +67,6 @@ fn a_nested_include_resolves_relative_to_the_including_file() {
 }
 
 // ---------------------------------------------------------------------------
-// Family 2 — `equal?` does not terminate on circular structures (R7RS 6.1)
-// ---------------------------------------------------------------------------
-
-/// Two distinct cyclic lists with the same unrolling: period 2 against
-/// period 4. `(equal? a a)` is fine because `eq?` short-circuits; this one
-/// looped forever until 2026-08-24 (an explicit worklist with a lazily
-/// allocated visited set now).
-#[test]
-fn equal_terminates_on_two_distinct_cyclic_lists() {
-    assert_program_eval_to(
-        "(define a (list 1 2))       (set-cdr! (cdr a) a)
-         (define b (list 1 2 1 2))   (set-cdr! (cdddr b) b)
-         (equal? a b)",
-        "#t",
-    );
-}
-
-/// The vector shape of the same defect overflowed the Rust stack instead of
-/// hanging, which is why Larceny's `read` suite died rather than stalling.
-/// Also asserts the negative: a cycle of a different shape is not equal.
-#[test]
-fn equal_terminates_on_two_distinct_cyclic_vectors() {
-    assert_program_eval_to(
-        "(define (cyc x) (let ((v (vector x #f))) (vector-set! v 1 v) v))
-         (define a (list 1 2)) (set-cdr! (cdr a) a)
-         (list (equal? (cyc 1) (cyc 1)) (equal? (cyc 1) (cyc 2)) (equal? a (cyc 1)))",
-        "(#t #f #f)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 3 — `delay-force` is not iterative (R7RS 7.3)
-// ---------------------------------------------------------------------------
-
-/// The reason `delay-force` exists is that a chain of them runs in bounded
-/// space. Ours recursed per link and overflowed at a hundred thousand until
-/// 2026-08-24 (R7RS 7.3's iterative `force`, inner promise aliased to the
-/// outer's box).
-#[test]
-fn a_long_delay_force_chain_runs_in_bounded_space() {
-    assert_program_eval_to(
-        "(import (scheme lazy))
-         (define (count-down n)
-           (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
-         (force (count-down 100000))",
-        "done",
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Family 4 — VM: a discarded call to `values` poisons the next
 //            `call-with-values`
 // ---------------------------------------------------------------------------
@@ -226,51 +176,6 @@ fn case_mapping_of_characters_without_a_single_character_mapping() {
                (char-ci<? #\\ß #\\t)
                (string-ci=? \"Straße\" \"STRASSE\"))",
         "(#\\ß #\\ß #\\ß #\\i #\\ᾈ #t #t #f #t)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 7 — `string->number` gaps the reader does not have
-// ---------------------------------------------------------------------------
-
-/// The reader accepts `+inf.0`, `-nan.0`, `1+2i` and `#e1e400` as literals;
-/// `string->number` rejected the first three and read the last through a
-/// float. Fixed 2026-08-24: `string->number` *is* the reader's number
-/// syntax now (the whole string must lex as one number token), and `#e` on
-/// a decimal is the exact value of the text.
-#[test]
-fn string_to_number_accepts_what_the_reader_accepts() {
-    assert_program_eval_to(
-        "(list (string->number \"+inf.0\")
-               (string->number \"-nan.0\")
-               (string->number \"1+2i\")
-               (exact? (string->number \"#e1e400\"))
-               (= (string->number \"#e1e400\") (expt 10 400))
-               (string->number \"#e1.5\")
-               (string->number \"1F\" 16)
-               (string->number \"#x1F\" 10)
-               (string->number \"abc\")
-               (string->number \"1 2\")
-               (string->number \" 12\")
-               (string->number \"\"))",
-        "(+inf.0 +nan.0 1+2i #t #t 3/2 31 31 #f #f #f #f)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 8 — `rationalize` at the infinities (R7RS 6.2.6)
-// ---------------------------------------------------------------------------
-
-/// `(rationalize +inf.0 3)` is `+inf.0` and `(rationalize 3 +inf.0)` is
-/// `0.0` — the second is exact `0` today, the first `0.0`.
-///
-/// Fixed 2026-08-24.
-#[test]
-fn rationalize_with_an_infinite_argument() {
-    assert_program_eval_to(
-        "(import (scheme inexact))
-         (list (rationalize +inf.0 3) (rationalize 3 +inf.0) (rationalize -inf.0 1))",
-        "(+inf.0 0.0 -inf.0)",
     );
 }
 

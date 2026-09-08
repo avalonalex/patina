@@ -213,6 +213,23 @@
 (test-equal "promises can be held in a data structure" 1
   (force (car promise-list)))
 
+;; **Larceny family 3** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs`.
+;;
+;; The reason `delay-force` exists at all is that a chain of them runs in
+;; bounded space — that is the whole of R7RS §7.3's argument for the form. Ours
+;; recursed per link and overflowed at a hundred thousand until 2026-08-24,
+;; when `force` became the report's iterative version with the inner promise
+;; aliased to the outer's box.
+;;
+;; A regression here aborts the process rather than failing the row, so it is
+;; ordered late in the file for the same reason `data/circular-data.scm`'s
+;; stack rows are last.
+(define (count-down n)
+  (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
+(test-equal "a long delay-force chain runs in bounded space" 'done
+  (force (count-down 100000)))
+
 ;; ── The examples R7RS gives ─────────────────────────────────────────────────
 ;;
 ;; §6.10's own text, kept verbatim even where a row above already covers the

@@ -148,6 +148,17 @@
                      (rationalize 314159/100000 1/100) (rationalize 3/2 1/10)
                      (rationalize 333/1000 1/100))))
 
+;; **Larceny family 8** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs` to sit beside the `rationalize` row above.
+;;
+;; R7RS §6.2.6 at the infinities: `(rationalize +inf.0 3)` is `+inf.0`, and
+;; `(rationalize 3 +inf.0)` is `0.0` — inexact, because the tolerance is. The
+;; exactness is the point of writing these rather than comparing them: an exact
+;; `0` would be a different answer. Fixed 2026-08-24.
+(test-equal "rationalize at the infinities" '("+inf.0" "0.0" "-inf.0")
+  (map written (list (rationalize +inf.0 3) (rationalize 3 +inf.0)
+                     (rationalize -inf.0 1))))
+
 ;; ── Float predicates ───────────────────────────────────────────────────────
 
 (test-equal "finite?" '(#t #t #t #f #f #f)
