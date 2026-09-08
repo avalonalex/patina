@@ -63,6 +63,12 @@ cargo test --all --lib --tests
 # Integration tests only
 cargo test --package patina-tests
 
+# The suite files under chibi and Gauche, checked against the divergence
+# register (crates/patina-tests/tests/scheme/DIVERGENCES.tsv). Run it after
+# touching any tests/scheme/*.scm; a missing oracle is skipped loudly.
+./scripts/run_suite_oracles.sh
+./scripts/run_suite_oracles.sh --list      # what they answer, checking nothing
+
 # Larceny's R7RS suites (second opinion; not vendored — LGPL — so this runs
 # from ~/Project/reference/larceny, which the script tells you how to fetch)
 ./scripts/run_larceny_tests.sh            # R7RS-small + Red edition, VM

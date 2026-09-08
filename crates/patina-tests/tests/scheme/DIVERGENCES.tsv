@@ -1,0 +1,84 @@
+# The oracle divergence register — #193 Phase 3.
+#
+# Every row here is a place where an external implementation answers a suite
+# row differently from Patina, or cannot run a file at all. `scripts/
+# run_suite_oracles.sh` runs the oracles and holds them to exactly this list:
+# an unregistered divergence fails, and so does a registered one that stops
+# appearing.
+#
+# WHY A CLASSIFIED REGISTER RATHER THAN A TALLY. A count says "3 rows differ"
+# and gives no signal about who should change. Worse, gating on the oracles'
+# own numbers quietly promotes "chibi says X" from commentary to constraint,
+# and the natural repair for a chibi bugfix breaking our build becomes "edit
+# the number". The class is what stops that: an `oracle-defect` row is a record
+# that someone investigated and concluded the *oracle* is wrong, so nobody
+# later "fixes" Patina to match it.
+#
+# The suite rows themselves always assert Patina's answer. Expected values come
+# from the specification or from intended behaviour — never from asking an
+# oracle what it prints. The oracles are consulted afterwards, to explain a
+# difference. That polarity is the thing that keeps their bugs out of our
+# tests, and it is worth more than any check in this directory.
+#
+# CLASSES
+#   latitude            R7RS permits both answers. Nobody is wrong.
+#   spec-silent         The standard does not say. Often a deliberate choice on
+#                       our side, and the note says which way the field splits.
+#   oracle-defect       We investigated and believe the oracle is wrong. These
+#                       are the candidates for an upstream bug report; the note
+#                       must carry the evidence, not an impression, and should
+#                       name the Patina issue tracking it so the finding
+#                       survives independently of this line. Filing upstream is
+#                       a separate, deliberate decision — the class does not
+#                       oblige anyone to open someone else's ticket.
+#   patina-defect       We are wrong. Quarantine it with `test-expect-fail` in
+#                       the file so it self-retires, and say so in the note.
+#   needs-investigation Not yet classified. A row may sit here, but not
+#                       silently: it is the class that should shrink.
+#
+# A `row` of `*` means the file does not complete on that oracle at all. It is
+# a claim about the whole pair, so a pair cannot have both a `*` and named
+# rows — the lane would resolve that silently in favour of `*` and check the
+# named rows never. `scheme_suite.rs` rejects the combination.
+#
+# WHY CHEZ APPEARS IN NOTES BUT NOT AS AN ORACLE. Six notes cite Chez, and it
+# is load-bearing: it is what turned the `(force 42)` candidate from a suspected
+# chibi defect into a 2-2 split, and it supplies the third round-tripping
+# spelling in the one oracle-defect row. It is nonetheless not a lane oracle,
+# and cannot be one — Chez 10.3.0 has no R7RS library system, so
+# `(import (scheme base) (srfi 64))` fails outright and it cannot run a single
+# file in this suite. Chez evidence is therefore gathered by hand, in plain
+# Chez syntax, and lives only in these notes. Treat it as dated the day the
+# note was written; nothing re-measures it.
+#
+# FORMAT: file <TAB> oracle <TAB> row <TAB> class <TAB> note
+# The row must match a test name in the file verbatim; `scheme_suite.rs`'s
+# `every_registered_divergence_names_a_real_row` checks that, so a renamed row
+# cannot leave a stale entry behind — and that check needs no oracle installed.
+
+control/callability.scm	chibi	*	incomplete	chibi loops forever on one of the programs in this file; the file's own comment names the row. Gauche runs the whole file and arbitrates it, so the coverage is not lost.
+control/callability.scm	gauche	with-exception-handler rejects a non-procedure handler	spec-silent	R7RS leaves a non-procedure handler unspecified. Patina and Chez reject it up front; chibi and Gauche accept it and only care once an exception is raised. The file records this as a deliberate choice so nobody matches Patina to chibi without knowing Chez sits on the other side.
+control/callability.scm	gauche	catchable: handler is not a procedure	spec-silent	The guarded half of the row above, same choice.
+control/internal-escape-boundaries.scm	chibi	*	incomplete	chibi cannot survive the deep dynamic-wind/continuation shapes this file is about. Gauche completes it, 11 of 11.
+control/wind-thunk-exceptions.scm	chibi	*	incomplete	Same class as internal-escape-boundaries. Gauche completes it, 12 of 12.
+data/circular-data.scm	chibi	a cycle through a quote form terminates	latitude	Whether `(quote x)` is written back as `'x`. R7RS 6.13.3 requires only that output read back as an equivalent datum, and `'x` and `(quote x)` are the same datum. chibi never abbreviates; Gauche abbreviates under `write` and so passes this row.
+data/circular-data.scm	chibi	a label crossing a quote boundary is defined once	latitude	Same difference, under `write-shared`. chibi and Gauche both decline to abbreviate there.
+data/circular-data.scm	gauche	a label crossing a quote boundary is defined once	latitude	Gauche abbreviates under `write` but not under `write-shared`; this row is `write-shared`.
+data/circular-data.scm	chibi	and once in the other order, where the reference comes first	latitude	Same as the row above, with definition and reference swapped.
+data/circular-data.scm	gauche	and once in the other order, where the reference comes first	latitude	Same as the row above.
+data/circular-data.scm	chibi	with nothing labelled, all four abbreviations apply	latitude	The four abbreviations under `write-shared`; chibi abbreviates none of them.
+data/circular-data.scm	gauche	with nothing labelled, all four abbreviations apply	latitude	Gauche does not abbreviate under `write-shared`.
+data/conversion.scm	chibi	number->string takes at most two	spec-silent	R7RS makes an extra argument "an error", which does not require signalling. chibi ignores it and answers; Patina and Gauche raise.
+data/conversion.scm	chibi	string->number takes at most two	spec-silent	Same as the row above.
+data/conversion.scm	gauche	a complex number keeps the exactness of its parts	latitude	Gauche has no exact complex numbers, so it answers "3.0+4.0i" to both halves. R7RS does not require exact complex support.
+reader/at-identifiers.scm	chibi	a bare @ writes as |@|	latitude	chibi writes `@` bare where Patina, Gauche and Chez bar it. R7RS 7.1.1 does not list `@` as an initial, so barring it is the conservative reading; chibi's output still reads back on chibi.
+reader/at-identifiers.scm	chibi	@ inside a datum	latitude	Same difference.
+reader/at-identifiers.scm	chibi	@ and unquote-splicing in one form	latitude	Same difference.
+reader/unicode-identifiers.scm	chibi	display writes a symbol bare, bars and all left off	latitude	R7RS 6.13.3 leaves `display` on symbols to the implementation. chibi bars them; Patina, Gauche and Chez write them bare.
+reader/unicode-identifiers.scm	gauche	write bars a non-ASCII identifier	latitude	Gauche and Chez write non-ASCII identifiers bare under `write`; Patina and chibi bar them. Both read back on the implementation that produced them, which is all 6.13.3 requires.
+reader/unicode-identifiers.scm	gauche	and bars a symbol-category one too	latitude	Same difference.
+reader/vertical-bar-identifiers.scm	chibi	every written symbol reads back as itself	oracle-defect	Tracked in issue #224 (upstream report deliberately deferred). chibi 0.12 writes the symbol `.5` bare, and reading that back yields the NUMBER 0.5 — its own `write` output loses the object. Measured 2026-09-07 on a 5-line program that needs no Patina: patina `|.5|`, Gauche `|.5|`, Chez `\x2E;5` all read back as the symbol; chibi alone does not. The spec argument to make upstream, stated honestly: R7RS 6.13.3 mandates vertical lines only for symbols containing NON-ASCII characters, and `.5` is ASCII, so this is not a violation of that sentence; the case rests on 6.13.3 specifying `write` as producing machine-readable output, which output that changes type on read-back is not. Three implementations avoid it by three different mechanisms. Patina had the same gap and fixed it.
+stdlib/lazy-evaluation.scm	chibi	forcing a non-promise returns it	needs-investigation	`(force 42)`: Patina and Gauche answer 42; chibi and Chez both raise. Measured 2026-09-07. The field splits 2-2, so this is NOT an oracle defect on the evidence available, and no upstream report should be filed until R7RS 4.2.5 is checked against the claim. See also the row-name concern in the file.
+stdlib/lazy-evaluation.scm	chibi	R7RS: forcing a non-promise returns it	needs-investigation	The same claim, in the section that quotes the report. Whether R7RS actually requires it is the open question; if it does not, this row's name overclaims and should be renamed rather than the oracle blamed.
+stdlib/scheme-r5rs.scm	chibi	exact->inexact on a ratnum	needs-investigation	Not yet looked into. Recorded so it is visible rather than absent.
+stdlib/scheme-r5rs.scm	gauche	dynamic-wind (also in (scheme base), so reachability is not what this shows)	needs-investigation	Not yet looked into. Recorded so it is visible rather than absent.

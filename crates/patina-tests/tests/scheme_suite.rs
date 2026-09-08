@@ -541,6 +541,157 @@ fn the_count_form_skips_exactly_the_next_row() {
     );
 }
 
+/// Every row named in the oracle divergence register still exists.
+///
+/// `DIVERGENCES.tsv` records, per file and per external implementation, which
+/// rows that implementation answers differently and why — the register
+/// `scripts/run_suite_oracles.sh` holds the oracles to. That script needs chibi
+/// and Gauche installed; this check does not, and it catches the failure the
+/// script cannot see coming: a row renamed here leaves a register entry
+/// pointing at nothing, and the script would then report the *old* name as "no
+/// longer differs" and the *new* one as unregistered — two confusing lines for
+/// one rename.
+///
+/// It also pins the class vocabulary, because the classes are the point. A
+/// tally says "3 rows differ" and gives no signal about who should change; the
+/// class does, and `oracle-defect` in particular is a record that someone
+/// investigated and concluded the *oracle* is wrong, so nobody later matches
+/// Patina to it. A typo'd class silently leaves a row unclassified.
+#[test]
+fn every_registered_divergence_names_a_real_row() {
+    const CLASSES: &[&str] = &[
+        "latitude",
+        "spec-silent",
+        "oracle-defect",
+        "patina-defect",
+        "needs-investigation",
+        "incomplete",
+    ];
+    let path = scheme_dir().join("DIVERGENCES.tsv");
+    let register = read(&path).unwrap_or_else(|e| panic!("{e}"));
+    let listed: Vec<&str> = SUITE.iter().map(|(n, _)| *n).collect();
+    let mut seen = 0;
+    // A duplicated entry puts the same row twice into the lane's `expected`
+    // list, and `comm` against one actual occurrence then reports it as "no
+    // longer differs" — a row that in fact still does, blamed for a
+    // copy-paste in a hand-edited file.
+    let mut keys: std::collections::HashSet<(String, String, String)> = Default::default();
+    // `*` (the file does not complete here) and a named row are mutually
+    // exclusive claims about the same pair. The lane resolves the conflict
+    // silently in favour of `*` — it takes the incomplete branch and never
+    // looks at the rows — so a carefully classified divergence filed against a
+    // `*` pair is checked by nothing at all, forever, with a plausible-looking
+    // register row to suggest otherwise.
+    let mut starred: std::collections::HashSet<(String, String)> = Default::default();
+    let mut rowed: std::collections::HashSet<(String, String)> = Default::default();
+    // Files are read once each, not once per row: the register is expected to
+    // grow, and it has several rows per file already.
+    let mut texts: std::collections::HashMap<String, String> = Default::default();
+
+    for (n, line) in register.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        assert_eq!(
+            cols.len(),
+            5,
+            "DIVERGENCES.tsv:{} has {} tab-separated columns, expected exactly 5 \
+             (file, oracle, row, class, note): {line:?}. Exactly, not at least: \
+             a tab pasted into the note splits it into further columns, and both \
+             this check and the script's awk read only the fifth — so the note \
+             that carries a class's evidence would silently lose its tail.",
+            n + 1,
+            cols.len()
+        );
+        let (file, oracle, row, class) = (cols[0], cols[1], cols[2], cols[3]);
+        seen += 1;
+
+        assert!(
+            listed.contains(&file),
+            "DIVERGENCES.tsv:{} names {file:?}, which is not in SUITE",
+            n + 1
+        );
+        assert!(
+            CLASSES.contains(&class),
+            "DIVERGENCES.tsv:{} has class {class:?}; the vocabulary is {CLASSES:?}. \
+             The class is what says who should change — an unrecognised one \
+             leaves the row effectively unclassified.",
+            n + 1
+        );
+        assert!(
+            !cols[4].trim().is_empty(),
+            "DIVERGENCES.tsv:{} has an empty note. The note carries the evidence; \
+             a class without one is an assertion.",
+            n + 1
+        );
+        assert!(
+            matches!(oracle, "chibi" | "gauche"),
+            "DIVERGENCES.tsv:{} names oracle {oracle:?}, which the lane cannot run",
+            n + 1
+        );
+
+        assert!(
+            keys.insert((file.to_string(), oracle.to_string(), row.to_string())),
+            "DIVERGENCES.tsv:{} repeats ({file}, {oracle}, {row:?}). A duplicate \
+             makes the lane report that row as \"no longer differs\" while it \
+             still does.",
+            n + 1
+        );
+
+        // `*` means the file does not complete on that oracle, so there is no
+        // row to find — but it is still a register key, so uniqueness is
+        // checked above this point rather than below it.
+        if row == "*" {
+            starred.insert((file.to_string(), oracle.to_string()));
+            assert_eq!(
+                class,
+                "incomplete",
+                "DIVERGENCES.tsv:{} uses `*` (the file does not complete) but is \
+                 classed {class:?}",
+                n + 1
+            );
+            continue;
+        }
+        assert_ne!(
+            class,
+            "incomplete",
+            "DIVERGENCES.tsv:{} is classed `incomplete` but names a row; \
+             `incomplete` is for a whole file, spelled `*`",
+            n + 1
+        );
+
+        rowed.insert((file.to_string(), oracle.to_string()));
+
+        let text = texts
+            .entry(file.to_string())
+            .or_insert_with(|| read(&scheme_dir().join(file)).unwrap_or_else(|e| panic!("{e}")));
+        assert!(
+            text.contains(&format!("\"{row}\"")),
+            "DIVERGENCES.tsv:{} names the row {row:?} in {file}, which has no test \
+             by that name. Renaming a row leaves its register entry pointing at \
+             nothing, and the oracle lane then reports one rename as two \
+             mismatches.",
+            n + 1
+        );
+    }
+
+    let conflicts: Vec<_> = starred.intersection(&rowed).collect();
+    assert!(
+        conflicts.is_empty(),
+        "DIVERGENCES.tsv registers both `*` and named rows for {conflicts:?}. \
+         Those are mutually exclusive claims about the same pair, and the lane \
+         resolves them silently in favour of `*` — so the named rows would be \
+         checked by nothing while looking as though they were."
+    );
+
+    assert!(
+        seen > 0,
+        "DIVERGENCES.tsv parsed to zero entries — a register that records nothing \
+         passes every check in it"
+    );
+}
+
 /// Every `.scm` file on disk is in [`SUITE`], and vice versa.
 ///
 /// Without this a file can be added and never run — passing by absence, which
