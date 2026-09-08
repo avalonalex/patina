@@ -377,10 +377,6 @@ fn a_transformer_free_reference_prefers_the_enclosing_binding_over_a_global() {
 }
 
 // ---------------------------------------------------------------------------
-// Review of #112 — the cases its review found, kept as they were verified
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Family 19 — the macro expander's walkers never returned on a cyclic datum
 // ---------------------------------------------------------------------------
 

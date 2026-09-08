@@ -17,11 +17,28 @@
 (test-begin "line-endings")
 
 ;; Ours ran a `;` comment to the *newline* only, so a datum after a
-;; return-terminated comment was swallowed. Fixed 2026-08-24. The third datum
-;; is behind a return+newline pair, which is one ending rather than two.
-(test-equal "a line comment ends at a bare return" '(first second third #t)
-  (let ((p (open-input-string "first ; comment\rsecond ; another\r\nthird")))
-    (list (read p) (read p) (read p) (eof-object? (read p)))))
+;; return-terminated comment was swallowed. Fixed 2026-08-24.
+;;
+;; Two rows rather than the `.rs` file's one, so that each ending's failure
+;; names itself instead of arriving as a four-element list to diff.
+;;
+;; **`let*`, not argument positions**, and this file is where that rule earned
+;; its place in `docs/TEST_ORGANIZATION.md`. Written as
+;; `(list (read p) (read p) …)` these reads happen right-to-left on chibi, and
+;; the reversed order made chibi look like it failed the return+newline row
+;; too — an `oracle-defect` was very nearly registered against it for a bug in
+;; the test. Sequenced properly, chibi answers that row exactly as we do.
+(define bare-return-port (open-input-string "first ; comment\rsecond"))
+(test-equal "a line comment ends at a bare return" '(first second)
+  (let* ((a (read bare-return-port)) (b (read bare-return-port)))
+    (list a b)))
+
+;; A return+newline is *one* ending, not two, so there is no empty datum
+;; between the comment and `third`. All three implementations agree here.
+(define crlf-port (open-input-string "first ; comment\r\nthird"))
+(test-equal "a return+newline pair is one ending" '(first third #t)
+  (let* ((a (read crlf-port)) (b (read crlf-port)) (c (eof-object? (read crlf-port))))
+    (list a b c)))
 
 ;; A shebang line is a comment by another spelling, and ends the same way.
 (test-equal "a shebang line ends at a bare return" 42

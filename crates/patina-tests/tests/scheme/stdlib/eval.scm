@@ -1,9 +1,14 @@
 ;; `(scheme eval)` — `eval` and `environment`, R7RS §6.12.
 ;;
 ;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (Larceny
-;; family 9, #193 Phase 1). The rest of `(scheme eval)`'s coverage is still in
-;; `scheme_eval.rs`; this file exists so a known-open defect has somewhere to
-;; live that retires itself.
+;; family 9, #193 Phase 1).
+;;
+;; **This file is one row, and that is temporary.** `(scheme eval)`'s other 34
+;; assertions are still in `scheme_eval.rs`, so the library's coverage is split
+;; across two places — worth doing only because a quarantine needs somewhere
+;; that retires itself, and `larceny_families.rs` is being emptied. Migrating
+;; `scheme_eval.rs` closes the split and is what this file is waiting for; when
+;; it lands, this row joins the rest rather than the rest joining this row.
 
 (import (scheme base) (scheme eval) (srfi 64))
 

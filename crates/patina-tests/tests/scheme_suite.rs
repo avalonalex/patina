@@ -103,7 +103,7 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/define-values.scm", 14),
     ("expansion/let-values.scm", 1),
     ("reader/at-identifiers.scm", 11),
-    ("reader/line-endings.scm", 3),
+    ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
     ("stdlib/eval.scm", 1),
