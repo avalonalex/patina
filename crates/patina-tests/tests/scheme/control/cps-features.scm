@@ -5,7 +5,9 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 46 rows of plain R7RS control flow;
+;;   - **this file**, 50 rows: 46 of plain R7RS control flow, plus Larceny
+;;     family 27's four, moved in from `larceny_families.rs` because this is
+;;     where the error objects live;
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
 ;;     `call-with-continuation-prompt`, `abort-current-continuation` — which
 ;;     migrates separately, because measured 2026-09-07 all three procedures are
@@ -24,6 +26,12 @@
 ;; `scripts/run_suite_oracles.sh`, not restated here.
 
 (import (scheme base) (scheme write) (scheme file) (scheme read) (srfi 64))
+
+;; `(scheme stream)` is imported only where it is used. It backs one row, that
+;; row is scoped to Patina, and it is R7RS-large Red rather than R7RS-small —
+;; so importing it unconditionally would put all 49 other rows at the mercy of
+;; a library none of them touch, on any implementation that lacks SRFI 41.
+(cond-expand (patina (import (scheme stream))) (else))
 
 (test-begin "cps-features")
 
@@ -299,6 +307,52 @@
 (test-equal "and its irritants" '(a b c)
   (guard (e ((error-object? e) (error-object-irritants e)) (else 'not-error))
     (error "msg" 'a 'b 'c)))
+
+;; **Larceny family 27** (`scheme_tests/reports/larceny_triage.md`), moved here
+;; from `larceny_families.rs` because this is the error-objects section.
+;;
+;; R7RS §6.11 says the message *should* be a string — advice, not a
+;; requirement — and the R6RS habit of `(error 'who "what")` runs through SRFI
+;; reference implementations, the bundled SRFI 41 among them: all 53 of its
+;; diagnostics were being replaced by a complaint about the argument (found by
+;; review of the SRFI 41 bundle, 2026-08-25). A non-string message is now
+;; accepted on both backends, in the primitive and in each backend's `error`
+;; intercept.
+;;
+;; The irritants are the portable half — all three implementations agree.
+(test-equal "a non-string message keeps its irritants" '(("bar" 1) (2))
+  (list (guard (e (#t (error-object-irritants e))) (error 'foo "bar" 1))
+        (guard (e (#t (error-object-irritants e))) (error "plain" 2))))
+
+;; A string message is unremarkable and portable — kept because the `.rs` row
+;; had it, and because it is the control for the row below.
+(test-equal "a string message and its irritants come back unchanged" '("plain" (2))
+  (list (guard (e (#t (error-object-message e))) (error "plain" 2))
+        (guard (e (#t (error-object-irritants e))) (error "plain" 2))))
+
+;; The *symbol* message is where we differ, and it gets a row to itself so a
+;; failure names the behaviour rather than printing two lists to diff. Measured
+;; 2026-09-07: Patina answers the **string** `"foo"`; chibi and Gauche both
+;; answer the **symbol** `foo`. R7RS says `error-object-message` returns the
+;; message, and says the message should be a string, without saying what
+;; happens when it is not — so converting and passing through are both
+;; defensible. Left unscoped and registered, because a recorded difference is
+;; worth more than a row that vanishes.
+(test-equal "a symbol message comes back as a string" "foo"
+  (guard (e (#t (error-object-message e))) (error 'foo "bar" 1)))
+
+;; **Scoped to Patina: the premise is about our SRFI 41 bundle.** This is the
+;; case family 27 was actually found by — `(stream-car 5)` reaches
+;; `(error 'stream-car …)` inside the bundled SRFI 41, and before the fix that
+;; diagnostic, and 52 others like it, were replaced wholesale by a complaint
+;; about the argument. Every implementation raises here; only the message is
+;; ours. Measured 2026-09-07: chibi says "slot-ref: bad type" and Gauche "pair
+;; required, but got 5", each its own diagnostic from its own stream code, so
+;; there is nothing portable to assert and no corroboration to lose.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "a library's own diagnostic survives to error-object-message"
+  "stream-car"
+  (guard (e (#t (error-object-message e))) (stream-car 5)))
 
 (test-equal "a raised symbol is not an error object" 'not-error
   (guard (e ((error-object? e) 'is-error) (else 'not-error))
