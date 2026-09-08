@@ -261,21 +261,27 @@
     (and (close? (real-part z) (/ (atan 0 -1) 2))
          (not (close? (imag-part z) 0)))))
 
-;; `(atan 0+1i)` is a pole of the principal branch. R7RS defines no value
-;; there, and measured 2026-09-07 the four implementations do four things:
+;; `(atan 0+1i)` is a pole of the principal branch, where R7RS defines no
+;; value. Measured 2026-09-07, the four implementations do four things:
 ;;
 ;;   patina   0.0+inf.0i
 ;;   Gauche   +nan.0+inf.0i
 ;;   Chez     raises — "Exception in atan: undefined for 0+1i"
-;;   chibi    **dies**, and not with a catchable error: the process ends
+;;   chibi    **segfaults** — exit 139, not a catchable error
 ;;
-;; chibi's answer is why this row is scoped. Without the skip it takes the
-;; whole file down and chibi reports nothing at all, because SRFI 64's summary
-;; only prints at `test-end` and it never arrives — 36 passing rows lost to one
-;; that asserts almost nothing. A **reported skip** rather than a bare
-;; `cond-expand` so the row cannot vanish quietly, and verified that `test-skip`
-;; prevents *evaluation* rather than merely discarding the result, which is the
-;; property this depends on.
+;; chibi's answer is why this row is scoped, and its crash is *not* about the
+;; pole: `(atan 0+2i)` is an ordinary point and crashes too. The trigger is an
+;; exact complex with an exact zero real part — `0+1i`, `0-1i`, `0+2i`, `0+3i`,
+;; `(make-rectangular 0 2)` all die, while `1+1i`, `2+0i` and the inexact
+;; `0.0+2.0i` all answer normally. Reproduced on chibi's master at
+;; 0.12-201-g6991e209, not only on the 0.12 release; tracked in issue #227.
+;;
+;; Without the skip it takes the whole file down and chibi reports nothing at
+;; all, because SRFI 64's summary only prints at `test-end` and never arrives —
+;; 36 passing rows lost to one that asserts almost nothing. A **reported skip**
+;; rather than a bare `cond-expand` so the row cannot vanish quietly, and
+;; verified that `test-skip` prevents *evaluation* rather than merely discarding
+;; the result, which is the property this depends on.
 ;;
 ;; The row asserts only that the call returns, exactly as the `.rs` row did.
 (cond-expand (patina) (else (test-skip 1)))
