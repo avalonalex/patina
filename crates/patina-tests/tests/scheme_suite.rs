@@ -576,6 +576,17 @@ fn every_registered_divergence_names_a_real_row() {
     // longer differs" — a row that in fact still does, blamed for a
     // copy-paste in a hand-edited file.
     let mut keys: std::collections::HashSet<(String, String, String)> = Default::default();
+    // `*` (the file does not complete here) and a named row are mutually
+    // exclusive claims about the same pair. The lane resolves the conflict
+    // silently in favour of `*` — it takes the incomplete branch and never
+    // looks at the rows — so a carefully classified divergence filed against a
+    // `*` pair is checked by nothing at all, forever, with a plausible-looking
+    // register row to suggest otherwise.
+    let mut starred: std::collections::HashSet<(String, String)> = Default::default();
+    let mut rowed: std::collections::HashSet<(String, String)> = Default::default();
+    // Files are read once each, not once per row: the register is expected to
+    // grow, and it has several rows per file already.
+    let mut texts: std::collections::HashMap<String, String> = Default::default();
 
     for (n, line) in register.lines().enumerate() {
         if line.starts_with('#') || line.trim().is_empty() {
@@ -632,6 +643,7 @@ fn every_registered_divergence_names_a_real_row() {
         // row to find — but it is still a register key, so uniqueness is
         // checked above this point rather than below it.
         if row == "*" {
+            starred.insert((file.to_string(), oracle.to_string()));
             assert_eq!(
                 class,
                 "incomplete",
@@ -649,7 +661,11 @@ fn every_registered_divergence_names_a_real_row() {
             n + 1
         );
 
-        let text = read(&scheme_dir().join(file)).unwrap_or_else(|e| panic!("{e}"));
+        rowed.insert((file.to_string(), oracle.to_string()));
+
+        let text = texts
+            .entry(file.to_string())
+            .or_insert_with(|| read(&scheme_dir().join(file)).unwrap_or_else(|e| panic!("{e}")));
         assert!(
             text.contains(&format!("\"{row}\"")),
             "DIVERGENCES.tsv:{} names the row {row:?} in {file}, which has no test \
@@ -659,6 +675,15 @@ fn every_registered_divergence_names_a_real_row() {
             n + 1
         );
     }
+
+    let conflicts: Vec<_> = starred.intersection(&rowed).collect();
+    assert!(
+        conflicts.is_empty(),
+        "DIVERGENCES.tsv registers both `*` and named rows for {conflicts:?}. \
+         Those are mutually exclusive claims about the same pair, and the lane \
+         resolves them silently in favour of `*` — so the named rows would be \
+         checked by nothing while looking as though they were."
+    );
 
     assert!(
         seen > 0,

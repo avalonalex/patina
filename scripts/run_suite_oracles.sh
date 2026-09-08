@@ -42,11 +42,16 @@ set -eo pipefail
 
 cd "$(dirname "$0")/.."
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-DIM='\033[2m'
-NC='\033[0m'
+# Colour and the progress line are for a person watching. Redirected — a log,
+# a CI job, the `> lane.log` someone reaches for when a run is slow — they are
+# carriage returns, erase padding and escape sequences in a file nobody can
+# read. The lane is a candidate for CI, where output is always redirected.
+if [ -t 1 ]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    DIM='\033[2m'; NC='\033[0m'; INTERACTIVE=1
+else
+    RED=''; GREEN=''; YELLOW=''; DIM=''; NC=''; INTERACTIVE=0
+fi
 
 SUITE_DIR="crates/patina-tests/tests/scheme"
 REGISTER="$SUITE_DIR/DIVERGENCES.tsv"
@@ -59,7 +64,8 @@ FILTER=""
 for arg in "$@"; do
     case "$arg" in
         --list) LIST_ONLY=1 ;;
-        -*) echo "unknown option: $arg" >&2; exit 2 ;;
+        --help|-h) sed -n '2,/^$/p' "$0" | sed -e 's/^#//' -e 's/^ //'; exit 0 ;;
+        -*) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
         *) FILTER="$arg" ;;
     esac
 done
@@ -149,9 +155,9 @@ for f in $FILES; do
         # Printed before the run, not after: two chibi pairs loop forever and
         # cost the whole timeout, and a line that only appears on completion
         # makes a 60 s wait look like a hang with nothing to blame it on.
-        printf "  %-42s %-7s ..." "$f" "$oracle"
+        [ "$INTERACTIVE" = 1 ] && printf "  %-42s %-7s ..." "$f" "$oracle"
         out=$(cd "$WORK" && run_oracle "$oracle" "$REPO/$SUITE_DIR/$f")
-        printf "\r%*s\r" 72 ""
+        [ "$INTERACTIVE" = 1 ] && printf "\r%*s\r" 72 ""
         pass=$(echo "$out" | grep -oE '# of expected passes +[0-9]+' | grep -oE '[0-9]+$' || true)
         fails=$(echo "$out" | grep -oE '# of unexpected failures +[0-9]+' | grep -oE '[0-9]+$' || true)
         skips=$(echo "$out" | grep -oE '# of skipped tests +[0-9]+' | grep -oE '[0-9]+$' || true)
@@ -225,7 +231,24 @@ if [ "$LIST_ONLY" = 1 ]; then
     echo -e "${DIM}--list: reported $checked file/oracle pairs, checked nothing.${NC}"
     exit 0
 fi
+# How much of the register this run could not look at. A green line that does
+# not say "and half the register went unchecked" is the same silence the
+# smoke test above exists to prevent, one level up.
+unchecked=0
+for o in chibi gauche; do
+    case " ${ORACLES[*]} " in
+        *" $o "*) ;;
+        *) n=$(awk -F'\t' -v o="$o" '!/^#/ && NF>=5 && $2==o' "$REPO/$REGISTER" | wc -l | tr -d ' ')
+           unchecked=$((unchecked + n))
+           echo -e "${YELLOW}$n register row(s) for $o went unchecked — it is not installed.${NC}" ;;
+    esac
+done
+
 if [ "$problems" -eq 0 ]; then
+    if [ "$unchecked" -gt 0 ]; then
+        echo -e "${YELLOW}PARTIAL: the oracles that ran match the register${NC} ($checked pairs, ${ORACLES[*]}), but $unchecked row(s) were not checked at all."
+        exit 0
+    fi
     echo -e "${GREEN}Oracle divergences match the register${NC} ($checked file/oracle pairs, oracles: ${ORACLES[*]})"
     exit 0
 fi

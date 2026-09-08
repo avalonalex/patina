@@ -36,7 +36,20 @@
 #   needs-investigation Not yet classified. A row may sit here, but not
 #                       silently: it is the class that should shrink.
 #
-# A `row` of `*` means the file does not complete on that oracle at all.
+# A `row` of `*` means the file does not complete on that oracle at all. It is
+# a claim about the whole pair, so a pair cannot have both a `*` and named
+# rows — the lane would resolve that silently in favour of `*` and check the
+# named rows never. `scheme_suite.rs` rejects the combination.
+#
+# WHY CHEZ APPEARS IN NOTES BUT NOT AS AN ORACLE. Six notes cite Chez, and it
+# is load-bearing: it is what turned the `(force 42)` candidate from a suspected
+# chibi defect into a 2-2 split, and it supplies the third round-tripping
+# spelling in the one oracle-defect row. It is nonetheless not a lane oracle,
+# and cannot be one — Chez 10.3.0 has no R7RS library system, so
+# `(import (scheme base) (srfi 64))` fails outright and it cannot run a single
+# file in this suite. Chez evidence is therefore gathered by hand, in plain
+# Chez syntax, and lives only in these notes. Treat it as dated the day the
+# note was written; nothing re-measures it.
 #
 # FORMAT: file <TAB> oracle <TAB> row <TAB> class <TAB> note
 # The row must match a test name in the file verbatim; `scheme_suite.rs`'s
