@@ -82,3 +82,14 @@ stdlib/lazy-evaluation.scm	chibi	forcing a non-promise returns it	needs-investig
 stdlib/lazy-evaluation.scm	chibi	R7RS: forcing a non-promise returns it	needs-investigation	The same claim, in the section that quotes the report. Whether R7RS actually requires it is the open question; if it does not, this row's name overclaims and should be renamed rather than the oracle blamed.
 stdlib/scheme-r5rs.scm	chibi	exact->inexact on a ratnum	needs-investigation	Not yet looked into. Recorded so it is visible rather than absent.
 stdlib/scheme-r5rs.scm	gauche	dynamic-wind (also in (scheme base), so reachability is not what this shows)	needs-investigation	Not yet looked into. Recorded so it is visible rather than absent.
+data/numeric-operations.scm	chibi	sqrt is inexact even for exact squares	patina-defect	Issue #225. Patina returns 2.0/3.0/0.0 for exact perfect squares; chibi and Gauche both return the exact 2/3/0, which R7RS 6.2.6 asks for. Our gap, corroborated 2-0. The row pins current behaviour, so fixing sqrt will fail it - that is the intended signal, not a quarantine.
+data/numeric-operations.scm	gauche	sqrt is inexact even for exact squares	patina-defect	Issue #225, same as the chibi row: Gauche also returns exact.
+data/numeric-operations.scm	chibi	magnitude is inexact even for a 3-4-5 triangle	patina-defect	Issue #225. (magnitude 5) is 5.0 here and the exact 5 on both oracles - the same exactness gap as sqrt.
+data/numeric-operations.scm	gauche	magnitude is inexact even for a 3-4-5 triangle	patina-defect	Issue #225, same as the chibi row.
+data/numeric-operations.scm	chibi	sqrt of a negative, and both branch cuts	patina-defect	Issue #225 again, on the complex side: chibi answers the exact 0+i to (sqrt -1) where we give 0.0+1.0i.
+data/numeric-operations.scm	chibi	make-rectangular	latitude	Elision only: chibi writes (make-rectangular 0 1) as 0+i where we elide the exact zero real part to +i. Both read back as the same number, and data/conversion.scm already records our elision rule.
+data/numeric-operations.scm	gauche	make-rectangular	latitude	Gauche has no exact complex numbers, so every part arrives inexact - 3.0+4.0i for (make-rectangular 3 4). R7RS does not require exact complex support.
+data/numeric-operations.scm	gauche	real-part	latitude	Gauche has no exact complex numbers, so exact parts come back inexact.
+data/numeric-operations.scm	gauche	imag-part, and that a real number has an exact zero one	latitude	Same as the real-part row: no exact complex numbers in Gauche.
+data/numeric-operations.scm	gauche	ceiling	latitude	Signed zero: IEEE 754 makes ceil(-0.5) equal -0.0 and we preserve it; Gauche answers 0.0. R7RS says nothing about the sign of a zero result.
+data/numeric-operations.scm	gauche	truncate rounds toward zero	latitude	Same signed-zero difference as the ceiling row.
