@@ -26,7 +26,11 @@
 #                       our side, and the note says which way the field splits.
 #   oracle-defect       We investigated and believe the oracle is wrong. These
 #                       are the candidates for an upstream bug report; the note
-#                       must carry the evidence, not an impression.
+#                       must carry the evidence, not an impression, and should
+#                       name the Patina issue tracking it so the finding
+#                       survives independently of this line. Filing upstream is
+#                       a separate, deliberate decision — the class does not
+#                       oblige anyone to open someone else's ticket.
 #   patina-defect       We are wrong. Quarantine it with `test-expect-fail` in
 #                       the file so it self-retires, and say so in the note.
 #   needs-investigation Not yet classified. A row may sit here, but not
@@ -60,7 +64,7 @@ reader/at-identifiers.scm	chibi	@ and unquote-splicing in one form	latitude	Same
 reader/unicode-identifiers.scm	chibi	display writes a symbol bare, bars and all left off	latitude	R7RS 6.13.3 leaves `display` on symbols to the implementation. chibi bars them; Patina, Gauche and Chez write them bare.
 reader/unicode-identifiers.scm	gauche	write bars a non-ASCII identifier	latitude	Gauche and Chez write non-ASCII identifiers bare under `write`; Patina and chibi bar them. Both read back on the implementation that produced them, which is all 6.13.3 requires.
 reader/unicode-identifiers.scm	gauche	and bars a symbol-category one too	latitude	Same difference.
-reader/vertical-bar-identifiers.scm	chibi	every written symbol reads back as itself	oracle-defect	chibi 0.12 writes the symbol `.5` bare, and reading that back yields the NUMBER 0.5 — its own `write` output loses the object. Measured 2026-09-07 on a 5-line program that needs no Patina: patina `|.5|`, Gauche `|.5|`, Chez `\x2E;5` all read back as the symbol; chibi alone does not. The spec argument to make upstream, stated honestly: R7RS 6.13.3 mandates vertical lines only for symbols containing NON-ASCII characters, and `.5` is ASCII, so this is not a violation of that sentence; the case rests on 6.13.3 specifying `write` as producing machine-readable output, which output that changes type on read-back is not. Three implementations avoid it by three different mechanisms. Patina had the same gap and fixed it.
+reader/vertical-bar-identifiers.scm	chibi	every written symbol reads back as itself	oracle-defect	Tracked in issue #224 (upstream report deliberately deferred). chibi 0.12 writes the symbol `.5` bare, and reading that back yields the NUMBER 0.5 — its own `write` output loses the object. Measured 2026-09-07 on a 5-line program that needs no Patina: patina `|.5|`, Gauche `|.5|`, Chez `\x2E;5` all read back as the symbol; chibi alone does not. The spec argument to make upstream, stated honestly: R7RS 6.13.3 mandates vertical lines only for symbols containing NON-ASCII characters, and `.5` is ASCII, so this is not a violation of that sentence; the case rests on 6.13.3 specifying `write` as producing machine-readable output, which output that changes type on read-back is not. Three implementations avoid it by three different mechanisms. Patina had the same gap and fixed it.
 stdlib/lazy-evaluation.scm	chibi	forcing a non-promise returns it	needs-investigation	`(force 42)`: Patina and Gauche answer 42; chibi and Chez both raise. Measured 2026-09-07. The field splits 2-2, so this is NOT an oracle defect on the evidence available, and no upstream report should be filed until R7RS 4.2.5 is checked against the claim. See also the row-name concern in the file.
 stdlib/lazy-evaluation.scm	chibi	R7RS: forcing a non-promise returns it	needs-investigation	The same claim, in the section that quotes the report. Whether R7RS actually requires it is the open question; if it does not, this row's name overclaims and should be renamed rather than the oracle blamed.
 stdlib/scheme-r5rs.scm	chibi	exact->inexact on a ratnum	needs-investigation	Not yet looked into. Recorded so it is visible rather than absent.
