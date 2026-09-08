@@ -5,8 +5,8 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 49 rows: 46 of plain R7RS control flow, plus Larceny
-;;     family 27's three, moved in from `larceny_families.rs` because this is
+;;   - **this file**, 50 rows: 46 of plain R7RS control flow, plus Larceny
+;;     family 27's four, moved in from `larceny_families.rs` because this is
 ;;     where the error objects live;
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
 ;;     `call-with-continuation-prompt`, `abort-current-continuation` — which
@@ -25,8 +25,13 @@
 ;; Divergences are recorded in `DIVERGENCES.tsv` and checked by
 ;; `scripts/run_suite_oracles.sh`, not restated here.
 
-(import (scheme base) (scheme write) (scheme file) (scheme read)
-        (scheme stream) (srfi 64))
+(import (scheme base) (scheme write) (scheme file) (scheme read) (srfi 64))
+
+;; `(scheme stream)` is imported only where it is used. It backs one row, that
+;; row is scoped to Patina, and it is R7RS-large Red rather than R7RS-small —
+;; so importing it unconditionally would put all 49 other rows at the mercy of
+;; a library none of them touch, on any implementation that lacks SRFI 41.
+(cond-expand (patina (import (scheme stream))) (else))
 
 (test-begin "cps-features")
 
@@ -319,16 +324,22 @@
   (list (guard (e (#t (error-object-irritants e))) (error 'foo "bar" 1))
         (guard (e (#t (error-object-irritants e))) (error "plain" 2))))
 
-;; The message itself is not portable, and the divergence is ours: measured
-;; 2026-09-07, Patina answers the **string** `"foo"` where chibi and Gauche
-;; both answer the **symbol** `foo`. R7RS says `error-object-message` returns
-;; the message, and says the message should be a string, without saying what
+;; A string message is unremarkable and portable — kept because the `.rs` row
+;; had it, and because it is the control for the row below.
+(test-equal "a string message and its irritants come back unchanged" '("plain" (2))
+  (list (guard (e (#t (error-object-message e))) (error "plain" 2))
+        (guard (e (#t (error-object-irritants e))) (error "plain" 2))))
+
+;; The *symbol* message is where we differ, and it gets a row to itself so a
+;; failure names the behaviour rather than printing two lists to diff. Measured
+;; 2026-09-07: Patina answers the **string** `"foo"`; chibi and Gauche both
+;; answer the **symbol** `foo`. R7RS says `error-object-message` returns the
+;; message, and says the message should be a string, without saying what
 ;; happens when it is not — so converting and passing through are both
 ;; defensible. Left unscoped and registered, because a recorded difference is
 ;; worth more than a row that vanishes.
-(test-equal "and Patina reports that message as a string" '("foo" "plain")
-  (list (guard (e (#t (error-object-message e))) (error 'foo "bar" 1))
-        (guard (e (#t (error-object-message e))) (error "plain" 2))))
+(test-equal "a symbol message comes back as a string" "foo"
+  (guard (e (#t (error-object-message e))) (error 'foo "bar" 1)))
 
 ;; **Scoped to Patina: the premise is about our SRFI 41 bundle.** This is the
 ;; case family 27 was actually found by — `(stream-car 5)` reaches

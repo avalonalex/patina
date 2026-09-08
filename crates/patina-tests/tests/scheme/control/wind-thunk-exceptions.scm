@@ -311,18 +311,21 @@
 ;; §6.10's own example) rather than re-derived here.
 ;;
 ;; All three implementations agree on this one.
+;; Top level, like this file's other seven logs: `docs/TEST_ORGANIZATION.md`
+;; asks migrations to keep `define`s where they were, because an internal one
+;; is `letrec*` on a local slot and a row can be moved off the path it was
+;; written for without anything saying so.
+(define extent-log '())
+(define (extent-note x) (set! extent-log (cons x extent-log)))
+(define extent-answer
+  (with-exception-handler
+    (lambda (e) (extent-note 'handler) 'handled)
+    (lambda ()
+      (dynamic-wind (lambda () (extent-note 'in))
+                    (lambda () (raise-continuable 'x))
+                    (lambda () (extent-note 'out))))))
 (test-equal "a handler runs inside the raise's dynamic extent"
   '(handled (in handler out))
-  (let ()
-    (define v '())
-    (define (note x) (set! v (cons x v)))
-    (define answer
-      (with-exception-handler
-        (lambda (e) (note 'handler) 'handled)
-        (lambda ()
-          (dynamic-wind (lambda () (note 'in))
-                        (lambda () (raise-continuable 'x))
-                        (lambda () (note 'out))))))
-    (list answer (reverse v))))
+  (list extent-answer (reverse extent-log)))
 
 (test-end)
