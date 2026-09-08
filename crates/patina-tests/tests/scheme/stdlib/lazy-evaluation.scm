@@ -17,8 +17,9 @@
 ;; identically. It is the shape under test in all three, not per-row state.
 ;;
 ;; Two rows fail under chibi by design — see the note on `force` of a
-;; non-promise. Gauche runs all 30 — 29 from the
-;; migration, plus Larceny family 3's `delay-force` chain, moved in from
+;; non-promise. Gauche runs all 32 — 29 from the
+;; migration, plus Larceny family 3's `delay-force` chain and two promise rows
+;; from that file's "Review of #112" section, all moved in from
 ;; `larceny_families.rs`.
 ;;
 ;; Some rows here are the same claim twice: the "R7RS examples" section repeats
@@ -231,6 +232,32 @@
   (if (= n 0) (delay 'done) (delay-force (count-down (- n 1)))))
 (test-equal "a long delay-force chain runs in bounded space" 'done
   (force (count-down 100000)))
+
+;; **From `larceny_families.rs`'s "Review of #112" section**, moved here
+;; because this is the file about promises.
+;;
+;; A promise's box can be re-pointed by a force nested inside its own thunk —
+;; `promise_update` aliases the inner promise to the outer's box. The outer
+;; force must then look its box up *again* rather than store into the one it
+;; captured before running the thunk. R7RS §7.3's reference gives `(2 2 2)`.
+(define reentrant-n 0)
+(define reentrant-q #f)
+(define reentrant-p (delay-force reentrant-q))
+(set! reentrant-q
+      (delay (let ((me (begin (set! reentrant-n (+ reentrant-n 1)) reentrant-n)))
+               (if (= me 1) (force reentrant-p))
+               me)))
+(test-equal "a force re-entered through its own thunk memoizes once" '(2 2 2)
+  (list (force reentrant-q) (force reentrant-q) (force reentrant-p)))
+
+;; `(delay e)` wraps its value in a *done* promise (R7RS §7.3), so forcing a
+;; delay whose value is a promise yields that promise, not its value. Forcing
+;; through is exactly what `delay-force` is for, which the third element shows.
+(define delayed-seven (delay 7))
+(test-equal "forcing a delay of a promise yields the promise" '(#t #t 5)
+  (list (promise? (force (delay (delay 5))))
+        (eq? (force (delay delayed-seven)) delayed-seven)
+        (force (delay-force (delay 5)))))
 
 ;; ── The examples R7RS gives ─────────────────────────────────────────────────
 ;;

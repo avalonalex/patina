@@ -5,9 +5,9 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 50 rows: 46 of plain R7RS control flow, plus Larceny
-;;     family 27's four, moved in from `larceny_families.rs` because this is
-;;     where the error objects live;
+;;   - **this file**, 51 rows: 46 of plain R7RS control flow, plus Larceny
+;;     family 27's four and one continuation-as-handler row, all moved in from
+;;     `larceny_families.rs`;
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
 ;;     `call-with-continuation-prompt`, `abort-current-continuation` — which
 ;;     migrates separately, because measured 2026-09-07 all three procedures are
@@ -454,5 +454,26 @@
 (test-equal "our type-error message survives into the error object"
   "car expects a pair"
   (guard (ex ((error-object? ex) (error-object-message ex))) (car 'not-a-pair)))
+
+
+;; **From `larceny_families.rs`'s "What `base` found once it ran" section.**
+;;
+;; `with-exception-handler` takes a *continuation* as its handler — R7RS's
+;; idiom for capturing a raised object, `(call/cc (lambda (k)
+;; (with-exception-handler k …)))`. The VM used to reject it ("expected a
+;; procedure, got object") until 2026-08-25: its type check asked for a
+;; procedure, and its generic call path could not invoke a continuation.
+;;
+;; With the object in hand, `read-error?` and `file-error?` answer `#f`, as
+;; R7RS §6.11 requires of them for an error that is neither — and answer `#f`
+;; for non-objects too, rather than raising.
+(test-equal "a continuation is a procedure for with-exception-handler"
+  '(#t "plain" #f #f #f #f obj)
+  (let ((e (call/cc (lambda (k)
+                      (with-exception-handler k (lambda () (error "plain")))))))
+    (list (error-object? e) (error-object-message e)
+          (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x)
+          (call/cc (lambda (k)
+                     (with-exception-handler k (lambda () (raise 'obj))))))))
 
 (test-end)
