@@ -91,5 +91,5 @@ data/numeric-operations.scm	chibi	make-rectangular	latitude	Elision only: chibi 
 data/numeric-operations.scm	gauche	make-rectangular	latitude	Gauche has no exact complex numbers, so every part arrives inexact - 3.0+4.0i for (make-rectangular 3 4). R7RS does not require exact complex support.
 data/numeric-operations.scm	gauche	real-part	latitude	Gauche has no exact complex numbers, so exact parts come back inexact.
 data/numeric-operations.scm	gauche	imag-part, and that a real number has an exact zero one	latitude	Same as the real-part row: no exact complex numbers in Gauche.
-data/numeric-operations.scm	gauche	ceiling	latitude	Signed zero: IEEE 754 makes ceil(-0.5) equal -0.0 and we preserve it; Gauche answers 0.0. R7RS says nothing about the sign of a zero result.
-data/numeric-operations.scm	gauche	truncate rounds toward zero	latitude	Same signed-zero difference as the ceiling row.
+data/numeric-operations.scm	gauche	ceiling	oracle-defect	Signed zero. Gauche's (features) includes ieee-float, and IEEE 754 5.9 specifies ceil(-0.5) = -0; Gauche answers 0.0. Not a representational limit - (- 0.0) is -0.0 there - so it can hold the value and does not produce it. Decisive comparison: chibi does NOT advertise ieee-float and returns -0.0 anyway. Classed oracle-defect on that evidence rather than latitude, which was the first draft's call. Not filed upstream; nobody has checked Gauche's tracker.
+data/numeric-operations.scm	gauche	truncate rounds toward zero	oracle-defect	Same signed-zero defect as the ceiling row, same ieee-float argument.

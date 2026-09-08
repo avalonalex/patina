@@ -14,7 +14,7 @@
 ;; 145 ran on the tree-walker alone — and the VM has been the default backend
 ;; since Phase 2. The driver runs every file on both, so the migration doubles
 ;; their coverage. Measured before writing this file: the VM agrees with the
-;; tree-walker on all 144 extractable cases, so nothing here was hiding a
+;; tree-walker on all 143 of them, so nothing here was hiding a
 ;; divergence — but nothing was looking, either.
 ;;
 ;; **Seven tests asserted on substrings of the printed form** — `result
@@ -42,7 +42,11 @@
 
 (define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
 
-;; A tolerance check, for the values that are only approximately known. `1e-10`
+;; A tolerance check, for the values that are only approximately known. Note
+;; before copying this one elsewhere: `magnitude` puts it in `(scheme complex)`,
+;; so a file that imports only `(scheme base)` and `(scheme inexact)` gets an
+;; undefined variable — and on Patina not even that, until it reaches an oracle
+;; (issue #211). `1e-10`
 ;; is far tighter than the two or three digits the `.rs` substring assertions
 ;; managed, and unlike them it cannot be satisfied by an unrelated number that
 ;; happens to contain the digits.
@@ -254,12 +258,15 @@
 (test-assert "cos of i is cosh 1"
   (close? (real-part (cos 0+1i)) (/ (+ (exp 1) (exp -1)) 2)))
 
-;; asin of a real greater than 1 leaves the real line: the real part is pi/2
-;; and the imaginary part is -arcosh(2).
-(test-assert "asin of 2 is complex"
+;; asin of a real greater than 1 leaves the real line: pi/2 - i*arcosh(2), and
+;; arcosh(2) is ln(2+sqrt 3), which is portable arithmetic rather than a
+;; constant to paste. Named rather than asserted to be merely non-zero: "not
+;; close to 0" is satisfied by any wrong value, and by +nan.0, since `close?`
+;; answers #f there and the `not` then passes the row.
+(test-assert "asin of 2 is pi/2 minus i arcosh 2"
   (let ((z (asin 2)))
     (and (close? (real-part z) (/ (atan 0 -1) 2))
-         (not (close? (imag-part z) 0)))))
+         (close? (imag-part z) (- (log (+ 2 (sqrt 3))))))))
 
 ;; `(atan 0+1i)` is a pole of the principal branch, where R7RS defines no
 ;; value. Measured 2026-09-07, the four implementations do four things:
@@ -285,8 +292,11 @@
 ;; verified that `test-skip` prevents *evaluation* rather than merely discarding
 ;; the result, which is the property this depends on.
 ;;
-;; The row asserts only that the call returns, exactly as the `.rs` row did.
+;; The `.rs` row asserted only that the call returned. Since this one is scoped
+;; to Patina anyway, it can name our answer instead — a scope, a register entry
+;; and an upstream report have all been spent on this row, and `#t` would be
+;; satisfied by any regression that still returned something.
 (cond-expand (patina) (else (test-skip 1)))
-(test-assert "atan of i returns rather than erroring" (begin (atan 0+1i) #t))
+(test-equal "atan of i is our 0.0+inf.0i" "0.0+inf.0i" (written (atan 0+1i)))
 
 (test-end)
