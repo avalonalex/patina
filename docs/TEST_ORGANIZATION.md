@@ -267,6 +267,28 @@ Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
 
+**One exception, and it is narrow: a row an oracle refuses to *compile*.**
+`test-skip` suppresses evaluation, so a row it guards is still read and
+compiled — which is enough to lose the whole file where an implementation
+rejects the program while compiling the form around it. Gauche does exactly
+that to two rows of `expansion/ellipsis.scm`: R7RS §4.3.2 makes a
+`syntax-rules` written where `...` is bound an ordinary three-variable pattern,
+and Gauche instead reports `Pattern variable b is used in wrong level` and
+stops. A `cond-expand` clause that is not selected is never compiled, so there
+the row goes inside one:
+
+```scheme
+(cond-expand
+  (gauche)   ; rejects both rows at compile time — see the header
+  (else (test-equal "the row's name" ...)))
+```
+
+That gives up precisely what the skip form buys: an omitted row reports no
+skip, so the lane sees nothing at all where a skipped row would have said so.
+Pay that only when the alternative is losing the file, and write the omission
+into the file's header — the header is then the only record that the row exists
+and did not run.
+
 **Skip the count, not the name, and put it immediately above its row.** SRFI
 64's `test-skip` takes a count, a name or a predicate; in this suite the count
 is **required**, not merely preferred, because it is the one form a check can

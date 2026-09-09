@@ -3,7 +3,7 @@
 //!
 //! **Being redistributed, not kept.** #193 Phase 1 is moving these rows to the
 //! file about their *subject* rather than about where they were found — see
-//! `docs/TEST_ORGANIZATION.md`'s section on it. 64 rows have become 37; the
+//! `docs/TEST_ORGANIZATION.md`'s section on it. 64 rows have become 32; the
 //! remainder is the macro and hygiene block, plus what genuinely cannot leave
 //! Rust. Two rows that could not are already gone to files that own their
 //! subject: family 1's nested `include` to `include_syntax.rs` and family 10's
@@ -41,37 +41,6 @@ use common::{
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
 
 // ---------------------------------------------------------------------------
-// Family 14 — a shadowed `...` is no longer the ellipsis (R7RS 4.3.2)
-// ---------------------------------------------------------------------------
-
-/// Where `...` is bound as a variable, a `syntax-rules` written in that scope
-/// has no ellipsis: `(_ a b ...)` is a three-variable pattern (R7RS 4.3.2
-/// identifies the ellipsis by binding). chibi, Larceny, Kawa and Sagittarius
-/// agree; Gauche rejects the definition, as Patina used to. Fixed 2026-08-25.
-///
-/// Both halves matter and pull in opposite directions. `swap-first-two` is
-/// written inside the binding, so its `...` is that variable and not an
-/// ellipsis. `first-of` is *generated* by `def-first`, which is defined
-/// outside and escapes an ellipsis into it with `(... ...)`; that one is an
-/// ellipsis, even though the macro it lands in is compiled inside the
-/// binding. Deciding once per macro (#111) got the first and lost the
-/// second. The rule now asks per token, and reads the token's own scopes
-/// when it has an identity of its own — which is what an escaped `(... ...)`
-/// now carries — and the macro's definition scopes otherwise.
-#[test]
-fn a_shadowed_ellipsis_is_an_ordinary_pattern_variable() {
-    let program = "(define-syntax def-first
-                     (syntax-rules ()
-                       ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
-                   (let ((... 'dots))
-                     (define-syntax swap-first-two
-                       (syntax-rules () ((_ a b ...) (list b a ...))))
-                     (def-first first-of)
-                     (list (swap-first-two 1 2 3) (first-of 1 2 3 4)))";
-    assert_program_eval_to(program, "((2 1 3) (1))");
-}
-
-// ---------------------------------------------------------------------------
 // Family 15 — a template's reference to a definition-site local that spells
 //             a keyword is rejected as syntax
 // ---------------------------------------------------------------------------
@@ -96,19 +65,6 @@ fn a_template_may_refer_to_a_definition_site_local_spelled_like_a_keyword() {
                      (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
                      (list (mention-dots 1) (mention-if 2) (my-if #t 'outer-if-is-syntax 'no)))";
     assert_program_eval_to(program, "((1 dots) (2 nineteen) outer-if-is-syntax)");
-}
-
-/// A declared SRFI 46 ellipsis is a *declaration*, so a binding of `...`
-/// around it has no bearing on it. #114 looked the binding up for the
-/// spelling `...` and broke this.
-#[test]
-fn a_declared_ellipsis_is_unaffected_by_a_binding_of_dots() {
-    assert_program_eval_to(
-        "(let ((... 'dots))
-           (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
-           (m3 1 2 3))",
-        "(2 3 1)",
-    );
 }
 
 /// A macro defined at top level generates one used inside `(let ((if …)) …)`.
@@ -236,59 +192,6 @@ fn a_transformer_free_reference_prefers_the_enclosing_binding_over_a_global() {
                         (g (syntax-rules () ((g x) (f x)))))
              (list (f 1) (g 1))))",
         "(1 2)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 19 — the macro expander's walkers never returned on a cyclic datum
-// ---------------------------------------------------------------------------
-
-/// A quoted datum with labels is a legitimate macro argument (Larceny's
-/// `base` suite hands `test` several), and until 2026-08-25 the expander's
-/// identifier scan and scope flip walked the cycle forever — the whole suite
-/// hung at load. Cycles only come from the reader, so a revisited pair holds
-/// no identifiers and is skipped.
-#[test]
-fn a_cyclic_quoted_datum_can_be_a_macro_argument() {
-    assert_program_eval_to(
-        "(define-syntax same? (syntax-rules () ((_ x y) (equal? x y))))
-         (list (same? '#0=(a b . #0#) '#1=(a b a b . #1#))
-               (same? '#2=(a b . #2#) '#3=(a b c . #3#)))",
-        "(#t #f)",
-    );
-}
-
-/// A datum label's scope is the outermost datum it appears in (R7RS 2.4).
-/// The parser that reads a whole program datum by datum (`parse`, used by
-/// the script runner and `eval_program`; `read` builds a fresh parser per
-/// call and never had the problem) kept the table across data and rejected
-/// a reused label — and a `#n#` whose `#n=` never came was left in the
-/// datum as a placeholder object rather than reported.
-#[test]
-fn datum_labels_are_scoped_to_one_datum() {
-    assert_program_eval_to(
-        "(define a '#0=(x . #0#))
-         (define b '#0=(y . #0#))
-         (list (car a) (car b) (eq? a (cdr a)))",
-        "(x y #t)",
-    );
-    assert_program_eval_error("(define a '#0=(x . #0#)) (define b '(y #0# z)) b");
-}
-
-/// The expander's scope flip copies a macro argument pair by pair; the copy
-/// must share where the original shared and close on itself where the
-/// original did — a memo from the first pair — rather than splice the
-/// original's tail in after a budget, which lost `eq?` identity across the
-/// cycle and left `write` a shape it could not print.
-#[test]
-fn a_flipped_cyclic_argument_is_a_closed_copy() {
-    assert_program_eval_to(
-        "(define-syntax both (syntax-rules () ((_ x) (list x x))))
-         (let ((v '#0=(1 . #0#)))
-           (list (eq? v (cdr v))
-                 (let ((w (car (both v)))) (eq? w (cdr w)))
-                 (let ((p (both '#1=(a b . #1#)))) (eq? (car p) (cadr p)))))",
-        "(#t #t #t)",
     );
 }
 
