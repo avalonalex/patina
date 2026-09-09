@@ -294,8 +294,11 @@
 ;; `(make-rectangular 0 2)` all die, while `1+1i`, `2+0i` and the inexact
 ;; `0.0+2.0i` all answer normally. Reproduced on chibi's master at
 ;; 0.12-201-g6991e209, not only on the 0.12 release. Tracked in issue #227 and
-;; filed upstream as ashinn/chibi-scheme#1197; if it is fixed there, this scope
-;; comes off and chibi gains a 37th row.
+;; filed upstream as ashinn/chibi-scheme#1197, where it was **fixed 2026-09-09**
+;; by commit cd989e2e4439, "account for normalization to non-complex in
+;; sexp_complex_atan" (bignum.c). The scope stays until the chibi the lane runs
+;; carries that fix — 0.12.0 as installed does not — and comes off when it does,
+;; at which point chibi arbitrates a 37th row here.
 ;;
 ;; Without the skip it takes the whole file down and chibi reports nothing at
 ;; all, because SRFI 64's summary only prints at `test-end` and never arrives —
