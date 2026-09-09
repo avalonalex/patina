@@ -237,6 +237,24 @@ passed while asserting something else:
   argument evaluation order unspecified and chibi evaluates right to left, so
   `(list (c) (c 5) (c 3) (c))` answers differently there — reporting a
   difference between implementations that is not one.
+- **Write `test-error` with three arguments: `(test-error "name" #t expr)`.**
+  SRFI 64's specifiers are `(test-error [[name] error-type] expr)`, so the
+  two-argument `(test-error "name" expr)` puts the string in the *error-type*
+  position and leaves the row's name `#f`. Measured 2026-09-09: chibi and
+  Gauche then print a bare `FAIL` with no name, which no `DIVERGENCES.tsv` line
+  can match and no reader can trace. Every row in the suite passes `#t`.
+
+  That `#t` is not a placeholder to be improved on later. SRFI 64's reference
+  implementation ignores the error type entirely on an R7RS host — its
+  `(or srfi-34 r7rs)` branch is `(guard (ex (else #t)) expr #f)` — so a
+  `test-error` row asserts only that *something* was raised, on every
+  implementation the lane runs. A row that needs to say *which* error belongs
+  in Rust, where `ErrorClass` can say it. (Patina's bundled copy calls
+  `error-matches?` and discards the result, which is the same behaviour and is
+  deliberate: matching upstream is what keeps a file's answer the same here and
+  on the oracles. The call earns its keep by warning on a type that is neither
+  `#t` nor a predicate — which is how the two-argument slip above announces
+  itself in the log.)
 
 **What still belongs in a `.rs` file**, because a `.scm` file cannot express
 it: a row whose backends give *different values*; a row deliberately asserted

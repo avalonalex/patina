@@ -739,19 +739,6 @@
                        (with-exception-handler
                          (lambda (x)
                            (test-result-set! runner 'actual-error x)
-                           ;; The result is deliberately discarded: any raised
-                           ;; exception passes, whatever `error-type` says.
-                           ;; That is what SRFI 64's reference implementation
-                           ;; does on an R7RS host — its `(or srfi-34 r7rs)`
-                           ;; branch is `(guard (ex (else #t)) expr #f)` and
-                           ;; never looks at the type — so chibi and Gauche
-                           ;; answer a `test-error` row the same way, which is
-                           ;; the parity every file in `tests/scheme` rests on.
-                           ;; The call is kept for its diagnostic: a type that
-                           ;; is neither #t nor a predicate logs a warning
-                           ;; through `on-bad-error-type`, which is how a row
-                           ;; written `(test-error "name" expr)` — the string
-                           ;; landing in the type position — announces itself.
                            (error-matches? x error-type)
                            (k #t))
                          (lambda ()
