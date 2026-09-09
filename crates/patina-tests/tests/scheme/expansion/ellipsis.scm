@@ -86,9 +86,14 @@
 ;; and one file already carries the cost of that. Reporting the reference as a
 ;; keyword rather than a variable was one of the pair gating Larceny's `base`
 ;; at load; fixed 2026-08-25.
+;;
+;; `if` is bound alongside `...` though nothing here refers to it, for the
+;; reason the sibling row in `hygiene.scm` binds `...`: the Rust original had
+;; one `let` binding both and a macro per spelling, so one body had to serve
+;; two keyword-spelled locals. Each half keeps that body.
 (test-equal "a template may refer to a definition-site local spelled ..."
   '(1 dots)
-  (let ((... 'dots))
+  (let ((... 'dots) (if 'nineteen))
     (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
     (mention-dots 1)))
 

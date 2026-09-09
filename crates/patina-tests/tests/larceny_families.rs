@@ -19,17 +19,19 @@
 //! `scheme_tests/reports/larceny_triage.md` (disposable once the queue is
 //! empty); the durable record is Track L PRD §6.
 //!
-//! Pinning follows the crate's conventions:
-//! - a wrong answer both backends agree on is asserted *as-is*, with a message
-//!   saying what to do when it converges (the test fails when the bug is
-//!   fixed, which is the point);
-//! - a backend divergence goes through `assert_divergence`, or explicit
-//!   per-backend assertions when the broken side returns a value rather than
-//!   failing;
-//! - a crash or hang cannot be asserted at all, so those carry the *correct*
-//!   expectation under `#[ignore]` with the reason; run them with
-//!   `cargo test -p patina-tests --test larceny_families -- --ignored` when
-//!   working on the fix, and drop the attribute when they pass.
+//! What is left asserts the *right* answer. The nine rows are families 33 and
+//! 35, which need a `define-library` to have anything private for a template
+//! to reach, and family 40's three, which are genuine backend divergences and
+//! go through `assert_divergence`.
+//!
+//! Two pinning conventions this file used to carry are gone with the rows that
+//! used them, and are recorded here because the shapes recur: **a wrong answer
+//! both backends agree on** was asserted as-is with a note saying what to do
+//! when it converged — family 37 was the last, and its note outlived its own
+//! defect by two weeks, which is the argument for SRFI 64's `test-expect-fail`
+//! and the right answer instead (see `docs/TEST_ORGANIZATION.md`); and **a
+//! crash or hang**, which cannot be asserted at all, carried the correct
+//! expectation under `#[ignore]`. No row here is ignored today.
 
 mod common;
 

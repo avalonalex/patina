@@ -3,12 +3,21 @@
 ;; renamed throughout its scope.
 ;;
 ;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 15,
-;; 36, 37, 38 and 39; #193 Phase 1). Fourteen Rust tests became these
-;; seventeen rows. Its Rust companion `hygiene.rs` keeps the rows that reach
-;; below the language — a backend named explicitly, a scope-set trace, a stage
-;; that must be the one to reject — and `hygiene_matrix.rs` keeps the 28-shape
-;; scoreboard scored against chibi and Racket, which is a different instrument
-;; from a suite file and stays one.
+;; 36, 37, 38 and 39; #193 Phase 1). Fourteen Rust tests became eighteen rows —
+;; the seventeen below, plus one that went to `expansion/ellipsis.scm` for the
+;; reason at the end of this header.
+;;
+;; **The other two hygiene files, and what each is for.**
+;; `hygiene_matrix.rs` is a scoreboard, not a suite: 28 shapes scored against
+;; chibi and Racket, read as a table when a hygiene fix moves a row. It stays
+;; Rust. `hygiene.rs` is 49 tests that predate the shared helpers, and the
+;; honest description is that **44 of them build a tree-walker by hand** and so
+;; never run on the VM at all, while 8 use `assert_program_eval_to` and run
+;; both. That is a gap, not a design — the VM is the default backend, and the
+;; defects families 36 and 40 record are VM-side. Most of those 44 are ordinary
+;; portable value assertions that belong here; converting them is its own job,
+;; and `hygiene.rs`'s header now says so. **Add a new portable hygiene row
+;; here**, where it runs on both backends and both oracles.
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
@@ -16,9 +25,13 @@
 ;;   chibi                     17 pass
 ;;   Gauche                    17 pass
 ;;
-;; **Nothing here diverges**, which is worth saying out loud for a file of
-;; seventeen hygiene rows: every one of these was a live defect in Patina
-;; within the last month, and all three implementations now agree on every one.
+;; **Nothing here diverges**, which is worth saying for a file of seventeen
+;; hygiene rows. Most were live defects in Patina within the last month; three
+;; were not, and the difference matters when reading them. Family 36's
+;; parameter and `let` rows and family 39's row all pass *before* the fixes
+;; they document — the first two because nothing had pinned the shape until PR
+;; #138 broke it with the suite staying green, the third because the right
+;; answer was arriving for the wrong reason. Their comments say which is which.
 ;; The register has no entry for this file.
 ;;
 ;; One row of family 15 is **not** here. It is the same claim as the first row
@@ -46,9 +59,17 @@
 ;; the check for one and could not see the other. Fixed 2026-08-25.
 (define-syntax my-if (syntax-rules () ((_ c a b) (if c a b))))
 
+;; `...` is bound here as well as `if`, though nothing below refers to it. The
+;; Rust original bound both in one `let` and defined a macro per spelling, so
+;; one body had to serve two keyword-spelled locals — the shape that defeats a
+;; decision made once per body, which is how #111 and #114 each got one case
+;; and lost another. The `...` macro is in `expansion/ellipsis.scm`; the
+;; binding stays here so this row keeps the body it was written for. Measured:
+;; Gauche accepts a `syntax-rules` written in this scope as long as no template
+;; *uses* an ellipsis, which is why this costs the file nothing.
 (test-equal "a template may refer to a definition-site local spelled like a keyword"
   '((2 nineteen) outer-if-is-syntax)
-  (let ((if 'nineteen))
+  (let ((... 'dots) (if 'nineteen))
     (define-syntax mention-if (syntax-rules () ((_ a) (list a if))))
     (list (mention-if 2) (my-if #t 'outer-if-is-syntax 'no))))
 
@@ -56,13 +77,13 @@
 ;; inside `(let ((if …)) …)`. The generated template's `if` came from the
 ;; generator, where `if` is the special form, and must stay so. #114 captured
 ;; it.
-(define-syntax def-mid-in-let
+(define-syntax def-mid
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ c) (if c 'yes 'no)))))))
 
 (test-equal "a generated macro keeps its keywords inside a binding of that name"
   'yes
-  (let ((if 'shadowed)) (def-mid-in-let mid5) (mid5 #t)))
+  (let ((if 'shadowed)) (def-mid mid5) (mid5 #t)))
 
 ;; The same, with the binding coming from a `define` shorthand parameter rather
 ;; than a `let` — the case with no `let` to give it a scope. Taking the
@@ -71,11 +92,9 @@
 ;; it to a plain `define`, so the marker for the parameter became a
 ;; name-visible global that shadowed the special form for every reference,
 ;; macro-introduced ones included. The `fv` half is the same fault reached
-;; through an internal definition instead of a parameter.
-(define-syntax def-mid
-  (syntax-rules ()
-    ((_ n) (define-syntax n (syntax-rules () ((_ c) (if c 'yes 'no)))))))
-
+;; through an internal definition instead of a parameter. One generator serves
+;; both rows — they differ only in where the shadowing binding comes from, and
+;; a second copy of it would obscure that.
 (def-mid mid)
 
 (define (shorthand-param if) (mid #t))
