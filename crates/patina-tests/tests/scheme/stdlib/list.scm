@@ -20,13 +20,27 @@
 
 (test-begin "list")
 
-(test-equal "SRFI 1's n-ary procedures walk more than one list"
-  '(((1 4) (2 5) (3 6)) 10 #t yes (9 27) 1)
-  (list (zip '(1 2 3) '(4 5 6))
-        (fold + 0 '(1 2) '(3 4))
-        (every < '(1 2) '(3 4))
-        (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4))
-        (filter-map (lambda (x y) (and (number? x) (* x y))) '(a 1 b 3) '(9 9 9 9))
-        (list-index = '(1 2 3) '(9 2 9))))
+;; One row each rather than the `.rs` file's single six-element list. They
+;; share a cause, which the comment above records — but they are six separately
+;; implemented procedures, and a later regression need not be in the shared
+;; cause. Packed together, a break in `filter-map` alone prints a six-element
+;; list for the reader to scan; apart, the failure names itself.
+(test-equal "zip walks two lists" '((1 4) (2 5) (3 6))
+  (zip '(1 2 3) '(4 5 6)))
+
+(test-equal "fold walks two lists" 10
+  (fold + 0 '(1 2) '(3 4)))
+
+(test-equal "every walks two lists" #t
+  (every < '(1 2) '(3 4)))
+
+(test-equal "any walks two lists" 'yes
+  (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4)))
+
+(test-equal "filter-map walks two lists" '(9 27)
+  (filter-map (lambda (x y) (and (number? x) (* x y))) '(a 1 b 3) '(9 9 9 9)))
+
+(test-equal "list-index walks two lists" 1
+  (list-index = '(1 2 3) '(9 2 9)))
 
 (test-end)

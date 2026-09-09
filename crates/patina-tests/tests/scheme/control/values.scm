@@ -14,9 +14,12 @@
 ;; rule out in four places and one copy special-cased zero. Both were fixed on
 ;; 2026-08-25, and one `Heap::values_from` now serves every path.
 ;;
-;; A neighbour lives in `control/cps-features.scm` — "a continuation can be
-;; handed multiple values" — which is registered as a Gauche divergence and so
-;; stays where its register entry points.
+;; The row below it, "a continuation can be handed multiple values", came from
+;; `cps-features.scm` in the same change. It was nearly left there because it
+;; carries a `DIVERGENCES.tsv` entry and moving it means editing the register —
+;; which is placement by bookkeeping rather than by subject, and the same
+;; mistake this whole redistribution exists to undo. The register edit is one
+;; line, and `every_registered_divergence_names_a_real_row` catches a stale one.
 
 (import (scheme base) (srfi 64))
 
@@ -47,6 +50,16 @@
 ;; procedures unusable there; see `stdlib/list.scm`.
 (test-equal "a continuation invoked with two values delivers them" '(4 5)
   (call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list))
+
+;; The same claim reached the other way: a `values` object handed to a
+;; continuation, rather than two arguments. Gauche delivers only the first —
+;; see the register. The `.rs` row this came from compared "1\n2\n3", which was
+;; the harness rendering a values object rather than anything a program can
+;; see; `call-with-values` is how a program asks.
+(test-equal "a continuation can be handed multiple values" '(1 2 3)
+  (call-with-values
+    (lambda () (call-with-current-continuation (lambda (k) (k (values 1 2 3)))))
+    list))
 
 ;; Zero is the count the rule's four copies disagreed about: the tree-walker
 ;; gave `(#<unspecified>)` for the first of these until 2026-08-25.

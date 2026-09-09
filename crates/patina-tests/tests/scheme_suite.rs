@@ -91,11 +91,11 @@ use std::path::{Path, PathBuf};
 const SUITE: &[(&str, i64)] = &[
     ("control/callability.scm", 26),
     ("control/case-lambda.scm", 20),
-    ("control/cps-features.scm", 51),
+    ("control/cps-features.scm", 50),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
     ("control/tail-recursion.scm", 36),
-    ("control/values.scm", 4),
+    ("control/values.scm", 5),
     ("control/wind-thunk-exceptions.scm", 14),
     ("data/circular-data.scm", 31),
     ("data/case-mapping.scm", 2),
@@ -110,7 +110,7 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/vertical-bar-identifiers.scm", 32),
     ("stdlib/eval.scm", 1),
     ("stdlib/lazy-evaluation.scm", 32),
-    ("stdlib/list.scm", 1),
+    ("stdlib/list.scm", 6),
     ("stdlib/process-context.scm", 12),
     ("stdlib/scheme-r5rs.scm", 20),
 ];
@@ -173,8 +173,22 @@ fn run_on<B: Backend>(
     // exists precisely to check that quasiquote survives it — so the driver
     // must not depend on any of them.
     //
-    // Five evaluations rather than one, each returning a bare integer: no
-    // constructor, nothing a file's import set can redirect.
+    // Five evaluations rather than one, each returning a bare integer. What
+    // that buys precisely: the read no longer depends on a *constructor*,
+    // which is the kind of name a file is most likely to rebind — SRFI 101
+    // exports `list`, `append` and `quote`, and a numeric library could
+    // plausibly export others. It is not immunity. SRFI 64's own accessors
+    // are ordinary identifiers too, and a file that shadowed
+    // `test-runner-pass-count` would still fool this; nothing in the suite
+    // does, and a library that exported those names would be a strange one.
+    //
+    // The runner is bound once, into a name the driver chooses, so the five
+    // reads are five fields of one object rather than five independent
+    // lookups of a parameter the file has just had a chance to disturb.
+    interp
+        .eval_program("(define %suite-runner (test-runner-current))")
+        .map_err(|e| format!("[{label}] could not capture the runner: {e}"))?;
+
     let mut nums = [0i64; 5];
     for (slot, accessor) in nums.iter_mut().zip([
         "test-runner-pass-count",
@@ -184,7 +198,7 @@ fn run_on<B: Backend>(
         "test-runner-skip-count",
     ]) {
         let value = interp
-            .eval_program(&format!("({accessor} (test-runner-current))"))
+            .eval_program(&format!("({accessor} %suite-runner)"))
             .map_err(|e| format!("[{label}] could not read {accessor}: {e}"))?;
         let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
             value,
