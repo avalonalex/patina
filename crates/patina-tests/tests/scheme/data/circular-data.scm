@@ -8,7 +8,9 @@
 ;; `larceny_families.rs` because this is the file about circular data: family
 ;; 2's three, the record-cycle row from its "Review of #112" section, and
 ;; family 19's five, which are the same data seen by the macro expander rather
-;; than by the reader or the writer (a section of their own, below). The arithmetic for the 27 is worth spelling out: the loop's eight
+;; than by the reader or the writer (a section of their own, below).
+;;
+;; The arithmetic for the 27 is worth spelling out: the loop's eight
 ;; executions become four named `declines` rows plus one combined `applies` row,
 ;; the standalone `quote`-declines test the loop already covered is gone as a
 ;; duplicate, and one row is new — the portable half of the error-object claim,
