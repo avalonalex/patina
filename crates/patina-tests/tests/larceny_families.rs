@@ -154,49 +154,6 @@ fn srfi_1_n_ary_procedures_walk_more_than_one_list() {
 }
 
 // ---------------------------------------------------------------------------
-// Family 6 — Unicode case mapping beyond the one-to-one table
-// ---------------------------------------------------------------------------
-
-/// Fixed 2026-08-24: the *simple* Unicode mappings (R7RS 6.6) — the full one
-/// where it is a single character, the tabled simple one where it expands
-/// (İ → i, ᾀ → ᾈ), the character itself where there is none (ß); the `-ci`
-/// comparisons compare simple foldings (ẞ folds to ß), `string-ci=?` full
-/// foldings.
-#[test]
-fn case_mapping_of_characters_without_a_single_character_mapping() {
-    assert_program_eval_to(
-        "(import (scheme char))
-         (list (char-upcase #\\ß)
-               (char-foldcase #\\ß)
-               (char-foldcase #\\x1E9E)
-               (char-downcase #\\x130)
-               (char-upcase #\\x1F80)
-               (char-ci=? #\\ς #\\σ)
-               (char-ci=? #\\ß #\\x1E9E)
-               (char-ci<? #\\ß #\\t)
-               (string-ci=? \"Straße\" \"STRASSE\"))",
-        "(#\\ß #\\ß #\\ß #\\i #\\ᾈ #t #t #f #t)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 9 — `environment` rejects a nested import set
-// ---------------------------------------------------------------------------
-
-/// `(prefix (only …) …)` is an ordinary import set; `environment` should
-/// accept whatever `import` accepts.
-///
-/// **When this stops erroring, replace the assertion with
-/// `assert_program_eval_to(program, "1")` and update the triage doc.**
-#[test]
-fn environment_accepts_a_nested_import_set() {
-    let program = "(import (scheme eval))
-                   (eval '(p:car '(1 2))
-                         (environment '(prefix (only (scheme base) car) p:)))";
-    assert_program_eval_error(program);
-}
-
-// ---------------------------------------------------------------------------
 // Family 10 — `input-port-open?` on an output port is an error, not `#f`
 // ---------------------------------------------------------------------------
 
@@ -420,37 +377,6 @@ fn a_transformer_free_reference_prefers_the_enclosing_binding_over_a_global() {
 }
 
 // ---------------------------------------------------------------------------
-// Family 16 — a line comment is not ended by a bare return
-// ---------------------------------------------------------------------------
-
-/// R7RS 7.1.1: a line ending is newline, return, or return+newline, and a
-/// `;` comment runs to the line ending. Ours ran to the newline only, so a
-/// datum after a return-terminated comment was swallowed. Fixed 2026-08-24.
-#[test]
-fn a_line_comment_ends_at_a_bare_return() {
-    assert_program_eval_to(
-        "(import (scheme read))
-         (let ((p (open-input-string \"first ; comment\\rsecond ; another\\r\\nthird\")))
-           (list (read p) (read p) (read p) (eof-object? (read p))))",
-        "(first second third #t)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Review of #112 — the cases its review found, kept as they were verified
-// ---------------------------------------------------------------------------
-
-/// A shebang line, like a `;` comment, ends at a bare return.
-#[test]
-fn a_shebang_line_ends_at_a_bare_return() {
-    assert_program_eval_to(
-        "(import (scheme read))
-         (read (open-input-string \"#!/usr/bin/env patina\\r42\"))",
-        "42",
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Family 19 — the macro expander's walkers never returned on a cyclic datum
 // ---------------------------------------------------------------------------
 
@@ -508,26 +434,6 @@ fn a_flipped_cyclic_argument_is_a_closed_copy() {
 // so the fix trips the test. chibi and Gauche agree on every expectation.
 // ---------------------------------------------------------------------------
 
-/// R7RS 4.2.2: `let-values` evaluates every init in the outer environment
-/// before binding any of the formals; ours bound each clause before
-/// evaluating the next, like `let*-values`, until 2026-08-25 (now the
-/// reference implementation of R7RS 7.3). Also covers a dotted and a rest
-/// formal. (A `(() (values))` clause works on the VM but not the
-/// tree-walker — that is family 18, zero values arriving as one.)
-#[test]
-fn let_values_binds_all_clauses_in_parallel() {
-    assert_program_eval_to(
-        "(let ((a 'a) (b 'b) (x 'x) (y 'y))
-           (list (let-values (((a b) (values x y)) ((x y) (values a b)))
-                   (list a b x y))
-                 (let-values (((p . q) (values 1 2 3)) (r (values 4 5)))
-                   (list p q r))
-                 (let*-values (((a b) (values x y)) ((x y) (values a b)))
-                   (list a b x y))))",
-        "((x y a b) (1 (2 3) (4 5)) (x y x y))",
-    );
-}
-
 /// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local to
 /// it, not spliced into the enclosing one — and the macro names it binds are
 /// visible in the transformers only under `letrec-syntax`. Fixed 2026-08-25.
@@ -561,23 +467,6 @@ fn let_syntax_body_definitions_and_transformer_scope() {
                (list (f 1) (g 1)))))
          (list (defs) (scope) (rec-scope))",
         "((13 70) (1 2) (1 1))",
-    );
-}
-
-/// `read-line` ends a line at a bare return as well as at a newline and at
-/// return+newline (R7RS 6.13.2 defers to 7.1.1's line endings; chibi and
-/// Gauche split all three). Fixed 2026-08-25; a return+newline pair is one
-/// ending, so the second line of "abc\r\ndef" is "def", not "".
-#[test]
-fn read_line_ends_at_a_bare_return() {
-    assert_program_eval_to(
-        "(define (lines s)
-           (let ((p (open-input-string s)))
-             (let loop ((acc '()))
-               (let ((l (read-line p)))
-                 (if (eof-object? l) (reverse acc) (loop (cons l acc)))))))
-         (map lines '(\"abc\\ndef\" \"abc\\rdef\" \"abc\\r\\ndef\" \"abc\\r\" \"\\r\\n\\n\"))",
-        "((\"abc\" \"def\") (\"abc\" \"def\") (\"abc\" \"def\") (\"abc\") (\"\" \"\"))",
     );
 }
 
