@@ -929,7 +929,9 @@ fn every_triage_pointer_names_something_that_exists() {
                     .contains(&needle)),
                 "{at} names the row {row:?}, which appears in none of the files \
                  that line points at ({named_files:?}). A row renamed in the \
-                 suite leaves the queue pointing at a title nothing carries."
+                 suite leaves the queue pointing at a title nothing carries. If \
+                 this is a section heading or an aside rather than a row, put it \
+                 in backticks — on an `- Ours:` line, double quotes mean a row."
             );
             checked += 1;
         }
