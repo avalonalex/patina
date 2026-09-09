@@ -13,6 +13,8 @@
 
 mod common;
 use common::eval_program as eval;
+use common::{assert_program_eval_to, scratch_path};
+use tempfile::TempDir;
 
 /// Sibling per-topic files (`srfi_151_bitwise.rs`, `srfi_130_string.rs`) wrap
 /// the import prologue in a small helper rather than repeating it per case.
@@ -116,4 +118,32 @@ fn test_a_non_port_or_wrong_direction_is_rejected() {
             "{expr} should be rejected"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// From `larceny_families.rs` (Larceny family 10), moved here by #193 Phase 1
+// because this is the file about ports. It stays in Rust: the claim is about a
+// *binary file* port, which needs a real file on disk, and the `.scm` suite has
+// no way to make one. A string-port version would assert the same direction
+// through a different port type, which is not the same test.
+// ---------------------------------------------------------------------------
+
+/// R7RS 6.13.1: `input-port-open?` "returns #t if port is still open and
+/// capable of performing input" — for an output-only port that is `#f`, not
+/// a type error. Larceny's `file` suite maps every port predicate over a
+/// freshly opened binary port and dies here.
+///
+/// Fixed 2026-08-24: `#f` for the other direction, on both predicates.
+#[test]
+fn input_port_open_on_an_output_only_port_is_false() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = scratch_path(&dir, "out.bin");
+    let program = format!(
+        "(import (scheme file))
+         (define p (open-binary-output-file \"{path}\"))
+         (define q (open-input-string \"\"))
+         (list (output-port-open? p) (input-port-open? p)
+               (input-port-open? q) (output-port-open? q))"
+    );
+    assert_program_eval_to(&program, "(#t #f #t #f)");
 }

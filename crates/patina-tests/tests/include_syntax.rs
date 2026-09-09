@@ -2,6 +2,7 @@
 
 mod common;
 use common::*;
+use tempfile::TempDir;
 
 // Resolve path to test resource files relative to the test crate root
 fn resource_path(name: &str) -> String {
@@ -136,4 +137,44 @@ fn test_syntax_error_not_reached() {
           (else (syntax-error "should not reach here")))
     "#;
     assert_program_eval_to(code, "42");
+}
+
+// ---------------------------------------------------------------------------
+// From `larceny_families.rs` (Larceny family 1), moved here by #193 Phase 1
+// because this is the file about `include`. It stays in Rust rather than
+// joining the `.scm` suite for the reason the driver's header gives: it writes
+// files to a temporary directory and includes them by path, and the driver
+// evaluates a file's *text*, so a relative include has no directory to resolve
+// against.
+// ---------------------------------------------------------------------------
+
+/// `outer.scm` (included by absolute path) includes `sub/middle.scm` by
+/// absolute path, and `middle.scm` includes `"leaf.scm"` relatively. Every
+/// implementation that runs Larceny's `base` suite resolves that last one
+/// beside `middle.scm`; Patina used to look in the first file the source map
+/// happened to yield, then the cwd, and find nothing.
+///
+/// Fixed 2026-08-24: the desugarer keeps a stack of include directories.
+#[test]
+fn a_nested_include_resolves_relative_to_the_including_file() {
+    let dir = TempDir::new().expect("temp dir");
+    std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+    let middle = scratch_path(&dir, "sub/middle.scm");
+    std::fs::write(
+        dir.path().join("outer.scm"),
+        format!("(include \"{middle}\")"),
+    )
+    .expect("write outer");
+    std::fs::write(&middle, "(include \"leaf.scm\")").expect("write middle");
+    std::fs::write(
+        dir.path().join("sub/leaf.scm"),
+        "(define leaf-value 'found)",
+    )
+    .expect("write leaf");
+
+    let program = format!(
+        "(include \"{}\") leaf-value",
+        scratch_path(&dir, "outer.scm")
+    );
+    assert_program_eval_to(&program, "found");
 }

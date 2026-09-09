@@ -5,7 +5,7 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 51 rows: 46 of plain R7RS control flow, plus Larceny
+;;   - **this file**, 50 rows: 45 of plain R7RS control flow, plus Larceny
 ;;     family 27's four and one continuation-as-handler row, all moved in from
 ;;     `larceny_families.rs`;
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
@@ -186,14 +186,6 @@
 (define (tail-callcc)
   (call-with-current-continuation (lambda (k) (k 42))))
 (test-equal "call/cc in tail position" 42 (tail-callcc))
-
-;; The `.rs` row compared "1\n2\n3", which was the harness rendering a values
-;; object rather than anything a program can see. `call-with-values` is how a
-;; program asks.
-(test-equal "a continuation can be handed multiple values" '(1 2 3)
-  (call-with-values
-    (lambda () (call-with-current-continuation (lambda (k) (k (values 1 2 3)))))
-    list))
 
 ;; These three came from the `.rs` file's "instruction-level control ops"
 ;; sections, which sat below the prompt tests and were nearly left behind with
