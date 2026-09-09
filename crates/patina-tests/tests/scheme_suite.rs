@@ -72,7 +72,7 @@
 //! is upstream SRFI 64 behaviour, not something the driver can paper over.
 
 mod common;
-use common::repo_root;
+use common::{files_under, repo_root};
 use patina_interpreter::Interpreter;
 use patina_runtime::Backend;
 use std::path::{Path, PathBuf};
@@ -814,4 +814,131 @@ fn test_end_does_not_signal_a_failure() {
             "test-end returned an error — SRFI 64 changed, and the driver's \
              count-reading may now be redundant",
         );
+}
+
+/// Every `- Ours:` pointer in the Larceny triage doc resolves.
+///
+/// `scheme_tests/reports/larceny_triage.md` is the open defect queue CLAUDE.md
+/// sends people to first, and each family entry names the test that reproduces
+/// it. #193 Phase 1 has been moving those tests out of
+/// `larceny_families.rs` into this directory, and the pointers rotted a slice
+/// at a time — 22 of them named Rust functions that existed nowhere by the
+/// time anyone looked. A queue that points at deleted symbols is worse than
+/// one that points at nothing: it reads as though someone checked.
+///
+/// It lives here rather than in a file of its own because a new `tests/*.rs`
+/// costs a whole binary (~6 s of link, the thing #193 exists to reduce), and
+/// here it sits beside `every_registered_divergence_names_a_real_row`, which
+/// does the same job for `DIVERGENCES.tsv`. When the queue is empty the doc is
+/// meant to be deleted; this check goes with it, and the empty-doc case below
+/// says so rather than passing vacuously.
+///
+/// **What counts as a pointer**, since the lines are prose and not a table:
+/// inside a `- Ours:` line, a backticked token is checked if it looks like a
+/// Rust identifier (lowercase, and containing `_` — which is what keeps
+/// ordinary prose words like `do` and `map` out) or if it names a file. A
+/// double-quoted string is checked as a row name against whichever `.scm`
+/// files that line named. Anything else is prose and ignored. The heuristic
+/// errs toward silence: a pointer written in some other shape is not checked,
+/// which is the failure mode that leaves work undone rather than the one that
+/// blocks a PR over a sentence.
+#[test]
+fn every_triage_pointer_names_something_that_exists() {
+    let doc = repo_root().join("scheme_tests/reports/larceny_triage.md");
+    let text = match read(&doc) {
+        Ok(t) => t,
+        // The doc is disposable by its own header. Gone is fine; empty is not,
+        // which is the state a half-finished deletion leaves behind.
+        Err(_) => return,
+    };
+    assert!(
+        text.contains("- Ours:"),
+        "{} has no `- Ours:` lines at all. If the queue is empty the doc is \
+         meant to be deleted along with this check, not left as a husk.",
+        doc.display()
+    );
+
+    let rust_fns: String = files_under(&repo_root().join("crates"))
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .filter_map(|p| read(&p).ok())
+        .collect();
+    let repo = repo_root();
+    // Both listings are walked once, not once per pointer: the doc names ~40
+    // of them, and the walk they would repeat is the whole test tree.
+    let test_files: Vec<PathBuf> = files_under(&repo.join("crates/patina-tests/tests"));
+    let mut texts: std::collections::HashMap<String, String> = Default::default();
+    let mut checked = 0;
+
+    for (n, line) in text.lines().enumerate() {
+        let Some(rest) = line.strip_prefix("- Ours:") else {
+            continue;
+        };
+        let at = format!("{}:{}", doc.display(), n + 1);
+        let ticked: Vec<&str> = rest.split('`').skip(1).step_by(2).collect();
+
+        let mut named_files = Vec::new();
+        for tok in &ticked {
+            let is_path = tok.ends_with(".rs") || tok.ends_with(".scm") || tok.ends_with(".sld");
+            if is_path {
+                // Written full-path or by basename; both appear in the doc.
+                let found = if tok.contains('/') {
+                    repo.join(tok).exists()
+                } else {
+                    test_files
+                        .iter()
+                        .any(|p| p.file_name().is_some_and(|f| f == *tok))
+                };
+                assert!(
+                    found,
+                    "{at} names the file `{tok}`, which does not exist. The test \
+                     it held has probably moved into tests/scheme/ — repoint the \
+                     entry at the suite file and the row names, as the entries \
+                     for families 2, 4 and 19 do."
+                );
+                if tok.ends_with(".scm") {
+                    named_files.push(*tok);
+                }
+                checked += 1;
+            } else if tok.starts_with(|c: char| c.is_ascii_lowercase())
+                && tok.contains('_')
+                && tok
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            {
+                assert!(
+                    rust_fns.contains(&format!("fn {tok}")),
+                    "{at} names the Rust test `{tok}`, which no longer exists. \
+                     Either it was renamed, or #193 moved it into tests/scheme/ \
+                     — repoint the entry at the suite file and the row name."
+                );
+                checked += 1;
+            }
+        }
+
+        // A row name is only checkable against a file the same line names.
+        for row in rest.split('"').skip(1).step_by(2) {
+            if named_files.is_empty() {
+                continue;
+            }
+            let needle = format!("{row:?}");
+            assert!(
+                named_files.iter().any(|f| texts
+                    .entry((*f).to_string())
+                    .or_insert_with(|| read(&repo.join(f)).unwrap_or_default())
+                    .contains(&needle)),
+                "{at} names the row {row:?}, which appears in none of the files \
+                 that line points at ({named_files:?}). A row renamed in the \
+                 suite leaves the queue pointing at a title nothing carries."
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked > 20,
+        "only {checked} triage pointers were checkable, which is fewer than the \
+         doc is known to carry — the `- Ours:` shape has probably changed and \
+         this check is now reading past most of it."
+    );
 }
