@@ -237,6 +237,24 @@ passed while asserting something else:
   argument evaluation order unspecified and chibi evaluates right to left, so
   `(list (c) (c 5) (c 3) (c))` answers differently there — reporting a
   difference between implementations that is not one.
+- **Write `test-error` with three arguments: `(test-error "name" #t expr)`.**
+  SRFI 64's specifiers are `(test-error [[name] error-type] expr)`, so the
+  two-argument `(test-error "name" expr)` puts the string in the *error-type*
+  position and leaves the row's name `#f`. Measured 2026-09-09: chibi and
+  Gauche then print a bare `FAIL` with no name, which no `DIVERGENCES.tsv` line
+  can match and no reader can trace. Every row in the suite passes `#t`.
+
+  That `#t` is not a placeholder to be improved on later. SRFI 64's reference
+  implementation ignores the error type entirely on an R7RS host — its
+  `(or srfi-34 r7rs)` branch is `(guard (ex (else #t)) expr #f)` — so a
+  `test-error` row asserts only that *something* was raised, on every
+  implementation the lane runs. A row that needs to say *which* error belongs
+  in Rust, where `ErrorClass` can say it. (Patina's bundled copy calls
+  `error-matches?` and discards the result, which is the same behaviour and is
+  deliberate: matching upstream is what keeps a file's answer the same here and
+  on the oracles. The call earns its keep by warning on a type that is neither
+  `#t` nor a predicate — which is how the two-argument slip above announces
+  itself in the log.)
 
 **What still belongs in a `.rs` file**, because a `.scm` file cannot express
 it: a row whose backends give *different values*; a row deliberately asserted
@@ -266,6 +284,33 @@ quietly is what the skip and floor checks exist to prevent; with it, chibi and
 Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
+
+**Where an oracle refuses to *compile* a row, neither form works — register
+the file instead.** `test-skip` suppresses evaluation, so a row it guards is
+still read and compiled, which is enough to lose the whole file when an
+implementation rejects the program while compiling the form around it. Gauche
+does exactly that to `expansion/ellipsis.scm`: R7RS §4.3.2 makes a
+`syntax-rules` written where `...` is bound an ordinary three-variable pattern,
+and Gauche reports `Pattern variable b is used in wrong level` and stops.
+
+The tempting repair is a `cond-expand` clause that is simply not selected,
+since an unselected clause is never compiled. **Don't** — it hides a real
+difference in the one place nothing checks. `run_suite_oracles.sh` compares the
+rows an oracle *fails*, and an absent row cannot fail, so the omission lives
+only in a comment and ages there silently.
+
+Let the file die and register it instead:
+
+```
+expansion/ellipsis.scm	gauche	*	incomplete	Gauche rejects the file while compiling it: …
+```
+
+Now the lane holds the claim — and holds it in both directions, because a `*`
+row that starts completing is reported as "completes now, but is registered as
+incomplete". The quarantine retires itself the day the oracle changes. The
+price is the rest of that file's rows on that oracle, so keep a file whose rows
+one oracle cannot compile small, and say in its header which rows the *other*
+oracle still arbitrates.
 
 **Skip the count, not the name, and put it immediately above its row.** SRFI
 64's `test-skip` takes a count, a name or a predicate; in this suite the count
