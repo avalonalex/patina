@@ -1,6 +1,16 @@
 //! Original test cases for the families of defects that Larceny's R7RS test
 //! suites surfaced (Track L §L5.3, 2026-08-24).
 //!
+//! **Being redistributed, not kept.** #193 Phase 1 is moving these rows to the
+//! file about their *subject* rather than about where they were found — see
+//! `docs/TEST_ORGANIZATION.md`'s section on it. 64 rows have become 37; the
+//! remainder is the macro and hygiene block, plus what genuinely cannot leave
+//! Rust. Two rows that could not are already gone to files that own their
+//! subject: family 1's nested `include` to `include_syntax.rs` and family 10's
+//! port predicates to `standard_ports.rs`, both because they need real files
+//! on disk. When the last row leaves, this file goes with it and the binary
+//! count drops by one.
+//!
 //! The suites themselves are LGPL and are not vendored — they run from a
 //! reference checkout via `scripts/run_larceny_tests.sh`. Every program here
 //! is written from scratch to exhibit the same *family* of problem, so the
@@ -25,157 +35,10 @@ mod common;
 
 use common::{
     ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program, scratch_path,
+    eval_program,
 };
-use tempfile::TempDir;
 
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
-
-// ---------------------------------------------------------------------------
-// Family 1 — a nested `include` resolves against the wrong directory
-// ---------------------------------------------------------------------------
-
-/// `outer.scm` (included by absolute path) includes `sub/middle.scm` by
-/// absolute path, and `middle.scm` includes `"leaf.scm"` relatively. Every
-/// implementation that runs Larceny's `base` suite resolves that last one
-/// beside `middle.scm`; Patina used to look in the first file the source map
-/// happened to yield, then the cwd, and find nothing.
-///
-/// Fixed 2026-08-24: the desugarer keeps a stack of include directories.
-#[test]
-fn a_nested_include_resolves_relative_to_the_including_file() {
-    let dir = TempDir::new().expect("temp dir");
-    std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
-    let middle = scratch_path(&dir, "sub/middle.scm");
-    std::fs::write(
-        dir.path().join("outer.scm"),
-        format!("(include \"{middle}\")"),
-    )
-    .expect("write outer");
-    std::fs::write(&middle, "(include \"leaf.scm\")").expect("write middle");
-    std::fs::write(
-        dir.path().join("sub/leaf.scm"),
-        "(define leaf-value 'found)",
-    )
-    .expect("write leaf");
-
-    let program = format!(
-        "(include \"{}\") leaf-value",
-        scratch_path(&dir, "outer.scm")
-    );
-    assert_program_eval_to(&program, "found");
-}
-
-// ---------------------------------------------------------------------------
-// Family 4 — VM: a discarded call to `values` poisons the next
-//            `call-with-values`
-// ---------------------------------------------------------------------------
-
-/// `values` called with one argument in a non-tail position, result thrown
-/// away; the next `call-with-values` whose producer returns a plain value
-/// must not see it. Until 2026-08-25 the VM kept multiple values in a side
-/// buffer that a discarded `values` call left set; multiple values are now
-/// only ever a #<values> object in the result register, as on the
-/// tree-walker.
-#[test]
-fn a_discarded_values_call_does_not_leak_into_call_with_values() {
-    assert_program_eval_to(
-        "(define (call1 f) (f 42))
-         (call1 values)
-         (call-with-values (lambda () 'fresh) (lambda xs xs))",
-        "(fresh)",
-    );
-}
-
-/// The shapes the removed buffer used to carry, now through the value
-/// itself: a producer that calls `values` for effect and then returns
-/// something else, several values, and a primitive that returns several.
-#[test]
-fn call_with_values_sees_only_what_its_producer_returned() {
-    assert_program_eval_to(
-        "(define (call1 f) (f 1 2 3))
-         (list (call-with-values (lambda () (call1 values) 'one) (lambda xs xs))
-               (call-with-values (lambda () (values 1 2)) list)
-               (call-with-values (lambda () (exact-integer-sqrt 17)) list))",
-        "((one) (1 2) (4 1))",
-    );
-}
-
-/// A continuation invoked with other than one value delivers a `#<values>`
-/// object, as `(values …)` returns one — the VM since #113, the tree-walker
-/// since 2026-08-25. The tree-walker used to raise a wrong-arity error, which
-/// is what made SRFI 1's n-ary procedures unusable there (family 5).
-#[test]
-fn a_continuation_invoked_with_two_values_delivers_them() {
-    assert_program_eval_to(
-        "(call-with-values (lambda () (call/cc (lambda (k) (k 4 5)))) list)",
-        "(4 5)",
-    );
-}
-
-/// `(values)` reaches a consumer as no arguments, and `(k)` likewise —
-/// R7RS 6.10, and what chibi and Gauche both answer. The tree-walker gave
-/// `(#<unspecified>)` for the first until 2026-08-25, because the rule "one
-/// value is itself, any other count is a #<values> object" was written out
-/// in four places and the `values` primitive's copy special-cased zero. One
-/// `Heap::values_from` now serves all four.
-#[test]
-fn zero_values_reach_the_consumer_as_no_arguments() {
-    assert_program_eval_to(
-        "(list (call-with-values (lambda () (values)) (lambda xs xs))
-               (call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda xs xs)))",
-        "(() ())",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 5 — tree-walker: SRFI 1's n-ary procedures raise a wrong-arity error
-// ---------------------------------------------------------------------------
-
-/// `zip` is `(apply map list list1 more-lists)` inside `srfi-1-reference.scm`,
-/// against SRFI 1's own n-ary `map`. It failed on the tree-walker with a
-/// wrong-arity error, and the cause turned out to be family 17, not `apply`:
-/// SRFI 1's `%cars+cdrs` bails out of an exhausted list with
-/// `(abort '() '())`, invoking a continuation with two values, which the
-/// tree-walker refused. Fixed 2026-08-25 with that one; every n-ary
-/// procedure that walks more than one list reaches the same abort.
-#[test]
-fn srfi_1_n_ary_procedures_walk_more_than_one_list() {
-    assert_program_eval_to(
-        "(import (scheme list))
-         (list (zip '(1 2 3) '(4 5 6))
-               (fold + 0 '(1 2) '(3 4))
-               (every < '(1 2) '(3 4))
-               (any (lambda (a b) (if (< a b) 'yes #f)) '(1 2 3) '(0 1 4))
-               (filter-map (lambda (x y) (and (number? x) (* x y))) '(a 1 b 3) '(9 9 9 9))
-               (list-index = '(1 2 3) '(9 2 9)))",
-        "(((1 4) (2 5) (3 6)) 10 #t yes (9 27) 1)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 10 — `input-port-open?` on an output port is an error, not `#f`
-// ---------------------------------------------------------------------------
-
-/// R7RS 6.13.1: `input-port-open?` "returns #t if port is still open and
-/// capable of performing input" — for an output-only port that is `#f`, not
-/// a type error. Larceny's `file` suite maps every port predicate over a
-/// freshly opened binary port and dies here.
-///
-/// Fixed 2026-08-24: `#f` for the other direction, on both predicates.
-#[test]
-fn input_port_open_on_an_output_only_port_is_false() {
-    let dir = TempDir::new().expect("temp dir");
-    let path = scratch_path(&dir, "out.bin");
-    let program = format!(
-        "(import (scheme file))
-         (define p (open-binary-output-file \"{path}\"))
-         (define q (open-input-string \"\"))
-         (list (output-port-open? p) (input-port-open? p)
-               (input-port-open? q) (output-port-open? q))"
-    );
-    assert_program_eval_to(&program, "(#t #f #t #f)");
-}
 
 // ---------------------------------------------------------------------------
 // Family 14 — a shadowed `...` is no longer the ellipsis (R7RS 4.3.2)
@@ -521,34 +384,6 @@ fn a_templates_quote_is_the_definition_sites_quote_under_an_imported_one() {
                   (car '(1 2))
                   (r7:pair? (lit)))",
         "(#t 1 #t)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Family 34 — VM: quasiquote built its result with the use site's `list`
-// ---------------------------------------------------------------------------
-
-/// A quasiquote denotes the structure it writes, whatever `list`, `append`
-/// and `list->vector` mean where it appears. The VM's expansion called them
-/// by name, so under SRFI 101 — whose `list` builds random-access lists —
-/// `` `(1 ,x 3) `` was one too, and `` `#(1 ,x) `` failed inside
-/// `list->vector`. The tree-walker builds the structure directly and was
-/// right all along. The last element pins that the rebinding is real.
-///
-/// Fixed 2026-08-26: the expansion references the registry's primitives as
-/// values, so nothing the program imports or defines can redirect them.
-#[test]
-fn quasiquote_builds_pairs_whatever_list_means_at_the_use_site() {
-    assert_program_eval_to(
-        "(import (except (scheme base) quote car cons list list? append)
-                 (prefix (scheme base) r7:)
-                 (srfi 101))
-         (define x 2)
-         (r7:list (r7:pair? `(1 ,x 3))
-                  (r7:equal? `(1 ,@(r7:list 7 8) 3) (r7:list 1 7 8 3))
-                  (r7:vector? `#(1 ,x))
-                  (r7:pair? (list 1 2)))",
-        "(#t #t #t #f)",
     );
 }
 

@@ -95,6 +95,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
     ("control/tail-recursion.scm", 36),
+    ("control/values.scm", 4),
     ("control/wind-thunk-exceptions.scm", 14),
     ("data/circular-data.scm", 31),
     ("data/case-mapping.scm", 2),
@@ -102,12 +103,14 @@ const SUITE: &[(&str, i64)] = &[
     ("data/numeric-operations.scm", 38),
     ("expansion/define-values.scm", 14),
     ("expansion/let-values.scm", 1),
+    ("expansion/quasiquote.scm", 1),
     ("reader/at-identifiers.scm", 11),
     ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
     ("stdlib/eval.scm", 1),
     ("stdlib/lazy-evaluation.scm", 32),
+    ("stdlib/list.scm", 1),
     ("stdlib/process-context.scm", 12),
     ("stdlib/scheme-r5rs.scm", 20),
 ];
@@ -158,28 +161,40 @@ fn run_on<B: Backend>(
         .eval_program(program)
         .map_err(|e| format!("[{label}] failed to run: {e}"))?;
 
-    let value = interp
-        .eval_program(
-            "(let ((r (test-runner-current)))
-               (list (test-runner-pass-count r) (test-runner-fail-count r)
-                     (test-runner-xpass-count r) (test-runner-xfail-count r)
-                     (test-runner-skip-count r)))",
-        )
-        .map_err(|e| format!("[{label}] could not read the runner counts: {e}"))?;
-
-    let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
-        value,
-        interp.backend().global_env().heap(),
-    );
-    let parsed: Option<Vec<i64>> = text
-        .trim_matches(|c| c == '(' || c == ')')
-        .split_whitespace()
-        .map(|n| n.parse().ok())
-        .collect();
-    let nums = match parsed {
-        Some(nums) if nums.len() == 5 => nums,
-        _ => return Err(format!("[{label}] expected five counts, got {text:?}")),
-    };
+    // Each count is read on its own, in an expression that constructs nothing.
+    //
+    // The obvious version builds one list — `(list (test-runner-pass-count r)
+    // …)` — and parses it. That is fragile in a way only one kind of file
+    // reveals: the driver evaluates this in the *same* interpreter the file
+    // just ran in, so whatever the file imported is still in scope.
+    // `expansion/quasiquote.scm` imports SRFI 101, whose `list` builds
+    // random-access lists, and the count expression came back as
+    // `#<record kons>`. A file is entitled to rebind core names — that one
+    // exists precisely to check that quasiquote survives it — so the driver
+    // must not depend on any of them.
+    //
+    // Five evaluations rather than one, each returning a bare integer: no
+    // constructor, nothing a file's import set can redirect.
+    let mut nums = [0i64; 5];
+    for (slot, accessor) in nums.iter_mut().zip([
+        "test-runner-pass-count",
+        "test-runner-fail-count",
+        "test-runner-xpass-count",
+        "test-runner-xfail-count",
+        "test-runner-skip-count",
+    ]) {
+        let value = interp
+            .eval_program(&format!("({accessor} (test-runner-current))"))
+            .map_err(|e| format!("[{label}] could not read {accessor}: {e}"))?;
+        let text = patina_primitives::primitives::io::datum_writer::format_display_tagged(
+            value,
+            interp.backend().global_env().heap(),
+        );
+        *slot = text
+            .trim()
+            .parse()
+            .map_err(|_| format!("[{label}] {accessor} answered {text:?}, not a count"))?;
+    }
     Ok(Counts {
         pass: nums[0],
         fail: nums[1],
