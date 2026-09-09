@@ -5,15 +5,25 @@
 ;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 15,
 ;; 33 and 35, and its "What `base` found once it ran" section; #193 Phase 1).
 ;; Nine Rust tests became the fifteen rows below, split so that a failure names
-;; the claim rather than an element of a list. Its Rust companion
-;; `let_syntax.rs` keeps what a `.scm` file cannot say — that a malformed
-;; binding, a non-symbol keyword or an empty body is *rejected*, which is a
-;; claim about a stage and not about a value.
+;; the claim rather than an element of a list.
 ;;
-;; The file is one file on purpose: eight of these rows were written in
-;; separate Rust tests, each with its own empty top level, and Larceny's `base`
-;; is what found several of them precisely because a real program has other
-;; things in it. The global `f` below is that condition restored — `base`
+;; **This is not the only file about `let-syntax`, and the overlap is real.**
+;; `let_syntax.rs` holds fourteen tests of its own, from before #193. Three of
+;; them a `.scm` file cannot express — that a malformed binding, a non-symbol
+;; keyword or an empty body is *rejected*, which is a claim about a stage
+;; rather than a value — and the other eleven are ordinary value assertions
+;; that would run unchanged on both oracles. Two overlap the rows here
+;; outright: `test_let_syntax_scope` makes this file's
+;; "an internal define-syntax is not visible outside its body" claim for a
+;; `let-syntax` keyword, and `test_let_syntax_lexical_scoping` is the
+;; definition-site-reference claim from a third angle. **This file is the
+;; canonical home**; those eleven are migration candidates that this slice did
+;; not take, because they are not Larceny rows and moving them is a different
+;; job from redistributing this one.
+;;
+;; The file is one file on purpose: those nine Rust tests each had its own
+;; empty top level, and Larceny's `base` is what found several of them
+;; precisely because a real program has other things in it. The global `f` below is that condition restored — `base`
 ;; defines its own `f`, which is why two rows that passed in isolation still
 ;; failed there.
 ;;
@@ -24,9 +34,9 @@
 ;;   Gauche                    13 pass, 2 fail — registered as an oracle defect
 ;;
 ;; **Gauche lets a template-generated `let-syntax` capture its own sibling.**
-;; The two rows it fails are the generated form; the row directly beneath them
-;; is the *same shape written by hand*, and Gauche answers that one exactly as
-;; we do. So it has §4.3.1's rule and loses it under expansion, which is what
+;; The two rows it fails are the generated form; the row directly beneath them,
+;; "the same shape written in source rather than generated", is the identical
+;; form written by hand, and Gauche answers that one exactly as we do. So it has §4.3.1's rule and loses it under expansion, which is what
 ;; makes this a defect claim rather than a difference of reading — see the
 ;; register for the evidence as recorded.
 
@@ -51,13 +61,17 @@
 ;; definitions, so testing only the top level of the desugared body saw no
 ;; definition at all and let the names escape into the enclosing one.
 ;;
-;; The `let-syntax` runs in a definition rather than at top level because its
-;; value is not what is under test — `aa` afterwards is.
+;; The `let-syntax` stands at **top level**, as a bare expression whose value
+;; is discarded, because that is the context the escape escapes *into*: the
+;; enclosing body of a top-level form is the top level, and `aa` still being
+;; `outer` afterwards is how you see the definitions stayed put. Wrapping it in
+;; a `(define …)` would move the enclosing body inward and let an
+;; implementation splice into that instead, with this row none the wiser.
 (define aa 'outer)
-(define ignored-inner-aa
-  (let-syntax ((noop (syntax-rules () ((_ x) x))))
-    (define-values (aa bb) (values 1 2))
-    (noop aa)))
+
+(let-syntax ((noop (syntax-rules () ((_ x) x))))
+  (define-values (aa bb) (values 1 2))
+  (noop aa))
 
 (test-equal "a let-syntax body keeps definitions a macro wrapped in begin"
   'outer aa)
@@ -79,7 +93,8 @@
   '((withargs 1) (noargs 1))
   (list (with-args 1) (without-args)))
 
-(test-error "and is not visible outside it" #t (m-with-args 3))
+(test-error "an internal define-syntax is not visible outside its body" #t
+  (m-with-args 3))
 
 ;; ── A transformer's free identifiers ────────────────────────────────────────
 ;;
@@ -206,10 +221,13 @@
 
 ;; The control for the two rows above, and the reason the register calls
 ;; Gauche's answer a defect rather than a reading: the identical form, written
-;; in source instead of generated. All three implementations answer `outer-b`
-;; here — so §4.3.1's rule is present in all three and one of them loses it
-;; under expansion.
-(test-equal "the same shape written by hand, which all three get right"
+;; in source instead of generated. Measured 2026-09-09, all three answer
+;; `outer-b` here — so §4.3.1's rule is present in all three and one of them
+;; loses it under expansion. That measurement is dated and lives in the header
+;; and the register; the row's *name* says only what the row asserts, since the
+;; driver runs Patina alone and could not notice the day it stopped holding
+;; elsewhere.
+(test-equal "the same shape written in source rather than generated"
   'outer-b
   (let-syntax ((a (syntax-rules () ((_) (b))))
                (b (syntax-rules () ((_) 'sibling-b))))

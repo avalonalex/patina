@@ -1,5 +1,16 @@
 //! Tests for let-syntax and letrec-syntax special forms
 //!
+//! **The canonical home for this subject is now
+//! `tests/scheme/expansion/let-syntax.scm`** (#193 Phase 1), which runs on
+//! chibi and Gauche as well as on both backends — and where the Larceny
+//! families for `let-syntax` landed. Three tests here cannot go there,
+//! because they assert a program is *rejected* rather than what it evaluates
+//! to: `test_let_syntax_empty_body_error`, `test_let_syntax_invalid_binding_error`
+//! and `test_let_syntax_non_symbol_name_error`. The other eleven are ordinary
+//! value assertions and would run there unchanged; two of them,
+//! `test_let_syntax_scope` and `test_let_syntax_lexical_scoping`, already have
+//! counterparts in that file. Add a new value assertion there, not here.
+//!
 //! # Important Note on Macro Recursion
 //!
 //! **WARNING**: Do NOT use `letrec-syntax` to implement runtime recursion!
