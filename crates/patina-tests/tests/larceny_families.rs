@@ -3,7 +3,7 @@
 //!
 //! **Being redistributed, not kept.** #193 Phase 1 is moving these rows to the
 //! file about their *subject* rather than about where they were found — see
-//! `docs/TEST_ORGANIZATION.md`'s section on it. 64 rows have become 32; the
+//! `docs/TEST_ORGANIZATION.md`'s section on it. 64 rows have become 23; the
 //! remainder is the macro and hygiene block, plus what genuinely cannot leave
 //! Rust. Two rows that could not are already gone to files that own their
 //! subject: family 1's nested `include` to `include_syntax.rs` and family 10's
@@ -33,10 +33,7 @@
 
 mod common;
 
-use common::{
-    ErrorClass, On, assert_divergence, assert_program_eval_error, assert_program_eval_to,
-    eval_program,
-};
+use common::{ErrorClass, On, assert_divergence, assert_program_eval_to, eval_program};
 
 const TRIAGE: &str = "scheme_tests/reports/larceny_triage.md";
 
@@ -121,145 +118,9 @@ fn a_use_site_binder_does_not_capture_a_templates_keyword() {
     );
 }
 
-/// An inner `let-syntax` keyword outranks an enclosing variable of the same
-/// spelling. The spelling veto this replaced had no ordering, so the outer
-/// variable won wherever one existed.
-#[test]
-fn an_inner_keyword_outranks_an_enclosing_variable_of_the_same_name() {
-    assert_program_eval_to(
-        "(list (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))
-               (let ((f (lambda (x) (+ x 1))))
-                 (let-syntax ((f (syntax-rules () ((f x) x)))) (f 1))))",
-        "(1 1)",
-    );
-}
-
-/// R7RS 4.3.1 again, for the definitions a macro produces indirectly.
-/// `define-values` and `define-record-type` both expand to a `begin` of
-/// definitions, so testing only the top level of the desugared body saw no
-/// definition and let the names escape into the enclosing body.
-#[test]
-fn a_let_syntax_body_keeps_definitions_a_macro_wrapped_in_begin() {
-    assert_program_eval_to(
-        "(define aa 'outer)
-         (let-syntax ((noop (syntax-rules () ((_ x) x))))
-           (define-values (aa bb) (values 1 2))
-           (noop aa))
-         aa",
-        "outer",
-    );
-}
-
-/// R7RS 5.3.2: a syntax definition inside a body is local to that body. It
-/// used to install itself in the enclosing environment, and then — once a body
-/// with bindings got an environment of its own — only when the body's lambda
-/// happened to bind nothing, which made the leak depend on the formals list.
-#[test]
-fn an_internal_define_syntax_is_local_to_its_body() {
-    assert_program_eval_to(
-        "(define (g y) (define-syntax m2 (syntax-rules () ((_ v) (list 'withargs v)))) (m2 y))
-         (define (f) (define-syntax m (syntax-rules () ((_ v) (list 'noargs v)))) (m 1))
-         (list (g 1) (f))",
-        "((withargs 1) (noargs 1))",
-    );
-    assert_program_eval_error(
-        "(define (g y) (define-syntax m2 (syntax-rules () ((_ v) v))) (m2 y))
-         (g 1)
-         (m2 3)",
-    );
-}
-
-/// A `let-syntax` transformer's free identifier denotes the binding that
-/// encloses the *form*, even when the program also defines that name at top
-/// level. Larceny's `base` is what found this: the suite happens to define
-/// its own `f`, so the same two assertions family 23 covers still failed
-/// there after they passed in isolation — `(g 1)` answered `"1"`, the
-/// suite's `number->string` wrapper, rather than 2.
-///
-/// The cause is one IR below hygiene. A template's free identifiers are
-/// linked back to the macro's definition environment by *name*, for the sake
-/// of a template that calls a helper private to the library defining it —
-/// and the name-only view of an environment deliberately hides local
-/// variables, so it could not tell this `f` from a global one and aliased it
-/// to the global. The link is asked with the macro's definition scopes now,
-/// and skips any name something lexical shadows.
-#[test]
-fn a_transformer_free_reference_prefers_the_enclosing_binding_over_a_global() {
-    assert_program_eval_to(
-        "(define (f n) (number->string n))
-         (let ((f (lambda (x) (+ x 1))))
-           (let-syntax ((f (syntax-rules () ((f x) x)))
-                        (g (syntax-rules () ((g x) (f x)))))
-             (list (f 1) (g 1))))",
-        "(1 2)",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// What `base` found once it ran (2026-08-25) — each pinned as it is today,
-// so the fix trips the test. chibi and Gauche agree on every expectation.
-// ---------------------------------------------------------------------------
-
-/// R7RS 4.3.1: a `let-syntax` body is a body — its definitions are local to
-/// it, not spliced into the enclosing one — and the macro names it binds are
-/// visible in the transformers only under `letrec-syntax`. Fixed 2026-08-25.
-///
-/// Three separate mistakes, and the middle one is the interesting one. `defs`
-/// binds `x` through a *macro*, so reading the body's source forms saw no
-/// definition and let it escape. `scope`'s `(f 1)` went to the outer variable
-/// because a keyword bound unscoped could never outrank one; and its `(g 1)`
-/// reached a sibling keyword that, under `let-syntax`, is not in scope in the
-/// transformers at all. `rec-scope` is the same body under `letrec-syntax`,
-/// where the sibling *is* in scope, and pins that the two forms still differ.
-#[test]
-fn let_syntax_body_definitions_and_transformer_scope() {
-    assert_program_eval_to(
-        "(define (defs)
-           (let ((x 13))
-             (define y 14)
-             (let-syntax ((def (syntax-rules () ((_ var val) (define var val)))))
-               (def x 56)
-               (set! y (+ x y)))
-             (list x y)))
-         (define (scope)
-           (let ((f (lambda (x) (+ x 1))))
-             (let-syntax ((f (syntax-rules () ((f x) x)))
-                          (g (syntax-rules () ((g x) (f x)))))
-               (list (f 1) (g 1)))))
-         (define (rec-scope)
-           (let ((f (lambda (x) (+ x 1))))
-             (letrec-syntax ((f (syntax-rules () ((f x) x)))
-                             (g (syntax-rules () ((g x) (f x)))))
-               (list (f 1) (g 1)))))
-         (list (defs) (scope) (rec-scope))",
-        "((13 70) (1 2) (1 1))",
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Family 33 — a template's `quote` resolved at the use site
 // ---------------------------------------------------------------------------
-
-/// `m`'s template writes `(quote d)`; a `let-syntax` binding `quote` around
-/// the *call* has nothing to do with it. Patina used to bind a `let-syntax`
-/// keyword unscoped as well as scoped, which made it reachable from every
-/// reference of that spelling — including one another macro introduced —
-/// and since the captured expansion introduces `quote` again, the capture
-/// repeated until the stack went. chibi answers `hello`.
-///
-/// Fixed 2026-08-26: the keyword is bound only under the body's scopes, plus
-/// the binder's own scopes when the `let-syntax` itself came out of a
-/// template (chibi's §4.3 `(m k)`, where binder and reference are
-/// `bound-identifier=?`).
-#[test]
-fn a_templates_quote_is_not_captured_by_a_use_site_let_syntax() {
-    assert_program_eval_to(
-        "(define-syntax m (syntax-rules () ((m d) (quote d))))
-         (let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
-           (m hello))",
-        "hello",
-    );
-}
 
 /// The import half, and the literal form. SRFI 101 exports its own `quote`,
 /// which builds random-access lists. Its own template `(get-cached 'datum)`
@@ -318,75 +179,6 @@ fn relinking_leaves_the_users_code_inside_a_macro_call_alone() {
          (define v (both (list 1 2)))
          (r7:list (r7:pair? v) (r7:pair? (r7:cadr v)))",
         "(#t #f)",
-    );
-}
-
-/// The review of the first fix found what the new binding rule had left
-/// out, all fixed 2026-08-26 and pinned here: a `let-syntax` puts its scope
-/// on its body *as written* and — for `letrec-syntax` — on its transformers,
-/// which is what lets an introduced binder be bound at its own scopes plus
-/// that one; and a user's symbol that reached a transformer through a
-/// pattern variable stands in the transformer's definition context.
-///
-/// `gen6`'s keyword is referenced from inside its own transformer, which
-/// the unscoped binding used to satisfy by name; `gen7`'s from a transformer
-/// in the body. Both unbound after the first fix; `done6` and `v` in chibi.
-#[test]
-fn a_generated_keyword_is_reachable_from_a_transformer_in_its_scope() {
-    assert_program_eval_to(
-        "(define-syntax gen6
-           (syntax-rules ()
-             ((_ name) (letrec-syntax ((name (syntax-rules () ((_) 'done6) ((_ x . r) (name . r)))))
-                         (name 1)))))
-         (define-syntax gen7
-           (syntax-rules ()
-             ((_ name) (let-syntax ((name (syntax-rules () ((_) 'v))))
-                         (let-syntax ((g (syntax-rules () ((_) (name))))) (g))))))
-         (list (gen6 foo) (gen7 bar))",
-        "(done6 v)",
-    );
-}
-
-/// Under `let-syntax` a transformer does not see its siblings, and that
-/// holds when the whole form came out of a template: `a`'s `(b)` is the
-/// outer `b`, whether that is bound by `define-syntax` or by an enclosing
-/// `let-syntax`. The first fix bound the generated keyword at the
-/// template's scopes alone, which every reference from that expansion
-/// carries — the sibling's transformer included.
-#[test]
-fn a_template_generated_let_syntax_keeps_siblings_out_of_its_transformers() {
-    assert_program_eval_to(
-        "(define-syntax b (syntax-rules () ((_) 'outer-b)))
-         (define-syntax m
-           (syntax-rules ()
-             ((_) (let-syntax ((a (syntax-rules () ((_) (b))))
-                               (b (syntax-rules () ((_) 'sibling-b))))
-                    (a)))))
-         (list (m)
-               (let-syntax ((b2 (syntax-rules () ((_) 'outer-b2))))
-                 (let-syntax ((m2 (syntax-rules ()
-                                    ((_) (let-syntax ((a (syntax-rules () ((_) (b2))))
-                                                      (b2 (syntax-rules () ((_) 'sibling-b2))))
-                                           (a))))))
-                   (m2))))",
-        "(outer-b outer-b2)",
-    );
-}
-
-/// A user's `(k)` passed into a template that wraps it in a `let-syntax`
-/// binding `k` means the user's `k` — the generated keyword's binding
-/// carries the template's scope, which the user's reference never does.
-/// Pre-existing: the keyword used to be bound at the body's scopes alone,
-/// which every symbol in the body resolves with.
-#[test]
-fn a_users_symbol_is_not_captured_by_a_template_generated_keyword() {
-    assert_program_eval_to(
-        "(define (k) 'users-k)
-         (define-syntax gen
-           (syntax-rules ()
-             ((_ body) (let-syntax ((k (syntax-rules () ((_) 'captured)))) body))))
-         (gen (k))",
-        "users-k",
     );
 }
 

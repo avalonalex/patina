@@ -103,6 +103,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/numeric-operations.scm", 38),
     ("expansion/define-values.scm", 14),
     ("expansion/ellipsis.scm", 3),
+    ("expansion/let-syntax.scm", 15),
     ("expansion/let-values.scm", 1),
     ("expansion/quasiquote.scm", 1),
     ("reader/at-identifiers.scm", 11),

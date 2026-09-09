@@ -225,6 +225,16 @@ Three things that came out of doing it, worth knowing before the next one:
   integer, which timed the oracle lane out and cost chibi the arbitration of
   every other row in that file. Scoping it to Patina returned them, because
   `test-skip` prevents evaluation rather than discarding a result.
+- **One top level is not the same as many empty ones, and that is a gain.**
+  Each Rust test ran in a fresh interpreter, so its program had the top level
+  to itself; a suite file gives fifteen rows one shared top level, and names
+  can collide. Renaming to avoid that is usually right — but not always, and
+  `expansion/let-syntax.scm` is the case. Two of its rows are there because
+  Larceny's `base` suite defines its own `f`: they passed in isolation and
+  failed inside a real program, and the Rust file could only note it in a
+  comment. In one file with a top-level `f`, the condition that found the bug
+  is *restored*, not lost. Read the comments before renaming a colliding
+  identifier — sometimes the collision is the test.
 
 Two migration rules learned the hard way in #193 Phase 1, both from rows that
 passed while asserting something else:
