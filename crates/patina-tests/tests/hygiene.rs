@@ -3,6 +3,27 @@
 //! These tests verify that the macro system properly implements hygienic renaming
 //! to prevent macro-introduced identifiers from capturing user bindings.
 //!
+//! **44 of the 49 tests here run on the tree-walker only.** They build
+//! `TreeWalkInterpreter::new_tree_walker()` by hand, which is what the file did
+//! before `common::assert_program_eval_to` existed; the 8 call sites that use
+//! that helper run both backends. This is a gap and not a decision — the VM is
+//! the default backend, and the hygiene defects Larceny families 36 and 40
+//! record are VM-side, so a VM-only regression passes every one of the 44.
+//! Do not read the hand-built interpreter as "this test is about the
+//! tree-walker"; where a test really is about one backend, `assert_divergence`
+//! says so and the row belongs in `backend_divergence.rs`.
+//!
+//! Most of those 44 are ordinary portable value assertions whose home is
+//! `tests/scheme/expansion/hygiene.scm`, where they would run on both backends
+//! and under chibi and Gauche. Converting them is a job of its own: some hold
+//! one interpreter across several `eval_program` calls and depend on that
+//! shared state, so it is not a search-and-replace. **Add a new portable
+//! hygiene row to the `.scm` file rather than here.**
+//!
+//! `hygiene_matrix.rs` is a different instrument again — 28 shapes scored
+//! against chibi and Racket, read as a table when a fix moves a row — and
+//! stays in Rust.
+//!
 //! Related issues:
 //! - https://github.com/avalonalex/patina/issues/12
 

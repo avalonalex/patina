@@ -26,14 +26,15 @@
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   3 pass
-;;   chibi                     3 pass
+;;   patina VM / tree-walker   4 pass
+;;   chibi                     4 pass
 ;;   Gauche                    does not complete — registered
 ;;
-;; **Gauche rejects the binding rows**, as Patina used to, by two separate
-;; refusals: `swap-first-two`'s definition is "Pattern variable b is used in
-;; wrong level", and the generated `first-of`'s use is "malformed first-of".
-;; chibi accepts both. (The Rust row this came from also named Larceny, Kawa
+;; **Gauche rejects three of the four rows**, as Patina used to, by three
+;; separate refusals: `swap-first-two`'s definition is "Pattern variable b is
+;; used in wrong level", the generated `first-of`'s use is "malformed
+;; first-of", and `mention-dots`'s definition is "template's ellipsis nesting
+;; is deeper than pattern's". chibi accepts all three. (The Rust row this came from also named Larceny, Kawa
 ;; and Sagittarius as accepting it; that claim is inherited from its comment,
 ;; is in no document this repo holds, and was not re-measured here.)
 ;;
@@ -44,7 +45,8 @@
 ;; difference from the lane, since an absent row cannot FAIL. Letting the file
 ;; die puts the difference in `DIVERGENCES.tsv`, where the lane checks it and
 ;; where it retires itself the day Gauche accepts the program. The price is
-;; this file's third row, which Gauche would pass; chibi still arbitrates it.
+;; the one row Gauche would pass — the declared-ellipsis row; chibi still
+;; arbitrates it, and every other row here.
 
 (import (scheme base) (srfi 64))
 
@@ -76,6 +78,24 @@
       (syntax-rules () ((_ a b ...) (list b a ...))))
     (def-first first-of)
     (first-of 1 2 3 4)))
+
+;; A template may *refer* to a definition-site local spelled `...`, which is
+;; the same claim `expansion/hygiene.scm` makes for `if` in its first row —
+;; here rather than there because Gauche rejects this one too, with a third
+;; distinct message ("template's ellipsis nesting is deeper than pattern's"),
+;; and one file already carries the cost of that. Reporting the reference as a
+;; keyword rather than a variable was one of the pair gating Larceny's `base`
+;; at load; fixed 2026-08-25.
+;;
+;; `if` is bound alongside `...` though nothing here refers to it, for the
+;; reason the sibling row in `hygiene.scm` binds `...`: the Rust original had
+;; one `let` binding both and a macro per spelling, so one body had to serve
+;; two keyword-spelled locals. Each half keeps that body.
+(test-equal "a template may refer to a definition-site local spelled ..."
+  '(1 dots)
+  (let ((... 'dots) (if 'nineteen))
+    (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
+    (mention-dots 1)))
 
 ;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
 ;; around it has no bearing on it either way. #114 looked up the spelling `...`
