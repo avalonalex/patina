@@ -7,8 +7,9 @@
 ;; **36 rows here** — 27 from that file, plus nine that moved in from
 ;; `larceny_families.rs` because this is the file about circular data: family
 ;; 2's three, the record-cycle row from its "Review of #112" section, and
-;; family 19's five, which are the same data seen by the macro expander rather
-;; than by the reader or the writer (a section of their own, below).
+;; families 19 and 20's five, which are the same data seen by the macro
+;; expander and by the program parser rather than by `read` or the writer
+;; (a section of their own, below).
 ;;
 ;; The arithmetic for the 27 is worth spelling out: the loop's eight
 ;; executions become four named `declines` rows plus one combined `applies` row,
@@ -300,12 +301,15 @@
 
 ;; ── Through the macro expander ──────────────────────────────────────────────
 ;;
-;; **Larceny family 19**, moved here from `larceny_families.rs` because the
-;; reader is not the only walker that meets a cycle. Larceny's `base` suite
-;; hands `test` several labelled data, and until 2026-08-25 the expander's
-;; identifier scan and its scope flip walked the cycle forever — the suite hung
-;; at load, before one row of it ran. Cycles reach the expander only from the
-;; reader, so a pair it has already visited holds no identifiers and is skipped.
+;; **Larceny families 19 and 20**, moved here from `larceny_families.rs`
+;; because `read` is not the only reader that meets a label. Family 19 is the
+;; expander: Larceny's `base` suite hands `test` several labelled data, and
+;; until 2026-08-25 the identifier scan and the scope flip walked the cycle
+;; forever — the suite hung at load, before one row of it ran. Cycles reach the
+;; expander only from the reader, so a pair it has already visited holds no
+;; identifiers and is skipped. Family 20 is the program parser, and is the
+;; middle two rows; the triage doc keeps them as separate entries and so does
+;; this section, so that either can be traced back.
 
 (define-syntax same? (syntax-rules () ((_ x y) (equal? x y))))
 
@@ -313,8 +317,8 @@
   (list (same? '#0=(a b . #0#) '#1=(a b a b . #1#))
         (same? '#2=(a b . #2#) '#3=(a b c . #3#))))
 
-;; R7RS §2.4 scopes a label to the outermost datum it appears in, so the next
-;; datum may reuse it. The parser that reads a whole program datum by datum
+;; **Larceny family 20.** R7RS §2.4 scopes a label to the outermost datum it
+;; appears in, so the next datum may reuse it. The parser that reads a whole program datum by datum
 ;; (`parse`, behind the script runner and `eval_program`) kept one label table
 ;; across all of them and rejected the reuse; `read` builds a fresh parser per
 ;; call and never had the bug. **This file is the test** — the two definitions
@@ -332,13 +336,20 @@
 ;; datum as a placeholder object rather than reported. Read from a string
 ;; rather than written here for the reason the row above is written here — a
 ;; source file containing it would not load at all.
-(test-error "a reference to a label that was never defined is an error"
+(test-error "a reference to a label that was never defined is an error" #t
   (read (open-input-string "(y #0# z)")))
 
-;; The scope flip copies a macro argument pair by pair, and the copy has to
-;; close on itself where the original did — a memo from the first pair — rather
-;; than splice the original's tail in after some budget, which lost `eq?`
-;; identity across the cycle and left `write` a shape it could not print.
+;; **Family 19 again.** The scope flip copies a macro argument pair by pair,
+;; and the copy has to close on itself where the original did — a memo from the
+;; first pair — rather than splice the original's tail in after some budget,
+;; which lost `eq?` identity across the cycle and left `write` a shape it could
+;; not print.
+;;
+;; The Rust original asserted three things at once and the first was its
+;; control — that the *uncopied* literal is `eq?` to its own tail, before any
+;; macro touches it. That one is dropped here rather than lost: it is the row
+;; "the cdr of a circular literal is eq? to the pair", 200 lines above, which is
+;; the same claim with nothing in the way.
 (define-syntax both (syntax-rules () ((_ x) (list x x))))
 
 (test-assert "the expander's copy of a cycle is closed on itself"

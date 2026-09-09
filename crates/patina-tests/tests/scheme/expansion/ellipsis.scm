@@ -17,26 +17,34 @@
 ;; token carrying an identity of its own — which an escaped `(... ...)` does —
 ;; is read in its own scopes, and every other in the macro's definition scopes.
 ;;
+;; **Both binding rows put both macros in one `let`.** They assert one each so
+;; that a failure names itself, but neither could be written with only the
+;; macro it asks about: the shape that defeats a per-macro or per-scope rule is
+;; a single scope in which one macro has an ellipsis and the other does not.
+;; Split into a scope apiece, an implementation deciding per scope by looking
+;; at whichever macro it finds there would pass both.
+;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
 ;;   patina VM / tree-walker   3 pass
 ;;   chibi                     3 pass
-;;   Gauche                    1 pass, 2 omitted — see below
+;;   Gauche                    does not complete — registered
 ;;
-;; **Gauche rejects both binding rows**, as Patina used to, and by two separate
+;; **Gauche rejects the binding rows**, as Patina used to, by two separate
 ;; refusals: `swap-first-two`'s definition is "Pattern variable b is used in
-;; wrong level", and the generated `first-of`'s *use* is "malformed first-of".
-;; chibi accepts both, as do Larceny, Kawa and Sagittarius per the family-14
-;; triage, so this is Gauche alone.
+;; wrong level", and the generated `first-of`'s use is "malformed first-of".
+;; chibi accepts both. (The Rust row this came from also named Larceny, Kawa
+;; and Sagittarius as accepting it; that claim is inherited from its comment,
+;; is in no document this repo holds, and was not re-measured here.)
 ;;
-;; They are omitted on Gauche with `cond-expand` rather than skipped with
-;; `test-skip`, and that is not a style preference — it is the one case where
-;; the file's usual scoping tool cannot work. Gauche refuses these programs
-;; while it **compiles** the enclosing form; `test-skip` suppresses evaluation
-;; only, so a skipped row would still take the whole file down and cost Gauche
-;; the third row too. A `cond-expand` clause that is not selected is never
-;; compiled. The cost is that the omission is invisible in the lane's output —
-;; an absent row cannot FAIL — which is why it is spelled out here.
+;; Gauche refuses these programs while it **compiles** them, which is why the
+;; file is registered `*` — `incomplete` — rather than scoped. `test-skip`
+;; suppresses evaluation, not compilation, so it cannot save a row Gauche will
+;; not read; and a `cond-expand` clause that omits the rows would hide a real
+;; difference from the lane, since an absent row cannot FAIL. Letting the file
+;; die puts the difference in `DIVERGENCES.tsv`, where the lane checks it and
+;; where it retires itself the day Gauche accepts the program. The price is
+;; this file's third row, which Gauche would pass; chibi still arbitrates it.
 
 (import (scheme base) (srfi 64))
 
@@ -46,33 +54,33 @@
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
 
-(cond-expand
-  (gauche)   ; rejects both rows at compile time — see the header
-  (else
-   ;; Written inside the binding, so its `...` is the variable `dots` and the
-   ;; pattern binds three variables: `(list b a ...)` puts them back in the
-   ;; order `b a dots`, where a real ellipsis would splice.
-   (test-equal "a syntax-rules written where dots is bound has no ellipsis"
-     '(2 1 3)
-     (let ((... 'dots))
-       (define-syntax swap-first-two
-         (syntax-rules () ((_ a b ...) (list b a ...))))
-       (swap-first-two 1 2 3)))
+;; `swap-first-two` is written inside the binding, so its `...` is the variable
+;; `dots` and the pattern binds three variables: `(list b a ...)` puts them back
+;; in the order `b a dots`, where a real ellipsis would splice.
+(test-equal "a syntax-rules written where dots is bound has no ellipsis"
+  '(2 1 3)
+  (let ((... 'dots))
+    (define-syntax swap-first-two
+      (syntax-rules () ((_ a b ...) (list b a ...))))
+    (def-first first-of)
+    (swap-first-two 1 2 3)))
 
-   ;; The opposite direction, and the half that a per-macro decision loses:
-   ;; `def-first` is written at top level and escapes an ellipsis into what it
-   ;; generates. That token is an ellipsis at the use site whatever `...` means
-   ;; there, so `first-of` takes one argument and any number more.
-   (test-equal "an escaped ellipsis is still one inside a binding of dots"
-     '(1)
-     (let ((... 'dots))
-       (def-first first-of)
-       (first-of 1 2 3 4)))))
+;; The opposite direction in the same scope, and the half a per-macro decision
+;; loses: `def-first` is written at top level and escapes an ellipsis into what
+;; it generates. That token is an ellipsis at the use site whatever `...` means
+;; there, so `first-of` takes one argument and any number more.
+(test-equal "an escaped ellipsis is still one inside a binding of dots"
+  '(1)
+  (let ((... 'dots))
+    (define-syntax swap-first-two
+      (syntax-rules () ((_ a b ...) (list b a ...))))
+    (def-first first-of)
+    (first-of 1 2 3 4)))
 
 ;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
 ;; around it has no bearing on it either way. #114 looked up the spelling `...`
-;; and broke this row while fixing the two above. All three implementations
-;; agree here.
+;; and broke this row while fixing the two above. chibi agrees; Gauche never
+;; reaches it, for the reason in the header.
 (test-equal "a declared ellipsis is unaffected by a binding of dots" '(2 3 1)
   (let ((... 'dots))
     (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))

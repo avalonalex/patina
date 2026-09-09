@@ -267,27 +267,32 @@ Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
 
-**One exception, and it is narrow: a row an oracle refuses to *compile*.**
-`test-skip` suppresses evaluation, so a row it guards is still read and
-compiled — which is enough to lose the whole file where an implementation
-rejects the program while compiling the form around it. Gauche does exactly
-that to two rows of `expansion/ellipsis.scm`: R7RS §4.3.2 makes a
+**Where an oracle refuses to *compile* a row, neither form works — register
+the file instead.** `test-skip` suppresses evaluation, so a row it guards is
+still read and compiled, which is enough to lose the whole file when an
+implementation rejects the program while compiling the form around it. Gauche
+does exactly that to `expansion/ellipsis.scm`: R7RS §4.3.2 makes a
 `syntax-rules` written where `...` is bound an ordinary three-variable pattern,
-and Gauche instead reports `Pattern variable b is used in wrong level` and
-stops. A `cond-expand` clause that is not selected is never compiled, so there
-the row goes inside one:
+and Gauche reports `Pattern variable b is used in wrong level` and stops.
 
-```scheme
-(cond-expand
-  (gauche)   ; rejects both rows at compile time — see the header
-  (else (test-equal "the row's name" ...)))
+The tempting repair is a `cond-expand` clause that is simply not selected,
+since an unselected clause is never compiled. **Don't** — it hides a real
+difference in the one place nothing checks. `run_suite_oracles.sh` compares the
+rows an oracle *fails*, and an absent row cannot fail, so the omission lives
+only in a comment and ages there silently.
+
+Let the file die and register it instead:
+
+```
+expansion/ellipsis.scm	gauche	*	incomplete	Gauche rejects the file while compiling it: …
 ```
 
-That gives up precisely what the skip form buys: an omitted row reports no
-skip, so the lane sees nothing at all where a skipped row would have said so.
-Pay that only when the alternative is losing the file, and write the omission
-into the file's header — the header is then the only record that the row exists
-and did not run.
+Now the lane holds the claim — and holds it in both directions, because a `*`
+row that starts completing is reported as "completes now, but is registered as
+incomplete". The quarantine retires itself the day the oracle changes. The
+price is the rest of that file's rows on that oracle, so keep a file whose rows
+one oracle cannot compile small, and say in its header which rows the *other*
+oracle still arbitrates.
 
 **Skip the count, not the name, and put it immediately above its row.** SRFI
 64's `test-skip` takes a count, a name or a predicate; in this suite the count
