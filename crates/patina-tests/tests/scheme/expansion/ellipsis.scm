@@ -1,11 +1,14 @@
 ;; The ellipsis is identified by *binding*, not by spelling — R7RS §4.3.2, and
 ;; SRFI 46 for the declared form.
 ;;
-;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 14
-;; and 15, #193 Phase 1), where the rows sat under the suite run that found
-;; them. Their subject is one question asked three ways: *which token in this
-;; template is the ellipsis?* — and the answer is never "whichever one is
-;; spelled `...`".
+;; **Assembled from two migrations**, both under #193: families 14 and 15 of
+;; `larceny_families.rs`, where the rows sat under the suite run that found
+;; them, and `hygiene.rs`'s ellipsis-escape tests (five of them, three rows —
+;; the section below says why three).
+;;
+;; Two subjects, and §4.3.2 is the source of both: *which token in this template
+;; is the ellipsis?* — never "whichever one is spelled `...`" — and what the
+;; escape `(... ⟨template⟩)` hands back.
 ;;
 ;; §4.3.2 says a `syntax-rules` written where `...` is bound as a variable has
 ;; no ellipsis at all, so `(_ a b ...)` is a three-variable pattern. Patina
@@ -26,11 +29,11 @@
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   4 pass
-;;   chibi                     4 pass
-;;   Gauche                    1 pass, 3 omitted — see below
+;;   patina VM / tree-walker   7 pass
+;;   chibi                     7 pass
+;;   Gauche                    4 pass, 3 omitted — see below
 ;;
-;; **Gauche cannot compile three of the four rows**, as Patina could not until
+;; **Gauche cannot compile three of the seven rows**, as Patina could not until
 ;; 2026-08-25, by three separate refusals: `swap-first-two`'s definition is
 ;; "Pattern variable b is used in wrong level", the generated `first-of`'s use
 ;; is "malformed first-of", and `mention-dots`'s definition is "template's
@@ -73,6 +76,50 @@
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
 
+
+;; ── What the escape produces ────────────────────────────────────────────────
+;;
+;; **From `hygiene.rs`** (#193). R7RS §4.3.2 gives `(... ⟨template⟩)` as an
+;; escape: the template is used with `...` treated as an ordinary symbol. The
+;; binding rows elsewhere in this file ask *which token is the ellipsis*; these
+;; ask what the escape hands back, which is the other half of the same
+;; sentence.
+;;
+;; Five Rust tests became three rows. Two of the five asserted the same claims
+;; through `equal?` — `(equal? (make-ellipsis) '...)` beside a printed-form
+;; check of the same call — and `test-equal` compares with `equal?`, so those
+;; two are what the three rows already say. The printed form is not lost so
+;; much as not the point: the claim is that the escape yields the *symbol*, and
+;; `external_representation.rs` is where rendering is asserted deliberately.
+(define-syntax make-ellipsis (syntax-rules () ((_) (quote (... ...)))))
+
+(test-equal "an escaped ellipsis alone yields the symbol" '...
+  (make-ellipsis))
+
+;; The escape covers a whole template, so a pattern variable inside one is
+;; still substituted while the `...` beside it stays a symbol.
+(define-syntax escaped-with-var (syntax-rules () ((_ x) (quote (... (x ...))))))
+
+(test-equal "and a pattern variable inside one is still substituted" '(foo ...)
+  (escaped-with-var foo))
+
+;; Nested: the outer escape protects the inner `...`, which is then an ordinary
+;; symbol in the output rather than a second escape.
+(define-syntax escaped-twice (syntax-rules () ((_ x y) (quote (... (... x y))))))
+
+(test-equal "and an escape inside an escape is a symbol, not a second escape"
+  '(... bar baz)
+  (escaped-twice bar baz))
+
+;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
+;; around it has no bearing on it either way. #114 looked up the spelling `...`
+;; and broke this row while fixing the two above. chibi agrees; Gauche never
+;; reaches it, for the reason in the header.
+(test-equal "a declared ellipsis is unaffected by a binding of dots" '(2 3 1)
+  (let ((... 'dots))
+    (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
+    (m3 1 2 3)))
+
 ;; ── Rows Gauche cannot compile ──────────────────────────────────────────────
 ;;
 ;; Last in the file on purpose: a row appended at the end must not land inside
@@ -81,9 +128,9 @@
 (cond-expand
   (gauche)   ; cannot compile the rows below — see the header
   (else
-   ;; `swap-first-two` is written inside the binding, so its `...` is the variable
-   ;; `dots` and the pattern binds three variables: `(list b a ...)` puts them back
-   ;; in the order `b a dots`, where a real ellipsis would splice.
+   ;; `swap-first-two` is written inside the binding, so its `...` is the
+   ;; variable `dots` and the pattern binds three variables: `(list b a ...)`
+   ;; puts them back in the order `b a dots`, where a real ellipsis splices.
    (test-equal "a syntax-rules written where dots is bound has no ellipsis"
      '(2 1 3)
      (let ((... 'dots))
@@ -96,8 +143,9 @@
    ;; rather than shared for that reason: one body has to bind `...` and hold
    ;; both macros, which is the shape a decision made once per body fails. This
    ;; is the half a per-macro decision loses: `def-first` is written at top
-   ;; level and escapes an ellipsis into what it generates. That token is an ellipsis at the use site whatever `...` means
-   ;; there, so `first-of` takes one argument and any number more.
+   ;; level and escapes an ellipsis into what it generates. That token is an
+   ;; ellipsis at the use site whatever `...` means there, so `first-of` takes
+   ;; one argument and any number more.
    (test-equal "an escaped ellipsis is still one inside a binding of dots"
      '(1)
      (let ((... 'dots))
@@ -110,7 +158,7 @@
    ;; the same claim `expansion/hygiene.scm` makes for `if` in its first row —
    ;; here rather than there because Gauche rejects this one too, with a third
    ;; distinct message ("template's ellipsis nesting is deeper than pattern's"),
-   ;; and one file already carries the cost of that. Reporting the reference as a
+   ;; and one file already carries that cost. Reporting the reference as a
    ;; keyword rather than a variable was one of the pair gating Larceny's `base`
    ;; at load; fixed 2026-08-25.
    ;;
@@ -123,14 +171,5 @@
      (let ((... 'dots) (if 'nineteen))
        (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
        (mention-dots 1)))))
-
-;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
-;; around it has no bearing on it either way. #114 looked up the spelling `...`
-;; and broke this row while fixing the two above. chibi agrees; Gauche never
-;; reaches it, for the reason in the header.
-(test-equal "a declared ellipsis is unaffected by a binding of dots" '(2 3 1)
-  (let ((... 'dots))
-    (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
-    (m3 1 2 3)))
 
 (test-end)

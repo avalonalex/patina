@@ -2,10 +2,12 @@
 ;; literal identifier only when both occurrences have the same lexical binding,
 ;; or the two are spelled alike and neither is bound.
 ;;
-;; **Moved from `crates/patina-tests/tests/hygiene.rs`** (#193, the file's first
-;; slice). That file's 49 tests are portable value assertions, but 44 of them
-;; build a tree-walker by hand and so never ran on the VM — the default backend.
-;; These rows run on both, and under chibi and Gauche.
+;; **Moved from `crates/patina-tests/tests/hygiene.rs`** (#193), in two slices:
+;; the literal-matching tests first, then the two about `_`, which is a literal
+;; the moment it appears in a literals list. That file's tests are portable
+;; value assertions, but most of them built a tree-walker by hand and so never
+;; ran on the VM — the default backend. These rows run on both, and under chibi
+;; and Gauche.
 ;;
 ;; The rule reads as bookkeeping and is not: it is what lets a user rebind `=>`
 ;; or `else` and have `cond` stop treating them as syntax, and what stops a
@@ -14,9 +16,9 @@
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   17 pass
-;;   chibi                     17 pass
-;;   Gauche                    16 pass, 1 fail — registered, and filed upstream
+;;   patina VM / tree-walker   19 pass
+;;   chibi                     19 pass
+;;   Gauche                    18 pass, 1 fail — registered, and filed upstream
 ;;
 ;; Gauche differs on the last row only: a literal matched against an identifier
 ;; the *enclosing template* just bound. It answers `matched-k` where Patina,
@@ -126,7 +128,10 @@
 ;; `test_literal_binding_before_vs_after` were the same program down to the
 ;; symbol it returned. That, and the shadowed-`=>` program appearing both as a
 ;; tree-walker-only test and through the both-backend helper, is why fourteen
-;; tests became seventeen rows rather than nineteen. In the first, `k` is bound *before* the macro is defined, so the
+;; tests became seventeen rows rather than nineteen; the two `_` rows arrived
+;; later, from two more tests, which is the file's nineteen.
+;;
+;; In the first, `k` is bound *before* the macro is defined, so the
 ;; literal in the pattern and the `k` at the use site are the same binding and
 ;; the literal matches. In the second the use site binds `k` *after*, so they
 ;; are different bindings and it does not — even though every `k` is spelled
@@ -212,5 +217,38 @@
                        (let ((k 99))
                          (n k)))))))
     (m anything)))
+
+;; ── `_`, which is a pattern token until it is a literal ─────────────────────
+;;
+;; **From `hygiene.rs`** (#193). R7RS §4.3.2 gives `_` two jobs. In a pattern it
+;; matches anything and binds nothing, which is why `count-args` can ask only
+;; about arity. Named in the literals list it stops being a wildcard and becomes
+;; an ordinary literal, matching only an identifier with the same binding — the
+;; same "by binding, not by spelling" rule the rest of this file is about,
+;; applied to the one token with a second job.
+(define-syntax count-args (syntax-rules () ((_ a) 1) ((_ a b) 2) ((_ a b c) 3)))
+
+(test-equal "_ is a wildcard that matches anything and binds nothing" '(1 2 3)
+  (list (count-args x) (count-args x y) (count-args x y z)))
+
+;; With `_` declared a literal, `(_ _ _)` matches only a call spelled with two
+;; literal underscores; `(count-to-2_ a b)` falls through to the dotted
+;; catch-all
+;; instead. The macro's *own* keyword position is still matched by the first `_`
+;; of each rule, which is the part that has to keep working for the rest to mean
+;; anything.
+(define-syntax count-to-2_
+  (syntax-rules (_)
+    ((_) 0)
+    ((_ _) 1)
+    ((_ _ _) 2)
+    ((x . y) 'fail)))
+
+(test-equal "and in the literals list it matches only itself"
+  '(2 0 fail fail)
+  (list (count-to-2_ _ _)
+        (count-to-2_)
+        (count-to-2_ a b)
+        (count-to-2_ a b c d)))
 
 (test-end)

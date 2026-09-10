@@ -3,7 +3,7 @@
 //! These tests verify that the macro system properly implements hygienic renaming
 //! to prevent macro-introduced identifiers from capturing user bindings.
 //!
-//! **24 of the 25 tests here run on the tree-walker only.** They build
+//! **17 of the 18 tests here run on the tree-walker only.** They build
 //! `TreeWalkInterpreter::new_tree_walker()` by hand, which is what the file did
 //! before `common::assert_program_eval_to` existed. This is a gap and not a
 //! decision — the VM is the default backend, and the hygiene defects Larceny
@@ -16,7 +16,9 @@
 //! assertions whose home is `tests/scheme/expansion/`, where they run on both
 //! backends and under chibi and Gauche. The literal-matching rows went first,
 //! to `syntax-rules-literals.scm` and the `let-syntax` rows to
-//! `let-syntax.scm` — 49 tests are now 25 — and moving them found
+//! `let-syntax.scm`, the ellipsis-escape rows to `ellipsis.scm` and the two
+//! about `_` to `syntax-rules-literals.scm` — 49 tests are now 18 — and moving
+//! them found
 //! two things a Rust comment could not: one row that asserted only "did not
 //! error", now pinned at the value all four implementations give, and one whose
 //! comment claimed Gauche agreed with it when Gauche never has (shirok/Gauche
@@ -265,172 +267,6 @@ fn test_recursive_macro_hygiene() {
         result
     );
     assert_eq!(interp.display_tagged(result.unwrap()), "6");
-}
-
-// =============================================================================
-// Underscore Literal Tests
-// =============================================================================
-//
-// R7RS Section 4.3.2: When `_` appears in the literals list, it should only
-// match the literal symbol `_`, not act as a wildcard pattern.
-
-/// Test underscore as wildcard (default behavior when not in literals)
-#[test]
-fn test_underscore_as_wildcard() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax count-args
-          (syntax-rules ()
-            ((_ a) 1)
-            ((_ a b) 2)
-            ((_ a b c) 3)))
-
-        (list (count-args x) (count-args x y) (count-args x y z))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // _ should match any symbol in macro keyword position
-    let val = result.unwrap();
-    assert_eq!(interp.display_tagged(val), "(1 2 3)");
-}
-
-/// Test underscore as literal (when explicitly in literals list)
-///
-/// R7RS: When `_` is in the literals list, `_` in patterns should only
-/// match the literal symbol `_`, not act as a wildcard.
-#[test]
-fn test_underscore_as_literal() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax count-to-2_
-          (syntax-rules (_)
-            ((_) 0)
-            ((_ _) 1)
-            ((_ _ _) 2)
-            ((x . y) 'fail)))
-
-        (list (count-to-2_ _ _)
-              (count-to-2_)
-              (count-to-2_ a b)
-              (count-to-2_ a b c d))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Pattern (_ _ _) should only match literal _, not a and b
-    let val = result.unwrap();
-    assert_eq!(interp.display_tagged(val), "(2 0 fail fail)");
-}
-
-// =============================================================================
-// Ellipsis Escape Tests
-// =============================================================================
-//
-// R7RS Section 4.3.2: "(... template)" is an escape form that produces
-// "template" with ellipsis treated as a regular symbol.
-
-/// Test basic ellipsis escape: (... ...) produces literal ...
-#[test]
-fn test_ellipsis_escape_basic() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax make-ellipsis
-          (syntax-rules ()
-            ((_) (quote (... ...)))))
-
-        (make-ellipsis)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // (... ...) should produce just ...
-    assert_eq!(interp.display_tagged(result.unwrap()), "...");
-}
-
-/// Test ellipsis escape preserves pattern variable substitution
-#[test]
-fn test_ellipsis_escape_with_pattern_variable() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax elli-esc-1
-          (syntax-rules ()
-            ((_ x) (quote (... (x ...))))))
-
-        (elli-esc-1 foo)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // x should be substituted, but ... remains literal
-    assert_eq!(interp.display_tagged(result.unwrap()), "(foo ...)");
-}
-
-/// Test ellipsis escape with multiple pattern variables
-#[test]
-fn test_ellipsis_escape_multiple_vars() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax elli-esc-2
-          (syntax-rules ()
-            ((_ x y) (quote (... (... x y))))))
-
-        (elli-esc-2 bar baz)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Both x and y should be substituted, ... remains literal
-    assert_eq!(interp.display_tagged(result.unwrap()), "(... bar baz)");
-}
-
-/// Test that ellipsis escape produces proper Symbol values
-#[test]
-fn test_ellipsis_escape_produces_symbol() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax make-ellipsis
-          (syntax-rules ()
-            ((_) (quote (... ...)))))
-
-        (equal? (make-ellipsis) '...)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Should be equal to '...
-    assert_eq!(interp.display_tagged(result.unwrap()), "#t");
-}
-
-/// Test ellipsis escape in list produces equal? results
-#[test]
-fn test_ellipsis_escape_equal_list() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define-syntax elli-with-var
-          (syntax-rules ()
-            ((_ x) (quote (... (x ...))))))
-
-        (equal? (elli-with-var 100) '(100 ...))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "#t");
 }
 
 // =============================================================================
