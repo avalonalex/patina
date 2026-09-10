@@ -158,7 +158,9 @@ had caught. All are now fixed; the newest is first.
   `test` form had been rewritten to `(chibi test)`'s `list` (the relinker
   matched by spelling). A probe of the same shape found a library template's
   literal `'(1 2)` reaching the program's `quote` too. Triage families 33–35,
-  each pinned in `crates/patina-tests/tests/larceny_families.rs`; the review
+  each pinned in `crates/patina-tests/tests/scheme/expansion/` since #193
+  Phase 1 redistributed `larceny_families.rs` (families 33 and 35 in
+  `template-references.scm`, the `let-syntax` rows in `let-syntax.scm`); the review
   of that fix found a second layer of the same families (a generated
   `let-syntax`'s scoping, `quote` inside a quasiquote, the ellipsis-escape
   compiler), all fixed and pinned in the same PR. It also surfaced family 36 —

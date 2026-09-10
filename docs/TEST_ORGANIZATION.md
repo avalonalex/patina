@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  74 as of 2026-09-07.
+  73 as of 2026-09-10, with Phase 1 complete.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -197,19 +197,33 @@ number would delete why the file exists.
 
 #### A file organised by provenance gets redistributed, not migrated
 
-`larceny_families.rs` was the one place the suite departed from the rule above.
-It is Patina's own MIT-licensed reproduction of every defect family Larceny's
-R7RS suites surfaced — the suites are LGPL and are not vendored — and it was
-organised by **where a defect was found** rather than what it is about. So
-`equal?` on circular structures sat in a Larceny file while `data/circular-data
-.scm` argued about `equal?` on circular structures two directories away.
+`larceny_families.rs` was the one place the suite departed from the rule above,
+and **it is gone** — the redistribution finished on 2026-09-10, and this section
+is what it left behind. It held Patina's own MIT-licensed reproduction of every
+defect family Larceny's R7RS suites surfaced (the suites are LGPL and are not
+vendored), organised by **where a defect was found** rather than what it is
+about. So `equal?` on circular structures sat in a Larceny file while
+`data/circular-data.scm` argued about `equal?` on circular structures two
+directories away.
 
-Those rows are being moved to the file about their subject, one group at a
-time, each carrying a `Larceny family N` line so
-`scheme_tests/reports/larceny_triage.md` still maps — better than before, since
-the triage doc can now name a file rather than a 1497-line haystack.
+Sixty-four rows went, ten slices at a time, each carrying a `Larceny family N`
+line so `scheme_tests/reports/larceny_triage.md` still maps — better than
+before, since the triage doc names a file and a row rather than a 1497-line
+haystack, and `every_triage_pointer_names_something_that_exists` now checks that
+those pointers resolve. Six rows stayed in Rust because a `.scm` file cannot
+express them: family 40's three backend divergences (`backend_divergence.rs`),
+and the two families that need real files on disk (`include_syntax.rs`,
+`standard_ports.rs`).
 
-Three things that came out of doing it, worth knowing before the next one:
+**What the move was actually worth** is not the binary it saved. Rows that had
+only ever run on Patina were suddenly arbitrated by two other implementations,
+and that found things: a Gauche defect (a template-generated `let-syntax`
+capturing its own sibling), a chibi one (`only` resolving against a library's
+internal names), a row that had been *relying* on our own family-40 defect to
+pass, and a quarantine whose note had outlived its own fix by two weeks. None of
+those was reachable from a file only Patina ran.
+
+Lessons that came out of doing it, worth knowing before the next one:
 
 - **Putting a row beside its subject is what makes it worth reading.**
   `circular-data.scm`'s header already argued that `equal?` must terminate on

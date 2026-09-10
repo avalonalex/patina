@@ -823,9 +823,9 @@ fn test_end_does_not_signal_a_failure() {
 ///
 /// `scheme_tests/reports/larceny_triage.md` is the open defect queue CLAUDE.md
 /// sends people to first, and each family entry names the test that reproduces
-/// it. #193 Phase 1 has been moving those tests out of
-/// `larceny_families.rs` into this directory, and the pointers rotted a slice
-/// at a time — 22 of them named Rust functions that existed nowhere by the
+/// it. #193 Phase 1 moved those tests out of `larceny_families.rs` into this
+/// directory — that file is deleted now — and the pointers rotted a slice at
+/// a time — 22 of them named Rust functions that existed nowhere by the
 /// time anyone looked. A queue that points at deleted symbols is worse than
 /// one that points at nothing: it reads as though someone checked.
 ///
