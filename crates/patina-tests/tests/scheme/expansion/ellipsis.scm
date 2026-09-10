@@ -28,25 +28,42 @@
 ;;
 ;;   patina VM / tree-walker   4 pass
 ;;   chibi                     4 pass
-;;   Gauche                    does not complete — registered
+;;   Gauche                    1 pass, 3 omitted — see below
 ;;
-;; **Gauche rejects three of the four rows**, as Patina used to, by three
-;; separate refusals: `swap-first-two`'s definition is "Pattern variable b is
-;; used in wrong level", the generated `first-of`'s use is "malformed
-;; first-of", and `mention-dots`'s definition is "template's ellipsis nesting
-;; is deeper than pattern's". chibi accepts all three. (The Rust row this came from also named Larceny, Kawa
-;; and Sagittarius as accepting it; that claim is inherited from its comment,
-;; is in no document this repo holds, and was not re-measured here.)
+;; **Gauche cannot compile three of the four rows**, as Patina could not until
+;; 2026-08-25, by three separate refusals: `swap-first-two`'s definition is
+;; "Pattern variable b is used in wrong level", the generated `first-of`'s use
+;; is "malformed first-of", and `mention-dots`'s definition is "template's
+;; ellipsis nesting is deeper than pattern's". chibi accepts all three. (The
+;; Rust row these came from also named Larceny, Kawa and Sagittarius as
+;; accepting them; that claim is inherited from its comment, is in no document
+;; this repo holds, and has not been re-measured — but it is why Gauche reads
+;; as the outlier here rather than as one of two camps.) **Not reported
+;; upstream**: nobody has checked Gauche's tracker for it. The two Gauche bugs
+;; filed from this suite, shirok/Gauche#1326 and #1327, are different rows.
 ;;
-;; Gauche refuses these programs while it **compiles** them, which is why the
-;; file is registered `*` — `incomplete` — rather than scoped. `test-skip`
-;; suppresses evaluation, not compilation, so it cannot save a row Gauche will
-;; not read; and a `cond-expand` clause that omits the rows would hide a real
-;; difference from the lane, since an absent row cannot FAIL. Letting the file
-;; die puts the difference in `DIVERGENCES.tsv`, where the lane checks it and
-;; where it retires itself the day Gauche accepts the program. The price is
-;; the one row Gauche would pass — the declared-ellipsis row; chibi still
-;; arbitrates it, and every other row here.
+;; They sit in a `cond-expand` clause Gauche does not select. `test-skip`
+;; cannot do this job — Gauche refuses these programs while it **compiles**
+;; them, and a skipped row is still compiled, so it would take the file down
+;; anyway. An unselected `cond-expand` clause is never compiled at all.
+;;
+;; **Why omit rather than let the file die and register it.** The earlier draft
+;; did the latter, so that the lane held the claim and would report it if Gauche
+;; ever accepted the program. That is the right instinct for a difference in an
+;; *answer* — those stay unscoped and classified, which is how two Gauche bugs
+;; came to be filed — but it is the wrong trade here, and the difference is
+;; ownership. Whether Gauche compiles this is Gauche's conformance, not
+;; Patina's behaviour; we have no fix to make and no drift to guard against. The
+;; register earns its keep by stopping *our* rows being edited to match an
+;; oracle, and there is nothing here to edit. Paying for that with Gauche's
+;; arbitration of every other row in the file is a bad trade, and it gets worse
+;; as the file grows.
+;;
+;; What the omission gives up is precisely nothing on our side: the driver's
+;; floor for this file fails if a row stops running on Patina, which is the
+;; direction that matters. What it gives up on the oracle side is the day
+;; Gauche starts accepting these programs — nothing will notice, and this
+;; header is the only record. That is a cost worth naming and worth paying.
 
 (import (scheme base) (srfi 64))
 
@@ -56,46 +73,56 @@
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
 
-;; `swap-first-two` is written inside the binding, so its `...` is the variable
-;; `dots` and the pattern binds three variables: `(list b a ...)` puts them back
-;; in the order `b a dots`, where a real ellipsis would splice.
-(test-equal "a syntax-rules written where dots is bound has no ellipsis"
-  '(2 1 3)
-  (let ((... 'dots))
-    (define-syntax swap-first-two
-      (syntax-rules () ((_ a b ...) (list b a ...))))
-    (def-first first-of)
-    (swap-first-two 1 2 3)))
-
-;; The opposite direction in the same scope, and the half a per-macro decision
-;; loses: `def-first` is written at top level and escapes an ellipsis into what
-;; it generates. That token is an ellipsis at the use site whatever `...` means
-;; there, so `first-of` takes one argument and any number more.
-(test-equal "an escaped ellipsis is still one inside a binding of dots"
-  '(1)
-  (let ((... 'dots))
-    (define-syntax swap-first-two
-      (syntax-rules () ((_ a b ...) (list b a ...))))
-    (def-first first-of)
-    (first-of 1 2 3 4)))
-
-;; A template may *refer* to a definition-site local spelled `...`, which is
-;; the same claim `expansion/hygiene.scm` makes for `if` in its first row —
-;; here rather than there because Gauche rejects this one too, with a third
-;; distinct message ("template's ellipsis nesting is deeper than pattern's"),
-;; and one file already carries the cost of that. Reporting the reference as a
-;; keyword rather than a variable was one of the pair gating Larceny's `base`
-;; at load; fixed 2026-08-25.
+;; ── Rows Gauche cannot compile ──────────────────────────────────────────────
 ;;
-;; `if` is bound alongside `...` though nothing here refers to it, for the
-;; reason the sibling row in `hygiene.scm` binds `...`: the Rust original had
-;; one `let` binding both and a macro per spelling, so one body had to serve
-;; two keyword-spelled locals. Each half keeps that body.
-(test-equal "a template may refer to a definition-site local spelled ..."
-  '(1 dots)
-  (let ((... 'dots) (if 'nineteen))
-    (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
-    (mention-dots 1)))
+;; Last in the file on purpose: a row appended at the end must not land inside
+;; this clause by accident, where it would silently stop running on Gauche with
+;; nothing to report it — the driver's floor counts Patina, where it still runs.
+(cond-expand
+  (gauche)   ; cannot compile the rows below — see the header
+  (else
+   ;; `swap-first-two` is written inside the binding, so its `...` is the variable
+   ;; `dots` and the pattern binds three variables: `(list b a ...)` puts them back
+   ;; in the order `b a dots`, where a real ellipsis would splice.
+   (test-equal "a syntax-rules written where dots is bound has no ellipsis"
+     '(2 1 3)
+     (let ((... 'dots))
+       (define-syntax swap-first-two
+         (syntax-rules () ((_ a b ...) (list b a ...))))
+       (def-first first-of)
+       (swap-first-two 1 2 3)))
+
+   ;; The opposite direction **in the same scope** — the preamble is repeated
+   ;; rather than shared for that reason: one body has to bind `...` and hold
+   ;; both macros, which is the shape a decision made once per body fails. This
+   ;; is the half a per-macro decision loses: `def-first` is written at top
+   ;; level and escapes an ellipsis into what it generates. That token is an ellipsis at the use site whatever `...` means
+   ;; there, so `first-of` takes one argument and any number more.
+   (test-equal "an escaped ellipsis is still one inside a binding of dots"
+     '(1)
+     (let ((... 'dots))
+       (define-syntax swap-first-two
+         (syntax-rules () ((_ a b ...) (list b a ...))))
+       (def-first first-of)
+       (first-of 1 2 3 4)))
+
+   ;; A template may *refer* to a definition-site local spelled `...`, which is
+   ;; the same claim `expansion/hygiene.scm` makes for `if` in its first row —
+   ;; here rather than there because Gauche rejects this one too, with a third
+   ;; distinct message ("template's ellipsis nesting is deeper than pattern's"),
+   ;; and one file already carries the cost of that. Reporting the reference as a
+   ;; keyword rather than a variable was one of the pair gating Larceny's `base`
+   ;; at load; fixed 2026-08-25.
+   ;;
+   ;; `if` is bound alongside `...` though nothing here refers to it, for the
+   ;; reason the sibling row in `hygiene.scm` binds `...`: the Rust original had
+   ;; one `let` binding both and a macro per spelling, so one body had to serve
+   ;; two keyword-spelled locals. Each half keeps that body.
+   (test-equal "a template may refer to a definition-site local spelled ..."
+     '(1 dots)
+     (let ((... 'dots) (if 'nineteen))
+       (define-syntax mention-dots (syntax-rules () ((_ a) (list a ...))))
+       (mention-dots 1)))))
 
 ;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
 ;; around it has no bearing on it either way. #114 looked up the spelling `...`
