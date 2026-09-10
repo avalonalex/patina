@@ -6,7 +6,7 @@
 //! families for `let-syntax` landed. Three tests here cannot go there,
 //! because they assert a program is *rejected* rather than what it evaluates
 //! to: `test_let_syntax_empty_body_error`, `test_let_syntax_invalid_binding_error`
-//! and `test_let_syntax_non_symbol_name_error`. The other eleven are ordinary
+//! and `test_let_syntax_non_symbol_name_error`. The other ten are ordinary
 //! value assertions and would run there unchanged; `test_let_syntax_scope`
 //! already has a counterpart there. `test_let_syntax_lexical_scoping` was a
 //! third case — its program was byte-identical to one in `hygiene.rs` — and is
