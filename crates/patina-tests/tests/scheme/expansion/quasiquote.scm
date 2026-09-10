@@ -17,13 +17,22 @@
 ;; them.
 ;;
 ;; The import set is the test. `(scheme base)`'s list operations are excluded
-;; and re-imported under `r7:`, and SRFI 101 supplies the bare names — so the
+;; and re-imported under `r7:`, and SRFI 101 supplies the bare names. The
+;; `except` list names twenty, of which this row needs six: the rest are the
+;; other names SRFI 101 exports, excluded so that no identifier arrives from
+;; two libraries at once — an error the report leaves implementations to
+;; notice, and which chibi warns about. `expansion/template-references.scm`
+;; uses the same apparatus and says more about it; a correction to one belongs
+;; in both. So the
 ;; last element, `(r7:pair? (list 1 2))` answering `#f`, is what proves the
 ;; rebinding actually took effect. Without it the row would pass on an
 ;; implementation where the import did nothing.
 
 (import (scheme write)
-        (except (scheme base) quote car cons list list? append)
+        (except (scheme base)
+          quote car cdr caar cadr cdar cddr cons pair? null?
+          list list? make-list length append reverse
+          list-tail list-ref map for-each)
         (prefix (scheme base) r7:)
         (srfi 101)
         (srfi 64))
