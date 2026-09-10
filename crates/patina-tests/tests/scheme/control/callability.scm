@@ -276,13 +276,17 @@
 ;; `call/cc` as a value. Q2 part 1 is the fix — a real binding behind the name.
 ;; chibi and Gauche answer every row below as the VM does.
 ;;
-;; `let`-bound rather than `define`-bound as the `.rs` file had it: a top-level
-;; `(define f call/cc)` raises outside any row on the tree-walker and would
-;; take the whole file down instead of costing one expected failure.
+;; The first shape is `define`-bound, as Track Q §1.2 names it: the top-level
+;; `define` itself succeeds on the tree-walker (the registry miss is raised
+;; at the *call*, which the row's own assertion catches), so the binding can
+;; stay a global and the row still costs one expected failure rather than the
+;; file. A `let` would pass the same test while never storing a control
+;; primitive into a global slot.
 
+(define callcc-as-value call/cc)
 (cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
-(test-equal "call/cc bound to a variable" 1
-  (let ((f call/cc)) (f (lambda (k) 1))))
+(test-equal "call/cc bound with define" 1
+  (callcc-as-value (lambda (k) 1)))
 
 ;; Same root cause, kept separate because passing a control operator *through
 ;; a higher-order procedure* is the shape real code hits (SRFI 1).

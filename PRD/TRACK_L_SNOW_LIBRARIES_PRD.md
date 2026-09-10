@@ -1330,9 +1330,10 @@ must-not-fire case is captured *under* the primitive's own barrier and so compar
 
 **Tree-walker: two continuation defects around primitive callbacks** — ❌ **open**. Both found
 2026-08-16 while fixing the VM half, and both pinned in
-`crates/patina-tests/tests/escape_from_primitive.rs` as `assert_divergence` quarantines so they
-retire themselves — a suite row cannot hold them, because the invoke runs the rest of the file
-from inside the callback (measured 2026-09-10, #193's divergence slice).
+`crates/patina-tests/tests/escape_from_primitive.rs` so they retire themselves — the callback
+one as an `assert_divergence` quarantine, the `eval` one as two per-backend assertions, since
+there the tree-walker returns a value. A suite row cannot hold either, because the invoke runs
+the rest of the file from inside the callback (measured 2026-09-10, #193's divergence slice).
 
 ```scheme
 (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))

@@ -5,9 +5,10 @@
 ;; which is being split rather than moved whole. That file had three parts with
 ;; different portability:
 ;;
-;;   - **this file**, 50 rows: 45 of plain R7RS control flow, plus Larceny
-;;     family 27's four and one continuation-as-handler row, all moved in from
-;;     `larceny_families.rs`;
+;;   - **this file** — 50 rows at the time, 45 of plain R7RS control flow plus
+;;     Larceny family 27's four and one continuation-as-handler row moved in
+;;     from `larceny_families.rs`; 82 now, with `backend_divergence.rs`'s rows
+;;     (the last four sections, see below);
 ;;   - the delimited-continuation half — `make-continuation-prompt-tag`,
 ;;     `call-with-continuation-prompt`, `abort-current-continuation` — which
 ;;     migrates separately, because measured 2026-09-07 all three procedures are
@@ -941,7 +942,9 @@
 (test-equal "a guard survives declining a continuable raise" 'caught-y
   (with-exception-handler (lambda (e) (list 'I e))
     (lambda () (guard (e ((eq? e 'y) 'caught-y))
-      (list (raise-continuable 'x) (raise-continuable 'y))))))
+      (let* ((x (raise-continuable 'x))
+             (y (raise-continuable 'y)))
+        (list x y))))))
 
 ;; ── Raise paths: what reaches the handler, and from where ──────────────────
 
@@ -1000,20 +1003,36 @@
 ;; an instruction, which sees it whatever the handler was and whichever route
 ;; the raise took.
 ;;
-;; The `.rs` row pinned Patina's wording of the secondary exception,
-;; "exception handler returned from non-continuable exception". Wording is
-;; not portable, so what is asserted is what R7RS says: the outer `guard`
-;; receives an *error object* — neither the handler's `'returned` delivered
-;; as a value nor the original `'x` re-raised bare.
+;; Two rows per thunk. The portable one asserts what R7RS says: the outer
+;; `guard` receives an *error object* — neither the handler's `'returned`
+;; delivered as a value nor the original `'x` re-raised bare. That cannot
+;; distinguish the secondary from the primary when the primary is itself an
+;; error object, as `car`'s is, so the Patina-scoped one pins the wording the
+;; `.rs` row pinned, "exception handler returned from non-continuable
+;; exception" — not portable, which is why it is scoped rather than dropped.
 (test-equal "a handler returning from a non-continuable raise raises the secondary"
   '(outer #t)
   (guard (o (#t (list 'outer (error-object? o))))
     (with-exception-handler (lambda (e) 'returned)
       (lambda () (list (raise 'x))))))
 
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "and it is the secondary, not the primary, that arrives"
+  '(outer "exception handler returned from non-continuable exception")
+  (guard (o (#t (list 'outer (error-object-message o))))
+    (with-exception-handler (lambda (e) 'returned)
+      (lambda () (list (raise 'x))))))
+
 (test-equal "and from a primitive's error, where the raise has no source form"
   '(outer #t)
   (guard (o (#t (list 'outer (error-object? o))))
+    (with-exception-handler (lambda (e) 'returned)
+      (lambda () (list (car 5))))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "and a primitive's error is replaced by the secondary too"
+  '(outer "exception handler returned from non-continuable exception")
+  (guard (o (#t (list 'outer (error-object-message o))))
     (with-exception-handler (lambda (e) 'returned)
       (lambda () (list (car 5))))))
 

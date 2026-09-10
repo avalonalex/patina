@@ -91,7 +91,7 @@ use std::path::{Path, PathBuf};
 const SUITE: &[(&str, i64)] = &[
     ("control/callability.scm", 30),
     ("control/case-lambda.scm", 20),
-    ("control/cps-features.scm", 80),
+    ("control/cps-features.scm", 82),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
     ("control/prompts.scm", 25),
@@ -283,13 +283,20 @@ fn run_identically(label: &str, program: &str) -> Result<Counts, String> {
 /// row the file never scoped is a mismatch, and so is a scoped line whose row
 /// both backends pass — which is how a quarantine retires: the `xpass` check
 /// says to delete the line, and this one says the file still declares it.
+///
+/// Only rows-ran and the `xfail` delta are compared here. `fail`, `xpass` and
+/// `skip` are asserted zero per backend by the caller before this runs, so
+/// comparing them again would add nothing — and would fire *first* on a
+/// retiring quarantine, hiding both messages above behind "the backends
+/// disagree". `harness_holds_a_backend_scoped_expectation_to_its_declaration`
+/// pins the accepted and the rejected shape.
 fn backends_ran_the_same_rows(
     label: &str,
     program: &str,
     tw: &Counts,
     vm: &Counts,
 ) -> Result<(), String> {
-    if tw.ran() != vm.ran() || tw.fail != vm.fail || tw.xpass != vm.xpass || tw.skip != vm.skip {
+    if tw.ran() != vm.ran() {
         return Err(format!(
             "[{label}] the backends disagree on what ran: tree-walker {tw:?}, vm {vm:?}. \
              Only the split between `pass` and `xfail` may differ between them, \
@@ -331,30 +338,31 @@ fn backends_ran_the_same_rows(
 /// identifier is true and the row is an ordinary assertion. The row asserts
 /// the *right* answer everywhere; the line says who is known to miss it.
 ///
-/// Only the count form is read, which
-/// `every_scoped_row_skips_by_count_and_sits_above_its_row` already requires
-/// of every specifier. A specifier under `(patina …)`, or with no clause at
-/// all, applies to both backends alike and contributes to neither side.
+/// The scan is [`specifiers_in`]'s — the same one the text check runs — so a
+/// specifier that check accepts is one this counts, and vice versa. A
+/// specifier under `(patina …)`, or with no clause at all, applies to both
+/// backends alike and contributes to neither side.
 fn declared_backend_expectations(program: &str) -> (i64, i64) {
-    const OPENER: &str = "(test-expect-fail ";
     let (mut tw, mut vm) = (0, 0);
     for line in program.lines() {
-        let mut rest = code_before_comment(line);
-        while let Some(at) = rest.find(OPENER) {
-            let n: i64 = rest[at + OPENER.len()..]
-                .split(')')
-                .next()
-                .and_then(|spec| spec.trim().parse().ok())
-                .unwrap_or(0);
+        let code = code_before_comment(line);
+        for (form, spec, at) in specifiers_in(code) {
+            if form != "test-expect-fail" {
+                continue;
+            }
+            // The text check requires a positive count and reports a bad one
+            // by line; a specifier it would reject counts for nothing here
+            // rather than panicking, so one bad line costs that file's report
+            // and not every file's.
+            let n: i64 = spec.parse().unwrap_or(0);
             // The clause the specifier sits in opens at the last `(` before it,
             // and the feature name is what follows that paren.
-            let clause = rest[..at].rfind('(').map(|open| rest[open + 1..at].trim());
+            let clause = code[..at].rfind('(').map(|open| code[open + 1..at].trim());
             match clause {
                 Some("patina-tree-walker") => tw += n,
                 Some("patina-vm") => vm += n,
                 _ => {}
             }
-            rest = &rest[at + OPENER.len()..];
         }
     }
     (tw, vm)
@@ -398,25 +406,26 @@ fn every_scheme_file_passes_on_both_backends() {
         // held to each other: an `xpass` on one backend is a quarantine
         // retiring, and that message — not "the backends disagree" — is the
         // one the person deleting the line needs to see.
-        let per_backend: Vec<(&str, &Counts)> = if tw == vm {
-            vec![("both backends", &vm)]
+        // The reproduction flag travels with the counts rather than being read
+        // back off the label, so rewording a label cannot send someone to
+        // reproduce a tree-walker failure on the VM.
+        let per_backend: Vec<(&str, &str, &Counts)> = if tw == vm {
+            vec![("both backends", "", &vm)]
         } else {
-            vec![("the tree-walker", &tw), ("the vm", &vm)]
+            vec![
+                ("the tree-walker", "--tree-walker", &tw),
+                ("the vm", "", &vm),
+            ]
         };
-        for (backend, counts) in per_backend {
+        for (backend, flag, counts) in per_backend {
             if counts.fail != 0 {
                 problems.push(format!(
                     "[{name}] {} assertion(s) failed on {backend}. To see which, run it \
                      from a scratch directory — SRFI 64 puts per-assertion detail in a \
                      log beside the cwd, not on stdout:\n  \
-                     (cd $(mktemp -d) && $OLDPWD/target/release/patina {} -A $OLDPWD/test-lib \
+                     (cd $(mktemp -d) && $OLDPWD/target/release/patina {flag} -A $OLDPWD/test-lib \
                      $OLDPWD/crates/patina-tests/tests/scheme/{name} && cat {stem}.log)",
-                    counts.fail,
-                    if backend == "the tree-walker" {
-                        "--tree-walker"
-                    } else {
-                        ""
-                    }
+                    counts.fail
                 ));
             }
             if counts.xpass != 0 {
@@ -573,7 +582,7 @@ fn every_scoped_row_skips_by_count_and_sits_above_its_row() {
             if specs.is_empty() {
                 continue;
             }
-            for (form, spec) in &specs {
+            for (form, spec, _) in &specs {
                 assert!(
                     spec.parse::<u32>().is_ok_and(|n| n > 0),
                     "[{name}:{}] `({form} {spec})` is {}. This suite requires a \
@@ -589,12 +598,14 @@ fn every_scoped_row_skips_by_count_and_sits_above_its_row() {
             let next = next
                 .unwrap_or_else(|| panic!("[{name}:{}] a specifier with no row beneath it", i + 1));
             assert!(
-                next.trim_start().starts_with("(test-"),
+                starts_a_test_row(next),
                 "[{name}:{}] the count binds to the next test the runner reaches, \
                  but the next form here is `{}`. Keep the specifier directly above \
                  the row it guards, with nothing in the gap — this check cannot \
                  tell *which* test form follows, so adjacency is the only part of \
-                 \"it guards that row\" that text can hold on to.",
+                 \"it guards that row\" that text can hold on to. (`test-end` is \
+                 not a row: SRFI 64 discards pending specifiers there, so a \
+                 specifier above it guards nothing.)",
                 i + 1,
                 next.trim()
             );
@@ -631,25 +642,42 @@ fn code_before_comment(line: &str) -> &str {
     line
 }
 
+/// Whether a line begins an assertion a pending specifier can bind to.
+///
+/// `test-begin`, `test-end` and `test-group` share the `(test-` prefix and are
+/// not rows; `test-end` in particular discards the pending specifiers
+/// (`lib/srfi/64.scm`), so a specifier directly above it is a dangling one
+/// that the count-based guards would otherwise never see.
+fn starts_a_test_row(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("(test-")
+        && !["(test-end", "(test-begin", "(test-group"]
+            .iter()
+            .any(|form| line.starts_with(form))
+}
+
 /// Every `(test-skip …)` / `(test-expect-fail …)` on one line, as
-/// (form name, specifier text).
+/// (form name, specifier text, byte offset of the specifier's `(`).
 ///
 /// All of them, not just the first: two specifiers can share a line, and one
 /// checked plus one unchecked is worse than neither. The delimiter check after
-/// the name stops `(test-skip-everything …)` matching as `test-skip`.
-fn specifiers_in(code: &str) -> Vec<(&'static str, &str)> {
+/// the name stops `(test-skip-everything …)` matching as `test-skip`. The
+/// offset is what [`declared_backend_expectations`] uses to find the
+/// `cond-expand` clause a specifier sits in, so the two read one grammar.
+fn specifiers_in(code: &str) -> Vec<(&'static str, &str, usize)> {
     let mut found = Vec::new();
     for form in ["test-skip", "test-expect-fail"] {
         let opener = format!("({form}");
-        let mut rest = code;
-        while let Some(at) = rest.find(&opener) {
-            let after = &rest[at + opener.len()..];
-            rest = after;
+        let mut from = 0;
+        while let Some(at) = code[from..].find(&opener) {
+            let at = from + at;
+            let after = &code[at + opener.len()..];
+            from = at + opener.len();
             match after.chars().next() {
                 Some(c) if c.is_whitespace() => {}
                 _ => continue, // `(test-skipping`, or `(test-skip)` with no spec
             }
-            found.push((form, after.split(')').next().unwrap_or(after).trim()));
+            found.push((form, after.split(')').next().unwrap_or(after).trim(), at));
         }
     }
     found
@@ -932,6 +960,58 @@ fn harness_reports_each_result_kind() {
         },
         "the driver cannot tell the four result kinds apart, so every \
          expectation above it is unfounded"
+    );
+}
+
+/// The backend-scoped expectation is the driver's own mechanism, so it gets a
+/// probe of its own, beside the one for the four result kinds: a row that is
+/// true on one backend and false on the other, declared to fail on the second,
+/// is one `xfail` there and one `pass` here — and
+/// [`backends_ran_the_same_rows`] accepts exactly that, and rejects the same
+/// counts once the declaration names the wrong backend.
+///
+/// The row is built on `(features)` rather than on a real divergence, so it
+/// stays a probe whatever the backends converge on.
+#[test]
+fn harness_holds_a_backend_scoped_expectation_to_its_declaration() {
+    const PROGRAM: &str = r#"(import (scheme base) (srfi 64))
+           (test-begin "deliberate")
+           (cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+           (test-assert "true on the vm only" (memq 'patina-vm (features)))
+           (test-end)"#;
+    let (tw, vm) =
+        run_on_both_backends("scoped-probe", PROGRAM).expect("the probe must run on both backends");
+    assert_eq!(
+        tw,
+        Counts {
+            pass: 0,
+            fail: 0,
+            xpass: 0,
+            xfail: 1,
+            skip: 0
+        },
+        "the tree-walker should record the declared expected failure"
+    );
+    assert_eq!(
+        vm,
+        Counts {
+            pass: 1,
+            fail: 0,
+            xpass: 0,
+            xfail: 0,
+            skip: 0
+        },
+        "the vm should pass the row plainly"
+    );
+    backends_ran_the_same_rows("scoped-probe", PROGRAM, &tw, &vm)
+        .expect("a declared expectation matching the recorded one is agreement");
+
+    let misdeclared = PROGRAM.replace("patina-tree-walker", "patina-vm");
+    let problem = backends_ran_the_same_rows("scoped-probe", &misdeclared, &tw, &vm)
+        .expect_err("the same counts under a declaration naming the other backend");
+    assert!(
+        problem.contains("declares 0 tree-walker and 1 vm"),
+        "the rejection should say what the file declares: {problem}"
     );
 }
 

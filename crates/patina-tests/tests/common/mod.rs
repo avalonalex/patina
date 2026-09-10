@@ -42,11 +42,12 @@
 //!
 //! Fixing the bug makes that test fail, which is the same point made the same
 //! way. Today every such pin is the tree-walker's nested-trampoline family, in
-//! `escape_from_primitive.rs`. The complete inventory is therefore three greps
-//! and two files: `rg 'patina-(vm|tree-walker) \(test-expect-fail'
-//! crates/patina-tests/tests/scheme`, `rg assert_divergence crates/patina-tests`,
-//! the per-backend pins beside the latter, and the two matrix files, which
-//! record every backend's answer per row.
+//! `escape_from_primitive.rs`. The complete inventory is therefore two greps —
+//! `rg 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme`
+//! and `rg assert_divergence crates/patina-tests` — plus the per-backend
+//! value pins that neither grep finds (`escape_from_primitive.rs`'s `eval`
+//! escape, `callability.rs`'s continuation-as-converter), and the two matrix
+//! files, which record every backend's answer per row.
 
 #![allow(dead_code)]
 // `gc_shared_tests!` is used only by the GC test binaries; every other test

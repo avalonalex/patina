@@ -9,7 +9,9 @@
 ;;   - `hygiene.rs`, its capture and macro-generating-macro tests — eighteen
 ;;     tests, eighteen rows, the everyday statements of the same rule.
 ;;
-;; Thirty-two tests, thirty-five rows. **`hygiene.rs` is deleted**: it was 49
+;; Thirty-two tests, thirty-five rows — thirty-eight with Larceny family 40's
+;; three, which arrived from `backend_divergence.rs` after the tally below was
+;; taken and are the last section. **`hygiene.rs` is deleted**: it was 49
 ;; tests of which 44 built a tree-walker by hand and so never ran on the VM,
 ;; the default backend, and they are now spread across this file,
 ;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm` — running
@@ -46,8 +48,12 @@
 ;;   chibi                     35 pass
 ;;   Gauche                    35 pass
 ;;
-;; **Nothing here diverges**, which is worth saying for thirty-five hygiene
-;; rows. Most of the first seventeen were live defects in Patina within the
+;; Re-measured 2026-09-10 with family 40's three rows: tree-walker, chibi and
+;; Gauche 38 pass; the VM 35 pass and 3 expected failures, which is the one
+;; open divergence in this file and is declared in the text above each row.
+;;
+;; **Nothing else here diverges**, which is worth saying for thirty-five
+;; hygiene rows. Most of the first seventeen were live defects in Patina within the
 ;; last month; three were not, and the difference matters when reading them.
 ;; Family 36's parameter and `let` rows and family 39's row all pass *before*
 ;; the fixes they document — the first two because nothing had pinned the shape
@@ -538,8 +544,8 @@
 ;;
 ;; One expansion's `(define hidden-x …)` introduces a *scoped* top-level
 ;; definition; a different expansion's template reference to that spelling
-;; carries scopes that reject it. Measured 2026-09-09 on the first shape, and
-;; the VM is alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15
+;; carries scopes that reject it. Measured 2026-09-09 on the first shape and
+;; 2026-09-10 on all three, and the VM is alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15
 ;; errors "unbound variable", the tree-walker errors "Undefined variable", and
 ;; only the VM answers 10. One expansion's private definition is not another
 ;; expansion's to see, and three implementations say so. The VM still

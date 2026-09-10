@@ -230,8 +230,27 @@ fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
 /// enough to show it: `r` is unbound when the tree-walker gets there, for the
 /// reason the test above gives. Audit F6 recorded the resource corruption;
 /// this is what was underneath it.
+///
+/// The one-expression program is kept as a both-backend assertion beside the
+/// pin: `assert_divergence` compares only the *stage* of the tree-walker's
+/// failure, so on its own it would stay green if `call-with-port` went back
+/// to closing the port on every exit — the tree-walker would still fail at
+/// run time, for the old reason. The `"012"` is what says the port stayed
+/// open.
 #[test]
 fn test_a_retry_loop_inside_a_port_callback_runs_the_rest_of_the_program_on_the_tree_walker() {
+    assert_program_eval_to(
+        r#"(import (scheme base))
+           (call-with-port (open-output-string)
+             (lambda (p)
+               (let ((n 0))
+                 (let ((k (call/cc (lambda (c) c))))
+                   (write-string (number->string n) p)
+                   (set! n (+ n 1))
+                   (if (< n 3) (k k)))
+                 (get-output-string p))))"#,
+        "\"012\"",
+    );
     assert_divergence(
         r#"(import (scheme base))
            (define log '())

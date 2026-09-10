@@ -81,14 +81,16 @@ have moved.** `(apply values (list 7))` now returns `7` on *both* backends; the
 VM arity failure recorded at `7a6a797` is gone. `(apply call/cc ...)` still fails
 on both, which makes it a shared conformance gap rather than a divergence — the
 differential harness cannot see it, so Q2 must not read backend *agreement* as
-correctness. The four genuine divergences that remain (`define`-bound `call/cc`,
-`call/cc` through a higher-order procedure, `apply dynamic-wind`, `apply
-with-exception-handler`) are now committed as executable quarantine tests in
-`crates/patina-tests/tests/scheme/control/callability.scm` (backend-scoped
-`test-expect-fail` rows since #193's divergence slice), which supersede this table as
-the live inventory. Each pins both backends' current behaviour and is written to
-**fail when the bug is fixed**, forcing collapse into a plain both-backends
-assertion. Prefer that file over this section when starting Q2.
+correctness. The genuine divergences that remain — `define`-bound `call/cc`,
+`call/cc` through a higher-order procedure, and `apply call/cc` (the `apply
+dynamic-wind` and `apply with-exception-handler` rows converged 2026-08-16) —
+are backend-scoped `test-expect-fail` rows in
+`crates/patina-tests/tests/scheme/control/callability.scm` since #193's
+divergence slice, which supersede this table as the live inventory. Each
+asserts the right answer on every implementation and names the tree-walker as
+the backend expected to fail it, and the driver **fails the run when the bug
+is fixed**, forcing the line's deletion. Prefer that file over this section
+when starting Q2.
 
 **Update 2026-08-16 — the VM half of every `apply` row in the table is fixed,
 and the diagnosis above was wrong about why.** It was never the registry. Both
@@ -498,12 +500,17 @@ design note on scoped relinking.
   backends.** This is now a literal count —
   `rg -c 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme`
   plus `rg -c assert_divergence crates/patina-tests/tests` —
-  and it is expected to reach, and stay at, zero. It stands at **6**: the four
-  §1.2 control-operator rows, an error raised after a multi-value escape
-  (2026-08-25 — see below), and handler loss on
-  continuation re-entry (`PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, quarantined
-  2026-08-10 — previously a comment-only divergence, which is exactly the
-  discovery mode this metric exists to end).
+  and it is expected to reach, and stay at, zero. It stood at **6** when this
+  was written (the four §1.2 control-operator rows, an error raised after a
+  multi-value escape, and handler loss on continuation re-entry —
+  `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, previously a comment-only
+  divergence, which is exactly the discovery mode this metric exists to end).
+  As of 2026-09-10 the two greps answer **8 scoped rows and 3
+  `assert_divergence` sites**: the three §1.2 rows, family 40's three (VM),
+  the plain-raise-in-callback row, the nested-trampoline prompt row, and the
+  four tree-walker callback pins in `escape_from_primitive.rs` (one of them
+  two per-backend assertions rather than an `assert_divergence`). The
+  multi-value-escape and re-entry rows converged and are plain rows now.
 
   It was 7 until 2026-08-25, when the two multi-value continuation cases from
   `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` converged and that document

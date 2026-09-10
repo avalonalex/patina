@@ -25,7 +25,10 @@
 ;; Every section makes its own tag. All rows share one interpreter, and the
 ;; "no live prompt remains" rows below abort to a tag expecting nobody to be
 ;; listening — a prompt leaked by an earlier row would be found, and the
-;; failure would land on the wrong row.
+;; failure would land on the wrong row. Those rows sequence the prompt call
+;; and the probe with `let*`, never as two arguments of `list`: R7RS leaves
+;; argument order unspecified, and a right-to-left evaluator would run the
+;; probe first and prove nothing.
 
 (import (scheme base) (scheme lazy) (srfi 64))
 
@@ -298,8 +301,9 @@
 ;; …and the prompt does not outlive such a body: nothing is left for a later
 ;; abort to find, which is the half a depth sweep cannot do here.
 (test-equal "and the prompt does not outlive a frameless body" '(9 no-prompt)
-  (list (call-with-continuation-prompt (make-parameter 9) t-179 (lambda (v k) 'h))
-        (guard (e (#t 'no-prompt)) (abort-current-continuation t-179 'stale))))
+  (let* ((r (call-with-continuation-prompt (make-parameter 9) t-179 (lambda (v k) 'h)))
+         (after (guard (e (#t 'no-prompt)) (abort-current-continuation t-179 'stale))))
+    (list r after)))
 
 ;; A closure body still reaches its handler through an abort, which is the
 ;; path that does get a frame.
@@ -343,8 +347,9 @@
 ;; …and that prompt is gone: nothing is left for a later abort to land on.
 (test-equal "and the prompt a frameless control primitive ran under is gone"
   '(5 no-prompt)
-  (list (call-with-continuation-prompt values t-186 (lambda (v k) 'h) 5)
-        (guard (e (#t 'no-prompt)) (abort-current-continuation t-186 'stale))))
+  (let* ((r (call-with-continuation-prompt values t-186 (lambda (v k) 'h) 5))
+         (after (guard (e (#t 'no-prompt)) (abort-current-continuation t-186 'stale))))
+    (list r after)))
 
 ;; A body that aborts to the prompt this very call pushed.
 (test-equal "a control primitive can be the prompt body: abort-current-continuation itself"
