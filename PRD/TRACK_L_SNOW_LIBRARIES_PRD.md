@@ -840,6 +840,16 @@ Red-edition libraries Patina bundled that until now had only chibi's suites.
 Racket's own R7RS package was checked for this role and rejected: its tests
 are five small Racket-specific files plus a copy of chibi's `r7rs-tests.scm`.
 
+**Our reproductions are original, and MIT.** Every test case Patina carries
+for a Larceny-surfaced defect is written from scratch to exhibit the same
+*family* of problem; no line of the suite is copied, quoted or paraphrased into
+this repo. That statement lived in `crates/patina-tests/tests/larceny_families.rs`
+until #193 Phase 1 redistributed those rows across `tests/scheme/` and deleted
+the file, so it lives here now — seventeen suite files still name that file as
+where they came from, and a licence claim cannot rest on a deleted file or on
+`scheme_tests/reports/larceny_triage.md`, which is marked for deletion once the
+queue empties.
+
 **Not vendored, by decision.** The suite is LGPL — Larceny's README: derived
 from Racket's R6RS tests and "covered by the LGPL license due to its
 derivative nature". Racket has since relicensed its copy to Apache-2.0/MIT,

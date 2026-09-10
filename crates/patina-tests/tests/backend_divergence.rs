@@ -16,8 +16,10 @@
 //! divergence list will look for them.
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
-//! (2026-08-10), and
-//! `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
+//! (2026-08-10); `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured
+//! 2026-08-10); and `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 for Larceny family
+//! 40, the last section of this file, which is the one cluster here where the
+//! **VM** is the diverging backend rather than the tree-walker.
 //!
 //! Shared root cause of the §1.2 cluster: R7RS §6.10 makes `call/cc`,
 //! `dynamic-wind`, `values` and `with-exception-handler` ordinary procedures,
@@ -59,7 +61,11 @@ mod common;
 use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
-const CROSS_EXPANSION_GLOBALS: &str = "scheme_tests/reports/larceny_triage.md, family 40";
+// Track L §6 first, deliberately: the triage doc is a working document its own
+// header says to delete once the queue is empty, and these three quarantines
+// outlive it.
+const CROSS_EXPANSION_GLOBALS: &str =
+    "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6 (and larceny_triage.md family 40 while it exists)";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
 // HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
 // converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
@@ -1433,9 +1439,11 @@ fn a_control_primitive_can_be_the_prompt_body() {
 //
 // One expansion's `(define x …)` introduces a *scoped* top-level definition; a
 // different expansion's template reference to that spelling carries scopes that
-// reject it. chibi 0.12 errors "undefined variable" on all three programs — one
-// expansion's private definition is not another expansion's to see — and the
-// tree-walker agrees. The VM still answers: its compiler installs a bare-name
+// reject it. Measured 2026-09-09 on the first program below, and the VM is
+// alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15 errors "unbound
+// variable", the tree-walker errors "Undefined variable: x", and only the VM
+// answers 10. One expansion's private definition is not another expansion's to
+// see, and three implementations say so. The VM still answers: its compiler installs a bare-name
 // alias for a renamed macro-introduced global (`alpha_rename`'s `rename_body`),
 // the mechanism whose by-name reach Track L §6 already records as
 // undecidable-under-renaming — the jabberwocky-steal defect.

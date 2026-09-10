@@ -82,7 +82,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  73 as of 2026-09-10, with Phase 1 complete.
+  73 as of 2026-09-09, with Phase 1 complete.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -198,13 +198,23 @@ number would delete why the file exists.
 #### A file organised by provenance gets redistributed, not migrated
 
 `larceny_families.rs` was the one place the suite departed from the rule above,
-and **it is gone** — the redistribution finished on 2026-09-10, and this section
+and **it is gone** — the redistribution finished on 2026-09-09, and this section
 is what it left behind. It held Patina's own MIT-licensed reproduction of every
 defect family Larceny's R7RS suites surfaced (the suites are LGPL and are not
 vendored), organised by **where a defect was found** rather than what it is
 about. So `equal?` on circular structures sat in a Larceny file while
 `data/circular-data.scm` argued about `equal?` on circular structures two
 directories away.
+
+**Those rows are Patina's own work, and that has to keep being findable.**
+Larceny's suites are LGPL and are not vendored — nothing from them is quoted
+anywhere in this repo. Every program is written from scratch to exhibit the
+same *family* of defect, which is what makes it MIT like the rest of the
+codebase, and the durable statement of that is
+`PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. It used to be the deleted file's
+header, which is why it is restated here: seventeen suite files still say
+"Moved from `larceny_families.rs`", and a licence claim must not depend on a
+file that no longer exists or on a triage doc marked for deletion.
 
 Sixty-four rows went, ten slices at a time, each carrying a `Larceny family N`
 line so `scheme_tests/reports/larceny_triage.md` still maps — better than
@@ -436,17 +446,30 @@ R7RS specification compliance organized by category:
 - `numeric_edge_cases.rs` - Edge cases
 
 #### **Feature Tests** (top-level `tests/`)
-- `cps_features.rs` - CPS-specific behavior (31 tests)
-- `hygiene.rs` - Macro hygiene (~108 tests)
-- `numeric_operations.rs` - Numeric tower (~25 tests)
-- `complex_numbers.rs` - Complex number support (~20 tests)
-- `record_types.rs` - define-record-type (~40 tests)
-- `scheme_eval.rs` - (scheme eval) library
+
+Named by role, not by count: every per-file number this list used to carry had
+rotted by the time anyone checked — `numeric_operations.rs` had migrated to
+`data/numeric-operations.scm` and was still listed, `hygiene.rs` was down from
+"~108" to 49, `cps_features.rs` from 31 to 11. For a current count,
+`grep -c '^#\[test\]'` the file; for the suite files, `SUITE` in
+`scheme_suite.rs` carries a floor per file and a test keeps it honest.
+
+- `hygiene.rs`, `hygiene_matrix.rs` — macro hygiene; the matrix is a
+  scoreboard of 28 shapes against chibi and Racket, and the portable rows now
+  live in `tests/scheme/expansion/hygiene.scm`
+- `backend_divergence.rs` — the registry of behaviours where the two backends
+  differ, `assert_divergence` being the only way onto it
+- `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
+  24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
+- `complex_numbers.rs`, `record_types.rs`, `scheme_eval.rs` — feature areas
+  whose rows are about the implementation rather than the language
 
 #### **Library Tests**
-- `sld_file_loading.rs` - Library loading (~50 tests)
-- `r7rs_libraries.rs` - R7RS library compliance
-- `scheme_base.rs` - (scheme base) library
+- `sld_file_loading.rs` — library loading from `.sld` files
+- `r7rs_libraries.rs` — R7RS library compliance
+- `scheme_base.rs` — `(scheme base)`
+- `bundled_provenance.rs` — pins every third-party file claimed byte-identical
+  to an upstream release, so an unrecorded edit fails
 
 #### **Integration Tests** (`tests/integration/`)
 - Compare Patina output with chibi-scheme
@@ -487,16 +510,20 @@ assert_eval_type(expr, check, name)      // Verify result type
 |----------|-------|-------|
 | Unit tests (all crates) | ~483 | Inline with production code |
 | Integration tests | ~1,000+ | In patina-tests crate |
-| **Total** | **~1,500** | 24 ignored (document bugs) |
+| **Total** | **~1,500** | 3 ignored, measured 2026-09-09 |
 
-**By test file (largest):**
+**By test file (largest).** These are the numbers as last written down, and
+several are known stale — the counts above them say why a prose list of this
+kind does not survive contact with a migration. Re-measure before quoting:
+`grep -c '^#\[test\]' crates/patina-tests/tests/<file>.rs`.
+
 | File | Tests | Lines |
 |------|-------|-------|
 | compliance.rs | ~380 | via sub-modules |
-| hygiene.rs | ~108 | 1,065 |
+| hygiene.rs | 49 | measured 2026-09-09 |
 | scheme_base.rs | ~50 | |
-| sld_file_loading.rs | ~50 | 985 |
-| record_types.rs | ~40 | 747 |
+| sld_file_loading.rs | 40 | measured 2026-09-09 |
+| record_types.rs | 41 | measured 2026-09-09 |
 | tail-recursion.scm | 36 | 301 |
 | cps_features.rs | 31 | 580 |
 

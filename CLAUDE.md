@@ -123,7 +123,7 @@ links, so this is the worst realistic case):
 | any of them again with no edit in between | ~0.3 s |
 
 The two big numbers are **integration binaries × ~6 s** — 88 when this was
-measured, **73 as of 2026-09-10**, with #193 Phase 1 complete: every
+measured, **73 as of 2026-09-09**, with #193 Phase 1 complete: every
 `.rs` file directly in a `tests/` directory is its own crate and its own
 executable, and each statically links the whole workspace. Do not go looking for a cache bug —
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
