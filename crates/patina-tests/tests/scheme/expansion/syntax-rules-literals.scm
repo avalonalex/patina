@@ -24,11 +24,29 @@
 ;; after reproducing it on Gauche master (`f582cf69e`), so the row stays
 ;; unscoped — a difference in an answer is exactly what the register is for.
 ;;
-;; **One row asserted nothing before it moved.** The Rust version of "a literal
-;; reaching the pattern through a pattern variable" checked only that the
-;; program did not error, with a comment saying the result "depends on hygiene
-;; semantics". All four implementations answer `bound`, measured today, so it
-;; pins that now.
+;; **Two rows were worth more after the move than before, and both say why the
+;; move was worth making.**
+;;
+;; The nested-template row carried the comment "Verified against chibi-scheme
+;; and Gauche" in Rust. Gauche has never agreed with it, as far as any
+;; measurement taken here can tell. A claim like that is unfalsifiable in a
+;; comment and checked on every run in a suite file — which is the argument for
+;; this whole migration in one line, and the reason not to write another one.
+;;
+;; "A literal reaching the pattern through a pattern variable" asserted only
+;; that the program did not error, its comment saying the result "depends on
+;; hygiene semantics". All four implementations answer `bound` (measured
+;; 2026-09-09), so it pins that now.
+;;
+;; ── Where the rest of `hygiene.rs` is going ─────────────────────────────────
+;;
+;; This is the first of three slices. The `let-syntax` rows go to
+;; `expansion/let-syntax.scm`, the capture and macro-generating-macro rows to
+;; `expansion/hygiene.scm`, and the underscore and ellipsis-escape rows to
+;; `expansion/ellipsis.scm`; when the last leaves, `hygiene.rs` is deleted and
+;; the integration-binary count drops by one. `hygiene_matrix.rs` is not part of
+;; this — it is a 28-shape scoreboard against chibi and Racket, read as a table,
+;; and stays Rust.
 
 (import (scheme base)
         (rename (scheme base) (else alt) (=> arrow))
@@ -54,11 +72,28 @@
 ;; The control: unshadowed, `=>` is still cond's arrow and the clause calls its
 ;; receiver. Without this row the one above would pass on an implementation
 ;; where `=>` never matched at all.
+;;
+;; `core_syntax_bindings.rs` argues against exactly this row and is right about
+;; its own file: "a second copy only splits the failure across two files", the
+;; regression guards for `cond`/`case` being `compliance/derived.rs`'s
+;; `test_cond_with_else`, `test_cond_with_arrow` and `test_case_with_else`.
+;; Kept here anyway, and the difference is what the row is *for*: there it would
+;; be a second guard for `cond`, here it is the control that gives the shadowed
+;; row above its meaning. If `cond`'s arrow breaks, three files fail and
+;; `derived.rs` is the one to read.
 (test-equal "an unshadowed => is still the arrow" 'got-true
   (cond (#t => (lambda (x) 'got-true))))
 
 ;; `else` is the same question. Bound as a variable it is an ordinary test
 ;; expression — 5 is true, so the clause runs and answers 9.
+;; The `else` half has a sibling that predates this file:
+;; `core_syntax_bindings.rs::test_a_rebound_else_does_not_match` runs
+;; `(let ((else #f)) (cond (else 1) (#t 2)))` on both backends, and moved there
+;; from `hygiene.rs` when `else` became a syntactic binding. This row is the
+;; other polarity — a *true* rebound `else`, so the clause is taken rather than
+;; skipped — and the two together say the binding decides, not the spelling. A
+;; third copy of either is what `core_syntax_bindings.rs`'s own comment warns
+;; against.
 (test-equal "a shadowed else is not cond's else" 9
   (let ((else 5)) (cond (#f 1) (else 9))))
 
@@ -86,7 +121,12 @@
 ;; ── Which binding, and when ────────────────────────────────────────────────
 ;;
 ;; The pair that shows the rule is about bindings rather than about order of
-;; appearance. In the first, `k` is bound *before* the macro is defined, so the
+;; appearance. The first row is two Rust tests collapsed:
+;; `test_literal_bound_before_macro_definition` and the first half of
+;; `test_literal_binding_before_vs_after` were the same program down to the
+;; symbol it returned. That, and the shadowed-`=>` program appearing both as a
+;; tree-walker-only test and through the both-backend helper, is why fourteen
+;; tests became seventeen rows rather than nineteen. In the first, `k` is bound *before* the macro is defined, so the
 ;; literal in the pattern and the `k` at the use site are the same binding and
 ;; the literal matches. In the second the use site binds `k` *after*, so they
 ;; are different bindings and it does not — even though every `k` is spelled

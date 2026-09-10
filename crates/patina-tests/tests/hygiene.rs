@@ -21,9 +21,20 @@
 //! comment claimed Gauche agreed with it when Gauche never has (shirok/Gauche
 //! #1327). **Add a new portable hygiene row to the `.scm` files, not here.**
 //!
-//! Measured 2026-09-09 before the first slice: all 46 programs then in this
-//! file answer identically on the VM and the tree-walker, so the gap hides no
-//! current defect — closing it buys permanent coverage, not a bug fix.
+//! One cross-reference this file used to carry, restored because the first
+//! slice deleted it along with a section banner: the rebound-`else` claim lives
+//! in `core_syntax_bindings.rs::test_a_rebound_else_does_not_match`, which
+//! moved there from here when `else` became a syntactic binding, and its other
+//! polarity is now a row of `syntax-rules-literals.scm`.
+//! `compliance/derived.rs` holds the unshadowed regression guards for
+//! `cond`/`case`. A fourth copy of any of those is what
+//! `core_syntax_bindings.rs`'s own comment warns against.
+//!
+//! Measured 2026-09-09 before the first slice: the 46 programs held by the 44
+//! hand-built-interpreter tests answer identically on the VM and the
+//! tree-walker, so the gap hides no current defect — closing it buys permanent
+//! coverage, not a bug fix. (The five helper-based tests were not in that set;
+//! they already ran both backends, which is the point.)
 //!
 //! `hygiene_matrix.rs` is a different instrument again — 28 shapes scored
 //! against chibi and Racket, read as a table when a fix moves a row — and
