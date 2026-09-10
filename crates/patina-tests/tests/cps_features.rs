@@ -93,8 +93,8 @@ fn test_backtracking_pythagorean_triple() {
 //
 // The two *multi-value* continuation cases lived in `backend_divergence.rs`
 // while they were a known divergence; both converged on 2026-08-25 and are
-// plain both-backend assertions there now, keeping the SRFI 1 abort shape
-// beside them. PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md is closed.
+// plain rows in `tests/scheme/control/cps-features.scm` now, keeping the SRFI 1
+// abort shape beside them. PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md is closed.
 //
 // The single-value case below is *not* affected by that bug — it was swept into
 // the old `#[cfg(feature = "vm-backend")]` gate with its two neighbours, and
@@ -856,8 +856,8 @@ fn a_transfer_out_of_a_re_entry_thunk_behaves() {
 /// continuation captured inside the handler carries it — issue #178, both
 /// backends, measured against Guile 3.0.11.
 ///
-/// `backend_divergence.rs` holds the four answers that changed when this
-/// landed. What is here is the property none of them pins: **when the
+/// `tests/scheme/control/cps-features.scm` and `prompts.scm` hold the four
+/// answers that changed when this landed. What is here is the property none of them pins: **when the
 /// reinstated handler goes away again.** R7RS 6.11 puts it back for the rest
 /// of the thunk's extent, so a replay of that debt has to end where the
 /// replayed region does — otherwise a handler answers a raise long after its

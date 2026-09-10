@@ -82,8 +82,9 @@ fn test_escaping_out_of_an_input_thunk() {
 /// catchable, and must not leave the world redirected.
 ///
 /// The handler deliberately writes nothing: where a `guard` handler's own
-/// output goes is a separate, pre-existing divergence pinned in
-/// `backend_divergence.rs`, and asserting it here would test that bug instead
+/// output goes was a separate divergence, converged and kept as the "a guard
+/// clause runs after the unwind" row of `tests/scheme/control/cps-features.scm`,
+/// and asserting it here would test that behaviour instead
 /// of this one.
 #[test]
 fn test_an_error_in_the_thunk_still_restores_the_port() {

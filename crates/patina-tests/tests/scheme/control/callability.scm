@@ -137,7 +137,7 @@
 ;; under the handler stack its `dynamic-wind` call was made in (R7RS 6.10;
 ;; `cps_eval/wind.rs`), so the `(car 7)` error finds the `guard` like any other
 ;; raise would. Primitive callbacks still run on the nested trampoline — that
-;; boundary stays open in `backend_divergence.rs` and §6.
+;; boundary stays open in `cps-features.scm`, `escape_from_primitive.rs` and §6.
 ;;
 ;; `caught` is arbitrated by Gauche (chibi loops forever on this program): the
 ;; after thunk runs in the environment of the `dynamic-wind` call, which is
@@ -220,7 +220,7 @@
 ;; pinned divergence, and `assert_divergence` rejected it. What the tree-walker
 ;; still fails is `(apply call/cc …)` — `call/cc` *as apply's callee*, resolved
 ;; by name in value position — not a continuation object, which it invokes here
-;; fine. That one is pinned in `backend_divergence.rs::apply_callcc`.
+;; fine. That one is pinned as the "apply on call/cc" row at the end of this file.
 (test-equal "apply invokes a continuation" 42
   (call/cc (lambda (k) (let ((f apply)) (f k '(42))))))
 
@@ -257,5 +257,57 @@
 ;; The producer is the same dispatcher: `values` with no arguments.
 (test-equal "the producer is the same dispatcher" '()
   (call-with-values values list))
+
+;; ── `call/cc` in value position (Track Q §1.2) ───────────────────────────────
+;;
+;; Migrated from `crates/patina-tests/tests/backend_divergence.rs` (#193),
+;; where they were `assert_divergence` quarantines. Each row asserts the
+;; answer R7RS requires; the line above it names the backend known to get it
+;; wrong, using the feature identifier that backend advertises (see
+;; `docs/TEST_ORGANIZATION.md`). The driver fails the run the day that
+;; backend starts passing, and the fix is to delete the line.
+;;
+;; Shared root cause: R7RS §6.10 makes `call/cc` an ordinary procedure, but
+;; the tree-walker claims it *syntactically* (`cps_transform.rs`'s
+;; `is_callcc_reference`), so a reference in value position falls through to a
+;; registry binding that is not there — `Undefined variable:
+;; patina.internal.control/call/cc`. It works when called directly, which is
+;; why the 1226/1226 chibi suite never catches it: that suite never takes
+;; `call/cc` as a value. Q2 part 1 is the fix — a real binding behind the name.
+;; chibi and Gauche answer every row below as the VM does.
+;;
+;; The first shape is `define`-bound, as Track Q §1.2 names it: the top-level
+;; `define` itself succeeds on the tree-walker (the registry miss is raised
+;; at the *call*, which the row's own assertion catches), so the binding can
+;; stay a global and the row still costs one expected failure rather than the
+;; file. A `let` would pass the same test while never storing a control
+;; primitive into a global slot.
+
+(define callcc-as-value call/cc)
+(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+(test-equal "call/cc bound with define" 1
+  (callcc-as-value (lambda (k) 1)))
+
+;; Same root cause, kept separate because passing a control operator *through
+;; a higher-order procedure* is the shape real code hits (SRFI 1).
+(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+(test-equal "call/cc passed to a higher-order procedure" '(6)
+  (map (lambda (f) (f (lambda (k) 6))) (list call/cc)))
+
+;; Was "fails on both", recorded so Q2 would not mistake backend *agreement*
+;; for correctness. Half of it is fixed: the VM evaluates it to 1, as R7RS
+;; requires and as chibi does, so what was a shared gap is an ordinary
+;; divergence with the tree-walker on the wrong side — the same registry hole
+;; as the two rows above, and `apply` is simply a third way to reach it.
+(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+(test-equal "apply on call/cc" 1
+  (apply call/cc (list (lambda (k) 1))))
+
+;; Track Q §1.2 recorded this as a VM failure (`Wrong number of arguments:
+;; expected 1, got 2`) at `7a6a797`; both backends return 7 as of `2d4ce29`.
+;; Kept as the regression guard for a row that was fixed without anyone
+;; noticing.
+(test-equal "apply on values" 7
+  (apply values (list 7)))
 
 (test-end)

@@ -1182,7 +1182,7 @@ carries wherever it goes.
    ordinary `Call` instruction, which does not. This one came free with the
    shape change, which is the argument for the shape change.
 
-All four are now both-backend assertions in `backend_divergence.rs` rather
+All four are now both-backend rows in `tests/scheme/control/cps-features.scm` rather
 than quarantines. None had a Larceny row.
 
 
@@ -1291,7 +1291,7 @@ outlive — unreachable under the forced zero, reachable once the bound can be n
 **Recorded late, and that is the point.** This was visible as the "four `in`/`out` pairs" symptom in
 the primitive-escape work, and when those entries were rewritten the standalone repro went with
 them — a defect that had been tracked became untracked, and only a review sweep caught it. It was
-pinned in `crates/patina-tests/tests/backend_divergence.rs`, which is the mechanism that would have
+pinned in `crates/patina-tests/tests/scheme/control/cps-features.scm`, which is the mechanism that would have
 prevented that: prose in a PRD can be edited away, a failing test cannot. The value-form regression
 above makes the same argument twice over — `cargo test` was fully green while the after-thunk leaked,
 because the pin covered only head position.
@@ -1330,7 +1330,10 @@ must-not-fire case is captured *under* the primitive's own barrier and so compar
 
 **Tree-walker: two continuation defects around primitive callbacks** — ❌ **open**. Both found
 2026-08-16 while fixing the VM half, and both pinned in
-`crates/patina-tests/tests/backend_divergence.rs` so they retire themselves.
+`crates/patina-tests/tests/escape_from_primitive.rs` so they retire themselves — the callback
+one as an `assert_divergence` quarantine, the `eval` one as two per-backend assertions, since
+there the tree-walker returns a value. A suite row cannot hold either, because the invoke runs
+the rest of the file from inside the callback (measured 2026-09-10, #193's divergence slice).
 
 ```scheme
 (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
@@ -1369,9 +1372,9 @@ The cause was `apply_error`, the tree-walker's *third* raise path, which the
 entry above had not recorded: alone among the three it did not unwind before
 the handler. It turned out to be the one already right, and the fix took the
 other two down to it. Converged with triage families 22 and 28; now
-`a_guard_clause_runs_after_the_unwind` in
-`crates/patina-tests/tests/backend_divergence.rs`, held to one expectation on
-both backends.
+the "a guard clause runs after the unwind" row in
+`crates/patina-tests/tests/scheme/control/cps-features.scm`, held to one expectation on
+both backends and both oracles.
 
 **Tree-walker: an error inside a wind thunk escapes `guard`** — ✅ **fixed 2026-09-01**, together
 with the tree-walker half of the `finally` entry below. Found 2026-08-15 while sweeping the class
@@ -1404,7 +1407,7 @@ The same change closed triage family 30 — a `k` invoked from an *after* thunk 
 after thunk on the tree-walker. The whole unwind used to run on the nested trampoline, and the second
 jump escaped out of it; as steps, the second jump starts from the wind stack the first had reached,
 with the raising record already popped, so the outer thunk is still on its path. Converged in
-`a_continuation_from_an_after_thunk_still_runs_the_outer_after` (`backend_divergence.rs`).
+the "a continuation from an after thunk still runs the outer after" row (`tests/scheme/control/cps-features.scm`).
 
 **Tree-walker: a primitive's callback runs on a nested trampoline with no handler stack** — ❌
 **open**. What the entry above did *not* close. `apply_from_direct_tagged` still exists, and every
@@ -1446,8 +1449,10 @@ prerequisite PRs landed:** with the verbatim reference line the VM is unaffected
 ready for the reference expansion; this backend is the only thing holding it.
 `lib/scheme/base/exceptions.scm` records the deviation and points here.
 
-**Two more manifestations, found by the second review of #151 (2026-09-01)**, both pinned in
-`backend_divergence.rs`. A `guard` whose clause *declines* inside a primitive's callback loses the
+**Two more manifestations, found by the second review of #151 (2026-09-01)**: the declining pair
+is pinned in `escape_from_primitive.rs` (`assert_divergence` — the re-raise runs the rest of a
+suite file from inside the callback, so it cannot be a row), the plain-raise shape as a
+backend-scoped row in `tests/scheme/control/cps-features.scm`. A `guard` whose clause *declines* inside a primitive's callback loses the
 outer `guard`: the reference expansion re-raises through `handler-k`, back inside the callback, and
 the nested trampoline there has no handlers, so `(guard (outer (#t …)) (call-with-port p (lambda (p)
 (guard (e ((string? e) 'no)) (raise 'sym)))))` dies with `unhandled exception: sym` where the VM,
@@ -1577,7 +1582,7 @@ file of `assert_program_eval_to` calls until #193 Phase 1 migrated it), now as
 a single SRFI 64 `test-equal` per row, run on both backends by
 `scheme_suite.rs`. The two shapes found
 by review of the tree-walker PR also answer as Gauche does and have moved to
-`backend_divergence.rs`' "Not divergences": a continuation captured *inside*
+`tests/scheme/control/cps-features.scm` as both-backend rows: a continuation captured *inside*
 an after-thunk while a jump is running it (the VM used to run the thunk again
 and lose the jump's value — `(() (before after after))` for
 `(escaped (before after))`), and a handler installed at the *jump* but not at
@@ -1668,9 +1673,9 @@ the non-converged guard it is. The *late* re-entry had nothing to come back to:
 
 `#<unknown>` is an uninitialised register reaching user-visible output, and the
 rest of the call — body, after-thunk, value — never ran. Pinned as
-`the_value_form_of_dynamic_wind_survives_a_reentry_into_its_body` and
-`the_value_form_of_dynamic_wind_reenters_its_before_and_after_thunks` in
-`backend_divergence.rs`; both fail on `main` with exactly the answers quoted.
+the "the value form of dynamic-wind survives a re-entry into its body" and
+"the value form of dynamic-wind re-enters its before and after thunks" rows in
+`tests/scheme/control/cps-features.scm`; both fail on `main` with exactly the answers quoted.
 
 **A dead sweep goes with it.** The value form was the last push site that gave
 a record a real frame depth; `PushWind` — now the only one — always used the
@@ -1781,7 +1786,7 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 `cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
 kept there rather than repeated here: they are one defect, and it now has one document.
 
-**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-01; it was both backends when recorded). This is the root of triage family 40, whose three `assert_divergence` quarantines pin the class; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
+**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-01; it was both backends when recorded). This is the root of triage family 40, whose three backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm` pin the class; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
 
 *Two symptoms recorded 2026-08-23 while reviewing the VM hygiene work*, both
 the bare name collapsing an identity the rest of the pipeline keeps distinct.

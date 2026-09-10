@@ -3210,7 +3210,7 @@ fn step_wind_jump(
     // `(call/cc …)` — has had its frame popped by the tail call while the
     // primitive is still to deliver its value, and an abort from inside it
     // must still find the prompt. Guile and Racket both answer that it does,
-    // and `backend_divergence.rs` pins it.
+    // and `tests/scheme/control/prompts.scm` pins it.
     //
     // Here the same reading is exact, because the thing that made it wrong
     // cannot be pending: the value is being delivered *now*, by this arrival,

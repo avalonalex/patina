@@ -117,8 +117,8 @@ Seed sources, in order: the matrix's 28 programs × every user identifier in
 each; the hygiene repros from the Larceny families, which #193 Phase 1
 redistributed out of `larceny_families.rs` into
 `tests/scheme/expansion/hygiene.scm`, `let-syntax.scm`, `ellipsis.scm` and
-`template-references.scm` (family 40's three are in
-`backend_divergence.rs`); then `scheme_tests` programs; eventually corpus
+`template-references.scm` (family 40's three are the last section of
+`hygiene.scm`, scoped to expect the VM to fail); then `scheme_tests` programs; eventually corpus
 files.
 
 Known edge discipline (each is a skip-rule, not a blocker): programs that

@@ -42,7 +42,7 @@
 ;; (`ResumeWindJump`) on the VM — under that stack. Two further shapes that only
 ;; the VM ever got wrong — a handler that is *extra* at the jump, and a
 ;; continuation captured inside a running after-thunk — are in
-;; `backend_divergence.rs`.
+;; `cps-features.scm`.
 ;;
 ;; What neither backend covers is a raise from inside a Rust primitive's
 ;; callback within the thunk — `member`/`assoc` with a predicate,
@@ -303,7 +303,7 @@
 ;; unwind.
 ;;
 ;; Two neighbours deliberately not re-pinned here, both in
-;; `backend_divergence.rs`: the tree-walker's `error` path, whose opposite
+;; `cps-features.scm`: the tree-walker's `error` path, whose opposite
 ;; ordering converged with this (`a_guard_clause_runs_after_the_unwind`), and
 ;; the VM wind machinery the fix leans on, which #149 converged
 ;; (`a_continuation_within_its_own_wind_runs_the_thunks_once`). Plain re-entry

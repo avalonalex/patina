@@ -10,10 +10,11 @@ by family, to the file about the defect's *subject* — mostly SRFI 64 suite fil
 under `crates/patina-tests/tests/scheme/`, which run on chibi and Gauche as well
 as on both backends — and **that file is now deleted**. So an `- Ours:` line
 below names either a suite file plus the row names in it, or a Rust test where
-one is still the right home: `backend_divergence.rs` for family 40, whose three
-shapes are genuine backend divergences and cannot be one `.scm` row;
-`include_syntax.rs` and `standard_ports.rs` for the two families needing real
-files on disk.
+one is still the right home: `include_syntax.rs` and `standard_ports.rs` for
+the two families needing real files on disk. Family 40's three shapes were the
+last to move: a backend divergence is a `.scm` row now that each backend
+advertises its own `cond-expand` identifier, and they are the last section of
+`expansion/hygiene.scm`.
 
 What that bought, beyond the binary: every family below that ended up in a
 suite file is now arbitrated by chibi and Gauche on every run of
@@ -187,7 +188,7 @@ imported across a library boundary; expansion nested more than one level;
 ellipsis depth greater than one; `define-record-type` and other derived binding
 forms; literals in the pattern; a macro-introduced global as the binder
 (family 40's axis — its three shapes live in
-`crates/patina-tests/tests/backend_divergence.rs` as divergence pins until the
+`crates/patina-tests/tests/scheme/expansion/hygiene.scm` as backend-scoped rows until the
 axis exists). Each is a new `Binder` or `Site`, not a new
 file — and an axis must move exactly one thing, which the `do-var` case in that
 file's header explains the hard way.
@@ -373,7 +374,7 @@ file's header explains the hard way.
 - **The fourth is a design fault, still open.** All 8 assertions survive the three fixes. `make-improper-ilist-comparator` compares an ipair's cdr with the *element* comparator instead of with itself, so a two-element ilist reaches `=` with an ipair argument and raises a type error where the suite records `-1`. Repairing that is a comparator redesign, not a transcription fix, and it wants the 2016 erratum and post-finalization note #2 (2020, which changed the recommended comparator SRFI) read first.
 - **The lesson, not just the bug:** #123 originally claimed "everything else in `(srfi 116)` passes" on the strength of 337 of 345. Both suites' only n-ary `ievery` assertions expect `#t` — exactly what a dead path returns — so both were green over a procedure that did nothing. What passes is what the suites exercise.
 ### 30. Tree-walker: a continuation invoked from an *after* thunk skips the enclosing after thunk — tree-walker only — ✅ fixed 2026-09-01
-- Ours: `a_continuation_from_an_after_thunk_still_runs_the_outer_after` in `backend_divergence.rs`, one expectation on both backends (it was quarantined with explicit per-backend assertions, since the broken side returned a value rather than failing).
+- Ours: `crates/patina-tests/tests/scheme/control/cps-features.scm`, row "a continuation from an after thunk still runs the outer after", one expectation on both backends and on Gauche (chibi loops on the program, so the row is skipped there; while open it was quarantined with explicit per-backend assertions, since the broken side returned a value rather than failing).
 - Upstream: [tests/scheme/base.sld#L2647](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2647) — the one assertion in `base` the two backends answered differently: the suite read 1054 of 1064 on the VM and 1053 on the tree-walker when this was filed (1071 of 1079 on both since the fix). The report names it `set!` because that is the first non-binding operator in it; it is a `dynamic-wind` test.
 - R7RS 6.10: the after thunk runs whenever control leaves the extent, and calling `k` from inside one is still leaving — the enclosing wind has not finished unwinding and still owes its own after thunk. The VM always paid it; the tree-walker stopped at the inner one. Adjacent to families 22 and 28 (both about which dynamic extent a handler or re-raise runs in) but distinct: this is the unwinder itself, with no exceptions involved.
 - chibi cannot arbitrate: re-entering `k` from an after thunk sends it into an unbounded loop. The suite's own expectation agrees with the VM.
@@ -548,7 +549,7 @@ file's header explains the hard way.
 - With that clear, enforcement stopped being a switch. `resolve_scoped` returns an error for an ambiguous reference on every path: the desugarer reports a `DesugarError`, the VM's renamer a `CompileError`, the tree-walker an `EvalError` at the read. `PATINA_AMBIGUITY_STRICT` is gone with it — once refusing was free, the variable only offered a way to ask for the wrong answer. `PATINA_AMBIGUITY_LOG` stays: the `TIE` half is still reported and never raised, since Flatt's rule cannot see it.
 
 ### 40. The VM resolves a cross-expansion macro-introduced global by bare name — VM only since step 1; chibi sides with the tree-walker
-- Ours: `one_expansions_definition_is_not_another_expansions_reference`, `one_expansions_definition_is_not_another_expansions_write_target`, `a_generated_getter_cannot_see_a_different_expansions_private_define` — three `assert_divergence` quarantines pinning the VM as the diverging backend.
+- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "one expansion's definition is not another expansion's reference", "one expansion's definition is not another expansion's write target" and "a generated getter cannot see a different expansion's private define" — three backend-scoped `test-expect-fail` rows pinning the VM as the diverging backend, arbitrated by chibi and Gauche on every oracle run.
 - Surfaced 2026-08-31 by the review of step 1. One expansion's `(define x …)` introduces a scoped top-level definition; a *different* expansion's template reference to that spelling carries scopes that reject it. Before step 1 both backends answered the value through the by-name fallback; chibi 0.12 errors "undefined variable" on all three shapes — one expansion's hygienically-introduced definition is not another expansion's to see — and since step 1 the tree-walker agrees, so the fix *narrowed* wrongness to one backend and this entry pins the remainder rather than reporting a regression.
 
 ```scheme
