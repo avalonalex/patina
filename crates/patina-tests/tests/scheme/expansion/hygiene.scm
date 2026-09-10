@@ -20,6 +20,26 @@
 ;; against chibi and Racket, read as a table when a hygiene fix moves a row,
 ;; which is a different instrument from a suite.
 ;;
+;; **Closing that gap was measured, not assumed.** Before the first slice, the
+;; 46 programs held by `hygiene.rs`'s 44 hand-built-interpreter tests were run
+;; on both backends and answered identically (2026-09-09) — so the rows had not
+;; been hiding a VM defect, and moving them bought permanent coverage rather
+;; than a fix. What the oracles then found is a different matter, and is in
+;; `syntax-rules-literals.scm`'s header: a row that asserted only "did not
+;; error", and one whose comment claimed Gauche agreed with it when Gauche
+;; never has (shirok/Gauche#1327).
+;;
+;; **Three files hold claims adjacent to these, and a fourth copy is what
+;; `core_syntax_bindings.rs`'s own comment warns against.** That file has the
+;; rebound-`else` row, `compliance/derived.rs` the unshadowed regression guards
+;; for `cond`/`case`, and `syntax-rules-literals.scm` the literal-matching rows
+;; including the other polarity of the `else` case. Check those before adding a
+;; row here about a keyword being shadowed.
+;;
+;; The first row below — a macro's `temp` not capturing the caller's — is the
+;; test issue #12 was opened for, and that issue is where the original defect
+;; and its reasoning live.
+;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
 ;;   patina VM / tree-walker   35 pass
@@ -323,11 +343,12 @@
 
 ;; ── What a template introduces is the template's, not the use site's ────────
 ;;
-;; **From `hygiene.rs`** (#193, its last slice — that file is deleted with this
-;; change). The rows above are the defects Larceny's suites surfaced; these are
-;; the everyday statements of the same rule, and several are the textbook cases
-;; a Scheme implementation is expected to get right on day one. They ran on the
-;; tree-walker alone for as long as that file existed.
+;; **From `hygiene.rs`** (#193, its last slice). The rows above are the defects
+;; Larceny's suites surfaced; these are the everyday statements of the same
+;; rule, and several are the textbook cases a Scheme implementation is expected
+;; to get right on day one. They ran on the tree-walker alone for as long as
+;; that file existed. Its other three quarters are in
+;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm`.
 ;;
 ;; `temp` is the canonical example: the macro binds one, the use site binds one,
 ;; and the body the user passed in must see *theirs*.
