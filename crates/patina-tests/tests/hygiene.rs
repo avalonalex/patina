@@ -3,22 +3,38 @@
 //! These tests verify that the macro system properly implements hygienic renaming
 //! to prevent macro-introduced identifiers from capturing user bindings.
 //!
-//! **44 of the 49 tests here run on the tree-walker only.** They build
+//! **34 of the 35 tests here run on the tree-walker only.** They build
 //! `TreeWalkInterpreter::new_tree_walker()` by hand, which is what the file did
-//! before `common::assert_program_eval_to` existed; the 8 call sites that use
-//! that helper run both backends. This is a gap and not a decision — the VM is
-//! the default backend, and the hygiene defects Larceny families 36 and 40
-//! record are VM-side, so a VM-only regression passes every one of the 44.
-//! Do not read the hand-built interpreter as "this test is about the
-//! tree-walker"; where a test really is about one backend, `assert_divergence`
-//! says so and the row belongs in `backend_divergence.rs`.
+//! before `common::assert_program_eval_to` existed. This is a gap and not a
+//! decision — the VM is the default backend, and the hygiene defects Larceny
+//! families 36 and 40 record are VM-side, so a VM-only regression passes every
+//! one of them. Do not read the hand-built interpreter as "this test is about
+//! the tree-walker"; where a test really is about one backend,
+//! `assert_divergence` says so and the row belongs in `backend_divergence.rs`.
 //!
-//! Most of those 44 are ordinary portable value assertions whose home is
-//! `tests/scheme/expansion/hygiene.scm`, where they would run on both backends
-//! and under chibi and Gauche. Converting them is a job of its own: some hold
-//! one interpreter across several `eval_program` calls and depend on that
-//! shared state, so it is not a search-and-replace. **Add a new portable
-//! hygiene row to the `.scm` file rather than here.**
+//! **The file is being migrated, not kept.** Its rows are portable value
+//! assertions whose home is `tests/scheme/expansion/`, where they run on both
+//! backends and under chibi and Gauche. The literal-matching rows went first,
+//! to `syntax-rules-literals.scm` — 49 tests became 35 — and moving them found
+//! two things a Rust comment could not: one row that asserted only "did not
+//! error", now pinned at the value all four implementations give, and one whose
+//! comment claimed Gauche agreed with it when Gauche never has (shirok/Gauche
+//! #1327). **Add a new portable hygiene row to the `.scm` files, not here.**
+//!
+//! One cross-reference this file used to carry, restored because the first
+//! slice deleted it along with a section banner: the rebound-`else` claim lives
+//! in `core_syntax_bindings.rs::test_a_rebound_else_does_not_match`, which
+//! moved there from here when `else` became a syntactic binding, and its other
+//! polarity is now a row of `syntax-rules-literals.scm`.
+//! `compliance/derived.rs` holds the unshadowed regression guards for
+//! `cond`/`case`. A fourth copy of any of those is what
+//! `core_syntax_bindings.rs`'s own comment warns against.
+//!
+//! Measured 2026-09-09 before the first slice: the 46 programs held by the 44
+//! hand-built-interpreter tests answer identically on the VM and the
+//! tree-walker, so the gap hides no current defect — closing it buys permanent
+//! coverage, not a bug fix. (The five helper-based tests were not in that set;
+//! they already ran both backends, which is the point.)
 //!
 //! `hygiene_matrix.rs` is a different instrument again — 28 shapes scored
 //! against chibi and Racket, read as a table when a fix moves a row — and
@@ -594,88 +610,6 @@ fn test_nested_macro_listify() {
     assert_eq!(interp.display_tagged(val), "(1 2 3 4 5)");
 }
 
-// =============================================================================
-// Literal Shadowing Tests
-// =============================================================================
-//
-// R7RS Section 4.3.2: When a literal identifier in a macro pattern is shadowed
-// by a local binding at the macro use site, it should NOT match as a literal.
-// This allows user code to override literal keywords.
-
-/// Test that shadowed literal `=>` in cond doesn't match the arrow clause
-///
-/// This is the classic R7RS hygiene test where `=>` is shadowed by a local
-/// binding. The cond macro should NOT recognize the shadowed `=>` as its
-/// literal arrow syntax.
-#[test]
-fn test_shadowed_literal_cond_arrow() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ((=> #f))
-          (cond (#t => 'ok)))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Since => is shadowed, cond should treat it as a regular expression,
-    // falling through to the (test result1 result2 ...) pattern.
-    // The result should be 'ok, not an error from trying to call 'ok as a procedure.
-    assert_eq!(interp.display_tagged(result.unwrap()), "ok");
-}
-
-// The `else` counterpart of the test above lives in
-// `core_syntax_bindings.rs::test_a_rebound_else_does_not_match`. It ran here as
-// the same program against a directly-constructed `TreeWalkInterpreter`, so it
-// covered one backend; the helper there runs both, which is what `else`
-// becoming a syntactic binding warranted.
-
-/// Test that non-shadowed literal still works normally
-#[test]
-fn test_non_shadowed_literal_cond_arrow() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (cond (#t => (lambda (x) 'got-true)))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Normal => behavior: call the procedure with the test result
-    assert_eq!(interp.display_tagged(result.unwrap()), "got-true");
-}
-
-/// Test shadowed literal in nested scope
-#[test]
-fn test_shadowed_literal_nested_scope() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define (test-shadow)
-          (let ((=> #f))
-            (cond (#t => 'shadowed-ok))))
-        (test-shadow)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "shadowed-ok");
-}
-
-// =============================================================================
-// Internal Define Scoping in let-syntax Tests
-// =============================================================================
-//
-// R7RS: Internal defines in a let-syntax body should create local bindings
-// that don't escape to the outer scope.
-
-/// Test that define inside let-syntax creates a local binding
-///
-/// This is the chibi test case where (define x 2) inside let-syntax
-/// should NOT modify the outer x.
 #[test]
 fn test_let_syntax_internal_define_scoping() {
     let interp = TreeWalkInterpreter::new_tree_walker();
@@ -936,32 +870,6 @@ fn test_macro_generated_function_definition() {
     assert_eq!(interp.display_tagged(result.unwrap()), "25");
 }
 
-/// Test macro generating syntax-rules with literals from pattern variable
-/// This exercises the fix for parse_literals_list accepting Identifier
-#[test]
-fn test_macro_with_pattern_var_in_literals() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    // The literal 'k' comes from a pattern variable in the outer macro
-    let result = interp.eval_program(
-        r#"
-        (let-syntax
-            ((m (syntax-rules ()
-                  ((m x) (let-syntax
-                             ((n (syntax-rules (k)
-                                   ((n x) 'bound)
-                                   ((n y) 'free))))
-                           (n z))))))
-          (m k))
-        "#,
-    );
-
-    // Note: This tests that 'k' in the literals list works even when it
-    // comes from a pattern variable substitution (producing Identifier)
-    // The actual result depends on hygiene semantics (bound vs free identifier)
-    assert!(result.is_ok(), "Failed: {:?}", result);
-}
-
 /// Test macro generating let-syntax with macro name from pattern variable
 #[test]
 fn test_macro_generated_let_syntax() {
@@ -983,335 +891,6 @@ fn test_macro_generated_let_syntax() {
     assert_eq!(interp.display_tagged(result.unwrap()), "43");
 }
 
-// ============================================================================
-// Literal Identifier Matching Tests (bound-identifier=? semantics)
-// ============================================================================
-//
-// These tests verify R7RS 4.3.2 literal matching semantics:
-// "An element in the input matches a literal identifier if and only if
-//  it is an identifier and either both its occurrence in the macro
-//  expression and its occurrence in the macro definition have the same
-//  lexical binding, or the two identifiers are the same and both have
-//  no lexical binding."
-
-/// Test: Literal in nested macro matches same literal in template
-///
-/// When a macro generates another macro with a literal, and the template
-/// uses that same literal, they should match (both refer to the same binding).
-///
-/// Verified against chibi-scheme and Gauche.
-#[test]
-fn test_nested_macro_literal_matching() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let-syntax ((m (syntax-rules ()
-                          ((m ignored)
-                           (let-syntax ((n (syntax-rules (k)
-                                             ((n k) 'matched-k)
-                                             ((n y) 'no-match))))
-                             (n k))))))
-          (m anything))
-        "#,
-    );
-
-    // The literal `k` in (syntax-rules (k)...) matches the `k` in (n k)
-    // because both come from the outer macro's template (same binding context).
-    assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(interp.display_tagged(result.unwrap()), "matched-k");
-}
-
-/// Test: Literal shadowed by let AFTER macro definition should NOT match
-///
-/// When the input identifier is bound by a let AFTER the macro is defined,
-/// it refers to a different binding than the pattern literal, so it should
-/// not match.
-///
-/// Verified against chibi-scheme and Gauche.
-#[test]
-fn test_literal_shadowed_in_macro_body() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let-syntax ((n (syntax-rules (k)
-                          ((n k) 'matched)
-                          ((n y) 'no-match))))
-          (let ((k 42))
-            (n k)))
-        "#,
-    );
-
-    // The `k` in (n k) is shadowed by the let binding, so it doesn't
-    // refer to the same binding as the literal `k` in the macro pattern.
-    assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(interp.display_tagged(result.unwrap()), "no-match");
-}
-
-/// Test: Literal shadowed by let in nested macro template should NOT match
-///
-/// Same as above, but with the shadowing happening inside a macro template.
-///
-/// **The "verified against Gauche" this comment used to claim is not true.**
-/// Re-measured 2026-09-09: chibi 0.12 and Chez 10.3.0 answer `no-match` as we
-/// do, and Gauche answers `matched-k` — on the 0.9.15 release and on master
-/// (`f582cf69e`, 0.9.16_pre3) built from source. Filed as shirok/Gauche#1327.
-///
-/// The reasoning, since a 3-1 split deserves one: the `k` passed to `n` denotes
-/// the `(let ((k 99)) …)` binding, while the literal `k` stands outside that
-/// `let` and is unbound there. R7RS §4.3.2 matches a literal only when both
-/// have the same binding or both are unbound, so the first rule must not match.
-///
-/// This row belongs in `tests/scheme/expansion/` once this file is migrated —
-/// it is exactly the kind of claim a comment cannot check and the oracle lane
-/// can.
-#[test]
-fn test_literal_shadowed_in_nested_macro_template() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let-syntax ((m (syntax-rules ()
-                          ((m ignored)
-                           (let-syntax ((n (syntax-rules (k)
-                                             ((n k) 'matched-k)
-                                             ((n y) 'no-match))))
-                             (let ((k 99))
-                               (n k)))))))
-          (m anything))
-        "#,
-    );
-
-    // The `k` in (n k) is shadowed by the let inside the template.
-    assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(interp.display_tagged(result.unwrap()), "no-match");
-}
-
-/// Test: Literal bound BEFORE macro definition SHOULD match
-///
-/// R7RS Section 4.3.2 states:
-/// > "A literal identifier matches an input identifier if both have the same binding,
-/// >  or both are unbound and have the same name."
-///
-/// When a literal `k` in `(syntax-rules (k) ...)` is defined inside a `let` that
-/// binds `k`, and the macro is used in the same scope, the literal and the input
-/// should match because they refer to the SAME binding.
-///
-/// This is the "binding BEFORE macro definition" case - both the literal in the
-/// pattern and the identifier at the use site refer to the enclosing `let` binding.
-///
-/// Verified against chibi-scheme and Gauche which both return 'matched.
-#[test]
-fn test_literal_bound_before_macro_definition() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        ;; Case A: k is bound BEFORE the macro is defined
-        ;; Both the literal k in the pattern AND the k at use site
-        ;; refer to the SAME binding from the outer let.
-        (let ((k 999))
-          (let-syntax ((n (syntax-rules (k)
-                            ((n k) 'matched)
-                            ((n x) 'no-match))))
-            (n k)))
-        "#,
-    );
-
-    // Should return 'matched because both k's refer to the same binding
-    assert!(result.is_ok(), "Failed: {:?}", result);
-    assert_eq!(interp.display_tagged(result.unwrap()), "matched");
-}
-
-/// Test: Contrasting bound-before vs bound-after cases
-///
-/// This test demonstrates the difference between:
-/// - Case A: Binding exists BEFORE macro definition -> should match
-/// - Case B: Binding created AFTER macro definition -> should NOT match
-///
-/// Verified against chibi-scheme and Gauche.
-#[test]
-fn test_literal_binding_before_vs_after() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    // Case A: Binding BEFORE macro definition - should match
-    let result_before = interp.eval_program(
-        r#"
-        (let ((k 999))
-          (let-syntax ((n (syntax-rules (k)
-                            ((n k) 'matched-before)
-                            ((n x) 'no-match))))
-            (n k)))
-        "#,
-    );
-    assert!(result_before.is_ok(), "Case A failed: {:?}", result_before);
-    assert_eq!(
-        interp.display_tagged(result_before.unwrap()),
-        "matched-before"
-    );
-
-    // Case B: Binding AFTER macro definition - should NOT match
-    let result_after = interp.eval_program(
-        r#"
-        (let-syntax ((n (syntax-rules (k)
-                          ((n k) 'matched-after)
-                          ((n x) 'no-match))))
-          (let ((k 999))
-            (n k)))
-        "#,
-    );
-    assert!(result_after.is_ok(), "Case B failed: {:?}", result_after);
-    assert_eq!(interp.display_tagged(result_after.unwrap()), "no-match");
-}
-
-/// Test: a literal bound *globally* matches from inside a nested scope.
-///
-/// The third case beside the two above, and the one that was wrong. A literal
-/// resolving in the plain, unscoped bindings — a global, a library export — has
-/// an identity that owes nothing to where the macro happened to be defined, but
-/// `resolve_literal_bindings` recorded the *definition site's* scopes for it.
-/// The matcher then compared a non-empty scope set against an unscoped use-site
-/// identifier and called them different bindings, so any macro defined inside
-/// any scope failed to match any global literal.
-///
-/// `car` here is an ordinary procedure: nothing about this is syntactic. It
-/// surfaced only when syntactic keywords became bindings, because
-/// `(syntax-rules ::: (...))` then had a literal that resolved for the first
-/// time — see `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` §4.
-///
-/// Both forms are asserted together because the top-level one always passed:
-/// the pair is what shows the answer no longer depends on the nesting.
-///
-/// Verified against chibi-scheme and Gauche, which return 'matched for both.
-#[test]
-fn test_global_literal_matches_from_a_nested_scope() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let nested = interp.eval_program(
-        r#"
-        (let ()
-          (define-syntax m
-            (syntax-rules (car)
-              ((_ car) 'matched)
-              ((_ x) 'not-matched)))
-          (m car))
-        "#,
-    );
-    assert!(nested.is_ok(), "Failed: {:?}", nested);
-    assert_eq!(interp.display_tagged(nested.unwrap()), "matched");
-
-    let top_level = interp.eval_program(
-        r#"
-        (define-syntax m2
-          (syntax-rules (car)
-            ((_ car) 'matched)
-            ((_ x) 'not-matched)))
-        (m2 car)
-        "#,
-    );
-    assert!(top_level.is_ok(), "Failed: {:?}", top_level);
-    assert_eq!(interp.display_tagged(top_level.unwrap()), "matched");
-}
-
-// ============================================================================
-// Literal matching compares bindings, not spellings (R7RS §4.3.2)
-// ============================================================================
-//
-// "An element in the input matches a literal identifier if and only if it is
-// an identifier and either both its occurrence in the macro expression and its
-// occurrence in the macro definition have the same lexical binding, or the two
-// identifiers are the same and both have no lexical binding."
-//
-// Patina implemented the second clause and approximated the first. Audit
-// 2026-08-17, C4 / D3 / D4. These run on both backends; every expectation is
-// chibi's, and Gauche agrees on the ones the audit consulted it for.
-
-/// C4 — a use-site binding that merely shares a spelling must not veto a
-/// literal the *template* introduced.
-///
-/// `my-if2`'s `else` denotes base's `else`, the same binding `cond`'s literal
-/// names, so it must match however the use site spells its own variables.
-/// Vetoing it demoted the `else` clause to a test clause, and since #89 the
-/// demoted `else` was then rejected as syntax used as a value — a legal
-/// program turned into an error.
-#[test]
-fn test_a_template_introduced_literal_survives_a_use_site_shadow() {
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define-syntax my-if2 (syntax-rules () ((_ c t e) (cond (c t) (else e)))))
-         (let ((else #f)) (my-if2 #f 'wrong 'right))",
-        "right",
-    );
-}
-
-/// The other side of that veto, which must keep working: R7RS §4.3.2's own
-/// example. Here the `=>` *is* the user's, and the local binding does shadow
-/// it, so the clause is an ordinary test clause and answers `ok`.
-#[test]
-fn test_a_use_site_written_literal_is_still_shadowed() {
-    assert_program_eval_to(
-        "(import (scheme base)) (let ((=> #f)) (cond (#t => 'ok)))",
-        "ok",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (let ((else 5)) (cond (#f 1) (else 9)))",
-        "9",
-    );
-    // And with nothing shadowing, the auxiliary keywords work as themselves.
-    assert_program_eval_to("(import (scheme base)) (cond (#f 1) (else 7))", "7");
-}
-
-/// D3 — a keyword imported under a rename denotes the same binding as the
-/// literal, so it matches. Spelling alone could never say so.
-#[test]
-fn test_a_renamed_keyword_matches_its_literal() {
-    assert_program_eval_to(
-        "(import (scheme base) (rename (scheme base) (else alt)))
-         (cond (#f 1) (alt 42))",
-        "42",
-    );
-    // The same for `=>`, and through a user macro's literal rather than a
-    // built-in one.
-    assert_program_eval_to(
-        "(import (scheme base) (rename (scheme base) (=> arrow)))
-         (cond ((assv 1 '((1 . one))) arrow cdr) (else 'no))",
-        "one",
-    );
-}
-
-/// D4 — a literal bound by the template's *own* binding form is not the
-/// user's identifier of the same name, even though neither is written at the
-/// use site. chibi and Gauche both answer `var`; Patina answered `lit`.
-#[test]
-fn test_a_literal_the_template_binds_is_not_the_users_identifier() {
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define-syntax m
-           (syntax-rules ()
-             ((_ e) (let ((k 1))
-                      (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'var))))
-                        (n e))))))
-         (m k)",
-        "var",
-    );
-}
-
-/// Two expansions of the same rule each introduce a temporary spelled
-/// `tmp`; a later macro captures both in a *generated* macro's template —
-/// not as pattern-variable substitutions, but as free template text. Each
-/// copy's identity lives only in its expansion scope, and the template
-/// compiler used to *replace* those scopes with the generated macro's
-/// definition scopes, collapsing the two into one identifier: this program
-/// failed with "Duplicate parameter 'tmp' in lambda". The scopes are now
-/// unioned instead (compile_template's symbol case).
-///
-/// This is the distilled shape of chibi-match's `match-letrec`, whose
-/// per-variable `p-ls` temporaries pass through the generated Petrofsky
-/// `eq` macro of `match-identifier=?` — the collapse made
-/// `(match-letrec ((x 1) (y 2)) ...)` a duplicate-parameter error and gave
-/// a single list pattern an accidental equality constraint. chibi and
-/// Gauche both answer (1 2).
 #[test]
 fn test_generated_template_capture_keeps_expansions_distinct() {
     assert_program_eval_to(

@@ -475,13 +475,15 @@ R7RS specification compliance organized by category:
 Named by role, not by count: every per-file number this list used to carry had
 rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 `data/numeric-operations.scm` and was still listed, `hygiene.rs` was down from
-"~108" to 49, `cps_features.rs` from 31 to 11. For a current count,
+"~108" to 49 and is now 35, `cps_features.rs` from 31 to 11. For a current count,
 `grep -c '^#\[test\]'` the file; for the suite files, `SUITE` in
 `scheme_suite.rs` carries a floor per file and a test keeps it honest.
 
 - `hygiene.rs`, `hygiene_matrix.rs` — macro hygiene; the matrix is a
-  scoreboard of 28 shapes against chibi and Racket, and the portable rows now
-  live in `tests/scheme/expansion/hygiene.scm`
+  scoreboard of 28 shapes against chibi and Racket and stays Rust, while
+  `hygiene.rs` is being migrated row by row into `tests/scheme/expansion/`
+  (`hygiene.scm`, `syntax-rules-literals.scm`). Add a portable hygiene row
+  there, not here
 - `backend_divergence.rs` — the registry of behaviours where the two backends
   differ, `assert_divergence` being the only way onto it
 - `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
@@ -545,7 +547,7 @@ kind does not survive contact with a migration. Re-measure before quoting:
 | File | Tests | Lines |
 |------|-------|-------|
 | compliance.rs | ~380 | via sub-modules |
-| hygiene.rs | 49 | measured 2026-09-09 |
+| hygiene.rs | 35 | measured 2026-09-09, and shrinking |
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | 40 | measured 2026-09-09 |
 | record_types.rs | 41 | measured 2026-09-09 |
