@@ -34,12 +34,18 @@
 ;; 2026-08-25, by three separate refusals: `swap-first-two`'s definition is
 ;; "Pattern variable b is used in wrong level", the generated `first-of`'s use
 ;; is "malformed first-of", and `mention-dots`'s definition is "template's
-;; ellipsis nesting is deeper than pattern's". chibi accepts all three.
+;; ellipsis nesting is deeper than pattern's". chibi accepts all three. (The
+;; Rust row these came from also named Larceny, Kawa and Sagittarius as
+;; accepting them; that claim is inherited from its comment, is in no document
+;; this repo holds, and has not been re-measured — but it is why Gauche reads
+;; as the outlier here rather than as one of two camps.) **Not reported
+;; upstream**: nobody has checked Gauche's tracker for it. The two Gauche bugs
+;; filed from this suite, shirok/Gauche#1326 and #1327, are different rows.
 ;;
-;; They sit in a `cond-expand` clause Gauche does not select, which is the only
-;; thing that works: it refuses these programs while it **compiles** them, and
-;; `test-skip` suppresses evaluation rather than compilation, so a skipped row
-;; would still take the file down. An unselected clause is never compiled.
+;; They sit in a `cond-expand` clause Gauche does not select. `test-skip`
+;; cannot do this job — Gauche refuses these programs while it **compiles**
+;; them, and a skipped row is still compiled, so it would take the file down
+;; anyway. An unselected `cond-expand` clause is never compiled at all.
 ;;
 ;; **Why omit rather than let the file die and register it.** The earlier draft
 ;; did the latter, so that the lane held the claim and would report it if Gauche
@@ -67,8 +73,13 @@
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
 
+;; ── Rows Gauche cannot compile ──────────────────────────────────────────────
+;;
+;; Last in the file on purpose: a row appended at the end must not land inside
+;; this clause by accident, where it would silently stop running on Gauche with
+;; nothing to report it — the driver's floor counts Patina, where it still runs.
 (cond-expand
-  (gauche)   ; cannot compile the three rows below — see the header
+  (gauche)   ; cannot compile the rows below — see the header
   (else
    ;; `swap-first-two` is written inside the binding, so its `...` is the variable
    ;; `dots` and the pattern binds three variables: `(list b a ...)` puts them back
@@ -81,9 +92,11 @@
        (def-first first-of)
        (swap-first-two 1 2 3)))
 
-   ;; The opposite direction in the same scope, and the half a per-macro decision
-   ;; loses: `def-first` is written at top level and escapes an ellipsis into what
-   ;; it generates. That token is an ellipsis at the use site whatever `...` means
+   ;; The opposite direction **in the same scope** — the preamble is repeated
+   ;; rather than shared for that reason: one body has to bind `...` and hold
+   ;; both macros, which is the shape a decision made once per body fails. This
+   ;; is the half a per-macro decision loses: `def-first` is written at top
+   ;; level and escapes an ellipsis into what it generates. That token is an ellipsis at the use site whatever `...` means
    ;; there, so `first-of` takes one argument and any number more.
    (test-equal "an escaped ellipsis is still one inside a binding of dots"
      '(1)

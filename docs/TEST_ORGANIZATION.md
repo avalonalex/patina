@@ -346,6 +346,19 @@ to match it. Whether Gauche compiles a program is Gauche's conformance; file it
 upstream if it is worth filing, and do not pay for the record with that
 oracle's arbitration of every other row in the file.
 
+**The omission is not always available**, and when it is not, the `*` row is
+right. `expansion/template-references.scm` is the case: chibi cannot define a
+library in a script and every row in that file needs one, so there is no subset
+to scope past. Ask first whether the oracle fails on *some* rows or on the
+file's whole premise.
+
+And when the oracle *hangs* rather than refusing to compile, the cheapest shape
+of all works — `test-skip` prevents evaluation, so the program never runs and
+the file completes. Measured 2026-09-09: one such skip takes
+`control/callability.scm` from nothing at all on chibi to 22 arbitrated rows.
+Three files carry a `*` for chibi today and at least one of them should not;
+`DIVERGENCES.tsv` records the measurement.
+
 That reasoning does **not** extend to a difference in an *answer*. Those stay
 unscoped and classified in `DIVERGENCES.tsv`, because there the oracle is
 telling you something about a claim your own rows make — and scoping them away

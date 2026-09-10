@@ -36,7 +36,28 @@
 #   needs-investigation Not yet classified. A row may sit here, but not
 #                       silently: it is the class that should shrink.
 #
-# A `row` of `*` means the file does not complete on that oracle at all. It is
+# A `row` of `*` means the file does not complete on that oracle at all.
+#
+# BEFORE ADDING A `*` ROW, ASK WHETHER THE FILE HAS TO DIE. A `*` costs that
+# oracle's arbitration of every other row in the file, which is usually a worse
+# price than the record is worth. Two cheaper shapes come first:
+#   - the oracle HANGS or dies on one row: `(cond-expand (<oracle> (test-skip 1))
+#     (else))` above it. `test-skip` prevents evaluation, so the program never
+#     runs and the file completes. Measured 2026-09-09: one such skip takes
+#     `control/callability.scm` from nothing at all on chibi to 22 rows.
+#   - the oracle refuses to COMPILE one row: `test-skip` cannot help, since a
+#     skipped row is still compiled, but an unselected `cond-expand` clause is
+#     never compiled — `(cond-expand (<oracle>) (else <row>))`. That is what
+#     `expansion/ellipsis.scm` does.
+# Keep the `*` for a file where neither works, because every row needs what the
+# oracle lacks: `expansion/template-references.scm` is the case, since chibi
+# cannot define a library in a script and every row there needs one.
+#
+# The choice turns on ownership, and `docs/TEST_ORGANIZATION.md` states the
+# test: a difference in an ANSWER is about a claim our rows make, so it stays
+# unscoped and classified; a refusal to run at all is the oracle's own
+# conformance, which we file upstream if it is worth filing and otherwise scope
+# past. It is
 # a claim about the whole pair, so a pair cannot have both a `*` and named
 # rows — the lane would resolve that silently in favour of `*` and check the
 # named rows never. `scheme_suite.rs` rejects the combination.
@@ -56,7 +77,7 @@
 # `every_registered_divergence_names_a_real_row` checks that, so a renamed row
 # cannot leave a stale entry behind — and that check needs no oracle installed.
 
-control/callability.scm	chibi	*	incomplete	chibi loops forever on one of the programs in this file; the file's own comment names the row. Gauche runs the whole file and arbitrates it, so the coverage is not lost.
+control/callability.scm	chibi	*	incomplete	chibi loops forever on one of the programs in this file; the file's own comment names the row - "an error in a wind thunk reaches the enclosing guard". MEASURED 2026-09-09: scoping that one row with `(cond-expand (chibi (test-skip 1)) (else))` lets chibi complete the file - 22 pass, 3 fail, 1 skip - so this `*` is costing 22 rows of arbitration for one program. Not done here because the three failures need classifying first: two are the non-procedure-handler rows already registered against Gauche, and "catchable: a parameter's own arity" is new. Gauche runs the whole file and arbitrates it, so the coverage is not lost.
 control/callability.scm	gauche	with-exception-handler rejects a non-procedure handler	spec-silent	R7RS leaves a non-procedure handler unspecified. Patina and Chez reject it up front; chibi and Gauche accept it and only care once an exception is raised. The file records this as a deliberate choice so nobody matches Patina to chibi without knowing Chez sits on the other side.
 control/callability.scm	gauche	catchable: handler is not a procedure	spec-silent	The guarded half of the row above, same choice.
 control/internal-escape-boundaries.scm	chibi	*	incomplete	chibi cannot survive the deep dynamic-wind/continuation shapes this file is about. Gauche completes it, 11 of 11.
