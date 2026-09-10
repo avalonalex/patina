@@ -157,11 +157,17 @@
 ;; closed it; running the thunks as frames rather than nested Rust calls
 ;; (2026-09-02) means the recursion has nowhere to build up either.
 ;;
-;; **This row is last because chibi dies on it** — `ERROR: out of stack space`,
-;; measured 2026-09-07 — and SRFI 64 stops the file where that happens. In the
-;; middle of the file it cost the ten rows after it their second oracle; at the
-;; end it costs nothing, and chibi still corroborates 10 of 11. Keep it here,
-;; and put any future row chibi cannot survive beside it.
+;; **chibi dies on this row** — `ERROR: out of stack space`, measured
+;; 2026-09-07 — so it is last, and it is skipped there. Ordering alone was not
+;; enough: SRFI 64 stops the file where the death happens, and its summary is
+;; printed at `test-end`, so the oracle lane saw no output at all and the file
+;; was registered as one chibi cannot run. `test-skip` prevents *evaluation*,
+;; so with the row skipped chibi reaches `test-end` and reports — 10 pass, 1
+;; skip, measured 2026-09-09. That is the difference between chibi
+;; corroborating ten rows in a log nobody reads and corroborating them in the
+;; lane. Keep the row here, and put any future row chibi cannot survive beside
+;; it, with its own skip.
+(cond-expand (chibi (test-skip 1)) (else))
 (test-equal "escape from an after thunk during raise unwinding" 'escaped-from-after
   (call/cc (lambda (k)
     (guard (e (#t (list 'caught e)))

@@ -147,6 +147,12 @@
 ;; way. The VM's half moved from `handled` to `caught` with the audit's A3 fix
 ;; (wind records are popped before their after-thunk runs); `handled` came from
 ;; the old ordering swallowing the thunk's error.
+;; **Scoped away from chibi, which loops forever on this program.** Not a
+;; disagreement about the answer — chibi never produces one, and without the
+;; skip the file times out and chibi arbitrates none of the other 27 rows.
+;; `test-skip` prevents *evaluation*, so the program never runs there.
+;; Measured 2026-09-09: with this one row skipped chibi completes the file.
+(cond-expand (chibi (test-skip 1)) (else))
 (test-equal "an error in a wind thunk reaches the enclosing guard"
   'caught
   (guard (e (#t 'caught))
