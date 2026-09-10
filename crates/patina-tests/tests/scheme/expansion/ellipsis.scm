@@ -1,9 +1,10 @@
 ;; The ellipsis is identified by *binding*, not by spelling — R7RS §4.3.2, and
 ;; SRFI 46 for the declared form.
 ;;
-;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 14
-;; and 15, #193 Phase 1), where the rows sat under the suite run that found
-;; them. Their subject is one question asked three ways: *which token in this
+;; **Assembled from two migrations**, both under #193: families 14 and 15 of
+;; `larceny_families.rs`, where the rows sat under the suite run that found
+;; them, and `hygiene.rs`'s ellipsis-escape tests (five of them, three rows —
+;; the section below says why three). Their subject is one question asked three ways: *which token in this
 ;; template is the ellipsis?* — and the answer is never "whichever one is
 ;; spelled `...`".
 ;;
@@ -26,9 +27,9 @@
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   4 pass
-;;   chibi                     4 pass
-;;   Gauche                    1 pass, 3 omitted — see below
+;;   patina VM / tree-walker   7 pass
+;;   chibi                     7 pass
+;;   Gauche                    4 pass, 3 omitted — see below
 ;;
 ;; **Gauche cannot compile three of the four rows**, as Patina could not until
 ;; 2026-08-25, by three separate refusals: `swap-first-two`'s definition is
@@ -72,6 +73,40 @@
 (define-syntax def-first
   (syntax-rules ()
     ((_ name) (define-syntax name (syntax-rules () ((_ a b (... ...)) (list a)))))))
+
+
+;; ── What the escape produces ────────────────────────────────────────────────
+;;
+;; **From `hygiene.rs`** (#193). R7RS §4.3.2 gives `(... ⟨template⟩)` as an
+;; escape: the template is used with `...` treated as an ordinary symbol. The
+;; rows above are about *which token is the ellipsis*; these are about what the
+;; escape hands back, which is the other half of the same sentence.
+;;
+;; Five Rust tests became three rows. Two of the five asserted the same claims
+;; through `equal?` — `(equal? (make-ellipsis) '...)` beside a printed-form
+;; check of the same call — and `test-equal` compares with `equal?`, so those
+;; two are what the three rows already say. The printed form is not lost so
+;; much as not the point: the claim is that the escape yields the *symbol*, and
+;; `external_representation.rs` is where rendering is asserted deliberately.
+(define-syntax make-ellipsis (syntax-rules () ((_) (quote (... ...)))))
+
+(test-equal "an escaped ellipsis alone yields the symbol" '...
+  (make-ellipsis))
+
+;; The escape covers a whole template, so a pattern variable inside one is
+;; still substituted while the `...` beside it stays a symbol.
+(define-syntax escaped-with-var (syntax-rules () ((_ x) (quote (... (x ...))))))
+
+(test-equal "and a pattern variable inside one is still substituted" '(foo ...)
+  (escaped-with-var foo))
+
+;; Nested: the outer escape protects the inner `...`, which is then an ordinary
+;; symbol in the output rather than a second escape.
+(define-syntax escaped-twice (syntax-rules () ((_ x y) (quote (... (... x y))))))
+
+(test-equal "and an escape inside an escape is a symbol, not a second escape"
+  '(... bar baz)
+  (escaped-twice bar baz))
 
 ;; ── Rows Gauche cannot compile ──────────────────────────────────────────────
 ;;
