@@ -319,32 +319,44 @@ Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
 answer — that is a divergence, and it belongs in Rust where it can be named.
 
-**Where an oracle refuses to *compile* a row, neither form works — register
-the file instead.** `test-skip` suppresses evaluation, so a row it guards is
-still read and compiled, which is enough to lose the whole file when an
-implementation rejects the program while compiling the form around it. Gauche
-does exactly that to `expansion/ellipsis.scm`: R7RS §4.3.2 makes a
-`syntax-rules` written where `...` is bound an ordinary three-variable pattern,
-and Gauche reports `Pattern variable b is used in wrong level` and stops.
+**Where an oracle refuses to *compile* a row, neither form works.**
+`test-skip` suppresses evaluation, so a row it guards is still read and
+compiled, which is enough to lose the whole file when an implementation rejects
+the program while compiling the form around it. Gauche does exactly that to
+three rows of `expansion/ellipsis.scm`: R7RS §4.3.2 makes a `syntax-rules`
+written where `...` is bound an ordinary three-variable pattern, and Gauche
+reports `Pattern variable b is used in wrong level` and stops.
 
-The tempting repair is a `cond-expand` clause that is simply not selected,
-since an unselected clause is never compiled. **Don't** — it hides a real
-difference in the one place nothing checks. `run_suite_oracles.sh` compares the
-rows an oracle *fails*, and an absent row cannot fail, so the omission lives
-only in a comment and ages there silently.
+A `cond-expand` clause that is not selected is never compiled, so the row goes
+inside one:
 
-Let the file die and register it instead:
-
-```
-expansion/ellipsis.scm	gauche	*	incomplete	Gauche rejects the file while compiling it: …
+```scheme
+(cond-expand
+  (gauche)   ; cannot compile the rows below — see the header
+  (else (test-equal "the row's name" ...)))
 ```
 
-Now the lane holds the claim — and holds it in both directions, because a `*`
-row that starts completing is reported as "completes now, but is registered as
-incomplete". The quarantine retires itself the day the oracle changes. The
-price is the rest of that file's rows on that oracle, so keep a file whose rows
-one oracle cannot compile small, and say in its header which rows the *other*
-oracle still arbitrates.
+**Which leaves a real choice, and it turns on ownership.** The alternative is to
+let the file die on that oracle and register it `*` / `incomplete`, so the lane
+holds the claim and reports it if the oracle ever starts completing. Use that
+when the oracle's behaviour is a finding you intend to act on. Use the omission
+when it is not — and for a *compile-time refusal* it usually is not, because
+there is no Patina behaviour in question and nothing of ours that could drift
+to match it. Whether Gauche compiles a program is Gauche's conformance; file it
+upstream if it is worth filing, and do not pay for the record with that
+oracle's arbitration of every other row in the file.
+
+That reasoning does **not** extend to a difference in an *answer*. Those stay
+unscoped and classified in `DIVERGENCES.tsv`, because there the oracle is
+telling you something about a claim your own rows make — and scoping them away
+is how you would never learn it. Two Gauche bugs (shirok/Gauche#1326, #1327)
+were filed because rows that disagreed were left to disagree in the open.
+
+The omission costs nothing on our side: the driver's floor for the file fails if
+a row stops running on Patina, which is the direction that matters, and the
+`test-skip` rules below exist for the same reason. It costs the day the oracle
+changes — nothing notices — so the file's header must say which rows are
+omitted and why. That header is then the only record.
 
 **Skip the count, not the name, and put it immediately above its row.** SRFI
 64's `test-skip` takes a count, a name or a predicate; in this suite the count
