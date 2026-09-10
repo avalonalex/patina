@@ -149,7 +149,7 @@
 ;; the old ordering swallowing the thunk's error.
 ;; **Scoped away from chibi, which loops forever on this program.** Not a
 ;; disagreement about the answer — chibi never produces one, and without the
-;; skip the file times out and chibi arbitrates none of the other 27 rows.
+;; skip the file times out and chibi arbitrates none of the other 25 rows.
 ;; `test-skip` prevents *evaluation*, so the program never runs there.
 ;; Measured 2026-09-09: with this one row skipped chibi completes the file.
 (cond-expand (chibi (test-skip 1)) (else))

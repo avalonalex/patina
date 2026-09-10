@@ -357,19 +357,33 @@ compile, the cheapest shape of all works — `test-skip` prevents evaluation, so
 the program never runs and the file completes. Measured 2026-09-09 across the
 three files that carried a chibi `*`:
 
-| file | skips needed | chibi now arbitrates |
+| file | skips needed | chibi now answers |
 |---|---|---|
-| `control/callability.scm` | 1 | 22 of 28 |
-| `control/internal-escape-boundaries.scm` | 1 | 10 of 11 |
+| `control/callability.scm` | 1 | 25 of 26 — 22 agreeing, 3 registered |
+| `control/internal-escape-boundaries.scm` | 1 | 10 of 11, all agreeing |
 | `control/wind-thunk-exceptions.scm` | 6+, still failing | none — `*` kept |
 
-Two of the three were one row each, costing fifty rows of arbitration between
-them for want of two lines. The third really is the file: chibi dies on row 1,
-then 2, 4, 5, 6 and 7 in turn, and at that point the `*` is both cheaper than
-the skips and more informative. **That is the bisection worth doing before
-accepting a `*`** — instrument the file so each row announces itself to
-`(current-error-port)`, see where the oracle stops, scope that row, repeat. If
-it takes more than two or three, the premise really is the file.
+*Answers*, not passes: the three differences chibi is now registered for are
+arbitration too, and the most useful kind — a difference the register explains
+beats a row that agrees. Count rows with
+`grep -cE '^\(test-(equal|assert|error)'`; the obvious `grep -c '^(test-'`
+counts `test-begin` and `test-end` too, which is how the first draft of this
+table said 28.
+
+Two of the three were one row each, costing thirty-five rows of arbitration
+between them for want of two lines. The third really is the file: chibi dies on
+row 1, then 2, 4, 5, 6 and 7 in turn, and at that point the `*` is cheaper
+than the skips and says more.
+
+**That is the bisection worth doing before accepting a `*`** — instrument the
+file so each row announces itself to `(current-error-port)`, see where the
+oracle stops, scope that row, repeat. If it takes more than two or three, the
+premise really is the file.
+
+Use `write-string` for the marker, not `display`: these files import
+`(scheme base)` and `(srfi 64)` only, so `display` is unbound and the
+instrumented run dies before the first marker, which reads exactly like the
+oracle failing at row 0.
 
 That reasoning does **not** extend to a difference in an *answer*. Those stay
 unscoped and classified in `DIVERGENCES.tsv`, because there the oracle is
