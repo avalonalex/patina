@@ -17,9 +17,30 @@
 //! *consumer*, whose callback escapes; the frame-depth check structurally
 //! cannot see it. Diagnosis in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
 //! read this file as the class being closed.
+//!
+//! # The tree-walker's pins live here too
+//!
+//! Its callbacks run on a nested trampoline (`apply_from_direct_tagged`) that
+//! starts with every stack empty, and a continuation invoked inside the
+//! callback is misread as leaving the primitive: what the trampoline then runs
+//! to completion is the rest of the *program*, from inside the callback,
+//! before the outer trampoline abandons the primitive. That is why these
+//! divergences are Rust rather than rows in `tests/scheme/` (#193): inside an
+//! SRFI 64 file "the rest of the program" is every later row, and measured
+//! 2026-09-10 the rows simply vanished — begun, never ended, the file four
+//! rows short. Each pin below is an `assert_divergence`, or two per-backend
+//! assertions where the tree-walker returns a value, and each is written to
+//! fail when the trampoline is fixed.
 
 mod common;
-use common::{assert_program_eval_to, eval_program_vm, scratch_path};
+use common::{
+    ErrorClass, On, assert_divergence, assert_program_eval_to, eval_program_tree_walker,
+    eval_program_vm, scratch_path,
+};
+
+/// Where the tree-walker's nested-trampoline defect is tracked: the
+/// "primitive's callback" entry.
+const NESTED_TRAMPOLINE: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
 use tempfile::TempDir;
 
 /// Every re-entrant primitive reachable without a file, **left by both kinds
@@ -84,9 +105,9 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
             // nested trampoline that starts every stack empty, so the abort
             // finds no prompt — the "primitive's callback" hole its winds and
             // handlers have had since before prompts, pinned in
-            // `backend_divergence.rs`. Escaping works there because a full
-            // continuation carries its own target rather than searching for
-            // one.
+            // `tests/scheme/control/prompts.scm`. Escaping works there
+            // because a full continuation carries its own target rather than
+            // searching for one.
             false,
         ),
     ] {
@@ -173,20 +194,98 @@ fn test_the_escaped_from_primitive_is_abandoned() {
 /// would break, and the reason the check is a frame-depth comparison rather
 /// than a "was a continuation invoked" flag.
 ///
-/// VM-only, deliberately: the tree-walker writes nothing for this program.
-/// `assert_divergence` does not fit — it needs the broken backend to *fail*,
-/// and this one succeeds with a wrong value — so the divergence is pinned in
-/// `backend_divergence.rs` instead, where it will retire itself. chibi and
-/// Gauche both agree with the VM's `(2 3)`.
+/// ```text
+///   (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
+///   VM, chibi, Gauche => (2 3)
+///   tree-walker       => #f — the callback's value, not the primitive's
+/// ```
+///
+/// That `#f` is the *one-expression* program's answer, and it understates
+/// the defect. Followed by one more form the tree-walker reaches that form
+/// with `r` unbound: the invoke ran the rest of the program from inside the
+/// callback, before the `define` had anything to bind. So the program is
+/// two forms, and the pin is a run-time failure.
 #[test]
 fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
-    assert_eq!(
-        eval_program_vm(
-            r#"(import (scheme base))
-               (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))"#
-        ),
-        "(2 3)",
+    assert_divergence(
+        r#"(import (scheme base))
+           (define log '())
+           (define r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
+           (set! log (cons 'after log))
+           (list r log)"#,
+        On::Vm,
+        "((2 3) (after))",
+        ErrorClass::AtRuntime,
+        NESTED_TRAMPOLINE,
     );
+}
+
+/// A `call/cc` retry loop inside a `call-with-port` callback.
+///
+/// This used to be counted as converged — 2026-09-01, when `call-with-port`
+/// stopped closing its port on every exit (R7RS 6.13.1 closes it only "if
+/// `proc` returns"), the tree-walker stopped failing with `I/O error: port is
+/// closed` and the one-expression program answered `"012"` on both backends.
+/// The port half is fixed; the trampoline half is not, and a second form is
+/// enough to show it: `r` is unbound when the tree-walker gets there, for the
+/// reason the test above gives. Audit F6 recorded the resource corruption;
+/// this is what was underneath it.
+#[test]
+fn test_a_retry_loop_inside_a_port_callback_runs_the_rest_of_the_program_on_the_tree_walker() {
+    assert_divergence(
+        r#"(import (scheme base))
+           (define log '())
+           (define r (call-with-port (open-output-string)
+                       (lambda (p)
+                         (let ((n 0))
+                           (let ((k (call/cc (lambda (c) c))))
+                             (write-string (number->string n) p)
+                             (set! n (+ n 1))
+                             (if (< n 3) (k k)))
+                           (get-output-string p)))))
+           (set! log (cons 'after log))
+           (list r log)"#,
+        On::Vm,
+        "(\"012\" (after))",
+        ErrorClass::AtRuntime,
+        NESTED_TRAMPOLINE,
+    );
+}
+
+/// Tree-walker: `unhandled exception: sym` — a declining `guard` clause
+/// inside a primitive's callback loses the outer `guard`.
+///
+/// R7RS 7.3's `guard` re-raises a declined condition by jumping back *into*
+/// the raise point through `handler-k` and calling `raise-continuable` there,
+/// so the next handler out is the one that was installed around the raise.
+/// That jump lands inside the `call-with-port` callback, on the nested
+/// trampoline — which starts with an empty handler stack, so the re-raise
+/// finds nothing, and the failure escapes every handler in the program,
+/// including one wrapped around the row. It became reachable on 2026-09-01
+/// when `guard` took the reference expansion (triage families 22/28); the old
+/// expansion re-raised from the clause side, outside the callback, and
+/// happened to find the outer handler. Both raise forms reach it. VM, chibi
+/// and Gauche: `(outer sym)`.
+///
+/// Its sibling — a plain `raise` inside the callback, which the outer `guard`
+/// *does* receive, as the wrong object — is a suite row with a backend-scoped
+/// expectation in `tests/scheme/control/cps-features.scm`, because there the
+/// wrong answer is delivered to the row.
+#[test]
+fn test_a_declining_guard_inside_a_port_callback_loses_the_outer_guard_on_the_tree_walker() {
+    for raise in ["raise", "raise-continuable"] {
+        assert_divergence(
+            &format!(
+                "(guard (outer (#t (list 'outer outer)))
+                   (call-with-port (open-input-string \"a\")
+                     (lambda (p) (guard (e ((string? e) 'no)) ({raise} 'sym)))))"
+            ),
+            On::Vm,
+            "(outer sym)",
+            ErrorClass::AtRuntime,
+            NESTED_TRAMPOLINE,
+        );
+    }
 }
 
 /// `eval` and `load` re-enter the VM the same way a higher-order primitive
@@ -195,20 +294,44 @@ fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
 /// file after the continuation had been invoked, where chibi stops at the
 /// escaping form.
 ///
-/// VM-only: the tree-walker escapes *and then continues*, running the
-/// fall-through as well. Pinned as a divergence in `backend_divergence.rs`.
+/// **A divergence, and the one that cannot be a suite row.** The tree-walker
+/// escapes *and then continues*: the nested trampoline `eval` runs on carries
+/// the escape to the end of the program, then returns into the primitive,
+/// which resumes the lambda — so `'fell-through` is delivered to the same
+/// continuation a second time. Inside an SRFI 64 file that continuation is
+/// the rest of the file, and every row after this one would run twice,
+/// doubling the counts the driver reads. So it is pinned here, where a
+/// program's continuation ends at the program, and unlike its neighbours it
+/// cannot go through `assert_divergence`, because the tree-walker returns a
+/// value. It is still written to **fail when the bug is fixed**: the
+/// tree-walker assertion pins the wrong answer, and its message says what to
+/// collapse it into.
 #[test]
 fn test_escaping_out_of_eval() {
+    const PROGRAM: &str = r#"
+        (import (scheme base) (scheme eval) (scheme repl))
+        (define kk #f)
+        (define trace '())
+        (call/cc (lambda (k)
+          (set! kk k)
+          (eval '(kk 'from-eval) (interaction-environment))
+          (set! trace (cons 'ran-on trace))
+          'fell-through))
+        (reverse trace)
+    "#;
     assert_eq!(
-        eval_program_vm(
-            r#"(import (scheme base) (scheme eval) (scheme repl))
-               (define kk #f)
-               (call/cc (lambda (k)
-                 (set! kk k)
-                 (eval '(kk 'from-eval) (interaction-environment))
-                 'fell-through))"#
-        ),
-        "from-eval",
+        eval_program_vm(PROGRAM),
+        "()",
+        "the VM abandons at the escape; if this changed, it regressed"
+    );
+    assert_eq!(
+        eval_program_tree_walker(PROGRAM),
+        "(ran-on)",
+        "\n[tree-walker] NO LONGER DIVERGES — it now abandons at the escape.\n\
+         Replace both assertions with assert_program_eval_to(PROGRAM, \"()\"), \
+         move the program to tests/scheme/control/cps-features.scm, and \
+         update the \"primitive's callback\" entry in \
+         PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
     );
 }
 

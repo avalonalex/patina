@@ -61,8 +61,9 @@
 //! expansion nested more than one level; ellipsis depth greater than one;
 //! `define-record-type` and other derived binding forms; literals in the
 //! pattern; and a **macro-introduced global** as the binder — the axis the
-//! family-40 shapes come from (`backend_divergence.rs`, the last three rows
-//! of `larceny_families.rs` before #193 Phase 1 deleted it), where the two
+//! family-40 shapes come from (the last section of
+//! `tests/scheme/expansion/hygiene.scm`; the last three rows of
+//! `larceny_families.rs` before #193 Phase 1 deleted it), where the two
 //! backends currently diverge and the tree-walker is the one chibi agrees
 //! with. Each is a new `Site` or `Binder`, not a new file.
 //!

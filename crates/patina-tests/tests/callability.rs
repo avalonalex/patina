@@ -232,8 +232,8 @@ fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
 /// **VM-only assertions, and not because the tree-walker disagrees about the
 /// answer.** Each of these names a control primitive in value position, which
 /// the tree-walker resolves through a registry binding that is not there —
-/// the hole `backend_divergence.rs::callcc_bound_with_define` and its two
-/// neighbours already pin, still Q2 part 1's to fix. Pinning three more rows
+/// the hole `tests/scheme/control/callability.scm`'s "call/cc bound to a
+/// variable" and its two neighbours already pin, still Q2 part 1's to fix. Pinning three more rows
 /// of that one family here would just be three more things to collapse when
 /// it lands.
 ///

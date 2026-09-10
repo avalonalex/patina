@@ -24,12 +24,24 @@
 ;;
 ;; Divergences are recorded in `DIVERGENCES.tsv` and checked by
 ;; `scripts/run_suite_oracles.sh`, not restated here.
+;;
+;; The last four sections came from `crates/patina-tests/tests/
+;; backend_divergence.rs` (#193), the registry of behaviours where the two
+;; backends differed — most of them converged, each row keeping the account of
+;; what was wrong and when it was fixed. The rows still open carry a
+;; **backend-scoped expectation** — `(cond-expand (patina-tree-walker
+;; (test-expect-fail 1)) (else))` above the row — which is how a divergence is
+;; written now that each backend advertises its own feature identifier: the
+;; row asserts the right answer everywhere, the line says who is known to get
+;; it wrong, and the driver fails the run the day that backend starts passing.
+;; `docs/TEST_ORGANIZATION.md` has the mechanism.
 
-(import (scheme base) (scheme write) (scheme file) (scheme read) (srfi 64))
+(import (scheme base) (scheme write) (scheme file) (scheme read)
+        (scheme eval) (scheme repl) (srfi 64))
 
 ;; `(scheme stream)` is imported only where it is used. It backs one row, that
 ;; row is scoped to Patina, and it is R7RS-large Red rather than R7RS-small —
-;; so importing it unconditionally would put all 49 other rows at the mercy of
+;; so importing it unconditionally would put every other row at the mercy of
 ;; a library none of them touch, on any implementation that lacks SRFI 41.
 (cond-expand (patina (import (scheme stream))) (else))
 
@@ -467,5 +479,603 @@
           (read-error? e) (file-error? e) (read-error? 42) (file-error? 'x)
           (call/cc (lambda (k)
                      (with-exception-handler k (lambda () (raise 'obj))))))))
+
+;; ── Continuation escapes, and re-entry with the handler stack ──────────────
+
+;; A `call/cc` continuation invoked with multiple values. Converged
+;; 2026-08-25: the tree-walker delivers a `#<values>` object for any count but
+;; one, as the VM has since #113 and as `(values …)` itself does.
+(test-equal "a multi-value continuation through call-with-values" '(1 2)
+  (call-with-values
+    (lambda () (call-with-current-continuation (lambda (k) (k 1 2))))
+    (lambda (a b) (list a b))))
+
+;; The abort pattern used by SRFI 1's `%cars+cdrs`, and the reason the whole
+;; n-ary half of `(scheme list)` was unusable on the tree-walker: `zip`,
+;; `fold`, `any`, `every` and `list-index` over two or more lists all reach
+;; it. The SRFI 1 procedures this unblocks are asserted once, in
+;; `stdlib/list.scm` (Larceny family 5) — not duplicated here.
+(test-equal "the SRFI 1 abort pattern through call-with-values"
+  '(cars () cdrs ())
+  (call-with-values
+    (lambda () (call-with-current-continuation (lambda (abort) (abort '() '()))))
+    (lambda (cars cdrs) (list 'cars cars 'cdrs cdrs))))
+
+;; An error raised *after* a continuation escape is catchable — converged
+;; 2026-09-01 when `CpsContinuation` gained the handler stack. The tree-walker
+;; used to abort with `Type error: car expects a pair`, because the escape had
+;; emptied the `guard`'s handler stack on the way past.
+;;
+;; Found through a multi-value shape —
+;; `(guard (e (#t (list 'caught))) (+ 1 (call/cc (lambda (k) (k 1 2)))))`,
+;; reachable since 2026-08-25 when a multi-value continuation invocation
+;; stopped raising a wrong-arity error at the call site and started escaping.
+;; That program is **not** what is asserted here: delivering two values to a
+;; single-value context is unspecified in R7RS, and the references split on it
+;; (chibi and our VM let `+` raise on the `#<values>` object; Gauche delivers
+;; the first value and answers 2). The escape below is single-valued and the
+;; error after it is unambiguous, so every implementation must answer `caught`.
+(test-equal "an error after a continuation escape is catchable" 'caught
+  (guard (e (#t 'caught))
+    (begin (call-with-current-continuation (lambda (k) (k 1)))
+           (car 7))))
+
+;; The escape path's broadest effect, and the one nothing else covers: after
+;; an inner `guard` fires, a *later* raise must still find the outer handler.
+;;
+;; The tree-walker reset `exception_handlers` to empty on every re-entry, and
+;; a `guard` that fires re-enters — `guard` expands to `call/cc` +
+;; `with-exception-handler`, and catching invokes `guard-k`. So one caught
+;; exception emptied the handler stack for everything after it:
+;;
+;;   tree-walker, before => Error: unhandled exception: y
+;;   VM, chibi, Gauche   => (outer y)
+;;
+;; Nothing in `nested_exception_handlers.rs` caught this: those tests nest
+;; guards but never raise again *after* an inner one has fired, so they pass
+;; either way. This is an ordinary shape — a loop that catches per item and
+;; then fails on something else — not an exotic one.
+(test-equal "a raise after an earlier guard fired still finds the outer handler"
+  '(outer y)
+  (guard (o (#t (list 'outer o)))
+    (begin (guard (i (#t 'inner)) (raise 'x))
+           (raise 'y))))
+
+;; Re-entering a continuation captured under `with-exception-handler` keeps
+;; the handler on both backends — converged 2026-09-01, closing audit B3.
+;;
+;; The VM always restored the stack from its `VmContinuation` snapshot. The
+;; tree-walker's escape path in `cps_eval/mod.rs` reset `exception_handlers`
+;; to empty, because `CpsContinuation` did not carry them; it does now, and
+;; re-entry restores them like `dynamic_winds`. Kept as the regression guard.
+(test-equal "a re-entered continuation keeps its exception handler"
+  '(second-pass 42)
+  (let ((saved #f) (entered #f))
+    (define (run)
+      (with-exception-handler
+        (lambda (e) 42)
+        (lambda ()
+          (call/cc (lambda (k) (set! saved k) #f))
+          (raise-continuable 'boom))))
+    (let ((first (run)))
+      (if entered
+          (list 'second-pass first)
+          (begin (set! entered #t) (saved #f))))))
+
+;; ── dynamic-wind, re-entered ───────────────────────────────────────────────
+
+;; Invoking a continuation captured inside its own `dynamic-wind` extent runs
+;; the wind thunks once, on both backends — converged 2026-09-01.
+;;
+;;   (dynamic-wind in (lambda () (call/cc (lambda (k) (k #f)))) out)
+;;   tree-walker, chibi, Gauche => (in out)
+;;   VM                         => (in out in out)   until 2026-09-01
+;;
+;; R7RS §6.10 runs the thunks when the extent is actually left and re-entered;
+;; invoking `k` here never leaves it. The VM's wind transition (then
+;; `run_wind_transition`, now `step_wind_jump`) forced the common prefix to
+;; zero on every full `call/cc` invoke, so it exited and re-entered even the
+;; extents both stacks shared. It takes the common prefix now, keyed on the
+;; wind record's identity, as the tree-walker always did.
+;;
+;; Found while taking `guard` to R7RS 7.3's expansion for Track L triage
+;; families 22 and 28: that expansion leaves its body through a continuation
+;; far more often, and under the old rule a `guard` inside a
+;; `with-output-to-file` re-ran that form's after thunk — which closes the
+;; port — so the next write failed on a port the program still held. Kept as
+;; the regression guard: it was tracked in the PRD once, lost in an edit, and
+;; recovered only by review, which is why it lives in a test.
+(test-equal "a continuation within its own wind runs the thunks once" '(in out)
+  (let ((log '()))
+    (dynamic-wind (lambda () (set! log (cons 'in log)))
+                  (lambda () (call/cc (lambda (k) (k #f))))
+                  (lambda () (set! log (cons 'out log))))
+    (reverse log)))
+
+;; The same jump through the **value** form of `dynamic-wind`, which is a
+;; different code path and the one that regressed while that fix was written.
+;;
+;; Head-position `dynamic-wind` compiles to `PushWind`/`PopWind`, so a
+;; continuation resuming inside the body still reaches the instruction that
+;; pops the record. The value form used to run its body on a nested Rust call
+;; in `handle_control_primitive`, and an escape abandoned the frame that owned
+;; the cleanup — it used to be safe to abandon it because a full continuation
+;; invoke drained every wind record on the way past. Once the transition kept
+;; the records both stacks share, that stopped being true, and the after-thunk
+;; went from running at the wrong time to never running at all:
+;;
+;;   (define dw dynamic-wind) (dw in (lambda () (call/cc (lambda (k) (k #f)))) out)
+;;   main VM              => (in out in)     the thunks of a jump that crossed nothing
+;;   mid-fix VM           => (in)            after-thunk leaked entirely
+;;   chibi, Gauche, now   => (in out)
+;;
+;; The leaked record also outlived its owner and fired at the next unrelated
+;; transfer, so the second shape pins that a later `dynamic-wind` is
+;; unaffected. `cargo test` was fully green with the leak present, because
+;; nothing exercised the value form with an escaping body.
+;;
+;; The nested Rust call is gone since 2026-09-02 (issue #157): the value form
+;; runs the same `PushWind`/`PopWind` sequence in a stub frame, so these four
+;; shapes now go through the instructions head position uses. They stay
+;; because they are the shapes that caught the leak.
+(test-equal "the value form of dynamic-wind runs its after thunk once"
+  '((in out) (in after-dw in2 out2) (in out) (in out))
+  (let ((dw dynamic-wind))
+    (define (probe run)
+      (let ((log '()))
+        (run (lambda (x) (set! log (cons x log))))
+        (reverse log)))
+    (list
+      ;; escape stays inside the extent
+      (probe (lambda (note)
+               (dw (lambda () (note 'in))
+                   (lambda () (call/cc (lambda (k) (k #f))))
+                   (lambda () (note 'out)))))
+      ;; the record must not survive to fire at a later, unrelated wind
+      (probe (lambda (note)
+               (dw (lambda () (note 'in))
+                   (lambda () (call/cc (lambda (k) (k #f))))
+                   (lambda () (note 'after-dw)))
+               (dynamic-wind (lambda () (note 'in2))
+                             (lambda () 'body)
+                             (lambda () (note 'out2)))))
+      ;; reached through apply, not a variable reference
+      (probe (lambda (note)
+               (apply dynamic-wind
+                      (list (lambda () (note 'in))
+                            (lambda () (call/cc (lambda (k) (k #f))))
+                            (lambda () (note 'out))))))
+      ;; escape that genuinely leaves the extent
+      (probe (lambda (note)
+               (call/cc (lambda (esc)
+                 (dw (lambda () (note 'in))
+                     (lambda () (esc 'gone))
+                     (lambda () (note 'out))))))))))
+
+;; A continuation escaping from an *after* thunk still runs the enclosing
+;; after thunk — converged 2026-09-01 (triage family 30).
+;;
+;; R7RS 6.10: `dynamic-wind`'s third thunk runs whenever control leaves the
+;; dynamic extent, and calling `k` from inside one is still leaving — the
+;; outer wind has not finished unwinding, so its own after thunk is still
+;; owed. The VM always paid it. The tree-walker ran the whole unwind on a
+;; nested trampoline that a second jump escaped out of, so it stopped at the
+;; inner thunk and never ran `outer-after`. It now runs each wind thunk as a
+;; step of the trampoline the jump was made on, with the record already
+;; popped, so the second jump starts from where the first had got to and the
+;; outer thunk is still on its path.
+;;
+;; Found when Larceny's `base` suite began loading (families 14/15/23): it
+;; was the one assertion in that suite the two backends answered differently.
+;; chibi cannot arbitrate this one — re-entering `k` from an after thunk sends
+;; it into an unbounded loop, so the row is skipped there rather than costing
+;; the lane its timeout — but Gauche and the suite's own expectation agree
+;; with this answer.
+(cond-expand (chibi (test-skip 1)) (else))
+(test-equal "a continuation from an after thunk still runs the outer after"
+  '(from-after (outer-before inner-before body inner-after outer-after))
+  (let ((trace '()))
+    (define (note x) (set! trace (cons x trace)))
+    (let ((result
+           (call-with-current-continuation
+             (lambda (k)
+               (dynamic-wind
+                 (lambda () (note 'outer-before))
+                 (lambda ()
+                   (dynamic-wind
+                     (lambda () (note 'inner-before))
+                     (lambda () (note 'body) (k 'from-body))
+                     (lambda () (note 'inner-after) (k 'from-after))))
+                 (lambda () (note 'outer-after)))))))
+      (list result (reverse trace)))))
+
+;; A continuation captured *inside* an after thunk while a jump is running it
+;; resumes that thunk, and the jump then lands — converged 2026-09-02 with
+;; the VM half of the `finally` rule.
+;;
+;;   both, Gauche => (escaped (before after))
+;;   VM           => (() (before after after))   until 2026-09-02
+;;
+;; `return`'s continuation is the rest of the thunk and then the jump that
+;; was running it. Each backend had to make that second half a resumable
+;; thing before this could work: the tree-walker's `Jump` step (`wind.rs`),
+;; the VM's `ResumeWindJump` stub frame (`runtime/vm_state.rs`). The VM's old
+;; answer is what a nested Rust call gives you — the continuation captured
+;; the *enclosing* frame instead, parked inside the inlined `dynamic-wind`
+;; sequence at its `PopWind`, so re-entering it ran `Call after` a second
+;; time and the escape value never arrived.
+;;
+;; Until PR #152's fix in the tree-walker's escape arm (`cps_eval/mod.rs`),
+;; this program *crashed* the tree-walker with `Error: Continuation escape`:
+;; the parked escape's resumption was invoked in place, and its own parked
+;; escape was carried out of the trampoline by a `?`. No primitive callback
+;; is needed to reach it: a wind thunk whose tail is any `call/cc` that is
+;; later invoked does.
+(test-equal "a continuation captured inside a running after thunk resumes it"
+  '(escaped (before after))
+  (let ((log '()))
+    (define (note x) (set! log (cons x log)))
+    (let ((r (call/cc (lambda (k)
+               (dynamic-wind
+                 (lambda () (note 'before))
+                 (lambda () (k 'escaped))
+                 (lambda ()
+                   (call/cc (lambda (return)
+                     (note 'after)
+                     (return 'stopped)
+                     (note 'unreached)))))))))
+      (list r (reverse log)))))
+
+;; A before thunk run by a re-entry sees the handlers of its own
+;; `dynamic-wind` call, not those installed at the *jump* — converged
+;; 2026-09-02 with the VM half of the `finally` rule.
+;;
+;;   both, Gauche => (outer b)
+;;   VM           => (inner b)   until 2026-09-02
+;;
+;; The inner `guard` was not installed when `dynamic-wind` was called, so
+;; R7RS 6.10 puts the before thunk's `raise` outside it. This is the
+;; complement of `wind-thunk-exceptions.scm`, whose rows all have a handler
+;; *missing* at the jump; here one is *extra*, and the VM's old "handlers from
+;; the machine, not the record" answered wrong in that direction too. Both
+;; backends now take the thunk's handler stack from the wind record.
+(test-equal "a before thunk on re-entry sees its own dynamic-wind's handlers"
+  '(outer b)
+  (let ((k #f) (n 0))
+    (let ((r (guard (o (#t (list 'outer o)))
+               (dynamic-wind
+                 (lambda () (set! n (+ n 1)) (if (= n 2) (raise 'b)))
+                 (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+                 (lambda () #f)))))
+      (if (eq? r 'first)
+          (guard (i (#t (list 'inner i))) (k 'second))
+          r))))
+
+;; A continuation re-entering the body of the **value** form of
+;; `dynamic-wind` finds the call still intact — converged 2026-09-02 (issue
+;; #157).
+;;
+;; Two symptoms, one cause. The call's remaining obligations — deliver the
+;; body's value, pop the record, run *its own* after-thunk — used to live in
+;; the Rust frame `handle_control_primitive` ran the body on, and a re-entry
+;; restores the VM's frames, not that one:
+;;
+;;   (define r (dw (lambda () #f) «capture k, return 'first» (lambda () #f)))
+;;   (if (eq? r 'first) (k 'second) #f)          => second, VM said ()
+;;
+;;   (dw in1 «capture saved» out1) then (dw in2 (lambda () (saved 'second)) out2)
+;;                                              => (in1 out1 in2 out2 in1 out1),
+;;                                                 VM said (… in1 out2)
+;;
+;; The `()` was the `NULL` `call/cc`'s capture cleared `dst` to, left in a
+;; live register — downstream it surfaced as an unrelated `type error:
+;; expected a procedure, got null` rather than as a visibly wrong value. The
+;; wrong after-thunk came from the `Escaped` arm deciding what it still owed
+;; with a *length* test, `dynamic_winds.len() > wind_depth`, applied after
+;; the jump had already replaced that stack with the target's: it truncated
+;; the target's records and re-ran its own.
+;;
+;; The fix is the move PR #156 made for a jump's wind thunks — the value form
+;; now runs the same `PushWind`/`Call`/`PopWind` sequence head position
+;; compiles to, in a stub frame of its own, so "the rest of the
+;; `dynamic-wind`" is a pc that the continuation restores. Head position was
+;; never affected, for exactly that reason.
+(test-equal "the value form of dynamic-wind survives a re-entry into its body"
+  'second
+  (let ((dw dynamic-wind) (k #f))
+    (let ((r (dw (lambda () #f)
+                 (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+                 (lambda () #f))))
+      (if (eq? r 'first) (k 'second) #f)
+      r)))
+
+;; Re-entering extent 1 from inside extent 2 leaves extent 2 (`out2`) and
+;; enters extent 1 (`in1`); when the resumed body returns, extent 1 closes
+;; with its *own* after-thunk, `out1`.
+(test-equal "and the re-entered value form closes with its own after thunk"
+  '(in1 out1 in2 out2 in1 out1)
+  (let ((dw dynamic-wind) (log '()) (saved #f) (done #f))
+    (define (note x) (set! log (cons x log)))
+    (dw (lambda () (note 'in1))
+        (lambda () (call/cc (lambda (c) (set! saved c) 'first)))
+        (lambda () (note 'out1)))
+    (if (not done)
+        (begin (set! done #t)
+               (dw (lambda () (note 'in2))
+                   (lambda () (saved 'second))
+                   (lambda () (note 'out2)))))
+    (reverse log)))
+
+;; A continuation captured in the value form's **before** or **after** thunk
+;; and re-entered after the call has returned — issue #159, converged
+;; 2026-09-02 with the body case above and by the same change.
+;;
+;; The value form ran each thunk on a nested dispatch loop. While that loop is
+;; still on the Rust stack a continuation captured in the thunk resumes fine —
+;; a retry loop inside a before-thunk always worked, on `main` too. It is the
+;; *late* re-entry, after the `dynamic-wind` call has returned and the loop is
+;; gone, that had nothing to come back to:
+;;
+;;   A: capture in `before`, re-enter later => (val (in body out body out))
+;;   B: capture in `after`,  re-enter later => (val (in body out))
+;;   main VM said (#<unknown> (in body out)) to both
+;;
+;; `#<unknown>` is an uninitialised register reaching user-visible output: the
+;; re-entry delivered into a frame that no longer existed, and the rest of the
+;; `dynamic-wind` — the body, the after-thunk, the value — never ran at all.
+;; The tree-walker, Gauche and chibi all give the two answers above.
+;;
+;; `probe` sequences the run and the log read with `let*` rather than writing
+;; `(list (run …) (reverse log))`. R7RS leaves argument order unspecified and
+;; chibi evaluates right-to-left, so the shorter spelling reads an empty log
+;; there and answers `(val ())` to both rows — a bug in the *test*, not a
+;; disagreement about `dynamic-wind`. It was written that way first, and
+;; cross-checking the row against chibi is what caught it.
+(test-equal "the value form of dynamic-wind re-enters its before and after thunks"
+  '((val (in body out body out)) (val (in body out)))
+  (let ((dw dynamic-wind))
+    (define (probe run)
+      (let ((log '()))
+        (let* ((r (run (lambda (x) (set! log (cons x log)))))
+               (l (reverse log)))
+          (list r l))))
+    (list
+      ;; A — the resumed before-thunk returns, and the rest of the call runs
+      ;; a second time from there.
+      (probe (lambda (note)
+               (let ((k #f) (done #f))
+                 (let ((r (dw (lambda () (note 'in) (call/cc (lambda (c) (set! k c))))
+                              (lambda () (note 'body) 'val)
+                              (lambda () (note 'out)))))
+                   (if (not done) (begin (set! done #t) (k #f)))
+                   r))))
+      ;; B — the resumed after-thunk returns, and the call is then over, so
+      ;; nothing repeats.
+      (probe (lambda (note)
+               (let ((k #f) (done #f))
+                 (let ((r (dw (lambda () (note 'in))
+                              (lambda () (note 'body) 'val)
+                              (lambda () (note 'out) (call/cc (lambda (c) (set! k c)))))))
+                   (if (not done) (begin (set! done #t) (k #f)))
+                   r)))))))
+
+;; A `call/cc` retry loop *inside* one of the value form's wind thunks, which
+;; resumes while the thunk is still running.
+;;
+;; Not a converged row — `main` answered this correctly too, because the
+;; nested dispatch loop the thunk ran on was still on the Rust stack to resume
+;; into. It is the *late* re-entry, after that loop is gone, that was broken
+;; (#159, the row above). It is here as a guard on the rewritten path: the
+;; thunks are ordinary frames of `value_wind_stub` now, and this is the shape
+;; that would notice if the stub's register window or its `Call` sequence got
+;; the thunk's own re-entry wrong.
+(test-equal "the value form of dynamic-wind captures inside its own thunks"
+  '((0 1 2 body out) (in body 0 1 2))
+  (let ((dw dynamic-wind))
+    (define (probe run)
+      (let ((log '()))
+        (run (lambda (x) (set! log (cons x log))))
+        (reverse log)))
+    (list
+      ;; a retry loop inside the before-thunk
+      (probe (lambda (note)
+               (let ((n 0))
+                 (dw (lambda ()
+                       (let ((k (call/cc (lambda (c) c))))
+                         (note n)
+                         (set! n (+ n 1))
+                         (if (< n 3) (k k))))
+                     (lambda () (note 'body))
+                     (lambda () (note 'out))))))
+      ;; and one inside the after-thunk
+      (probe (lambda (note)
+               (let ((n 0))
+                 (dw (lambda () (note 'in))
+                     (lambda () (note 'body))
+                     (lambda ()
+                       (let ((k (call/cc (lambda (c) c))))
+                         (note n)
+                         (set! n (+ n 1))
+                         (if (< n 3) (k k)))))))))))
+
+;; ── guard, after the unwind and around a declined raise ────────────────────
+
+;; A `guard` clause runs after the unwind, on both backends — converged
+;; 2026-09-01 with Track L triage families 22 and 28.
+;;
+;;   VM, chibi, Gauche => (before after handler)
+;;   tree-walker       => (before handler after)   until 2026-09-01
+;;
+;; R7RS §4.2.7 evaluates the clauses in the `guard`'s own dynamic environment,
+;; so the after-thunk runs before them. Not cosmetic: a handler writing to
+;; `current-output-port` wrote into whatever the un-unwound extent installed,
+;; which is how it was found.
+;;
+;; The tree-walker diverged because `(error "x")` reached the handler from
+;; `apply_error`, which — alone among the three raise paths — did not unwind
+;; first. The fix took the *other* two down to `apply_error`'s behaviour
+;; rather than the reverse: no raise path unwinds now, and the unwind comes
+;; from `guard-k`, which is where R7RS puts it. See
+;; `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+(test-equal "a guard clause runs after the unwind" '(before after handler)
+  (let ((log '()))
+    (guard (e (#t (set! log (cons 'handler log))))
+      (dynamic-wind (lambda () (set! log (cons 'before log)))
+                    (lambda () (error "x"))
+                    (lambda () (set! log (cons 'after log)))))
+    (reverse log)))
+
+;; A `guard` survives one of its clauses declining a `raise-continuable`.
+;;
+;; The `guard`'s handler declines `'x`, which re-raises it through `handler-k`
+;; to the outer handler; that returns `(I x)`, and the body continues to raise
+;; `'y` — which the `guard` must catch. chibi and Gauche agree.
+;;
+;; The VM used to answer `((I x) (I y))`: its continuable path popped the
+;; handler to run it and re-pushed it only when the handler *returned*, in
+;; Rust after a nested dispatch loop, and `guard`'s handler leaves through
+;; `handler-k` instead — so the re-push was skipped and the `guard` was
+;; silently uninstalled for the rest of its body. Converged 2026-09-05 with
+;; issue #178, which made the re-push an instruction in a frame: `handler-k`
+;; captures that frame like any other, so re-entering it runs the re-push.
+(test-equal "a guard survives declining a continuable raise" 'caught-y
+  (with-exception-handler (lambda (e) (list 'I e))
+    (lambda () (guard (e ((eq? e 'y) 'caught-y))
+      (list (raise-continuable 'x) (raise-continuable 'y))))))
+
+;; ── Raise paths: what reaches the handler, and from where ──────────────────
+
+;; Bad syntax handed to the `eval` primitive is the *caller's* error, raised
+;; while the program runs — catchable, on both backends. The tree-walker used
+;; to wrap it in a non-catchable `InternalError` (so this program died) while
+;; the VM caught it; converged when the D3 error-class work relabeled the
+;; eval-primitive path as `InvalidSyntax`. `EvalError::DesugarError` stays
+;; reserved for the `Backend::eval` entry, where nothing is running yet.
+(test-equal "bad syntax handed to eval is catchable" 'caught
+  (guard (e (#t 'caught)) (eval '(if) (interaction-environment))))
+
+;; Converged 2026-08-15: an unbound variable is a catchable condition in every
+;; position, on both backends.
+;;
+;; The tree-walker's CPS step function routed lookup failures through the
+;; Scheme exception handlers in some arms and `?`-propagated them in others,
+;; so whether `guard` caught the error depended on where the variable sat.
+;; chibi, Gauche and Chez catch every position here; the VM already did.
+;; Enforced structurally by the `try_catchable!` macro in `step.rs`; history
+;; in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. One row per position, so a
+;; regression names the arm.
+(test-equal "an unbound variable is catchable: bare reference" 'caught
+  (guard (e (#t 'caught)) undefined-name))
+(test-equal "an unbound variable is catchable: operator position" 'caught
+  (guard (e (#t 'caught)) (undefined-name)))
+(test-equal "an unbound variable is catchable: operand position" 'caught
+  (guard (e (#t 'caught)) (list (undefined-name))))
+(test-equal "an unbound variable is catchable: operand of a primitive" 'caught
+  (guard (e (#t 'caught)) (+ 1 (undefined-name))))
+(test-equal "an unbound variable is catchable: if test" 'caught
+  (guard (e (#t 'caught)) (if undefined-name 1 2)))
+(test-equal "an unbound variable is catchable: set! target" 'caught
+  (guard (e (#t 'caught)) (set! undefined-name 1)))
+(test-equal "an unbound variable is catchable: define value" 'caught
+  (guard (e (#t 'caught)) (define x undefined-name) x))
+(test-equal "an unbound variable is catchable: call/cc operand" 'caught
+  (guard (e (#t 'caught)) (call/cc undefined-name)))
+(test-equal "an unbound variable is catchable: unquote" 'caught
+  (guard (e (#t 'caught)) `(,undefined-name)))
+
+;; A handler that returns from a non-continuable `raise` raises the secondary
+;; exception R7RS 6.11 asks for.
+;;
+;; "If the handler returns, a secondary exception is raised in the same
+;; dynamic environment as the handler." The VM used to deliver the handler's
+;; value to the raise's destination register as if the raise had been
+;; continuable — `(returned)` for the first row, and for the second, where
+;; the raise is a *primitive's* error routed with register 0 as its
+;; destination, the returning handler's value landed in r0 and `car`'s own
+;; destination was left holding `()`. It could not tell a handler that
+;; returned from one that escaped, because both came back through the same
+;; nested run loop.
+;;
+;; Converged 2026-09-05 with issue #178: the return lands on `ResumeRaise`,
+;; an instruction, which sees it whatever the handler was and whichever route
+;; the raise took.
+;;
+;; The `.rs` row pinned Patina's wording of the secondary exception,
+;; "exception handler returned from non-continuable exception". Wording is
+;; not portable, so what is asserted is what R7RS says: the outer `guard`
+;; receives an *error object* — neither the handler's `'returned` delivered
+;; as a value nor the original `'x` re-raised bare.
+(test-equal "a handler returning from a non-continuable raise raises the secondary"
+  '(outer #t)
+  (guard (o (#t (list 'outer (error-object? o))))
+    (with-exception-handler (lambda (e) 'returned)
+      (lambda () (list (raise 'x))))))
+
+(test-equal "and from a primitive's error, where the raise has no source form"
+  '(outer #t)
+  (guard (o (#t (list 'outer (error-object? o))))
+    (with-exception-handler (lambda (e) 'returned)
+      (lambda () (list (car 5))))))
+
+;; A continuation used *as* the handler, for a primitive's error.
+;;
+;; `(call/cc (lambda (k) (with-exception-handler k thunk)))` is R7RS's own
+;; idiom for capturing a raised object; chibi and Gauche answer #t too.
+;; Triage family 24 made it work for `raise` on the VM, but a `VmError` from a
+;; primitive takes the run loop's route into `vm_raise_value`, which called
+;; the handler through `call_any` — the narrow dispatcher, which does not
+;; accept a continuation. Converged 2026-09-05 with issue #178: the handler
+;; is called by the `Call` instruction of `raise_step_stub` now, which is the
+;; same dispatcher every other call goes through.
+(test-equal "a continuation can be the handler for a primitive error" #t
+  (error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))))
+
+;; ── The tree-walker's nested trampoline ────────────────────────────────────
+;;
+;; A Rust primitive's callback runs on a nested trampoline
+;; (`apply_from_direct_tagged`) that starts with every stack empty: no
+;; handlers, no wind records, no prompts. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+;; §6 tracks it as the "primitive's callback" entry; the prompt side is in
+;; `prompts.scm`.
+;;
+;; **Most of this family cannot be a row here, and the reason is the defect
+;; itself.** A continuation invoked inside the callback — a retry loop, a
+;; `guard` clause declining and re-raising through `handler-k`, an escape —
+;; is misread by that trampoline as leaving the primitive, and what it then
+;; runs to completion is the rest of the *program*: inside a suite file, every
+;; row after this one, from inside the callback, before the outer trampoline
+;; abandons the primitive. Measured 2026-09-10: four such rows recorded no
+;; result at all on the tree-walker and left the file four rows short, and
+;; the same programs followed by one more top-level form reach that form with
+;; the `define` they sit in still unbound. So those pins live in
+;; `escape_from_primitive.rs`, where a program's continuation ends at the
+;; program and `assert_divergence` can say they fail at run time: the
+;; declining-`guard` pair, the callback that uses its own continuation, the
+;; `call-with-port` retry loop, and the escape out of `eval`. What stays here
+;; is the one shape whose wrong answer is delivered *to the row* — as an error
+;; object a `guard` can catch.
+
+;; Tree-walker: a raise inside a primitive's callback reaches the outer
+;; `guard` as the wrong object.
+;;
+;; The callback's `(raise 'x)` finds no handler on the nested trampoline, so
+;; that trampoline reports it as an `unhandled exception: x` *error*, which
+;; the outer trampoline then routes to the `guard` as an error object. A
+;; clause testing for `'x` declines, and the program dies re-raising an
+;; object nobody raised. VM, chibi, Gauche: (sym x). Older than triage
+;; families 22/28 — `main` gave the same — and the same trampoline defect.
+;;
+;; The outermost `guard` is the row's, not the program's: a raw non-error
+;; object reaching SRFI 64's own handler aborts the *file* rather than failing
+;; the row (see `scheme_suite.rs`, "a sharp edge"), and turning whatever
+;; escapes into a value keeps the failure one row wide. Where the inner
+;; `guard` works, the wrapper never fires.
+(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+(test-equal "a raise inside a port callback reaches the guard as the raised object"
+  '(sym x)
+  (guard (escaped (#t (list 'escaped (error-object? escaped))))
+    (guard (e ((symbol? e) (list 'sym e))
+              ((error-object? e) (raise (error-object-message e))))
+      (call-with-port (open-input-string "a") (lambda (p) (raise 'x))))))
 
 (test-end)

@@ -525,4 +525,75 @@
   '(1 2)
   (bind-tmp (bind-tmp (through-template done)) ()))
 
+;; ── One expansion's private global, seen from another (Larceny family 40) ───
+;;
+;; Migrated from `crates/patina-tests/tests/backend_divergence.rs` (#193),
+;; where they were the three `assert_divergence` quarantines pinning **the VM**
+;; as the diverging backend. Each row is a `test-error` — the right answer is a
+;; refusal — and the line above it says the VM is expected to fail it by
+;; answering, using the feature identifier the VM advertises (see
+;; `docs/TEST_ORGANIZATION.md`). The driver fails the run the day the VM
+;; starts refusing, and the fix is to delete the line and close family 40 in
+;; `scheme_tests/reports/larceny_triage.md`.
+;;
+;; One expansion's `(define hidden-x …)` introduces a *scoped* top-level
+;; definition; a different expansion's template reference to that spelling
+;; carries scopes that reject it. Measured 2026-09-09 on the first shape, and
+;; the VM is alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15
+;; errors "unbound variable", the tree-walker errors "Undefined variable", and
+;; only the VM answers 10. One expansion's private definition is not another
+;; expansion's to see, and three implementations say so. The VM still
+;; answers: its compiler installs a bare-name alias for a renamed
+;; macro-introduced global (`alpha_rename`'s `rename_body`), the mechanism
+;; whose by-name reach `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 already records
+;; as undecidable-under-renaming — the jabberwocky-steal defect.
+;;
+;; The unusual direction is the reason to read these before "fixing" one:
+;; closing them means fixing relinking-by-name, not loosening the tree-walker
+;; back to the capture chibi rejects.
+;;
+;; The definitions are top-level forms, as in the original programs; only the
+;; use is inside the row, so that the refusal is a caught error and not a dead
+;; file. The hidden names are `hidden-…` rather than the originals' `x`,
+;; `count` and `priv` because this file already binds `count` at top level,
+;; and a visible binding of the same spelling is exactly what would make the
+;; reference resolve — for the wrong reason — on every implementation.
+
+;; Read direction: `use-x`'s template `hidden-x` means whatever `hidden-x` is
+;; at `use-x`'s definition site — and the only one there is `def-x`'s
+;; hygienically hidden one, which chibi and the tree-walker refuse to let it
+;; see.
+(define-syntax def-x (syntax-rules () ((_) (define hidden-x 10))))
+(def-x)
+(define-syntax use-x (syntax-rules () ((_) hidden-x)))
+(cond-expand (patina-vm (test-expect-fail 1)) (else))
+(test-error "one expansion's definition is not another expansion's reference" #t
+  (use-x))
+
+;; Write direction, exercising `set_scoped_terminal`'s refusal — the only row
+;; that reaches it, since every hygiene-matrix write row's global is a plain
+;; `define` the terminal's `local_slot` arm answers first.
+(define-syntax defc (syntax-rules () ((_) (define hidden-count 0))))
+(defc)
+(define-syntax inc (syntax-rules () ((_) (set! hidden-count (+ hidden-count 1)))))
+(cond-expand (patina-vm (test-expect-fail 1)) (else))
+(test-error "one expansion's definition is not another expansion's write target" #t
+  (inc))
+
+;; The generated-getter idiom across two expansions: `defgetter`'s template
+;; `hidden-priv` resolves at `defgetter`'s definition site, where no visible
+;; `hidden-priv` exists — `defpriv`'s is hygienically hidden. The R7RS suite's
+;; `jabberwocky` shape keeps working because there the `define` and the
+;; generated `define-syntax` share one expansion, so the getter's reference
+;; carries the defining expansion's scope. `define_scoped_definition`'s doc
+;; records the contract boundary this pins.
+(define-syntax defpriv (syntax-rules () ((_) (define hidden-priv 10))))
+(define-syntax defgetter
+  (syntax-rules () ((_ g) (define-syntax g (syntax-rules () ((_) hidden-priv))))))
+(defpriv)
+(defgetter get)
+(cond-expand (patina-vm (test-expect-fail 1)) (else))
+(test-error "a generated getter cannot see a different expansion's private define" #t
+  (get))
+
 (test-end)

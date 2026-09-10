@@ -534,7 +534,7 @@ no `Return` will ever cross its depth again.
 A loop-exit backstop was tried first and is not enough: it closes the
 two-top-level-form spelling of the issue and leaves the same sequence inside a
 single `let` body dying exactly as before, since no loop returns between the
-re-entry and the abort. Both spellings are pinned in `backend_divergence.rs`.
+re-entry and the abort. Both spellings are pinned in `tests/scheme/control/prompts.scm`.
 
 #### Who closes a prompt
 

@@ -220,10 +220,11 @@ Sixty-four rows went, ten slices at a time, each carrying a `Larceny family N`
 line so `scheme_tests/reports/larceny_triage.md` still maps — better than
 before, since the triage doc names a file and a row rather than a 1497-line
 haystack, and `every_triage_pointer_names_something_that_exists` now checks that
-those pointers resolve. Six rows stayed in Rust because a `.scm` file cannot
-express them: family 40's three backend divergences (`backend_divergence.rs`),
-and the two families that need real files on disk (`include_syntax.rs`,
-`standard_ports.rs`).
+those pointers resolve. Six rows stayed in Rust at the time: family 40's three
+backend divergences, which followed once a `.scm` row could tell the backends
+apart (they are the last section of `expansion/hygiene.scm` now — see "A row
+where the two backends differ" below), and the two families that need real
+files on disk (`include_syntax.rs`, `standard_ports.rs`), which stay.
 
 **What the move was actually worth** is not the binary it saved. Rows that had
 only ever run on Patina were suddenly arbitrated by two other implementations,
@@ -291,9 +292,9 @@ passed while asserting something else:
   itself in the log.)
 
 **What still belongs in a `.rs` file**, because a `.scm` file cannot express
-it: a row whose backends give *different values*; a row deliberately asserted
-on one backend; that an error escapes an *unguarded* program (observable only
-from outside it); and anything asserting *which stage* rejected a program, or
+it: a divergence whose wrong answer is not *delivered to the row* (see "A row
+where the two backends differ" below); that an error escapes an *unguarded*
+program (observable only from outside it); and anything asserting *which stage* rejected a program, or
 touching `Heap`, `VmState`, `Instruction`, `SourceMap`, GC counters or the
 library registry. The rule of thumb #193 uses: what is about the **language**
 goes to Scheme, what is about the **implementation** stays in Rust.
@@ -317,7 +318,41 @@ implementations with nothing anywhere saying so, and a row that can vanish
 quietly is what the skip and floor checks exist to prevent; with it, chibi and
 Gauche *report* a skip. Use this only where the premise genuinely is ours (a
 Patina-specific validation, say), never to paper over a difference in an
-answer — that is a divergence, and it belongs in Rust where it can be named.
+answer between our two backends — that is a divergence, and it has a spelling
+of its own.
+
+**A row where the two backends differ** is a suite row too, since #193's
+divergence slice. Each backend advertises its own feature identifier
+(`patina-vm`, `patina-tree-walker` — `Heap::add_feature`, at construction),
+so a file can say which one is known to get a row wrong:
+
+```scheme
+(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+(test-equal "the row's name" <the right answer> <the program>)
+```
+
+The row asserts the *right* answer, on every implementation — chibi and Gauche
+take the `else` and arbitrate it like any other row, which the Rust
+quarantines never had — and the line above says who is expected to fail it.
+`scheme_suite.rs` holds the two backends to the same rows and to exactly the
+expected-failure difference the file declares (`backends_ran_the_same_rows`),
+and fails the run on the `xpass` the day the wrong backend starts passing:
+delete the line, and the row is an ordinary assertion. That is what
+`assert_divergence` did in Rust, with one thing traded away — the stage pin,
+since a `test-expect-fail` says only "does not pass" and not "fails at run
+time".
+
+The test for whether a divergence can be a row is whether the wrong backend's
+answer is **delivered to the row**: a wrong value, or an error a `guard` in
+the row can catch. When it is not — the failure escapes every handler in the
+program, or a continuation is invoked that runs the rest of the file from
+where it was captured — the row takes every row after it down with it, and
+the pin stays in Rust: `assert_divergence` for a failure, two per-backend
+assertions for a value. Today that is the tree-walker's nested-trampoline
+family, all of it in `escape_from_primitive.rs`. The inventory of what is
+knowingly wrong is `rg 'patina-(vm|tree-walker) \(test-expect-fail'
+crates/patina-tests/tests/scheme` together with `rg assert_divergence
+crates/patina-tests`, plus the two matrix files.
 
 **Where an oracle refuses to *compile* a row, neither form works.**
 `test-skip` suppresses evaluation, so a row it guards is still read and
@@ -510,8 +545,12 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   `hygiene.rs` is gone, migrated into `tests/scheme/expansion/`
   (`hygiene.scm`, `syntax-rules-literals.scm`, `let-syntax.scm`,
   `ellipsis.scm`); add a portable hygiene row there
-- `backend_divergence.rs` — the registry of behaviours where the two backends
-  differ, `assert_divergence` being the only way onto it
+- `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
+  and the home of the divergence pins a suite row cannot hold (the
+  tree-walker's nested-trampoline family, via `assert_divergence`).
+  `backend_divergence.rs` is gone: its rows are in `control/cps-features.scm`,
+  `control/callability.scm`, `control/prompts.scm` and `expansion/hygiene.scm`,
+  the open ones as backend-scoped expectations
 - `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
   24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
 - `complex_numbers.rs`, `record_types.rs`, `scheme_eval.rs` — feature areas

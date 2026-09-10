@@ -84,7 +84,8 @@ differential harness cannot see it, so Q2 must not read backend *agreement* as
 correctness. The four genuine divergences that remain (`define`-bound `call/cc`,
 `call/cc` through a higher-order procedure, `apply dynamic-wind`, `apply
 with-exception-handler`) are now committed as executable quarantine tests in
-`crates/patina-tests/tests/backend_divergence.rs`, which supersedes this table as
+`crates/patina-tests/tests/scheme/control/callability.scm` (backend-scoped
+`test-expect-fail` rows since #193's divergence slice), which supersede this table as
 the live inventory. Each pins both backends' current behaviour and is written to
 **fail when the bug is fixed**, forcing collapse into a plain both-backends
 assertion. Prefer that file over this section when starting Q2.
@@ -104,8 +105,8 @@ Three rows converge (`apply dynamic-wind`, `apply with-exception-handler`, and
 …)` stops being a shared gap and becomes an ordinary divergence with the VM
 correct — the tree-walker's registry hole is real and is still Q2 part 1's to
 fix; `apply` was just a third way to reach it. `crates/patina-tests/tests/
-callability.rs` carries the callee-set tests, `backend_divergence.rs` the one
-remaining pin.
+callability.rs` carries the callee-set tests, `tests/scheme/control/callability.scm`'s
+"apply on call/cc" row the one remaining pin.
 
 **Update 2026-09-05 — the third VM dispatcher, `call_any`, is converged too
 (issue #186).** It had kept the narrow probe set, and it is what runs the nine
@@ -131,7 +132,7 @@ not: whether the callee finished or left a frame. A dead parameter had made a
 whole dispatcher look unreachable from most of the VM.
 
 Held by `tests/scheme/control/callability.scm`'s "apply as call-with-values' consumer" rows (migrated from `callability.rs` by #193 Phase 0)
-and `backend_divergence.rs::a_control_primitive_can_be_the_prompt_body`, both
+and `tests/scheme/control/prompts.scm`'s "a control primitive can be the prompt body" rows, both
 collapsed out of the quarantines that had pinned the failures, plus
 `every_frameless_call_site_takes_a_control_primitive` for the remaining sites.
 
@@ -231,7 +232,7 @@ risk warned against. Error class is covered too — `assert_eval_error` now
 requires *both* backends to reject, so one backend erroring where the other
 succeeds is a failure. Verified by mutation: injecting the §1.2 `call/cc`
 divergence fails with `[tree-walker] failed to evaluate … Undefined variable`.
-The §1.2 seed lives in `crates/patina-tests/tests/backend_divergence.rs`.
+The §1.2 seed lives in `crates/patina-tests/tests/scheme/control/callability.scm`, its last section.
 
 Remaining under this item:
 - **The test files that construct interpreters directly** (`scheme_base.rs`,
@@ -495,7 +496,8 @@ design note on scoped relinking.
   and `cargo fmt`.
 - Track-level metric: **the number of behaviours that differ between the two
   backends.** This is now a literal count —
-  `rg -c assert_divergence crates/patina-tests/tests/backend_divergence.rs` —
+  `rg -c 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme`
+  plus `rg -c assert_divergence crates/patina-tests/tests` —
   and it is expected to reach, and stay at, zero. It stands at **6**: the four
   §1.2 control-operator rows, an error raised after a multi-value escape
   (2026-08-25 — see below), and handler loss on

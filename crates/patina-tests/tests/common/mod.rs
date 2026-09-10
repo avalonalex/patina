@@ -18,14 +18,35 @@
 //! tree-walker-only — porting them is tracked as Q1 in
 //! `PRD/TRACK_Q_QUALITY_PRD.md`. Prefer these helpers in new tests.
 //!
-//! A known divergence is declared with [`assert_divergence`], which pins the
-//! working backend's answer *and* requires the other to still fail:
+//! A known divergence between the backends is usually **not** declared here.
+//! It is a row in a suite file under `tests/scheme/` with a backend-scoped
+//! expectation above it —
+//!
+//!     (cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+//!     (test-equal "the row's name" <the right answer> <the program>)
+//!
+//! — which asserts the right answer on every implementation and names the
+//! backend known to miss it; `scheme_suite.rs` fails the run the day that
+//! backend starts passing, so the quarantine retires itself instead of
+//! outliving the defect. That is the spelling whenever the wrong backend's
+//! answer is *delivered to the row*: a wrong value, or an error a `guard` can
+//! catch.
+//!
+//! [`assert_divergence`] is the spelling for the rest — a divergence where the
+//! wrong backend takes the whole program down, or returns to the row's
+//! continuation twice, so that inside a suite file it would take the other
+//! rows with it. It pins the working backend's answer *and* requires the other
+//! to still fail at the recorded stage:
 //!
 //!     assert_divergence(code, On::Vm, "(1 2)", ErrorClass::AtRuntime, "PRD/bugs/SOME_BUG.md");
 //!
-//! Fixing the bug makes that test fail, which is the point — the quarantine
-//! retires itself instead of outliving the defect. `rg assert_divergence
-//! crates/patina-tests` is the complete inventory.
+//! Fixing the bug makes that test fail, which is the same point made the same
+//! way. Today every such pin is the tree-walker's nested-trampoline family, in
+//! `escape_from_primitive.rs`. The complete inventory is therefore three greps
+//! and two files: `rg 'patina-(vm|tree-walker) \(test-expect-fail'
+//! crates/patina-tests/tests/scheme`, `rg assert_divergence crates/patina-tests`,
+//! the per-backend pins beside the latter, and the two matrix files, which
+//! record every backend's answer per row.
 
 #![allow(dead_code)]
 // `gc_shared_tests!` is used only by the GC test binaries; every other test
@@ -57,10 +78,11 @@ pub enum On {
 ///
 /// Selecting a single backend is a real need — a divergence where the wrong
 /// side returns a *value* rather than failing cannot go through
-/// [`assert_divergence`], and there are several such pins. Those use the named
-/// per-backend helpers (`eval_program_vm`, `try_eval_program_tree_walker`, …),
-/// which say in their name what they do; threading this enum out would give
-/// the same capability a second, vaguer spelling.
+/// [`assert_divergence`], and `escape_from_primitive.rs` holds such pins. Those
+/// use the named per-backend helpers (`eval_program_vm`,
+/// `try_eval_program_tree_walker`, …), which say in their name what they do;
+/// threading this enum out would give the same capability a second, vaguer
+/// spelling.
 #[derive(Clone, Copy)]
 enum Which {
     Both,

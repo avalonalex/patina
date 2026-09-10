@@ -154,8 +154,8 @@ fn every_exported_primitive_can_be_dispatched() {
     ///   **syntactically** on the tree-walker, in `cps_transform.rs`'s
     ///   `is_callcc_reference`, so `(define f call/cc)` then `(f …)` still
     ///   reaches a registry miss there. That is #169's defect in another
-    ///   place, already pinned as `backend_divergence.rs`'s
-    ///   `callcc_bound_with_define` under Track Q §1.2, so it is excluded here
+    ///   place, already pinned as `tests/scheme/control/callability.scm`'s
+    ///   "call/cc bound to a variable" row under Track Q §1.2, so it is excluded here
     ///   rather than counted twice.
     ///
     /// A name added to either list owes a pin somewhere for whatever it does
