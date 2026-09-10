@@ -128,7 +128,10 @@
 ;; `test_literal_binding_before_vs_after` were the same program down to the
 ;; symbol it returned. That, and the shadowed-`=>` program appearing both as a
 ;; tree-walker-only test and through the both-backend helper, is why fourteen
-;; tests became seventeen rows rather than nineteen. In the first, `k` is bound *before* the macro is defined, so the
+;; tests became seventeen rows rather than nineteen; the two `_` rows arrived
+;; later, from two more tests, which is the file's nineteen.
+;;
+;; In the first, `k` is bound *before* the macro is defined, so the
 ;; literal in the pattern and the `k` at the use site are the same binding and
 ;; the literal matches. In the second the use site binds `k` *after*, so they
 ;; are different bindings and it does not — even though every `k` is spelled
@@ -217,18 +220,20 @@
 
 ;; ── `_`, which is a pattern token until it is a literal ─────────────────────
 ;;
-;; **From `hygiene.rs`** (#193). `_` matches anything and binds nothing, which
-;; is why `count-args` can ask only about arity. Put it in the literals list and
-;; it stops being a wildcard and starts being an identifier that matches only
-;; itself — the same "by binding, not by spelling" rule the rest of this file is
-;; about, applied to the one token that has a second job.
+;; **From `hygiene.rs`** (#193). R7RS §4.3.2 gives `_` two jobs. In a pattern it
+;; matches anything and binds nothing, which is why `count-args` can ask only
+;; about arity. Named in the literals list it stops being a wildcard and becomes
+;; an ordinary literal, matching only an identifier with the same binding — the
+;; same "by binding, not by spelling" rule the rest of this file is about,
+;; applied to the one token with a second job.
 (define-syntax count-args (syntax-rules () ((_ a) 1) ((_ a b) 2) ((_ a b c) 3)))
 
 (test-equal "_ is a wildcard that matches anything and binds nothing" '(1 2 3)
   (list (count-args x) (count-args x y) (count-args x y z)))
 
 ;; With `_` declared a literal, `(_ _ _)` matches only a call spelled with two
-;; literal underscores; `(count-to-2_ a b)` falls through to the dotted catch-all
+;; literal underscores; `(count-to-2_ a b)` falls through to the dotted
+;; catch-all
 ;; instead. The macro's *own* keyword position is still matched by the first `_`
 ;; of each rule, which is the part that has to keep working for the rest to mean
 ;; anything.
