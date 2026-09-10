@@ -46,10 +46,16 @@
 ;; nothing at all, and with the full list chibi stops warning.
 ;;
 ;; `(only (srfi 101) quote car cons list list?)` would say this far better and
-;; **cannot be used**: chibi 0.12's `only` resolves against a library's
-;; *internal* names, so `(only (srfi 101) car)` fails with "importing unknown
-;; binding: car" even though the export alist it prints contains
-;; `(car . ra:car)`. `except` is unaffected. Not filed upstream.
+;; **cannot be used while the lane runs the 0.12.0 release**: there, `only`
+;; resolves against a library's *internal* names, so `(only (srfi 101) car)`
+;; fails with "importing unknown binding: car" even though the export alist it
+;; prints contains `(car . ra:car)`. `except` is unaffected.
+;;
+;; **Already fixed upstream, so nothing was filed.** Checked 2026-09-09 against
+;; chibi master at `bb9b3215`, built from source: the same program answers `1`.
+;; The fix is `0cf331e5`, "Allow import only on renamed identifiers." Switch
+;; this import to the `only` form when the lane's chibi carries that commit —
+;; it says in five names what the `except` list says in twenty.
 ;;
 ;; **What proves the staging took effect** is the relinking row's second
 ;; element, `(r7:pair? (r7:cadr v))` answering `#f`: that can only happen if

@@ -1053,7 +1053,19 @@ fn test_literal_shadowed_in_macro_body() {
 ///
 /// Same as above, but with the shadowing happening inside a macro template.
 ///
-/// Verified against chibi-scheme and Gauche.
+/// **The "verified against Gauche" this comment used to claim is not true.**
+/// Re-measured 2026-09-09: chibi 0.12 and Chez 10.3.0 answer `no-match` as we
+/// do, and Gauche answers `matched-k` — on the 0.9.15 release and on master
+/// (`f582cf69e`, 0.9.16_pre3) built from source. Filed as shirok/Gauche#1327.
+///
+/// The reasoning, since a 3-1 split deserves one: the `k` passed to `n` denotes
+/// the `(let ((k 99)) …)` binding, while the literal `k` stands outside that
+/// `let` and is unbound there. R7RS §4.3.2 matches a literal only when both
+/// have the same binding or both are unbound, so the first rule must not match.
+///
+/// This row belongs in `tests/scheme/expansion/` once this file is migrated —
+/// it is exactly the kind of claim a comment cannot check and the oracle lane
+/// can.
 #[test]
 fn test_literal_shadowed_in_nested_macro_template() {
     let interp = TreeWalkInterpreter::new_tree_walker();
