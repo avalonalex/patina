@@ -18,20 +18,47 @@
 ;; **chibi 0.12 cannot run this file at all.** It does not support
 ;; `define-library` in a script — measured 2026-09-09, the body's `define`
 ;; arrives at the top level and it reports "unexpected define", or the library
-;; is simply never registered. That is registered as `*` / `incomplete` in
+;; is simply never registered. Whether the report requires it to is not settled
+;; here: R7RS describes how a library is written and leaves how one is *located*
+;; to the implementation, and chibi loads libraries from its load path. That is
+;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
 ;; five of the six rows.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
-;; those names instead — its `list` builds a random-access list, which is not a
-;; pair — while `(prefix (scheme base) r7:)` keeps the ordinary ones reachable.
-;; So a template's `list` reaching the *library's* meaning is observable as a
-;; pair, and the program's as something else. Expected values are therefore
-;; built with `r7:list` and friends: an ordinary `'(1 2)` in this file is a
-;; random-access list, not a pair, which is what `expansion/quasiquote.scm`
-;; records learning the hard way.
+;; those five names instead — its `list` builds a random-access list, which is
+;; not a pair — while `(prefix (scheme base) r7:)` keeps the ordinary ones
+;; reachable. So a template's `list` reaching the *library's* meaning is
+;; observable as a pair, and the program's as something else. Expected values
+;; are therefore built with `r7:list` and friends: an ordinary `'(1 2)` in this
+;; file is a random-access list, not a pair, which is what
+;; `expansion/quasiquote.scm` records learning the hard way.
+;;
+;; **The `except` list is long, and only five of its names carry the test** —
+;; `quote`, `car`, `cons`, `list`, `list?`. The other fifteen are there because
+;; SRFI 101 exports them too, and importing two bindings of one identifier is
+;; an error: excluding only the five leaves `pair?`, `map`, `append`, `cdr` and
+;; eleven more ambiguous, in the one file where "which `pair?` is this" is the
+;; subject. Measured 2026-09-09: chibi warns ("importing already defined
+;; binding: quote") and lets the later import win, Patina and Gauche say
+;; nothing at all, and with the full list chibi stops warning.
+;;
+;; `(only (srfi 101) quote car cons list list?)` would say this far better and
+;; **cannot be used**: chibi 0.12's `only` resolves against a library's
+;; *internal* names, so `(only (srfi 101) car)` fails with "importing unknown
+;; binding: car" even though the export alist it prints contains
+;; `(car . ra:car)`. `except` is unaffected. Not filed upstream.
+;;
+;; **What proves the staging took effect** is the relinking row's second
+;; element, `(r7:pair? (r7:cadr v))` answering `#f`: that can only happen if
+;; the `(list 1 2)` the program wrote really did build a random-access list.
+;; Without a control like it the file would pass unchanged on an implementation
+;; where the import did nothing — the first row, for instance, answers the same
+;; either way. `expansion/quasiquote.scm` names its own control for the same
+;; reason, and the two files share this apparatus; a correction to one belongs
+;; in both.
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
@@ -92,7 +119,10 @@
         ((_ name) (define-syntax name (... (syntax-rules () ((_ x ...) (tag x ...))))))))))
 
 (import (scheme eval) (scheme repl)
-        (except (scheme base) quote car cons list list?)
+        (except (scheme base)
+          quote car cdr caar cadr cdar cddr cons pair? null?
+          list list? make-list length append reverse
+          list-tail list-ref map for-each)
         (prefix (scheme base) r7:)
         (srfi 101)
         (srfi 64)
@@ -110,10 +140,12 @@
 ;; template compiler compiles the `quote` of a literal datum as a *reference*
 ;; rather than emitting it verbatim with the datum.
 ;;
-;; Three claims: a quoted constant is the same object each time the procedure
-;; runs (§4.1.2 allows sharing and we do share); the program's `car` is SRFI
-;; 101's and reads a random-access list; and `(lit)`, whose template holds the
-;; literal, is a pair.
+;; Three claims, and the first is about SRFI 101's `quote`, not the standard's
+;; — every `'…` in this file goes through it: a quoted datum is the same object
+;; each time the procedure runs, so `ra:quote` is not rebuilding the list per
+;; call. Then: the program's `car` is SRFI 101's and reads a random-access
+;; list; and `(lit)`, whose template holds the literal, is a pair, because the
+;; library it was written in means `(scheme base)`'s `quote` by it.
 (test-equal "a template's quote is the definition site's under an imported one"
   (r7:list #t 1 #t)
   (r7:list (let ((f (lambda () '(x)))) (r7:eq? (f) (f)))
@@ -189,13 +221,25 @@
 ;; quietly — and it is what keeps Gauche able to run the file, since the
 ;; unbound variable would otherwise take the whole thing down and cost the five
 ;; rows above their only oracle.
-(define-syntax inner (syntax-rules () ((_ x) (r7:vector-set! x 0 'changed))))
+;; `vector-set!` and `vector` unprefixed: SRFI 101 does not export either, so
+;; these are `(scheme base)`'s without help. That matters for `inner`, whose
+;; template is expanded *inside* `eval` — reaching a prefixed name there would
+;; make the row depend on what `interaction-environment` carries, which is the
+;; one thing about this program the report leaves open. Only the form handed to
+;; `eval` needs `r7:list`, since `eval` takes a pair.
+(define-syntax inner (syntax-rules () ((_ x) (vector-set! x 0 'changed))))
 (define-syntax outer-mut (syntax-rules () ((_ x) (inner x))))
 
+;; `vec` is bound by a `let` rather than defined at top level, which is the one
+;; place this file departs from "keep top-level `define`s at top level": the
+;; `eval` has to sit *inside* the row so that `test-skip` suppresses it too.
+;; At top level it would run on every implementation and take the file down on
+;; Gauche. Nothing here is recursive, so the rule the convention protects —
+;; a self-reference resolving through the global environment — is not in play.
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "a vector object in evaluated code keeps its identity through expansion"
-  (r7:vector 'changed 2)
-  (let ((vec (r7:vector 1 2)))
+  (vector 'changed 2)
+  (let ((vec (vector 1 2)))
     (eval (r7:list 'outer-mut vec) (interaction-environment))
     vec))
 
