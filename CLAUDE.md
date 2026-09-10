@@ -123,7 +123,8 @@ links, so this is the worst realistic case):
 | any of them again with no edit in between | ~0.3 s |
 
 The two big numbers are **integration binaries × ~6 s** — 88 when this was
-measured, **73 as of 2026-09-09**, with #193 Phase 1 complete: every
+measured, **72 as of 2026-09-09**, with #193 Phase 1 complete and
+`hygiene.rs` migrated after it: every
 `.rs` file directly in a `tests/` directory is its own crate and its own
 executable, and each statically links the whole workspace. Do not go looking for a cache bug —
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
@@ -141,9 +142,9 @@ jobs on seven machines: **685 s of work in 270 s of wall clock**.
 driver (`crates/patina-tests/tests/scheme_suite.rs`) and migrated one file,
 which *added* a binary rather than removing one — 87 to 88 — because
 `callability.rs` still holds the rows a `.scm` file cannot express. Phase 1
-took it to **73** (`find crates -path '*/tests/*.rs' -not -path
-'*/tests/*/*' | wc -l`), across 28 suite files, so the 493 s and 580 s above
-are now over-estimates. The number
+took it to 73 and the `hygiene.rs` migration to **72** (`find crates -path
+'*/tests/*.rs' -not -path '*/tests/*/*' | wc -l`), across 29 suite files, so
+the 493 s and 580 s above are now over-estimates. The number
 that matters is the marginal one, measured the same day: adding one `.scm`
 file rebuilds in **0.098 s**, adding one `.rs` file in **8.96 s**. Phase 1's
 bulk migration is what turns that into a smaller total. The *reasoning* above
