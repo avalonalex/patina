@@ -234,9 +234,13 @@ divergence fails with `[tree-walker] failed to evaluate … Undefined variable`.
 The §1.2 seed lives in `crates/patina-tests/tests/backend_divergence.rs`.
 
 Remaining under this item:
-- **The 22 test files that construct interpreters directly** (`hygiene.rs`,
-  `scheme_base.rs`, `numeric_operations.rs`, `record_types.rs`, the SRFI
-  suites, …) still run tree-walker-only. Some are legitimately backend-specific
+- **The test files that construct interpreters directly** (`scheme_base.rs`,
+  `record_types.rs`, the SRFI suites, …) still run tree-walker-only. Two the
+  item used to name are gone rather than fixed: `numeric_operations.rs` and
+  `hygiene.rs` were migrated into `tests/scheme/` by #193, which is the other
+  way to close this — a suite row runs on both backends by construction, and
+  under chibi and Gauche besides. `hygiene.rs` was the largest of them, 44 of
+  its 49 tests tree-walker-only. Some are legitimately backend-specific
   (`interpreter_api.rs` uses `evaluator()`, which is not on the `Backend`
   trait), but most are plain R7RS coverage that should be parametrized.
 - **The chibi report diff** below is still unwritten.

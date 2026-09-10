@@ -40,13 +40,14 @@
 ;; hygiene semantics". All four implementations answer `bound` (measured
 ;; 2026-09-09), so it pins that now.
 ;;
-;; ── Where the rest of `hygiene.rs` is going ─────────────────────────────────
+;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
-;; This is the first of three slices. The `let-syntax` rows go to
-;; `expansion/let-syntax.scm`, the capture and macro-generating-macro rows to
-;; `expansion/hygiene.scm`, and the underscore and ellipsis-escape rows to
-;; `expansion/ellipsis.scm`; when the last leaves, `hygiene.rs` is deleted and
-;; the integration-binary count drops by one. `hygiene_matrix.rs` is not part of
+;; The migration is finished, in four slices. `hygiene.rs`'s 49 tests are now
+;; the literal-matching rows and the two about `_` here, the `let-syntax` rows
+;; in `expansion/let-syntax.scm`, the ellipsis-escape rows in
+;; `expansion/ellipsis.scm`, and the capture and macro-generating-macro rows in
+;; `expansion/hygiene.scm`. That file is deleted and the integration-binary
+;; count went 73 to 72 with it. `hygiene_matrix.rs` is not part of
 ;; this — it is a 28-shape scoreboard against chibi and Racket, read as a table,
 ;; and stays Rust.
 

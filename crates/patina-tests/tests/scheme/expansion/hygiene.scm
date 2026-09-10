@@ -2,43 +2,65 @@
 ;; where the macro was *written*, and a binding a template introduces is
 ;; renamed throughout its scope.
 ;;
-;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 15,
-;; 36, 37, 38 and 39; #193 Phase 1). Fourteen Rust tests became eighteen rows —
-;; the seventeen below, plus one that went to `expansion/ellipsis.scm` for the
-;; reason at the end of this header.
+;; **Assembled from two migrations**, both under #193:
 ;;
-;; **The other two hygiene files, and what each is for.**
-;; `hygiene_matrix.rs` is a scoreboard, not a suite: 28 shapes scored against
-;; chibi and Racket, read as a table when a hygiene fix moves a row. It stays
-;; Rust. `hygiene.rs` is 49 tests that predate the shared helpers, and the
-;; honest description is that **44 of them build a tree-walker by hand** and so
-;; never run on the VM at all, while 8 use `assert_program_eval_to` and run
-;; both. That is a gap, not a design — the VM is the default backend, and the
-;; defects families 36 and 40 record are VM-side. Most of those 44 are ordinary
-;; portable value assertions that belong here; converting them is its own job,
-;; and `hygiene.rs`'s header now says so. **Add a new portable hygiene row
-;; here**, where it runs on both backends and both oracles.
+;;   - `larceny_families.rs`, families 15, 36, 37, 38 and 39 — fourteen Rust
+;;     tests, seventeen rows, the defects Larceny's R7RS suites surfaced;
+;;   - `hygiene.rs`, its capture and macro-generating-macro tests — eighteen
+;;     tests, eighteen rows, the everyday statements of the same rule.
+;;
+;; Thirty-two tests, thirty-five rows. **`hygiene.rs` is deleted**: it was 49
+;; tests of which 44 built a tree-walker by hand and so never ran on the VM,
+;; the default backend, and they are now spread across this file,
+;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm` — running
+;; on both backends and under chibi and Gauche. The integration-binary count
+;; drops by one with it.
+;;
+;; `hygiene_matrix.rs` is not part of that and stays Rust: 28 shapes scored
+;; against chibi and Racket, read as a table when a hygiene fix moves a row,
+;; which is a different instrument from a suite.
+;;
+;; **Closing that gap was measured, not assumed.** Before the first slice, the
+;; 46 programs held by `hygiene.rs`'s 44 hand-built-interpreter tests were run
+;; on both backends and answered identically (2026-09-09) — so the rows had not
+;; been hiding a VM defect, and moving them bought permanent coverage rather
+;; than a fix. What the oracles then found is a different matter, and is in
+;; `syntax-rules-literals.scm`'s header: a row that asserted only "did not
+;; error", and one whose comment claimed Gauche agreed with it when Gauche
+;; never has (shirok/Gauche#1327).
+;;
+;; **Three files hold claims adjacent to these, and a fourth copy is what
+;; `core_syntax_bindings.rs`'s own comment warns against.** That file has the
+;; rebound-`else` row, `compliance/derived.rs` the unshadowed regression guards
+;; for `cond`/`case`, and `syntax-rules-literals.scm` the literal-matching rows
+;; including the other polarity of the `else` case. Check those before adding a
+;; row here about a keyword being shadowed.
+;;
+;; The first row below — a macro's `temp` not capturing the caller's — is the
+;; test issue #12 was opened for, and that issue is where the original defect
+;; and its reasoning live.
 ;;
 ;; ── Measured 2026-09-09 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   17 pass
-;;   chibi                     17 pass
-;;   Gauche                    17 pass
+;;   patina VM / tree-walker   35 pass
+;;   chibi                     35 pass
+;;   Gauche                    35 pass
 ;;
-;; **Nothing here diverges**, which is worth saying for a file of seventeen
-;; hygiene rows. Most were live defects in Patina within the last month; three
-;; were not, and the difference matters when reading them. Family 36's
-;; parameter and `let` rows and family 39's row all pass *before* the fixes
-;; they document — the first two because nothing had pinned the shape until PR
-;; #138 broke it with the suite staying green, the third because the right
-;; answer was arriving for the wrong reason. Their comments say which is which.
+;; **Nothing here diverges**, which is worth saying for thirty-five hygiene
+;; rows. Most of the first seventeen were live defects in Patina within the
+;; last month; three were not, and the difference matters when reading them.
+;; Family 36's parameter and `let` rows and family 39's row all pass *before*
+;; the fixes they document — the first two because nothing had pinned the shape
+;; until PR #138 broke it with the suite staying green, the third because the
+;; right answer was arriving for the wrong reason. Their comments say which is
+;; which. The eighteen from `hygiene.rs` were regression guards throughout, and
+;; all four implementations answered every one identically when they moved.
 ;; The register has no entry for this file.
 ;;
 ;; One row of family 15 is **not** here. It is the same claim as the first row
 ;; below with `...` as the keyword instead of `if`, and it lives in
 ;; `expansion/ellipsis.scm` — Gauche rejects a `syntax-rules` written where
-;; `...` is bound, so keeping it here would cost Gauche this whole file. The
-;; ellipsis file is already registered as one it cannot run.
+;; `...` is bound, so keeping it here would cost Gauche this whole file.
 
 (import (scheme base) (srfi 64))
 
@@ -318,5 +340,189 @@
         (let-syntax ((m2 (syntax-rules () ((m2) x))))
           (let ((x 'inner))
             (list (m1) (m2))))))))
+
+;; ── What a template introduces is the template's, not the use site's ────────
+;;
+;; **From `hygiene.rs`** (#193, its last slice). The rows above are the defects
+;; Larceny's suites surfaced; these are the everyday statements of the same
+;; rule, and several are the textbook cases a Scheme implementation is expected
+;; to get right on day one. They ran on the tree-walker alone for as long as
+;; that file existed. Its other three quarters are in
+;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm`.
+;;
+;; `temp` is the canonical example: the macro binds one, the use site binds one,
+;; and the body the user passed in must see *theirs*.
+(define-syntax my-let (syntax-rules () ((_ x body) (let ((temp x)) body))))
+
+(test-equal "a macro-introduced binding does not capture the use site's" 5
+  (let ((temp 5)) (my-let 10 temp)))
+
+;; The same through a macro that both binds and assigns: `my-swap`'s own `temp`
+;; is invisible to the caller's, which keeps its 999.
+(define-syntax my-swap
+  (syntax-rules () ((_ a b) (let ((temp a)) (set! a b) (set! b temp)))))
+
+(test-equal "nor does one a macro uses for a swap" '(2 1 999)
+  (let ((x 1) (y 2) (temp 999)) (my-swap x y) (list x y temp)))
+
+;; Two at once, so the answer distinguishes "the macro's bindings won" (3) from
+;; "the use site's won" (303) from correct (6).
+(define-syntax with-temps
+  (syntax-rules () ((_ e) (let ((temp1 1) (temp2 2)) (+ temp1 temp2 e)))))
+
+(test-equal "and several introduced bindings stay distinct at once" 6
+  (let ((temp1 100) (temp2 200)) (with-temps 3)))
+
+;; A template's `if` is the special form even where the use site binds `if` as a
+;; variable. The mirror of the first row in this file, which is the case of a
+;; template referring to a definition-site *local* spelled like a keyword.
+(define-syntax my-cond (syntax-rules () ((_ test then) (if test then #f))))
+
+(test-equal "a use-site variable does not capture a template's special form"
+  'success
+  (let ((if 'captured)) (my-cond #t 'success)))
+
+;; A `lambda` a template introduces binds its own `x`, and the free `n` in its
+;; body is the macro's argument rather than the use site's `n` of 200.
+(define-syntax make-adder-l (syntax-rules () ((_ n) (lambda (x) (+ x n)))))
+
+(test-equal "a template's lambda binds its own parameter" 8
+  (let ((x 100) (n 200)) ((make-adder-l 5) 3)))
+
+;; What a pattern variable carries is the user's expression, unrenamed: `double`
+;; means the procedure they defined.
+(define-syntax apply-twice (syntax-rules () ((_ f x) (f (f x)))))
+(define (double x) (* 2 x))
+
+(test-equal "a pattern variable delivers the user's own identifier" 12
+  (apply-twice double 3))
+
+;; Renaming stops at `quote`. A symbol in a template's quoted datum is that
+;; symbol, not a renamed one that would compare unequal to the user's.
+(define-syntax make-symbol (syntax-rules () ((_) 'temp)))
+
+(test-equal "a quoted symbol in a template is not renamed" #t
+  (eq? (make-symbol) 'temp))
+
+;; Recursion multiplies the introduced binding: each expansion of `nested-let`
+;; makes its own `temp`, and 1 + 2 + 3 + 0 only comes out if none of them
+;; captures another.
+(define-syntax nested-let
+  (syntax-rules ()
+    ((_ () body) body)
+    ((_ (val) body) (let ((temp val)) (+ temp body)))
+    ((_ (val . rest) body) (let ((temp val)) (nested-let rest (+ temp body))))))
+
+(test-equal "each expansion of a recursive macro gets its own binding" 6
+  (nested-let (1 2 3) 0))
+
+;; ── Macros that write macros ────────────────────────────────────────────────
+;;
+;; **From `hygiene.rs`** (#193). A template containing `define-syntax` has to
+;; escape its inner ellipsis with `(... …)` — that is `expansion/ellipsis.scm`'s
+;; subject — and the keyword it defines has to land where the caller can reach
+;; it. These rows are about the second half.
+(define-syntax gen-const-macro
+  (syntax-rules ()
+    ((_ name value) (... (define-syntax name (syntax-rules () ((name) value)))))))
+
+(gen-const-macro answer 42)
+
+(test-equal "a macro can define a macro the caller names" 42 (answer))
+
+(define-syntax be-like-begin
+  (syntax-rules ()
+    ((_ name)
+     (define-syntax name (... (syntax-rules () ((name e ...) (begin e ...))))))))
+
+(be-like-begin sequence)
+
+(test-equal "and one that takes any number of arguments" 4 (sequence 1 2 3 4))
+
+(define-syntax gen-list-macro
+  (syntax-rules ()
+    ((_ name) (... (define-syntax name (syntax-rules () ((name x ...) (list x ...))))))))
+
+(gen-list-macro listify)
+
+(test-equal "and one whose template splices them" '(1 2 3 4 5) (listify 1 2 3 4 5))
+
+;; The same inside a body rather than at top level, which is where the generated
+;; `define-syntax` is an *internal* definition. The `(let () …)` is the test,
+;; not scaffolding: at top level these would exercise a different path.
+(test-equal "a macro defined in a body can define a macro there" 'hello
+  (let ()
+    (define-syntax foo
+      (syntax-rules ()
+        ((_ bar y) (define-syntax bar (syntax-rules () ((bar x) 'y))))))
+    (foo my-bar hello)
+    (my-bar 1)))
+
+;; The generated keyword is named `bar`, which is also the generator's own
+;; pattern variable, and the quoted `x` is the other one. If either leaked, this
+;; answers something else or fails to expand.
+(test-equal "even when the names collide with the generator's own" 'x
+  (let ()
+    (define-syntax foo
+      (syntax-rules ()
+        ((_ bar y) (define-syntax bar (syntax-rules () ((bar x) 'y))))))
+    (foo bar x)
+    (bar 1)))
+
+(test-equal "and two generated macros stay distinct" 30
+  (let ()
+    (define-syntax make-const
+      (syntax-rules ()
+        ((_ name value) (define-syntax name (syntax-rules () ((name) value))))))
+    (make-const ten 10)
+    (make-const twenty 20)
+    (+ (ten) (twenty))))
+
+;; A generated template's free `base` is the one visible where the *generator*
+;; was written — 100 — while `offset` came through a pattern variable. 115 is
+;; the only answer that has both right.
+(test-equal "a generated template reaches its definition site's binding" 115
+  (let ()
+    (define base 100)
+    (define-syntax make-adder
+      (syntax-rules ()
+        ((_ name offset)
+         (define-syntax name (syntax-rules () ((name x) (+ base offset x)))))))
+    (make-adder add10 10)
+    (add10 5)))
+
+;; Not only macros: a template can define a *procedure* whose parameter is
+;; introduced, and the caller's name for it is what binds.
+(test-equal "a macro can define a procedure" 25
+  (let ()
+    (define-syntax def-square
+      (syntax-rules () ((_ name) (define (name x) (* x x)))))
+    (def-square my-square)
+    (my-square 5)))
+
+;; A generated `let-syntax`, where the keyword is a pattern variable and the
+;; body is another. `expansion/let-syntax.scm` holds what such a form does to
+;; the *scope* of its transformers; this is the plain case working at all.
+(define-syntax make-local-const
+  (syntax-rules ()
+    ((_ name val body) (let-syntax ((name (syntax-rules () ((name) val)))) body))))
+
+(test-equal "a macro can generate a let-syntax the caller uses" 43
+  (make-local-const answer2 42 (+ (answer2) 1)))
+
+;; Two expansions of one macro, each introducing `tmp`, feeding a third that
+;; binds both as `lambda` parameters. If the two `tmp`s were the same identifier
+;; the `lambda` would have duplicate formals; `(1 2)` is the proof they are not.
+(define-syntax bind-tmp (syntax-rules () ((_ (k ...) v) (k ... (tmp . v)))))
+
+(define-syntax through-template
+  (syntax-rules () ((_ k v) (let-syntax ((go (syntax-rules () ((go) (k v))))) (go)))))
+
+(define-syntax done
+  (syntax-rules () ((_ (a b)) ((lambda (a b) (list a b)) 1 2))))
+
+(test-equal "two expansions of one template introduce distinct identifiers"
+  '(1 2)
+  (bind-tmp (bind-tmp (through-template done)) ()))
 
 (test-end)
