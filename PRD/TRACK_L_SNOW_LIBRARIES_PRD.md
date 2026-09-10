@@ -840,6 +840,16 @@ Red-edition libraries Patina bundled that until now had only chibi's suites.
 Racket's own R7RS package was checked for this role and rejected: its tests
 are five small Racket-specific files plus a copy of chibi's `r7rs-tests.scm`.
 
+**Our reproductions are original, and MIT.** Every test case Patina carries
+for a Larceny-surfaced defect is written from scratch to exhibit the same
+*family* of problem; no line of the suite is copied, quoted or paraphrased into
+this repo. That statement lived in `crates/patina-tests/tests/larceny_families.rs`
+until #193 Phase 1 redistributed those rows across `tests/scheme/` and deleted
+the file, so it lives here now — seventeen suite files still name that file as
+where they came from, and a licence claim cannot rest on a deleted file or on
+`scheme_tests/reports/larceny_triage.md`, which is marked for deletion once the
+queue empties.
+
 **Not vendored, by decision.** The suite is LGPL — Larceny's README: derived
 from Racket's R6RS tests and "covered by the LGPL license due to its
 derivative nature". Racket has since relicensed its copy to Apache-2.0/MIT,
@@ -910,9 +920,13 @@ is organised by kind of problem and links every failing assertion to its test
 case upstream by permalink — nothing from the suite is quoted. The map from
 *defect family* to those links, and to our own original test case for each
 family, is `scheme_tests/reports/larceny_triage.md` — a working document,
-deleted when the queue is empty. The original cases are
+deleted when the queue is empty. The original cases were
 `crates/patina-tests/tests/larceny_families.rs`, pinned so that each fix
-trips its test.
+trips its test; #193 Phase 1 redistributed them to the files about their
+subjects — mostly SRFI 64 suite files under `crates/patina-tests/tests/scheme/`,
+which run under chibi and Gauche as well as both backends — and deleted that
+file. The triage doc's `- Ours:` line for each family names where its rows
+now live, and a test checks that those pointers still resolve.
 
 **What it found — ours**, in the order they are worth fixing (§6 has the repros):
 
@@ -1086,8 +1100,10 @@ assertions on Larceny's `base`. Restore it when that boundary is fixed.
 Larceny `base` goes to 1071 of 1079 on the VM and 1070 of 1079 on the
 tree-walker (from 1069 and 1068), the moved rows being this family's. Both
 chibi lanes stay 1226/1226. Pinned as
-`an_exception_handler_runs_in_the_raises_dynamic_extent`
-(`crates/patina-tests/tests/larceny_families.rs`); triage families 22 and 28,
+`crates/patina-tests/tests/scheme/control/wind-thunk-exceptions.scm`'s row
+"a handler runs inside the raise's dynamic extent" (né
+`an_exception_handler_runs_in_the_raises_dynamic_extent`, moved by #193
+Phase 1); triage families 22 and 28,
 the tree-walker `guard` entry below and `nested_exception_handlers.rs`'s pin
 closed with it, as recorded.
 

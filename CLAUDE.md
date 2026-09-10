@@ -123,7 +123,7 @@ links, so this is the worst realistic case):
 | any of them again with no edit in between | ~0.3 s |
 
 The two big numbers are **integration binaries × ~6 s** — 88 when this was
-measured, **74 as of 2026-09-07** and falling as #193 Phase 1 lands: every
+measured, **73 as of 2026-09-09**, with #193 Phase 1 complete: every
 `.rs` file directly in a `tests/` directory is its own crate and its own
 executable, and each statically links the whole workspace. Do not go looking for a cache bug —
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
@@ -137,12 +137,13 @@ Selecting the one test file you touched is therefore the entire lever, and it
 is ~50× cheaper than the suite. CI is not faster at any of this — it runs seven
 jobs on seven machines: **685 s of work in 270 s of wall clock**.
 
-**This table has a shelf life, and #193 is spending it.** Its Phase 0 landed
-the driver (`crates/patina-tests/tests/scheme_suite.rs`) and migrated one file,
+**This table has a shelf life, and #193 spent it.** Its Phase 0 landed the
+driver (`crates/patina-tests/tests/scheme_suite.rs`) and migrated one file,
 which *added* a binary rather than removing one — 87 to 88 — because
-`callability.rs` still holds the rows a `.scm` file cannot express. Phase 1 has
-since taken it to **74** (`find crates -path '*/tests/*.rs' -not -path
-'*/tests/*/*' | wc -l`), so the 493 s and 580 s above are now over-estimates. The number
+`callability.rs` still holds the rows a `.scm` file cannot express. Phase 1
+took it to **73** (`find crates -path '*/tests/*.rs' -not -path
+'*/tests/*/*' | wc -l`), across 28 suite files, so the 493 s and 580 s above
+are now over-estimates. The number
 that matters is the marginal one, measured the same day: adding one `.scm`
 file rebuilds in **0.098 s**, adding one `.rs` file in **8.96 s**. Phase 1's
 bulk migration is what turns that into a smaller total. The *reasoning* above

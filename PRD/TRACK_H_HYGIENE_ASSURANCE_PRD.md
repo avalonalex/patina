@@ -114,8 +114,12 @@ A test pass that, given a Scheme test program:
    output, so a printed symbol renames with the program.
 
 Seed sources, in order: the matrix's 28 programs × every user identifier in
-each; the `larceny_families.rs` hygiene repros; then `scheme_tests`
-programs; eventually corpus files.
+each; the hygiene repros from the Larceny families, which #193 Phase 1
+redistributed out of `larceny_families.rs` into
+`tests/scheme/expansion/hygiene.scm`, `let-syntax.scm`, `ellipsis.scm` and
+`template-references.scm` (family 40's three are in
+`backend_divergence.rs`); then `scheme_tests` programs; eventually corpus
+files.
 
 Known edge discipline (each is a skip-rule, not a blocker): programs that
 construct symbols with `string->symbol` or compare against quoted symbols

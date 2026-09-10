@@ -16,8 +16,10 @@
 //! divergence list will look for them.
 //!
 //! Sources: `PRD/TRACK_Q_QUALITY_PRD.md` §1.2, re-measured at `2d4ce29`
-//! (2026-08-10), and
-//! `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured 2026-08-10).
+//! (2026-08-10); `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3 (measured
+//! 2026-08-10); and `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 for Larceny family
+//! 40, the last section of this file, which is the one cluster here where the
+//! **VM** is the diverging backend rather than the tree-walker.
 //!
 //! Shared root cause of the §1.2 cluster: R7RS §6.10 makes `call/cc`,
 //! `dynamic-wind`, `values` and `with-exception-handler` ordinary procedures,
@@ -59,6 +61,11 @@ mod common;
 use common::*;
 
 const CONTROL_OPS: &str = "PRD/TRACK_Q_QUALITY_PRD.md §1.2";
+// Track L §6 first, deliberately: the triage doc is a working document its own
+// header says to delete once the queue is empty, and these three quarantines
+// outlive it.
+const CROSS_EXPANSION_GLOBALS: &str =
+    "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6 (and larceny_triage.md family 40 while it exists)";
 const GUARD_UNWIND_ORDER: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
 // HANDLER_REENTRY (audit B3) is gone with the two rows that cited it: both
 // converged on 2026-09-01 when `CpsContinuation` gained the handler stack.
@@ -153,7 +160,9 @@ fn callcc_abort_pattern_through_call_with_values() {
         "(cars () cdrs ())",
     );
     // The SRFI 1 procedures this unblocks are asserted once, in
-    // larceny_families.rs's family 5 — not duplicated here.
+    // `tests/scheme/stdlib/list.scm` — Larceny family 5, which moved there
+    // from `larceny_families.rs` with the rest of #193 Phase 1. Not
+    // duplicated here.
 }
 
 /// An error raised *after* a continuation escape is catchable — converged
@@ -1415,5 +1424,89 @@ fn a_control_primitive_can_be_the_prompt_body() {
              \x20 (lambda (v k) (list 'h v)) t 'ab)"
         ),
         "(h ab)",
+    );
+}
+
+// ─── one expansion's private global, seen from another (Larceny family 40) ───
+//
+// **The last of `larceny_families.rs`** (#193 Phase 1). That file held Patina's
+// own MIT-licensed reproductions of the defect families Larceny's R7RS suites
+// surfaced, organised by where each was found; its rows have gone to the files
+// about their subjects, mostly SRFI 64 suite files under `tests/scheme/`. These
+// three could not: a `.scm` row runs on both backends and asserts one value,
+// and these are the shapes where the two backends genuinely differ. This file
+// is where a divergence belongs, so they arrive here and that file is deleted.
+//
+// One expansion's `(define x …)` introduces a *scoped* top-level definition; a
+// different expansion's template reference to that spelling carries scopes that
+// reject it. Measured 2026-09-09 on the first program below, and the VM is
+// alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15 errors "unbound
+// variable", the tree-walker errors "Undefined variable: x", and only the VM
+// answers 10. One expansion's private definition is not another expansion's to
+// see, and three implementations say so. The VM still answers: its compiler installs a bare-name
+// alias for a renamed macro-introduced global (`alpha_rename`'s `rename_body`),
+// the mechanism whose by-name reach Track L §6 already records as
+// undecidable-under-renaming — the jabberwocky-steal defect.
+//
+// So these quarantines pin **the VM** as the diverging backend, which is the
+// unusual direction here and the reason to read them before "fixing" one:
+// closing them means fixing relinking-by-name, not loosening the tree-walker
+// back to the capture chibi rejects.
+
+/// Read direction: `use-x`'s template `x` means whatever `x` is at `use-x`'s
+/// definition site — and the only `x` there is `def-x`'s hygienically hidden
+/// one, which chibi and the tree-walker refuse to let it see.
+#[test]
+fn one_expansions_definition_is_not_another_expansions_reference() {
+    assert_divergence(
+        "(define-syntax def-x (syntax-rules () ((_) (define x 10))))
+         (def-x)
+         (define-syntax use-x (syntax-rules () ((_) x)))
+         (use-x)",
+        On::Vm,
+        "10",
+        ErrorClass::AtRuntime,
+        CROSS_EXPANSION_GLOBALS,
+    );
+}
+
+/// Write direction, exercising `set_scoped_terminal`'s refusal — the only test
+/// that reaches it, since every hygiene-matrix write row's global is a plain
+/// `define` the terminal's `local_slot` arm answers first.
+#[test]
+fn one_expansions_definition_is_not_another_expansions_write_target() {
+    assert_divergence(
+        "(define-syntax defc (syntax-rules () ((_) (define count 0))))
+         (defc)
+         (define-syntax inc (syntax-rules () ((_) (set! count (+ count 1)))))
+         (inc)
+         'done",
+        On::Vm,
+        "done",
+        ErrorClass::AtRuntime,
+        CROSS_EXPANSION_GLOBALS,
+    );
+}
+
+/// The generated-getter idiom across two expansions: `defgetter`'s template
+/// `priv` resolves at `defgetter`'s definition site, where no visible `priv`
+/// exists — `defpriv`'s is hygienically hidden. The R7RS suite's `jabberwocky`
+/// shape keeps working because there the `define` and the generated
+/// `define-syntax` share one expansion, so the getter's reference carries the
+/// defining expansion's scope. `define_scoped_definition`'s doc records the
+/// contract boundary this pins.
+#[test]
+fn a_generated_getter_cannot_see_a_different_expansions_private_define() {
+    assert_divergence(
+        "(define-syntax defpriv (syntax-rules () ((_) (define priv 10))))
+         (define-syntax defgetter
+           (syntax-rules () ((_ g) (define-syntax g (syntax-rules () ((_) priv))))))
+         (defpriv)
+         (defgetter get)
+         (get)",
+        On::Vm,
+        "10",
+        ErrorClass::AtRuntime,
+        CROSS_EXPANSION_GLOBALS,
     );
 }
