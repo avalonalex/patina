@@ -3,7 +3,7 @@
 //! These tests verify that the macro system properly implements hygienic renaming
 //! to prevent macro-introduced identifiers from capturing user bindings.
 //!
-//! **34 of the 35 tests here run on the tree-walker only.** They build
+//! **24 of the 25 tests here run on the tree-walker only.** They build
 //! `TreeWalkInterpreter::new_tree_walker()` by hand, which is what the file did
 //! before `common::assert_program_eval_to` existed. This is a gap and not a
 //! decision — the VM is the default backend, and the hygiene defects Larceny
@@ -15,7 +15,8 @@
 //! **The file is being migrated, not kept.** Its rows are portable value
 //! assertions whose home is `tests/scheme/expansion/`, where they run on both
 //! backends and under chibi and Gauche. The literal-matching rows went first,
-//! to `syntax-rules-literals.scm` — 49 tests became 35 — and moving them found
+//! to `syntax-rules-literals.scm` and the `let-syntax` rows to
+//! `let-syntax.scm` — 49 tests are now 25 — and moving them found
 //! two things a Rust comment could not: one row that asserted only "did not
 //! error", now pinned at the value all four implementations give, and one whose
 //! comment claimed Gauche agreed with it when Gauche never has (shirok/Gauche
@@ -264,98 +265,6 @@ fn test_recursive_macro_hygiene() {
         result
     );
     assert_eq!(interp.display_tagged(result.unwrap()), "6");
-}
-
-/// Test scope-based hygiene: macro captures binding from definition site
-///
-/// This is the classic R7RS hygiene test case where a macro defined inside
-/// a let should capture the outer binding of 'x', not the inner one.
-///
-/// From R7RS Section 4.3: "If a macro transformer inserts a free reference
-/// to an identifier, the reference refers to the binding that was visible
-/// where the transformer was specified, regardless of any local bindings
-/// that surround the use of the macro."
-#[test]
-fn test_let_syntax_captures_definition_site_binding() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ((x 'outer))
-          (let-syntax ((m (syntax-rules () ((m) x))))
-            (let ((x 'inner))
-              (m))))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // The macro's 'x' should refer to 'outer' (definition site),
-    // not 'inner' (expansion site)
-    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
-}
-
-/// Test scope-based hygiene with define wrapper
-///
-/// Same as above but wrapped in a define to ensure hygiene works
-/// across function boundaries.
-#[test]
-fn test_let_syntax_hygiene_in_define() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (define (test-hygiene)
-          (let ((x 'outer))
-            (let-syntax ((m (syntax-rules () ((m) x))))
-              (let ((x 'inner))
-                (m)))))
-        (test-hygiene)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
-}
-
-/// Test scope-based hygiene with lambda wrapper
-///
-/// Ensure hygiene works when the macro is defined inside a lambda parameter scope.
-#[test]
-fn test_let_syntax_hygiene_in_lambda() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        ((lambda (x)
-           (let-syntax ((m (syntax-rules () ((m) x))))
-             (let ((x 'inner))
-               (m))))
-         'outer)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "outer");
-}
-
-/// Test scope-based hygiene with multiple nested lets
-#[test]
-fn test_let_syntax_hygiene_multiple_nesting() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ((x 'level1))
-          (let ((y 'level2))
-            (let-syntax ((m (syntax-rules () ((m) x))))
-              (let ((x 'inner))
-                (m)))))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Should return 'level1, not 'inner
-    assert_eq!(interp.display_tagged(result.unwrap()), "level1");
 }
 
 // =============================================================================
@@ -608,129 +517,6 @@ fn test_nested_macro_listify() {
     assert!(result.is_ok());
     let val = result.unwrap();
     assert_eq!(interp.display_tagged(val), "(1 2 3 4 5)");
-}
-
-#[test]
-fn test_let_syntax_internal_define_scoping() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (define x 1)
-          (let-syntax ()
-            (define x 2)
-            #f)
-          x)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // The outer x should still be 1, not 2
-    assert_eq!(interp.display_tagged(result.unwrap()), "1");
-}
-
-/// Test multiple internal defines in let-syntax body
-#[test]
-fn test_let_syntax_multiple_internal_defines() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (define a 1)
-          (define b 2)
-          (let-syntax ()
-            (define a 10)
-            (define b 20)
-            (+ a b))  ; Should use local a=10, b=20
-          (+ a b))    ; Should use outer a=1, b=2
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // Outer a + b = 1 + 2 = 3
-    assert_eq!(interp.display_tagged(result.unwrap()), "3");
-}
-
-/// Test that define inside let-syntax can access outer variables
-#[test]
-fn test_let_syntax_internal_define_can_read_outer() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (define x 10)
-          (let-syntax ()
-            (define y (+ x 5))  ; y = 10 + 5 = 15
-            y))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "15");
-}
-
-/// Test let-syntax with both macros and internal defines
-#[test]
-fn test_let_syntax_macro_and_internal_define() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (define x 1)
-          (let-syntax ((double (syntax-rules ()
-                                 ((double e) (+ e e)))))
-            (define x 5)
-            (double x)))  ; Should use local x=5, result = 10
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "10");
-}
-
-/// Test letrec-syntax also has proper internal define scoping
-#[test]
-fn test_letrec_syntax_internal_define_scoping() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (define x 1)
-          (letrec-syntax ()
-            (define x 2)
-            #f)
-          x)
-        "#,
-    );
-
-    assert!(result.is_ok());
-    // The outer x should still be 1
-    assert_eq!(interp.display_tagged(result.unwrap()), "1");
-}
-
-/// Test define-syntax inside let-syntax body still works
-#[test]
-fn test_let_syntax_with_internal_define_syntax() {
-    let interp = TreeWalkInterpreter::new_tree_walker();
-
-    let result = interp.eval_program(
-        r#"
-        (let ()
-          (let-syntax ()
-            (define-syntax triple
-              (syntax-rules ()
-                ((triple e) (+ e e e))))
-            (triple 4)))
-        "#,
-    );
-
-    assert!(result.is_ok());
-    assert_eq!(interp.display_tagged(result.unwrap()), "12");
 }
 
 /// Test macro-generating macros: a macro that expands to define-syntax

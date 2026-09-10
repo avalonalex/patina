@@ -7,9 +7,12 @@
 //! because they assert a program is *rejected* rather than what it evaluates
 //! to: `test_let_syntax_empty_body_error`, `test_let_syntax_invalid_binding_error`
 //! and `test_let_syntax_non_symbol_name_error`. The other eleven are ordinary
-//! value assertions and would run there unchanged; two of them,
-//! `test_let_syntax_scope` and `test_let_syntax_lexical_scoping`, already have
-//! counterparts in that file. Add a new value assertion there, not here.
+//! value assertions and would run there unchanged; `test_let_syntax_scope`
+//! already has a counterpart there. `test_let_syntax_lexical_scoping` was a
+//! third case — its program was byte-identical to one in `hygiene.rs` — and is
+//! gone, the canonical copy being that file's row "a transformer's free
+//! reference is its definition site's binding". Add a new value assertion
+//! there, not here.
 //!
 //! # Important Note on Macro Recursion
 //!
@@ -189,24 +192,6 @@ fn test_let_syntax_non_symbol_name_error() {
         (let-syntax ((123 (syntax-rules () ((123 x) x)))) 42)
     "#;
     assert!(eval(code).is_err());
-}
-
-#[test]
-fn test_let_syntax_lexical_scoping() {
-    // Test case from chibi-scheme r7rs-tests.scm
-    // This tests that free variables in macro templates capture the
-    // lexical environment at macro definition time, not at use site.
-    //
-    // The macro 'm' is defined when x='outer is in scope.
-    // When m is used, x='inner is in scope at the use site.
-    // The macro should expand to 'outer (definition-time binding), not 'inner.
-    let code = r#"
-        (let ((x 'outer))
-          (let-syntax ((m (syntax-rules () ((m) x))))
-            (let ((x 'inner))
-              (m))))
-    "#;
-    assert_eq!(eval(code).unwrap(), "outer");
 }
 
 #[test]

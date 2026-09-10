@@ -264,4 +264,108 @@
   (let-syntax ((quote (syntax-rules () ((_ x) 'captured))))
     (mq hello)))
 
+;; ── Where the definition-site binding comes from ────────────────────────────
+;;
+;; **From `hygiene.rs`** (#193). One claim — a transformer's free `x` denotes
+;; the binding enclosing the `let-syntax`, not the one the use site makes — with
+;; the enclosing binder arriving four different ways. The Rust file kept them as
+;; four tests and that is worth preserving: family 15's shorthand-parameter row
+;; in `expansion/hygiene.scm` is a case where exactly this axis mattered, the
+;; binder's origin deciding whether it got scopes at all.
+;;
+;; The first is the canonical copy of a program that was in the tree twice —
+;; `hygiene.rs` and `let_syntax.rs` ran it byte-for-byte identically, one of
+;; them on a single backend. Both Rust copies are gone.
+(test-equal "a transformer's free reference is its definition site's binding"
+  'outer
+  (let ((x 'outer))
+    (let-syntax ((m (syntax-rules () ((m) x))))
+      (let ((x 'inner))
+        (m)))))
+
+(define (definition-site-in-a-body)
+  (let ((x 'outer))
+    (let-syntax ((m (syntax-rules () ((m) x))))
+      (let ((x 'inner))
+        (m)))))
+
+(test-equal "and the same inside a procedure body" 'outer
+  (definition-site-in-a-body))
+
+(test-equal "and where the binding is a lambda parameter" 'outer
+  ((lambda (x)
+     (let-syntax ((m (syntax-rules () ((m) x))))
+       (let ((x 'inner))
+         (m))))
+   'outer))
+
+;; Two enclosing `let`s rather than one, so the reference has to reach past a
+;; binding that is neither its own nor the use site's.
+(test-equal "and past an intervening binding of another name" 'level1
+  (let ((x 'level1))
+    (let ((y 'level2))
+      (let-syntax ((m (syntax-rules () ((m) x))))
+        (let ((x 'inner))
+          (m))))))
+
+;; ── A let-syntax body is a body ─────────────────────────────────────────────
+;;
+;; **From `hygiene.rs`** (#193). R7RS §4.3.1 again, from the definition side
+;; rather than the transformer side: a `let-syntax` body is a body, so what it
+;; defines is local to it. The section above on "the three claims `base` made at
+;; once" covers the case where a *macro* makes the definition, which is how ours
+;; escaped; these are the direct forms, which have to keep working too.
+(test-equal "a definition in a let-syntax body is local to it" 1
+  (let ()
+    (define x 1)
+    (let-syntax ()
+      (define x 2)
+      #f)
+    x))
+
+(test-equal "and so are several of them" 3
+  (let ()
+    (define a 1)
+    (define b 2)
+    (let-syntax ()
+      (define a 10)
+      (define b 20)
+      (+ a b))
+    (+ a b)))
+
+;; Local is not sealed: the body sees what encloses it.
+(test-equal "a definition in that body can read the enclosing one" 15
+  (let ()
+    (define x 10)
+    (let-syntax ()
+      (define y (+ x 5))
+      y)))
+
+;; And a macro bound by the same `let-syntax` expands against the body's own
+;; definition, not the outer one — 5 doubled, not 1.
+(test-equal "a macro the form binds sees the body's definition" 10
+  (let ()
+    (define x 1)
+    (let-syntax ((double (syntax-rules () ((double e) (+ e e)))))
+      (define x 5)
+      (double x))))
+
+(test-equal "letrec-syntax bodies are bodies too" 1
+  (let ()
+    (define x 1)
+    (letrec-syntax ()
+      (define x 2)
+      #f)
+    x))
+
+;; An internal `define-syntax` in a `let-syntax` body serves that body. Its
+;; sibling above — "an internal define-syntax serves its own body" — is the same
+;; claim for a *lambda* body, and the pair is deliberate: those were separate
+;; code paths here, and the leak used to depend on which body it was.
+(test-equal "and an internal define-syntax in one serves that body" 12
+  (let ()
+    (let-syntax ()
+      (define-syntax triple (syntax-rules () ((triple e) (+ e e e))))
+      (triple 4))))
+
 (test-end)

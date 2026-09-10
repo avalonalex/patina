@@ -475,7 +475,7 @@ R7RS specification compliance organized by category:
 Named by role, not by count: every per-file number this list used to carry had
 rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 `data/numeric-operations.scm` and was still listed, `hygiene.rs` was down from
-"~108" to 49 and is now 35, `cps_features.rs` from 31 to 11. For a current count,
+"~108" to 49 and is now 25, `cps_features.rs` from 31 to 11. For a current count,
 `grep -c '^#\[test\]'` the file; for the suite files, `SUITE` in
 `scheme_suite.rs` carries a floor per file and a test keeps it honest.
 
@@ -547,7 +547,7 @@ kind does not survive contact with a migration. Re-measure before quoting:
 | File | Tests | Lines |
 |------|-------|-------|
 | compliance.rs | ~380 | via sub-modules |
-| hygiene.rs | 35 | measured 2026-09-09, and shrinking |
+| hygiene.rs | 25 | measured 2026-09-09, and shrinking |
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | 40 | measured 2026-09-09 |
 | record_types.rs | 41 | measured 2026-09-09 |
