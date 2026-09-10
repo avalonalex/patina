@@ -104,7 +104,7 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/define-values.scm", 14),
     ("expansion/ellipsis.scm", 4),
     ("expansion/hygiene.scm", 17),
-    ("expansion/let-syntax.scm", 15),
+    ("expansion/let-syntax.scm", 25),
     ("expansion/let-values.scm", 1),
     ("expansion/quasiquote.scm", 1),
     ("expansion/syntax-rules-literals.scm", 17),
