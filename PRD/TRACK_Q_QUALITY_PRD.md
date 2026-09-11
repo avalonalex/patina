@@ -238,9 +238,10 @@ The §1.2 seed lives in `crates/patina-tests/tests/scheme/control/callability.sc
 
 Remaining under this item:
 - **The test files that construct interpreters directly** (`scheme_base.rs`,
-  `record_types.rs`, the SRFI suites, …) still run tree-walker-only. Two the
-  item used to name are gone rather than fixed: `numeric_operations.rs` and
-  `hygiene.rs` were migrated into `tests/scheme/` by #193, which is the other
+  the SRFI suites, …) still run tree-walker-only. Three the
+  item used to name are gone rather than fixed: `numeric_operations.rs`,
+  `hygiene.rs` and `record_types.rs` (41 tests, every one tree-walker-only)
+  were migrated into `tests/scheme/` by #193, which is the other
   way to close this — a suite row runs on both backends by construction, and
   under chibi and Gauche besides. `hygiene.rs` was the largest of them, 44 of
   its 49 tests tree-walker-only. Some are legitimately backend-specific
