@@ -3,10 +3,19 @@
 ;; Withdrawn in favour of SRFI 151, but 19 packages in the vendored corpus still
 ;; import it, so it is bundled as a rename over the same primitives rather than
 ;; a second implementation.
+;;
+;; The renames come from (srfi 142), not (srfi 151), because of one argument
+;; order. SRFI 33 defines `bitwise-merge` as "RESULT[k] := if MASK[k] = 0 then
+;; I0[k] else I1[k]", which is 142's `bitwise-if` and the reverse of 151's.
+;; This file used to rename 151's, so `(bitwise-merge 3 1 8)` answered 9
+;; instead of 0 and `copy-bit-field`, whose body below is chibi's and assumes
+;; the SRFI 33 order, copied the field the wrong way. chibi's (srfi 33) renames
+;; (srfi 142) too, and answers 0 and 15 for the two rows in
+;; `crates/patina-tests/tests/srfi_151_bitwise.rs`.
 
 (define-library (srfi 33)
   (import (scheme base)
-          (rename (srfi 151)
+          (rename (srfi 142)
                   (bitwise-if bitwise-merge)
                   (any-bit-set? any-bits-set?)
                   (every-bit-set? all-bits-set?)

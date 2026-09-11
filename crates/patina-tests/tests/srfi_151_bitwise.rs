@@ -208,9 +208,14 @@ fn test_srfi_60_exports_both_spellings() {
     assert_eq!(srfi60("(list (logand 12 10) (bitwise-and 12 10))"), "(8 8)");
 }
 
+/// `bitwise-merge` takes a result bit from its *second* argument where the
+/// mask bit is 0 — SRFI 33's text, and SRFI 142's `bitwise-if` order, not
+/// 151's. mask 3, i0 1, i1 8: bits 0–1 come from 8 and the rest from 1, so 0.
+/// This row asserted 9, SRFI 151's answer, until the shim was fixed.
 #[test]
 fn test_srfi_33_spellings() {
-    assert_eq!(srfi33("(bitwise-merge 3 1 8)"), "9");
+    assert_eq!(srfi33("(bitwise-merge 3 1 8)"), "0");
+    assert_eq!(srfi33("(bitwise-merge 5 3 0)"), "2");
     assert_eq!(srfi33("(any-bits-set? 12 10)"), "#t");
     assert_eq!(srfi33("(all-bits-set? 4 6)"), "#t");
 }
@@ -225,7 +230,10 @@ fn test_srfi_33_field_operations() {
     assert_eq!(srfi33("(extract-bit-field 4 0 255)"), "15");
     assert_eq!(srfi33("(extract-bit-field 4 8 #xA55A)"), "5");
     assert_eq!(srfi33("(replace-bit-field 4 0 5 255)"), "245");
-    assert_eq!(srfi33("(copy-bit-field 4 0 255 0)"), "240");
+    // TO with the field replaced by FROM's: bits 0–3 of 255 into 0. This was
+    // 240, the field copied the wrong way, while the shim used 151's order.
+    assert_eq!(srfi33("(copy-bit-field 4 0 255 0)"), "15");
+    assert_eq!(srfi33("(copy-bit-field 4 4 255 0)"), "240");
     // test-bit-field? / clear-bit-field are renames of SRFI 151's
     // bit-field-any? / bit-field-clear, so they take (n start end) — chibi's
     // (srfi 33) makes the same choice.
