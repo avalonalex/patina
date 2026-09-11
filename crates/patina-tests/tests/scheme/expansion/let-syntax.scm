@@ -12,18 +12,13 @@
 ;; Nineteen tests, twenty-five rows, split so that a failure names the claim
 ;; rather than an element of a list.
 ;;
-;; **This is not the only file about `let-syntax`, and the overlap is real.**
-;; `let_syntax.rs` holds thirteen tests of its own, from before #193. Three of
-;; them a `.scm` file cannot express — that a malformed binding, a non-symbol
-;; keyword or an empty body is *rejected*, which is a claim about a stage
-;; rather than a value — and the other ten are ordinary value assertions that
-;; would run unchanged on both oracles. One of them, `test_let_syntax_scope`,
-;; overlaps this file's "an internal define-syntax is not visible outside its
-;; body" for a `let-syntax` keyword. A second was byte-identical to a test in
-;; `hygiene.rs`, and the `hygiene.rs` slice deleted both copies rather than
-;; adding a third — the canonical row is "a transformer's free reference is its
-;; definition site's binding", below. **This file is the canonical home**, and
-;; the remaining ten are migration candidates.
+;; **This is the one file about `let-syntax`.** `let_syntax.rs` held thirteen
+;; tests of its own, from before #193, all on the tree-walker only. #193 Phase
+;; 2 moved its value tests into the last section below and deleted it; its
+;; three rejection tests — a malformed binding, a non-symbol keyword, an empty
+;; body, each refused before the program runs — are in `callability.rs`, since
+;; a `.scm` file cannot state a stage. Two of its programs were already here
+;; or in `hygiene.scm` byte for byte, and are not repeated.
 ;;
 ;; The file is one file on purpose: those nineteen Rust tests each had its own
 ;; empty top level, and Larceny's `base` is what found several of them
@@ -36,6 +31,9 @@
 ;;   patina VM / tree-walker   25 pass
 ;;   chibi                     25 pass
 ;;   Gauche                    23 pass, 2 fail — registered as an oracle defect
+;;
+;; Re-measured 2026-09-11 with the last section's six rows: both backends and
+;; chibi 31 pass, Gauche 29 pass and the same 2 fail.
 ;;
 ;; **Gauche lets a template-generated `let-syntax` capture its own sibling.**
 ;; The two rows it fails are the generated form; the row directly beneath them,
@@ -379,5 +377,69 @@
     (let-syntax ()
       (define-syntax triple (syntax-rules () ((triple e) (+ e e e))))
       (triple 4))))
+
+;; ── The forms themselves ────────────────────────────────────────────────────
+;;
+;; Moved from `crates/patina-tests/tests/let_syntax.rs` (#193 Phase 2), which
+;; is deleted. Those tests built a `TreeWalkInterpreter` by hand, so none of
+;; them had run on the VM; they are the plain uses the subtle rows above take
+;; for granted. Its three rejection tests — an empty body, a malformed
+;; binding, a non-symbol keyword — are refused before the program runs, which
+;; no `guard` can see, so they went to `callability.rs`. One more,
+;; `test_let_syntax_nested_lexical_scoping`, was byte-identical to
+;; `hygiene.scm`'s "a binder is scoped by where it stands" and is not
+;; repeated.
+
+(test-equal "let-syntax binds keywords for its body" '(42 (6 4) 12)
+  (list (let-syntax ((when (syntax-rules ()
+                             ((when test body ...)
+                              (if test (begin body ...))))))
+          (when #t 42))
+        (let-syntax ((inc (syntax-rules () ((inc x) (+ x 1))))
+                     (dec (syntax-rules () ((dec x) (- x 1)))))
+          (list (inc 5) (dec 5)))
+        (let-syntax ((outer (syntax-rules () ((outer x) (* x 2)))))
+          (let-syntax ((inner (syntax-rules () ((inner y) (+ y 1)))))
+            (outer (inner 5))))))
+
+;; The body is a sequence, and its value is the last expression's.
+(test-equal "a let-syntax body is a sequence" 4
+  (let-syntax ((inc (syntax-rules () ((inc x) (+ x 1)))))
+    (inc 1)
+    (inc 2)
+    (inc 3)))
+
+(test-equal "letrec-syntax lets a transformer use itself and its siblings" '(42 42 42)
+  (list (letrec-syntax ((my-or (syntax-rules ()
+                                 ((my-or) #f)
+                                 ((my-or e) e)
+                                 ((my-or e1 e2 ...)
+                                  (let ((temp e1))
+                                    (if temp temp (my-or e2 ...)))))))
+          (my-or #f #f 42 #f))
+        (letrec-syntax
+          ((macro-a (syntax-rules () ((macro-a x) (macro-b x))))
+           (macro-b (syntax-rules () ((macro-b x) (* x 2)))))
+          (macro-a 21))
+        (letrec-syntax ((double (syntax-rules () ((double x) (* x 2)))))
+          (double 21))))
+
+;; A keyword `let-syntax` binds is visible in its body and nowhere else.
+(define let-syntax-result
+  (let-syntax ((local-macro (syntax-rules () ((local-macro x) (* x 2)))))
+    (local-macro 5)))
+(test-equal "a let-syntax keyword works inside the form" 10 let-syntax-result)
+(test-error "and is unbound outside it" #t (local-macro 10))
+
+;; A transformer's free references are its definition site's, for every one
+;; of them.
+(test-equal "a transformer's free references ignore the use site's bindings"
+  '(outer-x outer-y)
+  (let ((x 'outer-x)
+        (y 'outer-y))
+    (let-syntax ((m (syntax-rules () ((m) (list x y)))))
+      (let ((x 'inner-x)
+            (y 'inner-y))
+        (m)))))
 
 (test-end)
