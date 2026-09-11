@@ -50,7 +50,6 @@ workspace/
 │       ├── Cargo.toml
 │       └── tests/
 │           ├── common/       # Test utilities
-│           ├── compliance/   # R7RS compliance tests
 │           ├── integration/  # Chibi comparison tests
 │           ├── scheme/       # *.scm test files, run by scheme_suite.rs
 │           │   ├── control/  #   evaluation order, tail calls, wind, parameters
@@ -82,7 +81,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  72 as of 2026-09-09, Phase 1 complete and `hygiene.rs` migrated after it.
+  51 when #193 finished on 2026-09-11.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -224,7 +223,8 @@ those pointers resolve. Six rows stayed in Rust at the time: family 40's three
 backend divergences, which followed once a `.scm` row could tell the backends
 apart (they are the last section of `expansion/hygiene.scm` now — see "A row
 where the two backends differ" below), and the two families that need real
-files on disk (`include_syntax.rs`, `standard_ports.rs`), which stay.
+files on disk (`include_syntax.rs`, and `standard_ports.rs`, whose file row
+later moved to `vfs_file_io.rs`), which stay.
 
 **What the move was actually worth** is not the binary it saved. Rows that had
 only ever run on Patina were suddenly arbitrated by two other implementations,
@@ -517,12 +517,15 @@ cargo test --package patina-core
 
 **Categories:**
 
-#### **Compliance Tests** (`tests/compliance/`)
-R7RS specification compliance organized by category. The list, string,
-vector, predicate and numeric modules moved to `tests/scheme/data/`, and
-the core-form, derived-form, control and quasiquote modules to
-`tests/scheme/control/` and `tests/scheme/expansion/` (#193):
-- `macros_advanced.rs` - Advanced macro patterns (~60 tests)
+#### **Compliance Tests** — migrated
+
+`tests/compliance/` held 406 tests of R7RS behaviour, organized by report
+section and compiled into one binary through `compliance.rs`. #193 moved all
+of them to suite files — lists, strings, vectors, predicates and numbers to
+`tests/scheme/data/`, control features to `tests/scheme/control/`, and core
+forms, derived forms, quasiquote and macros to `tests/scheme/expansion/` —
+and deleted the directory with `compliance.rs`. Each suite file's header
+names the module its rows came from.
 
 #### **Feature Tests** (top-level `tests/`)
 
@@ -565,15 +568,11 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 cargo test --package patina-tests
 
 # Run specific test file
-cargo test --package patina-tests --test hygiene
+cargo test --package patina-tests --test hygiene_matrix
 cargo test --package patina-tests --test cps_features
 
-# Run compliance tests
-cargo test --package patina-tests --test compliance
-
-# Run specific category
-cargo test --package patina-tests numbers::
-cargo test --package patina-tests primitives::
+# Run every suite file (tests/scheme/*.scm) on both backends
+cargo test --package patina-tests --test scheme_suite
 ```
 
 ## Test Utilities
@@ -602,12 +601,11 @@ kind does not survive contact with a migration. Re-measure before quoting:
 
 | File | Tests | Lines |
 |------|-------|-------|
-| compliance.rs | ~380 | via sub-modules |
-| expansion/hygiene.scm | 35 | measured 2026-09-09 |
+| expansion/hygiene.scm | 41 | measured 2026-09-11 |
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | 40 | measured 2026-09-09 |
 | data/record-types.scm | 23 rows (41 Rust tests before #193 Phase 2) | measured 2026-09-11 |
-| tail-recursion.scm | 36 | 301 |
+| tail-recursion.scm | 38 | measured 2026-09-11 |
 | control/prompts.scm | 58 rows | measured 2026-09-11 |
 
 ## Running Tests
@@ -627,14 +625,14 @@ cargo test --package patina-tests
 cargo test --package patina-frontend
 cargo test --package patina-macros
 
-# Only R7RS compliance
-cargo test --package patina-tests --test compliance
+# Only the suite files (tests/scheme/*.scm)
+cargo test --package patina-tests --test scheme_suite
 
 # Only CPS features
 cargo test --package patina-tests --test cps_features
 
-# Only macro hygiene
-cargo test --package patina-tests --test hygiene
+# Only the macro hygiene scoreboard
+cargo test --package patina-tests --test hygiene_matrix
 ```
 
 ### Development Workflow
@@ -696,7 +694,7 @@ crates/
 ├── patina-jit/            # JIT compiler backend (future)
 └── patina-tests/          # Tests ALL backends
     └── tests/
-        ├── compliance/    # Run against each backend
+        ├── scheme/        # *.scm suite files, run against each backend
         └── integration/   # Compare all backends vs chibi
 ```
 

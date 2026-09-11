@@ -10,7 +10,7 @@ by family, to the file about the defect's *subject* — mostly SRFI 64 suite fil
 under `crates/patina-tests/tests/scheme/`, which run on chibi and Gauche as well
 as on both backends — and **that file is now deleted**. So an `- Ours:` line
 below names either a suite file plus the row names in it, or a Rust test where
-one is still the right home: `include_syntax.rs` and `standard_ports.rs` for
+one is still the right home: `include_syntax.rs` and `vfs_file_io.rs` for
 the two families needing real files on disk. Family 40's three shapes were the
 last to move: a backend divergence is a `.scm` row now that each backend
 advertises its own `cond-expand` identifier, and they are the last section of

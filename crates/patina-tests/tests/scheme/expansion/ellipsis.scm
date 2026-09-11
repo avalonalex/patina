@@ -33,6 +33,11 @@
 ;;   chibi                     7 pass
 ;;   Gauche                    4 pass, 3 omitted — see below
 ;;
+;; Re-measured 2026-09-11 with five rows from `compliance/macros_advanced.rs`
+;; (#193) — SRFI 46's declared ellipsis and `...` as a literal, and the escape
+;; in a generated macro: 12 pass on both backends and chibi, 9 pass and the
+;; same 3 omitted on Gauche, which compiles all five new rows.
+;;
 ;; **Gauche cannot compile three of the seven rows**, as Patina could not until
 ;; 2026-08-25, by three separate refusals: `swap-first-two`'s definition is
 ;; "Pattern variable b is used in wrong level", the generated `first-of`'s use
@@ -111,6 +116,43 @@
   '(... bar baz)
   (escaped-twice bar baz))
 
+;; What the escape is *for*: a macro that writes a macro escapes the inner
+;; macro's ellipsis so the outer expansion leaves it alone, and the generated
+;; macro then uses it as an ordinary ellipsis. From
+;; `compliance/macros_advanced.rs` (#193), as is the rest of this section.
+;;
+;; The caller names the generated macro. The Rust original had the template
+;; name it `apply-to-list` itself, and then called it from outside — which
+;; R7RS §4.3.2's renaming forbids and chibi and Gauche both refuse, while
+;; Patina answered. That program is kept, pinned as a Patina defect, in
+;; `introduced-definitions.scm`; this row keeps the claim about the ellipsis.
+(test-equal "an escaped ellipsis works in the macro it generates" 1
+  (let ()
+    (define-syntax listify
+      (syntax-rules ()
+        ((listify e name)
+         (define-syntax name
+           (syntax-rules ()
+             ((name arg (... ...))
+              (e (list arg (... ...)))))))))
+    (listify car apply-to-list)
+    (apply-to-list 1 2 3)))
+
+;; The same with a value the outer macro substitutes into the inner template,
+;; beside the escaped ellipsis. `syntax-rules-literals.scm` has this generator
+;; at top level, for the claim that a substituted macro name still matches.
+(test-equal "and beside a substituted pattern variable" '(x 1 2 3)
+  (let ()
+    (define-syntax make-wrapper
+      (syntax-rules ()
+        ((make-wrapper wrapper-name tag)
+         (define-syntax wrapper-name
+           (syntax-rules ()
+             ((wrapper-name item (... ...))
+              '(tag item (... ...))))))))
+    (make-wrapper wrap-with-x x)
+    (wrap-with-x 1 2 3)))
+
 ;; A declared ellipsis (SRFI 46) is a *declaration*, so a binding of `...`
 ;; around it has no bearing on it either way. #114 looked up the spelling `...`
 ;; and broke this row while fixing the two above. chibi agrees; Gauche never
@@ -119,6 +161,39 @@
   (let ((... 'dots))
     (define-syntax m3 (syntax-rules ::: () ((_ a b :::) (list b ::: a))))
     (m3 1 2 3)))
+
+;; ── Declaring the ellipsis, and `...` as a literal ──────────────────────────
+;;
+;; SRFI 46, adopted by R7RS §4.3.2: `(syntax-rules <ellipsis> (<literal> …) …)`
+;; names the ellipsis, and a literal takes priority over the ellipsis. Without a
+;; binding of dots anywhere, so these are the plain cases the row above varies.
+
+;; `...` is both the declared ellipsis and a literal, so the literal wins and
+;; the template's `...` is a symbol.
+(test-equal "... in the literals list is a literal, not the ellipsis" '(100 ...)
+  (let ()
+    (define-syntax elli-lit-1
+      (syntax-rules ... (...)
+        ((_ x)
+         '(x ...))))
+    (elli-lit-1 100)))
+
+(test-equal "a declared ellipsis stands in for ..." '(1 2 3)
+  (let ()
+    (define-syntax colon-list
+      (syntax-rules ::: ()
+        ((_ x :::)
+         '(x :::))))
+    (colon-list 1 2 3)))
+
+;; With `:::` declared, `...` is free to be a literal, and matches only itself.
+(test-equal "and frees ... to be a literal" '(a b)
+  (let ()
+    (define-syntax with-dots
+      (syntax-rules ::: (...)
+        ((_ x ... y)
+         '(x y))))
+    (with-dots a ... b)))
 
 ;; ── Rows Gauche cannot compile ──────────────────────────────────────────────
 ;;
