@@ -439,8 +439,8 @@ already an L1 bundling target on its own in-degree — so it stays bundled
 either way; only the reason moved.
 
 The package ships no test suite; conformance is covered by
-`crates/patina-tests/tests/srfi_27.rs` (both backends must agree on exact
-pseudo-randomized streams) and by the SRFI 132 suite, whose quickselect
+`crates/patina-tests/tests/scheme/stdlib/random.scm` (both backends must
+give the recorded pseudo-randomized stream) and by the SRFI 132 suite, whose quickselect
 draws its pivots from `random-integer`.
 
 The rule and its enforcement: § The rule below, and
