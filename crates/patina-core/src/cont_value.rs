@@ -184,6 +184,12 @@ pub struct PromptFrame {
     /// `dynamic_winds.len()` when the prompt was pushed: an abort travels to
     /// this depth, and a delimited capture carries the records above it.
     pub wind_depth: usize,
+    /// The trampoline the prompt was pushed in — see
+    /// [`CpsContinuation::trampoline`](crate::CpsContinuation::trampoline).
+    /// An abort's landing is a jump to *this* trampoline, whatever trampoline
+    /// the abort itself runs on: an abort from inside a primitive's callback
+    /// to a prompt outside it must unwind through the primitive.
+    pub trampoline: u64,
     /// `exception_handlers.len()` when the prompt was pushed — the same
     /// boundary for the handler stack. Recorded, not inferred: the VM learned
     /// that no frame-depth comparison separates a handler installed in tail

@@ -18,9 +18,9 @@
 //! tree-walker-only — porting them is tracked as Q1 in
 //! `PRD/TRACK_Q_QUALITY_PRD.md`. Prefer these helpers in new tests.
 //!
-//! A known divergence between the backends is usually **not** declared here.
-//! It is a row in a suite file under `tests/scheme/` with a backend-scoped
-//! expectation above it —
+//! A known divergence between the backends is not declared here. It is a row
+//! in a suite file under `tests/scheme/` with a backend-scoped expectation
+//! above it —
 //!
 //!     (cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
 //!     (test-equal "the row's name" <the right answer> <the program>)
@@ -28,26 +28,18 @@
 //! — which asserts the right answer on every implementation and names the
 //! backend known to miss it; `scheme_suite.rs` fails the run the day that
 //! backend starts passing, so the quarantine retires itself instead of
-//! outliving the defect. That is the spelling whenever the wrong backend's
-//! answer is *delivered to the row*: a wrong value, or an error a `guard` can
-//! catch.
+//! outliving the defect. `rg 'patina-(vm|tree-walker) \(test-expect-fail'
+//! crates/patina-tests/tests/scheme` is the inventory, plus the per-backend
+//! value pins the grep cannot see (`callability.rs`'s continuation-as-converter)
+//! and the two matrix files, which record every backend's answer per row.
 //!
-//! [`assert_divergence`] is the spelling for the rest — a divergence where the
-//! wrong backend takes the whole program down, or returns to the row's
-//! continuation twice, so that inside a suite file it would take the other
-//! rows with it. It pins the working backend's answer *and* requires the other
-//! to still fail at the recorded stage:
-//!
-//!     assert_divergence(code, On::Vm, "(1 2)", ErrorClass::AtRuntime, "PRD/bugs/SOME_BUG.md");
-//!
-//! Fixing the bug makes that test fail, which is the same point made the same
-//! way. Today every such pin is the tree-walker's nested-trampoline family, in
-//! `escape_from_primitive.rs`. The complete inventory is therefore two greps —
-//! `rg 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme`
-//! and `rg assert_divergence crates/patina-tests` — plus the per-backend
-//! value pins that neither grep finds (`escape_from_primitive.rs`'s `eval`
-//! escape, `callability.rs`'s continuation-as-converter), and the two matrix
-//! files, which record every backend's answer per row.
+//! That spelling needs the wrong backend's answer to be *delivered to the
+//! row* — a wrong value, or an error a `guard` can catch. `assert_divergence`
+//! was the Rust spelling for the rest, a divergence that took the whole
+//! program down or ran the rest of the file from inside a callback; the last
+//! of those, the tree-walker's nested-trampoline family, closed 2026-09-10
+//! and the helper went with it (`git log -S assert_divergence` has it, should
+//! the class reappear).
 
 #![allow(dead_code)]
 // `gc_shared_tests!` is used only by the GC test binaries; every other test
@@ -63,50 +55,20 @@ use std::cell::RefCell;
 
 // ─── Backend selection ───────────────────────────────────────────────────────
 
-/// The backend a quarantined divergence currently *works* on. The other one is
-/// asserted to still fail, so fixing it retires the quarantine automatically.
-///
-/// This is deliberately two-valued: "both backends" is not expressible, because
-/// a quarantine that quarantines nothing is just [`assert_program_eval_to`].
-#[derive(Clone, Copy)]
-pub enum On {
-    TreeWalker,
-    Vm,
-}
-
 /// Which backends one run covers. Private: it is an implementation detail of
 /// the helpers below, not a knob tests turn.
 ///
-/// Selecting a single backend is a real need — a divergence where the wrong
-/// side returns a *value* rather than failing cannot go through
-/// [`assert_divergence`], and `escape_from_primitive.rs` holds such pins. Those
-/// use the named per-backend helpers (`eval_program_vm`,
-/// `try_eval_program_tree_walker`, …), which say in their name what they do;
-/// threading this enum out would give the same capability a second, vaguer
-/// spelling.
+/// Selecting a single backend is a real need — a pin of one backend's wrong
+/// *value* has no both-backend spelling (`callability.rs`'s
+/// continuation-as-converter row). Those use the named per-backend helpers
+/// (`eval_program_vm`, `try_eval_program_tree_walker`, …), which say in their
+/// name what they do; threading this enum out would give the same capability
+/// a second, vaguer spelling.
 #[derive(Clone, Copy)]
 enum Which {
     Both,
     TreeWalker,
     Vm,
-}
-
-impl On {
-    /// The backend that behaves correctly today.
-    fn working(self) -> Which {
-        match self {
-            On::TreeWalker => Which::TreeWalker,
-            On::Vm => Which::Vm,
-        }
-    }
-
-    /// The backend that is still broken.
-    fn broken(self) -> Which {
-        match self {
-            On::TreeWalker => Which::Vm,
-            On::Vm => Which::TreeWalker,
-        }
-    }
 }
 
 /// The workspace root, for tests that read repo files (bundled libraries,
@@ -539,64 +501,6 @@ pub fn assert_program_eval_error_at(
                     );
                 }
             }
-        }
-    }
-}
-
-/// Pin a **known divergence** between the backends: `works_on` must produce
-/// `expected`, and the other backend must still fail **at the recorded
-/// stage** (`broken_fails`). `tracking` names the document that records the
-/// bug — a mandatory argument, so a quarantine cannot be written without
-/// saying where it is tracked.
-///
-/// This is the only way *a test* opts out of both-backends coverage, and it is
-/// designed to **fail when the bug is fixed**: repairing the broken backend
-/// trips the second assertion, whose message tells the fixer to replace this
-/// call with a plain [`assert_program_eval_to`]. Asserting only the working
-/// side would let a quarantine outlive its bug forever, which is how an
-/// exception list becomes a permanent excuse.
-///
-/// **The matrix files are the second inventory**, and rg-ing for this function
-/// will not find them. `hygiene_matrix.rs` and `control_flow_matrix.rs` each
-/// record what every backend answers for every point in a space, so a row
-/// whose actual differs from `correct` is a quarantine too — self-describing,
-/// counted by a per-backend assertion, and failing in both directions for the
-/// same reason this function does. An audit of what is knowingly wrong has to
-/// read all three.
-///
-/// The pinned [`ErrorClass`] closes the other escape (audit D3): without it,
-/// *any* failure satisfied the quarantine, so a new, unrelated bug could
-/// silently replace the recorded one and hide behind it.
-pub fn assert_divergence(
-    code: &str,
-    works_on: On,
-    expected: &str,
-    broken_fails: ErrorClass,
-    tracking: &str,
-) {
-    expect_value(works_on.working(), code, expected, Mode::Program);
-
-    for (backend, outcome) in outcomes(works_on.broken(), code, Mode::Program) {
-        match outcome {
-            Ok(value) => panic!(
-                "\n[{backend}] NO LONGER DIVERGES — it now returns {value}.\n\
-                 \n\
-                 This quarantine has done its job. Replace the assert_divergence \
-                 call with\n    \
-                 assert_program_eval_to(code, {expected:?});\n\
-                 so both backends are held to the same expectation, and update \
-                 {tracking}.\n\
-                 \nProgram:\n{code}"
-            ),
-            Err(e) => assert_eq!(
-                e.class, broken_fails,
-                "\n[{backend}] still fails, but at a different stage \
-                 ({broken_fails:?} recorded, now {:?}): {}\n\
-                 The quarantined failure changed mode — check whether the \
-                 original bug (see {tracking}) was replaced by a new one, and \
-                 re-record the class if the change is understood.\nProgram:\n{code}",
-                e.class, e.message
-            ),
         }
     }
 }

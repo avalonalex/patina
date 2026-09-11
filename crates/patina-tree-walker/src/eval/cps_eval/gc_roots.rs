@@ -50,13 +50,16 @@ pub(super) struct StepRoots<'a> {
     /// The step about to be processed — the entire live machine state.
     pub step: &'a StepResult,
     /// The expression this trampoline was entered with. Its literals stay
-    /// live for the whole call even once the step has moved past them.
-    pub expr: &'a CpsExpr,
+    /// live for the whole call even once the step has moved past them. A
+    /// callback run has none — and never collects either, being nested.
+    pub expr: Option<&'a CpsExpr>,
 }
 
 impl GcRoots for StepRoots<'_> {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-        visitor.visit_expr_literals(self.expr);
+        if let Some(expr) = self.expr {
+            visitor.visit_expr_literals(expr);
+        }
         trace_step(self.step, visitor);
     }
 }

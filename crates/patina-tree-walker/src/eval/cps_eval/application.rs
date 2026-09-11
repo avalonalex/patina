@@ -851,15 +851,28 @@ impl<'a> CpsEvaluator<'a> {
 
         // Dispatch through the cached registry index — no name hashing. The
         // owned entry point moves `args` straight into higher-order handlers
-        // instead of re-copying them at the registry boundary.
-        let prim_result = self.evaluator.primitive_registry.apply_cached_owned(
-            qualified_name,
-            registry_index,
-            args,
-            self.evaluator,
-        );
+        // instead of re-copying them at the registry boundary. The context
+        // carries this step's dynamic environment, so a callback the
+        // primitive makes runs under it (`callback.rs`).
+        let prim_result = {
+            let ctx = super::callback::CallbackContext {
+                cps: self,
+                prompt_stack: &prompt_stack,
+                dynamic_winds: &dynamic_winds,
+                exception_handlers: &exception_handlers,
+            };
+            self.evaluator.primitive_registry.apply_cached_owned(
+                qualified_name,
+                registry_index,
+                args,
+                &ctx,
+            )
+        };
+        // Taken whatever the result, so it can never describe a later call.
+        let declined_by_every_handler = super::types::take_unhandled_in_callback();
 
         match prim_result {
+            Err(err) if declined_by_every_handler => Err(err),
             Ok(result_tagged) => {
                 // Return InvokeContinuation step instead of recursive call
                 Ok(StepResult::InvokeContinuation {
@@ -913,12 +926,23 @@ impl<'a> CpsEvaluator<'a> {
                 // Set value (replace top of stack after applying converter)
                 let new_val = if let Some(conv) = converter {
                     // Apply converter to new value using CPS machinery. The
-                    // converter is user code, so anything it raises must reach
-                    // the handlers installed *here* — `apply_from_direct_tagged`
-                    // runs it on a nested trampoline that starts with an empty
-                    // handler stack, so it comes back as a Rust error.
-                    match self.apply_from_direct_tagged(conv, vec![args[0]]) {
+                    // converter is user code, so it runs under this step's
+                    // dynamic environment: a raise inside it reaches the
+                    // handlers installed here, and only what escapes every
+                    // one of them comes back as a Rust error.
+                    let converted = {
+                        let ctx = super::callback::CallbackContext {
+                            cps: self,
+                            prompt_stack: &prompt_stack,
+                            dynamic_winds: &dynamic_winds,
+                            exception_handlers: &exception_handlers,
+                        };
+                        patina_primitives::ApplyContext::apply_proc(&ctx, conv, vec![args[0]])
+                    };
+                    let declined_by_every_handler = super::types::take_unhandled_in_callback();
+                    match converted {
                         Ok(v) => v,
+                        Err(err) if declined_by_every_handler => return Err(err),
                         Err(err) => {
                             return self.maybe_route_error_through_cps(
                                 err,
@@ -974,6 +998,9 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         op: &CpsPrimitive,
         args: Vec<TaggedValue>,
+        prompt_stack: &[PromptFrame],
+        dynamic_winds: &[DynamicWindRecord],
+        exception_handlers: &[ExceptionHandler],
     ) -> Result<TaggedValue, EvalError> {
         let heap = self.evaluator.global_env.heap();
 
@@ -1000,10 +1027,19 @@ impl<'a> CpsEvaluator<'a> {
             _ => {}
         }
 
-        // Use pre-computed static qualified name — zero allocation
+        // Use pre-computed static qualified name — zero allocation. None of
+        // these ops calls back today; the context carries the step's stacks
+        // anyway, so that one which does is not the callback that starts
+        // with nothing.
         let qualified_name = op.qualified_name().unwrap();
+        let ctx = super::callback::CallbackContext {
+            cps: self,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        };
         self.evaluator
             .primitive_registry
-            .apply_tagged(qualified_name, &args, self.evaluator)
+            .apply_tagged(qualified_name, &args, &ctx)
     }
 }

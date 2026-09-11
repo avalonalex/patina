@@ -44,12 +44,13 @@
 ;; continuation captured inside a running after-thunk — are in
 ;; `cps-features.scm`.
 ;;
-;; What neither backend covers is a raise from inside a Rust primitive's
+;; What no shape below covers is a raise from inside a Rust primitive's
 ;; callback within the thunk — `member`/`assoc` with a predicate,
-;; `call-with-port`, `force`, a parameter converter, anything under `eval` —
-;; which still runs on a nested trampoline (tree-walker) or a nested dispatch
-;; loop (VM) with no handlers of its own (PRD §6, "a primitive's callback runs
-;; on a nested trampoline with no handler stack"). No shape below crosses one.
+;; `call-with-port`, `force`, a parameter converter, anything under `eval`.
+;; Until 2026-09-10 the tree-walker ran those on a nested trampoline with no
+;; handlers of its own (PRD §6, "a primitive's callback runs on a nested
+;; trampoline with no handler stack"); it inherits the caller's now, so this
+;; is a gap in coverage rather than a known defect.
 ;;
 ;; Tracked in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, "An exception raised by a
 ;; `dynamic-wind` after-thunk does not behave like a `finally`".

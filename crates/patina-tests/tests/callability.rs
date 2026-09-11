@@ -50,10 +50,11 @@ use common::{
 /// escape through it, answering `1`. The VM does the same, through `call_any`.
 /// The tree-walker still rejects it, and deliberately so: its converter
 /// runs as a direct-mode primitive callback, from which a continuation
-/// cannot be invoked at all (PRD §6, "two continuation defects around
-/// primitive callbacks"), so the clean rejection is the better of its two
-/// answers until that is fixed. Not `assert_divergence` — the tree-walker
-/// returns a value, not a failure.
+/// cannot be invoked at all — the trampoline it ran on could not tell a local
+/// jump from an escape until 2026-09-10 — so the clean rejection was the
+/// better of its two answers; it stays because `make-parameter` still
+/// rejects a tree-walker continuation by type before calling it. A
+/// per-backend value pin: the tree-walker returns a value, not a failure.
 /// The unguarded halves of the catchable-error pairs whose guarded halves are
 /// in `tests/scheme/control/*.scm`.
 ///

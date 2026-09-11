@@ -87,9 +87,9 @@
 //! — which is what makes their agreement here worth something.
 //!
 //! No row records a wrong answer today, on either backend, and none records
-//! an absent feature. `common/mod.rs` names this file as the second inventory
-//! of assertions `assert_divergence` does not know about; the inventory is
-//! empty, and the file is what keeps it that way.
+//! an absent feature. `common/mod.rs` names this file as one of the two
+//! matrices the backend-scoped-expectation grep does not see; the inventory
+//! here is empty, and the file is what keeps it that way.
 //!
 //! # Adding axes
 //!

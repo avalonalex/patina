@@ -136,8 +136,9 @@
 ;; Wind thunks now run as steps of the trampoline the jump was made on, each
 ;; under the handler stack its `dynamic-wind` call was made in (R7RS 6.10;
 ;; `cps_eval/wind.rs`), so the `(car 7)` error finds the `guard` like any other
-;; raise would. Primitive callbacks still run on the nested trampoline — that
-;; boundary stays open in `cps-features.scm`, `escape_from_primitive.rs` and §6.
+;; raise would. A primitive's callback runs on a nested trampoline too, which
+;; since 2026-09-10 inherits the caller's stacks (`cps-features.scm`, "A
+;; primitive's callback").
 ;;
 ;; `caught` is arbitrated by Gauche (chibi loops forever on this program): the
 ;; after thunk runs in the environment of the `dynamic-wind` call, which is

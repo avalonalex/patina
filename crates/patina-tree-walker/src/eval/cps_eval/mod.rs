@@ -62,7 +62,9 @@
 //! - `quasiquote.rs` - Quasiquote template evaluation
 
 mod application;
+mod callback;
 mod continuation;
+pub(crate) use callback::CallbackContext;
 mod environment;
 mod exceptions;
 mod gc_roots;
@@ -108,7 +110,7 @@ impl<'a> CpsEvaluator<'a> {
     /// outstanding (`docs/GC_DESIGN.md` §7). The protocol itself lives in
     /// `GcController::safe_point`; this supplies only the roots.
     #[inline]
-    fn maybe_collect(&self, is_outermost: bool, step: &StepResult, expr: &CpsExpr) {
+    fn maybe_collect(&self, is_outermost: bool, step: &StepResult, expr: Option<&CpsExpr>) {
         let evaluator = self.evaluator;
         GcController::safe_point(
             &evaluator.gc,
@@ -160,47 +162,71 @@ impl<'a> CpsEvaluator<'a> {
         expr: Rc<CpsExpr>,
         env: Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        // Every trampoline defers collection for its own extent; only the
-        // outermost one reaches its safe point un-deferred. A nested
-        // trampoline's caller has live values in Rust locals that no root
-        // provider can see — see `docs/GC_DESIGN.md` §7.
-        let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
-        // Loop invariant, hoisted out of the safe point (see maybe_collect).
-        // The cached pending-flag handle makes the per-step check a single
-        // load — no borrow.
-        let is_outermost = gc_defer.is_outermost();
+        self.eval_in_env_with(expr, env, Vec::new(), Vec::new(), Vec::new())
+    }
 
-        let cont_env = ContEnv::new();
-        let prompt_stack = Vec::new();
-        let dynamic_winds = Vec::new();
-        let exception_handlers = Vec::new();
-
+    /// Evaluate `expr` on a trampoline that starts under the given dynamic
+    /// environment — empty for a top-level form, the calling step's for the
+    /// `eval` primitive (`callback.rs`).
+    pub(super) fn eval_in_env_with(
+        &self,
+        expr: Rc<CpsExpr>,
+        env: Rc<Environment>,
+        prompt_stack: Vec<types::PromptFrame>,
+        dynamic_winds: Vec<patina_core::DynamicWindRecord>,
+        exception_handlers: Vec<types::ExceptionHandler>,
+    ) -> Result<TaggedValue, EvalError> {
         // Debug: show the CPS expression (enabled via RUST_LOG=patina_tree_walker::eval::cps_eval=debug)
         debug!(target: "patina_tree_walker::eval::cps_eval", input_expr = %expr, "CPS evaluation starting");
-
-        // Start with the initial expression
-        let mut current_step = match self.eval_one_step(
-            &expr,
+        let initial = StepResult::Continue {
+            expr: expr.clone(),
             env,
-            cont_env,
+            cont_env: ContEnv::new(),
             prompt_stack,
             dynamic_winds,
             exception_handlers,
-        ) {
-            Ok(step) => step,
-            Err(e) => {
-                debug!(target: "patina_tree_walker::eval::cps_eval", error = %e, "Error in initial eval_one_step");
-                return Err(e);
-            }
         };
+        self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form)
+    }
 
+    /// The step loop: run `initial` and every step after it until one
+    /// delivers to this trampoline's `Halt`.
+    ///
+    /// One loop for every trampoline — a top-level form, a primitive's
+    /// callback, the `eval` primitive's expression — because they differ in
+    /// only two things, and both are decided here rather than by which copy
+    /// of the loop is running: which stacks the first step carries (the
+    /// caller's), and which continuations belong to this run
+    /// (`TrampolineGuard`). Until 2026-09-10 the nested runs had a loop of
+    /// their own with no escape arm, so the only continuation they could
+    /// resume was none, and the outermost loop resumed everything that
+    /// reached it — including chains that ended in a nested `Halt`, which it
+    /// then delivered as the program's value.
+    ///
+    /// `expr` is the expression an outermost run was entered with, rooted at
+    /// the safe point for its literals; a callback run has none. Every
+    /// trampoline defers collection for its own extent and only the outermost
+    /// one reaches its safe point un-deferred — a nested trampoline's caller
+    /// holds live values in Rust locals that no root provider can see
+    /// (`docs/GC_DESIGN.md` §7).
+    fn run_trampoline(
+        &self,
+        initial: StepResult,
+        expr: Option<&CpsExpr>,
+        kind: types::TrampolineKind,
+    ) -> Result<TaggedValue, EvalError> {
+        let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
+        // Loop invariant, hoisted out of the safe point (see maybe_collect).
+        let is_outermost = gc_defer.is_outermost();
+        let trampoline = types::TrampolineGuard::enter(kind);
+
+        let mut current_step = initial;
         let mut step_count = 0;
 
-        // Trampoline loop - process steps until we get a final value
         loop {
             // GC safe point: all live state is in `current_step` and `expr`,
             // both rooted below. No heap borrow is outstanding here.
-            self.maybe_collect(is_outermost, &current_step, &expr);
+            self.maybe_collect(is_outermost, &current_step, expr);
 
             step_count += 1;
             if step_count <= 30 {
@@ -211,7 +237,6 @@ impl<'a> CpsEvaluator<'a> {
                     "CPS step"
                 );
             }
-            // Process step, catching ContinuationEscape to handle escaped continuations
             let step_result = match current_step {
                 StepResult::Done(value) => {
                     debug!(
@@ -278,72 +303,66 @@ impl<'a> CpsEvaluator<'a> {
                 ),
             };
 
-            // Handle result, catching ContinuationEscape
             match step_result {
                 Ok(step) => current_step = step,
-                Err(EvalError::ContinuationEscape) => {
-                    // A continuation escaped from apply_from_direct
-                    if let Some((value_tagged, k)) = take_pending_escape() {
-                        debug!(
-                            target: "patina_tree_walker::eval::cps_eval",
-                            escaped_value = ?value_tagged,
-                            "Continuation escape"
-                        );
-
-                        // Resume the captured continuation. The
-                        // `__dynamic_wind_cleanup__` sentinel that used to be
-                        // sniffed for here is gone: a captured continuation now
-                        // carries its real ContEnv, so there is nothing to
-                        // decode and one path serves every case.
-                        //
-                        // `exception_handlers` is restored from the
-                        // continuation, like `dynamic_winds`: R7RS 6.11 puts
-                        // the handler stack in the dynamic environment, so
-                        // re-entry has to bring it back. Resetting it to empty
-                        // emptied the stack for the rest of the trampoline, so
-                        // any raise *after* an earlier `guard` had fired went
-                        // unhandled.
-                        //
-                        // `prompt_stack` likewise — the third stack of the
-                        // dynamic environment, and the one this arm reset to
-                        // empty until the tree-walker had a prompt API. An
-                        // abort lands here too (`prompts.rs`), with a
-                        // continuation whose stacks are cut back to its
-                        // prompt. The wind thunks between the jump and here
-                        // have already run, as steps of the trampoline the
-                        // jump was made on, each in its own `dynamic-wind`
-                        // call's environment (`wind.rs`).
-                        //
-                        // `resume` holds an effect-carrying continuation that
-                        // must be re-established rather than jumped past; the
-                        // common case flattens to a Local.
-                        //
-                        // Hand the resumption to the loop as a step rather
-                        // than invoking it here: when `resume` is itself a
-                        // `Jump` — the continuation of a wind thunk's tail
-                        // call, captured while a jump was running the thunk
-                        // — invoking it parks a *second* escape, and a `?` on
-                        // it would carry that escape out of the trampoline
-                        // as an error. As a step it lands in this same arm on
-                        // the next turn.
-                        current_step = StepResult::InvokeContinuation {
-                            cont: continuation::continuation_cont_value(&k),
-                            value: value_tagged,
-                            env: k.env.clone(),
-                            cont_env: k.captured_cont_env.clone(),
-                            prompt_stack: k.prompt_stack.clone(),
-                            dynamic_winds: k.dynamic_winds.clone(),
-                            exception_handlers: k.exception_handlers.clone(),
-                        };
-                    } else {
+                // A location can be stamped on the way out of a step
+                // (`try_catchable!`), and a parked escape is control flow
+                // whatever it is wrapped in.
+                Err(e) if is_continuation_escape(&e) => {
+                    // A jump parked its target and unwound to here. Whether
+                    // this run resumes it is `TrampolineGuard::resumes`'s
+                    // call: its own continuation, or one whose run has
+                    // returned and this is the nearest form to end in its
+                    // place; otherwise the target's run is still below, and
+                    // the escape keeps unwinding — this loop is a
+                    // primitive's callback, and the primitive is abandoned
+                    // by the `?` its caller put on this call. A jump inside
+                    // its own trampoline never gets here:
+                    // `jump_to_continuation` resumes those in place.
+                    let Some((value_tagged, k)) = take_pending_escape() else {
                         return Err(EvalError::InternalError(
                             "ContinuationEscape without pending data".to_string(),
                         ));
+                    };
+                    if !trampoline.resumes(k.trampoline) {
+                        types::set_pending_escape(value_tagged, k);
+                        return Err(EvalError::ContinuationEscape);
                     }
+                    debug!(
+                        target: "patina_tree_walker::eval::cps_eval",
+                        escaped_value = ?value_tagged,
+                        "Continuation escape"
+                    );
+
+                    // An abort lands here too (`prompts.rs`), with a
+                    // continuation whose stacks are cut back to its prompt.
+                    // The wind thunks between the jump and here have already
+                    // run, as steps of the trampoline the jump was made on,
+                    // each in its own `dynamic-wind` call's environment
+                    // (`wind.rs`).
+                    //
+                    // As a step rather than invoked here: when `resume` is
+                    // itself a `Jump` — the continuation of a wind thunk's
+                    // tail call, captured while a jump was running the thunk
+                    // — invoking it parks a *second* escape, and a `?` on it
+                    // would carry that escape out of the trampoline as an
+                    // error. As a step it lands in this same arm on the next
+                    // turn.
+                    current_step = continuation::resume_step(&k, value_tagged);
                 }
                 Err(e) => return Err(e),
             }
         }
+    }
+}
+
+/// Whether an error is a parked escape, however many source locations were
+/// stamped on it on the way out of a step.
+fn is_continuation_escape(e: &EvalError) -> bool {
+    match e {
+        EvalError::ContinuationEscape => true,
+        EvalError::WithLocation { error, .. } => is_continuation_escape(error),
+        _ => false,
     }
 }
 
@@ -391,6 +410,33 @@ pub fn eval_cps(
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
     cps_evaluator.eval_in_env(Rc::new(cps_expr), env)
+}
+
+/// [`eval_cps`], on a trampoline that starts under the given dynamic
+/// environment — the `eval` primitive's entry, from a step that has one.
+pub(super) fn eval_cps_with(
+    expr: &patina_core::CoreExpr,
+    env: Rc<Environment>,
+    evaluator: &super::Evaluator,
+    prompt_stack: Vec<types::PromptFrame>,
+    dynamic_winds: Vec<patina_core::DynamicWindRecord>,
+    exception_handlers: Vec<types::ExceptionHandler>,
+) -> Result<TaggedValue, EvalError> {
+    use patina_core::CoreExprKind;
+    use patina_ir::CpsTransformer;
+
+    if let CoreExprKind::Import { .. } = &expr.kind {
+        // An import touches no dynamic state; the plain entry handles it.
+        return eval_cps(expr, env, evaluator);
+    }
+    let cps_expr = CpsTransformer::new().transform_toplevel(expr);
+    CpsEvaluator::new(evaluator).eval_in_env_with(
+        Rc::new(cps_expr),
+        env,
+        prompt_stack,
+        dynamic_winds,
+        exception_handlers,
+    )
 }
 
 #[cfg(test)]

@@ -335,7 +335,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `Evaluator.global_env` | `eval/mod.rs:43` | `visit_env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
 | `PENDING_ESCAPE` thread-local | `eval/cps_eval/types.rs:21-31` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root |
-| Suspended outer `StepResult`s in nested trampolines | `apply_from_direct_tagged`, `eval/cps_eval/wind.rs:223` | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
+| Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
 | Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
 
@@ -493,16 +493,17 @@ placement + deferral:
      fields; capture temporaries are dead; `value_buffer`/`scratch_args` are
      restored.
    - Tree-walker (**stage 2, implemented**): top of the trampoline loop in
-     `eval_in_env`. The entire machine state is `current_step`, which the
+     `run_trampoline` (`cps_eval/mod.rs`, the one loop every run shares since
+     2026-09-10). The entire machine state is `current_step`, which the
      safe point passes as a transient root along with the `expr` the
      trampoline was entered with (its literals stay live for the call).
 2. **`gc_defer_depth` counter** on the shared heap, managed by the
    `GcDeferGuard` RAII type so early returns and `?` propagation cannot leak
    an increment.
 
-   The tree-walker takes a guard **on every trampoline entry** (`eval_in_env`
-   *and* `apply_from_direct_tagged`) rather than instrumenting each re-entrant
-   call site. This inverts the failure mode: a nested trampoline is deferred
+   The tree-walker takes a guard **on every trampoline entry** (`run_trampoline`,
+   whether entered for a form or for a primitive's callback) rather than
+   instrumenting each re-entrant call site. This inverts the failure mode: a nested trampoline is deferred
    *by construction* (whatever route reached it — a higher-order primitive,
    `eval`, quasiquote), instead of relying on someone having remembered to
    guard that route.

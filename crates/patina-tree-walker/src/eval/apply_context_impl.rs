@@ -36,18 +36,10 @@ impl ApplyContext for Evaluator {
         expr: TaggedValue,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        use super::cps_eval::eval_cps;
-        use patina_frontend::Desugarer;
-
-        let desugarer = Desugarer::with_env(env.clone()).with_fs(self.fs.clone());
-        // Bad syntax handed to the `eval` primitive is the caller's error,
-        // raised while the program runs — catchable, like the VM's path.
-        // (`EvalError::DesugarError` is only for the Backend::eval entry.)
-        let core_expr = desugarer
-            .desugar_tagged(expr, self.global_env.heap())
-            .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
-
-        eval_cps(&core_expr, env.clone(), self)
+        // A call from outside any step: the same path a step's `eval` takes
+        // (`cps_eval/callback.rs`), with nothing to inherit.
+        let cps = super::cps_eval::CpsEvaluator::new(self);
+        super::cps_eval::CallbackContext::detached(&cps).eval_expr(expr, env)
     }
 
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {

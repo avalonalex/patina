@@ -1049,52 +1049,211 @@
 (test-equal "a continuation can be the handler for a primitive error" #t
   (error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))))
 
-;; ── The tree-walker's nested trampoline ────────────────────────────────────
+;; ── A primitive's callback ─────────────────────────────────────────────────
 ;;
-;; A Rust primitive's callback runs on a nested trampoline
-;; (`apply_from_direct_tagged`) that starts with every stack empty: no
-;; handlers, no wind records, no prompts. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
-;; §6 tracks it as the "primitive's callback" entry; the prompt side is in
-;; `prompts.scm`.
-;;
-;; **Most of this family cannot be a row here, and the reason is the defect
-;; itself.** A continuation invoked inside the callback — a retry loop, a
-;; `guard` clause declining and re-raising through `handler-k`, an escape —
-;; is misread by that trampoline as leaving the primitive, and what it then
-;; runs to completion is the rest of the *program*: inside a suite file, every
-;; row after this one, from inside the callback, before the outer trampoline
-;; abandons the primitive. Measured 2026-09-10: four such rows recorded no
-;; result at all on the tree-walker and left the file four rows short, and
-;; the same programs followed by one more top-level form reach that form with
-;; the `define` they sit in still unbound. So those pins live in
-;; `escape_from_primitive.rs`, where a program's continuation ends at the
-;; program and `assert_divergence` can say they fail at run time: the
-;; declining-`guard` pair, the callback that uses its own continuation, the
-;; `call-with-port` retry loop, and the escape out of `eval`. What stays here
-;; is the one shape whose wrong answer is delivered *to the row* — as an error
-;; object a `guard` can catch.
+;; A Rust primitive's callback — `member` or `assoc` with a predicate,
+;; `call-with-port`, `force`, a parameter converter — runs on a nested
+;; trampoline on the tree-walker. Until 2026-09-10 that trampoline started with
+;; every stack empty and read every continuation invoke inside the callback as
+;; leaving the primitive, so: a `raise` in the callback found no handler, a
+;; retry loop or a local `call/cc` inside the callback abandoned the primitive
+;; and ran the rest of the *program* from inside it, and an abort from the
+;; callback found no prompt. Inside a suite file "the rest of the program" was
+;; every later row, so four of these were `assert_divergence` quarantines in
+;; `escape_from_primitive.rs` — they vanished as rows rather than failing.
+;; Each trampoline now inherits its caller's stacks and knows which
+;; continuations end in it (`cps_eval/types.rs`, `callback.rs`), and every row
+;; here is an ordinary both-backend assertion. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+;; §6 has the history under "primitive's callback".
 
-;; Tree-walker: a raise inside a primitive's callback reaches the outer
-;; `guard` as the wrong object.
+;; A `call/cc` retry loop inside a `call-with-port` callback. Two things are
+;; asserted: the value, "012", which says the port stayed open across the
+;; re-entries (R7RS 6.13.1 closes it only "if `proc` returns"; until
+;; 2026-09-01 the tree-walker failed here with `I/O error: port is closed`),
+;; and `after`, which says the rest of the program ran once, after the
+;; primitive returned — the half a one-expression program could not see.
+(test-equal "call-with-port survives an in-extent continuation invoke"
+  '("012" (after))
+  (let ((log '()))
+    (let* ((r (call-with-port (open-output-string)
+                (lambda (p)
+                  (let ((n 0))
+                    (let ((k (call/cc (lambda (c) c))))
+                      (write-string (number->string n) p)
+                      (set! n (+ n 1))
+                      (if (< n 3) (k k)))
+                    (get-output-string p)))))
+           (l (begin (set! log (cons 'after log)) log)))
+      (list r l))))
+
+;; A callback that captures and invokes its *own* continuation, returning
+;; normally, is not an escape: the primitive runs to completion. The
+;; tree-walker used to answer #f — the callback's value — and, followed by
+;; one more form, reached it with the `define` still unbound.
+(test-equal "a callback using its own continuation returns the primitive's value"
+  '((2 3) (after))
+  (let ((log '()))
+    (let* ((r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
+           (l (begin (set! log (cons 'after log)) log)))
+      (list r l))))
+
+;; A declining `guard` clause inside the callback. R7RS 7.3's `guard`
+;; re-raises a declined condition by jumping back *into* the raise point
+;; through `handler-k` and calling `raise-continuable` there, so the next
+;; handler out is the one installed around the raise — which on the
+;; tree-walker's old empty-stacked trampoline was nothing, and the raw symbol
+;; escaped every handler in the program. Both raise forms.
+(test-equal "a declining guard inside a port callback reaches the outer guard: raise"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (call-with-port (open-input-string "a")
+      (lambda (p) (guard (e ((string? e) 'no)) (raise 'sym))))))
+
+(test-equal "a declining guard inside a port callback reaches the outer guard: raise-continuable"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (call-with-port (open-input-string "a")
+      (lambda (p) (guard (e ((string? e) 'no)) (raise-continuable 'sym))))))
+
+;; A declining `guard` *outside* the callback. The raise inside the callback
+;; finds the inner guard's handler (inherited), whose escape unwinds the
+;; callback's trampoline; the clause declines and re-raises through
+;; `handler-k`, a continuation captured *in* that trampoline — which has
+;; returned by then. A run that has returned is resumed by the nearest
+;; enclosing form-level run, so the re-raise lands at the raise point with
+;; the outer handler next, as R7RS 7.3 asks. The first cut of the fix made
+;; this an error, and the review caught it: it was `(outer #<error …>)` on
+;; the old tree-walker — wrong object, but caught — and must not get worse.
+(test-equal "a declining guard outside a port callback reaches the outer guard"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (guard (e ((string? e) 'no))
+      (call-with-port (open-input-string "a") (lambda (p) (raise 'sym))))))
+
+;; A handler that returns from a non-continuable raise inside a callback is
+;; called **once**. The callback's run pops the handler and calls it; when it
+;; returns, the secondary exception must see only the handlers *outside* it
+;; (R7RS 6.11). The first cut of the fix routed the escaping secondary
+;; through the calling step's handler stack — the same handlers the callback
+;; had inherited — and the handler ran a second time with the secondary.
+(test-equal "a handler returning inside a callback is called once: raise"
+  '(outer 1 #t)
+  (let ((n 0))
+    (guard (o (#t (list 'outer n (error-object? o))))
+      (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
+        (lambda () (member 1 '(1 2) (lambda (a b) (raise 'x))))))))
+
+(test-equal "a handler returning inside a callback is called once: error"
+  '(outer 1)
+  (let ((n 0))
+    (guard (o (#t (list 'outer n)))
+      (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
+        (lambda () (member 1 '(1 2) (lambda (a b) (error "boom"))))))))
+
+;; A continuation captured inside an after-thunk that is running as a step
+;; of a jump *out of* the callback. The thunk runs on the callback's
+;; trampoline, so the capture is stamped with it, but its chain ends in the
+;; jump's target, in the form outside. Re-entering it after the callback has
+;; returned runs the rest of the thunk and then completes the jump: `r` is
+;; `escaped` a second time, and the thunk's own log line is written twice.
+(test-equal "a capture inside an after thunk during a jump out of a callback re-enters"
+  '(escaped 2 (after after))
+  (let ((n 0) (saved #f) (log '()))
+    (let ((r (call/cc (lambda (out)
+               (member 1 '(1) (lambda (a b)
+                 (dynamic-wind (lambda () #f)
+                               (lambda () (out 'escaped))
+                               (lambda () (call/cc (lambda (k) (set! saved k)))
+                                          (set! log (cons 'after log))))))))))
+      (set! n (+ n 1))
+      (if (= n 1) (saved 'again))
+      (list r n (reverse log)))))
+
+;; An unquote runs under the enclosing dynamic environment. The tree-walker
+;; evaluates `,expr` on a nested form run, like the `eval` primitive, and
+;; until 2026-09-10 that run started with no handlers — the same shape as
+;; the callback defect, in a place the first cut of the fix missed.
+(test-equal "an unquote sees the enclosing guard" '(sym y)
+  (guard (e ((symbol? e) (list 'sym e)) (#t (list 'other (error-object? e))))
+    `(1 ,(raise 'y))))
+
+(test-equal "an unquote sees the enclosing handler" '(1 10)
+  (with-exception-handler (lambda (e) 10) (lambda () `(1 ,(raise-continuable 'x)))))
+
+(test-equal "an unquote can escape" 2
+  (call/cc (lambda (k) `(1 ,(k 2)))))
+
+;; ── Escaping out of a callback ──────────────────────────────────────────────
 ;;
-;; The callback's `(raise 'x)` finds no handler on the nested trampoline, so
-;; that trampoline reports it as an `unhandled exception: x` *error*, which
-;; the outer trampoline then routes to the `guard` as an error object. A
-;; clause testing for `'x` declines, and the program dies re-raising an
-;; object nobody raised. VM, chibi, Gauche: (sym x). Older than triage
-;; families 22/28 — `main` gave the same — and the same trampoline defect.
-;;
-;; The outermost `guard` is the row's, not the program's: a raw non-error
-;; object reaching SRFI 64's own handler aborts the *file* rather than failing
-;; the row (see `scheme_suite.rs`, "a sharp edge"), and turning whatever
-;; escapes into a value keeps the failure one row wide. Where the inner
-;; `guard` works, the wrapper never fires.
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+;; Moved from `escape_from_primitive.rs` once the trampoline fix made them
+;; portable; what stays there needs a file on disk or `eval`'s environment.
+;; On the VM these were the escape whose result used to be written through a
+;; register base of a frame that no longer existed (`index out of bounds` in
+;; `set_reg_at`, until 2026-08-15); the primitive is *abandoned* now rather
+;; than left running on a stack it no longer owns.
+
+;; The bad register offset tracked frame depth rather than being a fixed
+;; mistake, so escaping twice and from a nested depth is the case that would
+;; catch an off-by-one "fix" working at one depth only.
+(test-equal "an escape out of a callback, repeatedly and from a nested depth"
+  '(deep deep deep)
+  (let ()
+    (define (run) (call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
+    (define (nested) (call/cc (lambda (k) (member 2 '(1 2) (lambda (a b) (k (run)))))))
+    (let* ((a (run)) (b (run)) (c (nested)))
+      (list a b c))))
+
+;; A closure comparator that does *not* escape must still work — the VM's
+;; guard fires on frame depth, and one that fired spuriously would break
+;; every re-entrant call. These are the closure forms, the ones that push a
+;; frame; the primitive-comparator forms are covered elsewhere.
+(test-equal "a closure callback that does not escape still works"
+  '((2 3) (2 . b))
+  (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
+        (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b)))))
+
+;; Reaching the same primitive other than by call position: `apply` and
+;; value-position dispatch go through a different path on the VM, which has
+;; no depth check of its own — they work because the escape is signalled
+;; from the re-entry boundary, and every route unwinds the same way.
+(test-equal "an escape out of a callback reached through apply" 'x
+  (call/cc (lambda (k) (apply member (list 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+
+(test-equal "an escape out of a callback reached in value position" 'x
+  (call/cc (lambda (k)
+    (let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+
+;; The primitive stops when the continuation is invoked, instead of running
+;; on to completion. `member` would otherwise keep calling the comparator for
+;; the remaining elements — each call re-invoking the continuation.
+(test-equal "the escaped-from primitive is abandoned" '(#f (1))
+  (let ((seen '()))
+    (let ((r (call/cc (lambda (k)
+               (member 9 '(1 2 3)
+                 (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
+      (list r (reverse seen)))))
+
+;; The parameter *set* path, which runs a converter through a different
+;; boundary than `make-parameter` construction does. On the VM this used to
+;; lose the enclosing top-level `define` outright.
+(test-equal "an escape out of a parameter converter during parameterize"
+  'from-converter
+  (let ((kk #f))
+    (let ((p (make-parameter 0 (lambda (v) (if kk (kk 'from-converter) v)))))
+      (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))))
+
+;; A raise inside the callback reaches the outer `guard` as the object that
+;; was raised. The tree-walker used to report the callback's unhandled raise
+;; as an *error*, which the outer trampoline then routed to the `guard` as an
+;; error object whose message was `unhandled exception: x`; a clause testing
+;; for `'x` declined, and the program died re-raising an object nobody
+;; raised. This row was the one of the family that could be a scoped
+;; expectation while the rest were Rust: its wrong answer was at least
+;; delivered to the row.
 (test-equal "a raise inside a port callback reaches the guard as the raised object"
   '(sym x)
-  (guard (escaped (#t (list 'escaped (error-object? escaped))))
-    (guard (e ((symbol? e) (list 'sym e))
-              ((error-object? e) (raise (error-object-message e))))
-      (call-with-port (open-input-string "a") (lambda (p) (raise 'x))))))
+  (guard (e ((symbol? e) (list 'sym e))
+            ((error-object? e) (raise (error-object-message e))))
+    (call-with-port (open-input-string "a") (lambda (p) (raise 'x)))))
 
 (test-end)

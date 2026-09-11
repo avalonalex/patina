@@ -498,19 +498,17 @@ design note on scoped relinking.
   and `cargo fmt`.
 - Track-level metric: **the number of behaviours that differ between the two
   backends.** This is now a literal count —
-  `rg -c 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme`
-  plus `rg -c assert_divergence crates/patina-tests/tests` —
+  `rg -c 'patina-(vm|tree-walker) \(test-expect-fail' crates/patina-tests/tests/scheme` —
   and it is expected to reach, and stay at, zero. It stood at **6** when this
   was written (the four §1.2 control-operator rows, an error raised after a
   multi-value escape, and handler loss on continuation re-entry —
   `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, previously a comment-only
   divergence, which is exactly the discovery mode this metric exists to end).
-  As of 2026-09-10 the two greps answer **8 scoped rows and 3
-  `assert_divergence` sites**: the three §1.2 rows, family 40's three (VM),
-  the plain-raise-in-callback row, the nested-trampoline prompt row, and the
-  four tree-walker callback pins in `escape_from_primitive.rs` (one of them
-  two per-backend assertions rather than an `assert_divergence`). The
-  multi-value-escape and re-entry rows converged and are plain rows now.
+  As of 2026-09-10 the grep answers **6 scoped rows**: the three §1.2 rows
+  and family 40's three (VM). The multi-value-escape and re-entry rows
+  converged earlier, and the tree-walker's whole nested-trampoline family
+  (four callback pins and two scoped rows) converged the same day, taking
+  the `assert_divergence` helper with it.
 
   It was 7 until 2026-08-25, when the two multi-value continuation cases from
   `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md` converged and that document

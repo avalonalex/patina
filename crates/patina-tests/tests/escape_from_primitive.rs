@@ -18,29 +18,27 @@
 //! cannot see it. Diagnosis in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
 //! read this file as the class being closed.
 //!
-//! # The tree-walker's pins live here too
+//! # The tree-walker's side, closed 2026-09-10
 //!
-//! Its callbacks run on a nested trampoline (`apply_from_direct_tagged`) that
-//! starts with every stack empty, and a continuation invoked inside the
-//! callback is misread as leaving the primitive: what the trampoline then runs
-//! to completion is the rest of the *program*, from inside the callback,
-//! before the outer trampoline abandons the primitive. That is why these
-//! divergences are Rust rather than rows in `tests/scheme/` (#193): inside an
-//! SRFI 64 file "the rest of the program" is every later row, and measured
-//! 2026-09-10 the rows simply vanished — begun, never ended, the file four
-//! rows short. Each pin below is an `assert_divergence`, or two per-backend
-//! assertions where the tree-walker returns a value, and each is written to
-//! fail when the trampoline is fixed.
+//! Its callbacks run on a nested trampoline, which used to start with every
+//! stack empty and to read every continuation invoke inside the callback as
+//! leaving the primitive — so the rest of the *program* ran from inside the
+//! callback, and the callback's value became the form's. Each trampoline now
+//! carries its caller's three stacks and an identity that captured
+//! continuations record (`cps_eval/types.rs`), and a jump resumes in place,
+//! escapes through the primitive, or reports a callback whose primitive has
+//! returned, by that identity. The rows this file held as `assert_divergence`
+//! quarantines while that was open are plain rows in
+//! `tests/scheme/control/cps-features.scm` now, arbitrated by chibi and
+//! Gauche, and so is everything else here that needs neither a file on disk
+//! nor `eval`'s environment (the "Escaping out of a callback" section there).
+//! What stays: the matrix below, whose port rows need real files and whose
+//! `eval` row needs `interaction-environment` to see a script's definitions,
+//! which Gauche's does not; the `eval` escape, for the same reason; and the
+//! port-open test, for the files.
 
 mod common;
-use common::{
-    ErrorClass, On, assert_divergence, assert_program_eval_to, eval_program_tree_walker,
-    eval_program_vm, scratch_path,
-};
-
-/// Where the tree-walker's nested-trampoline defect is tracked: the
-/// "primitive's callback" entry.
-const NESTED_TRAMPOLINE: &str = "PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6";
+use common::{assert_program_eval_to, scratch_path};
 use tempfile::TempDir;
 
 /// Every re-entrant primitive reachable without a file, **left by both kinds
@@ -90,25 +88,24 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
         format!(r#"(call-with-output-file "{output}" (lambda (p) LEAVE))"#),
     ];
 
-    for (transfer, wrap, leave, both_backends) in [
+    for (transfer, wrap, leave) in [
         (
             "escape",
             "(call/cc (lambda (k) (set! esc k) BODY))",
             "(esc 'x)",
-            true,
         ),
         (
             "abort",
             "(call-with-continuation-prompt (lambda () BODY) t (lambda (v k2) v))",
             "(abort-current-continuation t 'x)",
-            // VM-only. The tree-walker runs most of these callbacks on a
-            // nested trampoline that starts every stack empty, so the abort
-            // finds no prompt — the "primitive's callback" hole its winds and
-            // handlers have had since before prompts, pinned in
-            // `tests/scheme/control/prompts.scm`. Escaping works there
-            // because a full continuation carries its own target rather than
-            // searching for one.
-            false,
+            // Both backends since 2026-09-10. Until then the tree-walker ran
+            // most of these callbacks on a nested trampoline that started
+            // every stack empty, so the abort found no prompt — the
+            // "primitive's callback" hole its winds and handlers had since
+            // before prompts. Escaping always worked there, because a full
+            // continuation carries its own target rather than searching for
+            // one; an abort's landing now carries its prompt's trampoline,
+            // so it unwinds through the primitive the same way.
         ),
     ] {
         for body in &bodies {
@@ -116,194 +113,8 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
                 "{PRELUDE} {}",
                 wrap.replace("BODY", &body.replace("LEAVE", leave))
             );
-            let got = if both_backends {
-                common::eval_program(&program)
-            } else {
-                eval_program_vm(&program)
-            };
-            assert_eq!(got, "x", "[{transfer}] {body}");
+            assert_eq!(common::eval_program(&program), "x", "[{transfer}] {body}");
         }
-    }
-}
-
-/// The bad register offset tracked frame depth rather than being a fixed
-/// mistake, so escaping twice and from a nested depth is the case that would
-/// catch an off-by-one "fix" working at one depth only.
-#[test]
-fn test_escaping_repeatedly_and_from_a_nested_depth() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define (run) (call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
-           (define (nested) (call/cc (lambda (k) (member 2 '(1 2) (lambda (a b) (k (run)))))))
-           (list (run) (run) (nested))"#,
-        "(deep deep deep)",
-    );
-}
-
-/// A closure comparator that does *not* escape must still work — the guard
-/// fires on frame depth, and one that fired spuriously would break every
-/// re-entrant call. The primitive-comparator forms are covered in
-/// `compliance/lists.rs` and `vm_callprimitive.rs`; these are the closure
-/// forms, which are the ones that push a frame.
-#[test]
-fn test_a_closure_callback_that_does_not_escape_still_works() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
-                 (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b))))"#,
-        "((2 3) (2 . b))",
-    );
-}
-
-/// Reaching the same primitives other than by call position. `apply` and
-/// value-position dispatch go through `call_primitive_proc`, which has no
-/// depth check of its own — they work because the escape is now signalled
-/// from the re-entry boundary instead, and every route unwinds the same way.
-#[test]
-fn test_escaping_through_apply_and_value_position() {
-    for form in [
-        "(apply member (list 2 '(1 2 3) (lambda (a b) (k 'x))))",
-        "(let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x))))",
-    ] {
-        assert_program_eval_to(
-            &format!("(import (scheme base) (scheme lazy)) (call/cc (lambda (k) {form}))"),
-            "x",
-        );
-    }
-}
-
-/// The primitive stops when the continuation is invoked, instead of running
-/// on to completion. `member` would otherwise keep calling the comparator for
-/// the remaining elements — each call re-invoking the continuation.
-#[test]
-fn test_the_escaped_from_primitive_is_abandoned() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define seen '())
-           (define r (call/cc (lambda (k)
-                       (member 9 '(1 2 3)
-                         (lambda (a b) (set! seen (cons b seen)) (k #f))))))
-           (list r (reverse seen))"#,
-        "(#f (1))",
-    );
-}
-
-/// A continuation captured *and* invoked inside the callback, returning
-/// normally, is not an escape — the primitive must run to completion. This is
-/// the case a naive "any continuation invocation unwinds the primitive" rule
-/// would break, and the reason the check is a frame-depth comparison rather
-/// than a "was a continuation invoked" flag.
-///
-/// ```text
-///   (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
-///   VM, chibi, Gauche => (2 3)
-///   tree-walker       => #f — the callback's value, not the primitive's
-/// ```
-///
-/// That `#f` is the *one-expression* program's answer, and it understates
-/// the defect. Followed by one more form the tree-walker reaches that form
-/// with `r` unbound: the invoke ran the rest of the program from inside the
-/// callback, before the `define` had anything to bind. So the program is
-/// two forms, and the pin is a run-time failure.
-#[test]
-fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
-    assert_divergence(
-        r#"(import (scheme base))
-           (define log '())
-           (define r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
-           (set! log (cons 'after log))
-           (list r log)"#,
-        On::Vm,
-        "((2 3) (after))",
-        ErrorClass::AtRuntime,
-        NESTED_TRAMPOLINE,
-    );
-}
-
-/// A `call/cc` retry loop inside a `call-with-port` callback.
-///
-/// This used to be counted as converged — 2026-09-01, when `call-with-port`
-/// stopped closing its port on every exit (R7RS 6.13.1 closes it only "if
-/// `proc` returns"), the tree-walker stopped failing with `I/O error: port is
-/// closed` and the one-expression program answered `"012"` on both backends.
-/// The port half is fixed; the trampoline half is not, and a second form is
-/// enough to show it: `r` is unbound when the tree-walker gets there, for the
-/// reason the test above gives. Audit F6 recorded the resource corruption;
-/// this is what was underneath it.
-///
-/// The one-expression program is kept as a both-backend assertion beside the
-/// pin: `assert_divergence` compares only the *stage* of the tree-walker's
-/// failure, so on its own it would stay green if `call-with-port` went back
-/// to closing the port on every exit — the tree-walker would still fail at
-/// run time, for the old reason. The `"012"` is what says the port stayed
-/// open.
-#[test]
-fn test_a_retry_loop_inside_a_port_callback_runs_the_rest_of_the_program_on_the_tree_walker() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (call-with-port (open-output-string)
-             (lambda (p)
-               (let ((n 0))
-                 (let ((k (call/cc (lambda (c) c))))
-                   (write-string (number->string n) p)
-                   (set! n (+ n 1))
-                   (if (< n 3) (k k)))
-                 (get-output-string p))))"#,
-        "\"012\"",
-    );
-    assert_divergence(
-        r#"(import (scheme base))
-           (define log '())
-           (define r (call-with-port (open-output-string)
-                       (lambda (p)
-                         (let ((n 0))
-                           (let ((k (call/cc (lambda (c) c))))
-                             (write-string (number->string n) p)
-                             (set! n (+ n 1))
-                             (if (< n 3) (k k)))
-                           (get-output-string p)))))
-           (set! log (cons 'after log))
-           (list r log)"#,
-        On::Vm,
-        "(\"012\" (after))",
-        ErrorClass::AtRuntime,
-        NESTED_TRAMPOLINE,
-    );
-}
-
-/// Tree-walker: `unhandled exception: sym` — a declining `guard` clause
-/// inside a primitive's callback loses the outer `guard`.
-///
-/// R7RS 7.3's `guard` re-raises a declined condition by jumping back *into*
-/// the raise point through `handler-k` and calling `raise-continuable` there,
-/// so the next handler out is the one that was installed around the raise.
-/// That jump lands inside the `call-with-port` callback, on the nested
-/// trampoline — which starts with an empty handler stack, so the re-raise
-/// finds nothing, and the failure escapes every handler in the program,
-/// including one wrapped around the row. It became reachable on 2026-09-01
-/// when `guard` took the reference expansion (triage families 22/28); the old
-/// expansion re-raised from the clause side, outside the callback, and
-/// happened to find the outer handler. Both raise forms reach it. VM, chibi
-/// and Gauche: `(outer sym)`.
-///
-/// Its sibling — a plain `raise` inside the callback, which the outer `guard`
-/// *does* receive, as the wrong object — is a suite row with a backend-scoped
-/// expectation in `tests/scheme/control/cps-features.scm`, because there the
-/// wrong answer is delivered to the row.
-#[test]
-fn test_a_declining_guard_inside_a_port_callback_loses_the_outer_guard_on_the_tree_walker() {
-    for raise in ["raise", "raise-continuable"] {
-        assert_divergence(
-            &format!(
-                "(guard (outer (#t (list 'outer outer)))
-                   (call-with-port (open-input-string \"a\")
-                     (lambda (p) (guard (e ((string? e) 'no)) ({raise} 'sym)))))"
-            ),
-            On::Vm,
-            "(outer sym)",
-            ErrorClass::AtRuntime,
-            NESTED_TRAMPOLINE,
-        );
     }
 }
 
@@ -313,44 +124,60 @@ fn test_a_declining_guard_inside_a_port_callback_loses_the_outer_guard_on_the_tr
 /// file after the continuation had been invoked, where chibi stops at the
 /// escaping form.
 ///
-/// **A divergence, and the one that cannot be a suite row.** The tree-walker
-/// escapes *and then continues*: the nested trampoline `eval` runs on carries
-/// the escape to the end of the program, then returns into the primitive,
-/// which resumes the lambda — so `'fell-through` is delivered to the same
-/// continuation a second time. Inside an SRFI 64 file that continuation is
-/// the rest of the file, and every row after this one would run twice,
-/// doubling the counts the driver reads. So it is pinned here, where a
-/// program's continuation ends at the program, and unlike its neighbours it
-/// cannot go through `assert_divergence`, because the tree-walker returns a
-/// value. It is still written to **fail when the bug is fixed**: the
-/// tree-walker assertion pins the wrong answer, and its message says what to
-/// collapse it into.
+/// Both backends since 2026-09-10. The tree-walker used to escape *and then
+/// continue*: the nested `eval` run had its own copy of the escape-catching
+/// arm and resumed the outer continuation *inside* itself, then returned
+/// into the primitive, which ran the lambda on — so `'fell-through` reached
+/// the same continuation a second time, and in an SRFI 64 file every row
+/// after this one ran twice. A trampoline now resumes only the continuations
+/// whose chain ends in it; this one's ends in the outer run, so the escape
+/// unwinds through `eval`. Rust rather than a suite row because Gauche's
+/// `interaction-environment` does not see a script's top-level definitions.
 #[test]
 fn test_escaping_out_of_eval() {
-    const PROGRAM: &str = r#"
-        (import (scheme base) (scheme eval) (scheme repl))
-        (define kk #f)
-        (define trace '())
-        (call/cc (lambda (k)
-          (set! kk k)
-          (eval '(kk 'from-eval) (interaction-environment))
-          (set! trace (cons 'ran-on trace))
-          'fell-through))
-        (reverse trace)
-    "#;
-    assert_eq!(
-        eval_program_vm(PROGRAM),
-        "()",
-        "the VM abandons at the escape; if this changed, it regressed"
+    assert_program_eval_to(
+        r#"(import (scheme base) (scheme eval) (scheme repl))
+           (define kk #f)
+           (define trace '())
+           (define r (call/cc (lambda (k)
+                       (set! kk k)
+                       (eval '(kk 'from-eval) (interaction-environment))
+                       (set! trace (cons 'ran-on trace))
+                       'fell-through)))
+           (list r (reverse trace))"#,
+        "(from-eval ())",
     );
-    assert_eq!(
-        eval_program_tree_walker(PROGRAM),
-        "(ran-on)",
-        "\n[tree-walker] NO LONGER DIVERGES — it now abandons at the escape.\n\
-         Replace both assertions with assert_program_eval_to(PROGRAM, \"()\"), \
-         move the program to tests/scheme/control/cps-features.scm, and \
-         update the \"primitive's callback\" entry in \
-         PRD/TRACK_L_SNOW_LIBRARIES_PRD.md §6."
+}
+
+/// A continuation captured by one form of a loaded file and invoked from a
+/// later form of the same file. `load` evaluates each form on its own
+/// nested run; the earlier run has returned by the time `k` is invoked, and
+/// what every implementation does is resume the rest of that form and then
+/// carry on with the form *after the invoking one* — `r` is 11, the `if`
+/// does not run again, `n` stays 1. The first cut of the trampoline fix
+/// refused a continuation whose run had returned, and the review measured
+/// this program failing where `main`, the VM, chibi and Gauche all agree.
+/// Rust because it needs a file on disk.
+#[test]
+fn test_load_reenters_a_continuation_captured_by_an_earlier_form() {
+    let dir = TempDir::new().expect("temp dir");
+    let loaded = scratch_path(&dir, "loaded.scm");
+    std::fs::write(
+        &loaded,
+        "(define k #f) (define n 0)\n\
+         (define r (+ 1 (call/cc (lambda (c) (set! k c) 1))))\n\
+         (set! n (+ n 1))\n\
+         (if (< n 3) (k 10))\n\
+         (define loaded-result (list r n))\n",
+    )
+    .expect("loaded file");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme load))
+               (load "{loaded}")
+               loaded-result"#
+        ),
+        "(11 1)",
     );
 }
 
@@ -379,39 +206,25 @@ fn test_an_escape_out_of_a_port_callback_leaves_the_port_open() {
              (output-port-open? out))"#,
         "(\"inside\" returned #f)",
     );
-    // The condition itself is deliberately not in the answer: on the
-    // tree-walker a raise inside a primitive's callback reaches the outer
-    // `guard` as an "unhandled exception" error object rather than as `'x` —
-    // the nested-trampoline defect of Track L §6, not this test's subject.
+    // The condition is in the answer too: until 2026-09-10 the tree-walker
+    // delivered a raise inside a primitive's callback to the outer `guard`
+    // as an "unhandled exception" error object rather than as `'x`, and this
+    // test left it out so as not to test that defect instead of its own
+    // subject.
     assert_program_eval_to(
         &format!(
             r#"(import (scheme base) (scheme file))
                (define seen #f)
                (list
-                 (guard (e (#t (read-char seen)))
+                 (guard (e (#t (list e (read-char seen))))
                    (call-with-input-file "{input}"
                      (lambda (p) (set! seen p) (raise 'x))))
                  (input-port-open? (call-with-input-file "{input}" (lambda (p) p)))
-                 (guard (e (#t (output-port-open? seen)))
+                 (guard (e (#t (list e (output-port-open? seen))))
                    (call-with-output-file "{output}"
                      (lambda (p) (set! seen p) (raise 'y))))
                  (output-port-open? (call-with-output-file "{output}" (lambda (p) p))))"#
         ),
-        "(#\\s #f #t #f)",
-    );
-}
-
-/// The parameter *set* path, which runs a converter through a different
-/// boundary than `make-parameter` construction does. Before this it lost the
-/// enclosing top-level `define` outright on the VM.
-#[test]
-fn test_escaping_out_of_a_parameter_converter_during_parameterize() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define kk #f)
-           (define p (make-parameter 0 (lambda (v) (if kk (kk 'from-converter) v))))
-           (define r (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))
-           r"#,
-        "from-converter",
+        "((x #\\s) #f (y #t) #f)",
     );
 }
