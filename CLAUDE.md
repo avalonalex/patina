@@ -118,13 +118,12 @@ links, so this is the worst realistic case):
 |---|---|
 | `cargo build --release` — the repro, the chibi lanes, the benchmarks | **3.4 s** |
 | `cargo test -p patina-tests --test <one file> --no-run` | **9.3 s** |
-| `cargo test --all --lib --tests` | 493 s |
+| `cargo test --all --lib --tests` | 493 s at 87 binaries; **340 s at 60** (2026-09-11) |
 | `cargo clippy --all-targets --all-features` | 580 s |
 | any of them again with no edit in between | ~0.3 s |
 
 The two big numbers are **integration binaries × ~6 s** — 88 when this was
-measured, **72 as of 2026-09-09**, with #193 Phase 1 complete and
-`hygiene.rs` migrated after it: every
+measured, **60 as of 2026-09-11**, with #193 Phase 2 complete: every
 `.rs` file directly in a `tests/` directory is its own crate and its own
 executable, and each statically links the whole workspace. Do not go looking for a cache bug —
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
@@ -142,12 +141,15 @@ jobs on seven machines: **685 s of work in 270 s of wall clock**.
 driver (`crates/patina-tests/tests/scheme_suite.rs`) and migrated one file,
 which *added* a binary rather than removing one — 87 to 88 — because
 `callability.rs` still holds the rows a `.scm` file cannot express. Phase 1
-took it to 73 and the `hygiene.rs` migration to **72** (`find crates -path
-'*/tests/*.rs' -not -path '*/tests/*/*' | wc -l`), across 29 suite files, so
-the 493 s and 580 s above are now over-estimates. The number
-that matters is the marginal one, measured the same day: adding one `.scm`
-file rebuilds in **0.098 s**, adding one `.rs` file in **8.96 s**. Phase 1's
-bulk migration is what turns that into a smaller total. The *reasoning* above
+took it to 73 and the `hygiene.rs` migration to 72; Phase 2 split the mixed
+files and took it to **60** (`find crates -path '*/tests/*.rs' -not -path
+'*/tests/*/*' | wc -l`), across 38 suite files and 792 rows. Re-measured on
+the same worst case at 60 binaries, `cargo test --all --lib --tests` took
+340 s — an upper bound, since a review agent was running at the same time —
+against 493 s at 87; clippy was not re-measured and 580 s is now an
+over-estimate. The number that matters is the marginal one, measured
+2026-09-06: adding one `.scm` file rebuilds in **0.098 s**, adding one `.rs`
+file in **8.96 s**. The *reasoning* above
 survives either way (one link per `tests/*.rs` file is why they are big); the
 figures do not. Re-measure before quoting them.
 
