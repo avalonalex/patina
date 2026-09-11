@@ -89,3 +89,18 @@ fn test_the_default_baseline_still_works() {
     assert_eq!(eval("(car (list 9 8))"), "9");
     assert_eq!(eval("(map (lambda (x) (* x x)) (list 1 2 3))"), "(1 4 9)");
 }
+
+/// `only` and `prefix` at the top level select and rename what a program can
+/// name — the positive half of this file's rule, on both backends.
+///
+/// From `import_test.rs` (#193 Phase 2), which built a `TreeWalkInterpreter`
+/// by hand and so never ran these on the VM; that file is deleted. They are
+/// Rust rather than suite rows because each program's *only* import is the
+/// set under test, which a shared `.scm` file — importing `(scheme base)`
+/// whole at its top — cannot isolate.
+#[test]
+fn test_only_and_prefix_select_and_rename_at_the_top_level() {
+    assert_program_eval_to("(import (scheme base)) (+ 1 2 3)", "6");
+    assert_program_eval_to("(import (only (scheme base) + - *)) (* 2 3 4)", "24");
+    assert_program_eval_to("(import (prefix (scheme base) s:)) (s:+ 10 20)", "30");
+}
