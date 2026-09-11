@@ -11,9 +11,16 @@
 //!
 //! Design and staging: `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`.
 //! Every helper here runs both backends.
+//!
+//! **Three rows moved** to `tests/scheme/expansion/keyword-bindings.scm` (#193
+//! Phase 2) — local bindings shadowing a keyword, a rebound `else`, and a
+//! keyword renamed on import — where chibi and Gauche answer them too. What
+//! stays rebinds a keyword at the top level, builds a `define-library`, or
+//! imports at the top level, none of which a shared suite file can do without
+//! changing every row after it.
 
 mod common;
-use common::{assert_eval_to, assert_program_eval_error, assert_program_eval_to};
+use common::{assert_program_eval_error, assert_program_eval_to};
 
 // ============================================================================
 // A definition shadows a keyword (R7RS §5.3.1)
@@ -48,23 +55,6 @@ fn test_define_syntax_also_shadows_a_syntactic_keyword() {
     );
 }
 
-/// Lexical shadowing is older than this change and must survive it: local
-/// bindings are not in the desugarer's environment at all, so they are handled
-/// by `shadowed_names` rather than by the lookup.
-#[test]
-fn test_local_bindings_still_shadow_keywords() {
-    assert_eval_to(
-        "(let ((if (lambda (a b c) 'shadowed))) (if 1 2 3))",
-        "shadowed",
-    );
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define (f begin) (begin 1 2))
-         (f list)",
-        "(1 2)",
-    );
-}
-
 // ============================================================================
 // Auxiliary syntax
 // ============================================================================
@@ -85,34 +75,9 @@ fn test_auxiliary_syntax_in_head_position_is_an_error() {
 // for `cond`/`case`, and a second copy only splits the failure across two
 // files.
 
-/// A use site that rebinds `else` must stop it matching, which is the reason
-/// R7RS matches literals by binding rather than by spelling.
-///
-/// Moved here from `hygiene.rs`, which ran the same program against a
-/// directly-constructed `TreeWalkInterpreter` and so covered one backend; this
-/// helper runs both, which is what the change to `else` warranted.
-#[test]
-fn test_a_rebound_else_does_not_match() {
-    assert_eval_to("(let ((else #f)) (cond (else 1) (#t 2)))", "2");
-}
-
 // ============================================================================
 // Keywords travel through import sets
 // ============================================================================
-
-/// The keyword survives being renamed on the way in *and* reaching the use site
-/// under the new name. This is the case the two backends used to answer
-/// differently — the VM loaded the library and left `blk` unbound, the
-/// tree-walker rejected the library outright, and chibi and Gauche both made it
-/// work. Recorded as an open divergence in Track L §6 and deliberately never
-/// pinned, because neither of our answers was the right one.
-///
-/// `sld_file_loading.rs` covers the library-internal form; this is the top
-/// level, where both backends already agreed — on binding nothing.
-#[test]
-fn test_a_renamed_keyword_works_at_top_level() {
-    assert_program_eval_to("(import (rename (scheme base) (begin blk))) (blk 1 2)", "2");
-}
 
 // A renamed keyword is the *same* interned marker, not a copy: pinned by
 // `core_syntax_is_interned_per_heap` in `patina-core`, which is where it moved

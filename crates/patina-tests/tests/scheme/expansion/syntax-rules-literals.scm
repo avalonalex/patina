@@ -90,9 +90,10 @@
 ;; `else` is the same question. Bound as a variable it is an ordinary test
 ;; expression — 5 is true, so the clause runs and answers 9.
 ;; The `else` half has a sibling that predates this file:
-;; `core_syntax_bindings.rs::test_a_rebound_else_does_not_match` runs
-;; `(let ((else #f)) (cond (else 1) (#t 2)))` on both backends, and moved there
-;; from `hygiene.rs` when `else` became a syntactic binding. This row is the
+;; `keyword-bindings.scm`'s "a rebound else does not match" runs
+;; `(let ((else #f)) (cond (else 1) (#t 2)))` — it moved from `hygiene.rs` to
+;; `core_syntax_bindings.rs` when `else` became a syntactic binding, and from
+;; there to the suite (#193 Phase 2). This row is the
 ;; other polarity — a *true* rebound `else`, so the clause is taken rather than
 ;; skipped — and the two together say the binding decides, not the spelling. A
 ;; third copy of either is what `core_syntax_bindings.rs`'s own comment warns
