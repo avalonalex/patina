@@ -688,8 +688,9 @@ escaping `with-handlers` answers a different question.
 The tree-walker's marks date from 2026-09-04 (issue #169). Its prompt is not
 a depth in three stacks but a boundary *value* in the continuation, with the
 wind and handler depths recorded on the frame (`cps_eval/prompts.rs`); the
-same matrix rows and the same seven `cps_features.rs` tests score it, so the
-column is one answer reached two ways.
+same matrix rows and the same prompt rows (`tests/scheme/control/prompts.scm`,
+from `cps_features.rs` until #193 Phase 2) score it, so the column is one
+answer reached two ways.
 
 Two things worth taking from this. **P1–P3 are unanimous across six
 implementations**, so those cells are settled behaviour rather than a Patina
@@ -742,8 +743,9 @@ uninstalled, the second encloses it and must survive, and no comparison
 against `stack_depth` separates them — each choice of `<` or `<=` fixes one
 shape and breaks the other. `PromptFrame::exception_handler_depth` records
 `exception_handlers.len()` at push time, as `dynamic_wind_depth` has always
-done for winds. Both shapes are pinned in
-`test_a_prompt_transfers_carry_the_dynamic_environment`.
+done for winds. Both shapes are pinned in `tests/scheme/control/prompts.scm`,
+"an abort uninstalls the handlers of the region it abandons" and the row after
+it.
 
 ---
 

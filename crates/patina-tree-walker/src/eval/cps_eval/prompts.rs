@@ -25,7 +25,7 @@
 //!   #165 and what A1 in §5.6 measures.
 //! - **Composable invoke.** Re-enter the captured extents outermost first —
 //!   each `before` thunk a step under the *invoke site's* handler stack
-//!   (`cps_features.rs` pins why not the record's) — then push a frame with
+//!   (`tests/scheme/control/prompts.scm` pins why not the record's) — then push a frame with
 //!   the invoke site's continuation in it, append the captured prompts and
 //!   handlers, and deliver the value into the chain. When the chain reaches
 //!   its boundary it pops that frame and returns to the invoker. The frame

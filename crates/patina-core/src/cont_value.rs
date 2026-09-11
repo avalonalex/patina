@@ -365,7 +365,7 @@ pub enum ContValue {
     /// travel. Not `Jump` itself: a jump's thunks run under their record's
     /// own handler stack because the target replaces the machine, while an
     /// invoke's target *extends* it, so these run under the invoke site's
-    /// stack. Both backends pin that in `cps_features.rs`.
+    /// stack. Both backends pin that in `tests/scheme/control/prompts.scm`.
     ComposableInvokeStep {
         /// The delimited continuation being invoked.
         target: Rc<CpsContinuation>,

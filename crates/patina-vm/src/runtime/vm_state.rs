@@ -4020,7 +4020,7 @@ fn invoke_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
 /// composable invoke's extends it, so the invoke site's stack is a prefix of
 /// the right answer. Installing the record's raw list here loses the invoke
 /// site's handlers and resurrects capture-site ones whose extent is over,
-/// which is pinned in `cps_features.rs`.
+/// which is pinned in `tests/scheme/control/prompts.scm` ("a re-entry thunk runs under the invoke site's handler").
 fn push_invoke_step(
     state: &mut VmState,
     cont: TaggedValue,
