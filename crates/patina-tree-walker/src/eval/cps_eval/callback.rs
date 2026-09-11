@@ -46,10 +46,8 @@ impl<'a> CallbackContext<'_, 'a, '_> {
 /// Marking it is what stops the call site from routing it through the same
 /// handlers a second time (`types::mark_unhandled_in_callback`).
 fn unhandled_is_final(result: Result<TaggedValue, EvalError>) -> Result<TaggedValue, EvalError> {
-    if let Err(e) = &result {
-        if e.is_catchable() {
-            super::types::mark_unhandled_in_callback();
-        }
+    if result.as_ref().is_err_and(|e| e.is_catchable()) {
+        super::types::mark_unhandled_in_callback();
     }
     result
 }
