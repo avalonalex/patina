@@ -62,6 +62,17 @@ pub struct CpsContinuation {
     /// every implementation does at the REPL.
     pub trampoline: u64,
 
+    /// A composable continuation whose captured region crosses a primitive's
+    /// callback: the abort ran inside the callback, the prompt sits outside
+    /// it, so the chain from the abort point reaches the callback's `Halt`
+    /// before it reaches the prompt's boundary — the "return to the
+    /// primitive, which then continues" between the two is Rust stack, not
+    /// a continuation. Resuming it would run the rest of the callback and
+    /// then end whatever run it was resumed in. The tree-walker refuses it
+    /// instead; the VM, whose callbacks run on the same machine, does not
+    /// have the limit.
+    pub crosses_callback: bool,
+
     /// Dynamic wind handlers that were active when this continuation was captured
     /// These need to be reinstalled when the continuation is invoked
     pub dynamic_winds: Vec<DynamicWindRecord>,

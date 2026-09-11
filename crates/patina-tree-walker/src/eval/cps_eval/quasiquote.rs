@@ -1,12 +1,12 @@
 //! Quasiquote Evaluator
 //!
-//! This module provides quasiquote evaluation for the CPS evaluator.
+//! This module provides quasiquote evaluation for the CPS ctx.
 //! The main entry point is `eval_quasiquote_in_env()` which handles
 //! quasiquote templates with proper nesting of quasiquote/unquote.
 //!
 //! This implementation works directly with TaggedValue and the shared heap.
 
-use super::eval_cps;
+use super::eval_cps_with;
 use crate::eval::error::EvalError;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::Desugarer;
@@ -18,11 +18,11 @@ use std::rc::Rc;
 /// This is used by quasiquote to evaluate unquote expressions with full
 /// continuation support. The expression is desugared and evaluated via CPS.
 fn eval_tagged_via_cps(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
     let desugarer = Desugarer::with_env(env.clone());
     // A failure here is the program's, not the interpreter's: `,if` names a
     // syntactic keyword, and #89 made the desugarer say so. `InternalError`
@@ -35,7 +35,14 @@ fn eval_tagged_via_cps(
             other => other.to_string(),
         })
     })?;
-    eval_cps(&core_expr, env.clone(), evaluator)
+    eval_cps_with(
+        &core_expr,
+        env.clone(),
+        ctx.cps.evaluator,
+        ctx.prompt_stack.to_vec(),
+        ctx.dynamic_winds.to_vec(),
+        ctx.exception_handlers.to_vec(),
+    )
 }
 
 /// Implementation of quasiquote with depth tracking
@@ -44,12 +51,12 @@ fn eval_tagged_via_cps(
 /// - depth 0: at current quasiquote level (unquotes are active)
 /// - depth > 0: inside nested quasiquote (unquotes become quoted)
 fn eval_quasiquote_impl(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     expr: TaggedValue,
     env: &Rc<Environment>,
     depth: i32,
 ) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
 
     // Handle immediate values that are self-evaluating
     if expr.is_fixnum() || expr.is_boolean() || expr.is_char() || expr.is_null() {
@@ -81,7 +88,7 @@ fn eval_quasiquote_impl(
 
     // Handle pairs (the interesting case)
     if expr.is_pair() {
-        let (car, cdr) = get_pair_parts(evaluator, expr)?;
+        let (car, cdr) = get_pair_parts(ctx, expr)?;
 
         // Check if car is a special symbol - convert to owned String to avoid borrow issues
         let sym_name: Option<String> = heap
@@ -93,19 +100,19 @@ fn eval_quasiquote_impl(
             match name {
                 // Nested quasiquote: increment depth
                 "quasiquote" => {
-                    let (inner, rest) = extract_pair_tagged(evaluator, cdr)?;
+                    let (inner, rest) = extract_pair_tagged(ctx, cdr)?;
                     if !rest.is_null() {
                         return Err(EvalError::InvalidSyntax(
                             "quasiquote expects exactly one argument".to_string(),
                         ));
                     }
-                    let processed = eval_quasiquote_impl(evaluator, inner, env, depth + 1)?;
-                    return Ok(make_list_2(evaluator, "quasiquote", processed));
+                    let processed = eval_quasiquote_impl(ctx, inner, env, depth + 1)?;
+                    return Ok(make_list_2(ctx, "quasiquote", processed));
                 }
 
                 // Unquote: evaluate if at depth 0, otherwise decrement depth
                 "unquote" => {
-                    let (inner, rest) = extract_pair_tagged(evaluator, cdr)?;
+                    let (inner, rest) = extract_pair_tagged(ctx, cdr)?;
                     if !rest.is_null() {
                         return Err(EvalError::InvalidSyntax(
                             "unquote expects exactly one argument".to_string(),
@@ -114,11 +121,11 @@ fn eval_quasiquote_impl(
 
                     if depth == 0 {
                         // At quasiquote level: evaluate the unquoted expression via CPS
-                        return eval_tagged_via_cps(evaluator, inner, env);
+                        return eval_tagged_via_cps(ctx, inner, env);
                     } else {
                         // Inside nested quasiquote: preserve unquote, decrement depth
-                        let processed = eval_quasiquote_impl(evaluator, inner, env, depth - 1)?;
-                        return Ok(make_list_2(evaluator, "unquote", processed));
+                        let processed = eval_quasiquote_impl(ctx, inner, env, depth - 1)?;
+                        return Ok(make_list_2(ctx, "unquote", processed));
                     }
                 }
 
@@ -130,33 +137,33 @@ fn eval_quasiquote_impl(
                         ));
                     } else {
                         // Inside nested quasiquote: preserve, decrement depth
-                        let (inner, rest) = extract_pair_tagged(evaluator, cdr)?;
+                        let (inner, rest) = extract_pair_tagged(ctx, cdr)?;
                         if !rest.is_null() {
                             return Err(EvalError::InvalidSyntax(
                                 "unquote-splicing expects exactly one argument".to_string(),
                             ));
                         }
-                        let processed = eval_quasiquote_impl(evaluator, inner, env, depth - 1)?;
-                        return Ok(make_list_2(evaluator, "unquote-splicing", processed));
+                        let processed = eval_quasiquote_impl(ctx, inner, env, depth - 1)?;
+                        return Ok(make_list_2(ctx, "unquote-splicing", processed));
                     }
                 }
 
                 _ => {
                     // Regular symbol: process as normal pair
-                    return process_quasiquote_pair(evaluator, expr, env, depth);
+                    return process_quasiquote_pair(ctx, expr, env, depth);
                 }
             }
         } else {
             // Non-symbol car: process as normal pair
-            return process_quasiquote_pair(evaluator, expr, env, depth);
+            return process_quasiquote_pair(ctx, expr, env, depth);
         }
     }
 
     // Check for vectors - convert to list, process, convert back
     if expr.is_vector() {
-        let list = vector_to_list_tagged(evaluator, expr)?;
-        let processed = eval_quasiquote_impl(evaluator, list, env, depth)?;
-        return list_to_vector_tagged(evaluator, processed);
+        let list = vector_to_list_tagged(ctx, expr)?;
+        let processed = eval_quasiquote_impl(ctx, list, env, depth)?;
+        return list_to_vector_tagged(ctx, processed);
     }
 
     // Other types: return as-is
@@ -167,12 +174,12 @@ fn eval_quasiquote_impl(
 ///
 /// This handles the case where we have a list that might contain unquote-splicing
 fn process_quasiquote_pair(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     expr: TaggedValue,
     env: &Rc<Environment>,
     depth: i32,
 ) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
 
     // Collect elements and handle splicing
     let mut elements: Vec<TaggedValue> = Vec::new();
@@ -187,29 +194,29 @@ fn process_quasiquote_pair(
 
         if !current.is_pair() {
             // Improper list (dotted pair with non-list tail)
-            tail = eval_quasiquote_impl(evaluator, current, env, depth)?;
+            tail = eval_quasiquote_impl(ctx, current, env, depth)?;
             break;
         }
 
-        let (car, cdr) = get_pair_parts(evaluator, current)?;
+        let (car, cdr) = get_pair_parts(ctx, current)?;
 
         // Check if this element is (unquote-splicing ...)
         if depth == 0 && car.is_pair() {
-            let (inner_car, inner_cdr) = get_pair_parts(evaluator, car)?;
+            let (inner_car, inner_cdr) = get_pair_parts(ctx, car)?;
 
             if heap.borrow().is_named(inner_car, "unquote-splicing") {
                 // Evaluate the splicing expression via CPS
-                let (splice_expr, rest) = extract_pair_tagged(evaluator, inner_cdr)?;
+                let (splice_expr, rest) = extract_pair_tagged(ctx, inner_cdr)?;
                 if !rest.is_null() {
                     return Err(EvalError::InvalidSyntax(
                         "unquote-splicing expects exactly one argument".to_string(),
                     ));
                 }
 
-                let splice_result = eval_tagged_via_cps(evaluator, splice_expr, env)?;
+                let splice_result = eval_tagged_via_cps(ctx, splice_expr, env)?;
 
                 // Must be a list
-                if !is_list_tagged(evaluator, splice_result) {
+                if !is_list_tagged(ctx, splice_result) {
                     return Err(EvalError::InvalidSyntax(
                         "unquote-splicing result must be a list".to_string(),
                     ));
@@ -219,7 +226,7 @@ fn process_quasiquote_pair(
                 let mut splice_current = splice_result;
                 while !splice_current.is_null() {
                     if splice_current.is_pair() {
-                        let (sc, sn) = get_pair_parts(evaluator, splice_current)?;
+                        let (sc, sn) = get_pair_parts(ctx, splice_current)?;
                         elements.push(sc);
                         splice_current = sn;
                     } else {
@@ -229,15 +236,15 @@ fn process_quasiquote_pair(
 
                 // Check if CDR is an unquote form for improper list tail
                 if cdr.is_pair() {
-                    let (cdr_car, cdr_cdr) = get_pair_parts(evaluator, cdr)?;
+                    let (cdr_car, cdr_cdr) = get_pair_parts(ctx, cdr)?;
                     if heap.borrow().is_named(cdr_car, "unquote") {
-                        let (unquote_expr, rest) = extract_pair_tagged(evaluator, cdr_cdr)?;
+                        let (unquote_expr, rest) = extract_pair_tagged(ctx, cdr_cdr)?;
                         if !rest.is_null() {
                             return Err(EvalError::InvalidSyntax(
                                 "unquote expects exactly one argument".to_string(),
                             ));
                         }
-                        tail = eval_tagged_via_cps(evaluator, unquote_expr, env)?;
+                        tail = eval_tagged_via_cps(ctx, unquote_expr, env)?;
                         break;
                     }
                 }
@@ -249,33 +256,33 @@ fn process_quasiquote_pair(
 
         // Check if CDR is an unquote form (for improper lists like (a . ,x))
         if depth == 0 && cdr.is_pair() {
-            let (cdr_car, cdr_cdr) = get_pair_parts(evaluator, cdr)?;
+            let (cdr_car, cdr_cdr) = get_pair_parts(ctx, cdr)?;
             if heap.borrow().is_named(cdr_car, "unquote") {
                 // This is an improper list: (... car . ,expr)
                 // Process car normally, then evaluate the unquote as tail
-                let processed_car = eval_quasiquote_impl(evaluator, car, env, depth)?;
+                let processed_car = eval_quasiquote_impl(ctx, car, env, depth)?;
                 elements.push(processed_car);
 
                 // Evaluate the unquote expression via CPS
-                let (unquote_expr, rest) = extract_pair_tagged(evaluator, cdr_cdr)?;
+                let (unquote_expr, rest) = extract_pair_tagged(ctx, cdr_cdr)?;
                 if !rest.is_null() {
                     return Err(EvalError::InvalidSyntax(
                         "unquote expects exactly one argument".to_string(),
                     ));
                 }
-                tail = eval_tagged_via_cps(evaluator, unquote_expr, env)?;
+                tail = eval_tagged_via_cps(ctx, unquote_expr, env)?;
                 break;
             }
         }
 
         // Regular element: process recursively
-        let processed = eval_quasiquote_impl(evaluator, car, env, depth)?;
+        let processed = eval_quasiquote_impl(ctx, car, env, depth)?;
         elements.push(processed);
         current = cdr;
     }
 
     // Reconstruct the list using heap-allocated pairs
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
     let result = heap.borrow_mut().list_from_iter_with_tail(elements, tail);
     Ok(result)
 }
@@ -286,10 +293,10 @@ fn process_quasiquote_pair(
 
 /// Get car and cdr from a pair (either native heap pair or boxed pair)
 fn get_pair_parts(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     pair: TaggedValue,
 ) -> Result<(TaggedValue, TaggedValue), EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
 
     // Use heap's try_pair which handles both native and boxed pairs
     if let Some((car, cdr)) = heap.borrow().try_pair(pair) {
@@ -308,15 +315,15 @@ fn get_pair_parts(
 
 /// Extract car and cdr from a pair as TaggedValue
 fn extract_pair_tagged(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     value: TaggedValue,
 ) -> Result<(TaggedValue, TaggedValue), EvalError> {
-    get_pair_parts(evaluator, value)
+    get_pair_parts(ctx, value)
 }
 
 /// Check if a value is a proper list
-fn is_list_tagged(evaluator: &crate::eval::Evaluator, val: TaggedValue) -> bool {
-    let heap = evaluator.global_env.heap();
+fn is_list_tagged(ctx: &super::callback::CallbackContext<'_, '_, '_>, val: TaggedValue) -> bool {
+    let heap = ctx.cps.evaluator.global_env.heap();
     let mut current = val;
 
     loop {
@@ -334,11 +341,11 @@ fn is_list_tagged(evaluator: &crate::eval::Evaluator, val: TaggedValue) -> bool 
 
 /// Make a 2-element list with a symbol as first element
 fn make_list_2(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     sym_name: &str,
     second: TaggedValue,
 ) -> TaggedValue {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
     let mut heap_ref = heap.borrow_mut();
     let sym = heap_ref.intern_symbol(sym_name);
     let inner = heap_ref.alloc_pair(second, TaggedValue::NULL);
@@ -347,10 +354,10 @@ fn make_list_2(
 
 /// Convert vector to list (TaggedValue version)
 fn vector_to_list_tagged(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     vec_tv: TaggedValue,
 ) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
 
     // Handle native vectors (from tagged path)
     if vec_tv.is_vector() {
@@ -372,10 +379,10 @@ fn vector_to_list_tagged(
 
 /// Convert list to vector (TaggedValue version)
 fn list_to_vector_tagged(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     list: TaggedValue,
 ) -> Result<TaggedValue, EvalError> {
-    let heap = evaluator.global_env.heap();
+    let heap = ctx.cps.evaluator.global_env.heap();
     let mut elements: Vec<TaggedValue> = Vec::new();
     let mut current = list;
 
@@ -384,7 +391,7 @@ fn list_to_vector_tagged(
             break;
         }
         if current.is_pair() {
-            let (car, cdr) = get_pair_parts(evaluator, current)?;
+            let (car, cdr) = get_pair_parts(ctx, current)?;
             elements.push(car);
             current = cdr;
         } else {
@@ -404,22 +411,23 @@ fn list_to_vector_tagged(
 
 /// Evaluate a quasiquote template in the given environment
 ///
-/// This is the public entry point for the CPS evaluator. Takes and returns
+/// This is the public entry point for the CPS ctx. Takes and returns
 /// TaggedValue directly to avoid unnecessary conversions.
 ///
 /// Unquote expressions within quasiquote are evaluated via CPS for full
 /// continuation support.
 pub fn eval_quasiquote_in_env(
-    evaluator: &crate::eval::Evaluator,
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
     template: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, EvalError> {
-    eval_quasiquote_impl(evaluator, template, env, 0)
+    eval_quasiquote_impl(ctx, template, env, 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::cps_eval::eval_cps;
     use patina_core::TaggedValue;
     use patina_ir::{CoreExpr, CoreExprKind, Formals, ScopedParam};
     use patina_runtime::ScopeSet;

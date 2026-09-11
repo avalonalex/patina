@@ -1328,12 +1328,12 @@ barrier id pushed at each re-entry boundary, recorded into `VmContinuation` at c
 invoke — an invocation is an escape iff it was captured under an older barrier. `k2` in the
 must-not-fire case is captured *under* the primitive's own barrier and so compares equal.
 
-**Tree-walker: two continuation defects around primitive callbacks** — ❌ **open**. Both found
-2026-08-16 while fixing the VM half, and both pinned in
-`crates/patina-tests/tests/escape_from_primitive.rs` so they retire themselves — the callback
-one as an `assert_divergence` quarantine, the `eval` one as two per-backend assertions, since
-there the tree-walker returns a value. A suite row cannot hold either, because the invoke runs
-the rest of the file from inside the callback (measured 2026-09-10, #193's divergence slice).
+**Tree-walker: two continuation defects around primitive callbacks** — ✅ **fixed 2026-09-10**,
+with the nested-trampoline entry below (trampoline identity; see there). Both found
+2026-08-16 while fixing the VM half. The callback one is the "a callback using its own
+continuation returns the primitive's value" row of `tests/scheme/control/cps-features.scm`
+now, the `eval` one `escape_from_primitive.rs::test_escaping_out_of_eval`, both plain
+both-backend assertions.
 
 ```scheme
 (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))
@@ -1431,7 +1431,27 @@ loop, a callback using its own continuation) were correct only as one-expression
 one more top-level form the tree-walker reached it with the `define` unbound, because the rest of
 the program had run from inside the callback. **Now unblocked:** the `guard` success-path
 deviation recorded under "This row now blocks something concrete" — restoring R7RS 7.3's verbatim
-line is the follow-up, with the Larceny lane as its measurement. The diagnosis as it stood:
+line is the follow-up, with the Larceny lane as its measurement.
+
+**What the review of the fix found and what stays open.** The first cut refused any continuation
+whose trampoline had returned; that regressed three programs `main` got right (cross-form re-entry
+under `load`, a declining `guard` *outside* a callback whose `handler-k` was captured inside, a
+capture inside an after-thunk running during a jump out of a callback), so the rule became the
+one `main` effectively had: the nearest enclosing form-level run resumes it and its `Halt` ends
+that run. Also fixed in the same round: a handler returning inside a callback ran twice (the
+escaping secondary was re-routed through the calling step's identical handler stack); relocated
+prompt frames kept their capture-site trampoline; the unquote path still started with empty
+stacks. **Open on both backends**, recorded here rather than as rows because neither has a right
+answer: a continuation captured inside a callback and invoked *after the primitive returned* —
+`(member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (c) (set! saved c) (= a b)))))` then
+`(saved #t)` — is `((2 3) 2)` on chibi and Gauche, `()` on the VM, and on the tree-walker ends the
+current form early with the callback's value (the `Halt` has no primitive to return to); and a
+composable continuation an abort hands out when the abort is inside a callback and the prompt
+outside it is truncated at the callback's return — the tree-walker refuses to resume it
+(`CpsContinuation::crosses_callback`), the VM answers `()`. The route to both is the one the
+review named: define `member`, `assoc`, `call-with-port` and the `call-with-*-file` family in
+Scheme on the tree-walker, as `force` and `call-with-values` already are, so that no callback
+runs on a nested trampoline at all. The diagnosis as it stood:
 
 `apply_from_direct_tagged` still exists, and every
 callback a Rust higher-order primitive makes — `member` and `assoc` with a predicate,
@@ -1472,10 +1492,9 @@ prerequisite PRs landed:** with the verbatim reference line the VM is unaffected
 ready for the reference expansion; this backend is the only thing holding it.
 `lib/scheme/base/exceptions.scm` records the deviation and points here.
 
-**Two more manifestations, found by the second review of #151 (2026-09-01)**: the declining pair
-is pinned in `escape_from_primitive.rs` (`assert_divergence` — the re-raise runs the rest of a
-suite file from inside the callback, so it cannot be a row), the plain-raise shape as a
-backend-scoped row in `tests/scheme/control/cps-features.scm`. A `guard` whose clause *declines* inside a primitive's callback loses the
+**Two more manifestations, found by the second review of #151 (2026-09-01)**, both plain rows of
+`tests/scheme/control/cps-features.scm` since 2026-09-10 ("A primitive's callback"). A `guard`
+whose clause *declines* inside a primitive's callback loses the
 outer `guard`: the reference expansion re-raises through `handler-k`, back inside the callback, and
 the nested trampoline there has no handlers, so `(guard (outer (#t …)) (call-with-port p (lambda (p)
 (guard (e ((string? e) 'no)) (raise 'sym)))))` dies with `unhandled exception: sym` where the VM,

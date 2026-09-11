@@ -22,11 +22,36 @@ use patina_primitives::ApplyContext;
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub(super) struct CallbackContext<'c, 'a, 's> {
+pub(crate) struct CallbackContext<'c, 'a, 's> {
     pub cps: &'c CpsEvaluator<'a>,
     pub prompt_stack: &'s [PromptFrame],
     pub dynamic_winds: &'s [DynamicWindRecord],
     pub exception_handlers: &'s [ExceptionHandler],
+}
+
+impl<'a> CallbackContext<'_, 'a, '_> {
+    /// The context for a call from outside any step: nothing to inherit.
+    pub(crate) fn detached(cps: &'a CpsEvaluator<'a>) -> CallbackContext<'a, 'a, 'static> {
+        CallbackContext {
+            cps,
+            prompt_stack: &[],
+            dynamic_winds: &[],
+            exception_handlers: &[],
+        }
+    }
+}
+
+/// A catchable error leaving the nested run was offered to every handler the
+/// run inherited — the calling step's own — and declined by all of them.
+/// Marking it is what stops the call site from routing it through the same
+/// handlers a second time (`types::mark_unhandled_in_callback`).
+fn unhandled_is_final(result: Result<TaggedValue, EvalError>) -> Result<TaggedValue, EvalError> {
+    if let Err(e) = &result {
+        if e.is_catchable() {
+            super::types::mark_unhandled_in_callback();
+        }
+    }
+    result
 }
 
 impl ApplyContext for CallbackContext<'_, '_, '_> {
@@ -43,13 +68,13 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         proc: TaggedValue,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
-        self.cps.apply_from_direct_with(
+        unhandled_is_final(self.cps.apply_from_direct_with(
             proc,
             args,
             self.prompt_stack.to_vec(),
             self.dynamic_winds.to_vec(),
             self.exception_handlers.to_vec(),
-        )
+        ))
     }
 
     fn eval_expr(
@@ -67,14 +92,14 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
             .desugar_tagged(expr, evaluator.heap())
             .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
 
-        super::eval_cps_with(
+        unhandled_is_final(super::eval_cps_with(
             &core_expr,
             env.clone(),
             evaluator,
             self.prompt_stack.to_vec(),
             self.dynamic_winds.to_vec(),
             self.exception_handlers.to_vec(),
-        )
+        ))
     }
 
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {

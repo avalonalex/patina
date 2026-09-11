@@ -64,6 +64,7 @@
 mod application;
 mod callback;
 mod continuation;
+pub(crate) use callback::CallbackContext;
 mod environment;
 mod exceptions;
 mod gc_roots;
@@ -185,7 +186,7 @@ impl<'a> CpsEvaluator<'a> {
             dynamic_winds,
             exception_handlers,
         };
-        self.run_trampoline(initial, Some(&expr))
+        self.run_trampoline(initial, Some(&expr), types::TrampolineKind::Form)
     }
 
     /// The step loop: run `initial` and every step after it until one
@@ -212,11 +213,12 @@ impl<'a> CpsEvaluator<'a> {
         &self,
         initial: StepResult,
         expr: Option<&CpsExpr>,
+        kind: types::TrampolineKind,
     ) -> Result<TaggedValue, EvalError> {
         let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
         // Loop invariant, hoisted out of the safe point (see maybe_collect).
         let is_outermost = gc_defer.is_outermost();
-        let trampoline = types::TrampolineGuard::enter();
+        let trampoline = types::TrampolineGuard::enter(kind);
 
         let mut current_step = initial;
         let mut step_count = 0;
@@ -303,35 +305,28 @@ impl<'a> CpsEvaluator<'a> {
 
             match step_result {
                 Ok(step) => current_step = step,
-                Err(EvalError::ContinuationEscape) => {
-                    // A jump parked its target and unwound to here. Three
-                    // cases, by the trampoline the target's chain ends in:
-                    // this one, so resume it; an enclosing one still running,
-                    // so keep unwinding — this loop is a primitive's
-                    // callback, and the primitive is abandoned by the `?`
-                    // its caller put on this call; or one that has already
-                    // returned, whose `Halt` has no primitive left to return
-                    // to. A jump inside its own trampoline never gets here:
+                // A location can be stamped on the way out of a step
+                // (`try_catchable!`), and a parked escape is control flow
+                // whatever it is wrapped in.
+                Err(e) if is_continuation_escape(&e) => {
+                    // A jump parked its target and unwound to here. Whether
+                    // this run resumes it is `TrampolineGuard::resumes`'s
+                    // call: its own continuation, or one whose run has
+                    // returned and this is the nearest form to end in its
+                    // place; otherwise the target's run is still below, and
+                    // the escape keeps unwinding — this loop is a
+                    // primitive's callback, and the primitive is abandoned
+                    // by the `?` its caller put on this call. A jump inside
+                    // its own trampoline never gets here:
                     // `jump_to_continuation` resumes those in place.
                     let Some((value_tagged, k)) = take_pending_escape() else {
                         return Err(EvalError::InternalError(
                             "ContinuationEscape without pending data".to_string(),
                         ));
                     };
-                    if k.trampoline != trampoline.id() {
-                        if types::trampoline_is_active(k.trampoline) {
-                            types::set_pending_escape(value_tagged, k);
-                            return Err(EvalError::ContinuationEscape);
-                        }
-                        return Err(EvalError::SchemeException {
-                            kind: patina_core::ExceptionKind::Error,
-                            message: "a continuation captured inside a primitive's callback \
-                                      was invoked after that primitive returned; the \
-                                      tree-walker cannot resume a callback whose primitive \
-                                      is gone"
-                                .to_string(),
-                            irritants_display: String::new(),
-                        });
+                    if !trampoline.resumes(k.trampoline) {
+                        types::set_pending_escape(value_tagged, k);
+                        return Err(EvalError::ContinuationEscape);
                     }
                     debug!(
                         target: "patina_tree_walker::eval::cps_eval",
@@ -339,15 +334,12 @@ impl<'a> CpsEvaluator<'a> {
                         "Continuation escape"
                     );
 
-                    // Resume the captured continuation with the environment
-                    // it names — `exception_handlers` and `prompt_stack`
-                    // restored from it like `dynamic_winds`, since R7RS 6.11
-                    // puts all three in the dynamic environment. An abort
-                    // lands here too (`prompts.rs`), with a continuation
-                    // whose stacks are cut back to its prompt. The wind
-                    // thunks between the jump and here have already run, as
-                    // steps of the trampoline the jump was made on, each in
-                    // its own `dynamic-wind` call's environment (`wind.rs`).
+                    // An abort lands here too (`prompts.rs`), with a
+                    // continuation whose stacks are cut back to its prompt.
+                    // The wind thunks between the jump and here have already
+                    // run, as steps of the trampoline the jump was made on,
+                    // each in its own `dynamic-wind` call's environment
+                    // (`wind.rs`).
                     //
                     // As a step rather than invoked here: when `resume` is
                     // itself a `Jump` — the continuation of a wind thunk's
@@ -356,19 +348,21 @@ impl<'a> CpsEvaluator<'a> {
                     // would carry that escape out of the trampoline as an
                     // error. As a step it lands in this same arm on the next
                     // turn.
-                    current_step = StepResult::InvokeContinuation {
-                        cont: continuation::continuation_cont_value(&k),
-                        value: value_tagged,
-                        env: k.env.clone(),
-                        cont_env: k.captured_cont_env.clone(),
-                        prompt_stack: k.prompt_stack.clone(),
-                        dynamic_winds: k.dynamic_winds.clone(),
-                        exception_handlers: k.exception_handlers.clone(),
-                    };
+                    current_step = continuation::resume_step(&k, value_tagged);
                 }
                 Err(e) => return Err(e),
             }
         }
+    }
+}
+
+/// Whether an error is a parked escape, however many source locations were
+/// stamped on it on the way out of a step.
+fn is_continuation_escape(e: &EvalError) -> bool {
+    match e {
+        EvalError::ContinuationEscape => true,
+        EvalError::WithLocation { error, .. } => is_continuation_escape(error),
+        _ => false,
     }
 }
 

@@ -1115,6 +1115,74 @@
     (call-with-port (open-input-string "a")
       (lambda (p) (guard (e ((string? e) 'no)) (raise-continuable 'sym))))))
 
+;; A declining `guard` *outside* the callback. The raise inside the callback
+;; finds the inner guard's handler (inherited), whose escape unwinds the
+;; callback's trampoline; the clause declines and re-raises through
+;; `handler-k`, a continuation captured *in* that trampoline — which has
+;; returned by then. A run that has returned is resumed by the nearest
+;; enclosing form-level run, so the re-raise lands at the raise point with
+;; the outer handler next, as R7RS 7.3 asks. The first cut of the fix made
+;; this an error, and the review caught it: it was `(outer #<error …>)` on
+;; the old tree-walker — wrong object, but caught — and must not get worse.
+(test-equal "a declining guard outside a port callback reaches the outer guard"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (guard (e ((string? e) 'no))
+      (call-with-port (open-input-string "a") (lambda (p) (raise 'sym))))))
+
+;; A handler that returns from a non-continuable raise inside a callback is
+;; called **once**. The callback's run pops the handler and calls it; when it
+;; returns, the secondary exception must see only the handlers *outside* it
+;; (R7RS 6.11). The first cut of the fix routed the escaping secondary
+;; through the calling step's handler stack — the same handlers the callback
+;; had inherited — and the handler ran a second time with the secondary.
+(test-equal "a handler returning inside a callback is called once: raise"
+  '(outer 1 #t)
+  (let ((n 0))
+    (guard (o (#t (list 'outer n (error-object? o))))
+      (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
+        (lambda () (member 1 '(1 2) (lambda (a b) (raise 'x))))))))
+
+(test-equal "a handler returning inside a callback is called once: error"
+  '(outer 1)
+  (let ((n 0))
+    (guard (o (#t (list 'outer n)))
+      (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
+        (lambda () (member 1 '(1 2) (lambda (a b) (error "boom"))))))))
+
+;; A continuation captured inside an after-thunk that is running as a step
+;; of a jump *out of* the callback. The thunk runs on the callback's
+;; trampoline, so the capture is stamped with it, but its chain ends in the
+;; jump's target, in the form outside. Re-entering it after the callback has
+;; returned runs the rest of the thunk and then completes the jump: `r` is
+;; `escaped` a second time, and the thunk's own log line is written twice.
+(test-equal "a capture inside an after thunk during a jump out of a callback re-enters"
+  '(escaped 2 (after after))
+  (let ((n 0) (saved #f) (log '()))
+    (let ((r (call/cc (lambda (out)
+               (member 1 '(1) (lambda (a b)
+                 (dynamic-wind (lambda () #f)
+                               (lambda () (out 'escaped))
+                               (lambda () (call/cc (lambda (k) (set! saved k)))
+                                          (set! log (cons 'after log))))))))))
+      (set! n (+ n 1))
+      (if (= n 1) (saved 'again))
+      (list r n (reverse log)))))
+
+;; An unquote runs under the enclosing dynamic environment. The tree-walker
+;; evaluates `,expr` on a nested form run, like the `eval` primitive, and
+;; until 2026-09-10 that run started with no handlers — the same shape as
+;; the callback defect, in a place the first cut of the fix missed.
+(test-equal "an unquote sees the enclosing guard" '(sym y)
+  (guard (e ((symbol? e) (list 'sym e)) (#t (list 'other (error-object? e))))
+    `(1 ,(raise 'y))))
+
+(test-equal "an unquote sees the enclosing handler" '(1 10)
+  (with-exception-handler (lambda (e) 10) (lambda () `(1 ,(raise-continuable 'x)))))
+
+(test-equal "an unquote can escape" 2
+  (call/cc (lambda (k) `(1 ,(k 2)))))
+
 ;; ── Escaping out of a callback ──────────────────────────────────────────────
 ;;
 ;; Moved from `escape_from_primitive.rs` once the trampoline fix made them

@@ -249,11 +249,15 @@ impl<'a> CpsEvaluator<'a> {
                 ..inner.clone()
             })
             .collect();
+        // A prompt in another trampoline means the region between here and
+        // it crosses a primitive's callback, and the chain cannot reach the
+        // boundary (`CpsContinuation::crosses_callback`).
         let delimited = self.capture(
             &cont,
             &cont_env,
             Some(frame.id),
             current_trampoline(),
+            frame.trampoline != current_trampoline(),
             &dynamic_winds[wind_depth..],
             &exception_handlers[handler_depth..],
             &inner_prompts,
@@ -279,6 +283,7 @@ impl<'a> CpsEvaluator<'a> {
             &cont_env,
             None,
             frame.trampoline,
+            false,
             &dynamic_winds[..wind_depth],
             &exception_handlers[..handler_depth],
             &prompt_stack[..idx],
@@ -304,6 +309,24 @@ impl<'a> CpsEvaluator<'a> {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     ) -> Result<StepResult, EvalError> {
+        if target.crosses_callback {
+            return self.maybe_route_error_through_cps(
+                EvalError::SchemeException {
+                    kind: ExceptionKind::Error,
+                    message: "cannot resume a delimited continuation captured across a \
+                              primitive's callback: the tree-walker runs a callback on a \
+                              nested trampoline, and the region between the abort and its \
+                              prompt includes the primitive's own return"
+                        .to_string(),
+                    irritants_display: String::new(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
+        }
         self.resume_composable(
             target,
             value,
@@ -377,9 +400,13 @@ impl<'a> CpsEvaluator<'a> {
             handler_depth: handler_base,
             trampoline: current_trampoline(),
         });
+        // Relocated in trampoline as well as in depth: the frames are live
+        // on *this* run's stack now, so an abort to one of them is a jump
+        // here, whatever run captured them.
         prompt_stack.extend(target.prompt_stack.iter().map(|inner| PromptFrame {
             wind_depth: inner.wind_depth + wind_base,
             handler_depth: inner.handler_depth + handler_base,
+            trampoline: current_trampoline(),
             ..inner.clone()
         }));
         exception_handlers.extend(target.exception_handlers.iter().cloned());

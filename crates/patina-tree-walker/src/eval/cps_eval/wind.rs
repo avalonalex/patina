@@ -112,15 +112,7 @@ impl<'a> CpsEvaluator<'a> {
         // the program: the callback's value became the form's, and the
         // `define` around the primitive never bound anything.
         if target.trampoline == super::types::current_trampoline() {
-            return Ok(StepResult::InvokeContinuation {
-                cont: super::continuation::continuation_cont_value(&target),
-                value,
-                env: target.env.clone(),
-                cont_env: target.captured_cont_env.clone(),
-                prompt_stack: target.prompt_stack.clone(),
-                dynamic_winds: target.dynamic_winds.clone(),
-                exception_handlers: target.exception_handlers.clone(),
-            });
+            return Ok(super::continuation::resume_step(&target, value));
         }
         set_pending_escape(value, target);
         Err(EvalError::ContinuationEscape)
@@ -244,6 +236,6 @@ impl<'a> CpsEvaluator<'a> {
             dynamic_winds,
             exception_handlers,
         };
-        self.run_trampoline(initial, None)
+        self.run_trampoline(initial, None, super::types::TrampolineKind::Callback)
     }
 }

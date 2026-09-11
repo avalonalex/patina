@@ -493,16 +493,17 @@ placement + deferral:
      fields; capture temporaries are dead; `value_buffer`/`scratch_args` are
      restored.
    - Tree-walker (**stage 2, implemented**): top of the trampoline loop in
-     `eval_in_env`. The entire machine state is `current_step`, which the
+     `run_trampoline` (`cps_eval/mod.rs`, the one loop every run shares since
+     2026-09-10). The entire machine state is `current_step`, which the
      safe point passes as a transient root along with the `expr` the
      trampoline was entered with (its literals stay live for the call).
 2. **`gc_defer_depth` counter** on the shared heap, managed by the
    `GcDeferGuard` RAII type so early returns and `?` propagation cannot leak
    an increment.
 
-   The tree-walker takes a guard **on every trampoline entry** (`eval_in_env`
-   *and* `apply_from_direct_tagged`) rather than instrumenting each re-entrant
-   call site. This inverts the failure mode: a nested trampoline is deferred
+   The tree-walker takes a guard **on every trampoline entry** (`run_trampoline`,
+   whether entered for a form or for a primitive's callback) rather than
+   instrumenting each re-entrant call site. This inverts the failure mode: a nested trampoline is deferred
    *by construction* (whatever route reached it — a higher-order primitive,
    `eval`, quasiquote), instead of relying on someone having remembered to
    guard that route.

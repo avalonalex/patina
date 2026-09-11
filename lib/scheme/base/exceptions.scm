@@ -126,10 +126,8 @@
             ;; verbatim line is a separate change, measured on the Larceny
             ;; lane, and `nested_exception_handlers.rs` holds the assertion
             ;; it must keep. Raising still jumps, exactly as it always has.
-            ;;
-            ;; Track L §6 has the boundary defect ("an error inside a wind
-            ;; thunk escapes `guard`" — same root, the VM's `across_reentry`
-            ;; is what it lacks). Restore the reference line when that lands.
+            ;; Track L §6 has the history, under "a primitive's callback
+            ;; runs on a nested trampoline".
             (call-with-values
              (lambda () e1 e2 ...)
              (lambda args

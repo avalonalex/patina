@@ -274,6 +274,31 @@
     (q 42)
     (list (q) (guard (e (#t 'no-prompt)) (abort-current-continuation t-179b 'stale)))))
 
+;; The prompts a composable continuation carries are re-established on
+;; whatever run invokes it. Both prompts here are pushed *inside* a
+;; callback; the abort to the outer one hands its handler `kk`, whose region
+;; still holds the inner prompt; `kk` is invoked after `member` has
+;; returned, and the abort inside the resumed region must find that inner
+;; prompt on the *current* run. The first cut of the tree-walker fix copied
+;; the capture-site trampoline onto the relocated frame and refused the
+;; abort as belonging to a run that had ended.
+(define t-reloc-outer (make-continuation-prompt-tag 'reloc-outer))
+(define t-reloc-inner (make-continuation-prompt-tag 'reloc-inner))
+(test-equal "a carried prompt is re-established on the invoking run"
+  '((1) (inner (resumed-with 42)))
+  (let ((kk #f))
+    (let ((first (member 1 '(1) (lambda (a b)
+                   (call-with-continuation-prompt
+                     (lambda ()
+                       (call-with-continuation-prompt
+                         (lambda ()
+                           (+ 100 (let ((v (abort-current-continuation t-reloc-outer 'up)))
+                                    (abort-current-continuation t-reloc-inner
+                                                                (list 'resumed-with v)))))
+                         t-reloc-inner (lambda (v k) (list 'inner v))))
+                     t-reloc-outer (lambda (v k) (set! kk k) v))))))
+      (list first (kk 42)))))
+
 ;; The prompt body may be a primitive or a parameter object — issue #179,
 ;; fixed 2026-09-05.
 ;;

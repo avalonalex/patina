@@ -7,8 +7,8 @@
 
 use super::CpsEvaluator;
 use super::types::{
-    ContEnv, ContValue, ExceptionHandler, OUTERMOST_TRAMPOLINE, PromptFrame, StepResult,
-    current_trampoline,
+    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, current_trampoline,
+    is_outermost_trampoline,
 };
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
@@ -24,6 +24,23 @@ use std::rc::Rc;
 /// The single decoder for both re-entry paths — the escape handler in `mod.rs`
 /// and the `Captured` arm of `invoke_continuation_step` — so the two cannot
 /// drift apart.
+/// The step that resumes a full continuation with `value`: its chain, under
+/// the dynamic environment it names — winds, handlers and prompts restored
+/// from it, since R7RS 6.11 puts all three in the dynamic environment. The
+/// one place this is spelled, for the in-place arrival in `wind.rs` and the
+/// escape arm in `mod.rs` alike.
+pub(super) fn resume_step(k: &CpsContinuation, value: TaggedValue) -> StepResult {
+    StepResult::InvokeContinuation {
+        cont: continuation_cont_value(k),
+        value,
+        env: k.env.clone(),
+        cont_env: k.captured_cont_env.clone(),
+        prompt_stack: k.prompt_stack.clone(),
+        dynamic_winds: k.dynamic_winds.clone(),
+        exception_handlers: k.exception_handlers.clone(),
+    }
+}
+
 pub(super) fn continuation_cont_value(k: &CpsContinuation) -> ContValue {
     match &k.resume {
         Some(cont) => cont.clone(),
@@ -62,15 +79,23 @@ impl<'a> CpsEvaluator<'a> {
             // "leave": with empty stacks recorded here, a callback's
             // tail-position `call/cc` re-entered in place would run the
             // after-thunk of every extent the primitive was called under.
-            ContValue::Halt if current_trampoline() == OUTERMOST_TRAMPOLINE => {
-                self.capture(cont, cont_env, None, current_trampoline(), &[], &[], &[])
-            }
+            ContValue::Halt if is_outermost_trampoline() => self.capture(
+                cont,
+                cont_env,
+                None,
+                current_trampoline(),
+                false,
+                &[],
+                &[],
+                &[],
+            ),
 
             _ => self.capture(
                 cont,
                 cont_env,
                 None,
                 current_trampoline(),
+                false,
                 dynamic_winds,
                 exception_handlers,
                 prompt_stack,
@@ -82,7 +107,9 @@ impl<'a> CpsEvaluator<'a> {
     /// state given: a full continuation when `boundary` is `None`, a
     /// composable one delimited by that boundary otherwise (`prompts.rs`).
     /// `trampoline` is the one the chain ends in — the current one for a
-    /// capture, the prompt's own for an abort's landing.
+    /// capture, the prompt's own for an abort's landing. `crosses_callback`
+    /// is set only for a delimited capture whose prompt is in another
+    /// trampoline (`CpsContinuation::crosses_callback`).
     ///
     /// The one encoder, as `continuation_cont_value` is the one decoder. The
     /// chain is stored one of two ways: a `Local` is flattened into the
@@ -100,6 +127,7 @@ impl<'a> CpsEvaluator<'a> {
         cont_env: &ContEnv,
         boundary: Option<u64>,
         trampoline: u64,
+        crosses_callback: bool,
         dynamic_winds: &[DynamicWindRecord],
         exception_handlers: &[ExceptionHandler],
         prompt_stack: &[PromptFrame],
@@ -151,6 +179,7 @@ impl<'a> CpsEvaluator<'a> {
             env,
             boundary,
             trampoline,
+            crosses_callback,
             dynamic_winds: dynamic_winds.to_vec(),
             prompt_stack: prompt_stack.to_vec(),
             exception_handlers: exception_handlers.to_vec(),

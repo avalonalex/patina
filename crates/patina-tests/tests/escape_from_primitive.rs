@@ -149,6 +149,38 @@ fn test_escaping_out_of_eval() {
     );
 }
 
+/// A continuation captured by one form of a loaded file and invoked from a
+/// later form of the same file. `load` evaluates each form on its own
+/// nested run; the earlier run has returned by the time `k` is invoked, and
+/// what every implementation does is resume the rest of that form and then
+/// carry on with the form *after the invoking one* — `r` is 11, the `if`
+/// does not run again, `n` stays 1. The first cut of the trampoline fix
+/// refused a continuation whose run had returned, and the review measured
+/// this program failing where `main`, the VM, chibi and Gauche all agree.
+/// Rust because it needs a file on disk.
+#[test]
+fn test_load_reenters_a_continuation_captured_by_an_earlier_form() {
+    let dir = TempDir::new().expect("temp dir");
+    let loaded = scratch_path(&dir, "loaded.scm");
+    std::fs::write(
+        &loaded,
+        "(define k #f) (define n 0)\n\
+         (define r (+ 1 (call/cc (lambda (c) (set! k c) 1))))\n\
+         (set! n (+ n 1))\n\
+         (if (< n 3) (k 10))\n\
+         (define loaded-result (list r n))\n",
+    )
+    .expect("loaded file");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme load))
+               (load "{loaded}")
+               loaded-result"#
+        ),
+        "(11 1)",
+    );
+}
+
 /// What the port primitives do with their port when the callback escapes.
 /// R7RS 6.13.1: `call-with-port` closes the port "if `proc` returns" — and
 /// only then, because a `guard` clause runs after that escape and is entitled
