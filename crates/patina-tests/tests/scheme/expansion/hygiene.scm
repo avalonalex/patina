@@ -33,7 +33,7 @@
 ;;
 ;; **Three files hold claims adjacent to these, and a fourth copy is what
 ;; `core_syntax_bindings.rs`'s own comment warns against.** That file has the
-;; rebound-`else` row, `compliance/derived.rs` the unshadowed regression guards
+;; rebound-`else` row, `derived-forms.scm` the unshadowed regression guards
 ;; for `cond`/`case`, and `syntax-rules-literals.scm` the literal-matching rows
 ;; including the other polarity of the `else` case. Check those before adding a
 ;; row here about a keyword being shadowed.

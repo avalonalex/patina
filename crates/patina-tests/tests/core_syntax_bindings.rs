@@ -70,8 +70,9 @@ fn test_auxiliary_syntax_in_head_position_is_an_error() {
 
 // That `else` and `=>` still do their real job — matching as `syntax-rules`
 // literals inside `cond` and `case` — is already covered on both backends by
-// `compliance/derived.rs` (`test_cond_with_else`, `test_cond_with_arrow`,
-// `test_case_with_else`). Not restated here: those are the regression guards
+// `tests/scheme/expansion/derived-forms.scm` ("cond falls through to else",
+// "cond's => passes the test's value", "case falls through to else"). Not
+// restated here: those are the regression guards
 // for `cond`/`case`, and a second copy only splits the failure across two
 // files.
 

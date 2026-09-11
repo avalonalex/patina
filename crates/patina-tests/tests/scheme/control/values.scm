@@ -67,4 +67,20 @@
   (list (call-with-values (lambda () (values)) (lambda xs xs))
         (call-with-values (lambda () (call/cc (lambda (k) (k)))) (lambda xs xs))))
 
+;; ── The report's examples ──────────────────────────────────────────────────
+;;
+;; From `crates/patina-tests/tests/compliance/control.rs` (#193): the ordinary
+;; shapes of R7RS §6.10, most of them the report's own examples.
+
+(test-equal "values of one argument is that argument" 42 (values 42))
+(test-equal "call-with-values, the report's example" 5
+  (call-with-values (lambda () (values 4 5)) (lambda (a b) b)))
+(test-equal "three values to a three-argument consumer" 6
+  (call-with-values (lambda () (values 1 2 3)) (lambda (a b c) (+ a b c))))
+;; `*` with no arguments is 1, and `-` of one argument negates it.
+(test-equal "call-with-values of two primitives, the report's example" -1
+  (call-with-values * -))
+(test-equal "two values summed by the consumer" 3
+  (call-with-values (lambda () (values 1 2)) (lambda (a b) (+ a b))))
+
 (test-end)

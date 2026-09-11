@@ -311,4 +311,48 @@
                         (lambda () (set! log (cons 'out log))))))))
       (list result (reverse log)))))
 
+;; ── The ordinary shapes ────────────────────────────────────────────────────
+;;
+;; From `crates/patina-tests/tests/compliance/control.rs` (#193). The first
+;; row of this file covers most of these inside one list; these are the
+;; separate rows they were written as, each naming its own failure.
+
+(test-equal "guard's else catches a raised object" 'caught
+  (guard (exn (else 'caught))
+    (raise 'boom)))
+
+(test-equal "a guard clause that matches" 'matched
+  (guard (exn
+          ((eq? exn 'specific) 'matched)
+          (else 'other))
+    (raise 'specific)))
+
+(test-equal "a clause that does not match falls through to else" 'other
+  (guard (exn
+          ((eq? exn 'specific) 'matched)
+          (else 'other))
+    (raise 'different)))
+
+(test-equal "with nothing raised, guard returns its body's value" 3
+  (guard (exn (else 'caught))
+    (+ 1 2)))
+
+(test-equal "a guard body may begin with definitions" 15
+  (guard (exn (else 'caught))
+    (define x 10)
+    (+ x 5)))
+
+(test-equal "guard catches error, whose message a clause can read"
+  "test message"
+  (guard (exn
+          ((error-object? exn) (error-object-message exn))
+          (else 'other))
+    (error "test message")))
+
+(test-equal "and whose irritants a clause can read" '(1 2 3)
+  (guard (exn
+          ((error-object? exn) (error-object-irritants exn))
+          (else 'other))
+    (error "msg" 1 2 3)))
+
 (test-end)
