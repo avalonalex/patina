@@ -215,24 +215,25 @@ fn process_quasiquote_pair(
 
                 let splice_result = eval_tagged_via_cps(ctx, splice_expr, env)?;
 
-                // Must be a list
-                if !is_list_tagged(ctx, splice_result) {
-                    return Err(EvalError::InvalidSyntax(
-                        "unquote-splicing result must be a list".to_string(),
-                    ));
+                // Last in the template, the value is the tail as it stands:
+                // a non-list makes an improper list, and a list is shared
+                // rather than copied. The VM compiles `(a ,@x)` to
+                // `(append (list 'a) x)`, whose last argument can be of any
+                // type (R7RS 6.4), and chibi and Gauche answer the same; R7RS
+                // 4.2.8 makes a non-list splice an error and leaves the answer
+                // open (#270). A vector template has no tail to take one, so
+                // there the conversion below refuses it, as the VM's
+                // `list->vector` does.
+                if cdr.is_null() {
+                    tail = splice_result;
+                    break;
                 }
 
-                // Append all elements from the spliced list
-                let mut splice_current = splice_result;
-                while !splice_current.is_null() {
-                    if splice_current.is_pair() {
-                        let (sc, sn) = get_pair_parts(ctx, splice_current)?;
-                        elements.push(sc);
-                        splice_current = sn;
-                    } else {
-                        break;
-                    }
-                }
+                elements.extend(proper_list_elements(
+                    ctx,
+                    splice_result,
+                    "unquote-splicing result",
+                )?);
 
                 // Check if CDR is an unquote form for improper list tail
                 if cdr.is_pair() {
@@ -321,21 +322,41 @@ fn extract_pair_tagged(
     get_pair_parts(ctx, value)
 }
 
-/// Check if a value is a proper list
-fn is_list_tagged(ctx: &super::callback::CallbackContext<'_, '_, '_>, val: TaggedValue) -> bool {
+/// The elements of `value`, which must be a proper list; `what` names it in
+/// the error. One walk that pushes as it goes, with a second pointer moving at
+/// half its speed: the two meet only on a cycle, so a circular list is refused
+/// rather than followed without end — which here would grow `out` until the
+/// process died, not merely spin.
+fn proper_list_elements(
+    ctx: &super::callback::CallbackContext<'_, '_, '_>,
+    value: TaggedValue,
+    what: &str,
+) -> Result<Vec<TaggedValue>, EvalError> {
     let heap = ctx.cps.evaluator.global_env.heap();
-    let mut current = val;
-
+    let heap = heap.borrow();
+    let not_a_list = || EvalError::TypeError(format!("{what} must be a proper list"));
+    let mut out = Vec::new();
+    let mut fast = value;
+    let mut slow = value;
+    let mut move_slow = false;
     loop {
-        if current.is_null() {
-            return true;
+        if fast.is_null() {
+            return Ok(out);
         }
-        if current.is_pair() {
-            let heap_ref = heap.borrow();
-            current = heap_ref.cdr(current);
-            continue;
+        let (car, cdr) = heap.try_pair(fast).ok_or_else(not_a_list)?;
+        out.push(car);
+        fast = cdr;
+        if move_slow {
+            // `slow` trails `fast` through pairs it has already walked.
+            slow = heap
+                .try_pair(slow)
+                .map(|(_, next)| next)
+                .ok_or_else(not_a_list)?;
+            if fast == slow {
+                return Err(not_a_list());
+            }
         }
-        return false;
+        move_slow = !move_slow;
     }
 }
 
@@ -378,30 +399,16 @@ fn vector_to_list_tagged(
 }
 
 /// Convert list to vector (TaggedValue version)
+///
+/// A vector has no tail, so an improper list here — a vector template ending
+/// in a non-list splice — is refused, and so is a circular one, which a plain
+/// walk would follow while allocating until the process died.
 fn list_to_vector_tagged(
     ctx: &super::callback::CallbackContext<'_, '_, '_>,
     list: TaggedValue,
 ) -> Result<TaggedValue, EvalError> {
+    let elements = proper_list_elements(ctx, list, "a vector template's elements")?;
     let heap = ctx.cps.evaluator.global_env.heap();
-    let mut elements: Vec<TaggedValue> = Vec::new();
-    let mut current = list;
-
-    loop {
-        if current.is_null() {
-            break;
-        }
-        if current.is_pair() {
-            let (car, cdr) = get_pair_parts(ctx, current)?;
-            elements.push(car);
-            current = cdr;
-        } else {
-            return Err(EvalError::InvalidSyntax(
-                "Cannot convert improper list to vector".to_string(),
-            ));
-        }
-    }
-
-    // Allocate native vector on heap
     Ok(heap.borrow_mut().alloc_vector(elements))
 }
 

@@ -143,4 +143,59 @@
   (else
    (test-error "splicing a non-list literal is an error" #t `(a ,@42 b))))
 
+;; ── A splice in the last position is append's last argument ────────────────
+
+;; R7RS §4.2.8 makes a non-list splice an error wherever it stands, and an
+;; error it need not signal, so what the last position answers is Patina's
+;; choice. It is the VM's: templates compile to `append`, so `(a ,@x)` is
+;; `(append (list 'a) x)`, and append's last argument "can be of any type"
+;; (§6.4). A non-list therefore makes an improper list, and a list is the tail
+;; itself rather than a copy. chibi 0.12 and Gauche 0.9.15 make the same
+;; choice. The tree-walker, which evaluates templates directly, refused a
+;; non-list anywhere and copied a list, until #270 made it follow the VM.
+;;
+;; A vector template is `(list->vector (append ...))`, so its last splice is
+;; not a tail, and must be a list like any other splice.
+;;
+;; chibi agrees with every row below except two of the three errors, where it
+;; keeps the latitude registered for the row above; it signals on the vector
+;; row. Values arrive as procedure arguments, for the reason given above.
+(define (splice-last n) `(a ,@n))
+(define (splice-alone n) `(,@n))
+(define (splice-twice m n) `(a ,@m ,@n))
+(define (splice-before-dotted-tail n) `(a ,@n . b))
+(define (splice-into-vector n) `#(a ,@n))
+(define (splice-nested n) `(a `(b ,(c ,@n))))
+
+(test-equal "a non-list spliced last becomes the tail" '(a . 42)
+  (splice-last 42))
+(test-equal "a non-list spliced alone is the whole value" 42
+  (splice-alone 42))
+(test-equal "an improper list spliced last keeps its tail" '(a 1 . 2)
+  (splice-last '(1 . 2)))
+(test-equal "only the last of two splices may be a non-list" '(a 1 . 42)
+  (splice-twice '(1) 42))
+;; R7RS lets a quasiquote share structure it need not rebuild, so copying
+;; would not be wrong. The row pins the two backends to one answer, which is
+;; also chibi's and Gauche's.
+(test-assert "a list spliced last is shared, not copied"
+  (let ((n (list 1 2)))
+    (eq? (cdr (splice-last n)) n)))
+;; The inner template's `,@n` is at nesting level zero, so it is evaluated,
+;; and the same rule applies there.
+(test-equal "a splice evaluated inside a nested template follows the rule"
+  '(a `(b ,(c . 42)))
+  (splice-nested 42))
+
+;; Last means nothing follows, not only splices. An implementation that took
+;; "the cdr is not a pair" for "last" would accept the first of these as a
+;; tail and drop the `b`.
+(test-error "a splice before a dotted tail must be a list" #t
+  (splice-before-dotted-tail 42))
+(test-error "the first of two splices must be a list" #t
+  (splice-twice 42 '(1)))
+;; A vector cannot have a tail, so list->vector refuses the improper list.
+(test-error "a vector template cannot end in a non-list splice" #t
+  (splice-into-vector 42))
+
 (test-end)
