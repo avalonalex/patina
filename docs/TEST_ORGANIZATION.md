@@ -551,7 +551,7 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
 - `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
   24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
-- `complex_numbers.rs`, `record_types.rs`, `scheme_eval.rs` — feature areas
+- `complex_numbers.rs`, `scheme_eval.rs` — feature areas
   whose rows are about the implementation rather than the language
 
 #### **Library Tests**
@@ -613,7 +613,7 @@ kind does not survive contact with a migration. Re-measure before quoting:
 | expansion/hygiene.scm | 35 | measured 2026-09-09 |
 | scheme_base.rs | ~50 | |
 | sld_file_loading.rs | 40 | measured 2026-09-09 |
-| record_types.rs | 41 | measured 2026-09-09 |
+| data/record-types.scm | 23 rows (41 Rust tests before #193 Phase 2) | measured 2026-09-11 |
 | tail-recursion.scm | 36 | 301 |
 | cps_features.rs | 31 | 580 |
 
