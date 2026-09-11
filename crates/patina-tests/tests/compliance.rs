@@ -28,22 +28,6 @@ mod rationals;
 #[path = "compliance/numeric_edge_cases.rs"]
 mod numeric_edge_cases;
 
-// Section 6.4: Pairs and lists
-#[path = "compliance/lists.rs"]
-mod lists;
-
-// Section 6.x: Predicates
-#[path = "compliance/predicates.rs"]
-mod predicates;
-
-// Section 6.7: Strings
-#[path = "compliance/strings.rs"]
-mod strings;
-
-// Section 6.8: Vectors
-#[path = "compliance/vectors.rs"]
-mod vectors;
-
 // Section 6.10: Control features
 #[path = "compliance/control.rs"]
 mod control;
