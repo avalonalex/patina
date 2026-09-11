@@ -20,17 +20,15 @@
 //! under chibi or Gauche and it does the same, which is the property that
 //! makes these files an oracle rather than only a suite (#193 Phase 3).
 //!
-//! **That property is exercised by hand, and nothing here re-checks it.** Each
-//! file's header records the tallies its oracles produced, on a stated date,
-//! and those numbers are what the next person runs it against — but this driver
-//! runs only the two Patina backends, and `run_chibi_tests.sh` covers the chibi
-//! R7RS suite rather than `tests/scheme/`. So a row edited after the header was
-//! written leaves the claim stale with nothing to catch it. All 14 files make
-//! such a claim — every one names chibi or Gauche — and four carry an explicit
-//! pass/fail tally: `reader/at-identifiers.scm`,
-//! `reader/vertical-bar-identifiers.scm`, `data/conversion.scm` and
-//! `data/circular-data.scm`. Closing this is what Phase 3 is for; until then the
-//! rule is that a PR touching a file's rows re-measures its header.
+//! **That property is checked in CI, not here.** This driver runs only the two
+//! Patina backends. The oracles are `scripts/run_suite_oracles.sh`, which runs
+//! every file under chibi and Gauche and holds each oracle's differing rows to
+//! `DIVERGENCES.tsv` — the CI job "Suite oracles" runs it on every PR against
+//! pinned oracle versions (#193 Phase 3), so a row edited into a new
+//! disagreement fails there, classified or not. What CI does *not* check is the
+//! prose: several files' headers carry a pass/fail tally measured on a stated
+//! date, and the rule is still that a PR touching a file's rows re-measures its
+//! header.
 //!
 //! # How the driver reads the result, and why not the obvious way
 //!

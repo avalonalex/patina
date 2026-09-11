@@ -93,6 +93,7 @@ cargo fmt
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh` |
 | GC differential | `run_gc_differential.sh` on release **and** on debug with poison assertions |
 | Rustfmt / Clippy | `cargo fmt --check`, `clippy --all-targets --all-features -D warnings` |
+| Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 The GC lanes and the macOS/Linux split have no local equivalent that anyone
 runs by hand, so pushing is *stronger* verification than the commands above,
@@ -134,8 +135,9 @@ them. `clippy` edges out `cargo test` because `--all-targets` adds the Criterion
 bench target that `--lib --tests` never builds.
 
 Selecting the one test file you touched is therefore the entire lever, and it
-is ~50× cheaper than the suite. CI is not faster at any of this — it runs seven
-jobs on seven machines: **685 s of work in 270 s of wall clock**.
+is ~50× cheaper than the suite. CI is not faster at any of this — it ran seven
+jobs on seven machines: **685 s of work in 270 s of wall clock**, measured
+before the suite-oracle job made it eight.
 
 **This table has a shelf life, and #193 spent it.** Its Phase 0 landed the
 driver (`crates/patina-tests/tests/scheme_suite.rs`) and migrated one file,

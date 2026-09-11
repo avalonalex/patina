@@ -10,8 +10,13 @@
 #                                               # new register rows
 #
 # Environment:
-#   SUITE_ORACLE_TIMEOUT   seconds per file per oracle (default 60)
-#   CHIBI / GOSH           override the interpreter binaries
+#   SUITE_ORACLE_TIMEOUT       seconds per file per oracle (default 60)
+#   SUITE_ORACLE_CHIBI_HEAP    chibi's maximum heap (default 2G); see run_oracle
+#   CHIBI / GOSH               override the interpreter binaries
+#   SUITE_ORACLES_REQUIRE_ALL  set to 1 to fail, rather than skip, when an
+#                              oracle is missing — what CI sets, since a lane
+#                              that checked one oracle of two is not the lane
+#                              the register was measured against
 #
 # WHAT THIS CHECKS, AND WHAT IT DELIBERATELY DOES NOT
 #
@@ -56,6 +61,7 @@ fi
 SUITE_DIR="crates/patina-tests/tests/scheme"
 REGISTER="$SUITE_DIR/DIVERGENCES.tsv"
 TIMEOUT="${SUITE_ORACLE_TIMEOUT:-60}"
+CHIBI_HEAP="${SUITE_ORACLE_CHIBI_HEAP:-2G}"
 CHIBI="${CHIBI:-chibi-scheme}"
 GOSH="${GOSH:-gosh}"
 
@@ -94,13 +100,26 @@ if [ ${#ORACLES[@]} -eq 0 ]; then
     echo -e "${RED}No oracle found. This lane has nothing to run.${NC}" >&2
     exit 2
 fi
+if [ "${SUITE_ORACLES_REQUIRE_ALL:-0}" = 1 ] && [ ${#ORACLES[@]} -lt 2 ]; then
+    echo -e "${RED}SUITE_ORACLES_REQUIRE_ALL is set, and only ${ORACLES[*]} was found.${NC}" >&2
+    echo -e "${DIM}  A partial lane would pass while the other oracle's register rows go unchecked.${NC}" >&2
+    exit 2
+fi
 
 # Run one file under one oracle, with a portable timeout. `perl -e 'alarm'` is
 # the idiom run_larceny_tests.sh already uses; macOS has no coreutils timeout.
+#
+# chibi also gets a heap ceiling (`-h initial/max`; 2M is its default initial
+# size, so only the maximum changes). A file it cannot finish —
+# `control/wind-thunk-exceptions.scm`, registered `*` — does not merely spin:
+# it allocates without bound, and on a CI runner it exhausted memory in under
+# 40 s and took the whole step down before the alarm fired. With a ceiling it
+# fails with chibi's own out-of-memory error, which is the "does not
+# complete" the register already records.
 run_oracle() {
     local oracle=$1 file=$2
     case "$oracle" in
-        chibi)  perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$CHIBI" "$file" 2>&1 </dev/null || true ;;
+        chibi)  perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$CHIBI" -h "2M/$CHIBI_HEAP" "$file" 2>&1 </dev/null || true ;;
         gauche) perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$GOSH" -r7 "$file" 2>&1 </dev/null || true ;;
     esac
 }

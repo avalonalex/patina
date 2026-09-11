@@ -48,7 +48,15 @@
 
 (test-equal "exact->inexact" 3.0 (exact->inexact 3))
 (test-equal "inexact->exact" 3 (inexact->exact 3.0))
-(test-equal "exact->inexact on a ratnum" 0.3333333333333333 (exact->inexact 1/3))
+;; Compared against `(/ 1.0 3.0)` rather than the literal 0.3333333333333333,
+;; because the literal made the row a test of the *reader* too. Measured
+;; 2026-09-11: chibi 0.12's reader on arm64 (Homebrew) reads that literal one
+;; ulp low — `(exact 0.3333333333333333)` is 6004799503160660/2^54 there,
+;; where Patina, Gauche and chibi on x86-64 give the correctly rounded
+;; 6004799503160661/2^54 — while its `exact->inexact` is right. The row was
+;; registered against chibi as needs-investigation until the oracle lane ran
+;; on an x86-64 CI runner and stopped reproducing it.
+(test-equal "exact->inexact on a ratnum" (/ 1.0 3.0) (exact->inexact 1/3))
 
 ;; ── Names re-exported from the R7RS libraries that now hold them ────────────
 
