@@ -10,8 +10,12 @@
 #                                               # new register rows
 #
 # Environment:
-#   SUITE_ORACLE_TIMEOUT   seconds per file per oracle (default 60)
-#   CHIBI / GOSH           override the interpreter binaries
+#   SUITE_ORACLE_TIMEOUT       seconds per file per oracle (default 60)
+#   CHIBI / GOSH               override the interpreter binaries
+#   SUITE_ORACLES_REQUIRE_ALL  set to 1 to fail, rather than skip, when an
+#                              oracle is missing — what CI sets, since a lane
+#                              that checked one oracle of two is not the lane
+#                              the register was measured against
 #
 # WHAT THIS CHECKS, AND WHAT IT DELIBERATELY DOES NOT
 #
@@ -92,6 +96,11 @@ else
 fi
 if [ ${#ORACLES[@]} -eq 0 ]; then
     echo -e "${RED}No oracle found. This lane has nothing to run.${NC}" >&2
+    exit 2
+fi
+if [ "${SUITE_ORACLES_REQUIRE_ALL:-0}" = 1 ] && [ ${#ORACLES[@]} -lt 2 ]; then
+    echo -e "${RED}SUITE_ORACLES_REQUIRE_ALL is set, and only ${ORACLES[*]} was found.${NC}" >&2
+    echo -e "${DIM}  A partial lane would pass while the other oracle's register rows go unchecked.${NC}" >&2
     exit 2
 fi
 

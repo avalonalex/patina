@@ -90,6 +90,66 @@ jobs:
     - name: Stress + adaptive lanes vs baseline, both backends
       run: ./scripts/run_gc_differential.sh target/debug/patina
 
+  # The oracle lane (#193 Phase 3): every tests/scheme/*.scm file under chibi
+  # and Gauche, held to the divergence register. It needs no Rust — it runs
+  # other implementations over our files — and it pins their versions,
+  # because the register records what *those* versions answer: a floating
+  # oracle would fail unrelated PRs the day it released a fix. Both are built
+  # from checksummed release sources and cached, so the build is paid once
+  # per version. Bumping a version is a deliberate change that re-measures
+  # the register, like bumping rust-toolchain.toml.
+  suite-oracles:
+    name: Suite oracles (chibi 0.12, Gauche 0.9.15)
+    runs-on: ubuntu-latest
+    env:
+      CHIBI_VERSION: "0.12"
+      CHIBI_SHA256: b70a1147bc70a0f90df3fb6081bc99808237fd17a9accf9ee7a2cc20d95a4df0
+      GAUCHE_VERSION: "0.9.15"
+      GAUCHE_SHA256: 3643e27bc7c8822cfd6fb2892db185f658e8e364938bc2ccfcedb239e35af783
+      ORACLES: /home/runner/oracles
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache the oracles
+      id: oracle-cache
+      uses: actions/cache@v4
+      with:
+        path: /home/runner/oracles
+        # The trailing number is the recipe's: bump it when the build steps
+        # below change, so a stale build is not restored under a new recipe.
+        key: oracles-${{ runner.os }}-chibi-${{ env.CHIBI_VERSION }}-gauche-${{ env.GAUCHE_VERSION }}-1
+
+    - name: Build chibi-scheme
+      if: steps.oracle-cache.outputs.cache-hit != 'true'
+      run: |
+        curl -sSL -o chibi.tgz "https://github.com/ashinn/chibi-scheme/archive/refs/tags/${CHIBI_VERSION}.tar.gz"
+        echo "${CHIBI_SHA256}  chibi.tgz" | sha256sum -c
+        tar xzf chibi.tgz
+        cd "chibi-scheme-${CHIBI_VERSION}"
+        make -j"$(nproc)" PREFIX="$ORACLES"
+        make install PREFIX="$ORACLES"
+
+    - name: Build Gauche
+      if: steps.oracle-cache.outputs.cache-hit != 'true'
+      run: |
+        curl -sSL -o gauche.tgz "https://github.com/shirok/Gauche/releases/download/release${GAUCHE_VERSION//./_}/Gauche-${GAUCHE_VERSION}.tgz"
+        echo "${GAUCHE_SHA256}  gauche.tgz" | sha256sum -c
+        tar xzf gauche.tgz
+        cd "Gauche-${GAUCHE_VERSION}"
+        # No TLS: the suite never touches the network, and it drops the
+        # mbedtls dependency the Homebrew build carries.
+        ./configure --prefix="$ORACLES" --with-tls=no
+        make -j"$(nproc)"
+        make install
+
+    - name: Run the oracle lane
+      run: |
+        export PATH="$ORACLES/bin:$PATH"
+        export LD_LIBRARY_PATH="$ORACLES/lib:${LD_LIBRARY_PATH:-}"
+        chibi-scheme -V
+        gosh -V | head -1
+        SUITE_ORACLES_REQUIRE_ALL=1 ./scripts/run_suite_oracles.sh
+
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest

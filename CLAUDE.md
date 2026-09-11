@@ -93,6 +93,7 @@ cargo fmt
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh` |
 | GC differential | `run_gc_differential.sh` on release **and** on debug with poison assertions |
 | Rustfmt / Clippy | `cargo fmt --check`, `clippy --all-targets --all-features -D warnings` |
+| Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 The GC lanes and the macOS/Linux split have no local equivalent that anyone
 runs by hand, so pushing is *stronger* verification than the commands above,
