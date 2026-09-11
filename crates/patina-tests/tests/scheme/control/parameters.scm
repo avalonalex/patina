@@ -9,7 +9,7 @@
 ;;     class. The catchable half of the first is in this file, below;
 ;;   - that a parameter prints as `#<parameter>`, which is Patina's own
 ;;     external representation and not a claim another implementation can be
-;;     held to — `external_representation.rs`.
+;;     held to — `data/external-representation.scm`, scoped to Patina there.
 ;;
 ;; The predicate's own truth table lives with the other predicates in
 ;; `compliance/predicates.rs`; this file covers what being a procedure lets a
