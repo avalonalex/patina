@@ -20,8 +20,12 @@
 //! errored and `(procedure? cond)` returned `#f`, which was an accident of `if`
 //! having had no binding to load.
 //!
-//! **It is a desugar-time rule, so it has recorded residuals**, all pinned at
-//! the bottom of this file. The check asks what a name resolves to *while the
+//! **It is a desugar-time rule, which is why this file is Rust.** A rejection
+//! happens before the program runs, so no `guard` inside the program can see
+//! its own form refused; the rows that show the rule *accepting* things are a
+//! suite file, `tests/scheme/expansion/keyword-bindings.scm`.
+//!
+//! **It has recorded residuals**, all pinned at the bottom of this file. The check asks what a name resolves to *while the
 //! form is being desugared*, and what the desugarer knows then is not
 //! everything: a name that is not syntax yet still loads `#<macro>` or
 //! `#<syntax:…>` as a value.
@@ -113,151 +117,21 @@ fn test_a_macro_is_not_a_value_either() {
 // ============================================================================
 // Not rejected — the false positives this could easily have had
 // ============================================================================
-
-/// A local binding wins, so a keyword's *spelling* is an ordinary variable once
-/// something shadows it. This is the check that has to consult `shadowed_names`
-/// rather than the environment alone.
-#[test]
-fn test_a_shadowed_keyword_is_an_ordinary_variable() {
-    assert_program_eval_to("(import (scheme base)) (let ((else 5)) else)", "5");
-    assert_program_eval_to("(import (scheme base)) ((lambda (if) if) 7)", "7");
-    assert_program_eval_to(
-        "(import (scheme base)) (let ((cond 1) (quote 2)) (+ cond quote))",
-        "3",
-    );
-}
-
-/// An internal definition shadows like `letrec*` — over the whole body,
-/// including the forms before it (R7RS §5.3.2). The body scan has to run
-/// before any form is desugared, or #89's value-position check sees the core
-/// binding and rejects a legal program (audit C2), and head position silently
-/// picks the core form over the local binding (audit D6).
-#[test]
-fn test_an_internal_definition_shadows_a_keyword_over_the_whole_body() {
-    // C2: value position. Rejected outright before the scan existed.
-    assert_program_eval_to(
-        "(import (scheme base)) (let () (define if 3) (+ if 1))",
-        "4",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (let () (define when 3) (+ when 1))",
-        "4",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) ((lambda () (define if 3) (+ if 1)))",
-        "4",
-    );
-    // D6: head position. The pre-existing half — silently answered `2`,
-    // because core `if` claimed the head over the body's own binding.
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define (g) (define if (lambda (a b c) 'shadowed)) (if 1 2 3))
-         (g)",
-        "shadowed",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (let () (define cond (lambda args 'shadowed-cond)) (cond 1 2))",
-        "shadowed-cond",
-    );
-    // `begin` splices into the body it appears in, so its definitions bind
-    // there too.
-    assert_program_eval_to(
-        "(import (scheme base)) ((lambda () (begin (define if 4)) (+ if 1)))",
-        "5",
-    );
-    // An inner body's definitions stay inside it.
-    assert_program_eval_to(
-        "(import (scheme base)) ((lambda () (define (g) (define if 7) if) (g)))",
-        "7",
-    );
-    // And a body that defines nothing of the sort is untouched.
-    assert_program_eval_to(
-        "(import (scheme base)) ((lambda () (define x 3) (if (> x 1) 'yes 'no)))",
-        "yes",
-    );
-}
-
-/// F4 — body-position `define-syntax` was the last keyword still recognized by
-/// spelling, so a body that binds the *name* still had its call read as a
-/// macro definition. Recognized through its binding now, like every other
-/// keyword since #88.
-#[test]
-fn test_body_position_define_syntax_is_recognized_through_its_binding() {
-    // Shadowed by a formal: `(define-syntax foo 2)` is an ordinary call of the
-    // procedure the formal is bound to. By spelling it was read as a macro
-    // definition named `foo` with `2` for a transformer, which fails to
-    // compile. chibi answers 12 here too.
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define foo 10)
-         ((lambda (define-syntax) (define-syntax foo 2)) (lambda (a b) (+ a b)))",
-        "12",
-    );
-    // Reached under an import rename, it still defines a macro.
-    assert_program_eval_to(
-        "(import (scheme base) (rename (scheme base) (define-syntax defmac)))
-         ((lambda () (defmac m (syntax-rules () ((_ x) (* x 3)))) (m 4)))",
-        "12",
-    );
-}
-
-/// Quoted data is data. It desugars to a literal and never reaches the check.
-#[test]
-fn test_quoted_syntax_is_data() {
-    assert_program_eval_to("(import (scheme base)) '(if cond else)", "(if cond else)");
-    assert_program_eval_to("(import (scheme base)) (car '(if))", "if");
-    assert_program_eval_to("(import (scheme base)) `(a ,(+ 1 1) else)", "(a 2 else)");
-}
+//
+// Moved to `tests/scheme/expansion/keyword-bindings.scm` (#193 Phase 2): a
+// shadowed keyword, an internal definition over one, `define-syntax` through
+// its binding, quoted keywords, the derived forms, `apply` as a value. They
+// are what the rule proved *works*, which a portable program can observe and
+// chibi and Gauche can arbitrate — all 14 rows agree on all four
+// implementations. What stays here is what a program cannot observe from
+// inside: a rejection the desugarer makes before the program runs, a keyword
+// rebound at the top level, and the residuals.
 
 // That `else` and `=>` still work inside `cond` and `case` — matched as
 // `syntax-rules` literals, never desugared as expressions — is covered on both
 // backends by `compliance/derived.rs` (`test_cond_with_else`,
 // `test_cond_with_arrow`, `test_case_with_else`). `core_syntax_bindings.rs`
 // says in as many words that it does not restate them; neither does this file.
-
-/// The derived forms are all macros whose expansions the check now sees. Any
-/// one of them emitting a keyword in value position would fail here — which is
-/// the cheapest guard against this rule being subtly too strict.
-///
-/// A smoke test, deliberately: each form has its own suite in `compliance/`,
-/// and every one of the ~1400 integration tests goes through this desugarer, so
-/// a real breakage fails hundreds of tests before this one. It earns its place
-/// by naming *why* these five are watched, not by being the only guard.
-#[test]
-fn test_the_derived_forms_still_expand() {
-    assert_program_eval_to(
-        "(import (scheme base)) (do ((i 0 (+ i 1))) ((= i 2) 'done))",
-        "done",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (let-values (((a b) (values 1 2))) (+ a b))",
-        "3",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (guard (e (#t 'caught)) (raise 1))",
-        "caught",
-    );
-    assert_program_eval_to(
-        "(import (scheme base))
-         (define-record-type <p> (mk a) p? (a p-a))
-         (p-a (mk 7))",
-        "7",
-    );
-    assert_program_eval_to(
-        "(import (scheme base)) (let loop ((i 0)) (if (= i 2) 'done (loop (+ i 1))))",
-        "done",
-    );
-}
-
-/// `apply` is a real procedure binding, not a keyword or a macro, so it stays a
-/// value. It is also the one head symbol the desugarer still recognizes by
-/// spelling — the check reads the binding, so the two do not interfere.
-#[test]
-fn test_apply_is_still_a_value() {
-    // `apply` as a *callee* is `callability.rs`'s subject and is covered there;
-    // what belongs here is only that the check does not claim it.
-    assert_program_eval_to("(import (scheme base)) (procedure? apply)", "#t");
-}
 
 // ============================================================================
 // The rule reads bindings, not spellings
@@ -282,9 +156,6 @@ fn test_define_may_rebind_a_keyword_but_set_may_not() {
     assert_program_eval_to("(import (scheme base)) (define if 5) (+ if 1)", "6");
     assert_program_eval_error("(import (scheme base)) (set! if 5)");
     assert_program_eval_error("(import (scheme base)) (set! cond 5)");
-    // A `set!` on an ordinary variable is untouched — the refusal is about what
-    // the name denotes, not about `set!`.
-    assert_program_eval_to("(import (scheme base)) (let ((x 1)) (set! x 2) x)", "2");
 }
 
 /// A keyword that was never imported is an unbound variable, not a misuse of
