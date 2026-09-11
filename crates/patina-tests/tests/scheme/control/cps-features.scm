@@ -1115,6 +1115,65 @@
     (call-with-port (open-input-string "a")
       (lambda (p) (guard (e ((string? e) 'no)) (raise-continuable 'sym))))))
 
+;; ── Escaping out of a callback ──────────────────────────────────────────────
+;;
+;; Moved from `escape_from_primitive.rs` once the trampoline fix made them
+;; portable; what stays there needs a file on disk or `eval`'s environment.
+;; On the VM these were the escape whose result used to be written through a
+;; register base of a frame that no longer existed (`index out of bounds` in
+;; `set_reg_at`, until 2026-08-15); the primitive is *abandoned* now rather
+;; than left running on a stack it no longer owns.
+
+;; The bad register offset tracked frame depth rather than being a fixed
+;; mistake, so escaping twice and from a nested depth is the case that would
+;; catch an off-by-one "fix" working at one depth only.
+(test-equal "an escape out of a callback, repeatedly and from a nested depth"
+  '(deep deep deep)
+  (let ()
+    (define (run) (call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
+    (define (nested) (call/cc (lambda (k) (member 2 '(1 2) (lambda (a b) (k (run)))))))
+    (let* ((a (run)) (b (run)) (c (nested)))
+      (list a b c))))
+
+;; A closure comparator that does *not* escape must still work — the VM's
+;; guard fires on frame depth, and one that fired spuriously would break
+;; every re-entrant call. These are the closure forms, the ones that push a
+;; frame; the primitive-comparator forms are covered elsewhere.
+(test-equal "a closure callback that does not escape still works"
+  '((2 3) (2 . b))
+  (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
+        (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b)))))
+
+;; Reaching the same primitive other than by call position: `apply` and
+;; value-position dispatch go through a different path on the VM, which has
+;; no depth check of its own — they work because the escape is signalled
+;; from the re-entry boundary, and every route unwinds the same way.
+(test-equal "an escape out of a callback reached through apply" 'x
+  (call/cc (lambda (k) (apply member (list 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+
+(test-equal "an escape out of a callback reached in value position" 'x
+  (call/cc (lambda (k)
+    (let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+
+;; The primitive stops when the continuation is invoked, instead of running
+;; on to completion. `member` would otherwise keep calling the comparator for
+;; the remaining elements — each call re-invoking the continuation.
+(test-equal "the escaped-from primitive is abandoned" '(#f (1))
+  (let ((seen '()))
+    (let ((r (call/cc (lambda (k)
+               (member 9 '(1 2 3)
+                 (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
+      (list r (reverse seen)))))
+
+;; The parameter *set* path, which runs a converter through a different
+;; boundary than `make-parameter` construction does. On the VM this used to
+;; lose the enclosing top-level `define` outright.
+(test-equal "an escape out of a parameter converter during parameterize"
+  'from-converter
+  (let ((kk #f))
+    (let ((p (make-parameter 0 (lambda (v) (if kk (kk 'from-converter) v)))))
+      (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))))
+
 ;; A raise inside the callback reaches the outer `guard` as the object that
 ;; was raised. The tree-walker used to report the callback's unhandled raise
 ;; as an *error*, which the outer trampoline then routed to the `guard` as an

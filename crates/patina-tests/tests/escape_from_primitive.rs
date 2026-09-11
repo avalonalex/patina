@@ -30,8 +30,12 @@
 //! returned, by that identity. The rows this file held as `assert_divergence`
 //! quarantines while that was open are plain rows in
 //! `tests/scheme/control/cps-features.scm` now, arbitrated by chibi and
-//! Gauche; the two below stay because they need `eval`'s environment or a
-//! second top-level form, which the suite files cannot spell portably.
+//! Gauche, and so is everything else here that needs neither a file on disk
+//! nor `eval`'s environment (the "Escaping out of a callback" section there).
+//! What stays: the matrix below, whose port rows need real files and whose
+//! `eval` row needs `interaction-environment` to see a script's definitions,
+//! which Gauche's does not; the `eval` escape, for the same reason; and the
+//! port-open test, for the files.
 
 mod common;
 use common::{assert_program_eval_to, scratch_path};
@@ -114,92 +118,6 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     }
 }
 
-/// The bad register offset tracked frame depth rather than being a fixed
-/// mistake, so escaping twice and from a nested depth is the case that would
-/// catch an off-by-one "fix" working at one depth only.
-#[test]
-fn test_escaping_repeatedly_and_from_a_nested_depth() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define (run) (call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
-           (define (nested) (call/cc (lambda (k) (member 2 '(1 2) (lambda (a b) (k (run)))))))
-           (list (run) (run) (nested))"#,
-        "(deep deep deep)",
-    );
-}
-
-/// A closure comparator that does *not* escape must still work — the guard
-/// fires on frame depth, and one that fired spuriously would break every
-/// re-entrant call. The primitive-comparator forms are covered in
-/// `compliance/lists.rs` and `vm_callprimitive.rs`; these are the closure
-/// forms, which are the ones that push a frame.
-#[test]
-fn test_a_closure_callback_that_does_not_escape_still_works() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
-                 (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b))))"#,
-        "((2 3) (2 . b))",
-    );
-}
-
-/// Reaching the same primitives other than by call position. `apply` and
-/// value-position dispatch go through `call_primitive_proc`, which has no
-/// depth check of its own — they work because the escape is now signalled
-/// from the re-entry boundary instead, and every route unwinds the same way.
-#[test]
-fn test_escaping_through_apply_and_value_position() {
-    for form in [
-        "(apply member (list 2 '(1 2 3) (lambda (a b) (k 'x))))",
-        "(let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x))))",
-    ] {
-        assert_program_eval_to(
-            &format!("(import (scheme base) (scheme lazy)) (call/cc (lambda (k) {form}))"),
-            "x",
-        );
-    }
-}
-
-/// The primitive stops when the continuation is invoked, instead of running
-/// on to completion. `member` would otherwise keep calling the comparator for
-/// the remaining elements — each call re-invoking the continuation.
-#[test]
-fn test_the_escaped_from_primitive_is_abandoned() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define seen '())
-           (define r (call/cc (lambda (k)
-                       (member 9 '(1 2 3)
-                         (lambda (a b) (set! seen (cons b seen)) (k #f))))))
-           (list r (reverse seen))"#,
-        "(#f (1))",
-    );
-}
-
-/// A continuation captured *and* invoked inside the callback, returning
-/// normally, is not an escape — the primitive must run to completion. This is
-/// the case a naive "any continuation invocation unwinds the primitive" rule
-/// would break, and the reason the check is a frame-depth comparison rather
-/// than a "was a continuation invoked" flag.
-///
-/// Both backends since 2026-09-10. The tree-walker used to answer `#f` — the
-/// callback's value, not the primitive's — and, followed by one more form,
-/// reached that form with `r` unbound: its nested trampoline read every
-/// continuation invoke as leaving the primitive. The two-form program is kept
-/// because it is the one that showed the rest-of-program corruption; the
-/// rows with oracles are in `tests/scheme/control/cps-features.scm`.
-#[test]
-fn test_a_continuation_used_inside_the_callback_is_not_an_escape() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define log '())
-           (define r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
-           (set! log (cons 'after log))
-           (list r log)"#,
-        "((2 3) (after))",
-    );
-}
-
 /// `eval` and `load` re-enter the VM the same way a higher-order primitive
 /// does, and the first attempt missed them: it detected the escape in
 /// `apply_proc` alone, so `load` kept executing the remaining forms of the
@@ -276,20 +194,5 @@ fn test_an_escape_out_of_a_port_callback_leaves_the_port_open() {
                  (output-port-open? (call-with-output-file "{output}" (lambda (p) p))))"#
         ),
         "((x #\\s) #f (y #t) #f)",
-    );
-}
-
-/// The parameter *set* path, which runs a converter through a different
-/// boundary than `make-parameter` construction does. Before this it lost the
-/// enclosing top-level `define` outright on the VM.
-#[test]
-fn test_escaping_out_of_a_parameter_converter_during_parameterize() {
-    assert_program_eval_to(
-        r#"(import (scheme base))
-           (define kk #f)
-           (define p (make-parameter 0 (lambda (v) (if kk (kk 'from-converter) v))))
-           (define r (call/cc (lambda (k) (set! kk k) (parameterize ((p 1)) 'done))))
-           r"#,
-        "from-converter",
     );
 }
