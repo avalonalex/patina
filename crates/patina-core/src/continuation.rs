@@ -43,6 +43,25 @@ pub struct CpsContinuation {
     /// its prompt, appended to the invoke site's.
     pub boundary: Option<u64>,
 
+    /// The trampoline this continuation's chain ends in.
+    ///
+    /// A chain ends at a `Halt`, and a `Halt` means one of two things: the
+    /// program is over, or a Rust primitive's callback has returned and the
+    /// primitive continues. The tree-walker runs a callback on a nested
+    /// trampoline, so a continuation captured inside one returns *to that
+    /// trampoline*, and invoking it anywhere else has no primitive to return
+    /// to. This is the field the jump reads: the same trampoline resumes the
+    /// chain in place, an enclosing one is unwound to through the primitive
+    /// (the escape), and one that has already returned is an error. It is
+    /// what the VM's frame-depth test in `across_reentry` answers there —
+    /// here a continuation is not a stack, so the answer is recorded.
+    ///
+    /// Every outermost trampoline shares the id `0`: a continuation captured
+    /// in one top-level form and invoked from a later one resumes the rest
+    /// of its own form and then falls through to the next, which is what
+    /// every implementation does at the REPL.
+    pub trampoline: u64,
+
     /// Dynamic wind handlers that were active when this continuation was captured
     /// These need to be reinstalled when the continuation is invoked
     pub dynamic_winds: Vec<DynamicWindRecord>,

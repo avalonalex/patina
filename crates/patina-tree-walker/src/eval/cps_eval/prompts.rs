@@ -55,18 +55,23 @@
 //!   the region's base and the invoke adds the site's lengths back (#164);
 //! - `raise` still touches nothing but the handler stack.
 //!
-//! # What is still shared with `call/cc`
+//! # What is shared with `call/cc`
 //!
-//! A nested trampoline — `apply_from_direct_tagged`, which Rust primitives
-//! call back through — starts every stack empty, so an abort from inside such
-//! a callback to a prompt outside it reports no matching prompt. Winds and
-//! handlers have had that gap since before this module (the "primitive's
-//! callback" entry in the triage doc); prompts inherit it rather than add to
-//! it.
+//! A nested trampoline — the one a Rust primitive's callback runs on — used
+//! to start every stack empty, so an abort from inside such a callback to a
+//! prompt outside it reported no matching prompt; winds and handlers had the
+//! same gap (the "primitive's callback" entry in the triage doc, closed
+//! 2026-09-10). The callback now runs under the caller's stacks
+//! (`callback.rs`), and a `PromptFrame` records the trampoline it was pushed
+//! in, so an abort's landing belongs to the prompt's trampoline and unwinds
+//! through the primitive to reach it — the same escape a full continuation
+//! takes.
 
 use super::CpsEvaluator;
 use super::continuation::continuation_cont_value;
-use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{
+    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, current_trampoline,
+};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::PromptTag;
 use patina_core::tagged_value::TaggedValue;
@@ -146,6 +151,7 @@ impl<'a> CpsEvaluator<'a> {
             cont,
             wind_depth: dynamic_winds.len(),
             handler_depth: exception_handlers.len(),
+            trampoline: current_trampoline(),
         });
         Ok(StepResult::ApplyProc {
             proc: body,
@@ -247,6 +253,7 @@ impl<'a> CpsEvaluator<'a> {
             &cont,
             &cont_env,
             Some(frame.id),
+            current_trampoline(),
             &dynamic_winds[wind_depth..],
             &exception_handlers[handler_depth..],
             &inner_prompts,
@@ -258,7 +265,11 @@ impl<'a> CpsEvaluator<'a> {
         // it resumes into. Travelling there is what runs the after-thunks of
         // every extent being left, each in its own `dynamic-wind` call's
         // environment (`wind.rs`); `prompt_stack` goes along uncut so that a
-        // thunk on the way can itself abort.
+        // thunk on the way can itself abort. The landing belongs to the
+        // trampoline the prompt was pushed in, not to this one: an abort from
+        // inside a primitive's callback to a prompt outside it has to unwind
+        // through the primitive, and that is what the jump's arrival decides
+        // from this id.
         let landing = self.capture(
             &ContValue::AbortLanding {
                 handler: frame.handler,
@@ -267,6 +278,7 @@ impl<'a> CpsEvaluator<'a> {
             },
             &cont_env,
             None,
+            frame.trampoline,
             &dynamic_winds[..wind_depth],
             &exception_handlers[..handler_depth],
             &prompt_stack[..idx],
@@ -363,6 +375,7 @@ impl<'a> CpsEvaluator<'a> {
             cont,
             wind_depth: wind_base,
             handler_depth: handler_base,
+            trampoline: current_trampoline(),
         });
         prompt_stack.extend(target.prompt_stack.iter().map(|inner| PromptFrame {
             wind_depth: inner.wind_depth + wind_base,

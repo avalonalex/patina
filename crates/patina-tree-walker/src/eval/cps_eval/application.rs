@@ -851,13 +851,23 @@ impl<'a> CpsEvaluator<'a> {
 
         // Dispatch through the cached registry index — no name hashing. The
         // owned entry point moves `args` straight into higher-order handlers
-        // instead of re-copying them at the registry boundary.
-        let prim_result = self.evaluator.primitive_registry.apply_cached_owned(
-            qualified_name,
-            registry_index,
-            args,
-            self.evaluator,
-        );
+        // instead of re-copying them at the registry boundary. The context
+        // carries this step's dynamic environment, so a callback the
+        // primitive makes runs under it (`callback.rs`).
+        let prim_result = {
+            let ctx = super::callback::CallbackContext {
+                cps: self,
+                prompt_stack: &prompt_stack,
+                dynamic_winds: &dynamic_winds,
+                exception_handlers: &exception_handlers,
+            };
+            self.evaluator.primitive_registry.apply_cached_owned(
+                qualified_name,
+                registry_index,
+                args,
+                &ctx,
+            )
+        };
 
         match prim_result {
             Ok(result_tagged) => {
@@ -913,11 +923,17 @@ impl<'a> CpsEvaluator<'a> {
                 // Set value (replace top of stack after applying converter)
                 let new_val = if let Some(conv) = converter {
                     // Apply converter to new value using CPS machinery. The
-                    // converter is user code, so anything it raises must reach
-                    // the handlers installed *here* — `apply_from_direct_tagged`
-                    // runs it on a nested trampoline that starts with an empty
-                    // handler stack, so it comes back as a Rust error.
-                    match self.apply_from_direct_tagged(conv, vec![args[0]]) {
+                    // converter is user code, so it runs under this step's
+                    // dynamic environment: a raise inside it reaches the
+                    // handlers installed here, and only what escapes every
+                    // one of them comes back as a Rust error.
+                    match self.apply_from_direct_with(
+                        conv,
+                        vec![args[0]],
+                        prompt_stack.clone(),
+                        dynamic_winds.clone(),
+                        exception_handlers.clone(),
+                    ) {
                         Ok(v) => v,
                         Err(err) => {
                             return self.maybe_route_error_through_cps(

@@ -209,11 +209,12 @@ resolve or a `set!` happen. **The per-node hook must sit at the top of the inner
 (`step.rs:74`), where `current_expr`, `current_env`, and `cont_env` are all in hand.**
 
 **(b) The `dynamic-wind` trampoline needs no second fire site.**
-`apply_from_direct_tagged` (`cps_eval/wind.rs:164`) *does* contain a copy of the driver
-loop (`wind.rs:195`) so that primitive-initiated applications and parameter
-converters can run nested (wind thunks no longer do: since 2026-09-01 a continuation
-jump runs them as `ContValue::Jump` steps of the outer loop) — but that copy contains no `CpsExprKind` dispatch of its
-own: every arm delegates straight back to `eval_one_step` (`wind.rs:209`),
+`apply_from_direct_tagged` (`cps_eval/wind.rs`) used to contain a copy of the driver
+loop so that primitive-initiated applications and parameter
+converters could run nested (wind thunks no longer do: since 2026-09-01 a continuation
+jump runs them as `ContValue::Jump` steps of the outer loop); since 2026-09-10 every
+trampoline is the one `run_trampoline` in `cps_eval/mod.rs`. Either way the loop contains no `CpsExprKind` dispatch of its
+own: every arm delegates straight back to `eval_one_step`,
 `invoke_continuation_step`, and `apply_cps_step`. **A hook at `step.rs:74` therefore
 already fires inside wind handlers**, and no `Unwind` site is needed there either
 (that loop never catches `ContinuationEscape`). Factoring the two driver loops into one

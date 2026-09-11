@@ -1049,52 +1049,84 @@
 (test-equal "a continuation can be the handler for a primitive error" #t
   (error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))))
 
-;; ── The tree-walker's nested trampoline ────────────────────────────────────
+;; ── A primitive's callback ─────────────────────────────────────────────────
 ;;
-;; A Rust primitive's callback runs on a nested trampoline
-;; (`apply_from_direct_tagged`) that starts with every stack empty: no
-;; handlers, no wind records, no prompts. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
-;; §6 tracks it as the "primitive's callback" entry; the prompt side is in
-;; `prompts.scm`.
-;;
-;; **Most of this family cannot be a row here, and the reason is the defect
-;; itself.** A continuation invoked inside the callback — a retry loop, a
-;; `guard` clause declining and re-raising through `handler-k`, an escape —
-;; is misread by that trampoline as leaving the primitive, and what it then
-;; runs to completion is the rest of the *program*: inside a suite file, every
-;; row after this one, from inside the callback, before the outer trampoline
-;; abandons the primitive. Measured 2026-09-10: four such rows recorded no
-;; result at all on the tree-walker and left the file four rows short, and
-;; the same programs followed by one more top-level form reach that form with
-;; the `define` they sit in still unbound. So those pins live in
-;; `escape_from_primitive.rs`, where a program's continuation ends at the
-;; program and `assert_divergence` can say they fail at run time: the
-;; declining-`guard` pair, the callback that uses its own continuation, the
-;; `call-with-port` retry loop, and the escape out of `eval`. What stays here
-;; is the one shape whose wrong answer is delivered *to the row* — as an error
-;; object a `guard` can catch.
+;; A Rust primitive's callback — `member` or `assoc` with a predicate,
+;; `call-with-port`, `force`, a parameter converter — runs on a nested
+;; trampoline on the tree-walker. Until 2026-09-10 that trampoline started with
+;; every stack empty and read every continuation invoke inside the callback as
+;; leaving the primitive, so: a `raise` in the callback found no handler, a
+;; retry loop or a local `call/cc` inside the callback abandoned the primitive
+;; and ran the rest of the *program* from inside it, and an abort from the
+;; callback found no prompt. Inside a suite file "the rest of the program" was
+;; every later row, so four of these were `assert_divergence` quarantines in
+;; `escape_from_primitive.rs` — they vanished as rows rather than failing.
+;; Each trampoline now inherits its caller's stacks and knows which
+;; continuations end in it (`cps_eval/types.rs`, `callback.rs`), and every row
+;; here is an ordinary both-backend assertion. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+;; §6 has the history under "primitive's callback".
 
-;; Tree-walker: a raise inside a primitive's callback reaches the outer
-;; `guard` as the wrong object.
-;;
-;; The callback's `(raise 'x)` finds no handler on the nested trampoline, so
-;; that trampoline reports it as an `unhandled exception: x` *error*, which
-;; the outer trampoline then routes to the `guard` as an error object. A
-;; clause testing for `'x` declines, and the program dies re-raising an
-;; object nobody raised. VM, chibi, Gauche: (sym x). Older than triage
-;; families 22/28 — `main` gave the same — and the same trampoline defect.
-;;
-;; The outermost `guard` is the row's, not the program's: a raw non-error
-;; object reaching SRFI 64's own handler aborts the *file* rather than failing
-;; the row (see `scheme_suite.rs`, "a sharp edge"), and turning whatever
-;; escapes into a value keeps the failure one row wide. Where the inner
-;; `guard` works, the wrapper never fires.
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+;; A `call/cc` retry loop inside a `call-with-port` callback. Two things are
+;; asserted: the value, "012", which says the port stayed open across the
+;; re-entries (R7RS 6.13.1 closes it only "if `proc` returns"; until
+;; 2026-09-01 the tree-walker failed here with `I/O error: port is closed`),
+;; and `after`, which says the rest of the program ran once, after the
+;; primitive returned — the half a one-expression program could not see.
+(test-equal "call-with-port survives an in-extent continuation invoke"
+  '("012" (after))
+  (let ((log '()))
+    (let* ((r (call-with-port (open-output-string)
+                (lambda (p)
+                  (let ((n 0))
+                    (let ((k (call/cc (lambda (c) c))))
+                      (write-string (number->string n) p)
+                      (set! n (+ n 1))
+                      (if (< n 3) (k k)))
+                    (get-output-string p)))))
+           (l (begin (set! log (cons 'after log)) log)))
+      (list r l))))
+
+;; A callback that captures and invokes its *own* continuation, returning
+;; normally, is not an escape: the primitive runs to completion. The
+;; tree-walker used to answer #f — the callback's value — and, followed by
+;; one more form, reached it with the `define` still unbound.
+(test-equal "a callback using its own continuation returns the primitive's value"
+  '((2 3) (after))
+  (let ((log '()))
+    (let* ((r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
+           (l (begin (set! log (cons 'after log)) log)))
+      (list r l))))
+
+;; A declining `guard` clause inside the callback. R7RS 7.3's `guard`
+;; re-raises a declined condition by jumping back *into* the raise point
+;; through `handler-k` and calling `raise-continuable` there, so the next
+;; handler out is the one installed around the raise — which on the
+;; tree-walker's old empty-stacked trampoline was nothing, and the raw symbol
+;; escaped every handler in the program. Both raise forms.
+(test-equal "a declining guard inside a port callback reaches the outer guard: raise"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (call-with-port (open-input-string "a")
+      (lambda (p) (guard (e ((string? e) 'no)) (raise 'sym))))))
+
+(test-equal "a declining guard inside a port callback reaches the outer guard: raise-continuable"
+  '(outer sym)
+  (guard (outer (#t (list 'outer outer)))
+    (call-with-port (open-input-string "a")
+      (lambda (p) (guard (e ((string? e) 'no)) (raise-continuable 'sym))))))
+
+;; A raise inside the callback reaches the outer `guard` as the object that
+;; was raised. The tree-walker used to report the callback's unhandled raise
+;; as an *error*, which the outer trampoline then routed to the `guard` as an
+;; error object whose message was `unhandled exception: x`; a clause testing
+;; for `'x` declined, and the program died re-raising an object nobody
+;; raised. This row was the one of the family that could be a scoped
+;; expectation while the rest were Rust: its wrong answer was at least
+;; delivered to the row.
 (test-equal "a raise inside a port callback reaches the guard as the raised object"
   '(sym x)
-  (guard (escaped (#t (list 'escaped (error-object? escaped))))
-    (guard (e ((symbol? e) (list 'sym e))
-              ((error-object? e) (raise (error-object-message e))))
-      (call-with-port (open-input-string "a") (lambda (p) (raise 'x))))))
+  (guard (e ((symbol? e) (list 'sym e))
+            ((error-object? e) (raise (error-object-message e))))
+    (call-with-port (open-input-string "a") (lambda (p) (raise 'x)))))
 
 (test-end)

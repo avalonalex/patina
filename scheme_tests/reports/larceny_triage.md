@@ -479,7 +479,7 @@ file's header explains the hard way.
 - Verified: `(genlam)` answers 101 on both backends, as chibi does; `a_macro_introduced_variable_binding_renames_its_scope` asserts all three binding forms at the right answer on both, having been asserted at the wrong one before.
 
 ### 38. A scoped write cannot reach the binding its own read can — tree-walker only — ✅ fixed 2026-08-27; the fallback halves closed 2026-08-31 with family 36's step 2
-- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "an introduced macro can assign to an introduced binding" and "an introduced macro can assign to a source-written binder" (both plain assertions since the 2026-08-27 fix; the earlier `…_diverges` names and their `assert_divergence` quarantine are gone)
+- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "an introduced macro can assign to an introduced binding" and "an introduced macro can assign to a source-written binder" (both plain assertions since the 2026-08-27 fix; the earlier `…_diverges` names and their Rust divergence quarantine are gone — and so is that helper, since 2026-09-10)
 - Also `crates/patina-tests/tests/hygiene_matrix.rs`, where this family's remaining half is the single row `internal-def/inside/write`: the tree-walker answers `(5 99)` where chibi, Racket and the VM answer `(99 global)`. It goes green with family 36's fix rather than before it.
 - `Environment::get_with_scopes` resolves by subset — the largest binding scope set contained in the reference's — while `set_with_scopes` demands an *exact* match. A reference can read a binding it cannot write, and the write falls through to the root's by-name `set`.
 

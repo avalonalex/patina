@@ -100,14 +100,28 @@ impl<'a> CpsEvaluator<'a> {
             });
         }
 
-        // Arrived. The trampoline that catches this resumes `target` with the
-        // environment it captured (`mod.rs`). Every `apply_from_direct_tagged`
-        // between here and there unwinds on the way — its loop `?`s each step
-        // — but a nested `eval_cps` run (the `eval` primitive, through
-        // `ApplyContext::eval_expr`) has its own copy of the catching arm and
-        // resumes `target` *inside* itself, so the escape never leaves it and
-        // the primitive returns the nested run's `Halt` value instead. That
-        // is one face of PRD §6's open "primitive's callback" entry.
+        // Arrived. Which trampoline resumes `target` is the one its chain
+        // ends in (`CpsContinuation::trampoline`): this one resumes it in
+        // place, as a step; any other is reached by parking the escape and
+        // unwinding the Rust stack — through every primitive whose callback
+        // this is, each abandoned by the `?` on its loop — until the loop
+        // whose id matches catches it (`run_trampoline`). Before this test
+        // every arrival parked, so a continuation captured *inside* a
+        // callback and invoked there escaped the primitive too, and the
+        // outermost loop then ran the rest of the callback as the rest of
+        // the program: the callback's value became the form's, and the
+        // `define` around the primitive never bound anything.
+        if target.trampoline == super::types::current_trampoline() {
+            return Ok(StepResult::InvokeContinuation {
+                cont: super::continuation::continuation_cont_value(&target),
+                value,
+                env: target.env.clone(),
+                cont_env: target.captured_cont_env.clone(),
+                prompt_stack: target.prompt_stack.clone(),
+                dynamic_winds: target.dynamic_winds.clone(),
+                exception_handlers: target.exception_handlers.clone(),
+            });
+        }
         set_pending_escape(value, target);
         Err(EvalError::ContinuationEscape)
     }
@@ -183,107 +197,53 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
-    /// Apply a procedure from direct (non-CPS) context
-    ///
-    /// This is the primary entry point for calling procedures from code that
-    /// wasn't compiled with CPS transformation.
+    /// Apply a procedure from outside any step — `Backend::apply`, and the
+    /// direct-mode `Evaluator::apply`. The run starts with every stack empty
+    /// because there is no caller's dynamic environment to inherit; a
+    /// primitive's callback goes through [`Self::apply_from_direct_with`]
+    /// instead, which inherits the step's.
     pub fn apply_from_direct_tagged(
         &self,
         proc: TaggedValue,
         args: Vec<TaggedValue>,
     ) -> Result<TaggedValue, EvalError> {
-        // This is a second trampoline and deliberately has **no safe point**:
-        // its `current_step` is a Rust local that no root provider sees. The
-        // guard makes "every trampoline defers for its extent" structural
-        // rather than relying on this always being entered from within
-        // `eval_in_env` (`docs/GC_DESIGN.md` §7).
-        let _gc_defer = patina_core::GcDeferGuard::new(self.evaluator.global_env.heap());
+        self.apply_from_direct_with(proc, args, Vec::new(), Vec::new(), Vec::new())
+    }
 
+    /// Run `proc` on a nested trampoline under the given dynamic environment
+    /// — the three stacks of the step that is calling the primitive whose
+    /// callback this is — and return what it delivers to its `Halt`.
+    ///
+    /// Inheriting the stacks is what lets a `raise` inside the callback find
+    /// the handlers installed around the primitive, a `dynamic-wind` inside
+    /// it sit on the right records, and an abort inside it find a prompt
+    /// outside. Until 2026-09-10 the run fabricated empty stacks, and every
+    /// one of those found nothing (PRD §6's "primitive's callback" entry).
+    ///
+    /// The run has its own trampoline id, so a continuation captured in the
+    /// callback returns here, an outer continuation invoked in the callback
+    /// escapes through the primitive, and the primitive is abandoned by the
+    /// `?` on the step that made the call. Its `GcDeferGuard` is the loop's
+    /// (`run_trampoline`): every nested trampoline defers for its extent.
+    pub(super) fn apply_from_direct_with(
+        &self,
+        proc: TaggedValue,
+        args: Vec<TaggedValue>,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<TaggedValue, EvalError> {
         let env = self.evaluator.global_env.clone();
-        let cont_env = ContEnv::new();
-        let prompt_stack = Vec::new();
-        let dynamic_winds = Vec::new();
-        let exception_handlers = Vec::new();
-
-        // Start with ApplyProc step with Halt continuation
-        let mut current_step = self.apply_cps_step(
+        let initial = StepResult::ApplyProc {
             proc,
             args,
-            ContValue::Halt,
-            env.clone(),
-            cont_env,
+            cont: ContValue::Halt,
+            env,
+            cont_env: ContEnv::new(),
             prompt_stack,
             dynamic_winds,
             exception_handlers,
-        )?;
-
-        // Run trampoline until done
-        loop {
-            match current_step {
-                StepResult::Done(value) => {
-                    return Ok(value);
-                }
-
-                StepResult::Continue {
-                    expr,
-                    env,
-                    cont_env,
-                    prompt_stack,
-                    dynamic_winds,
-                    exception_handlers,
-                } => {
-                    current_step = self.eval_one_step(
-                        &expr,
-                        env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds,
-                        exception_handlers,
-                    )?;
-                }
-
-                StepResult::InvokeContinuation {
-                    cont,
-                    value,
-                    env,
-                    cont_env,
-                    prompt_stack,
-                    dynamic_winds,
-                    exception_handlers,
-                } => {
-                    current_step = self.invoke_continuation_step(
-                        cont,
-                        value,
-                        env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds,
-                        exception_handlers,
-                    )?;
-                }
-
-                StepResult::ApplyProc {
-                    proc,
-                    args,
-                    cont,
-                    env,
-                    cont_env,
-                    prompt_stack,
-                    dynamic_winds,
-                    exception_handlers,
-                } => {
-                    current_step = self.apply_cps_step(
-                        proc,
-                        args,
-                        cont,
-                        env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds,
-                        exception_handlers,
-                    )?;
-                }
-            }
-        }
+        };
+        self.run_trampoline(initial, None)
     }
 }

@@ -347,12 +347,12 @@ answer is **delivered to the row**: a wrong value, or an error a `guard` in
 the row can catch. When it is not — the failure escapes every handler in the
 program, or a continuation is invoked that runs the rest of the file from
 where it was captured — the row takes every row after it down with it, and
-the pin stays in Rust: `assert_divergence` for a failure, two per-backend
-assertions for a value. Today that is the tree-walker's nested-trampoline
-family, all of it in `escape_from_primitive.rs`. The inventory of what is
+the pin stays in Rust, as per-backend assertions. No such pin exists today:
+the one family that needed it, the tree-walker's nested trampoline, closed on
+2026-09-10, and the `assert_divergence` helper that spelled it went with the
+last caller (`git log -S assert_divergence` has it). The inventory of what is
 knowingly wrong is `rg 'patina-(vm|tree-walker) \(test-expect-fail'
-crates/patina-tests/tests/scheme` together with `rg assert_divergence
-crates/patina-tests`, plus the two matrix files.
+crates/patina-tests/tests/scheme`, plus the two matrix files.
 
 **Where an oracle refuses to *compile* a row, neither form works.**
 `test-skip` suppresses evaluation, so a row it guards is still read and
@@ -546,11 +546,9 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   (`hygiene.scm`, `syntax-rules-literals.scm`, `let-syntax.scm`,
   `ellipsis.scm`); add a portable hygiene row there
 - `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
-  and the home of the divergence pins a suite row cannot hold (the
-  tree-walker's nested-trampoline family, via `assert_divergence`).
-  `backend_divergence.rs` is gone: its rows are in `control/cps-features.scm`,
-  `control/callability.scm`, `control/prompts.scm` and `expansion/hygiene.scm`,
-  the open ones as backend-scoped expectations
+  on both backends. `backend_divergence.rs` is gone: its rows are in
+  `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
+  and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
 - `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
   24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
 - `complex_numbers.rs`, `record_types.rs`, `scheme_eval.rs` — feature areas

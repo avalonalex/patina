@@ -1409,8 +1409,31 @@ jump escaped out of it; as steps, the second jump starts from the wind stack the
 with the raising record already popped, so the outer thunk is still on its path. Converged in
 the "a continuation from an after thunk still runs the outer after" row (`tests/scheme/control/cps-features.scm`).
 
-**Tree-walker: a primitive's callback runs on a nested trampoline with no handler stack** — ❌
-**open**. What the entry above did *not* close. `apply_from_direct_tagged` still exists, and every
+**Tree-walker: a primitive's callback runs on a nested trampoline with no handler stack** — ✅
+**fixed 2026-09-10**, by giving each trampoline an identity rather than by the `MachineState`
+refactor proposed below. Two changes, one per half of the diagnosis. (1) The callback's trampoline
+**inherits the calling step's three stacks**: a primitive is now handed a `CallbackContext`
+(`cps_eval/callback.rs`) carrying the step's `prompt_stack`, `dynamic_winds` and
+`exception_handlers` by reference, and `apply_proc` / `eval_expr` start the nested run under
+clones of them — so a raise in the callback finds the handlers around the primitive, and an abort
+finds the prompt outside. (2) **Every trampoline has an id, and a captured continuation records
+the one its chain ends in** (`CpsContinuation::trampoline`, `PromptFrame::trampoline`;
+`cps_eval/types.rs`). A jump's arrival compares: the same trampoline resumes the chain in place as
+a step; an enclosing one is reached by the existing parked escape, which unwinds through the
+primitive; a nested one that has already returned is an explicit error rather than a silently
+wrong program. Outermost trampolines share id 0, so a continuation captured in one top-level form
+and invoked from a later one still works as at every REPL. The two loops that used to differ
+(`eval_in_env`'s and `apply_from_direct_tagged`'s) are one `run_trampoline`. Measured on the eight
+shapes below and the callback rows of `tests/scheme/control/cps-features.scm` and `prompts.scm`:
+every one answers as the VM, chibi and Gauche do; chibi's R7RS suite stays 1226 of 1226 on both
+backends. What it also found: the two rows recorded as "converged" (the `call-with-port` retry
+loop, a callback using its own continuation) were correct only as one-expression programs — with
+one more top-level form the tree-walker reached it with the `define` unbound, because the rest of
+the program had run from inside the callback. **Now unblocked:** the `guard` success-path
+deviation recorded under "This row now blocks something concrete" — restoring R7RS 7.3's verbatim
+line is the follow-up, with the Larceny lane as its measurement. The diagnosis as it stood:
+
+`apply_from_direct_tagged` still exists, and every
 callback a Rust higher-order primitive makes — `member` and `assoc` with a predicate,
 `call-with-port` and the `call-with-*-file` family, `force`, a parameter converter — runs on it
 with fabricated empty stacks, so a raise or a continuation invoke inside the callback cannot see

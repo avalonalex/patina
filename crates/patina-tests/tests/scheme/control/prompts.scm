@@ -15,8 +15,8 @@
 ;; Every row here is a **both-backend** assertion, and most used to be a
 ;; divergence: the tree-walker had no prompt API until 2026-09-04 (issue #169),
 ;; and the review of the PR that added it filed four VM defects (#176–#179),
-;; all since fixed. The one row still open carries a backend-scoped
-;; expectation — see `docs/TEST_ORGANIZATION.md` for the mechanism.
+;; all since fixed; the tree-walker's last one, an abort out of a primitive's
+;; callback, closed 2026-09-10.
 ;;
 ;; The 24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6 is
 ;; `control_flow_matrix.rs`, and the rest of `cps_features.rs`'s prompt half
@@ -179,24 +179,19 @@
     (lambda () (list 'y (force (delay (abort-current-continuation t-177 'a3)))))
     t-177 (lambda (v k) (list 'h v))))
 
-;; Tree-walker: an abort out of a callback reached through a *nested
-;; trampoline* does not find its prompt.
-;;
-;; The VM answers this since #177. The tree-walker's `apply_from_direct_tagged`
-;; — the trampoline a Rust primitive's callback runs on — starts every stack
-;; empty, so the abort searches a prompt stack that has none of the caller's
-;; prompts and raises "no matching prompt tag", which the wrapper `guard` then
-;; catches: (caught #t) where the VM says (h x). `dynamic-wind` records and
-;; exception handlers have the same hole on that path and predate prompts
-;; entirely; it is the "primitive's callback" entry in
-;; `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, and `cps_eval/prompts.rs` names it
-;; as inherited rather than added. When the tree-walker starts answering
-;; (h x), delete the expectation line and close that entry.
+;; An abort out of a callback reached through a *nested trampoline* — the
+;; one a Rust primitive's callback runs on, on the tree-walker — finds its
+;; prompt. Both backends since 2026-09-10; the VM since #177. The
+;; tree-walker's callback trampoline used to start with every stack empty,
+;; so the abort searched a prompt stack holding none of the caller's prompts
+;; and raised "no matching prompt tag", which the wrapper `guard` then
+;; caught: (caught #t). The callback now runs under the caller's stacks, and
+;; the landing belongs to the prompt's own trampoline, so the abort unwinds
+;; through `assoc` to it (`cps_eval/prompts.rs`).
 ;;
 ;; `force` is not the probe here: the tree-walker routes it through the CPS
-;; evaluator rather than the trampoline, so it answers (h a1) there. A
+;; evaluator rather than the trampoline, so it answered (h a1) throughout. A
 ;; comparator passed to `assoc` does go through the trampoline.
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
 (test-equal "an abort out of a nested trampoline callback reaches its prompt" '(h x)
   (guard (e (#t (list 'caught (error-object? e))))
     (call-with-continuation-prompt

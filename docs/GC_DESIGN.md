@@ -335,7 +335,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `Evaluator.global_env` | `eval/mod.rs:43` | `visit_env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
 | `PENDING_ESCAPE` thread-local | `eval/cps_eval/types.rs:21-31` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root |
-| Suspended outer `StepResult`s in nested trampolines | `apply_from_direct_tagged`, `eval/cps_eval/wind.rs:223` | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
+| Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
 | Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
 

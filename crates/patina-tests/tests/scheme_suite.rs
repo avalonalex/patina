@@ -91,7 +91,7 @@ use std::path::{Path, PathBuf};
 const SUITE: &[(&str, i64)] = &[
     ("control/callability.scm", 30),
     ("control/case-lambda.scm", 20),
-    ("control/cps-features.scm", 82),
+    ("control/cps-features.scm", 86),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
     ("control/prompts.scm", 25),

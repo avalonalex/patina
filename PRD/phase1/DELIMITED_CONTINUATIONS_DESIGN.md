@@ -100,11 +100,13 @@ An apply-time match sees the primitive whatever name reached it; a syntactic
 one only sees the call it was written in — which is why `call/cc` still does
 not work as a value (Track Q §1.2).
 
-**What is still shared with `call/cc`**: a nested trampoline
-(`apply_from_direct_tagged`, which Rust primitives call back through) starts
-every stack empty, so an abort from inside such a callback to a prompt outside
-it reports no matching prompt. Winds and handlers have had that gap since
-before prompts (the "primitive's callback" entry in the triage doc).
+**What is shared with `call/cc`**: the nested trampoline a Rust primitive's
+callback runs on used to start every stack empty, so an abort from inside such
+a callback to a prompt outside it reported no matching prompt — the
+"primitive's callback" entry in the triage doc, which winds and handlers had
+too. Closed 2026-09-10: the callback inherits the caller's stacks, and a
+`PromptFrame` records its trampoline so the abort's landing unwinds through
+the primitive (`cps_eval/prompts.rs`, "What is shared with `call/cc`").
 
 ---
 

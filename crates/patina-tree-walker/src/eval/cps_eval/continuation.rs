@@ -6,7 +6,10 @@
 //! - Decoding a reified continuation for re-entry (`continuation_cont_value`)
 
 use super::CpsEvaluator;
-use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::types::{
+    ContEnv, ContValue, ExceptionHandler, OUTERMOST_TRAMPOLINE, PromptFrame, StepResult,
+    current_trampoline,
+};
 use crate::eval::error::EvalError;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::tagged_value::TaggedValue;
@@ -51,14 +54,23 @@ impl<'a> CpsEvaluator<'a> {
             // the one it is being handed around in.
             ContValue::Captured(k) => k.clone(),
 
-            // Halt ends the program; nothing runs after it, so it names no
-            // dynamic state rather than the caller's.
-            ContValue::Halt => self.capture(cont, cont_env, None, &[], &[], &[]),
+            // An outermost Halt ends the program; nothing runs after it, so
+            // it names no dynamic state rather than the caller's. A nested
+            // one returns to the primitive whose callback this is, which
+            // continues under the caller's stacks — so those are what the
+            // continuation names, and what a jump back to it must not
+            // "leave": with empty stacks recorded here, a callback's
+            // tail-position `call/cc` re-entered in place would run the
+            // after-thunk of every extent the primitive was called under.
+            ContValue::Halt if current_trampoline() == OUTERMOST_TRAMPOLINE => {
+                self.capture(cont, cont_env, None, current_trampoline(), &[], &[], &[])
+            }
 
             _ => self.capture(
                 cont,
                 cont_env,
                 None,
+                current_trampoline(),
                 dynamic_winds,
                 exception_handlers,
                 prompt_stack,
@@ -69,6 +81,8 @@ impl<'a> CpsEvaluator<'a> {
     /// Build the continuation object for `cont` carrying exactly the dynamic
     /// state given: a full continuation when `boundary` is `None`, a
     /// composable one delimited by that boundary otherwise (`prompts.rs`).
+    /// `trampoline` is the one the chain ends in — the current one for a
+    /// capture, the prompt's own for an abort's landing.
     ///
     /// The one encoder, as `continuation_cont_value` is the one decoder. The
     /// chain is stored one of two ways: a `Local` is flattened into the
@@ -79,11 +93,13 @@ impl<'a> CpsEvaluator<'a> {
     /// `__dw_after__` / `__dw_wind_id__` / `__dw_original__` sentinel
     /// encoding existed to preserve, in ~90 lines across three files, because
     /// the storage type could not hold a ContValue. It can now.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn capture(
         &self,
         cont: &ContValue,
         cont_env: &ContEnv,
         boundary: Option<u64>,
+        trampoline: u64,
         dynamic_winds: &[DynamicWindRecord],
         exception_handlers: &[ExceptionHandler],
         prompt_stack: &[PromptFrame],
@@ -134,6 +150,7 @@ impl<'a> CpsEvaluator<'a> {
             param,
             env,
             boundary,
+            trampoline,
             dynamic_winds: dynamic_winds.to_vec(),
             prompt_stack: prompt_stack.to_vec(),
             exception_handlers: exception_handlers.to_vec(),
