@@ -81,7 +81,7 @@ Complex numbers form a **field** - all these properties hold:
 - a × 1 = a ✓
 - a × 0 = 0 ✓
 
-All these properties are tested in `complex_numbers.rs`!
+All these properties are tested in `tests/scheme/data/numeric-operations.scm`'s "Complex arithmetic" section, on both backends and under chibi and Gauche.
 
 ## Why These Tests Matter
 
@@ -97,11 +97,8 @@ All these properties are tested in `complex_numbers.rs`!
 # Run a specific example
 cargo run < tests/fixtures/examples/complex_fibonacci.scm
 
-# Run all complex number tests
-cargo test --test complex_numbers
-
-# Run with output
-cargo test --test complex_numbers -- --nocapture
+# Run the complex-number rows (they are part of the Scheme suite)
+./target/release/patina crates/patina-tests/tests/scheme/data/numeric-operations.scm
 ```
 
 ## Future Extensions

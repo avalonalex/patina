@@ -102,7 +102,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/case-mapping.scm", 2),
     ("data/conversion.scm", 62),
     ("data/external-representation.scm", 12),
-    ("data/numeric-operations.scm", 38),
+    ("data/numeric-operations.scm", 47),
     ("data/record-types.scm", 23),
     ("expansion/define-values.scm", 14),
     ("expansion/ellipsis.scm", 7),
@@ -125,6 +125,7 @@ const SUITE: &[(&str, i64)] = &[
     ("stdlib/process-context.scm", 12),
     ("stdlib/random.scm", 4),
     ("stdlib/scheme-r5rs.scm", 20),
+    ("stdlib/time.scm", 5),
 ];
 
 fn scheme_dir() -> PathBuf {

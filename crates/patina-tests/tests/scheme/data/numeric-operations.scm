@@ -314,4 +314,89 @@
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "atan of i is our 0.0+inf.0i" "0.0+inf.0i" (written (atan 0+1i)))
 
+;; ── Complex arithmetic ─────────────────────────────────────────────────────
+;;
+;; Moved from `crates/patina-tests/tests/complex_numbers.rs` (#193 Phase 2),
+;; which is deleted. It built a `TreeWalkInterpreter` by hand for every one of
+;; its 25 tests, so none had run on the VM, and it compared printed text.
+;; Here arithmetic is compared as numbers — `equal?` where every result is a
+;; non-real complex, `=` where a result collapses to a real, since Gauche has
+;; no exact complex numbers and answers 0.0 where the rest answer 0 — and the
+;; two claims that are *not* about value get rows of their own: that a zero
+;; imaginary part leaves an exact real, and how Patina writes the results.
+
+(test-equal "complex addition and subtraction"
+  '(4+6i 3+2i 6+6i 8+4i 12+3i 3+4i 3+4i 3+4i)
+  (list (+ 1+2i 3+4i) (+ 5+3i -2-1i) (+ 1+1i 2+2i 3+3i)
+        (+ 3+4i 5) (+ 10 2+3i) (- 5+7i 2+3i)
+        (+ 0 3+4i) (+ 3+4i 0)))
+
+(test-equal "complex multiplication and negation"
+  '(5+i 4+6i 3+6i -3-4i 5-2i -i +2i -2i +12i)
+  (list (* 2+3i 1-1i) (* 2+3i 2) (* 3 1+2i)
+        (- 3+4i) (- -5+2i) (- +i)
+        (* 1+1i 1+1i) (* 1-1i 1-1i)
+        (* (+ 1+i 2+2i) (- 3+3i 1+1i))))
+
+;; Results whose imaginary part cancels, compared as numbers.
+(test-equal "products and differences that cancel to reals"
+  '(#t #t #t #t #t #t #t #t)
+  (map = (list (* 1+i 1-i) (* +i +i) (* -i -i) (* (* +i +i) +i)
+               (* (* +i +i) (* +i +i)) (* 3+4i 3-4i)
+               (- 10+5i 10+5i) (+ 3+4i -3-4i))
+       '(2 -1 -1 -i 1 25 0 0)))
+
+;; With exact parts, a zero imaginary part leaves an exact *real*: R7RS
+;; §6.2.6 has `(real? -2.5+0i)` answer #t. Gauche has no exact complex
+;; numbers, so its results are inexact (registered as latitude).
+(test-equal "an exact complex whose imaginary part cancels is an exact real"
+  '((#t #t) (#t #t) (#t #t) (#t #t) (#t #t))
+  (map (lambda (x) (list (real? x) (exact? x)))
+       (list (* 1+i 1-i) (* +i +i) (- 10+5i 10+5i) (* 3+4i 3-4i) (* 0 3+4i))))
+
+;; The algebra holds: a difference of squares, distribution, association.
+(test-equal "complex arithmetic obeys the field identities" '(#t #t #t)
+  (let ((z 3+4i) (w 1+2i) (a 2+3i) (b 1+1i) (c 4-2i))
+    (list (= (* (- z w) (+ z w)) (- (* z z) (* w w)))
+          (= (* a (+ b c)) (+ (* a b) (* a c)))
+          (= (* (* 1+2i 3-1i) 2+2i) (* 1+2i (* 3-1i 2+2i))))))
+
+;; Iterations that stay complex, or pass through the reals and back.
+(test-equal "iterated complex arithmetic" '(#t #t #t #t #t #t #t #t #t)
+  (let ()
+    (define (complex-fib n a b)
+      (if (= n 0) a (if (= n 1) b (complex-fib (- n 1) b (+ a b)))))
+    (define (julia z c n)
+      (if (= n 0) z (julia (+ (* z z) c) c (- n 1))))
+    (map = (list (complex-fib 0 0+0i 0+1i) (complex-fib 1 0+0i 0+1i)
+                 (complex-fib 3 0+0i 0+1i) (complex-fib 5 0+0i 0+1i)
+                 (complex-fib 2 1+1i 1-1i) (complex-fib 5 1+1i 1-1i)
+                 (julia 2+0i 0+0i 1) (julia 2+0i 0+0i 2) (julia 0+1i 0+0i 1))
+         '(0 +i +2i +5i 2 8-2i 4 16 -1))))
+
+;; Literal syntax with inexact and rational parts, and in polar form.
+(test-equal "complex literals with inexact and rational parts"
+  '(3.5 2.7 1.0 -0.5 #t #t)
+  (list (real-part 3.5+2.7i) (imag-part 3.5+2.7i)
+        (real-part 1.0-0.5i) (imag-part 1.0-0.5i)
+        (= (real-part 1/2+3/4i) 1/2) (= (imag-part 1/2+3/4i) 3/4)))
+
+(test-equal "polar literals" '(#t #t #t)
+  (let ((close? (lambda (a b) (< (abs (- a b)) 1e-4))))
+    (list (close? (real-part 1@0) 1)
+          (close? (imag-part 1@1.5708) 1)
+          (close? (magnitude (+ 1 (+ -0.5+0.866i -0.5-0.866i))) 0))))
+
+;; How Patina writes these results — the elided unit and zero parts, and the
+;; collapse to a plain real. R7RS leaves the spelling to the writer, and the
+;; oracles elide differently (see "make-rectangular" above), so this row is
+;; Patina's.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "how complex results are written"
+  '("-1-i" "+i" "-i" "+5i" "-3i" "3+i" "5-i" "3.5+2.7i" "1.0-0.5i"
+    "+2i" "-2i" "+12i" "8-2i" "0" "25")
+  (map written (list -1-1i +i -i +5i -3i 3+i 5-i 3.5+2.7i 1.0-0.5i
+                     (* 1+1i 1+1i) (* 1-1i 1-1i) (* (+ 1+i 2+2i) (- 3+3i 1+1i))
+                     8-2i (- 10+5i 10+5i) (* 3+4i 3-4i))))
+
 (test-end)
