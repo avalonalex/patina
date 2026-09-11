@@ -124,7 +124,7 @@ Two reasons to reach for a `.scm` file first:
   not migrate at all until this existed, and the round-trip row it enabled found
   a live writer bug. Copies must stay identical; one using `display` would
   change what a whole file asserts. Where printing is *incidental* to the row,
-  the loss is real and that coverage belongs in `external_representation.rs`,
+  the loss is real and that coverage belongs in `data/external-representation.scm`,
   which asserts on rendering deliberately. Where printing *is* the row, keep it
   rather than relocating it: `data/circular-data.scm` is the worked example at
   scale — 20 of its 27 rows assert an exact printed form, and it says in its own

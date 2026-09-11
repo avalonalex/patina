@@ -90,7 +90,7 @@
 ;; check of the same call — and `test-equal` compares with `equal?`, so those
 ;; two are what the three rows already say. The printed form is not lost so
 ;; much as not the point: the claim is that the escape yields the *symbol*, and
-;; `external_representation.rs` is where rendering is asserted deliberately.
+;; `data/external-representation.scm` is where rendering is asserted deliberately.
 (define-syntax make-ellipsis (syntax-rules () ((_) (quote (... ...)))))
 
 (test-equal "an escaped ellipsis alone yields the symbol" '...

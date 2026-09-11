@@ -101,6 +101,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/circular-data.scm", 36),
     ("data/case-mapping.scm", 2),
     ("data/conversion.scm", 62),
+    ("data/external-representation.scm", 12),
     ("data/numeric-operations.scm", 38),
     ("data/record-types.scm", 23),
     ("expansion/define-values.scm", 14),

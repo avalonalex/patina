@@ -27,7 +27,7 @@
 mod common;
 use common::{
     ErrorClass, assert_program_eval_error, assert_program_eval_error_at, assert_program_eval_to,
-    eval_program_tree_walker, eval_program_vm,
+    eval_program_tree_walker, eval_program_vm, try_eval_program_tree_walker, try_eval_program_vm,
 };
 
 /// The known limit, stated as behaviour: `procedure?` is *wider* than what the
@@ -308,4 +308,66 @@ fn a_wind_thunk_reaches_the_probe_it_cannot_satisfy() {
         ErrorClass::AtRuntime,
         "number of arguments: expected at least 2, got 0",
     );
+}
+
+// ─── The uncaught-error diagnostic ───────────────────────────────────────────
+//
+// From `external_representation.rs` when it migrated (#193 Phase 2): the rest
+// of that file is `tests/scheme/data/external-representation.scm`, but an
+// error nothing handles is observable only from outside the program, which is
+// this file's class.
+
+/// Where the gap cost the most: an error nothing handles ends the program, and
+/// on the VM the message that ended it was `unhandled exception: #<unknown>`.
+///
+/// The two backends still word this differently, and the test says so rather
+/// than settling for a substring both happen to contain. The VM formats the
+/// raised object with the datum writer, so it now carries the irritants; the
+/// tree-walker's `error` never builds the heap object at all — it raises an
+/// `EvalError` whose `Display` drops the `irritants_display` it computed. The
+/// wording is not the property under test, but neither diagnostic may fall
+/// back to `#<unknown>`, and that part holds on both.
+#[test]
+fn test_an_uncaught_error_names_its_message() {
+    for (backend, result, expected) in [
+        (
+            "tree-walker",
+            try_eval_program_tree_walker(r#"(error "boom" 1 2)"#),
+            "Scheme exception (Error): boom",
+        ),
+        (
+            "vm",
+            try_eval_program_vm(r#"(error "boom" 1 2)"#),
+            "unhandled exception: #<error-object: boom 1 2>",
+        ),
+    ] {
+        let message = result.expect_err("nothing handles the error");
+        assert!(
+            message.contains(expected),
+            "[{backend}] expected the diagnostic to contain {expected:?}, got: {message}"
+        );
+        assert!(
+            !message.contains("#<unknown>"),
+            "[{backend}] diagnostic fell back to #<unknown>: {message}"
+        );
+    }
+}
+
+/// Re-raising a caught error object takes *both* backends through the writer,
+/// so this is the shape that pinned the gap on the tree-walker too. It is what
+/// the third-party compat harness hit, where a library's own error handling
+/// reported `unhandled exception: unhandled exception: #<unknown>`.
+#[test]
+fn test_a_re_raised_error_object_names_its_message() {
+    let code = r#"(raise (guard (e (#t e)) (error "boom" 1 2)))"#;
+    for (backend, result) in [
+        ("tree-walker", try_eval_program_tree_walker(code)),
+        ("vm", try_eval_program_vm(code)),
+    ] {
+        let message = result.expect_err("nothing handles the re-raise");
+        assert!(
+            message.contains("#<error-object: boom 1 2>"),
+            "[{backend}] uncaught error object was not named: {message}"
+        );
+    }
 }
