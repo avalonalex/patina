@@ -357,7 +357,7 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "srfi 33",
-        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the renames",
+        "rename shim over (srfi 142), and through it over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the renames. chibi's own (srfi 33) suite is no substitute: its two bitwise-merge assertions expect SRFI 151's argument order, which contradicts SRFI 33's text and chibi's own implementation",
     ),
     (
         "srfi 60",
