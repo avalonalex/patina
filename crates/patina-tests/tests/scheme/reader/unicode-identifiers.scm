@@ -128,7 +128,8 @@
 ;; the dispatch itself, `peek_is_numeric` and `peek_is_decimal_start`.
 ;; Deliberately not a tour of number syntax — rationals, complexes, radix
 ;; prefixes and exponents reach `read_number` through paths the change never
-;; touched, and are covered in `compliance/`.
+;; touched, and are covered in `data/numeric-operations.scm`,
+;; `data/rationals.scm` and `data/conversion.scm`.
 ;;
 ;; These compare numbers where the `.rs` rows compared printed forms (`".3"`
 ;; against `"0.3"`). The lexing claim is what the rows are for and it survives

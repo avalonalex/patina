@@ -319,7 +319,7 @@ Test output compared against expected errors using `diff`.
 - Parallel test execution with `zuo . -j N test`
 
 **Actionable for Patina**:
-- Current test organization (compliance/, integration/) is good
+- Current test organization (tests/scheme/, integration/) is good
 - Consider adding optimization level matrix when compiler is added
 - Parallel test execution (already supported by `cargo test`)
 

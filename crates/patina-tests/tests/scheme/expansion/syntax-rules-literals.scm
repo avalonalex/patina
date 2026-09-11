@@ -35,10 +35,27 @@
 ;; comment and checked on every run in a suite file — which is the argument for
 ;; this whole migration in one line, and the reason not to write another one.
 ;;
-;; "A literal reaching the pattern through a pattern variable" asserted only
-;; that the program did not error, its comment saying the result "depends on
-;; hygiene semantics". All four implementations answer `bound` (measured
-;; 2026-09-09), so it pins that now.
+;; "An identifier substituted into a pattern is not the template's literal"
+;; asserted only that the program did not error, its comment saying the result
+;; "depends on hygiene semantics". All four implementations answer `bound`
+;; (measured 2026-09-09), so it pins that now. It was first moved here under
+;; the name "a literal reaching the pattern through a pattern variable", with a
+;; comment reading the answer backwards; see the row.
+;;
+;; ── From `compliance/macros_advanced.rs` (#193) ────────────────────────────
+;;
+;; Nine rows arrived from that module's literal and identifier-identity tests,
+;; and two of its tests are rows this file already had: its
+;; `test_bound_identifier_equality_in_nested_macros` and
+;; `test_nested_macro_literal_matching_same_symbol` were the same programs as
+;; the rows named at each, down to the symbols returned in one case, so they
+;; became comments there rather than copies. The last section below, on
+;; identifier identity in a macro that writes a macro, is new.
+;;
+;; Measured 2026-09-11: patina VM and tree-walker 28 pass. chibi passes 27 and
+;; differs on the row asserting a duplicated pattern variable is an error,
+;; which R7RS leaves to the implementation (registered as latitude). Gauche
+;; passes 27 and fails the row it already failed.
 ;;
 ;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
@@ -53,6 +70,7 @@
 
 (import (scheme base)
         (rename (scheme base) (else alt) (=> arrow))
+        (scheme eval)
         (srfi 64))
 
 (test-begin "syntax-rules-literals")
@@ -173,15 +191,40 @@
 
 ;; ── Literals that arrive through a macro ────────────────────────────────────
 ;;
-;; A literal that reached the pattern through a pattern variable — `k` here is
-;; substituted into the `(syntax-rules (k) …)` of the generated macro — is still
-;; a literal, and `z` is not it. The Rust original asserted only that this did
-;; not error; all four implementations answer `bound`.
-(test-equal "a literal reaching the pattern through a pattern variable" 'bound
+;; The inner literals list `(k)` is written in the outer *template*, so its `k`
+;; is introduced and carries the outer expansion's scope. The inner pattern's
+;; `x` is substituted from the use site `(m k)`, and carries none. They are
+;; spelled alike but are different identifiers, so the substituted `k` is NOT a
+;; literal: it is a pattern variable, it matches `z`, and the first rule
+;; answers. Literal *membership* compares identity (`bound-identifier=?`);
+;; were it the substituted `k` acting as a literal, the answer would be `free`.
+;;
+;; This row reached the file under the name "a literal reaching the pattern
+;; through a pattern variable", with a comment saying the substituted `k` was
+;; still a literal and `z` not it — which predicts `free`, the opposite of the
+;; answer it asserted. The reading above is the one in
+;; `compliance/macros_advanced.rs`'s `test_bound_identifier_equality_in_nested_macros`,
+;; which was this program with `bound-identifier=?` and `free-identifier=?` as
+;; the symbols, verified against Chez Scheme there. The Rust original of this
+;; row asserted only that it did not error; all four implementations answer
+;; `bound`.
+(test-equal "an identifier substituted into a pattern is not the template's literal"
+  'bound
   (let-syntax ((m (syntax-rules ()
                     ((m x) (let-syntax ((n (syntax-rules (k) ((n x) 'bound) ((n y) 'free))))
                              (n z))))))
     (m k)))
+
+;; The same shape spelled `foo`, so the outcome follows from introduced versus
+;; substituted identity rather than from anything about the name `k`.
+(test-equal "and the same under another spelling" 'bound-identifier=?
+  (let-syntax ((m (syntax-rules ()
+                    ((m x)
+                     (let-syntax ((n (syntax-rules (foo)
+                                       ((n x) 'bound-identifier=?)
+                                       ((n y) 'free-identifier=?))))
+                       (n z))))))
+    (m foo)))
 
 ;; A macro binds `k` in its template and generates a macro with `k` as a
 ;; literal. The user's `k`, arriving through a pattern variable, is not the
@@ -197,12 +240,22 @@
   (binds-k k))
 
 ;; Both the literal and the input come from one template and neither is bound,
-;; so they match by the rule's second half.
+;; so they match by the rule's second half. `compliance/macros_advanced.rs`'s
+;; `test_nested_macro_literal_matching_same_symbol` was this program exactly.
 (test-equal "a literal in a generated macro matches the same literal" 'matched-k
   (let-syntax ((m (syntax-rules ()
                     ((m ignored)
                      (let-syntax ((n (syntax-rules (k) ((n k) 'matched-k) ((n y) 'no-match))))
                        (n k))))))
+    (m anything)))
+
+;; And a different identifier from the same template does not match it: `z`
+;; is not `k` by name, whatever the scopes.
+(test-equal "and does not match a different identifier" 'no-match
+  (let-syntax ((m (syntax-rules ()
+                    ((m ignored)
+                     (let-syntax ((n (syntax-rules (k) ((n k) 'matched-k) ((n y) 'no-match))))
+                       (n z))))))
     (m anything)))
 
 ;; The same program with one `let` added: the input `k` now denotes the binding
@@ -253,5 +306,123 @@
         (count-to-2_)
         (count-to-2_ a b)
         (count-to-2_ a b c d)))
+
+;; ── Identifier identity in a macro that writes a macro ──────────────────────
+;;
+;; **From `compliance/macros_advanced.rs`** (#193), where every case was
+;; checked against Chez Scheme. The common thread: an identifier's
+;; classification inside an inner `syntax-rules` depends on its *identity* —
+;; name plus scopes — and never on its name alone. An identifier substituted
+;; from the outer use site and one introduced by the outer template can be
+;; spelled the same and still be different identifiers.
+
+;; A substituted identifier that is not in the inner literals list is an
+;; ordinary pattern variable, so it binds whatever the inner macro is called
+;; with.
+(define-syntax gen-with-pattern-var
+  (syntax-rules ()
+    ((_ nm v) (define-syntax nm (syntax-rules () ((_ v) (list v v)))))))
+
+(gen-with-pattern-var twice q)
+
+(test-equal "a substituted identifier is a pattern variable" '(5 5) (twice 5))
+
+;; A substituted identifier that *is* in the inner literals list stays a
+;; literal, so it matches only itself.
+(define-syntax gen-with-literal
+  (syntax-rules ()
+    ((_ nm k)
+     (define-syntax nm
+       (syntax-rules (k) ((_ k) 'got-key) ((_ x) 'other))))))
+
+(gen-with-literal key-probe key)
+
+(test-equal "a substituted identifier in the literals list stays a literal"
+  '(got-key other)
+  (list (key-probe key) (key-probe zzz)))
+
+;; The `new-symbol?` guard from `(chibi parse)`'s `grammar-bind`, reduced.
+;; `syntax-rules` has no way to compare two identifiers, so the guard builds an
+;; inner macro whose literals list holds the names bound so far and calls it
+;; with an identifier that matches nothing. If the name is a literal, rule 1
+;; cannot match and rule 2 answers "already bound"; otherwise the name is a
+;; pattern variable, rule 1 matches, and the answer is "new". A literal that
+;; matched *any* identifier made the guard answer "new" every time, so the
+;; same grammar nonterminal got a variable more than once — which is what
+;; blocked chibi-parse and edn.
+(define-syntax probe-test
+  (syntax-rules ()
+    ((_ name (lit ...))
+     (let-syntax ((probe (syntax-rules (lit ...)
+                           ((probe name sk fk) sk)
+                           ((probe _ sk fk) fk))))
+       (probe random-symbol-to-match 'new 'already)))))
+
+(test-equal "chibi parse's new-symbol guard" '(already new)
+  (list (probe-test space (space term))
+        (probe-test other (space term))))
+
+;; The macro-keyword position of a rule is positional, so a substituted macro
+;; name still matches whatever the call spells. `expansion/ellipsis.scm` has
+;; the same generator inside a body; this is the top-level form.
+(define-syntax make-wrapper
+  (syntax-rules ()
+    ((_ wrapper-name tag)
+     (define-syntax wrapper-name
+       (syntax-rules ()
+         ((wrapper-name item (... ...)) '(tag item (... ...))))))))
+
+(make-wrapper wrap-with-x x)
+
+(test-equal "a substituted macro name still matches" '(x 1 2 3)
+  (wrap-with-x 1 2 3))
+
+;; A substituted identifier is still a duplicate of *itself*. edn passes a
+;; whole expression where `(chibi parse)`'s `grammar-bind` expects a name, and
+;; that expression mentions `ch` twice; substituting it into the guard's
+;; pattern asks for two pattern variables with one identity. Chez rejects this
+;; with "duplicate pattern variable ch", and so do Patina and Gauche. R7RS
+;; §4.3.2 makes it "an error" without requiring a signal, and chibi 0.12
+;; accepts it (registered as latitude) — so edn depends on chibi's leniency
+;; rather than on anything portable.
+;;
+;; Through `eval`, so the refusal is a caught error rather than a file that
+;; will not compile, and inside a `let` body because `(environment …)` is
+;; immutable — a top-level `define-syntax` there would fail for that reason
+;; instead. The first row is the control: the same program with the two names
+;; distinct runs, so the error in the second is the duplicate's.
+(test-equal "a substituted pattern with distinct names is fine" 'matched
+  (eval '(let ()
+           (define-syntax gen
+             (syntax-rules ()
+               ((_ nm blob) (define-syntax nm (syntax-rules () ((_ blob) 'matched))))))
+           (gen m (f ch dh))
+           (m (f 1 2)))
+        (environment '(scheme base))))
+
+(test-error "a substituted identifier repeated in a pattern is an error" #t
+  (eval '(let ()
+           (define-syntax gen
+             (syntax-rules ()
+               ((_ nm blob) (define-syntax nm (syntax-rules () ((_ blob) 'matched))))))
+           (gen m (f ch ch))
+           (m (f 1 2)))
+        (environment '(scheme base))))
+
+;; A literal matches an input identifier when both are unbound and share a
+;; name, even though one is introduced and the other substituted. §4.3.2 gives
+;; literal *matching* `free-identifier=?` semantics — same binding, or both
+;; unbound with the same name. That is a different question from literal
+;; *membership*, which compares identity (the substituted-identifier rows
+;; above). Conflating the two is what made the introduced literal `k` below
+;; unable to match the substituted `k`. Chez and Gauche answer (lit notlit),
+;; per the Rust original's comment.
+(define-syntax unbound-k-probe
+  (syntax-rules ()
+    ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit) ((n x) 'notlit))))
+             (n e)))))
+
+(test-equal "a literal matches when both are unbound" '(lit notlit)
+  (list (unbound-k-probe k) (unbound-k-probe other)))
 
 (test-end)

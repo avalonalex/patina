@@ -11,7 +11,9 @@
 ;;
 ;; Thirty-two tests, thirty-five rows — thirty-eight with Larceny family 40's
 ;; three, which arrived from `backend_divergence.rs` after the tally below was
-;; taken and are the last section. **`hygiene.rs` is deleted**: it was 49
+;; taken and are the last section, and forty-one with three variants from
+;; `compliance/macros_advanced.rs` (#193), each placed beside the row it
+;; varies and saying so. **`hygiene.rs` is deleted**: it was 49
 ;; tests of which 44 built a tree-walker by hand and so never ran on the VM,
 ;; the default backend, and they are now spread across this file,
 ;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm` — running
@@ -51,6 +53,8 @@
 ;; Re-measured 2026-09-10 with family 40's three rows: tree-walker, chibi and
 ;; Gauche 38 pass; the VM 35 pass and 3 expected failures, which is the one
 ;; open divergence in this file and is declared in the text above each row.
+;; Re-measured 2026-09-11 with the three `macros_advanced.rs` variants: the
+;; same, plus three passes everywhere.
 ;;
 ;; **Nothing else here diverges**, which is worth saying for thirty-five
 ;; hygiene rows. Most of the first seventeen were live defects in Patina within the
@@ -371,6 +375,18 @@
 (test-equal "nor does one a macro uses for a swap" '(2 1 999)
   (let ((x 1) (y 2) (temp 999)) (my-swap x y) (list x y temp)))
 
+;; The same at top level, where the caller's `temp` is a global. The Rust
+;; original of this variant (`compliance/macros_advanced.rs`,
+;; `test_swap_macro_with_hygiene`) was written that way; the row above binds
+;; every name with `let`, and a global is a different kind of binding for
+;; `set!` and for the reference alike.
+(define temp 999)
+(define swap-x 1)
+(define swap-y 2)
+
+(test-equal "nor does a global the caller named temp" '(2 1 999)
+  (begin (my-swap swap-x swap-y) (list swap-x swap-y temp)))
+
 ;; Two at once, so the answer distinguishes "the macro's bindings won" (3) from
 ;; "the use site's won" (303) from correct (6).
 (define-syntax with-temps
@@ -378,6 +394,31 @@
 
 (test-equal "and several introduced bindings stay distinct at once" 6
   (let ((temp1 100) (temp2 200)) (with-temps 3)))
+
+;; Three introduced bindings that are *assigned through*, against globals of
+;; the same three names: the arguments rotate and the globals keep their
+;; values. From `compliance/macros_advanced.rs`'s
+;; `test_hygiene_with_multiple_temps`, top level as it was written.
+(define-syntax rotate3!
+  (syntax-rules ()
+    ((_ a b c)
+     (let ((temp1 a) (temp2 b) (temp3 c))
+       (set! a temp3)
+       (set! b temp1)
+       (set! c temp2)))))
+
+(define temp1 100)
+(define temp2 200)
+(define temp3 300)
+(define rotate-x 1)
+(define rotate-y 2)
+(define rotate-z 3)
+
+(test-equal "and three assigned through, against globals of their names"
+  '(3 1 2 100 200 300)
+  (begin
+    (rotate3! rotate-x rotate-y rotate-z)
+    (list rotate-x rotate-y rotate-z temp1 temp2 temp3)))
 
 ;; A template's `if` is the special form even where the use site binds `if` as a
 ;; variable. The mirror of the first row in this file, which is the case of a
@@ -472,6 +513,19 @@
     (define-syntax foo
       (syntax-rules ()
         ((_ bar y) (define-syntax bar (syntax-rules () ((bar x) 'y))))))
+    (foo bar x)
+    (bar 1)))
+
+;; The same program with the generator's keyword spelled `foo` in its pattern
+;; rather than `_`, as chibi's R7RS test writes it — which is where
+;; `compliance/macros_advanced.rs`'s `test_nested_macro_with_quoted_symbols`
+;; took it from. The keyword position takes no part in matching (§4.3.2), so
+;; the two should never differ; this row is what notices if they do.
+(test-equal "and with the generator's keyword spelled in its pattern" 'x
+  (let ()
+    (define-syntax foo
+      (syntax-rules ()
+        ((foo bar y) (define-syntax bar (syntax-rules () ((bar x) 'y))))))
     (foo bar x)
     (bar 1)))
 

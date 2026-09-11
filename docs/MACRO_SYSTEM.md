@@ -715,9 +715,9 @@ The current scope-set hygiene system is **fully compatible** with syntax-case:
 
 | File | Coverage |
 |------|----------|
-| `crates/patina-tests/tests/scheme/expansion/hygiene.scm` | Hygiene, 35 rows; runs on both backends and under chibi and Gauche |
+| `crates/patina-tests/tests/scheme/expansion/hygiene.scm` | Hygiene, 41 rows; runs on both backends and under chibi and Gauche |
 | `crates/patina-tests/tests/scheme/expansion/` | `syntax-rules-literals.scm`, `let-syntax.scm`, `ellipsis.scm` — the rest of what was `hygiene.rs` |
-| `crates/patina-tests/tests/compliance/macros_advanced.rs` | Advanced macro features |
+| `crates/patina-tests/tests/scheme/expansion/syntax-rules.scm` | Well-known macros (control flow, binding, mutation, loops); from `compliance/macros_advanced.rs`, which also fed `introduced-definitions.scm` and the three files above |
 | `crates/patina-tests/tests/macro_expander_interface.rs` | Interface tests |
 
 ---
