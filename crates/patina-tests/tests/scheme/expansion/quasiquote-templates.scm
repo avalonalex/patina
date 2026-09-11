@@ -145,17 +145,21 @@
 
 ;; ── A splice in the last position is append's last argument ────────────────
 
-;; The rows above are about a splice with something after it. In the last
-;; position R7RS's own reading of a template decides the answer: `(a ,@x)` is
-;; `(append (list 'a) x)`, and append's last argument "may be any object". So
-;; a non-list makes an improper list, and a list is the tail itself rather
-;; than a copy. The VM compiles templates to exactly that append; the
-;; tree-walker, which evaluates them directly, refused a non-list anywhere
-;; and copied a list, until #270 made it follow the VM. chibi 0.12 and Gauche
-;; 0.9.15 agree with every row here but the three errors, where chibi keeps
-;; the latitude registered for the row above.
+;; R7RS §4.2.8 makes a non-list splice an error wherever it stands, and an
+;; error it need not signal, so what the last position answers is Patina's
+;; choice. It is the VM's: templates compile to `append`, so `(a ,@x)` is
+;; `(append (list 'a) x)`, and append's last argument "can be of any type"
+;; (§6.4). A non-list therefore makes an improper list, and a list is the tail
+;; itself rather than a copy. chibi 0.12 and Gauche 0.9.15 make the same
+;; choice. The tree-walker, which evaluates templates directly, refused a
+;; non-list anywhere and copied a list, until #270 made it follow the VM.
 ;;
-;; Values arrive as procedure arguments, for the reason given above.
+;; A vector template is `(list->vector (append ...))`, so its last splice is
+;; not a tail, and must be a list like any other splice.
+;;
+;; chibi agrees with every row below except two of the three errors, where it
+;; keeps the latitude registered for the row above; it signals on the vector
+;; row. Values arrive as procedure arguments, for the reason given above.
 (define (splice-last n) `(a ,@n))
 (define (splice-alone n) `(,@n))
 (define (splice-twice m n) `(a ,@m ,@n))
