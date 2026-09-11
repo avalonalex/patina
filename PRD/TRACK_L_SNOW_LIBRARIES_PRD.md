@@ -1104,7 +1104,7 @@ chibi lanes stay 1226/1226. Pinned as
 "a handler runs inside the raise's dynamic extent" (né
 `an_exception_handler_runs_in_the_raises_dynamic_extent`, moved by #193
 Phase 1); triage families 22 and 28,
-the tree-walker `guard` entry below and `nested_exception_handlers.rs`'s pin
+the tree-walker `guard` entry below and the pin now in `tests/scheme/control/guard.scm`
 closed with it, as recorded.
 
 **What the second review of #151 found, and where each went.** Four fixed in
@@ -1127,7 +1127,7 @@ a `guard` clause reading what the callback wrote needs it open — this also
 retired audit F6's quarantine on the tree-walker, by removing the
 resource rather than the misread behind it. (4) `execute` left the VM holding
 the frames, handlers and winds of a form that failed, so the REPL's next form
-returned into them. Pinned in `nested_exception_handlers.rs`,
+returned into them. Pinned in `tests/scheme/control/guard.scm` (then `nested_exception_handlers.rs`),
 `escape_from_primitive.rs` and `interpreter_api.rs`. Filed rather than fixed:
 three VM raise-path gaps (next entry), and two more manifestations of the
 tree-walker boundary defect (its entry below).

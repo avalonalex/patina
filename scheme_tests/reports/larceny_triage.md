@@ -290,7 +290,7 @@ file's header explains the hard way.
 - Upstream: [tests/scheme/base.sld#L730](tests/scheme/base.sld#L730). R7RS 4.2.2: every init is evaluated before any formal is bound; ours behaves as `let*-values`. chibi, Gauche and Chez give `(x y a b)`.
 
 ### 22. A `guard` re-raise does not re-enter the dynamic extent — both backends — ✅ fixed 2026-09-01
-- Ours: `test_a_guard_re_raise_rewinds_into_the_raiser` (`nested_exception_handlers.rs`) and `crates/patina-tests/tests/scheme/control/wind-thunk-exceptions.scm`'s row "a guard re-raise re-enters the raiser's dynamic extent", both asserting the right answer on both backends.
+- Ours: `crates/patina-tests/tests/scheme/control/guard.scm`'s row "a guard's re-raise rewinds into the raiser" and `crates/patina-tests/tests/scheme/control/wind-thunk-exceptions.scm`'s row "a guard re-raise re-enters the raiser's dynamic extent", both asserting the right answer on both backends.
 - Upstream: the two `base` assertions reading `(out in)` against an expected `(out in out in)`.
 - **Four changes, and each was measured to be insufficient alone.** Two landed ahead of this family, on their own merits:
   1. **`CpsContinuation` carries the handler stack** — PR #150. Without it the jump back arrives with no handlers and the re-raise reports `unhandled continuable exception`. Needed no `MachineState` refactor, contrary to what this entry predicted.
