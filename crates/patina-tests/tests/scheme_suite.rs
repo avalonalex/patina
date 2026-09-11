@@ -94,7 +94,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/cps-features.scm", 99),
     ("control/internal-escape-boundaries.scm", 11),
     ("control/parameters.scm", 18),
-    ("control/prompts.scm", 26),
+    ("control/prompts.scm", 28),
     ("control/tail-recursion.scm", 36),
     ("control/values.scm", 5),
     ("control/wind-thunk-exceptions.scm", 14),

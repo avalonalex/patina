@@ -1429,9 +1429,21 @@ every one answers as the VM, chibi and Gauche do; chibi's R7RS suite stays 1226 
 backends. What it also found: the two rows recorded as "converged" (the `call-with-port` retry
 loop, a callback using its own continuation) were correct only as one-expression programs — with
 one more top-level form the tree-walker reached it with the `define` unbound, because the rest of
-the program had run from inside the callback. **Now unblocked:** the `guard` success-path
-deviation recorded under "This row now blocks something concrete" — restoring R7RS 7.3's verbatim
-line is the follow-up, with the Larceny lane as its measurement.
+the program had run from inside the callback. **What it unblocked turned out to be the wrong
+move:** restoring R7RS 7.3's verbatim `guard` success-path line, which the deviation recorded under
+"This row now blocks something concrete" was waiting for, was measured 2026-09-11 and **rejected**: the reference line
+jumps to `guard-k`, a *full* continuation captured when the `guard` was entered, and that is only
+equivalent to returning when no composable continuation is involved. Resume a composable
+continuation that captured the body, from anywhere else, and the successful `guard` jumps back to
+the original context instead of returning to the invoker — `((r x))` where Racket 9.3 and Guile
+3.0.11 answer `((r x) (resumed (1 10)))`, on both backends. It also costs the VM a second O(depth)
+frame copy per `guard` (200k guards at depth 1000: 2.0–2.8 s → 3.9 s). The return is the correct
+spelling, not a workaround; `tests/scheme/control/prompts.scm` pins it. The *raise* path has the
+same flaw on both backends today, because a clause's result also goes out through `guard-k` —
+`((r x) (r (1 caught)))` where both oracles answer `((r x) (resumed (1 caught)))`. That one is
+inherent to the call/cc expansion and is pinned in the same file as an expected failure on both
+backends; the route to it is a `guard` built on a prompt of its own, as Racket and Guile build
+theirs.
 
 **What the review of the fix found and what stays open.** The first cut refused any continuation
 whose trampoline had returned; that regressed three programs `main` got right (cross-form re-entry
@@ -1490,7 +1502,9 @@ prerequisite PRs landed:** with the verbatim reference line the VM is unaffected
 1071 of 1079 either way — #149's wind fix is what made that true), while the tree-walker drops from
 1070 of 1079 to 987 of 1009, 13 new failures and 70 assertions that stop running. The VM half is
 ready for the reference expansion; this backend is the only thing holding it.
-`lib/scheme/base/exceptions.scm` records the deviation and points here.
+`lib/scheme/base/exceptions.scm` records the deviation and points here. (Superseded 2026-09-11:
+with this row fixed the tree-walker could take the verbatim line, and neither backend should — see
+the paragraph above, under the fix.)
 
 **Two more manifestations, found by the second review of #151 (2026-09-01)**, both plain rows of
 `tests/scheme/control/cps-features.scm` since 2026-09-10 ("A primitive's callback"). A `guard`
