@@ -67,7 +67,8 @@ workspace/
 **Prefer these for new tests of the language.** They are ordinary, portable
 SRFI 64 programs — `(import (scheme base) (srfi 64))`, `test-begin`,
 `test-equal`, `test-end` — and one Rust driver runs every one of them on every
-backend. Adding a backend touches the driver; adding a test touches neither.
+backend. Adding a backend touches the driver, not the files; adding a row
+touches neither, and adding a file adds one line to the driver's `SUITE`.
 
 **`scheme_suite.rs`'s `SUITE` table is the enumeration of these files** — the
 list below covers `tests/*.rs` only, and does not carry notes about files that
@@ -76,12 +77,12 @@ and the directory in step, which no prose list can do.
 
 Two reasons to reach for a `.scm` file first:
 
-- **Cost.** Measured on a warm build, adding one `.scm` file rebuilds in
-  **0.098 s**; adding one `.rs` test file costs **8.96 s**, because every `.rs`
-  file directly in a `tests/` directory is its own crate and its own link
-  against the whole workspace. That is the problem CLAUDE.md's build-cost table
-  describes, and #193's reason for existing — 88 binaries when it was measured,
-  51 when #193 finished on 2026-09-11.
+- **Every backend runs it.** A file asks which backend it is on through
+  `cond-expand` (see "A row where the two backends differ" below), so a new
+  backend needs no change to the files. The driver would change: its
+  comparison is written for exactly two backends today
+  (`run_on_both_backends`, `backends_ran_the_same_rows`), so a third means
+  generalizing those, not only adding an entry.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -143,6 +144,17 @@ Two reasons to reach for a `.scm` file first:
   And **do not generalise one bad row to the file**: the first draft of that
   file claimed chibi could not arbitrate it at all, which threw away ten rows of
   corroboration that were there for the asking.
+
+**Build cost is not a reason either way.** It used to head the list above —
+adding a `.scm` file rebuilds in 0.098 s, a `.rs` file in 8.96 s, because
+each `.rs` file is its own crate and link — and both numbers came from a
+rotted `target/` (CLAUDE.md's build-cost section says how it rots and how
+to tell). On a healthy target, measured 2026-09-11: a row in an existing
+`.scm` file needs no rebuild (0.1 s); a new `.scm` file needs a `SUITE`
+entry, which recompiles the driver (1.0 s); a new `.rs` file compiles and
+links in 0.4 s; and each test binary adds about 0.05 s to a full rebuild.
+#193 took the workspace from 87 test binaries to 51, which saves about 2 s
+a rebuild.
 
 #### The oracle lane (`scripts/run_suite_oracles.sh`, #193 Phase 3)
 
