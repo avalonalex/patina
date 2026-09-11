@@ -532,9 +532,9 @@
 ;;   tree-walker, before => Error: unhandled exception: y
 ;;   VM, chibi, Gauche   => (outer y)
 ;;
-;; Nothing in `guard.scm` (then `nested_exception_handlers.rs`) caught this: those rows nest
-;; guards but never raise again *after* an inner one has fired, so they pass
-;; either way. This is an ordinary shape — a loop that catches per item and
+;; Nothing in `nested_exception_handlers.rs` caught this when it was found:
+;; those tests nested guards but never raised again *after* an inner one had
+;; fired, so they passed either way. This is an ordinary shape — a loop that catches per item and
 ;; then fails on something else — not an exotic one.
 (test-equal "a raise after an earlier guard fired still finds the outer handler"
   '(outer y)

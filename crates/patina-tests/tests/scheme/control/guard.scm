@@ -14,10 +14,13 @@
 ;; rather than serializing continuations name by name.
 ;;
 ;; Two of its tests asserted a *leaked* handler through an unguarded
-;; program's final error. A leaked handler is just as visible to a `guard`
-;; placed around the leaking call — it sits above the guard's own and
-;; intercepts the error first — so those are rows here too, and the file is
-;; whole.
+;; program's final error. A `guard` placed around the leaking call sees a
+;; leak better than that did: the leaked handler sits above the guard's own
+;; and intercepts the error first, whereas between top-level forms the
+;; outermost run's own entry truncation hides it — measured by the review of
+;; this migration, which removed the tail-call branches' handler pops and
+;; found the top-level shape blind to it. So those are rows here too, and the
+;; file is whole.
 ;;
 ;; Divergences are recorded in `DIVERGENCES.tsv`, not restated here.
 
@@ -154,48 +157,102 @@
 ;;
 ;; A leaked handler sits above anything installed around the leaking call, so
 ;; the probe is an unrelated error afterwards, under a `guard`: a leak turns
-;; `car`'s error into `leaked` before the guard sees it.
+;; `car`'s error into `leaked` before the guard sees it. `probe-after` also
+;; records that `(car 5)` was actually reached, so an error from somewhere
+;; else — the leaking call itself failing, say — answers `not-reached`
+;; rather than passing as `car-error`, which is the part of the Rust rows'
+;; "the error names car" a portable row can keep.
+;;
+;; A macro, not a procedure, and that is load-bearing: the leaking
+;; expression has to run in the guard body's own frame. Passed in as a thunk
+;; it gets a frame of its own, whose ordinary return sweeps a leaked handler
+;; away before `(car 5)` runs — measured: with the VM's loop-exit truncation
+;; removed, the thunk version still answered `car-error`, the inline one
+;; `leaked`.
 (define (leak thunk) (with-exception-handler (lambda (e) (raise 'leaked)) thunk))
-(define (probe-leak thunk)
-  (guard (e (#t (if (eq? e 'leaked) 'leaked 'car-error)))
-    (leak thunk)
-    (car 5)))
+(define-syntax probe-after
+  (syntax-rules ()
+    ((_ action)
+     (let ((reached #f))
+       (guard (e (#t (cond ((eq? e 'leaked) 'leaked)
+                           ((not reached) (list 'not-reached e))
+                           ((error-object? e) 'car-error)
+                           (else (list 'other e)))))
+         action
+         (set! reached #t)
+         (car 5))))))
 
+;; The VM closes a handler's extent on each way a tail call can return, and
+;; each element takes one of them — checked by removing each branch's pop in
+;; turn and watching the row fail on the element that names it. The
+;; primitive and the second control primitive are called *as values*:
+;; written in head position, `car` compiles to an inline instruction and
+;; `call/cc` to a frame, and both return through `Return` — the last two
+;; elements, kept for that path. The review of this migration found the
+;; head-position spellings blind to the branches they were labelled with,
+;; and `(values 1)` labelled `TailCallWithValues` when it takes the control
+;; primitive branch.
 (test-equal "a handler thunk ending in a tail call still pops its handler"
-  '(car-error car-error car-error car-error car-error)
-  (let ((p (make-parameter 1)))
-    (map probe-leak
-         (list (lambda () (values 1))                 ; TailCallWithValues
-               (lambda () (guard (e (#f 'no)) 'fine)) ; (apply values args) ending a guard
-               (lambda () (car '(1)))                 ; a primitive
-               (lambda () (p))                        ; a parameter
-               (lambda () (call/cc (lambda (k) 1))))))) ; a control primitive
+  '(car-error car-error car-error car-error car-error car-error car-error car-error)
+  (let ((p (make-parameter 1))
+        (f car)
+        (ap apply))
+    (map (lambda (thunk) (probe-after (leak thunk)))
+         (list (lambda () (values 1))                   ; a control primitive
+               (lambda () (guard (e (#f 'no)) 'fine))   ; (apply values args) ending a guard
+               (lambda () (ap + '(1)))                  ; a control primitive, as a value
+               (lambda () (f '(1)))                     ; a primitive, as a value
+               (lambda () (p))                          ; a parameter
+               (lambda () (call-with-values (lambda () (values 1 2)) +)) ; TailCallWithValues
+               (lambda () (car '(1)))                   ; an inline primitive, through Return
+               (lambda () (call/cc (lambda (k) 1))))))) ; call/cc's frame, through Return
 
 ;; The same pop where the thunk returns to a *nested* run loop — a
-;; `call-with-port` callback, or the body of `dynamic-wind` reached as a
-;; value — rather than to a frame. That return does not go through the
-;; frame-depth test at all: the loop closes the handlers installed under it
-;; from its own entry count, because at its exit depth the frame-depth test
-;; cannot tell a handler it was started under from one installed inside it
-;; (the next row is the other side of that ambiguity).
+;; `call-with-port` callback, or `call-with-values` reached as a value —
+;; rather than to a frame. That return does not go through the frame-depth
+;; test at all: the loop closes the handlers installed under it from its own
+;; entry count, because at its exit depth the frame-depth test cannot tell a
+;; handler it was started under from one installed inside it (the next rows
+;; are the other side of that ambiguity).
+;;
+;; The Rust version's second shape was `dynamic-wind` reached as a value,
+;; which has not run a nested loop since #157 — its body is frames of a stub
+;; now — so it could no longer fail; `call-with-values` as a value still
+;; does.
 (test-equal "a handler installed inside a nested run is popped when the run returns"
   '(car-error car-error)
-  (let ((dw dynamic-wind))
-    (list (guard (e (#t (if (eq? e 'leaked) 'leaked 'car-error)))
-            (call-with-port (open-input-string "a") (lambda (port) (leak (lambda () 'x))))
-            (car 5))
-          (guard (e (#t (if (eq? e 'leaked) 'leaked 'car-error)))
-            (dw (lambda () #f) (lambda () (leak (lambda () 'x))) (lambda () #f))
-            (car 5)))))
+  (let ((cwv call-with-values))
+    (list (probe-after
+            (call-with-port (open-input-string "a")
+              (lambda (port) (leak (lambda () 'x)))))
+          (probe-after
+            (cwv (lambda () (leak (lambda () 'x))) list)))))
 
 ;; The other side: a handler that a nested run loop was *started under* must
-;; survive that run. The thunk tail-calls `dynamic-wind` as a value, so its own
-;; frame is gone by the time `before` runs on a nested loop — the handler sits
-;; at exactly that loop's exit depth, indistinguishable by depth from one
-;; whose thunk has returned, and still owed `body`'s raise. The first review
-;; fix for the leak above popped it at `before`'s return, and this lost its
-;; handler. chibi and Gauche agree.
-(test-equal "a handler survives a nested run its thunk's tail call started"
+;; survive that run. The thunk tail-calls into a nested run, so its own frame
+;; is gone by the time the run starts — the handler sits at exactly that
+;; loop's exit depth, indistinguishable by depth from one whose thunk has
+;; returned, and still owed a raise. The first review fix for the leak above
+;; popped handlers at a nested loop's exit depth, and this lost its handler.
+;;
+;; When this was written the nested run was `dynamic-wind`'s, reached as a
+;; value. Since #157 that one runs in frames, so the row below it can no
+;; longer fail on the VM — the review of this migration restored the wrong
+;; fix and this file stayed green — and is kept only as a semantic check.
+;; `call-with-values` as a value still starts a nested run, and restoring the
+;; wrong fix turns this first row into "unhandled exception: x". chibi and
+;; Gauche agree with both.
+;; The outer `guard` turns a lost handler into a wrong value for this row,
+;; rather than an unhandled raise of a non-error object, which would abort
+;; the file at SRFI 64's own handler.
+(test-equal "a handler survives a nested run its thunk's tail call started" 'handled
+  (let ((cwv call-with-values))
+    (guard (e (#t (list 'handler-lost e)))
+      (with-exception-handler
+        (lambda (e) 'handled)
+        (lambda () (cwv (lambda () 1) (lambda (x) (raise-continuable 'x))))))))
+
+(test-equal "and around a dynamic-wind reached as a value"
   '(handled (in handler out))
   (let ((dw dynamic-wind) (v '()))
     (define (log x) (set! v (cons x v)))
