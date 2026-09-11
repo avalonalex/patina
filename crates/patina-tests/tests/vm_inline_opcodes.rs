@@ -166,7 +166,7 @@ fn cxr_error_behavior_chains_through_car_cdr() {
 
 #[test]
 fn numeric_predicates_slow_paths_and_errors() {
-    // Fixnum basics live in compliance/numbers.rs; these are the non-fixnum
+    // Fixnum basics live in tests/scheme/data/numeric-operations.scm; these are the non-fixnum
     // slow paths and error behavior the registry move could have changed.
     assert_eq!(eval("(zero? 0.0)"), "#t");
     assert_eq!(eval("(zero? 1/2)"), "#f");

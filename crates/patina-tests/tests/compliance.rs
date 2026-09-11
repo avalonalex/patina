@@ -16,18 +16,6 @@ mod primitives;
 #[path = "compliance/derived.rs"]
 mod derived;
 
-// Section 6.2: Numbers
-#[path = "compliance/numbers.rs"]
-mod numbers;
-
-// Section 6.2.1: Rational Numbers (comprehensive tests)
-#[path = "compliance/rationals.rs"]
-mod rationals;
-
-// Section 6.2.x: Numeric Edge Cases (NaN, infinity, complex)
-#[path = "compliance/numeric_edge_cases.rs"]
-mod numeric_edge_cases;
-
 // Section 6.10: Control features
 #[path = "compliance/control.rs"]
 mod control;
