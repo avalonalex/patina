@@ -215,7 +215,18 @@ fn process_quasiquote_pair(
 
                 let splice_result = eval_tagged_via_cps(ctx, splice_expr, env)?;
 
-                // Must be a list
+                // Last in the template, the value is the tail as it stands.
+                // `(a ,@x)` means `(append (list 'a) x)`, and append's last
+                // argument may be any object: a non-list makes an improper
+                // list, and a list is shared rather than copied. That is what
+                // the VM compiles (`quasiquote_expand.rs`) and what chibi and
+                // Gauche answer (#270). Anywhere else, as a non-final argument
+                // to append, the value must be a list.
+                if cdr.is_null() {
+                    tail = splice_result;
+                    break;
+                }
+
                 if !is_list_tagged(ctx, splice_result) {
                     return Err(EvalError::InvalidSyntax(
                         "unquote-splicing result must be a list".to_string(),
