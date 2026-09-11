@@ -551,7 +551,7 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
 - `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
   24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
-- `complex_numbers.rs`, `scheme_eval.rs` — feature areas
+- `complex_numbers.rs` — a feature area
   whose rows are about the implementation rather than the language
 
 #### **Library Tests**

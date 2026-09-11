@@ -115,7 +115,7 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
-    ("stdlib/eval.scm", 1),
+    ("stdlib/eval.scm", 19),
     ("stdlib/lazy-evaluation.scm", 32),
     ("stdlib/list.scm", 6),
     ("stdlib/process-context.scm", 12),
