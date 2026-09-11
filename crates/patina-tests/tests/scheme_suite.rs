@@ -125,6 +125,7 @@ const SUITE: &[(&str, i64)] = &[
     ("stdlib/process-context.scm", 12),
     ("stdlib/random.scm", 4),
     ("stdlib/scheme-r5rs.scm", 20),
+    ("stdlib/time.scm", 5),
 ];
 
 fn scheme_dir() -> PathBuf {
