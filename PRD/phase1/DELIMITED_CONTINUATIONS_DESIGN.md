@@ -87,7 +87,8 @@ its only-prompt case since it was written; corrected 2026-09-03 and deleted
 2026-09-04); the placeholder delimited capture in `wind.rs`; and the #170
 "not implemented" registrations. Acceptance was the twelve
 `control_flow_matrix.rs` rows and the seven prompt tests in
-`cps_features.rs`, all of which now run on both backends and agree.
+`cps_features.rs` (rows of `tests/scheme/control/prompts.scm` since #193
+Phase 2), all of which now run on both backends and agree.
 
 **Which name is claimed where**, for the next control primitive:
 

@@ -1626,8 +1626,8 @@ records and handlers carry frame depths that a jump makes meaningless:
   original (deeper) depth, decided the extent's body had returned, and ran its
   after-thunk under the still-running entry. Nested value-form extents
   re-entered from a shallower stack **hung** without this; pinned as
-  `test_reentering_nested_value_form_winds_runs_each_thunk_once` in
-  `cps_features.rs`. (Moot since the #157 entry below: only the value form
+  `tests/scheme/control/cps-features.scm`'s "re-entering nested value-form
+  extents runs each thunk once". (Moot since the #157 entry below: only the value form
   ever pushed a record with a non-zero depth, and with it gone the depth and
   the sweep that read it are both removed.)
 
@@ -1759,9 +1759,9 @@ bookkeeping was a Rust call that truncation walked out from under: one shape
 aborted the process, and the other two silently skipped the handler *and* ran
 thunks the abort should have prevented — `body` and `out` after an abort from
 `before`, which had not entered the extent yet. Nothing in the suite covered
-the value form under a prompt at all; now pinned as
-`test_abort_to_a_prompt_out_of_each_value_form_wind_thunk` in
-`cps_features.rs`, VM-only because the tree-walker has no prompt API.
+the value form under a prompt at all; now pinned by the four "an abort from
+the value form's …" rows of `tests/scheme/control/prompts.scm`, on both
+backends since the tree-walker's prompt API landed.
 
 **Not** fixed, and filed as **issue #160**: invoking the composable continuation
 a prompt handler receives delivers nothing and yields `()`. Pre-existing,

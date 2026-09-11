@@ -536,7 +536,7 @@ R7RS specification compliance organized by category:
 Named by role, not by count: every per-file number this list used to carry had
 rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 `data/numeric-operations.scm` and was still listed, `hygiene.rs` was down from
-"~108" to 49 and is now deleted, `cps_features.rs` from 31 to 11. For a current count,
+"~108" to 49 and is now deleted, `cps_features.rs` from 31 to 11 and then to 1. For a current count,
 `grep -c '^#\[test\]'` the file; for the suite files, `SUITE` in
 `scheme_suite.rs` carries a floor per file and a test keeps it honest.
 
@@ -549,8 +549,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   on both backends. `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
-- `cps_features.rs`, `control_flow_matrix.rs` — continuations, prompts, and the
-  24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6
+- `control_flow_matrix.rs` — the 24-shape transfer matrix behind
+  `docs/VM_RUNTIME.md` §5.6; the prompt rows it does not cover are
+  `control/prompts.scm`. `cps_features.rs` holds one test, which needs a
+  thread with a sized stack
 - `complex_numbers.rs` — a feature area
   whose rows are about the implementation rather than the language
 
@@ -615,7 +617,7 @@ kind does not survive contact with a migration. Re-measure before quoting:
 | sld_file_loading.rs | 40 | measured 2026-09-09 |
 | data/record-types.scm | 23 rows (41 Rust tests before #193 Phase 2) | measured 2026-09-11 |
 | tail-recursion.scm | 36 | 301 |
-| cps_features.rs | 31 | 580 |
+| control/prompts.scm | 58 rows | measured 2026-09-11 |
 
 ## Running Tests
 

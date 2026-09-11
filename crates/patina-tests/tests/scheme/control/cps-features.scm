@@ -1049,6 +1049,71 @@
 (test-equal "a continuation can be the handler for a primitive error" #t
   (error-object? (call/cc (lambda (k) (with-exception-handler k (lambda () (car 5)))))))
 
+;; ── Backtracking, and re-entering nested extents ───────────────────────────
+;;
+;; Moved from `crates/patina-tests/tests/cps_features.rs` (#193 Phase 2) with
+;; its prompt half, which is `prompts.scm` now; these two use only `call/cc`
+;; and `dynamic-wind`, so they are portable and live here, where the oracles
+;; answer them.
+
+;; Classic amb-style backtracking (from chibi's `test08-callcc.scm`): the
+;; first Pythagorean triple with every side in 2..9, encoded as x*100+y*10+z.
+;; Which one comes first depends on the order `let` evaluates its inits,
+;; which R7RS leaves unspecified — 534 left to right, 543 right to left — so
+;; the row accepts either and checks that the answer really is a triple.
+(test-assert "amb-style backtracking finds a Pythagorean triple"
+  (let ()
+    (define fail (lambda () 999999))
+    (define (enumerate a b cont)
+      (if (< b a)
+          (fail)
+          (let ((save fail))
+            (set! fail (lambda () (set! fail save) (enumerate (+ a 1) b cont)))
+            (cont a))))
+    (define (in-range a b)
+      (call-with-current-continuation (lambda (cont) (enumerate a b cont))))
+    (let ((result (let ((x (in-range 2 9))
+                        (y (in-range 2 9))
+                        (z (in-range 2 9)))
+                    (if (= (* x x) (+ (* y y) (* z z)))
+                        (+ (* x 100) (+ (* y 10) z))
+                        (fail)))))
+      (and (memv result '(534 543))
+           (let ((x (quotient result 100))
+                 (y (remainder (quotient result 10) 10))
+                 (z (remainder result 10)))
+             (= (* x x) (+ (* y y) (* z z))))))))
+
+;; Re-entering a continuation captured inside two nested extents runs both
+;; before thunks, once each, and leaves the extents standing. The value form
+;; of `dynamic-wind` is what made this a real test: its records used to carry
+;; the frame depth of the call, and a jump that *enters* an extent pushed a
+;; record whose depth belonged to another stack — captured deep, re-entered
+;; from much shallower, it looked like the body returning, and the VM ran
+;; `out-a` under the still-running entry and went round for ever. Neither
+;; half of that exists now (issue #157); the shape stays because re-entry
+;; across two nested extents, from a shallower stack, is worth holding both
+;; backends to whatever the mechanism. `note` raises past a bounded log, so a
+;; regression fails the row rather than spinning.
+(test-equal "re-entering nested value-form extents runs each thunk once"
+  '(in-a in-b out-b out-a in-a in-b out-b out-a)
+  (let ((k #f) (log '()) (dw dynamic-wind))
+    (define (note x)
+      (if (> (length log) 12) (error "wind thunks are looping"))
+      (set! log (cons x log)))
+    (define (deep n)
+      (if (= n 0)
+          (dw (lambda () (note 'in-a))
+              (lambda ()
+                (dw (lambda () (note 'in-b))
+                    (lambda () (call/cc (lambda (c) (set! k c) 'first)))
+                    (lambda () (note 'out-b))))
+              (lambda () (note 'out-a)))
+          (car (list (deep (- n 1))))))
+    (let ((first-time? (eq? 'first (deep 6))))
+      (if first-time? (k 'second))
+      (reverse log))))
+
 ;; ── A primitive's callback ─────────────────────────────────────────────────
 ;;
 ;; A Rust primitive's callback — `member` or `assoc` with a predicate,
