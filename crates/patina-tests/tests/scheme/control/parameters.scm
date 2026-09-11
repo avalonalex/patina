@@ -12,7 +12,7 @@
 ;;     held to — `data/external-representation.scm`, scoped to Patina there.
 ;;
 ;; The predicate's own truth table lives with the other predicates in
-;; `compliance/predicates.rs`; this file covers what being a procedure lets a
+;; `data/predicates.scm`; this file covers what being a procedure lets a
 ;; parameter *do*.
 
 (import (scheme base) (srfi 64))

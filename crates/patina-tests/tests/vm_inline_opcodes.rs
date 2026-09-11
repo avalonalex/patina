@@ -103,7 +103,7 @@ fn predicates() {
 
 #[test]
 fn not_is_total_on_every_value() {
-    // Only #f is falsy (basic cases are in compliance/predicates.rs); the
+    // Only #f is falsy (basic cases are in tests/scheme/data/predicates.scm); the
     // novel cases here: values with no literal syntax, and the handler via
     // the higher-order (non-callee) position.
     assert_eq!(eval("(not \"\")"), "#f");

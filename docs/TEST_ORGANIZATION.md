@@ -520,10 +520,6 @@ cargo test --package patina-core
 #### **Compliance Tests** (`tests/compliance/`)
 R7RS specification compliance organized by category:
 - `numbers.rs` - Numeric operations (~30 tests)
-- `strings.rs` - String operations (~25 tests)
-- `lists.rs` - List operations (~20 tests)
-- `vectors.rs` - Vector operations
-- `predicates.rs` - Type predicates
 - `derived.rs` - Derived forms (let, cond, case)
 - `control.rs` - Control flow
 - `quasiquote.rs` - Quasiquote expansion
