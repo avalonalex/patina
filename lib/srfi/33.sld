@@ -11,7 +11,7 @@
 ;; instead of 0 and `copy-bit-field`, whose body below is chibi's and assumes
 ;; the SRFI 33 order, copied the field the wrong way. chibi's (srfi 33) renames
 ;; (srfi 142) too, and answers 0 and 15 for the two rows in
-;; `crates/patina-tests/tests/srfi_151_bitwise.rs`.
+;; `crates/patina-tests/tests/scheme/srfi/bitwise.scm`.
 
 (define-library (srfi 33)
   (import (scheme base)

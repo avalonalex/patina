@@ -4,7 +4,8 @@
 //! not ours. That matters more than the count: a hand-written test only covers
 //! the cases its author imagined, and for a library we ported, that author is
 //! the same person who made the porting mistakes. SRFI 151's suite is 145
-//! assertions against the 13 in `srfi_151_bitwise.rs`.
+//! assertions against the few dozen hand-written SRFI 151 rows in
+//! `tests/scheme/srfi/bitwise.scm`.
 //!
 //! Running them at all is a consequence of adopting upstream `(chibi test)` —
 //! the hand-written subset it replaced could not express `test-group` or report
@@ -357,11 +358,11 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "srfi 33",
-        "rename shim over (srfi 142), and through it over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the renames. chibi's own (srfi 33) suite is no substitute: its two bitwise-merge assertions expect SRFI 151's argument order, which contradicts SRFI 33's text and chibi's own implementation",
+        "rename shim over (srfi 142), and through it over (srfi 151), whose suite runs above; tests/scheme/srfi/bitwise.scm pins the renames. chibi's own (srfi 33) suite is no substitute: its two bitwise-merge assertions expect SRFI 151's argument order, which contradicts SRFI 33's text and chibi's own implementation",
     ),
     (
         "srfi 60",
-        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the MSB-first deviations",
+        "rename shim over (srfi 151), whose suite runs above; tests/scheme/srfi/bitwise.scm pins the MSB-first deviations",
     ),
     (
         "srfi 69",
@@ -374,7 +375,7 @@ const NO_SUITE: &[(&str, &str)] = &[
     ("srfi 111", "no upstream suite exists (boxes)"),
     (
         "srfi 142",
-        "rename shim over (srfi 151), whose suite runs above; srfi_151_bitwise.rs pins the bitwise-if swap",
+        "rename shim over (srfi 151), whose suite runs above; tests/scheme/srfi/bitwise.scm pins the bitwise-if swap",
     ),
     (
         "chibi filesystem",
@@ -468,4 +469,55 @@ fn test_harness_reports_failures_and_counts() {
 
     let vm = common::vm_interpreter();
     expect_one_failure_of_three(&vm, "self-check on vm");
+}
+
+// ─── Where (srfi 130) resolves from ──────────────────────────────────────────
+//
+// Moved here from `srfi_130_string.rs` when #193 took its portable rows to
+// `tests/scheme/srfi/string-cursors.scm`. These two cannot be suite rows: the
+// driver supplies `test-lib/` like every shared helper, and so does
+// `check_suite` above, which is why they sit beside it. The `srfi_130_string`
+// suite row would pass unchanged if the chain below leaked into `test-lib/`.
+
+/// Importing `(srfi 130)` alone must pull in `(srfi 14)` from the bundled
+/// tree, with **only `lib/` on the search path**.
+///
+/// #198 shortened the chain. The subset of `(chibi string)` that `(srfi 130)`
+/// used is inlined into `130.chibi-string.scm`, so `lib/chibi/` is gone and
+/// the only bundled dependency left is `(srfi 14)` — for the two char-set
+/// names the inlined `make-char-predicate` uses. The companion test below
+/// pins the other half: the library itself is *supplied*, not bundled.
+#[test]
+fn srfi_130_chain_resolves_from_the_shipped_tree_alone() {
+    use common::eval_program_shipped_only as shipped;
+    assert_eq!(
+        shipped("(import (scheme base) (scheme char) (srfi 130)) (string-null? \"\")"),
+        "#t"
+    );
+    assert_eq!(
+        shipped("(import (scheme base) (srfi 14)) (char-set-contains? char-set:digit #\\7)"),
+        "#t"
+    );
+}
+
+/// `(chibi string)` moved to `test-lib/` in #198 rather than being deleted:
+/// 35 corpus packages import it, and deleting it cost nine of them. So it is
+/// supplied like the rest of `test-lib/chibi/` — unreachable from `lib/`
+/// alone, reachable with the root. Both halves matter: the first is why
+/// `(srfi 130)` had to stop importing it, the second is why the corpus tally
+/// did not move.
+#[test]
+fn chibi_string_is_supplied_not_bundled() {
+    let err = common::eval_program_shipped_only_err(
+        r#"(import (scheme base) (chibi string)) (string-count "aab" #\a)"#,
+    );
+    assert!(
+        err.contains("chibi string"),
+        "(chibi string) resolved from lib/ alone — it is supplied from test-lib/: {err}"
+    );
+    // And it does resolve once the root is supplied, which every shared helper does.
+    assert_eq!(
+        common::eval_program(r#"(import (scheme base) (chibi string)) (string-count "aab" #\a)"#),
+        "2"
+    );
 }

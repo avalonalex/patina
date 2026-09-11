@@ -16,8 +16,7 @@ use common::eval_program as eval;
 use common::{assert_program_eval_to, scratch_path};
 use tempfile::TempDir;
 
-/// Sibling per-topic files (`srfi_151_bitwise.rs`, `srfi_130_string.rs`) wrap
-/// the import prologue in a small helper rather than repeating it per case.
+/// The import prologue, wrapped in a small helper rather than repeated per case.
 fn ports(expr: &str) -> String {
     eval(&format!(
         "(import (scheme base) (scheme read) (scheme write)) {expr}"
