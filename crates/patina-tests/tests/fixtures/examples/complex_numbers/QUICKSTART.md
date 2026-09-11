@@ -173,4 +173,4 @@ Copy and paste into the REPL:
 
 - **Full examples**: See other `.scm` files in this directory
 - **Mathematical theory**: See `README.md` for detailed explanations
-- **Test cases**: See `tests/complex_numbers.rs` for comprehensive examples
+- **Test cases**: See `tests/scheme/data/numeric-operations.scm` ("Complex arithmetic") for comprehensive examples

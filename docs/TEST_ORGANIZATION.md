@@ -553,8 +553,6 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   `docs/VM_RUNTIME.md` §5.6; the prompt rows it does not cover are
   `control/prompts.scm`. `cps_features.rs` holds one test, which needs a
   thread with a sized stack
-- `complex_numbers.rs` — a feature area
-  whose rows are about the implementation rather than the language
 
 #### **Library Tests**
 - `sld_file_loading.rs` — library loading from `.sld` files
