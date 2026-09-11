@@ -377,4 +377,58 @@
   (call-with-continuation-prompt abort-current-continuation t-186
     (lambda (v k) (list 'h v)) t-186 'ab))
 
+;; ── guard, resumed through a composable continuation ───────────────────────
+;;
+;; `lib/scheme/base/exceptions.scm` defines `guard` by R7RS 7.3's expansion,
+;; which captures `guard-k` — a *full* continuation — when the `guard` is
+;; entered, and leaves through it. If a composable continuation captured the
+;; guard's body and is resumed from somewhere else, a jump to `guard-k` goes
+;; back to the *original* context rather than returning to the invoker.
+;; Racket 9.3 (`with-handlers`) and Guile 3.0.11 (`--r7rs`'s `guard`) both
+;; return to the invoker, for both rows below.
+;;
+;; Each row keeps the whole scenario inside its own expression, and resumes
+;; `kk` at most once: a wrong jump then re-runs the row's own `let` and
+;; delivers a wrong value to the row, instead of re-running an earlier
+;; top-level form and taking the row with it.
+
+(define t-guard (make-continuation-prompt-tag 'guard))
+
+;; The success path. R7RS 7.3's reference line jumps to `guard-k` here as
+;; well; ours returns, and this row is why. With the reference line — tried
+;; and measured 2026-09-11 — both backends answered `((r x))`, the resumed
+;; `(list 1 _)` lost to a jump back to the first evaluation.
+(test-equal "a composable continuation resumed through a successful guard returns to its invoker"
+  '((r x) (resumed (1 10)))
+  (let ((kk #f) (log '()))
+    (let ((r (call-with-continuation-prompt
+               (lambda () (list 1 (guard (e (#t 'caught))
+                                    (abort-current-continuation t-guard 'x)
+                                    10)))
+               t-guard (lambda (v k) (set! kk k) v))))
+      (set! log (cons (list 'r r) log))
+      (if (= (length log) 1)
+          (set! log (cons (list 'resumed (kk 'resumed)) log)))
+      (reverse log))))
+
+;; The raise path, where the call/cc expansion has no alternative: a clause's
+;; result goes out through `guard-k` whichever way the body left. Both
+;; backends answer `((r x) (r (1 caught)))` — the resumed computation's
+;; value arrives at the *first* evaluation's `r`, and the resume never
+;; returns. An expected failure on both backends, so it announces itself
+;; when a prompt-based `guard` lands (Track L §6).
+(cond-expand (patina (test-expect-fail 1)) (else))
+(test-equal "a composable continuation resumed through a guard whose body raises returns to its invoker"
+  '((r x) (resumed (1 caught)))
+  (let ((kk #f) (log '()))
+    (let ((r (call-with-continuation-prompt
+               (lambda () (list 1 (guard (e (#t 'caught))
+                                    (abort-current-continuation t-guard 'x)
+                                    (raise 'boom))))
+               t-guard (lambda (v k) (set! kk k) v))))
+      (set! log (cons (list 'r r) log))
+      (if (= (length log) 1)
+          (set! log (cons (list 'resumed (kk 'resumed)) log)))
+      (reverse log))))
+
 (test-end)

@@ -106,28 +106,31 @@
             ;;
             ;; **One deviation from R7RS 7.3, and it is deliberate.** The
             ;; reference writes `(guard-k (lambda () (apply values args)))`
-            ;; here — it jumps even when nothing was raised. That jump crosses
-            ;; nothing: the body has already returned, so every extent it
-            ;; entered is already left, and `guard-k` lands where this return
-            ;; lands. The two are equivalent in every observable way.
+            ;; here — it jumps even when nothing was raised. That jump is
+            ;; equivalent to returning only when no composable continuation
+            ;; is involved: `guard-k` is a *full* continuation captured when
+            ;; the `guard` was entered, so if the body is resumed through a
+            ;; composable continuation from somewhere else, the jump goes
+            ;; back to the original context instead of returning to the
+            ;; invoker. Racket 9.3 and Guile 3.0.11 return; so does this.
+            ;; On the VM the jump would also cost a second O(depth) frame
+            ;; copy per `guard`. `tests/scheme/control/prompts.scm` pins it.
             ;;
-            ;; Returning was what we could afford. On the tree-walker every
-            ;; invoke of a reified continuation used to escape the nested
-            ;; trampoline that Rust primitives call back through, because a
-            ;; `CpsContinuation` carried no mark saying which trampoline
-            ;; captured it — so the primitive could not tell a local jump
-            ;; from a real escape and ran its cleanup either way. Jumping
-            ;; here would have made *every* `guard` do that: a `guard`
-            ;; inside a `call-with-port` callback closed the port under the
-            ;; still-running callback, and Larceny's `base` lost 70
-            ;; assertions to it. Since 2026-09-10 the continuation records
-            ;; its trampoline (`CpsContinuation::trampoline`) and a local
-            ;; jump resumes in place, so the reason is gone; restoring the
-            ;; verbatim line is a separate change, measured on the Larceny
-            ;; lane, and `nested_exception_handlers.rs` holds the assertion
-            ;; it must keep. Raising still jumps, exactly as it always has.
-            ;; Track L §6 has the history, under "a primitive's callback
-            ;; runs on a nested trampoline".
+            ;; It was first a workaround — the tree-walker's nested
+            ;; trampoline could not tell a local jump from an escape, and a
+            ;; `guard` inside a `call-with-port` callback closed the port
+            ;; under the callback — and that reason went on 2026-09-10.
+            ;; Restoring the line was then measured and rejected for the
+            ;; reason above (Track L §6, under "a primitive's callback runs
+            ;; on a nested trampoline").
+            ;;
+            ;; The *raise* path has the same flaw and cannot avoid it here:
+            ;; a clause's result goes out through `guard-k` too, so a
+            ;; composable continuation resumed through a `guard` whose body
+            ;; raises still jumps to the original context. The same file pins
+            ;; that as an expected failure on both backends; the fix is a
+            ;; `guard` built on a prompt of its own, as Racket's and Guile's
+            ;; are.
             (call-with-values
              (lambda () e1 e2 ...)
              (lambda args

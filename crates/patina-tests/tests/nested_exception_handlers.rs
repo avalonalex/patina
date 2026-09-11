@@ -73,16 +73,16 @@ fn guard_covers_every_r7rs_clause_shape() {
     );
 }
 
-/// The success path's deliberate deviation from R7RS 7.3, pinned from the
-/// side that matters: a `guard` whose body returns normally inside a
-/// primitive's callback must leave that callback running. The reference line
-/// jumps to `guard-k` even on success; until 2026-09-10 every such jump read
-/// as an escape from the tree-walker's nested trampoline, and
-/// `call-with-port` closed the port under a callback that then read from it.
-/// Returning in place is what kept the second `read-char` alive. A jump to a
-/// continuation of the same trampoline resumes in place now, so this is the
-/// assertion that must keep passing when the reference line is restored
-/// (`lib/scheme/base/exceptions.scm`).
+/// The success path's deliberate deviation from R7RS 7.3, pinned from one of
+/// its two sides: a `guard` whose body returns normally inside a primitive's
+/// callback must leave that callback running. The reference line jumps to
+/// `guard-k` even on success; until 2026-09-10 every such jump read as an
+/// escape from the tree-walker's nested trampoline, and `call-with-port`
+/// closed the port under a callback that then read from it. That reason is
+/// gone, and the deviation stays for a better one — the jump is wrong when
+/// the body is resumed through a composable continuation — which
+/// `tests/scheme/control/prompts.scm` pins ("a composable continuation
+/// resumed through a successful guard returns to its invoker").
 #[test]
 fn a_guard_that_succeeds_inside_a_callback_leaves_the_callbacks_port_open() {
     assert_program_eval_to(
