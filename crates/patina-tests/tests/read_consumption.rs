@@ -5,6 +5,10 @@
 //! accumulated whole lines into a local buffer, parsed one datum, and
 //! discarded the remainder — so a second `read` on "5 40" returned EOF
 //! instead of 40.
+//!
+//! Only the file-port rows are here, because a suite file cannot make a file.
+//! The string-port rows, the control showing the rule is the port's and not
+//! the file's, moved to `tests/scheme/stdlib/ports.scm` (#193).
 
 mod common;
 
@@ -37,53 +41,6 @@ impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
-}
-
-// =============================================================================
-// String ports
-// =============================================================================
-
-#[test]
-fn test_string_port_multiple_datums_one_line() {
-    assert_program_eval_to(
-        r#"
-        (define p (open-input-string "5 40 102334155"))
-        (let* ((a (read p))
-               (b (read p))
-               (c (read p))
-               (d (read p)))
-          (list a b c (eof-object? d)))
-        "#,
-        "(5 40 102334155 #t)",
-    );
-}
-
-#[test]
-fn test_string_port_read_then_read_char() {
-    // read consumes the datum but not the delimiter after it
-    assert_program_eval_to(
-        r#"
-        (define p (open-input-string "5 40"))
-        (let* ((a (read p))
-               (c (read-char p))
-               (b (read p)))
-          (list a c b))
-        "#,
-        "(5 #\\space 40)",
-    );
-}
-
-#[test]
-fn test_string_port_read_list_datums() {
-    assert_program_eval_to(
-        r#"
-        (define p (open-input-string "(1 2) (3 4)"))
-        (let* ((a (read p))
-               (b (read p)))
-          (list a b))
-        "#,
-        "((1 2) (3 4))",
-    );
 }
 
 // =============================================================================

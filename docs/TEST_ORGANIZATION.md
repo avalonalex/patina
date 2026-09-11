@@ -81,7 +81,7 @@ Two reasons to reach for a `.scm` file first:
   file directly in a `tests/` directory is its own crate and its own link
   against the whole workspace. That is the problem CLAUDE.md's build-cost table
   describes, and #193's reason for existing — 88 binaries when it was measured,
-  52 when #193 finished on 2026-09-11.
+  51 when #193 finished on 2026-09-11.
 - **Portability.** The same file runs under chibi and Gauche unchanged, which
   makes it an oracle and not only a suite. Differences are real findings — for
   `callability.scm`, Gauche's three disagreements are the deliberate
@@ -223,7 +223,8 @@ those pointers resolve. Six rows stayed in Rust at the time: family 40's three
 backend divergences, which followed once a `.scm` row could tell the backends
 apart (they are the last section of `expansion/hygiene.scm` now — see "A row
 where the two backends differ" below), and the two families that need real
-files on disk (`include_syntax.rs`, `standard_ports.rs`), which stay.
+files on disk (`include_syntax.rs`, and `standard_ports.rs`, whose file row
+later moved to `vfs_file_io.rs`), which stay.
 
 **What the move was actually worth** is not the binary it saved. Rows that had
 only ever run on Patina were suddenly arbitrated by two other implementations,

@@ -291,6 +291,33 @@ fn test_binary_port_predicates() {
     assert_program_eval_to(&code, "(#t #t #f #t #f)");
 }
 
+/// R7RS 6.13.1: `input-port-open?` "returns #t if port is still open and
+/// capable of performing input" — for an output-only port that is `#f`, not
+/// a type error. Larceny's `file` suite maps every port predicate over a
+/// freshly opened binary port and died here (family 10, fixed 2026-08-24:
+/// `#f` for the other direction, on both predicates). Moved from
+/// `standard_ports.rs` when #193 took that file's string-port rows to
+/// `tests/scheme/stdlib/ports.scm`: the claim is about a *binary file* port,
+/// which a suite file cannot make, and a string-port version would assert the
+/// same direction through a different port type.
+#[test]
+fn input_port_open_on_an_output_only_port_is_false() {
+    let f = TempFile::new("open_direction.bin");
+    let code = format!(
+        r#"
+        (import (scheme file))
+        (define p (open-binary-output-file "{path}"))
+        (define q (open-input-string ""))
+        (let ((results (list (output-port-open? p) (input-port-open? p)
+                             (input-port-open? q) (output-port-open? q))))
+          (close-port p)
+          results)
+        "#,
+        path = f.path()
+    );
+    assert_program_eval_to(&code, "(#t #f #t #f)");
+}
+
 // =============================================================================
 // Port close behavior
 // =============================================================================

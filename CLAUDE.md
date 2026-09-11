@@ -124,7 +124,7 @@ links, so this is the worst realistic case):
 | any of them again with no edit in between | ~0.3 s |
 
 The two big numbers are **integration binaries × ~6 s** — 88 when this was
-measured, **52 as of 2026-09-11**, with #193 finished: every
+measured, **51 as of 2026-09-11**, with #193 finished: every
 `.rs` file directly in a `tests/` directory is its own crate and its own
 executable, and each statically links the whole workspace. Do not go looking for a cache bug —
 there isn't one. Measured, so nobody re-derives it: clippy and `cargo test` do
@@ -145,9 +145,9 @@ which *added* a binary rather than removing one — 87 to 88 — because
 `callability.rs` still holds the rows a `.scm` file cannot express. Phase 1
 took it to 73 and the `hygiene.rs` migration to 72; Phase 2 split the mixed
 files and took it to 60, across 38 suite files and 792 rows. Finishing it —
-the SRFI files and the 406 tests of `compliance/` — took it to **52**
+the SRFI files and the 406 tests of `compliance/` — took it to **51**
 (`find crates -path '*/tests/*.rs' -not -path '*/tests/*/*' | wc -l`),
-across 56 suite files and 1738 rows. Re-measured on
+across 56 suite files and 1748 rows. Re-measured on
 the same worst case at 60 binaries, `cargo test --all --lib --tests` took
 340 s — an upper bound, since a review agent was running at the same time —
 against 493 s at 87; clippy was not re-measured and 580 s is now an
