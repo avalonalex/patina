@@ -371,3 +371,29 @@ fn test_a_re_raised_error_object_names_its_message() {
         );
     }
 }
+
+/// A malformed `let-syntax` is rejected **before the program runs**: an empty
+/// body, a binding that is not `(name transformer)`, a keyword that is not a
+/// symbol. From `let_syntax.rs` when it migrated (#193 Phase 2); the rest of
+/// that file is `tests/scheme/expansion/let-syntax.scm`. The Rust versions
+/// ran on the tree-walker only; both backends reject all three while
+/// desugaring.
+#[test]
+fn a_malformed_let_syntax_is_rejected_before_the_program_runs() {
+    for (code, message) in [
+        (
+            "(let-syntax ((foo (syntax-rules () ((foo x) x)))))",
+            "let-syntax requires bindings and at least",
+        ),
+        (
+            "(let-syntax ((foo)) 42)",
+            "Each let-syntax binding must be (name tran",
+        ),
+        (
+            "(let-syntax ((123 (syntax-rules () ((123 x) x)))) 42)",
+            "Macro name must be a symbol",
+        ),
+    ] {
+        assert_program_eval_error_at(code, ErrorClass::BeforeRun, ErrorClass::BeforeRun, message);
+    }
+}

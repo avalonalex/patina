@@ -108,7 +108,7 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/ellipsis.scm", 7),
     ("expansion/hygiene.scm", 38),
     ("expansion/keyword-bindings.scm", 14),
-    ("expansion/let-syntax.scm", 25),
+    ("expansion/let-syntax.scm", 31),
     ("expansion/let-values.scm", 1),
     ("expansion/quasiquote.scm", 1),
     ("expansion/syntax-rules-literals.scm", 19),
@@ -117,10 +117,13 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
+    ("stdlib/comparators.scm", 5),
     ("stdlib/eval.scm", 19),
+    ("stdlib/hash-tables.scm", 6),
     ("stdlib/lazy-evaluation.scm", 32),
     ("stdlib/list.scm", 6),
     ("stdlib/process-context.scm", 12),
+    ("stdlib/random.scm", 4),
     ("stdlib/scheme-r5rs.scm", 20),
 ];
 
