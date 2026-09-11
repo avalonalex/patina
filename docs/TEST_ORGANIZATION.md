@@ -518,14 +518,12 @@ cargo test --package patina-core
 **Categories:**
 
 #### **Compliance Tests** (`tests/compliance/`)
-R7RS specification compliance organized by category:
-- `numbers.rs` - Numeric operations (~30 tests)
+R7RS specification compliance organized by category. The list, string,
+vector, predicate and numeric modules moved to `tests/scheme/data/` (#193):
 - `derived.rs` - Derived forms (let, cond, case)
 - `control.rs` - Control flow
 - `quasiquote.rs` - Quasiquote expansion
 - `macros_advanced.rs` - Advanced macro patterns (~60 tests)
-- `rationals.rs` - Rational numbers
-- `numeric_edge_cases.rs` - Edge cases
 
 #### **Feature Tests** (top-level `tests/`)
 

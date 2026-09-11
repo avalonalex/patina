@@ -14,7 +14,7 @@
 ;; correctly at 10 000, at 200 000 and at 1 000 000 (measured 2026-09-07).
 ;; Both backends allocate frames on the heap rather than the native stack, so
 ;; surviving a deep recursion does not distinguish a tail call from any other
-;; call, at any of the depths used below — the largest here is 10 000.
+;; call, at any of the depths used below — the largest here is 100 000.
 ;;
 ;; So what each row actually pins is that the form evaluates *correctly* when
 ;; its last expression recurses, which is worth having and is what the row
@@ -34,7 +34,7 @@
 ;; depth where exhaustion separates the two is far past anything belonging in
 ;; a unit suite.
 ;;
-;; Both backends and Gauche agree on all 36 rows; chibi agrees on all 36 too.
+;; Both backends and Gauche agree on all 38 rows; chibi agrees on all 38 too.
 ;;
 ;; **Helper names are unique per row on purpose.** In the `.rs` form each row
 ;; was its own program with its own top level; seven of them defined
@@ -321,5 +321,15 @@
     ((1) (if (= n 1) 'odd-one (test-case-stress (- n 2))))))
 (test-equal "case, five thousand deep" 'even-zero
   (test-case-stress 5000))
+
+;; The last two came from `compliance/numbers.rs` (#193), where they sat among
+;; the numeric rows. The header's caveat applies to them as to the rest: they
+;; show a correct answer at depth, not constant space.
+(define (countdown-deep n) (if (= n 0) 'done (countdown-deep (- n 1))))
+(test-equal "a self tail call 100 000 deep" 'done (countdown-deep 100000))
+(test-equal "mutual recursion 10 000 deep" #t
+  (letrec ((ev? (lambda (n) (if (= n 0) #t (od? (- n 1)))))
+           (od? (lambda (n) (if (= n 0) #f (ev? (- n 1))))))
+    (ev? 10000)))
 
 (test-end)

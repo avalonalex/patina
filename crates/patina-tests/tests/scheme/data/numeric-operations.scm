@@ -8,6 +8,14 @@
 ;; because `sin`, `cos` and `tan` had a one-case test each and share a row
 ;; here, and because the six substring tests collapse into value assertions.
 ;;
+;; **Extended from `compliance/numbers.rs` and `compliance/numeric_edge_cases.rs`**
+;; (#193), both deleted: 53 tests over 186 assertions, which are the sections
+;; from "Arithmetic" to "Integer algorithms" and the one on complex equality,
+;; printing and `angle`. Their exact rationals went to `data/rationals.scm`
+;; with `compliance/rationals.rs`. Two tail-call rows at depth — a countdown
+;; from 100 000 and mutual `even?`/`odd?` recursion to 10 000 — are not
+;; numeric, and moved to `control/tail-recursion.scm`.
+;;
 ;; ── Two things the migration fixes, not just relocates ──────────────────────
 ;;
 ;; **These assertions had never run on the VM.** The `.rs` file carried its own
@@ -59,6 +67,201 @@
 (define (close? x y) (< (magnitude (- x y)) 1e-10))
 
 (test-begin "numeric-operations")
+
+;; ── Arithmetic ─────────────────────────────────────────────────────────────
+;;
+;; This section down to "Rounding", and the complex rows marked below, came
+;; from `compliance/numbers.rs` and `compliance/numeric_edge_cases.rs`
+;; (#193), both deleted. Those helpers compared the written form too. Most
+;; results here are exact integers or booleans, which print only one way, so
+;; a value comparison is the same test; a ratio or a float whose spelling is
+;; the point is written.
+
+(test-equal "+, including no arguments" '(7 6 0) (list (+ 3 4) (+ 1 2 3) (+)))
+(test-equal "-, including negation" '(7 5 -5) (list (- 10 3) (- 10 3 2) (- 5)))
+(test-equal "*, including no arguments" '(6 24 1) (list (* 2 3) (* 2 3 4) (*)))
+(test-equal "/ of exact integers is exact, and a ratio when it must be" '("5" "5/2")
+  (map written (list (/ 20 4) (/ 20 4 2))))
+
+;; An exact zero divisor is an error. An inexact one gives an infinity.
+(test-error "exact division by zero is an error" #t (/ 1 0))
+(test-error "exact division of a negative by zero is an error" #t (/ -5 0))
+(test-equal "an inexact zero divisor gives an infinity" '(+inf.0 -inf.0)
+  (list (/ 1 0.0) (/ -1 0.0)))
+;; R7RS §6.2.6: "It is an error if any argument of / other than the first is
+;; an exact zero." So an inexact dividend over an exact zero is Patina's
+;; choice, and Gauche's; chibi raises (registered as latitude).
+(test-equal "an inexact dividend over an exact zero gives an infinity" +inf.0
+  (/ 1.0 0))
+
+;; A zero divisor is *signed*, and IEEE 754 §6.3 makes the quotient's sign the
+;; exclusive-or of the two. `-0.0` is not less than zero, so taking the
+;; numerator's sign alone answered `+inf.0` for all four of these.
+(test-equal "the sign of a zero divisor counts" '(-inf.0 +inf.0 -inf.0 -inf.0)
+  (list (/ 1.0 -0.0) (/ -1.0 -0.0) (/ 1 -0.0) (/ -0.0)))
+
+;; ── Comparisons ────────────────────────────────────────────────────────────
+
+(test-equal "=" '(#t #f #t #f) (list (= 5 5) (= 5 6) (= 5 5 5) (= 5 5 6)))
+(test-equal "<" '(#t #f #t #f) (list (< 1 2) (< 2 1) (< 1 2 3) (< 1 2 2)))
+(test-equal ">" '(#t #f #t) (list (> 2 1) (> 1 2) (> 3 2 1)))
+(test-equal "<=" '(#t #t #f) (list (<= 1 2) (<= 2 2) (<= 2 1)))
+(test-equal ">=" '(#t #t #f) (list (>= 2 1) (>= 2 2) (>= 1 2)))
+
+;; Every comparison involving a NaN is false, including with itself.
+(test-equal "every comparison with a NaN is false" '(#f #f #f #f #f #f)
+  (list (< +nan.0 0) (> +nan.0 0) (<= +nan.0 0) (>= +nan.0 0)
+        (= +nan.0 0) (= +nan.0 +nan.0)))
+
+(test-equal "an infinity is equal to itself and beyond every finite number"
+  '(#f #f #t #t #t #t #t)
+  (list (< +inf.0 +inf.0) (> +inf.0 +inf.0) (= +inf.0 +inf.0)
+        (< 100 +inf.0) (> +inf.0 100) (< -inf.0 0) (> 0 -inf.0)))
+
+;; ── Integer division, abs, max and min ─────────────────────────────────────
+
+(test-equal "quotient truncates toward zero" '(3 -3)
+  (list (quotient 10 3) (quotient -10 3)))
+(test-equal "remainder takes the sign of the dividend" '(1 -1)
+  (list (remainder 10 3) (remainder -10 3)))
+(test-equal "modulo takes the sign of the divisor" '(1 2)
+  (list (modulo 10 3) (modulo -10 3)))
+(test-equal "abs" '(5 5 0) (list (abs 5) (abs -5) (abs 0)))
+(test-equal "max and min of exact integers" '(3 3 1 1)
+  (list (max 1 2 3) (max 3 2 1) (min 1 2 3) (min 3 2 1)))
+
+;; R7RS §6.2.6: if any argument is inexact, so is the result — even when the
+;; winner is the exact one.
+(test-equal "max is inexact when any argument is" '(4.0 4.0 5.0)
+  (list (max 3.9 4) (max 4 3.9) (max 5 3.9 4)))
+(test-equal "min is inexact when any argument is" '(3.9 3.9)
+  (list (min 3.9 4) (min 4 3.9)))
+(test-equal "max against an infinity" '(+inf.0 +inf.0 0.0)
+  (list (max 100 +inf.0) (max +inf.0 100) (max -inf.0 0)))
+(test-equal "min against an infinity" '(100.0 -inf.0)
+  (list (min 100 +inf.0) (min -inf.0 0)))
+
+;; A NaN anywhere makes the result a NaN, as Chez does. R7RS says nothing
+;; about NaN here; Gauche agrees, and chibi returns the other argument unless
+;; the NaN comes first (registered as spec-silent). `nan?` because `equal?`
+;; on two NaNs is not something R7RS pins down.
+(test-equal "max with a NaN argument is a NaN" '(#t #t #t #t #t)
+  (map nan? (list (max +nan.0 5) (max 1 +nan.0 3) (max 5 +nan.0)
+                  (max 1 2 3 +nan.0) (max +nan.0))))
+(test-equal "min with a NaN argument is a NaN" '(#t #t #t #t #t)
+  (map nan? (list (min +nan.0 5) (min 1 +nan.0 3) (min 5 +nan.0)
+                  (min 1 2 3 +nan.0) (min +nan.0))))
+
+;; ── Predicates ─────────────────────────────────────────────────────────────
+
+(test-equal "number? and integer?" '(#t #f #t #f)
+  (list (number? 42) (number? 'a) (integer? 42) (integer? 3.14)))
+(test-equal "zero?, positive? and negative?" '(#t #f #t #f #f #t #f #f)
+  (list (zero? 0) (zero? 1) (positive? 5) (positive? -5) (positive? 0)
+        (negative? -5) (negative? 5) (negative? 0)))
+(test-equal "odd? and even?" '(#t #f #t #f)
+  (list (odd? 3) (odd? 4) (even? 4) (even? 3)))
+
+;; ── Exactness and contagion ────────────────────────────────────────────────
+
+(test-equal "exact integers are exact, bignums included" '(#t #t #t #t #t #t)
+  (list (exact? 42) (exact? -17) (exact? 0) (exact? 9223372036854775808)
+        (exact? (- (+ 1 10000000000000000000000000000000000)
+                   10000000000000000000000000000000000))
+        (exact? 10000000000000000000)))
+(test-equal "decimals are inexact" '(#t #t #t #t)
+  (list (inexact? 3.14) (inexact? 2.0) (inexact? 0.0) (inexact? -5.5)))
+
+;; Exactness is syntactic: 123 and 123.0 are the same point on the line and
+;; different numbers. The `.rs` test asserted `(exact? 123)` and
+;; `(exact? 123.0)` twice each; the repeats are dropped. It also carried
+;; `(= 123 123.0)` commented out, waiting on mixed comparison — which holds
+;; now, so it is a case here.
+(test-equal "a decimal point makes a literal inexact, not a different number"
+  '(#t #f #f #t #t)
+  (list (exact? 123) (inexact? 123) (exact? 123.0) (inexact? 123.0)
+        (= 123 123.0)))
+
+(test-equal "+ is inexact when any argument is" '(#t #t #t #t)
+  (list (exact? (+ 1 2)) (inexact? (+ 1.0 2.0))
+        (inexact? (+ 1 2.0)) (inexact? (+ 1.0 2))))
+(test-equal "* is inexact when any argument is" '(#t #t #t #t)
+  (list (exact? (* 3 4)) (inexact? (* 3.0 4.0))
+        (inexact? (* 3 4.0)) (inexact? (* 3.0 4))))
+(test-equal "- is inexact when any argument is" '(#t #t #t #t)
+  (list (exact? (- 10 3)) (inexact? (- 10.0 3.0))
+        (inexact? (- 10 3.0)) (inexact? (- 10.0 3))))
+(test-equal "/ is inexact when any argument is" '(#t #t #t)
+  (list (inexact? (/ 10.0 3.0)) (inexact? (/ 10 3.0)) (inexact? (/ 10.0 3))))
+(test-equal "one inexact operand makes a whole expression inexact" '(#t #t #t)
+  (list (exact? (+ (* 2 3) (- 10 5)))
+        (inexact? (+ (* 2 3.0) (- 10 5)))
+        (inexact? (+ (* 2 3) (- 10.0 5)))))
+
+;; ── Bignums ────────────────────────────────────────────────────────────────
+
+(test-equal "bignum arithmetic stays exact" '(#t #t #t)
+  (list (exact? (+ 10000000000000000000 10000000000000000000))
+        (exact? (* 10000000000000000000 2))
+        (exact? (+ 9223372036854775807 1))))
+(test-equal "overflowing a machine word promotes rather than wrapping"
+  '(9223372036854775808 10000000000000000000)
+  (list (+ 9223372036854775807 1) (* 1000000000 10000000000)))
+
+;; Each result passes a 64-bit word, and 2^100 is built by repeated
+;; multiplication rather than `expt`.
+(test-equal "an iterative fib 100 is a bignum" 354224848179261915075
+  (let ()
+    (define (fib n)
+      (define (fib-iter a b count)
+        (if (= count 0) a (fib-iter b (+ a b) (- count 1))))
+      (fib-iter 0 1 n))
+    (fib 100)))
+(test-equal "a recursive 25! is a bignum" 15511210043330985984000000
+  (let ()
+    (define (factorial n) (if (= n 0) 1 (* n (factorial (- n 1)))))
+    (factorial 25)))
+(test-equal "2^100 by repeated multiplication" 1267650600228229401496703205376
+  (let ()
+    (define (power base exp)
+      (define (power-iter base exp acc)
+        (if (= exp 0) acc (power-iter base (- exp 1) (* acc base))))
+      (power-iter base exp 1))
+    (power 2 100)))
+
+;; ── Integer algorithms through multiple values ─────────────────────────────
+;;
+;; The `.rs` tests defined `gcd` at the top level of their own programs. Here
+;; that would redefine an imported binding, so the helper is `euclid`, bound
+;; locally. Their two programs are one row: the cases are the same algorithm.
+
+(test-equal "Euclid's gcd, stepping with values" '(6 5 6 21)
+  (let ()
+    (define (quotient-and-remainder a b)
+      (values (quotient a b) (remainder a b)))
+    (define (euclid a b)
+      (if (= b 0)
+          a
+          (let-values (((q r) (quotient-and-remainder a b)))
+            (euclid b r))))
+    (list (euclid 48 18) (euclid 100 35) (euclid 54 24) (euclid 1071 462))))
+
+;; 48*(-1) + 18*3 = 6.
+(test-equal "the extended Euclidean algorithm returns three values" '(6 -1 3)
+  (let ()
+    (define (extended-gcd a b)
+      (if (= b 0)
+          (values a 1 0)
+          (let-values (((g x1 y1) (extended-gcd b (remainder a b))))
+            (let ((q (quotient a b)))
+              (values g y1 (- x1 (* q y1)))))))
+    (call-with-values (lambda () (extended-gcd 48 18)) list)))
+
+(test-equal "a = b*q + r for quotient and remainder" '((3 2 17) #t)
+  (list (let-values (((q r) (values (quotient 17 5) (remainder 17 5))))
+          (list q r (+ (* 5 q) r)))
+        (let-values (((q r) (values (quotient 100 7) (remainder 100 7))))
+          (= 100 (+ (* 7 q) r)))))
 
 ;; ── Rounding ───────────────────────────────────────────────────────────────
 ;;
@@ -209,6 +412,107 @@
 ;; exactness, but the right number". A value comparison can.
 (test-assert "make-polar at angle zero is 1, of whichever exactness"
   (close? (make-polar 1 0) 1))
+
+;; ── Complex equality, printing and angle ───────────────────────────────────
+;;
+;; From `compliance/numeric_edge_cases.rs` and `compliance/numbers.rs`.
+
+;; `1+0i` reads as the exact real 1, so it equals 1 and 1.0. The `.rs` file had
+;; a second test, meant for ordering on complex numbers, that asserted only
+;; `(= 1+2i 1+2i)` again; it is the first case here.
+(test-equal "= on complex numbers, where a zero imaginary part is real"
+  '(#t #f #t #t #t #f)
+  (list (= 1+2i 1+2i) (= 1+2i 3+4i) (= 1+0i 1.0) (= 1+0i 1) (= 1.0 1+0i 1)
+        (= 1+2i 1.0)))
+
+;; §6.2.6: `(string->number (number->string z))` must be equivalent to `z`,
+;; which a complex with a zero real part did not satisfy. R7RS 7.1.1 spells an
+;; imaginary part `<sign> <ureal R> i`, so the sign is syntax and not
+;; decoration: `number->string` produced `"2.0i"`, which is not a number at
+;; all. And a bare `<imaginary R>` reads with an *exact* zero real part, so
+;; `+2.0i` cannot stand for `(make-rectangular 0.0 2.0)` — the inexact zero
+;; has to be written.
+(test-equal "number->string writes an inexact zero real part"
+  '("0.0+2.0i" "0.0-2.0i" "0.0+1.0i" "1.0-1.0i")
+  (map number->string
+       (list (make-rectangular 0.0 2.0) (make-rectangular 0.0 -2.0)
+             (make-rectangular 0.0 1.0) (make-rectangular 1.0 -1.0))))
+
+;; An infinite or NaN part formats with its own sign, so it needs the same
+;; guard as the pure-imaginary case — it used to concatenate a second `+` and
+;; produce `1.0++inf.0i`, which is not a number.
+(test-equal "number->string with an infinite imaginary part"
+  '("1.0+inf.0i" "0.0+inf.0i")
+  (map number->string
+       (list (make-rectangular 1.0 +inf.0) (make-rectangular 0.0 +inf.0))))
+
+;; With an *exact* zero real part, which R7RS lets the writer elide. chibi
+;; writes it as `0`, which reads back just as well, and Gauche has no
+;; mixed-exactness complex numbers to write, so the spelling is Patina's —
+;; the same call as "how complex results are written" below. A unit imaginary
+;; part is its own case: `+i` reads back *exact*, so collapsing an inexact 1.0
+;; to it would lose the inexactness.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "Patina elides an exact zero real part"
+  '("+2.0i" "-2.0i" "+1.0i" "+i")
+  (map number->string
+       (list (make-rectangular 0 2.0) (make-rectangular 0 -2.0)
+             (make-rectangular 0 1.0) (make-rectangular 0 1))))
+
+;; An inexact zero *imaginary* part is the mirror image: R7RS §6.2.6 has
+;; `(real? -2.5+0.0i)` answer #f, so writing it as a real would name a
+;; different number. Gauche reads `1.0+0.0i` as the real 1.0 (registered as
+;; latitude: it has no such complex number to keep).
+(test-equal "number->string keeps an inexact zero imaginary part" "1.0+0.0i"
+  (number->string (string->number "1.0+0.0i")))
+
+;; The round trip R7RS actually requires, across the shapes that exercise each
+;; arm above rather than only the easy one.
+(test-equal "complex numbers round-trip through number->string"
+  '(#t #t #t #t #t #t #t)
+  (let ((round-trips? (lambda (z) (equal? z (string->number (number->string z))))))
+    (map round-trips?
+         (list (make-rectangular 0.0 2.0) (make-rectangular 0 2.0)
+               (make-rectangular 1.0 2.0) (make-rectangular 0.0 1.0)
+               (make-rectangular 1.0 -1.0) (make-rectangular 1.0 +inf.0)
+               (make-rectangular 0.0 +inf.0)))))
+
+;; `write` must agree with `number->string`; it used to omit the inexact zero
+;; too, which is how the `sqrt` inexactness stayed invisible. The `.rs` row
+;; compared both against Patina's spelling; agreement is the claim, and it is
+;; one every implementation can be asked.
+(test-equal "write agrees with number->string on complex numbers" '(#t #t #t #t)
+  (map (lambda (z) (string=? (written z) (number->string z)))
+       (list (make-rectangular 0.0 2.0) (make-rectangular 0 2.0)
+             (make-rectangular 0.0 1.0) (make-rectangular 0 1))))
+
+;; §6.2.6: `angle` of a negative real is pi, and of a positive one zero —
+;; inexact, as every implementation here answers even for exact arguments.
+;; Bignums reach it through a conversion to a float, so they are cases.
+(test-equal "angle of a negative real is pi"
+  '(3.141592653589793 3.141592653589793 3.141592653589793 3.141592653589793
+    3.141592653589793)
+  (list (angle -1.0) (angle -5) (angle -1/2) (angle -inf.0)
+        (angle (- (expt 2 5000)))))
+(test-equal "angle of a positive real or zero is 0.0" '(0.0 0.0 0.0 0.0 0.0 0.0)
+  (list (angle 0.0) (angle 1.0) (angle 5) (angle (expt 2 5000)) (angle +inf.0)
+        (angle 0)))
+(test-equal "angle of i is pi/2" 1.5707963267948966 (angle +i))
+
+;; `-0.0` is negative by its *sign bit*, not by ordering — `(negative? -0.0)`
+;; is #f and must stay so — and asking the ordering question answered 0.0. A
+;; real is the complex number with a +0.0 imaginary part, so the answer is
+;; `atan2(+0.0, -0.0)`, which IEEE 754 §9.2 makes pi, as C's `carg` and
+;; chibi do. Gauche answers 0.0 (registered as spec-silent).
+(test-equal "angle of -0.0 is pi" 3.141592653589793 (angle -0.0))
+(test-equal "-0.0 is zero and not negative" '(#f #t)
+  (list (negative? -0.0) (zero? -0.0)))
+
+;; `+nan.0` used to answer 0.0, and a non-number did too, because the
+;; predicate this replaced was documented total. Gauche answers pi for the
+;; NaN (registered as spec-silent).
+(test-assert "angle of a NaN is a NaN" (nan? (angle +nan.0)))
+(test-error "angle of a non-number is an error" #t (angle "x"))
 
 ;; ── Trigonometric ──────────────────────────────────────────────────────────
 
