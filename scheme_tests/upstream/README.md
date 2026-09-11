@@ -8,8 +8,8 @@ The reference test suites for the SRFIs Patina bundles, and for the
 These are the specification authors' own tests, not ours. That is the point:
 a hand-written test only checks the cases its author thought of, and the author
 here is the same person who wrote the implementation. `srfi/151/test.sld` alone
-is 145 assertions against the 13 in
-`crates/patina-tests/tests/srfi_151_bitwise.rs`.
+is 145 assertions against the few dozen hand-written SRFI 151 rows in
+`crates/patina-tests/tests/scheme/srfi/bitwise.scm`.
 
 The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
 from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`); the `chibi/`

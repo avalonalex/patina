@@ -84,7 +84,7 @@
 ;; That is weaker than the row it replaces — a stub `(lambda (x) #f)` satisfies
 ;; it — and R5RS offers no portable way to *make* an eof object to strengthen
 ;; it. The positive case lives where a program can actually reach one:
-;; `read_consumption.rs`, `vfs_file_io.rs` and `binary_port_textual_reads.rs`.
+;; `read_consumption.rs`, `vfs_file_io.rs` and `stdlib/ports.scm`.
 (test-equal "eof-object?, which is the part R5RS defines" #f (eof-object? 'not-eof))
 (test-equal "load is a procedure, from (scheme load)" #t (procedure? load))
 
