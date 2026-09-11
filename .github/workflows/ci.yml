@@ -146,6 +146,10 @@ jobs:
       run: |
         export PATH="$ORACLES/bin:$PATH"
         export LD_LIBRARY_PATH="$ORACLES/lib:${LD_LIBRARY_PATH:-}"
+        # A backstop under the script's own chibi heap ceiling: no oracle
+        # process may take the runner down, whatever file it is stuck on. An
+        # oracle that hits it fails its file, which the lane reports.
+        ulimit -v 6291456
         chibi-scheme -V
         gosh -V | head -1
         SUITE_ORACLES_REQUIRE_ALL=1 ./scripts/run_suite_oracles.sh
