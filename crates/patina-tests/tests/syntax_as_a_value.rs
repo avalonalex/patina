@@ -129,8 +129,9 @@ fn test_a_macro_is_not_a_value_either() {
 
 // That `else` and `=>` still work inside `cond` and `case` — matched as
 // `syntax-rules` literals, never desugared as expressions — is covered on both
-// backends by `compliance/derived.rs` (`test_cond_with_else`,
-// `test_cond_with_arrow`, `test_case_with_else`). `core_syntax_bindings.rs`
+// backends by `tests/scheme/expansion/derived-forms.scm` ("cond falls through
+// to else", "cond's => passes the test's value", "case falls through to
+// else"). `core_syntax_bindings.rs`
 // says in as many words that it does not restate them; neither does this file.
 
 // ============================================================================

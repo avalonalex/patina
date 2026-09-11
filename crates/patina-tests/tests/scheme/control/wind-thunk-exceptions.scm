@@ -308,8 +308,8 @@
 ;; ordering converged with this (`a_guard_clause_runs_after_the_unwind`), and
 ;; the VM wind machinery the fix leans on, which #149 converged
 ;; (`a_continuation_within_its_own_wind_runs_the_thunks_once`). Plain re-entry
-;; is `compliance/control.rs`'s `test_dynamic_wind_with_callcc_reentry` (R7RS
-;; §6.10's own example) rather than re-derived here.
+;; is `control/cps-features.scm`'s "re-entering a wind runs the before and
+;; after thunks again" (R7RS §6.10's own example) rather than re-derived here.
 ;;
 ;; All three implementations agree on this one.
 ;; Top level, like this file's other seven logs: `docs/TEST_ORGANIZATION.md`

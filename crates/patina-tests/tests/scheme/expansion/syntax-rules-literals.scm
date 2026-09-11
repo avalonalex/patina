@@ -78,12 +78,13 @@
 ;;
 ;; `core_syntax_bindings.rs` argues against exactly this row and is right about
 ;; its own file: "a second copy only splits the failure across two files", the
-;; regression guards for `cond`/`case` being `compliance/derived.rs`'s
-;; `test_cond_with_else`, `test_cond_with_arrow` and `test_case_with_else`.
+;; regression guards for `cond`/`case` being `derived-forms.scm`'s "cond falls
+;; through to else", "cond's => passes the test's value" and "case falls
+;; through to else".
 ;; Kept here anyway, and the difference is what the row is *for*: there it would
 ;; be a second guard for `cond`, here it is the control that gives the shadowed
 ;; row above its meaning. If `cond`'s arrow breaks, three files fail and
-;; `derived.rs` is the one to read.
+;; `derived-forms.scm` is the one to read.
 (test-equal "an unshadowed => is still the arrow" 'got-true
   (cond (#t => (lambda (x) 'got-true))))
 

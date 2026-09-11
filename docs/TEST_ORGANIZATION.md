@@ -519,10 +519,9 @@ cargo test --package patina-core
 
 #### **Compliance Tests** (`tests/compliance/`)
 R7RS specification compliance organized by category. The list, string,
-vector, predicate and numeric modules moved to `tests/scheme/data/` (#193):
-- `derived.rs` - Derived forms (let, cond, case)
-- `control.rs` - Control flow
-- `quasiquote.rs` - Quasiquote expansion
+vector, predicate and numeric modules moved to `tests/scheme/data/`, and
+the core-form, derived-form, control and quasiquote modules to
+`tests/scheme/control/` and `tests/scheme/expansion/` (#193):
 - `macros_advanced.rs` - Advanced macro patterns (~60 tests)
 
 #### **Feature Tests** (top-level `tests/`)

@@ -96,6 +96,59 @@
   (with-exception-handler (lambda (e) (+ e 100))
     (lambda () (+ (raise-continuable 1) (raise-continuable 2) (raise-continuable 3)))))
 
+;; R7RS §6.11's ordinary shapes, from `crates/patina-tests/tests/compliance/
+;; control.rs` (#193). The first two restate rows above in the report's
+;; spelling and are kept as written there.
+(test-equal "a handler escapes through a continuation" 'caught
+  (call-with-current-continuation
+    (lambda (k)
+      (with-exception-handler
+        (lambda (x) (k 'caught))
+        (lambda () (raise 'boom))))))
+
+(test-equal "a handler that is never called leaves the thunk's value" 42
+  (with-exception-handler
+    (lambda (x) 'never-called)
+    (lambda () 42)))
+
+;; The report's own `raise-continuable` example: the handler's 42 becomes the
+;; value of the raise, so 42 + 23.
+(test-equal "raise-continuable, the report's example" 65
+  (with-exception-handler
+    (lambda (con) 42)
+    (lambda () (+ (raise-continuable "should be a number") 23))))
+
+;; Each handler level captures its own escape. On the tree-walker this failed
+;; until capturing a continuation learned to record the cleanup frame
+;; `with-exception-handler` leaves on its thunk's continuation — the defect
+;; `control/guard.scm`'s header tells in full.
+(test-equal "nested handlers, each with its own escape" 'inner-caught
+  (call-with-current-continuation
+    (lambda (outer-k)
+      (with-exception-handler
+        (lambda (x) (outer-k 'outer-caught))
+        (lambda ()
+          (call-with-current-continuation
+            (lambda (inner-k)
+              (with-exception-handler
+                (lambda (x) (inner-k 'inner-caught))
+                (lambda () (raise 'boom))))))))))
+
+;; The escape abandons the rest of the thunk: `after` is never logged.
+(test-equal "a handler's escape abandons the rest of the thunk" '(handled before)
+  (let ((result '()))
+    (call-with-current-continuation
+      (lambda (k)
+        (with-exception-handler
+          (lambda (e)
+            (set! result (cons 'handled result))
+            (k 'escaped))
+          (lambda ()
+            (set! result (cons 'before result))
+            (raise 'error)
+            (set! result (cons 'after result))))))
+    result))
+
 ;; ── dynamic-wind, nested ───────────────────────────────────────────────────
 
 (test-equal "before, body and after all run" '(before body after)
@@ -564,6 +617,23 @@
           (begin (set! entered #t) (saved #f))))))
 
 ;; ── dynamic-wind, re-entered ───────────────────────────────────────────────
+
+;; The report's own `dynamic-wind` example (R7RS §6.10), from
+;; `crates/patina-tests/tests/compliance/control.rs` (#193): a continuation
+;; captured in the body re-enters the extent, so both thunks run again.
+(test-equal "re-entering a wind runs the before and after thunks again"
+  '(connect talk1 disconnect connect talk2 disconnect)
+  (let ((path '()) (c #f))
+    (let ((add (lambda (s) (set! path (cons s path)))))
+      (dynamic-wind
+        (lambda () (add 'connect))
+        (lambda ()
+          (add (call-with-current-continuation
+                 (lambda (c0) (set! c c0) 'talk1))))
+        (lambda () (add 'disconnect)))
+      (if (< (length path) 4)
+          (c 'talk2)
+          (reverse path)))))
 
 ;; Invoking a continuation captured inside its own `dynamic-wind` extent runs
 ;; the wind thunks once, on both backends — converged 2026-09-01.
