@@ -1,11 +1,12 @@
 # Track H — Hygiene Assurance PRD
 
 **Created:** 2026-08-31
-**Updated:** 2026-09-12 — H1's bounded generator, historical capture check and
-binding-preserving shrinking measured against `c18f1edf` and `1393c8f7`.
+**Updated:** 2026-09-12 — H3's four-implementation sweep, historical shrinking
+and first classified findings measured on `0c992ddb` and `c18f1edf`.
 **Status:** H1's initial harness is implemented for the matrix's 28 shapes.
 H2's harness is provided by [#288](https://github.com/avalonalex/patina/pull/288),
-with three write-path defects tracked separately. H3 is not started;
+with three write-path defects tracked separately. H3's initial bounded manual
+lane is implemented; its first sweep found defects in triage families 40/41.
 H4 is unevaluated and optional; H5 remains deferred.
 Written when triage families 36 and 38 closed with the matrix at 28 of 28:
 hand-enumerated regressions still leave discovery to chance. This track exists
@@ -116,7 +117,7 @@ be treated as ordinary variable occurrences.
 |---|---|---|
 | H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness in #288; behavior fixes tracked in #289–#291 |
 | H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Initial 28-shape harness implemented; historical check and shrinker demonstrated |
-| H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Implementation not started |
+| H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Initial bounded lane implemented; historical shrinking demonstrated; first sweep classified (families 40/41) |
 | H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
 | H5 | No issue until the syntax-case boundary | Deferred |
 
@@ -342,6 +343,232 @@ a recorded first sweep that yields either classified defects or a clean
 baseline with a nonzero compared count for each claimed axis. Demonstrate the
 shrinker on a failing seed; preserve its seed, versions and reduced source.
 The larger sweep is not required on every PR.
+
+#### H3 implementation and replay — 2026-09-12
+
+Run the manual lane from the repository root:
+
+```bash
+./scripts/run_hygiene_differential.sh
+./scripts/run_hygiene_differential.sh --seed 286 --case 36
+./scripts/run_hygiene_differential.sh --historical
+```
+
+The script builds the release runtime, then selects one explicitly ignored
+test in `hygiene_metamorphic.rs`. Normal `cargo test` still runs H1 and the
+runner's self-checks; it does not require external oracles. `CHIBI`, `RACKET`
+and `RACO` override executable paths. `H3_PATINA` can select an already-built
+runtime; the report labels it as an override and records the binary checksum.
+`--output NEW_DIR` selects an artifact directory without overwriting a prior
+sweep. The default is a unique directory under `target/hygiene-h3/`.
+
+Racket needs the [R7RS language package](https://github.com/lexi-lambda/racket-r7rs),
+not just the Racket executable. An isolated local setup is:
+
+```bash
+export PLTUSERHOME="$(mktemp -d)"
+raco pkg install --scope user --auto --batch r7rs
+./scripts/run_hygiene_differential.sh
+```
+
+The first measurements used Chibi **0.12.0**, Racket **9.3 [cs]**, and
+`r7rs-lib` revision **`dfe5a961eb6f305a84a086af788a6fd0f603e5da`**. The lane
+records actual version output and the package checksum on every run. Required
+executables, the R7RS language and the library adapter must pass preflight;
+missing or nonfunctional oracles fail before any generated case counts.
+
+[`hygiene/extended.rs`](../crates/patina-tests/tests/hygiene/extended.rs) adds
+one axis at a time to H1's binding graph. Both lanes use the same
+`Program::variants` transformation engine and
+[`hygiene/shrink.rs`](../crates/patina-tests/tests/hygiene/shrink.rs) reducer.
+Unused padding identities stay reserved when shrinking, so removing a wrapper
+does not renumber the surviving H3 bindings. Library-private and
+macro-introduced globals have identities distinct from the same-spelled
+source global. Renaming the selected global changes those bindings and their
+references together, including inside the generated library. The sole
+poison-eligible source call remains nullary; helper calls with arguments and
+macro definitions are separate nodes.
+
+The bounded additions are:
+
+| Axis | Generated subset |
+|---|---|
+| Generated macros | An installer generates a macro whose template reads or assigns a definition-site binding; both outside/inside sites |
+| Imports | One generated R7RS library exporting a macro and a value observer; reads refer to private state and writes call a library-owned setter |
+| Expansion depth | Chains of 2–4 nullary macro expansions |
+| Ellipsis depth | Depths 1–3, widths 1–3, with nested numeric data whose reconstructed shape is checked before the target operation |
+| Derived binders | `let-values`, `let*-values`, `letrec*`, `define-values`, both sites and read/write directions |
+| Pattern literals | Bound literal matching and a same-spelled distinct local binding selecting the fallback rule |
+| Introduced globals | One expansion introduces private state, a macro and an observer; the source global remains a separate binding |
+
+The base seed is **286**, with case seed `base + index`. The fixed plan has
+**92 candidates**: 28 baseline matrix cases, 16 derived-binder cases and eight
+for each other new axis. Eight inside-site candidates for imports/introduced
+globals are explicitly excluded because this grammar places those definitions
+at top level. Every eligible case emits five variants. Arbitrary source
+rewriting, arbitrary macro arguments, combinations of new axes, recursive
+generated macros, record types, reflective symbols/`eval`, unspecified-order
+effects and intentional negative programs remain outside this first sweep.
+
+[`hygiene/oracles.rs`](../crates/patina-tests/tests/hygiene/oracles.rs) executes
+the same `main.scm` on all four implementations and the same `generated.sld`
+where a library is present. Racket's collection adapter is just a `#lang r7rs`
+file that includes that `.sld`; it does not rewrite its contents. Values and
+ordered effects are emitted as one marked datum. Rejects, unavailable commands,
+signals/Rust panics, missing/malformed output and timeouts have separate
+outcomes; none is successful agreement.
+
+Budgets are **15 seconds per process**, **1,800 seconds per sweep including
+shrinking**, and **32 reduction attempts per finding**. An earlier calibration
+run used five seconds and encountered startup timeouts during heavy host load,
+including a package-version query. It was interrupted and retained as
+inconclusive; those timeouts are not semantic findings. The retry uses the
+fixed budgets above.
+
+Each case retains its initial sources and process stdout/stderr. Findings
+retain every reduction attempt and the minimized sources, seed, versions and
+outcomes. Shrinking preserves the outcome kind of every backend/variant pair
+and the equality partition of successful values, so incidental numeric values
+can shrink without changing which comparisons fail. Automatic reports say
+`needs-investigation`; no result becomes a Patina defect by majority vote.
+`summary.tsv` distinguishes generated, accepted, compared, excluded and
+disagreeing cases per axis; accepted/compared require all 20 runs to return
+values. `outcomes.txt` separately counts initial process outcomes, excluding
+preflight and shrink attempts.
+
+The historical port copied only the eight harness/script files to an isolated
+worktree at **`c18f1edf19fd9785bba06616e2332e2bccab0074`**, without changing
+runtime code, dependencies or toolchain. `--historical` uses H1's generated
+seed **285**, two padding bindings and ordered effects. It failed as expected
+and reduced in **eight attempts** to:
+
+```scheme
+(import (scheme base) (scheme write))
+(define x 1)
+(define-syntax h1-m (syntax-rules () ((h1-m) x)))
+(define h1-result (let ((x 5)) (h1-m)))
+(write (list h1-result x 'x))
+;; Rename only the let binder to h1-local-285 for the paired variant.
+```
+
+On that old tree-walker, original/uniform both return `(5 1 x)`, local/global
+renaming returns `(1 1 x)`, and poison shadow returns `(199 1 x)`. The old VM,
+Chibi and Racket return `(1 1 x)` for all five. This is the confirmed historical
+Patina capture defect, triage family 36, already pinned by H1 and the matrix;
+it is not a new open defect. The same witness passes on current main's runtime
+**`0c992ddb`**.
+
+The first full sweep exposed a generator/oracle boundary at seeds **323** and
+**327** (`Imports/Outside/Write`). The original library emitted `set!` directly
+into the importing program:
+
+```scheme
+(define-library (h3 generated)
+  (export h1-m h3-library-value)
+  (import (scheme base))
+  (begin
+    (define x 11)
+    (define-syntax h1-m (syntax-rules () ((h1-m) (set! x 99))))
+    (define (h3-library-value) x)))
+;; Importer:
+;; (import (scheme base) (scheme write) (h3 generated))
+;; (h1-m) (write (h3-library-value))
+```
+
+Both Patina backends and Chibi assigned 99; Racket rejected the expansion with
+`set!: cannot mutate module-required identifier`. The sources and eight-attempt
+reduction were retained. Classification: **outside the agreed positive subset
+at the module mutation boundary**, not a confirmed Patina defect. R7RS
+[§5.2](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-7.html) forbids
+mutating imported bindings; this lane does not use the other implementations'
+acceptance to settle how that restriction applies to a hidden binding exposed
+by macro expansion. The positive generator now keeps `set!` inside a private
+setter procedure in the library and makes the imported macro call it. Its
+poison variant shadows that procedure's spelling, so referential transparency
+remains observable. Direct cross-module mutation is explicitly excluded.
+
+**Final first-sweep measurement.** With that subset correction, the finalized
+generator on main's runtime **`0c992ddb16f582258517ab47cbdd97b139093612`**
+completed in **400.77 seconds** at base seed **286**:
+
+| Axis | Generated | Accepted | Compared | Excluded | Disagreements |
+|---|---:|---:|---:|---:|---:|
+| Baseline | 28 | 28 | 28 | 0 | 0 |
+| Generated macros | 8 | 8 | 8 | 0 | 0 |
+| Imports | 8 | 4 | 4 | 4 | 0 |
+| Expansion depth | 8 | 8 | 8 | 0 | 0 |
+| Ellipsis depth | 8 | 8 | 8 | 0 | 0 |
+| Derived binders | 16 | 16 | 16 | 0 | 0 |
+| Pattern literals | 8 | 8 | 8 | 0 | 4 |
+| Introduced globals | 8 | 4 | 4 | 4 | 4 |
+| **Total** | **92** | **84** | **84** | **8** | **8** |
+
+All **1,680 initial process runs returned values**: zero rejected, unsupported,
+timed-out, crashed or protocol-failed runs. Every advertised axis has compared
+cases. All eight disagreements were reduced, in **5/7/6/5** attempts for the
+literal seeds and **4/5/6/6** for the introduced-global seeds listed below.
+The command deliberately exits **101** because those confirmed runtime bugs
+remain. The final local artifacts are in `target/hygiene-h3/sweep.htM5Sg`;
+`harness-files.txt` records checksums of all eight harness/script files.
+The earlier boundary-finding sweep is retained in `sweep.D8qv25`. These local
+directories are disposable build artifacts; the seeds, classification,
+reduced programs and regression rows are the durable replay record.
+
+The semantic findings belong to two triage families:
+
+- **Family 41, both backends:** seeds **364/365/368/369** make a template bind
+  an identifier of the same spelling as a surrounding helper's literal, then
+  pass that distinct binding to the helper. Both Patina backends select the
+  literal arm; Chibi and Racket select the fallback. Gauche independently
+  confirmed the minimized read and write programs. R7RS
+  [§4.3.2](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-6.html) requires
+  matching by lexical binding, so this is a confirmed Patina defect. With the
+  reduced values, the read should yield 5 rather than 799; the fallback write
+  should change the local to 99 rather than leave it at 5. Two portable rows
+  in `expansion/syntax-rules-literals.scm` assert those answers with Patina-only
+  expected failures.
+- **Family 40, VM only:** seeds **370/371/374/375** generate private state and
+  a macro in the same expansion, alongside a source global with the same
+  spelling. The generated macro must reach the private binding. The VM instead
+  reads or writes the source global; renaming only the private binding and its
+  references changes its answer. Tree-walker, Chibi, Racket and an independent
+  Gauche probe agree with R7RS §4.3's hygienic binding rule. The reduced read
+  observation `(result source 'x private)` is `(11 1 x 11)`, versus the VM's
+  `(1 1 x 11)`; the write observation is `(5 1 x 99)`, versus `(5 99 x 11)`.
+  Two positive rows in `expansion/hygiene.scm` now complement family 40's
+  existing cross-expansion error rows, with VM-only expected failures.
+
+Both families and reduced sources are recorded in the
+[triage queue](../scheme_tests/reports/larceny_triage.md). The fixed suite's
+expectations fail on unexpected success so a runtime fix must retire them.
+The manual H3 lane retains and fails every disagreement, including these known
+ones; the new findings are not suppressed to produce a green sweep. Existing
+oracle-defect and language-latitude rows in `DIVERGENCES.tsv` remain unchanged.
+
+Validation of the harness and regression additions:
+
+- `cargo test -p patina-tests --test hygiene_metamorphic --test scheme_suite`:
+  **17 passed, one manual test ignored**. This includes H1's 112 cases and
+  five variants per backend, the process-outcome checks and all fixed Scheme
+  suite files on both backends.
+- `SUITE_ORACLES_REQUIRE_ALL=1 ./scripts/run_suite_oracles.sh expansion/`:
+  **30 file/oracle pairs matched the divergence register**. Both Chibi and
+  Gauche were present. The existing registered Chibi non-completion for
+  `template-references.scm` remains classified; it is not a passing program.
+  Both oracles pass all four new regression rows.
+- `cargo build --release`, `./scripts/run_chibi_tests.sh` and
+  `./scripts/run_chibi_tests_tree_walker.sh`: **1,226/1,226 on each backend**.
+- `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo fmt --all -- --check`, shell syntax, relative links and
+  `git diff --check`: passed.
+- A deliberately absent `CHIBI` path fails preflight as `Unsupported` with
+  **zero generated cases**. The historical replay fails with the documented
+  capture and eight-attempt reduction; the same witness passes all 20 runs
+  on current main. All eight ported harness files were byte-identical, and
+  the historical worktree had no tracked runtime changes.
+
+The full Rust workspace and GC differential lanes were not rerun for this
+bounded test-harness change; no interpreter runtime or GC code changed.
 
 ### H4 — bounded verification of the kernel *(optional; evaluate before committing)*
 

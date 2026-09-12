@@ -2,6 +2,9 @@
 //! before serialization, without consulting Patina's parser or resolver.
 //! The 28 starting shapes follow hygiene_matrix.rs's binder/site/action product.
 
+#[path = "extended.rs"]
+pub mod extended;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Binder {
     Lambda,
@@ -11,6 +14,10 @@ pub enum Binder {
     NamedLet,
     InternalDefine,
     Do,
+    LetValues,
+    LetStarValues,
+    LetrecStar,
+    DefineValues,
 }
 
 pub const BINDERS: [Binder; 7] = [
@@ -49,8 +56,9 @@ const POISON: Id = Id(7);
 const PAD: usize = 8;
 
 // Builtins/keywords and quoted data are separate from variable occurrences.
-// Macro calls are explicitly nullary; their templates refer to definition-site
-// identities. No eval, constructed symbols, imports, literals or ellipses.
+// CallMacro is the explicitly nullary use-site node eligible for poisoning.
+// H3's argument-bearing helper calls and syntax patterns are separate nodes;
+// their templates still refer to definition-site identities. No text rewriting.
 #[derive(Clone, Debug)]
 enum Expr {
     Integer(i64),
@@ -64,6 +72,16 @@ enum Expr {
     Bind(Binder, Id, Box<Expr>, Vec<Expr>),
     DefineMacro(Id, Box<Expr>),
     CallMacro(Id),
+    Invoke(Id, Vec<Expr>),
+    Definitions(Vec<Expr>),
+    // The exported macro name is a pattern argument. All private definitions
+    // and their references are introduced by this one expansion.
+    InstallMacro(Id, Vec<Id>, Vec<Expr>),
+    LiteralMacro(Id, Id, Box<Expr>, Box<Expr>),
+    RepeatingMacro(Id, usize, usize, i64, Box<Expr>),
+    Getter(Id, Id),
+    Setter(Id, Id, Id),
+    RepeatedData(usize, usize, i64),
 }
 
 impl Expr {
@@ -91,6 +109,52 @@ impl Expr {
                 template.render(names)
             ),
             Self::CallMacro(id) => format!("({})", name(id)),
+            Self::Invoke(id, args) => format!("({} {})", name(id), sequence(args)),
+            Self::Definitions(forms) => sequence(forms),
+            Self::InstallMacro(maker, exported, forms) => {
+                let exports = exported
+                    .iter()
+                    .map(|id| name(id).as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "(define-syntax {} (syntax-rules () ((_ {exports}) (begin {}))))\n({} {exports})",
+                    name(maker),
+                    sequence(forms),
+                    name(maker)
+                )
+            }
+            Self::LiteralMacro(id, literal, matched, fallback) => format!(
+                "(define-syntax {} (syntax-rules ({}) ((_ {}) {}) ((_ h3-other) {})))",
+                name(id),
+                name(literal),
+                name(literal),
+                matched.render(names),
+                fallback.render(names)
+            ),
+            Self::RepeatingMacro(id, depth, width, value, template) => {
+                let mut pattern = "h3-item".to_string();
+                let mut expansion = pattern.clone();
+                for _ in 0..*depth {
+                    pattern = format!("({pattern} ...)");
+                    expansion = format!("(list {expansion} ...)");
+                }
+                let data = repeated_data(*depth, *width, *value);
+                format!(
+                    "(define-syntax {} (syntax-rules () ((_ {pattern}) (if (equal? {expansion} '{data}) {} (error \"H3 repetition changed data\")))))",
+                    name(id),
+                    template.render(names)
+                )
+            }
+            Self::Getter(id, target) => format!("(define ({}) {})", name(id), name(target)),
+            Self::Setter(id, parameter, target) => format!(
+                "(define ({} {}) (set! {} {}))",
+                name(id),
+                name(parameter),
+                name(target),
+                name(parameter)
+            ),
+            Self::RepeatedData(depth, width, value) => repeated_data(*depth, *width, *value),
             Self::Bind(form, id, initial, body) => {
                 let n = name(id);
                 let value = initial.render(names);
@@ -104,6 +168,14 @@ impl Expr {
                     Binder::InternalDefine => format!("((lambda () (define {n} {value}) {body}))"),
                     // The step reference belongs to this binder, even on rename.
                     Binder::Do => format!("(do (({n} {value} {n})) (#t {body}))"),
+                    Binder::LetValues => format!("(let-values ((({n}) (values {value}))) {body})"),
+                    Binder::LetStarValues => {
+                        format!("(let*-values ((({n}) (values {value}))) {body})")
+                    }
+                    Binder::LetrecStar => format!("(letrec* (({n} {value})) {body})"),
+                    Binder::DefineValues => {
+                        format!("((lambda () (define-values ({n}) (values {value})) {body}))")
+                    }
                 }
             }
         }
@@ -124,9 +196,11 @@ impl Expr {
                 1
             }
             Self::Define(_, inner) | Self::Assign(_, inner) => inner.poison_calls(value),
-            Self::Primitive(_, body) | Self::Begin(body) | Self::Body(body) => {
-                body.iter_mut().map(|e| e.poison_calls(value)).sum()
-            }
+            Self::Primitive(_, body)
+            | Self::Begin(body)
+            | Self::Body(body)
+            | Self::Invoke(_, body)
+            | Self::Definitions(body) => body.iter_mut().map(|e| e.poison_calls(value)).sum(),
             Self::Bind(_, _, initial, body) => {
                 initial.poison_calls(value)
                     + body
@@ -135,7 +209,16 @@ impl Expr {
                         .sum::<usize>()
             }
             // Templates are a different lexical context, not use-site code.
-            Self::DefineMacro(_, _) | Self::Integer(_) | Self::Quote(_) | Self::Reference(_) => 0,
+            Self::DefineMacro(_, _)
+            | Self::Integer(_)
+            | Self::Quote(_)
+            | Self::Reference(_)
+            | Self::InstallMacro(_, _, _)
+            | Self::LiteralMacro(_, _, _, _)
+            | Self::RepeatingMacro(_, _, _, _, _)
+            | Self::Getter(_, _)
+            | Self::Setter(_, _, _)
+            | Self::RepeatedData(_, _, _) => 0,
         }
     }
 }
@@ -294,33 +377,22 @@ impl Case {
         .into_iter()
         .map(String::from)
         .collect();
-        names.extend((0..self.padding).map(|i| format!("h1-padding-{i}")));
+        assert!(self.padding <= 2, "bounded lexical padding");
+        // Reserve both padding identities even when unused, so H3's appended
+        // identities do not shift when the shared shrinker removes padding.
+        names.extend((0..2).map(|i| format!("h1-padding-{i}")));
         Program {
             names,
             forms,
             template_target: target,
+            renamed_global: GLOBAL,
+            library: None,
         }
     }
 
     pub fn sources(&self) -> Vec<String> {
-        let original = self.program();
-        let mut local = original.clone();
-        local.rename(LOCAL, format!("h1-local-{}", self.seed));
-        let mut global = original.clone();
-        global.rename(GLOBAL, format!("h1-global-{}", self.seed));
-        let mut poison = original.clone();
-        poison.names[POISON.0] = poison.names[poison.template_target.0].clone();
-        let wrapped: usize = poison
-            .forms
-            .iter_mut()
-            .map(|e| e.poison_calls(self.poison))
-            .sum();
-        assert_eq!(wrapped, 1, "exactly one eligible nullary use-site call");
-        let mut uniform = original.clone();
-        // A supplementary spelling permutation, not the capture-avoidance test.
-        uniform.names[GLOBAL.0] = "h1-permuted".into();
-        uniform.names[LOCAL.0] = "h1-permuted".into();
-        [original, local, global, poison, uniform]
+        self.program()
+            .variants(self.seed, self.poison)
             .iter()
             .map(Program::render)
             .collect()
@@ -368,9 +440,35 @@ struct Program {
     names: Vec<String>,
     forms: Vec<Expr>,
     template_target: Id,
+    renamed_global: Id,
+    library: Option<Vec<Expr>>,
 }
 
 impl Program {
+    fn variants(self, seed: u64, poison_value: i64) -> Vec<Self> {
+        let original = self;
+        let mut local = original.clone();
+        local.rename(LOCAL, format!("h1-local-{seed}"));
+        let mut global = original.clone();
+        global.rename(global.renamed_global, format!("h1-global-{seed}"));
+        let mut poison = original.clone();
+        poison.names[POISON.0] = poison.names[poison.template_target.0].clone();
+        let wrapped: usize = poison
+            .forms
+            .iter_mut()
+            .map(|e| e.poison_calls(poison_value))
+            .sum();
+        assert_eq!(wrapped, 1, "exactly one eligible nullary use-site call");
+        let mut uniform = original.clone();
+        // A supplementary spelling permutation, not the capture-avoidance test.
+        let spelling = uniform.names[GLOBAL.0].clone();
+        for name in &mut uniform.names {
+            if *name == spelling {
+                *name = "h1-permuted".into();
+            }
+        }
+        vec![original, local, global, poison, uniform]
+    }
     fn rename(&mut self, id: Id, fresh: String) {
         assert!(!self.names.contains(&fresh), "renamed binder must be fresh");
         // Definitions and every reference render through this one identity.
@@ -383,6 +481,17 @@ impl Program {
             .map(|expr| expr.render(&self.names))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn repeated_data(depth: usize, width: usize, value: i64) -> String {
+    if depth == 0 {
+        value.to_string()
+    } else {
+        format!(
+            "({})",
+            vec![repeated_data(depth - 1, width, value); width].join(" ")
+        )
     }
 }
 

@@ -553,6 +553,15 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   `hygiene.rs` is gone, migrated into `tests/scheme/expansion/`
   (`hygiene.scm`, `syntax-rules-literals.scm`, `let-syntax.scm`,
   `ellipsis.scm`); add a portable hygiene row there
+- `hygiene_metamorphic.rs` — Track H1's normal binding-aware generated gate.
+  H3's larger four-implementation sweep is explicitly ignored in `cargo test`;
+  run `./scripts/run_hygiene_differential.sh` manually with Chibi and Racket's
+  `r7rs-lib` installed. It fails if a required oracle is unavailable and keeps
+  sources, versions, per-axis counts and minimized findings under the printed
+  `target/hygiene-h3/` directory. Use `--seed N --case INDEX` to replay one case
+  or `--historical` for seed 285's capture witness. See the supported grammar,
+  budgets and measured results in
+  [Track H's PRD](../PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3--differential-generation-and-shrinking-manual-or-scheduled-lane).
 - `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
   on both backends. `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`

@@ -56,6 +56,9 @@
 ;; differs on the row asserting a duplicated pattern variable is an error,
 ;; which R7RS leaves to the implementation (registered as latitude). Gauche
 ;; passes 27 and fails the row it already failed.
+;; Track H3 adds two family-41 rows (2026-09-12): 30 total, with 28 passes
+;; and two expected failures on each Patina backend. Chibi and Gauche pass
+;; both new rows; each retains its one registered difference above.
 ;;
 ;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
@@ -424,5 +427,40 @@
 
 (test-equal "a literal matches when both are unbound" '(lit notlit)
   (list (unbound-k-probe k) (unbound-k-probe other)))
+
+;; Track H3 seeds 364/365, minimized 2026-09-12 (triage family 41).
+;; The helper's literal and the enclosing template's local have distinct
+;; lexical bindings, even though both are called token. R7RS §4.3.2 requires
+;; the fallback rule. Chibi 0.12, Racket 9.3/r7rs-lib and Gauche 0.9.15 agree;
+;; both Patina backends wrongly take the literal arm. These expectations must
+;; be removed when the matcher is fixed: an unexpected pass fails the driver.
+(cond-expand (patina (test-expect-fail 1)) (else))
+(test-equal "a template-local binding does not match an enclosing helper's literal"
+  5
+  (let ((x 5))
+    (define token 1)
+    (define-syntax helper
+      (syntax-rules (token)
+        ((_ token) 799)
+        ((_ other) x)))
+    (define-syntax invoke
+      (syntax-rules ()
+        ((_) (let ((token 2)) (helper token)))))
+    (invoke)))
+
+(cond-expand (patina (test-expect-fail 1)) (else))
+(test-equal "a template-local binding selects the helper's fallback assignment"
+  99
+  (let ((x 5))
+    (define token 1)
+    (define-syntax helper
+      (syntax-rules (token)
+        ((_ token) 799)
+        ((_ other) (set! x 99))))
+    (define-syntax invoke
+      (syntax-rules ()
+        ((_) (let ((token 2)) (helper token)))))
+    (invoke)
+    x))
 
 (test-end)
