@@ -1,11 +1,12 @@
 # Track H — Hygiene Assurance PRD
 
 **Created:** 2026-08-31
-**Updated:** 2026-09-12 — corrected renaming properties and acceptance criteria;
-reviewed implementation status against `main` after #282.
-**Status:** Proposed — H1–H3 have no completed implementation deliverable;
-H4 is unevaluated and optional; H5 remains deferred. Existing regression
-matrices and oracle lanes are foundations, not completion of this track.
+**Updated:** 2026-09-12 — H1's bounded generator, historical capture check and
+binding-preserving shrinking measured against `c18f1edf` and `1393c8f7`.
+**Status:** H1's initial harness is implemented for the matrix's 28 shapes.
+H2's harness is provided by [#288](https://github.com/avalonalex/patina/pull/288),
+with three write-path defects tracked separately. H3 is not started;
+H4 is unevaluated and optional; H5 remains deferred.
 Written when triage families 36 and 38 closed with the matrix at 28 of 28:
 hand-enumerated regressions still leave discovery to chance. This track exists
 so the next family is found by generated tests.
@@ -48,12 +49,12 @@ What exists today, to build on rather than duplicate:
 | `scripts/run_suite_oracles.sh` | Repeatable Chibi/Gauche comparisons with classified divergences | Fixed suite inputs; not H3's generated Chibi/Racket lane |
 | Corpus + Larceny lanes | Real-world programs | Discovery by accident — the lesson of families 33–39 |
 
-The gap: no hygiene program generator, binding-aware metamorphic harness,
-or generated resolution-kernel property suite exists. `scope_resolve` has
-example-based unit tests; these do not satisfy H2. Known expected failures
-remain outside the 28 matrix shapes, including introduced definitions (#269)
-and cross-expansion globals (triage family 40). Green CI includes these
-quarantines; it is not a claim that all hygiene behavior is correct.
+The initial gap was generated assurance: H1 now exercises binding-aware
+transformations over the matrix's subset; H2's kernel/environment properties
+are in #288. Known expected failures remain outside the 28 matrix shapes,
+including introduced definitions (#269), cross-expansion globals (triage
+family 40), and H2's environment write-path defects (#289–#291). Green CI
+includes quarantines; it is not a claim that all hygiene behavior is correct.
 
 ## 2. The property
 
@@ -113,8 +114,8 @@ be treated as ordinary variable occurrences.
 
 | Item | Tracking | Status |
 |---|---|---|
-| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Implementation not started |
-| H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Implementation not started |
+| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness in #288; behavior fixes tracked in #289–#291 |
+| H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Initial 28-shape harness implemented; historical check and shrinker demonstrated |
 | H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Implementation not started |
 | H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
 | H5 | No issue until the syntax-case boundary | Deferred |
@@ -166,6 +167,115 @@ uniform spelling replacement alone misses the defect. This is the first
 experiment, before building a larger harness. Current known defects found
 by the harness become explicit regressions and separate fixes, not changed
 metamorphic expectations.
+
+#### H1 implementation and evidence — 2026-09-12
+
+The normal test gate runs
+[`hygiene_metamorphic.rs`](../crates/patina-tests/tests/hygiene_metamorphic.rs),
+with its binding model in
+[`hygiene/generator.rs`](../crates/patina-tests/tests/hygiene/generator.rs)
+and process isolation in
+[`hygiene/runner.rs`](../crates/patina-tests/tests/hygiene/runner.rs).
+It uses the existing public interpreter helpers; no resolver, expander,
+backend or dependency change is needed.
+
+The generated AST assigns stable identities to the global, local, macro and
+auxiliary bindings. Read and assignment nodes refer to identities; only the
+serializer assigns spellings. The macro template's target is the global for
+an outside definition and the local for an inside definition. Renaming either
+binding changes its name-table entry, preserving the other binding's template
+references. Keywords, builtins and quoted data are separate AST nodes.
+
+Each case emits five programs: original, local-binder rename, global-binder
+rename, poison shadow, and a supplementary uniform permutation of the colliding
+variable spelling. Poison insertion wraps exactly the **nullary macro call**,
+which has no argument references to capture. It never wraps the observations
+or the macro definition. All calls in this initial grammar are eligible.
+
+The bounded language follows the matrix's seven binder forms and both site
+and action directions. Each of its 28 shapes has one canonical sample and
+three generated samples: **112 cases**, with **560 program evaluations per
+backend**. The canonical samples use numeric global/local values 1 and 5,
+assignment 99, and the same binding bodies as the matrix, including the empty
+`let` that supplies a definition context for an inside macro in `do`.
+Generated samples vary global values 1–4, local values 5–8, assignments 99–102,
+poison values 199–202, three colliding spellings, and 0–2 extra lexical bindings.
+Their ordered `before`/`after` effects are returned as data alongside the
+result, global value and literal symbol `x`. `do` exits immediately and the
+named-let body does not recurse. This is bounded sampling, not a universal
+claim about those binding forms.
+
+The seed base is **285**. Canonical samples use seed 285; other samples use
+`285 + 4 * shape_index + sample_index`, where samples are 1–3 and shapes follow
+`BINDERS`, outside/inside, read/write order. The generator's explicit integer
+stream makes those seeds replayable without process-global randomness.
+Counts assert four executed cases for every shape on each backend, nonzero
+coverage at each padding depth, and 28 cases without / 84 with effect logging.
+The first sweep on main's runtime **`1393c8f7`** completed all **112/112** eligible
+cases for every transformation, with zero rejected, timed-out or crashed
+programs and no new quarantine. The focused gate took approximately 7 seconds
+on the development machine; this is not a CI performance threshold.
+
+Each case/backend batch runs in a child process with a **5-second deadline**;
+each generated test has a **120-second total budget**, including shrinking.
+A timeout kills and reaps the child. Rejection, process failure, missing output
+and timeout are distinct failures, even if another variant fails the same way.
+A harness test exercises rejection, a nonzero child exit and a nonterminating
+program. Intentional negative Scheme programs are not part of the generated
+language; syntax-rules arguments/literals/ellipsis, generated macros, libraries,
+other binding forms, reflective symbols/`eval`, and unspecified-order effects
+remain excluded. H3 owns expansion beyond this subset.
+
+The historical experiment ran first, before building the larger harness.
+The completed three-file harness was then ported **unchanged** to an isolated
+worktree at **`c18f1edf19fd9785bba06616e2332e2bccab0074`**. No runtime code,
+dependency manifest, lockfile or toolchain adaptation was needed. Replay:
+
+```bash
+cargo test -p patina-tests --test hygiene_metamorphic -- --nocapture --skip generated_matrix_programs_preserve_bindings_and_ordered_effects
+```
+
+For `Let/Outside/Read`, seed **285**, the recorded observations were:
+
+| Runtime | Original | Rename only local | Uniform permutation |
+|---|---|---|---|
+| `c18f1edf`, VM | `(1 1 x)` | `(1 1 x)` | `(1 1 x)` |
+| `c18f1edf`, tree-walker | `(5 1 x)` | `(1 1 x)` | `(5 1 x)` |
+| `1393c8f7`, both backends | `(1 1 x)` | `(1 1 x)` | `(1 1 x)` |
+
+The old tree-walker silently captures the macro's global reference. A uniform
+permutation preserves that collision and misses the defect. The local rename
+breaks it while retaining the literal `x`. The historical test exits **101**;
+the same test passes on the current runtime.
+
+`generated_capture_case_retains_its_failure_while_shrinking` starts from seed
+285 with global/local values 2/6, assignment/poison values 100/202, two extra
+bindings, effect logging, and spelling `h1-value`. On the historical tree-walker
+it reduces in **8 attempts** to values 1/5/99/199, no extra bindings or logging,
+and spelling `x`. The reducer re-emits paired programs from the binding model,
+keeps the form/site/action and the identities of surviving references, and
+retains only the same backend, transformation and failure class. It has a
+**32-attempt cap**; it does not claim a globally minimal Scheme program.
+The retained pair is ready to become a matrix regression:
+
+```scheme
+(define x 1)
+(define-syntax h1-m (syntax-rules () ((h1-m) x)))
+(define h1-result (let ((x 5)) (h1-m)))
+(list h1-result x 'x)
+;; Variant: change only the let binder to h1-local-285.
+```
+
+For the normal gate and coverage report, run
+`cargo test -p patina-tests --test hygiene_metamorphic -- --nocapture`.
+Metamorphic failures report the initial case, seed, backend, transformation,
+outcome class, shrink budget and both reduced sources. Backend agreement is
+checked separately after each backend's metamorphic checks pass.
+
+Local validation: `cargo test --all --lib --tests` passed **1,158 tests** with
+three existing ignored tests; the release build and both Chibi backend scripts
+passed **1,226/1,226** each. Clippy with all targets/features and warnings denied,
+the format check, PRD relative links, and `git diff --check` also passed.
 
 ### H2 — property tests on the resolution kernel *(first priority; pure Rust)*
 
