@@ -153,6 +153,15 @@ adding ordinary before/after captures. `docs/VM_RUNTIME.md` §4.6 records the
 shared policy, the separate composable path, and the backend/runtime boundary;
 it does not claim native Rust callbacks can be replayed as Scheme frames.
 
+**Update 2026-09-11 — #171's capture-site expansion is complete.**
+The matrix now has 64 shapes (2 forms × 2 positions × 16 transfers), adding
+full captures during jump entry, escape/abort exit, and a resumed region's
+after thunk, plus abort/resume from before and after thunks. All new rows
+match both backends. Per-row oracle support is measured with `dump_programs`;
+Chibi's extra entry on `escape+after-reenter` is explicitly recorded as a
+disagreement, and Racket's module-definition re-entry rejection is kept apart
+from a semantic answer. No runtime behavior or divergence pin changed.
+
 **The lesson is the one §1.2 already teaches, applied to itself, three times.**
 Every row in that table was measured, but the *cause* attached to two of them
 was inferred from the error text and never checked — a registry name in an

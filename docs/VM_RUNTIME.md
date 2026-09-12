@@ -638,12 +638,15 @@ by reading, before anyone writes a program that trips over it.
 
 Its executable counterpart is
 `crates/patina-tests/tests/control_flow_matrix.rs`, which enumerates the
-*transfers* rather than the state: 32 shapes over how a `dynamic-wind` is
+*transfers* rather than the state: 64 shapes over how a `dynamic-wind` is
 written, whether it is in tail position, and how control leaves or re-enters
-it, including full captures in the body, before thunk, and after thunk. Each
-row records **which** external implementations back its answer —
-four for the prompt-free shapes, down to one for the shape only Guile can
-express — rather than one number for the table. Where this table catches a
+it. Capture sites include ordinary body/before/after execution, thunks run
+during full-jump and abort travel, and composable capture/resume from each
+site; the matrix header maps all 16 transfer variants to those contexts. Each
+row records **which** external implementations back its answer, from four
+supporting oracles down to one. Unsupported programs and an observed Chibi
+disagreement are documented in the matrix header rather than counted as
+agreement. Where this table catches a
 component nobody carried, that one catches a shape nobody tried.
 
 | transfer | frames | registers | dynamic_winds | prompt_stack | exception_handlers |

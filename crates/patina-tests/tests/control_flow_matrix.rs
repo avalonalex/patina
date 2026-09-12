@@ -25,17 +25,27 @@
 //! headline number would let the thinnest rows borrow the confidence of the
 //! thickest:
 //!
-//! ```text
-//!   none, escape           4   chibi, gauche, guile, racket
-//!   reenter{,-before,-after} 3   Racket forbids re-executing a module-level
-//!                              `define`, which is a module-system rule
-//!   abort, resume          2   guile, racket — chibi and Gauche have no
-//!                              tagged prompt API at all
-//!   resume+thunk-reenter   1   guile
-//! ```
+//! | Transfer family | Supporting oracles |
+//! |---|---|
+//! | none, escape | chibi, gauche, guile, racket |
+//! | reenter, reenter-before, reenter-after, jump+before-reenter | chibi, gauche, guile |
+//! | escape+after-reenter | gauche, guile (Chibi differs; see below) |
+//! | abort/resume from body, before, or after | guile, racket |
+//! | abort+after-reenter, resume+thunk-reenter, resume+after-reenter | guile |
 //!
-//! The eight ordinary before/after capture rows were measured 2026-09-11
-//! against chibi, Gauche and Guile using `dump_programs`.
+//! The ordinary before/after rows and the remaining #171 capture-site rows
+//! were measured 2026-09-11 with `dump_programs`, using the versions above.
+//! Racket rejects full re-entry through a module-level `define` (assignment
+//! to a constant); that is an unusable oracle for these programs, not an
+//! answer about wind traversal. Chibi and Gauche have no tagged prompt API,
+//! so no prompt programs are emitted for them.
+//!
+//! Chibi **does answer differently** on all four `escape+after-reenter` rows:
+//! `(escaped (in out-1 out-2 in out-2))`. Gauche and Guile answer
+//! `(escaped (in out-1 out-2 out-2))`, which is the recorded expectation:
+//! the exiting record was already popped when its after-thunk captured, so
+//! resuming that thunk's remainder does not re-enter the extent. Chibi is
+//! deliberately excluded from those rows' `oracles`, not counted as agreement.
 //!
 //! Every oracle runs the **same program text**. What differs is a prelude:
 //! an import line, a `write` around the final expression, and for Guile and
@@ -94,13 +104,32 @@
 //! matrices the backend-scoped-expectation grep does not see; the inventory
 //! here is empty, and the file is what keeps it that way.
 //!
+//! # Capture-site coverage (#171)
+//!
+//! The 64 rows are 2 extent forms × 2 positions × 16 transfers. Capture site
+//! is expressed by transfer variants, avoiding meaningless combinations such
+//! as a capture site for `None` or a before-thunk run by abort's exit travel.
+//!
+//! | Context | Body | Before | After |
+//! |---|---|---|---|
+//! | Ordinary full capture and later re-entry | Reenter | ReenterBefore | ReenterAfter |
+//! | Abort's composable capture | Abort | AbortFromBefore | AbortFromAfter |
+//! | Resume that composable capture | Resume | ResumeFromBefore | ResumeFromAfter |
+//! | Full capture during a full jump's travel | — | JumpThenReenterBefore | EscapeThenReenterAfter |
+//! | Full capture during abort travel | — | — | AbortThenReenterAfter |
+//! | Full capture while running a resumed region | — | ResumeThenReenterThunk | ResumeThenReenterAfter |
+//!
+//! `JumpThenReenterBefore` and `ResumeThenReenterAfter` use a phase counter
+//! to capture only during the second entry. `ResumeThenReenterThunk` refreshes
+//! its saved continuation on re-entry. Thunks log before and after capture,
+//! so restarting
+//! the thunk cannot masquerade as resuming its remainder. The jump/abort value
+//! is separate from the value delivered to the thunk continuation.
+//!
+//! No new Patina divergence was found in the 32 rows that completed #171.
+//!
 //! # Adding axes
 //!
-//! The axes here are the ones the defect history names.
-//!
-//! Full re-entry now enumerates capture in the body, ordinary `before`, and
-//! ordinary `after` thunks (32 rows total). The existing composable re-entry
-//! rows cover a `before` thunk run during a transfer rather than ordinary entry.
 //! Further axes worth adding:
 //!
 //! - **an exception crossing the extent** — `raise` and `guard` interacting
@@ -162,8 +191,9 @@ enum Transfer {
     Escape,
     /// Jump back *in* to a continuation captured inside the body.
     Reenter,
-    /// Re-enter a full continuation captured during ordinary entry/exit.
+    /// Re-enter a full continuation captured during ordinary entry.
     ReenterBefore,
+    /// Re-enter a full continuation captured during ordinary exit.
     ReenterAfter,
     /// Abort to a prompt established outside the extent.
     Abort,
@@ -172,6 +202,22 @@ enum Transfer {
     /// Invoke it, having also captured a continuation in the extent's
     /// `before` thunk, and re-enter that.
     ResumeThenReenterThunk,
+    /// Capture in a before thunk only when a full jump re-enters the extent.
+    JumpThenReenterBefore,
+    /// Capture in the after thunk run by an escaping full continuation.
+    EscapeThenReenterAfter,
+    /// Capture in the after thunk run by abort travel, then replay its remainder.
+    AbortThenReenterAfter,
+    /// Capture in the after thunk of a resumed composable region.
+    ResumeThenReenterAfter,
+    /// Abort captures the composable continuation inside the before thunk.
+    AbortFromBefore,
+    /// Abort captures the composable continuation inside the after thunk.
+    AbortFromAfter,
+    /// Resume the composable continuation captured inside the before thunk.
+    ResumeFromBefore,
+    /// Resume the composable continuation captured inside the after thunk.
+    ResumeFromAfter,
 }
 
 impl Extent {
@@ -210,6 +256,14 @@ impl Transfer {
             Transfer::Abort => "abort",
             Transfer::Resume => "resume",
             Transfer::ResumeThenReenterThunk => "resume+thunk-reenter",
+            Transfer::JumpThenReenterBefore => "jump+before-reenter",
+            Transfer::EscapeThenReenterAfter => "escape+after-reenter",
+            Transfer::AbortThenReenterAfter => "abort+after-reenter",
+            Transfer::ResumeThenReenterAfter => "resume+after-reenter",
+            Transfer::AbortFromBefore => "abort-from-before",
+            Transfer::AbortFromAfter => "abort-from-after",
+            Transfer::ResumeFromBefore => "resume-from-before",
+            Transfer::ResumeFromAfter => "resume-from-after",
         }
     }
     /// Whether the shape needs the prompt API — which chibi and Gauche do not
@@ -218,7 +272,15 @@ impl Transfer {
     fn needs_prompts(self) -> bool {
         matches!(
             self,
-            Transfer::Abort | Transfer::Resume | Transfer::ResumeThenReenterThunk
+            Transfer::Abort
+                | Transfer::Resume
+                | Transfer::ResumeThenReenterThunk
+                | Transfer::AbortThenReenterAfter
+                | Transfer::ResumeThenReenterAfter
+                | Transfer::AbortFromBefore
+                | Transfer::AbortFromAfter
+                | Transfer::ResumeFromBefore
+                | Transfer::ResumeFromAfter
         )
     }
 }
@@ -239,6 +301,14 @@ const TRANSFERS: &[Transfer] = &[
     Transfer::Abort,
     Transfer::Resume,
     Transfer::ResumeThenReenterThunk,
+    Transfer::JumpThenReenterBefore,
+    Transfer::EscapeThenReenterAfter,
+    Transfer::AbortThenReenterAfter,
+    Transfer::ResumeThenReenterAfter,
+    Transfer::AbortFromBefore,
+    Transfer::AbortFromAfter,
+    Transfer::ResumeFromBefore,
+    Transfer::ResumeFromAfter,
 ];
 
 /// One point in the space.
@@ -254,9 +324,8 @@ struct Shape {
     tw: &'static str,
     /// The external implementations that answer `correct` for **this** row.
     ///
-    /// Per row, not per file: the eight prompt-free shapes have four, the
-    /// re-entry ones three (Racket cannot re-execute a module-level `define`),
-    /// and the prompt shapes two or one. A single number across the table
+    /// Per row, not per file: the header records both unsupported programs
+    /// and the Chibi disagreement. A single number across the table
     /// would let a row backed by one implementation borrow the confidence of
     /// a row backed by four.
     oracles: &'static str,
@@ -315,10 +384,16 @@ fn program(shape: &Shape) -> String {
     let out = "(note 'out)";
     let body = match shape.transfer {
         Transfer::None | Transfer::ReenterBefore | Transfer::ReenterAfter => "'body",
-        Transfer::Escape => "(k 'escaped)",
-        Transfer::Reenter => "(call/cc (lambda (c) (set! k c) 'first))",
-        Transfer::Abort => "(abort-current-continuation t 'ab)",
-        Transfer::Resume | Transfer::ResumeThenReenterThunk => {
+        Transfer::Escape | Transfer::EscapeThenReenterAfter => "(k 'escaped)",
+        Transfer::Reenter | Transfer::JumpThenReenterBefore => {
+            "(call/cc (lambda (c) (set! k c) 'first))"
+        }
+        Transfer::Abort | Transfer::AbortThenReenterAfter => "(abort-current-continuation t 'ab)",
+        Transfer::AbortFromBefore
+        | Transfer::AbortFromAfter
+        | Transfer::ResumeFromBefore
+        | Transfer::ResumeFromAfter => "'body",
+        Transfer::Resume | Transfer::ResumeThenReenterThunk | Transfer::ResumeThenReenterAfter => {
             "(list 'got (abort-current-continuation t 'ab))"
         }
     };
@@ -326,6 +401,12 @@ fn program(shape: &Shape) -> String {
     // resuming its remainder from incorrectly restarting the whole thunk.
     let capture = "(call/cc (lambda (c) (set! k c)))";
     let before = match shape.transfer {
+        Transfer::JumpThenReenterBefore => {
+            "(note 'in-1) (when (= n 1) (call/cc (lambda (c) (set! kt c)))) (note 'in-2)"
+        }
+        Transfer::AbortFromBefore | Transfer::ResumeFromBefore => {
+            "(note 'in-1) (abort-current-continuation t 'ab) (note 'in-2)"
+        }
         Transfer::ReenterBefore => "(note 'in-1) (call/cc (lambda (c) (set! k c))) (note 'in-2)",
         Transfer::ResumeThenReenterThunk => {
             "(note 'in-1) (call/cc (lambda (c) (set! kt c))) (note 'in-2)"
@@ -333,10 +414,18 @@ fn program(shape: &Shape) -> String {
         _ => inn,
     };
     let after_capture = format!("(note 'out-1) {capture} (note 'out-2)");
-    let after = if shape.transfer == Transfer::ReenterAfter {
-        after_capture.as_str()
-    } else {
-        out
+    let after = match shape.transfer {
+        Transfer::ReenterAfter => after_capture.as_str(),
+        Transfer::EscapeThenReenterAfter | Transfer::AbortThenReenterAfter => {
+            "(note 'out-1) (call/cc (lambda (c) (set! kt c))) (note 'out-2)"
+        }
+        Transfer::ResumeThenReenterAfter => {
+            "(note 'out-1) (when (= n 1) (call/cc (lambda (c) (set! kt c)))) (note 'out-2)"
+        }
+        Transfer::AbortFromAfter | Transfer::ResumeFromAfter => {
+            "(note 'out-1) (abort-current-continuation t 'ab) (note 'out-2)"
+        }
+        _ => out,
     };
     let core = positioned(shape, &extent(shape, before, body, after));
     match shape.transfer {
@@ -348,15 +437,38 @@ fn program(shape: &Shape) -> String {
             "{prelude}\n(define k #f)\n(define n 0)\n(define r {core})\n\
              (when (< n 1) (set! n 1) (k 'again))\n(list r (reverse log))"
         ),
-        Transfer::Abort => format!(
+        Transfer::Abort | Transfer::AbortFromBefore | Transfer::AbortFromAfter => format!(
             "{prelude}\n(define t (make-continuation-prompt-tag 'p))\n\
              (define r (call-with-continuation-prompt (lambda () {core}) t (lambda (v k) (list 'h v))))\n\
              (list r (reverse log))"
         ),
-        Transfer::Resume => format!(
+        Transfer::Resume | Transfer::ResumeFromBefore | Transfer::ResumeFromAfter => format!(
             "{prelude}\n(define t (make-continuation-prompt-tag 'p))\n(define k* #f)\n\
              (define cap (call-with-continuation-prompt (lambda () {core}) t (lambda (v k) (set! k* k) 'cap)))\n\
              (define r (k* 'resumed))\n(list r (reverse log))"
+        ),
+        Transfer::JumpThenReenterBefore => format!(
+            "{prelude}\n(define k #f)\n(define kt #f)\n(define n 0)\n(define r {core})\n\
+             (when (= n 0) (set! n 1) (k 'again))\n\
+             (when (= n 1) (set! n 2) (kt 'thunk))\n(list r (reverse log))"
+        ),
+        Transfer::EscapeThenReenterAfter => format!(
+            "{prelude}\n(define kt #f)\n(define n 0)\n\
+             (define r (call/cc (lambda (k) {core})))\n\
+             (when (= n 0) (set! n 1) (kt 'thunk))\n(list r (reverse log))"
+        ),
+        Transfer::AbortThenReenterAfter => format!(
+            "{prelude}\n(define kt #f)\n(define n 0)\n\
+             (define t (make-continuation-prompt-tag 'p))\n\
+             (define r (call-with-continuation-prompt (lambda () {core}) t (lambda (v k) (list 'h v))))\n\
+             (when (= n 0) (set! n 1) (kt 'thunk))\n(list r (reverse log))"
+        ),
+        Transfer::ResumeThenReenterAfter => format!(
+            "{prelude}\n(define t (make-continuation-prompt-tag 'p))\n(define k* #f)\n\
+             (define kt #f)\n(define n 0)\n\
+             (define cap (call-with-continuation-prompt (lambda () {core}) t (lambda (v k) (set! k* k) 'cap)))\n\
+             (set! n 1)\n(define r (k* 'resumed))\n\
+             (when (= n 1) (set! n 2) (kt 'thunk))\n(list r (reverse log))"
         ),
         Transfer::ResumeThenReenterThunk => format!(
             "{prelude}\n(define t (make-continuation-prompt-tag 'p))\n(define k* #f)\n\
@@ -375,6 +487,111 @@ fn program(shape: &Shape) -> String {
 /// inside a wind thunk.
 #[rustfmt::skip]
 const MATRIX: &[Shape] = &[
+    // Full jump: capture only during re-entry, then replay the pending jump.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::JumpThenReenterBefore,
+            correct: "(again (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(again (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "(again (in-1 in-2 out in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::JumpThenReenterBefore,
+            correct: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::JumpThenReenterBefore,
+            correct: "(again (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "(again (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "(again (in-1 in-2 out in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::JumpThenReenterBefore,
+            correct: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))", vm: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))", tw: "((w again) (in-1 in-2 out in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    // Full escape: replay the exiting thunk without re-entering its extent.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::EscapeThenReenterAfter,
+            correct: "(escaped (in out-1 out-2 out-2))", vm: "(escaped (in out-1 out-2 out-2))", tw: "(escaped (in out-1 out-2 out-2))",
+            oracles: "gauche, guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::EscapeThenReenterAfter,
+            correct: "(escaped (in out-1 out-2 out-2))", vm: "(escaped (in out-1 out-2 out-2))", tw: "(escaped (in out-1 out-2 out-2))",
+            oracles: "gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::EscapeThenReenterAfter,
+            correct: "(escaped (in out-1 out-2 out-2))", vm: "(escaped (in out-1 out-2 out-2))", tw: "(escaped (in out-1 out-2 out-2))",
+            oracles: "gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::EscapeThenReenterAfter,
+            correct: "(escaped (in out-1 out-2 out-2))", vm: "(escaped (in out-1 out-2 out-2))", tw: "(escaped (in out-1 out-2 out-2))",
+            oracles: "gauche, guile", issue: "" },
+    // Abort travel: replay the exiting thunk and still deliver the abort value.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::AbortThenReenterAfter,
+            correct: "((h ab) (in out-1 out-2 out-2))", vm: "((h ab) (in out-1 out-2 out-2))", tw: "((h ab) (in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::AbortThenReenterAfter,
+            correct: "((h ab) (in out-1 out-2 out-2))", vm: "((h ab) (in out-1 out-2 out-2))", tw: "((h ab) (in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::AbortThenReenterAfter,
+            correct: "((h ab) (in out-1 out-2 out-2))", vm: "((h ab) (in out-1 out-2 out-2))", tw: "((h ab) (in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::AbortThenReenterAfter,
+            correct: "((h ab) (in out-1 out-2 out-2))", vm: "((h ab) (in out-1 out-2 out-2))", tw: "((h ab) (in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    // Resumed region: replay its after-thunk, preserving the resumed result.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ResumeThenReenterAfter,
+            correct: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))", vm: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))", tw: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ResumeThenReenterAfter,
+            correct: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))", vm: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))", tw: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ResumeThenReenterAfter,
+            correct: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))", vm: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))", tw: "((got resumed) (in out-1 out-2 in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ResumeThenReenterAfter,
+            correct: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))", vm: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))", tw: "((w (got resumed)) (in out-1 out-2 in out-1 out-2 out-2))",
+            oracles: "guile", issue: "" },
+    // Abort from before: the extent has not been entered.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::AbortFromBefore,
+            correct: "((h ab) (in-1))", vm: "((h ab) (in-1))", tw: "((h ab) (in-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::AbortFromBefore,
+            correct: "((h ab) (in-1))", vm: "((h ab) (in-1))", tw: "((h ab) (in-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::AbortFromBefore,
+            correct: "((h ab) (in-1))", vm: "((h ab) (in-1))", tw: "((h ab) (in-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::AbortFromBefore,
+            correct: "((h ab) (in-1))", vm: "((h ab) (in-1))", tw: "((h ab) (in-1))",
+            oracles: "guile, racket", issue: "" },
+    // Abort from after: the extent has already been left.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::AbortFromAfter,
+            correct: "((h ab) (in out-1))", vm: "((h ab) (in out-1))", tw: "((h ab) (in out-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::AbortFromAfter,
+            correct: "((h ab) (in out-1))", vm: "((h ab) (in out-1))", tw: "((h ab) (in out-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::AbortFromAfter,
+            correct: "((h ab) (in out-1))", vm: "((h ab) (in out-1))", tw: "((h ab) (in out-1))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::AbortFromAfter,
+            correct: "((h ab) (in out-1))", vm: "((h ab) (in out-1))", tw: "((h ab) (in out-1))",
+            oracles: "guile, racket", issue: "" },
+    // Resume before: finish entry, then run the body and exit.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ResumeFromBefore,
+            correct: "(body (in-1 in-2 out))", vm: "(body (in-1 in-2 out))", tw: "(body (in-1 in-2 out))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ResumeFromBefore,
+            correct: "((w body) (in-1 in-2 out))", vm: "((w body) (in-1 in-2 out))", tw: "((w body) (in-1 in-2 out))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ResumeFromBefore,
+            correct: "(body (in-1 in-2 out))", vm: "(body (in-1 in-2 out))", tw: "(body (in-1 in-2 out))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ResumeFromBefore,
+            correct: "((w body) (in-1 in-2 out))", vm: "((w body) (in-1 in-2 out))", tw: "((w body) (in-1 in-2 out))",
+            oracles: "guile, racket", issue: "" },
+    // Resume after: finish exit and return the saved body result.
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ResumeFromAfter,
+            correct: "(body (in out-1 out-2))", vm: "(body (in out-1 out-2))", tw: "(body (in out-1 out-2))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ResumeFromAfter,
+            correct: "((w body) (in out-1 out-2))", vm: "((w body) (in out-1 out-2))", tw: "((w body) (in out-1 out-2))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ResumeFromAfter,
+            correct: "(body (in out-1 out-2))", vm: "(body (in out-1 out-2))", tw: "(body (in out-1 out-2))",
+            oracles: "guile, racket", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ResumeFromAfter,
+            correct: "((w body) (in out-1 out-2))", vm: "((w body) (in out-1 out-2))", tw: "((w body) (in out-1 out-2))",
+            oracles: "guile, racket", issue: "" },
+
     Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ReenterBefore,
             correct: "(body (in-1 in-2 out in-2 out))", vm: "(body (in-1 in-2 out in-2 out))", tw: "(body (in-1 in-2 out in-2 out))",
             oracles: "chibi, gauche, guile", issue: "" },
