@@ -9,6 +9,7 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
+use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -752,29 +753,7 @@ pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<Tagg
     run_loop_until(state, depth_before)
 }
 
-/// Call a closure (heap index) with `args`, returning its result.
-///
-/// Takes a compiled closure and nothing else, so it is the wrong dispatcher
-/// for anything user code names as a procedure. Two callers remain:
-/// `with-exception-handler`'s thunk, which is issue #190 — the hole issue #186
-/// closed for [`call_any`], at a call site that never had a dispatcher — and
-/// `Instruction::CallWithPrompt`, which no pass emits (also #190). The
-/// `CallWithPrompt` body thunks this comment used to advertise are the value
-/// arm's business now, through `call_any`.
-fn call_closure(
-    state: &mut VmState,
-    closure_val: TaggedValue,
-    args: &[TaggedValue],
-    return_reg: u16,
-) -> Result<(), VmError> {
-    // Resolve the closure to its code id (free vars stay on the heap).
-    let code_id = resolve_closure(state, closure_val)?;
-    call_closure_resolved(state, closure_val, code_id, args, return_reg)
-}
-
-/// `call_closure` for a callee whose code id is already resolved — call
-/// sites that probed the closure type up front pass the id along instead of
-/// paying a second heap lookup.
+/// Call a compiled closure whose code id was resolved by the dispatcher.
 fn call_closure_resolved(
     state: &mut VmState,
     closure_val: TaggedValue,
@@ -1642,26 +1621,6 @@ fn dispatch_one_instruction(
         }
 
         // ── Continuations ───────────────────────────────────────────────
-        Instruction::CallWithPrompt {
-            body,
-            tag,
-            handler,
-            dst,
-        } => {
-            let tag_val = state.reg_at(base, tag);
-            let handler_val = state.reg_at(base, handler);
-            let body_val = state.reg_at(base, body);
-            state.prompt_stack.push(PromptFrame {
-                tag: tag_val,
-                stack_depth: state.frames.len(),
-                dynamic_wind_depth: state.dynamic_winds.len(),
-                exception_handler_depth: state.exception_handlers.len(),
-                handler: handler_val,
-                dst,
-            });
-            call_closure(state, body_val, &[], dst)?;
-        }
-
         Instruction::AbortToPrompt { tag, val, dst } => {
             let tag_val = state.reg_at(base, tag);
             let abort_val = state.reg_at(base, val);
@@ -2742,7 +2701,7 @@ fn handle_control_primitive(
                             .into(),
                     });
                 }
-                if !heap.is_procedure(thunk) {
+                if !heap.is_callable(thunk) {
                     return Err(VmError::TypeError {
                         message: "with-exception-handler: second argument must be a procedure"
                             .into(),
@@ -2754,15 +2713,19 @@ fn handle_control_primitive(
             // popped when the thunk returns (via pop_exception_handlers) or when
             // raise invokes it. It records no wind depth: a raise does not
             // unwind, so there is nothing to unwind *to*.
+            let handler_index = state.exception_handlers.len();
             state.exception_handlers.push(ExceptionHandler {
                 handler: handler_proc,
                 stack_depth: state.frames.len(),
             });
 
-            // Call the thunk — push its frame and let the run loop drive it.
-            // When the thunk returns, the Return instruction path will pop the
-            // exception handler via pop_exception_handlers.
-            call_closure(state, thunk, &[], dst)?;
+            // A frameless result sends no Return to sweep this extent. Close
+            // by the saved index: re-entry can leave entries above our own.
+            // On an error/transfer, leave cleanup to the owning dispatch loop.
+            if let Some(result) = call_any(state, thunk, &[], dst)? {
+                state.exception_handlers.truncate(handler_index);
+                state.set_reg(dst, result);
+            }
         }
 
         VmControlPrimitive::Raise => {
@@ -3099,29 +3062,6 @@ mod wind_step {
     pub(super) const NUM_REGS: u16 = 4;
 }
 
-/// How many leading records two wind stacks share (R7RS §6.10's common
-/// prefix), by the identity of the `dynamic-wind` call each stands for.
-///
-/// The comparison is on `DynamicWindRecord::id`, unique per `dynamic-wind`
-/// *call*, which is why the VM's record grew one. Depth cannot serve — the
-/// whole question is where two stacks stop agreeing — and neither can the
-/// `before` thunk, since two calls may share a closure.
-///
-/// What was once wrong here was not the comparison but that it was skipped: a
-/// full `call/cc` invoke forced the prefix to 0, so it exited and re-entered
-/// every extent, the shared ones included. Invoking a continuation captured
-/// inside its own extent therefore ran that extent's after and before thunks
-/// for a jump that crossed nothing: `(dynamic-wind in (lambda () (call/cc
-/// (lambda (k) (k #f)))) out)` logged `(in out in out)` where the
-/// tree-walker, chibi and Gauche log `(in out)`.
-fn common_wind_prefix(current: &[DynamicWindRecord], target: &[DynamicWindRecord]) -> usize {
-    current
-        .iter()
-        .zip(target.iter())
-        .take_while(|(a, b)| a.id == b.id)
-        .count()
-}
-
 /// Take the next step of a jump to the full continuation `target`: run one
 /// wind thunk between the live wind stack and the target's, or, with none
 /// left, arrive — restore the target's state and deliver `value`.
@@ -3159,10 +3099,10 @@ fn step_wind_jump(
         .ok_or_else(|| VmError::TypeError {
             message: "continuation jump: not a full continuation".into(),
         })?;
-    let common = common_wind_prefix(&state.dynamic_winds, &cc.dynamic_winds);
+    let step = next_wind_step(&state.dynamic_winds, &cc.dynamic_winds, |r| r.id);
 
     // Leaving an extent: pop first, then run its after-thunk.
-    if state.dynamic_winds.len() > common {
+    if step == WindStep::Exit {
         let record = state
             .dynamic_winds
             .pop()
@@ -3180,11 +3120,9 @@ fn step_wind_jump(
     // Entering one: run its before-thunk, and push the record only when that
     // returns — `ResumeWindJump` does it, from `ENTERING`.
     //
-    // `common` is `state.dynamic_winds.len()` here (the branch above ruled
-    // out longer, and a prefix cannot be longer than the stack it indexes),
-    // so this is the first record of the target that the live stack lacks.
-    if let Some(record) = cc.dynamic_winds.get(state.dynamic_winds.len()) {
-        let entering = TaggedValue::fixnum(state.dynamic_winds.len() as i64);
+    if let WindStep::Enter(index) = step {
+        let record = &cc.dynamic_winds[index];
+        let entering = TaggedValue::fixnum(index as i64);
         return push_wind_step(
             state,
             target,

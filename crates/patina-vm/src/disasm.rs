@@ -269,17 +269,6 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::Define { name, src } => {
             format!("Define       globals[{}] ← r{}", name, src)
         }
-        Instruction::CallWithPrompt {
-            body,
-            tag,
-            handler,
-            dst,
-        } => {
-            format!(
-                "CallWithPrompt r{} ← prompt(tag=r{}, body=r{}, handler=r{})",
-                dst, tag, body, handler
-            )
-        }
         Instruction::AbortToPrompt { tag, val, dst } => {
             format!("AbortToPrompt tag=r{}, val=r{} (hole r{})", tag, val, dst)
         }

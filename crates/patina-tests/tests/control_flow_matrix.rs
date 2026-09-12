@@ -27,12 +27,15 @@
 //!
 //! ```text
 //!   none, escape           4   chibi, gauche, guile, racket
-//!   reenter                3   Racket forbids re-executing a module-level
+//!   reenter{,-before,-after} 3   Racket forbids re-executing a module-level
 //!                              `define`, which is a module-system rule
 //!   abort, resume          2   guile, racket — chibi and Gauche have no
 //!                              tagged prompt API at all
 //!   resume+thunk-reenter   1   guile
 //! ```
+//!
+//! The eight ordinary before/after capture rows were measured 2026-09-11
+//! against chibi, Gauche and Guile using `dump_programs`.
 //!
 //! Every oracle runs the **same program text**. What differs is a prelude:
 //! an import line, a `write` around the final expression, and for Guile and
@@ -93,16 +96,13 @@
 //!
 //! # Adding axes
 //!
-//! The axes here are the ones the defect history names. Worth adding next,
-//! roughly in order of value:
+//! The axes here are the ones the defect history names.
 //!
-//! - **where inside the extent a continuation is captured** — the body, the
-//!   `before` thunk, the `after` thunk. Only
-//!   [`Transfer::ResumeThenReenterThunk`] reaches into a thunk today, and that
-//!   one axis produced #157, #159, #165 and #167. As a separate `Capture` axis
-//!   it would multiply these rows by three; as one more `Transfer` it stays
-//!   cheap — and [`the_matrix_is_a_complete_cross_product`] will name the rows
-//!   the addition leaves unwritten.
+//! Full re-entry now enumerates capture in the body, ordinary `before`, and
+//! ordinary `after` thunks (32 rows total). The existing composable re-entry
+//! rows cover a `before` thunk run during a transfer rather than ordinary entry.
+//! Further axes worth adding:
+//!
 //! - **an exception crossing the extent** — `raise` and `guard` interacting
 //!   with the thunks, which is Track L §6's `finally` rule and has its own
 //!   tests but no enumeration.
@@ -162,6 +162,9 @@ enum Transfer {
     Escape,
     /// Jump back *in* to a continuation captured inside the body.
     Reenter,
+    /// Re-enter a full continuation captured during ordinary entry/exit.
+    ReenterBefore,
+    ReenterAfter,
     /// Abort to a prompt established outside the extent.
     Abort,
     /// Invoke the composable continuation that abort handed the handler.
@@ -202,6 +205,8 @@ impl Transfer {
             Transfer::None => "none",
             Transfer::Escape => "escape",
             Transfer::Reenter => "reenter",
+            Transfer::ReenterBefore => "reenter-before",
+            Transfer::ReenterAfter => "reenter-after",
             Transfer::Abort => "abort",
             Transfer::Resume => "resume",
             Transfer::ResumeThenReenterThunk => "resume+thunk-reenter",
@@ -229,6 +234,8 @@ const TRANSFERS: &[Transfer] = &[
     Transfer::None,
     Transfer::Escape,
     Transfer::Reenter,
+    Transfer::ReenterBefore,
+    Transfer::ReenterAfter,
     Transfer::Abort,
     Transfer::Resume,
     Transfer::ResumeThenReenterThunk,
@@ -307,7 +314,7 @@ fn program(shape: &Shape) -> String {
     let inn = "(note 'in)";
     let out = "(note 'out)";
     let body = match shape.transfer {
-        Transfer::None => "'body",
+        Transfer::None | Transfer::ReenterBefore | Transfer::ReenterAfter => "'body",
         Transfer::Escape => "(k 'escaped)",
         Transfer::Reenter => "(call/cc (lambda (c) (set! k c) 'first))",
         Transfer::Abort => "(abort-current-continuation t 'ab)",
@@ -315,21 +322,29 @@ fn program(shape: &Shape) -> String {
             "(list 'got (abort-current-continuation t 'ab))"
         }
     };
-    // Only the last transfer captures in a thunk; everything else keeps the
-    // thunks to one `note` each, so the axis moves one thing.
+    // Thunk-capture transfers log both sides of the capture, distinguishing
+    // resuming its remainder from incorrectly restarting the whole thunk.
+    let capture = "(call/cc (lambda (c) (set! k c)))";
     let before = match shape.transfer {
+        Transfer::ReenterBefore => "(note 'in-1) (call/cc (lambda (c) (set! k c))) (note 'in-2)",
         Transfer::ResumeThenReenterThunk => {
             "(note 'in-1) (call/cc (lambda (c) (set! kt c))) (note 'in-2)"
         }
         _ => inn,
     };
-    let core = positioned(shape, &extent(shape, before, body, out));
+    let after_capture = format!("(note 'out-1) {capture} (note 'out-2)");
+    let after = if shape.transfer == Transfer::ReenterAfter {
+        after_capture.as_str()
+    } else {
+        out
+    };
+    let core = positioned(shape, &extent(shape, before, body, after));
     match shape.transfer {
         Transfer::None => format!("{prelude}\n(define r {core})\n(list r (reverse log))"),
         Transfer::Escape => {
             format!("{prelude}\n(define r (call/cc (lambda (k) {core})))\n(list r (reverse log))")
         }
-        Transfer::Reenter => format!(
+        Transfer::Reenter | Transfer::ReenterBefore | Transfer::ReenterAfter => format!(
             "{prelude}\n(define k #f)\n(define n 0)\n(define r {core})\n\
              (when (< n 1) (set! n 1) (k 'again))\n(list r (reverse log))"
         ),
@@ -360,6 +375,31 @@ fn program(shape: &Shape) -> String {
 /// inside a wind thunk.
 #[rustfmt::skip]
 const MATRIX: &[Shape] = &[
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ReenterBefore,
+            correct: "(body (in-1 in-2 out in-2 out))", vm: "(body (in-1 in-2 out in-2 out))", tw: "(body (in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ReenterBefore,
+            correct: "((w body) (in-1 in-2 out in-2 out))", vm: "((w body) (in-1 in-2 out in-2 out))", tw: "((w body) (in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ReenterBefore,
+            correct: "(body (in-1 in-2 out in-2 out))", vm: "(body (in-1 in-2 out in-2 out))", tw: "(body (in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ReenterBefore,
+            correct: "((w body) (in-1 in-2 out in-2 out))", vm: "((w body) (in-1 in-2 out in-2 out))", tw: "((w body) (in-1 in-2 out in-2 out))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::Tail, transfer: Transfer::ReenterAfter,
+            correct: "(body (in out-1 out-2 out-2))", vm: "(body (in out-1 out-2 out-2))", tw: "(body (in out-1 out-2 out-2))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Head, position: Position::NonTail, transfer: Transfer::ReenterAfter,
+            correct: "((w body) (in out-1 out-2 out-2))", vm: "((w body) (in out-1 out-2 out-2))", tw: "((w body) (in out-1 out-2 out-2))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::Tail, transfer: Transfer::ReenterAfter,
+            correct: "(body (in out-1 out-2 out-2))", vm: "(body (in out-1 out-2 out-2))", tw: "(body (in out-1 out-2 out-2))",
+            oracles: "chibi, gauche, guile", issue: "" },
+    Shape { extent: Extent::Value, position: Position::NonTail, transfer: Transfer::ReenterAfter,
+            correct: "((w body) (in out-1 out-2 out-2))", vm: "((w body) (in out-1 out-2 out-2))", tw: "((w body) (in out-1 out-2 out-2))",
+            oracles: "chibi, gauche, guile", issue: "" },
+
     // ---- no transfer: the extent's own bookkeeping ---------------------
     // The baseline. Every other row adds a transfer to this one, so a change that
     // moves these four moves everything and is about the extent, not the transfer.

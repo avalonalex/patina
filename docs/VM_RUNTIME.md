@@ -227,35 +227,21 @@ and a continuation can escape out of its callback. They hold only because
 
 ### 4.1 Call Dispatch Order
 
-When a `Call` or `TailCall` instruction is executed:
+`Call` and `Apply` use `call_value`; their tail forms use
+`tail_call_value`. Both accept compiled closures, control primitives, ordinary
+primitives, parameters, full continuations, and delimited continuations. The
+probe orders may differ because these heap variants are mutually exclusive.
+Non-instruction callers use `call_any`, which delegates to `call_value` and
+reports whether a frame remains to run (§4.5).
 
-1. **VM control primitive check** — `vm_control_primitive()` detects if the
-   function is a known control primitive (continuations, exceptions, values,
-   dynamic-wind). If so, dispatch via `handle_control_primitive()`.
-2. **Primitive call** — `try_call_primitive()` checks if it's a
-   `Procedure::Primitive` on the heap, calls it directly without pushing a frame.
-3. **Parameter call** — `try_call_parameter()` checks if it's a parameter object.
-4. **Continuation call** — `try_invoke_continuation()` checks if it's a
-   continuation object.
-5. **Closure call** — `call_closure()` resolves to `(code_id, free_vars)`,
-   checks arity, pushes a new frame.
+### 4.2 `call_closure_resolved`
 
-### 4.2 `call_closure`
-
-```rust
-fn call_closure(
-    state: &mut VmState,
-    closure_val: TaggedValue,
-    args: &[TaggedValue],
-    return_reg: u16,
-) -> Result<(), VmError>
-```
-
-- Looks up code object in `code_store`
-- Checks arity
-- Allocates register window for new frame
-- Copies args into callee parameter slots
-- Handles variadic rest-arg collection via `build_list()`
+The dispatcher resolves a compiled closure's code id before reaching this
+helper. It checks arity, allocates a register window, copies arguments, builds
+any rest list, and pushes the call frame. It is not a general procedure entry
+point. The old closure-only `call_closure` wrapper and unused `CallWithPrompt`
+instruction were removed with #190; prompt bodies and exception-handler
+thunks both use `call_any`.
 
 ### 4.3 Tail Call
 
@@ -290,10 +276,10 @@ There are **two** probe sets, one per call shape, and they differ in order:
   non-closure arm has its own frame bookkeeping to do. Both functions carry a
   comment on why the order is free to differ (the callable heap variants are
   mutually exclusive), so this is two probe sets by choice, not by drift
-- **`call_any()`** — `call_value()` for the nine call sites that have no
+- **`call_any()`** — `call_value()` for call sites that have no
   instruction behind them: a `call-with-values` consumer (instruction and tail
-  instruction) or producer, a prompt body, `call/cc`'s procedure, a jump's wind
-  thunks, a composable invoke's re-entry thunks, a higher-order primitive's
+  instruction) or producer, a prompt body, an exception-handler thunk,
+  `call/cc`'s procedure, a jump's wind thunks, a composable invoke's re-entry thunks, a higher-order primitive's
   callback, and a parameter converter. It adds the one thing those callers
   cannot get from the dispatch loop: whether the callee finished. `Some(v)` is
   a callee that needed no frame, `None` a frame still to run — and the **frame
@@ -303,10 +289,46 @@ There are **two** probe sets, one per call shape, and they differ in order:
   apply)` failed at a name lookup
 - **`call_any_sync()`** — `call_any()` plus the nested `run_loop_until()` for a
   callee that did push a frame; reached when a parameter is *set* by calling it
-- **`call_closure()`** — a compiled closure and nothing else, so the wrong
-  dispatcher for anything user code names as a procedure. Two callers left, both
-  issue #190: `with-exception-handler`'s thunk, and the `CallWithPrompt`
-  instruction that no pass emits
+- A `with-exception-handler` thunk that finishes without a frame closes its
+  handler extent by truncating to the handler-stack length recorded before
+  installation. A prompt body does the same for prompts. Neither can rely on
+  a `Return`, and neither may blindly pop the last entry after re-entry.
+
+### 4.6 Shared policy and runtime boundaries
+
+`patina_core::continuation::next_wind_step` is the shared traversal policy for
+full continuation jumps and abort landings. Given outermost-first stacks and
+per-invocation identities, it selects one action: exit the innermost unshared
+extent, enter the next target extent, or arrive. Both backends call this helper;
+neither keeps a second common-prefix algorithm. It allocates no state and
+calls no Scheme code. Recompute the action after each thunk, because a thunk
+may replace the transfer being performed.
+
+The backends own execution of that action: pop before calling `after`; call
+`before` before pushing its record; run under the record's handlers; preserve
+live prompts until arrival. The VM stores the remainder in a `ResumeWindJump`
+frame and the tree-walker in `ContValue::Jump`. The remainder must be captured
+with a continuation made inside the thunk. At arrival each backend installs
+its own representation of the target's frames/chain, values, winds, prompts,
+and handlers. Frame indices, CPS environments, prompt relocation, GC roots,
+and escape signals remain backend responsibilities.
+
+Composable invocation is a separate operation: it appends a captured region
+and returns to its invoker. Its entry thunks run under the invoke site's
+handlers, so it must not use the replacement traversal. A raise also does not
+traverse winds: it calls the handler in the raise site's dynamic environment.
+
+Rust callbacks are a runtime boundary. The VM's `across_reentry` and pending
+transfer signal, and the tree-walker's trampoline identity, distinguish a
+callback return from an escape. Native Rust computation is not itself saved
+by a Scheme continuation. In particular, the tree-walker rejects re-entry to
+an expired callback trampoline and invocation of a composable capture crossing
+a callback;
+sharing traversal does not remove these representation limits. Any operation
+that promises replay of work after a Scheme call must encode that remainder
+in machine frames or CPS continuation values, rather than only on the Rust
+stack. `escape_from_primitive.rs` guards the callback boundaries; the matrix
+in §5.6 guards wind ordering and continuation result delivery.
 
 ---
 
@@ -616,9 +638,10 @@ by reading, before anyone writes a program that trips over it.
 
 Its executable counterpart is
 `crates/patina-tests/tests/control_flow_matrix.rs`, which enumerates the
-*transfers* rather than the state: 24 shapes over how a `dynamic-wind` is
+*transfers* rather than the state: 32 shapes over how a `dynamic-wind` is
 written, whether it is in tail position, and how control leaves or re-enters
-it. Each row records **which** external implementations back its answer —
+it, including full captures in the body, before thunk, and after thunk. Each
+row records **which** external implementations back its answer —
 four for the prompt-free shapes, down to one for the shape only Guile can
 express — rather than one number for the table. Where this table catches a
 component nobody carried, that one catches a shape nobody tried.
