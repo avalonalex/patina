@@ -311,4 +311,30 @@
 (test-equal "apply on values" 7
   (apply values (list 7)))
 
+;; #190: the thunk accepts every callable category, and a frameless return
+;; closes only its handler extent. Check the outer handler in the same body,
+;; before a top-level dispatch loop can hide a leaked entry.
+(for-each
+  (lambda (thunk)
+    (test-equal "frameless handler thunk closes its extent" '(outer boom)
+      (with-exception-handler (lambda (e) (list 'outer e))
+        (lambda ()
+          (with-exception-handler (lambda (e) (list 'leaked e)) thunk)
+          (raise-continuable 'boom)))))
+  (list (lambda () 7) + values (make-parameter 7)))
+(test-equal "primitive handler thunk result" 0
+  (with-exception-handler (lambda (e) 'bad) +))
+(test-equal "parameter handler thunk result" 7
+  (with-exception-handler (lambda (e) 'bad) (make-parameter 7)))
+(test-equal "zero values from handler thunk" '()
+  (call-with-values
+    (lambda () (with-exception-handler (lambda (e) 'bad) values)) list))
+(test-equal "full continuation as handler thunk" '()
+  (call-with-values
+    (lambda () (call/cc (lambda (k) (with-exception-handler (lambda (e) 'bad) k))))
+    list))
+(test-equal "a thunk arity error reaches its installed handler" 'caught
+  (call/cc (lambda (escape)
+    (with-exception-handler (lambda (e) (escape 'caught)) car))))
+
 (test-end)

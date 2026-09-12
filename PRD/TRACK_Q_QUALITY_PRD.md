@@ -138,13 +138,20 @@ and `tests/scheme/control/prompts.scm`'s "a control primitive can be the prompt 
 collapsed out of the quarantines that had pinned the failures, plus
 `every_frameless_call_site_takes_a_control_primitive` for the remaining sites.
 
-**One dispatcher is not the VM, and Q2 should not read this update as saying
-otherwise.** `with-exception-handler`'s *thunk* still goes through
-`call_closure` — a compiled closure and nothing else — so
-`(with-exception-handler h values)` answers `#<values>` on the tree-walker and
-fails on the VM. Filed as **issue #190**, together with
-`Instruction::CallWithPrompt`, which has the same narrow body call and is
-emitted by no pass.
+**Update 2026-09-11 — #190's remaining closure-only call is removed.**
+`with-exception-handler` validates its thunk with `is_callable` and calls it
+through `call_any`; frameless success truncates handlers to the recorded
+installation index. The unused `CallWithPrompt` instruction and the
+closure-only wrapper are deleted. `tests/scheme/control/callability.scm`
+checks primitive, parameter, zero-value and full-continuation thunks and
+handler cleanup. This closes the VM dispatcher hole, not Q2's remaining
+tree-walker value-binding work.
+
+Both backends now use `patina_core::continuation::next_wind_step` for full
+jumps and abort travel. The capture-site matrix grows from 24 to 32 shapes,
+adding ordinary before/after captures. `docs/VM_RUNTIME.md` §4.6 records the
+shared policy, the separate composable path, and the backend/runtime boundary;
+it does not claim native Rust callbacks can be replayed as Scheme frames.
 
 **The lesson is the one §1.2 already teaches, applied to itself, three times.**
 Every row in that table was measured, but the *cause* attached to two of them

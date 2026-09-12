@@ -471,19 +471,6 @@ pub enum Instruction {
     Define { name: Symbol, src: Reg },
 
     // ── Continuations (SRFI-226) ──────────────────────────────────────────────
-    /// Maps to `call-with-continuation-prompt`.
-    ///
-    /// 1. Push a `PromptFrame` onto `VmState::prompt_stack`.
-    /// 2. Call `body` thunk as a normal `Call`.
-    /// 3. Normal return: pop prompt, write result to `dst`.
-    /// 4. `AbortToPrompt` with matching tag: unwind, invoke `handler`.
-    CallWithPrompt {
-        body: Reg,
-        tag: Reg,
-        handler: Reg,
-        dst: Reg,
-    },
-
     /// Maps to `abort-current-continuation`.
     ///
     /// Searches prompt stack for nearest frame matching `tag`, clones the

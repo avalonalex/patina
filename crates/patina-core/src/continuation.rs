@@ -207,3 +207,69 @@ impl DynamicWindRecord {
         }
     }
 }
+
+/// The next action of a full continuation jump (including an abort landing).
+/// Backends own the resumable thunk call and dynamic-state installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindStep {
+    /// Pop the innermost live record before calling its after thunk.
+    Exit,
+    /// Call this target record's before thunk, then push it on return.
+    Enter(usize),
+    /// Install the target machine state and deliver the jump's value.
+    Arrive,
+}
+
+/// Shared traversal policy for stacks ordered outermost first. Identity is
+/// per dynamic-wind invocation, never thunk equality or stack depth. Recompute
+/// after each resumable thunk; a thunk can abandon the transfer. Composable
+/// invocation appends extents and must not use this replacement policy.
+pub fn next_wind_step<T>(current: &[T], target: &[T], id: impl Fn(&T) -> u64) -> WindStep {
+    let common = current
+        .iter()
+        .zip(target)
+        .take_while(|(a, b)| id(a) == id(b))
+        .count();
+    if current.len() > common {
+        WindStep::Exit
+    } else if current.len() < target.len() {
+        WindStep::Enter(current.len())
+    } else {
+        WindStep::Arrive
+    }
+}
+
+#[cfg(test)]
+mod wind_policy_tests {
+    use super::{WindStep, next_wind_step};
+
+    #[test]
+    fn sibling_extents_exit_inside_out_then_enter_outside_in() {
+        let target = [1, 4, 5];
+        let mut live = vec![1, 2, 3];
+        let mut steps = Vec::new();
+        loop {
+            let step = next_wind_step(&live, &target, |id| *id);
+            steps.push(step);
+            match step {
+                WindStep::Exit => {
+                    live.pop();
+                }
+                WindStep::Enter(i) => live.push(target[i]),
+                WindStep::Arrive => break,
+            }
+        }
+        assert_eq!(
+            steps,
+            [
+                WindStep::Exit,
+                WindStep::Exit,
+                WindStep::Enter(1),
+                WindStep::Enter(2),
+                WindStep::Arrive
+            ]
+        );
+        assert_eq!(next_wind_step::<u64>(&[], &[], |id| *id), WindStep::Arrive);
+        assert_eq!(next_wind_step(&[1], &[2], |id| *id), WindStep::Exit);
+    }
+}

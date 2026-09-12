@@ -11,7 +11,7 @@ use patina_core::tagged_value::TaggedValue;
 /// An entry on the prompt stack, recording the dynamic context needed to
 /// handle an `AbortToPrompt` or to restore after normal return.
 ///
-/// Created by `CallWithPrompt`, popped on normal return or abort.
+/// Created by `call-with-continuation-prompt`, popped on normal return or abort.
 #[derive(Debug, Clone)]
 pub struct PromptFrame {
     /// The prompt tag (opaque heap object, compared by identity).

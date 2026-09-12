@@ -18,7 +18,7 @@
 ;; all since fixed; the tree-walker's last one, an abort out of a primitive's
 ;; callback, closed 2026-09-10.
 ;;
-;; The 24-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6 is
+;; The 32-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6 is
 ;; `control_flow_matrix.rs`, which stays Rust: it is a scoreboard, read as a
 ;; table. The rest of `cps_features.rs`'s prompt half moved here in #193
 ;; Phase 2 — the section on aborts, composable continuations and the dynamic
@@ -1115,5 +1115,26 @@
       (if (= (length log) 1)
           (set! log (cons (list 'resumed (kk 'resumed)) log)))
       (reverse log))))
+
+;; #190: even an empty composable continuation is a legal handler thunk.
+;; It finishes without a frame on the VM, so its handler must close before
+;; the next raise in this same expression. A nonempty capture exercises the
+;; path that appends frames instead. Both must preserve the caller's handler.
+;; Guile 3.0.11 agrees on both rows (same body, tagged-prompt API shim).
+(for-each
+  (lambda (tail?)
+    (test-equal "composable continuation as exception-handler thunk" '(outer boom)
+      (let ((tag (make-continuation-prompt-tag 'handler-thunk)) (saved #f))
+        (call-with-continuation-prompt
+          (lambda ()
+            (if tail?
+                (abort-current-continuation tag 'capture)
+                (begin (abort-current-continuation tag 'capture) 7)))
+          tag (lambda (v k) (set! saved k)))
+        (with-exception-handler (lambda (e) (list 'outer e))
+          (lambda ()
+            (with-exception-handler (lambda (e) (list 'leaked e)) saved)
+            (raise-continuable 'boom))))))
+  '(#t #f))
 
 (test-end)

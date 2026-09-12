@@ -9,18 +9,10 @@ use super::types::{
     ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
 };
 use crate::eval::error::EvalError;
+use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::rc::Rc;
-
-/// How many leading records two wind stacks share (R7RS §6.10's common
-/// prefix), by identity of the `dynamic-wind` call.
-fn common_wind_prefix(from: &[DynamicWindRecord], to: &[DynamicWindRecord]) -> usize {
-    from.iter()
-        .zip(to.iter())
-        .take_while(|(a, b)| a.id == b.id)
-        .count()
-}
 
 impl<'a> CpsEvaluator<'a> {
     /// Take the next step of a jump to `target`: run one wind thunk between
@@ -60,9 +52,9 @@ impl<'a> CpsEvaluator<'a> {
         prompt_stack: Vec<PromptFrame>,
         mut dynamic_winds: Vec<DynamicWindRecord>,
     ) -> Result<StepResult, EvalError> {
-        let common = common_wind_prefix(&dynamic_winds, &target.dynamic_winds);
+        let step = next_wind_step(&dynamic_winds, &target.dynamic_winds, |r| r.id);
 
-        if dynamic_winds.len() > common {
+        if step == WindStep::Exit {
             let record = dynamic_winds.pop().expect("longer than its prefix");
             let handlers = record.handlers.to_vec();
             return Ok(StepResult::ApplyProc {
@@ -81,8 +73,8 @@ impl<'a> CpsEvaluator<'a> {
             });
         }
 
-        if let Some(record) = target.dynamic_winds.get(dynamic_winds.len()) {
-            let record = record.clone();
+        if let WindStep::Enter(index) = step {
+            let record = target.dynamic_winds[index].clone();
             let handlers = record.handlers.to_vec();
             return Ok(StepResult::ApplyProc {
                 proc: record.before,
