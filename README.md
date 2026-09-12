@@ -218,6 +218,9 @@ to install from verified cached archives offline. It refuses an existing destina
 go into a new root for review. This is not an automatic resolver or `patina pkg`.
 See [the acquisition design and measured limitations](PRD/future/PACKAGE_MANAGER_DESIGN.md)
 for lock files, offline reproduction, and implementation-specific dependencies.
+Libraries needing a Patina adaptation can instead use a pinned source checkout;
+the [external filesystem example](test-lib/README.md#use-the-filesystem-adaptation-from-a-separate-project)
+documents acquisition and execution on both backends.
 
 ### Full Numeric Tower
 

@@ -22,8 +22,9 @@ deferred; L5.3's lanes: VM **22 of 33** suites clean (8447/8475), tree-walker **
 priority list largely shipped; its scope now includes all SRFIs and R7RS-large draft libraries.**
 Remaining work is ordered by demand and cost, rather than excluded for low popularity.
 **L2 supplies implementation-specific libraries externally:** #194–198 removed `lib/chibi/`;
-the test lanes use `test-lib/` and the vendored corpus via `-A`. End-user acquisition remains
-open in #195. The open defect queue is §6 Open plus the non-hygiene triage families;
+the test lanes use `test-lib/` and the vendored corpus via `-A`. #195's development workflow now
+covers locked Snow archives and pinned checkouts of maintained adaptations; general resolution
+and public distribution remain deferred. The open defect queue is §6 Open plus the non-hygiene triage families;
 the exception-extent cluster (families 22+28) closed 2026-09-01, together with
 the tree-walker `guard` ordering; two quarantined defects turned out to be its
 prerequisites and landed first as #149 and #150.
@@ -196,9 +197,9 @@ dependencies. #194–198 completed the Chibi unbundling: maintained adaptations 
 unchanged upstream packages in `compat/vendor/`, and consumers supply their roots with `-A`.
 The stored corpus already passes `(chibi match)` and `(chibi pathname)` without bundling them.
 
-**Remaining work:** [#195](https://github.com/avalonalex/patina/issues/195) tracks obtaining and
-placing external libraries with their dependencies. Verify the installed layout, relative includes
-and dependency closure before choosing an existing installer or a Patina fetcher. Keep routine
+**Acquisition:** [#195](https://github.com/avalonalex/patina/issues/195) tracks obtaining and
+placing external libraries with their dependencies. The studies below verify installed layouts,
+relative includes and explicit dependency sets; general automatic resolution is deferred. Keep routine
 verification offline against pinned sources. SRFI 166 belongs to L1; `(chibi show)` remains here
 even if an implementation of one shares code with the other.
 
@@ -211,9 +212,12 @@ acquisition, target-feature selection and Patina-specific adaptations remain to 
 **Follow-up:** live `(pfds queue)` acquisition and two identical offline reproductions now verify
 a real dependency set. `scripts/install_snow_locked.py` consumes explicit archive locks, with a
 PFDS example under `examples/`; it is not an automatic resolver. CLI-based test lanes use
-`--isolated-libraries` so user-installed packages cannot alter their search paths. #195 remains
-open for target-aware dependency selection and distribution of maintained adaptations; the package
-design records the measured Snow `cond-expand` and filesystem limitations.
+`--isolated-libraries` so user-installed packages cannot alter their search paths. A subsequent
+external-project example fetched a pinned Patina checkout and exercised the maintained
+`(chibi filesystem)` adaptation on both backends, including directory operations and its explicit
+FFI boundary. See `test-lib/README.md` for the recipe. These two acquisition paths define the
+development-stage scope of #195; general target-aware dependency selection and package publication
+can remain deferred. Public distribution of Patina is not required.
 
 **Acceptance:** programs and verification lanes resolve supplied libraries and their dependencies
 without adding another implementation's public library namespace to the shipped bundle.
@@ -1006,7 +1010,7 @@ runs the largest suite either; upstream's README records the same for chibi
 0.7.3 and Gauche 0.9.5.
 
 ## 5. Sequencing within the track
-**L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (bundle R7RS-large/SRFI APIs) / **L2** (supply implementation-specific libraries externally) → **L3 re-run**, then loop L1/L2 against the refreshed histogram. The 2026-09-12 policy broadens L1 beyond edition members; #195's external acquisition workflow is the next L2 investigation.
+**L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (bundle R7RS-large/SRFI APIs) / **L2** (supply implementation-specific libraries externally) → **L3 re-run**, then loop L1/L2 against the refreshed histogram. The 2026-09-12 policy broadens L1 beyond edition members; #195's acquisition studies now provide explicit archive locks and pinned maintained-source recipes, so general package resolution need not gate that loop.
 
 **L5 is not on that loop, and that is the point.** L1/L2 raise the score against
 the corpus we have; L5 asks whether that corpus is measuring what the headline

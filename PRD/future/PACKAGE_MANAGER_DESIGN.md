@@ -1,8 +1,9 @@
 # Package Manager Design: `patina pkg`
 
 **Status — 2026-09-12:** `patina pkg` remains a proposal. An explicit, locked-archive installer
-now wraps Snow for a limited project-local workflow (see below); automatic dependency selection
-is still open in [#195](https://github.com/avalonalex/patina/issues/195). Bundling follows
+now wraps Snow for a limited project-local workflow (see below), and a pinned source checkout
+supplies maintained adaptations. [#195](https://github.com/avalonalex/patina/issues/195) records
+the acquisition decision; general automatic dependency selection remains deferred. Bundling follows
 [the current policy](../phase2/R7RS_LARGE_STATUS.md#bundling-policy): R7RS-large libraries,
 including drafts, and SRFIs are eligible; other implementations' libraries stay external.
 
@@ -150,7 +151,33 @@ checks in release and debug passed. A Larceny `char` spot-check returned 138/139
 overflowed the tree walker's stack; rerunning with isolation disabled produced the same results.
 That comparison is not a passing Larceny lane.
 
-### What still prevents a general Snow workflow
+### Maintained adaptations: a pinned checkout is sufficient for development
+
+After #297, the `(chibi filesystem)` adaptation was fetched from Patina revision
+`5f467589a8a9eb8e29da62c974810e861090fc09` into a separate temporary project's
+`.patina/sources/patina/`, with a sparse checkout of `test-lib/`. Both backends ran
+[`examples/chibi-filesystem.scm`](../../examples/chibi-filesystem.scm) using that explicit
+root and printed `(filesystem-ok ffi-unavailable)`. The example verified file creation and
+readback, nested directories, listing and traversal, working-directory restoration on normal
+return and exception, and recursive cleanup. The import failed without the explicit root.
+An intentionally broken library in the project and inherited environment did not affect the
+isolated runs. The adaptation itself required no changes.
+
+The [reproducible recipe](../../test-lib/README.md#use-the-filesystem-adaptation-from-a-separate-project)
+pins the source revision, retains the licence/provenance notice and tests both backends.
+Its active Patina branch imports only `(scheme base)`, `(scheme file)` and `(patina internal io)`;
+no other Chibi dependency is required. An offline CLI regression test runs the same example
+from a separate project with only the maintained declaration and provenance supplied. It also
+checks that rerunning against an existing demo directory preserves its contents.
+
+This covers the development-stage acquisition need alongside #297's locked upstream archives.
+Public Patina releases, Snow registration and publication of adapted packages are not completion
+requirements. A project can use a pinned source checkout now and validate a different revision
+in a separate directory before updating. Pin the interpreter too, since the adaptation imports
+Patina's internal API. The example explicitly checks the unsupported POSIX `file-status` call;
+it does not establish full Chibi filesystem compatibility.
+
+### Deferred limitations of a general Snow workflow
 
 - **Feature-dependent dependency selection:** live `(chibi pathname)` installation through
   `generic` failed while seeking `(srfi 13)`. Snow 0.12's `check-cond-expand` treats every
@@ -161,16 +188,17 @@ That comparison is not a passing Larceny lane.
 - **Metadata can differ between the live index and the archive:** indexing the downloaded
   `(chibi filesystem)` archive pulled in `(chibi test)` despite `--skip-tests`. A lock must cover
   what Snow actually reads, not just a hand-assumed runtime closure.
-- **Patina adaptations need a distribution decision:** the unmodified upstream
+- **Upstream archives do not contain Patina adaptations:** the unmodified upstream
   `(chibi filesystem)` declaration, supplied directly from its downloaded archive, failed on
   both backends because `duplicate-file-descriptor` was exported but undefined. Its `cond-expand`
-  has no Patina/portable fallback. The adapted copy in `test-lib/` remains available only from
-  the project; this work does not publish a package or move it back into `lib/`.
+  has no Patina/portable fallback. Use the pinned checkout recipe above for the maintained
+  adaptation in `test-lib/`; publishing it as a separate package can remain deferred.
 
-Keep #195 open for a target-aware dependency workflow and distribution of maintained adaptations.
-The next decision is whether an upstream Snow improvement/target profile can address those gaps
-or a small Patina resolver is needed. The locked wrapper is useful for verified selections now;
-it does not establish arbitrary Snow-package compatibility or implement the larger proposal below.
+The bounded acquisition workflow for #195 is explicit locked archives plus pinned maintained
+sources, exercised from an external project with isolated lookup. A general target-aware resolver
+is follow-up work when needed: an upstream Snow improvement/target profile or a small Patina
+resolver may address the gaps above. These recipes do not establish arbitrary Snow-package
+compatibility or implement the larger proposal below.
 
 ## Summary
 
