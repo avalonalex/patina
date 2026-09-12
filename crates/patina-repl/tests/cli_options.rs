@@ -209,3 +209,96 @@ fn supplied_libraries_need_an_explicit_root() {
         "#t",
     );
 }
+
+/// Every implicit source can satisfy an import normally, but none may fill
+/// a missing dependency in an isolated run. Exercise each independently so
+/// an earlier path cannot hide a leak from a later one.
+#[test]
+fn isolated_libraries_exclude_all_implicit_roots() {
+    for source in ["env", "home", "lib", "project", "script"] {
+        let cwd = TempDir::new().unwrap();
+        let script_dir = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        let library = match source {
+            "env" => external.path().to_path_buf(),
+            "home" => home.path().join("lib"),
+            "lib" => cwd.path().join("lib"),
+            "project" => cwd.path().join(".patina/lib"),
+            "script" => script_dir.path().to_path_buf(),
+            _ => unreachable!(),
+        };
+        fs::create_dir_all(&library).unwrap();
+        write_dup_lib(&library, "ambient");
+        let script = write_dup_script(script_dir.path());
+        let envs = [
+            ("PATINA_LIBRARY_PATH", external.path().to_str().unwrap()),
+            ("PATINA_HOME", home.path().to_str().unwrap()),
+        ];
+        for backend in [&[][..], &["--tree-walker"][..]] {
+            let mut args = backend.to_vec();
+            args.push(&script);
+            let (stdout, stderr, ok) = run_patina_env(cwd.path(), &args, &envs);
+            assert!(ok, "normal {source}: {stderr}");
+            assert_eq!(stdout.trim(), "ambient");
+
+            args.insert(0, "--isolated-libraries");
+            let (_, stderr, ok) = run_patina_env(cwd.path(), &args, &envs);
+            assert!(!ok, "isolated run leaked {source}");
+            assert!(stderr.contains("(dup)"), "{source}: {stderr}");
+
+            // The caller can still explicitly opt into precisely this root.
+            args.splice(0..0, ["-A", library.to_str().unwrap()]);
+            let (stdout, stderr, ok) = run_patina_env(cwd.path(), &args, &envs);
+            assert!(ok, "explicit {source}: {stderr}");
+            assert_eq!(stdout.trim(), "ambient");
+        }
+    }
+}
+
+#[test]
+fn isolated_libraries_keep_explicit_order_and_apply_to_eval_print() {
+    let cwd = TempDir::new().unwrap();
+    let first = TempDir::new().unwrap();
+    let second = TempDir::new().unwrap();
+    write_dup_lib(first.path(), "first");
+    write_dup_lib(second.path(), "second");
+    let args = [
+        "--isolated-libraries",
+        "-A",
+        second.path().to_str().unwrap(),
+        "-I",
+        first.path().to_str().unwrap(),
+        "-p",
+        "(import (scheme base) (dup)) v",
+    ];
+    run_both_backends(cwd.path(), &args, "first");
+}
+
+#[test]
+fn isolated_environment_setting_takes_effect_before_bootstrap() {
+    let cwd = TempDir::new().unwrap();
+    let poisoned = cwd.path().join("poison");
+    fs::create_dir_all(poisoned.join("scheme")).unwrap();
+    // A valid library with the wrong exports would break bootstrap if any
+    // user path were consulted before isolation takes effect.
+    fs::write(
+        poisoned.join("scheme/base.sld"),
+        "(define-library (scheme base) (export))",
+    )
+    .unwrap();
+    for backend in [&[][..], &["--tree-walker"][..]] {
+        let mut args = backend.to_vec();
+        args.extend(["-p", "(import (scheme base)) (+ 20 22)"]);
+        let (stdout, stderr, ok) = run_patina_env(
+            cwd.path(),
+            &args,
+            &[
+                ("PATINA_LIBRARY_PATH", poisoned.to_str().unwrap()),
+                ("PATINA_ISOLATED_LIBRARIES", "1"),
+            ],
+        );
+        assert!(ok, "{stderr}");
+        assert_eq!(stdout.trim(), "42");
+    }
+}

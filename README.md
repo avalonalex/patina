@@ -197,6 +197,28 @@ Complete R7RS-compliant library system:
 - **Scheme implementations** - Macros and derived forms in `.scm` files
 - **Full support** - `cond-expand`, `include`, `include-ci`, `include-library-declarations`
 
+External libraries can be supplied with `-A <directory>`, `-I <directory>`,
+`PATINA_LIBRARY_PATH`, or a project's `.patina/lib/`. For a reproducible run,
+`--isolated-libraries` uses only bundled roots and explicit `-I`/`-A` directories,
+ignoring environment overrides, working-directory defaults and the script's directory.
+Bundled libraries precede `-A` roots; `-I` explicitly overrides them. This controls library
+lookup, not filesystem access or Scheme `load`/`include`.
+
+A limited Snow workflow is available for an explicitly selected set of source archives:
+
+```sh
+python3 scripts/install_snow_locked.py examples/snow-pfds.lock.json \
+  --cache .patina/cache --dest .patina/lib --fetch
+./target/release/patina --isolated-libraries -A .patina/lib examples/snow-queue.scm
+# => (1 2 3)
+```
+
+The installer requires Python 3.9+ and `snow-chibi` (tested with Chibi 0.12). Omit `--fetch`
+to install from verified cached archives offline. It refuses an existing destination; updates
+go into a new root for review. This is not an automatic resolver or `patina pkg`.
+See [the acquisition design and measured limitations](PRD/future/PACKAGE_MANAGER_DESIGN.md)
+for lock files, offline reproduction, and implementation-specific dependencies.
+
 ### Full Numeric Tower
 
 Complete Scheme numeric hierarchy with automatic promotion:

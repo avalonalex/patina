@@ -27,13 +27,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-BACKEND_ARGS=()
+BACKEND_ARGS=(--isolated-libraries)
 BACKEND_NAME="VM"
 SUFFIX=""
 for arg in "$@"; do
     case "$arg" in
         --tree-walker)
-            BACKEND_ARGS=(--tree-walker)
+            BACKEND_ARGS=(--isolated-libraries --tree-walker)
             BACKEND_NAME="tree-walker"
             SUFFIX="_tree_walker"
             ;;

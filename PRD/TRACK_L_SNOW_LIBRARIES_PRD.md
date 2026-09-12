@@ -208,6 +208,13 @@ chain from a local repository. Both Patina backends ran the installed libraries.
 acquisition, target-feature selection and Patina-specific adaptations remain to verify; see
 `PRD/future/PACKAGE_MANAGER_DESIGN.md` § "#195 investigation: Snow installation layout".
 
+**Follow-up:** live `(pfds queue)` acquisition and two identical offline reproductions now verify
+a real dependency set. `scripts/install_snow_locked.py` consumes explicit archive locks, with a
+PFDS example under `examples/`; it is not an automatic resolver. CLI-based test lanes use
+`--isolated-libraries` so user-installed packages cannot alter their search paths. #195 remains
+open for target-aware dependency selection and distribution of maintained adaptations; the package
+design records the measured Snow `cond-expand` and filesystem limitations.
+
 **Acceptance:** programs and verification lanes resolve supplied libraries and their dependencies
 without adding another implementation's public library namespace to the shipped bundle.
 

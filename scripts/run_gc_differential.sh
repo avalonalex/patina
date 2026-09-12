@@ -19,6 +19,9 @@
 # the debug build's poison assertions panic at the exact accessor.
 set -euo pipefail
 
+# Apply before bootstrap, including the generated reclamation probes below.
+export PATINA_ISOLATED_LIBRARIES=1
+
 cd "$(dirname "$0")/.."
 BIN="${1:-target/release/patina}"
 

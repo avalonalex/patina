@@ -217,31 +217,36 @@ impl LibraryRegistry {
     /// 4. $PATINA_HOME/lib/ (if PATINA_HOME env var is set)
     /// 5. Workspace root/lib/ (by walking up from executable to find Cargo.toml workspace)
     /// 6. Executable directory/../lib/ (relative to binary)
+    ///
+    /// With PATINA_ISOLATED_LIBRARIES=1, only the workspace/executable roots
+    /// are included. This must take effect before bootstrap loads libraries.
     pub fn with_default_paths() -> Self {
         let mut registry = Self::new();
 
-        // 1. $PATINA_LIBRARY_PATH — the conventional user override, ahead
-        // of the built-in defaults the way GUILE_LOAD_PATH and
-        // CHIBI_MODULE_PATH are. CLI -I flags prepend in front of even
-        // these.
-        for dir in env_library_paths() {
-            registry.add_search_path(dir);
-        }
+        if !Self::isolated_paths_enabled() {
+            // 1. $PATINA_LIBRARY_PATH — the conventional user override, ahead
+            // of the built-in defaults the way GUILE_LOAD_PATH and
+            // CHIBI_MODULE_PATH are. CLI -I flags prepend in front of even
+            // these.
+            for dir in env_library_paths() {
+                registry.add_search_path(dir);
+            }
 
-        // 2. Current directory ./lib/
-        registry.add_search_path(PathBuf::from("./lib"));
+            // 2. Current directory ./lib/
+            registry.add_search_path(PathBuf::from("./lib"));
 
-        // 3. Project-local dependency directory ./.patina/lib/ — where a
-        // future fetcher drops third-party libraries (Track L; see
-        // PRD/future/PACKAGE_MANAGER_DESIGN.md). Ahead of the workspace and
-        // executable paths so project dependencies win over installed ones.
-        registry.add_search_path(PathBuf::from("./.patina/lib"));
+            // 3. Project-local dependency directory ./.patina/lib/ — where a
+            // future fetcher drops third-party libraries (Track L; see
+            // PRD/future/PACKAGE_MANAGER_DESIGN.md). Ahead of the workspace and
+            // executable paths so project dependencies win over installed ones.
+            registry.add_search_path(PathBuf::from("./.patina/lib"));
 
-        // 4. $PATINA_HOME/lib/ if set
-        if let Ok(patina_home) = std::env::var("PATINA_HOME") {
-            let mut path = PathBuf::from(patina_home);
-            path.push("lib");
-            registry.add_search_path(path);
+            // 4. $PATINA_HOME/lib/ if set
+            if let Ok(patina_home) = std::env::var("PATINA_HOME") {
+                let mut path = PathBuf::from(patina_home);
+                path.push("lib");
+                registry.add_search_path(path);
+            }
         }
 
         // 5. Workspace root/lib/ - walk up from executable looking for workspace Cargo.toml
@@ -263,6 +268,12 @@ impl LibraryRegistry {
         }
 
         registry
+    }
+
+    /// Startup setting shared by library construction and the CLI's implicit
+    /// script-directory handling. Explicit paths remain available in this mode.
+    pub fn isolated_paths_enabled() -> bool {
+        std::env::var("PATINA_ISOLATED_LIBRARIES").as_deref() == Ok("1")
     }
 
     /// Find workspace root by walking up from the given path looking for Cargo.toml with [workspace]

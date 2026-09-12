@@ -45,6 +45,12 @@ fn parse_args(args: &[String]) -> CliOptions {
                 process::exit(0);
             }
             "--tree-walker" => opts.use_tree_walker = true,
+            // Set before constructing either backend: bootstrap itself must
+            // not resolve through a user's environment or project directory.
+            // SAFETY: argument parsing runs before any threads are started.
+            "--isolated-libraries" => unsafe {
+                std::env::set_var("PATINA_ISOLATED_LIBRARIES", "1")
+            },
             // Sets the variable the frontend reads, rather than threading a
             // flag down to every Lexer construction site. The variable stays
             // the interface; this is the discoverable spelling of it.
@@ -117,7 +123,9 @@ fn apply_library_paths(backend: &dyn LibraryPaths, opts: &CliOptions, script: Op
     for dir in &opts.append_paths {
         backend.append(std::path::PathBuf::from(dir));
     }
-    if let Some(dir) = script.and_then(script_dir) {
+    if !patina_runtime::LibraryRegistry::isolated_paths_enabled()
+        && let Some(dir) = script.and_then(script_dir)
+    {
         backend.append(dir);
     }
 }
@@ -203,6 +211,10 @@ fn print_help() {
     eprintln!("  --trace        Execute with instruction-level tracing to stderr");
     eprintln!("  -I <dir>       Prepend a directory to the library search path");
     eprintln!("  -A <dir>       Append a directory to the library search path");
+    eprintln!("  --isolated-libraries  Use bundled roots and explicit -I/-A paths only");
+    eprintln!(
+        "                        Ignore user paths, ./lib, ./.patina/lib and script directory"
+    );
     eprintln!("  -p <expr>      Evaluate an expression, print its result, and exit");
     eprintln!("                 (repeatable; evaluated in order)");
     eprintln!();
@@ -210,6 +222,7 @@ fn print_help() {
     eprintln!("  PATINA_LIBRARY_PATH  Colon-separated library directories, searched");
     eprintln!("                       before the built-in defaults");
     eprintln!("  PATINA_ALLOW_R6RS    Same as --allow-r6rs when set to anything but 0");
+    eprintln!("  PATINA_ISOLATED_LIBRARIES  Same as --isolated-libraries when set to 1");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
     eprintln!("Otherwise, start an interactive REPL.");

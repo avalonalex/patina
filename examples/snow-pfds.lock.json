@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "libraries": [
+    "(pfds queue)"
+  ],
+  "packages": [
+    {
+      "name": "pfds queue",
+      "version": "1.0.0",
+      "url": "https://snow-fort.org/s/peterlane.info/peter/pfds/queue/1.0.0/pfds-queue-1.0.0.tgz",
+      "sha256": "b9da21328abf243ff4efe9215d5720f0fffaf4e552f51a49519993347882c60f"
+    },
+    {
+      "name": "pfds lazy-list",
+      "version": "1.0.0",
+      "url": "https://snow-fort.org/s/peterlane.info/peter/pfds/lazy-list/1.0.0/pfds-lazy-list-1.0.0.tgz",
+      "sha256": "db4fcc889545c34716dff6c0420f9a5fcee2a3dee8f31416c1bc08462b74252f"
+    },
+    {
+      "name": "pfds list-helpers",
+      "version": "1.0.0",
+      "url": "https://snow-fort.org/s/peterlane.info/peter/pfds/list-helpers/1.0.0/pfds-list-helpers-1.0.0.tgz",
+      "sha256": "0eb459e05b775a90f6b2a6a7435d19aa6369f99709b8d501a960149e05e21517"
+    }
+  ]
+}

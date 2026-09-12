@@ -7,6 +7,8 @@
 *.swp
 *~
 .patina_history
+/.patina/
+__pycache__/
 
 # Personal agent settings and session state.
 CLAUDE.local.md
