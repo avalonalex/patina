@@ -18,7 +18,7 @@
 ;; all since fixed; the tree-walker's last one, an abort out of a primitive's
 ;; callback, closed 2026-09-10.
 ;;
-;; The 32-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6 is
+;; The 64-shape transfer matrix behind `docs/VM_RUNTIME.md` §5.6 is
 ;; `control_flow_matrix.rs`, which stays Rust: it is a scoreboard, read as a
 ;; table. The rest of `cps_features.rs`'s prompt half moved here in #193
 ;; Phase 2 — the section on aborts, composable continuations and the dynamic
