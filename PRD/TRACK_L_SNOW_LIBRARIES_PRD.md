@@ -202,6 +202,12 @@ and dependency closure before choosing an existing installer or a Patina fetcher
 verification offline against pinned sources. SRFI 166 belongs to L1; `(chibi show)` remains here
 even if an implementation of one shares code with the other.
 
+**Initial #195 measurements (2026-09-12):** Snow 0.12's `generic` target installed `(chibi match)`,
+relocated `(chibi irregex)` with its include, and resolved a synthetic three-package dependency
+chain from a local repository. Both Patina backends ran the installed libraries. Live-index
+acquisition, target-feature selection and Patina-specific adaptations remain to verify; see
+`PRD/future/PACKAGE_MANAGER_DESIGN.md` § "#195 investigation: Snow installation layout".
+
 **Acceptance:** programs and verification lanes resolve supplied libraries and their dependencies
 without adding another implementation's public library namespace to the shipped bundle.
 
