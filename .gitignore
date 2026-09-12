@@ -8,6 +8,11 @@
 *~
 .patina_history
 
+# Personal agent settings and session state.
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/RESUME.md
+
 # Benchmark reports - tracked for baseline history
 # /benchmark_reports
 
