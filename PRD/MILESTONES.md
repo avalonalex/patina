@@ -2,6 +2,25 @@
 
 Major accomplishments and project milestones.
 
+## 2026-09-12: Track H's Initial Hygiene Assurance Deliverables Complete
+
+H1's binding-aware metamorphic tests (#292), H2's generated scope-resolution
+and environment properties (#288), and H3's Chibi/Racket differential lane
+(#293) are merged. The harnesses reproduce historical failures; H3's first
+84-case sweep produced 1,680 successful process runs and eight classified
+disagreements, now pinned by regression rows.
+
+H4 completed the evaluation of Kani, Creusot and an independent reference
+expander. Its disposable probe checked all 1,118,480 ordered candidate/reference
+combinations in a four-scope, four-candidate domain against the production
+selector. The decision is to retain the existing gates without adopting an
+additional verifier now; this is bounded evidence, not a whole-system proof.
+
+The [Track H PRD](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md)
+is archived with the evaluation and replay evidence. H5 moved to the
+[syntax-case design](macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
+The write-path defects #289–#291 and triage families 40/41 remain open.
+
 ## 2026-08-07: VM Faster Than Chibi — Scoreboard Geomean 0.93×
 
 **Patina's VM crossed parity with Chibi 0.12: geomean 0.93× across the
@@ -794,4 +813,3 @@ The 52.7% pass rate demonstrates Patina has graduated from "toy implementation" 
 - ✅ Test infrastructure
 - ✅ Initial documentation
 - ✅ REPL with rustyline
-

@@ -598,7 +598,7 @@ named "a generated macro reads its private global despite a source global's
 spelling" and "a generated macro assigns its private global without changing
 the source global". Both are VM-scoped expected failures; an unexpected pass
 requires removing the expectation. H3 replay and minimized sources are recorded
-in [Track H](../../PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3-implementation-and-replay--2026-09-12).
+in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3-implementation-and-replay--2026-09-12).
 
 ### 41. A template-local identifier matches a helper's differently bound literal — both backends
 

@@ -2,11 +2,27 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2025-12-13
+**Last Updated:** 2026-09-12
 
 ---
 
 ## Directory Structure
+
+### `completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md`
+
+**Status:** Archived 2026-09-12 — the initial assurance deliverables are complete.
+
+[Track H](completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md) records H1's
+binding-aware metamorphic gate, H2's generated resolution/environment
+properties, H3's four-implementation sweep and shrinking, and H4's evaluation
+against a measured bounded selector baseline. H4 adopts no additional verifier
+or reference expander for the current architecture.
+
+Runtime defects #289–#291 and triage families 40/41 remain open. The deferred
+H5 mechanization decision moved to the
+[syntax-case design](../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
+
+---
 
 ### 📁 `error_system_2025_12/`
 **Status:** ✅ COMPLETE - CPS Error Routing (2025-12-12)

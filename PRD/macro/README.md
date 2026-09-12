@@ -20,7 +20,7 @@ Patina has a complete R7RS-small `syntax-rules` implementation with Racket-style
 - **[SYNTAX_KEYWORD_BINDINGS_DESIGN.md](SYNTAX_KEYWORD_BINDINGS_DESIGN.md)** — Give core syntactic keywords real bindings instead of recognizing them by spelling, so import sets and export resolution reach them through the ordinary path. Retires three workarounds; fixes six conformance defects including a recorded backend divergence. Two staged PRs.
 
 ### syntax-case System
-- **[SYNTAX_CASE_DESIGN.md](SYNTAX_CASE_DESIGN.md)** — Core `syntax-case` implementation design: syntax objects, pattern matching with fenders, `datum->syntax`, `quasisyntax`, etc.
+- **[SYNTAX_CASE_DESIGN.md](SYNTAX_CASE_DESIGN.md)** — Core `syntax-case` implementation design: syntax objects, pattern matching with fenders, `datum->syntax`, `quasisyntax`, and the deferred mechanization decision transferred from Track H (H5).
 
 ### Specification
 - **[spec/R7RS_LARGE_MACRO_FASCICLE.md](spec/R7RS_LARGE_MACRO_FASCICLE.md)** — Local copy of the full R7RS-large macro fascicle (chapters 1-8, all forms, examples, and references).
