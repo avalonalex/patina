@@ -210,6 +210,68 @@ fn supplied_libraries_need_an_explicit_root() {
     );
 }
 
+/// Exercise the documented external-project recipe on real temporary files.
+/// CI copies the maintained source locally; acquisition of the pinned checkout
+/// is a separate, manual step and must not introduce a network dependency here.
+#[test]
+fn external_filesystem_example_uses_only_supplied_adaptation() {
+    let dependency = TempDir::new().unwrap();
+    let chibi = dependency.path().join("chibi");
+    fs::create_dir(&chibi).unwrap();
+    for file in ["filesystem.sld", "PROVENANCE.md"] {
+        fs::copy(
+            repo_root().join("test-lib/chibi").join(file),
+            chibi.join(file),
+        )
+        .unwrap();
+    }
+
+    for backend in [&[][..], &["--tree-walker"][..]] {
+        let project = TempDir::new().unwrap();
+        fs::copy(
+            repo_root().join("examples/chibi-filesystem.scm"),
+            project.path().join("main.scm"),
+        )
+        .unwrap();
+        let poison = project.path().join("lib/chibi");
+        fs::create_dir_all(&poison).unwrap();
+        fs::write(
+            poison.join("filesystem.sld"),
+            "(define-library (chibi filesystem) (export))",
+        )
+        .unwrap();
+        let ambient = project.path().join("lib");
+        let envs = [
+            ("PATINA_LIBRARY_PATH", ambient.to_str().unwrap()),
+            ("PATINA_HOME", project.path().to_str().unwrap()),
+        ];
+        let mut args = backend.to_vec();
+        args.extend(["--isolated-libraries", "main.scm"]);
+        let (_, stderr, ok) = run_patina_env(project.path(), &args, &envs);
+        assert!(!ok, "adaptation resolved without its explicit root");
+        assert!(stderr.contains("(chibi filesystem)"), "{stderr}");
+
+        args.splice(0..0, ["-A", dependency.path().to_str().unwrap()]);
+        let (stdout, stderr, ok) = run_patina_env(project.path(), &args, &envs);
+        assert!(ok, "{stderr}");
+        assert_eq!(stdout.trim(), "(filesystem-ok ffi-unavailable)");
+        assert!(stderr.is_empty(), "{stderr}");
+        let work = project.path().join("filesystem-demo-work");
+        assert!(!work.exists(), "example failed to remove its working tree");
+
+        // A rerun must refuse an existing directory instead of deleting it.
+        fs::create_dir(&work).unwrap();
+        fs::write(work.join("keep.txt"), "keep this file").unwrap();
+        let (stdout, stderr, ok) = run_patina_env(project.path(), &args, &envs);
+        assert!(!ok, "{stdout}");
+        assert!(stderr.contains("demo directory already exists"), "{stderr}");
+        assert_eq!(
+            fs::read_to_string(work.join("keep.txt")).unwrap(),
+            "keep this file"
+        );
+    }
+}
+
 /// Every implicit source can satisfy an import normally, but none may fill
 /// a missing dependency in an isolated run. Exercise each independently so
 /// an earlier path cannot hide a leak from a later one.

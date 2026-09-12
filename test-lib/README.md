@@ -20,6 +20,69 @@ $ ./target/release/patina -A test-lib probe.scm
 `crates/patina-repl/tests/cli_options.rs` pins both halves of that, so the
 boundary is a checked claim rather than a stated one.
 
+## Use the filesystem adaptation from a separate project
+
+For development, a pinned Patina source checkout is the acquisition source for
+the maintained adaptation. No Patina release, Snow registration or package
+publication is required. The checkout's `test-lib/` is supplied explicitly;
+it is not part of the interpreter's bundled library roots.
+
+From a Patina checkout containing [the example](../examples/chibi-filesystem.scm),
+build the interpreter, then create a separate temporary project:
+
+```sh
+cargo build --release
+patina_bin="$(pwd)/target/release/patina"
+filesystem_example="$(pwd)/examples/chibi-filesystem.scm"
+filesystem_project="$(mktemp -d)"
+cp "$filesystem_example" "$filesystem_project/main.scm"
+cd "$filesystem_project"
+
+# Pin the maintained sources to the main revision containing #297.
+adaptation_revision=5f467589a8a9eb8e29da62c974810e861090fc09
+adaptation_source=.patina/sources/patina
+mkdir -p "$adaptation_source"
+git -C "$adaptation_source" init --quiet
+git -C "$adaptation_source" sparse-checkout set test-lib
+git -C "$adaptation_source" fetch --depth 1 \
+  https://github.com/avalonalex/patina.git "$adaptation_revision"
+git -C "$adaptation_source" checkout --detach "$adaptation_revision"
+
+"$patina_bin" --isolated-libraries -A "$adaptation_source/test-lib" main.scm
+"$patina_bin" --tree-walker --isolated-libraries -A "$adaptation_source/test-lib" main.scm
+# Both print: (filesystem-ok ffi-unavailable)
+```
+
+Only acquisition needs network access; running the example again is offline
+and does not require Chibi or Snow. The example creates and removes a new
+`filesystem-demo-work/` under the project directory, refusing an existing
+directory. It verifies file creation/readback, directory listing and traversal,
+working-directory restoration after normal return and an exception, and cleanup.
+It also checks that `file-status` reports the documented FFI limitation.
+
+The adaptation's Patina branch depends only on `(scheme base)`, `(scheme file)`
+and `(patina internal io)`, supplied by the interpreter. It needs no other Chibi
+library. CI exercises the example with only `filesystem.sld` and its provenance
+notice copied into a separate root; the real Git acquisition above was verified
+manually on 2026-09-12. Both backends fail without `-A`, and a deliberately broken
+library in the project/environment cannot override the explicitly supplied copy
+when isolation is enabled.
+
+**Supported scope:** directory operations are implemented; raw file descriptors,
+stat metadata, links and permissions raise `requires FFI, unavailable in Patina:`.
+Directory failures raise exceptions where Chibi may return `#f` or an empty list;
+see [the adaptation's provenance and differences](chibi/PROVENANCE.md).
+This is a Patina adaptation of an implementation-specific API, not a claim of
+complete Chibi filesystem compatibility.
+
+Record the full source revision with your project's dependency instructions and
+keep the fetched checkout unchanged. To update, acquire the new revision into a
+different source directory, run the example and your project tests with that
+root, then change the project's `-A` path. Pin the interpreter revision as well
+when reproducing results: this library uses Patina's internal filesystem API.
+Keep `chibi/PROVENANCE.md` with any copied adaptation; it contains the source
+history and licence notice. The full checkout recipe retains it automatically.
+
 ## Why this root exists
 
 `PRD/phase2/R7RS_LARGE_STATUS.md` § "Bundling policy" includes R7RS-large
