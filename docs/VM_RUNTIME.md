@@ -106,15 +106,25 @@ pub struct PromptFrame {
 
 ### 2.4 `DynamicWindRecord`
 
+Both backends alias `patina_core::WindRecord<H>`, which owns the common
+fields and constructor:
+
 ```rust
-#[derive(Clone)]
-pub struct DynamicWindRecord {
+pub struct WindRecord<H> {
     pub id:       u64,            // unique per `dynamic-wind` call
     pub before:   TaggedValue,
     pub after:    TaggedValue,
-    pub handlers: Rc<[ExceptionHandler]>,
+    pub handlers: Rc<[H]>,
 }
+pub type DynamicWindRecord = WindRecord<ExceptionHandler>;
 ```
+
+The VM's handler includes a frame depth; the tree-walker's does not. Handler
+installation, clamping, and relocation remain backend-specific. Cloning a
+record shares the saved handler slice. Identities may repeat in a composed
+stack, so traversal compares prefixes positionally. `GcVisitor` shares wind
+field traversal through `visit_wind_with` / `visit_winds_with`, with each
+backend supplying the handler-root visitor.
 
 ### 2.5 `ExceptionHandler`
 

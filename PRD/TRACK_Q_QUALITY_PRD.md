@@ -153,6 +153,13 @@ adding ordinary before/after captures. `docs/VM_RUNTIME.md` §4.6 records the
 shared policy, the separate composable path, and the backend/runtime boundary;
 it does not claim native Rust callbacks can be replayed as Scheme frames.
 
+**Update 2026-09-11 — #173's wind records are shared.**
+Both backend names now alias `patina_core::WindRecord<H>`, sharing fields,
+identity documentation, and construction while retaining their own handler
+types. GC wind traversal is shared with a handler-root callback. VM handler
+depth clamping and relocation remain VM responsibilities; the traversal
+policy, dynamic-state table, and matrix expectations are unchanged.
+
 **Update 2026-09-11 — #171's capture-site expansion is complete.**
 The matrix now has 64 shapes (2 forms × 2 positions × 16 transfers), adding
 full captures during jump entry, escape/abort exit, and a resumed region's

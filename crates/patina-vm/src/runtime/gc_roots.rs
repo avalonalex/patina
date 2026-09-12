@@ -128,17 +128,7 @@ fn trace_frames(frames: &[CallFrame], visitor: &mut GcVisitor<'_>) {
 }
 
 fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut GcVisitor<'_>) {
-    // The VM has its own `DynamicWindRecord` (it carries an id and a handler
-    // stack), so `GcVisitor::visit_winds` — which takes the core type — does
-    // not apply.
-    for wind in winds {
-        visitor.visit(wind.before);
-        visitor.visit(wind.after);
-        // The handler stack of the record's `dynamic-wind` call, which its
-        // thunks run under: reachable from nowhere else once the live stack
-        // has moved on, which is exactly when a jump is about to use it.
-        trace_handlers(&wind.handlers, visitor);
-    }
+    visitor.visit_winds_with(winds, |handler, visitor| visitor.visit(handler.handler));
 }
 
 fn trace_prompts(prompts: &[PromptFrame], visitor: &mut GcVisitor<'_>) {

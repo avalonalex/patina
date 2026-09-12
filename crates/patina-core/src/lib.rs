@@ -42,7 +42,9 @@ pub mod vfs;
 pub use compiled_macro::{
     CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
 };
-pub use continuation::{CpsContinuation, DynamicWindRecord, next_dynamic_wind_id, next_prompt_id};
+pub use continuation::{
+    CpsContinuation, DynamicWindRecord, WindRecord, next_dynamic_wind_id, next_prompt_id,
+};
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};

@@ -159,17 +159,23 @@ pub fn next_prompt_id() -> u64 {
 /// to find the common prefix of two wind stacks (R7RS §6.10). The `before`
 /// thunk cannot serve — two `dynamic-wind` calls may share one closure — and
 /// the depth cannot either, since the whole question is where two stacks stop
-/// agreeing. The VM keeps its own record type, so it mints through here
-/// rather than duplicating the counter.
+/// agreeing. Both backends mint identities through the shared record constructor.
 pub fn next_dynamic_wind_id() -> u64 {
     DYNAMIC_WIND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
-/// A record of a dynamic-wind that needs to be managed during continuation jumps
+/// A dynamic extent carried by continuations in either backend.
+///
+/// `H` is the backend's exception-handler representation. The VM carries
+/// frame depths; the tree-walker does not. Installing and relocating those
+/// handlers remains the backend's responsibility.
 #[derive(Debug, Clone)]
-pub struct DynamicWindRecord {
-    /// Unique identifier for this dynamic-wind invocation
-    /// Used to find the common prefix when switching continuations
+pub struct WindRecord<H> {
+    /// Identity of the `dynamic-wind` call this record came from.
+    ///
+    /// Compare stack prefixes positionally: an id is unique per invocation
+    /// but may repeat within one live stack when a composable continuation
+    /// appends its captured records. Do not use ids as unique stack keys.
     pub id: u64,
     /// The "before" thunk to call when entering this dynamic extent
     pub before: TaggedValue,
@@ -188,17 +194,16 @@ pub struct DynamicWindRecord {
     /// Shared, not owned: records are cloned into every captured
     /// continuation, and a handler stack copied per clone was the cost the
     /// tree-walker's continuation capture could not afford.
-    pub handlers: Rc<[crate::cont_value::ExceptionHandler]>,
+    pub handlers: Rc<[H]>,
 }
 
-impl DynamicWindRecord {
+/// Tree-walker wind record, retaining its backend-specific handler type.
+pub type DynamicWindRecord = WindRecord<crate::cont_value::ExceptionHandler>;
+
+impl<H> WindRecord<H> {
     /// Create a new dynamic-wind record with a unique ID, remembering the
     /// handler stack of the `dynamic-wind` call it stands for.
-    pub fn new(
-        before: TaggedValue,
-        after: TaggedValue,
-        handlers: Rc<[crate::cont_value::ExceptionHandler]>,
-    ) -> Self {
+    pub fn new(before: TaggedValue, after: TaggedValue, handlers: Rc<[H]>) -> Self {
         Self {
             id: next_dynamic_wind_id(),
             before,
