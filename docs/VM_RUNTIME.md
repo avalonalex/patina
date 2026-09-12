@@ -330,6 +330,35 @@ in machine frames or CPS continuation values, rather than only on the Rust
 stack. `escape_from_primitive.rs` guards the callback boundaries; the matrix
 in §5.6 guards wind ordering and continuation result delivery.
 
+### 4.7 The VM control runtime boundary (#174)
+
+[`runtime/control.rs`](../crates/patina-vm/src/runtime/control.rs) is the
+contract for code calling VM procedures or transferring control. Its module
+documentation specifies valid frame/register inputs, normal versus scheduled
+results, the parked-escape protocol, and GC deferral obligations. Each
+stateful helper states its entry assumptions and effects. This is an internal
+Rust interface for a tier using the existing explicit Scheme frames and
+registers; it is not a native-code ABI or an implementation of a compiled tier.
+
+The boundary owns call dispatch (including closure and registry fast paths),
+parameter and primitive callbacks, raise, prompts, continuation capture/invoke,
+wind traversal, and runtime stub construction. Stub builders and internal
+probes remain private. Only the entry points and resume-register layouts used
+by the driver are visible within `runtime`; the compiler separately reads the
+control-primitive identity table. `vm_state.rs` retains `VmState`, instruction
+dispatch, loop ownership/error recovery, GC safe points, library evaluation,
+and global-binding invalidation. The control module calls its explicit loop
+and host-evaluation services rather than owning a second driver.
+
+The key obligation for another driver is to propagate an escaped call before
+writing a result or cleaning up the abandoned dynamic extent. The owning
+loop checks `pending_escape` before error classification, because primitive
+error conversion can wrap the sentinel. Only the loop that will run the
+landing consumes it and clears `pending_transfer`. The authoritative sequence
+and the rooting requirements are together in the module documentation;
+`VmState` field comments and `Resume*` instruction comments describe storage
+and operands, not a separate protocol.
+
 ---
 
 ## 5. Control Primitives

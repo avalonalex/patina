@@ -282,7 +282,7 @@ fn collect_callees(expr: &RegExpr, out: &mut Callees) {
 #[cfg(test)]
 mod tests {
     use super::is_excluded;
-    use crate::runtime::vm_state::VM_INTERCEPTED_PRIMITIVES;
+    use crate::runtime::control::VM_INTERCEPTED_PRIMITIVES;
 
     /// `is_excluded` may be a superset of the intercepted set (everything in
     /// the control/errors libraries stays on the generic path), but it must

@@ -384,7 +384,7 @@ pub enum Instruction {
     /// The only site that *mints* a record (`DynamicWindRecord::new`, which is
     /// where its `id` comes from). Head-position `dynamic-wind` compiles to
     /// this; the value form runs the same instructions in a runtime-pushed
-    /// stub frame (`value_wind_stub` in `runtime/vm_state.rs`). The two other
+    /// stub frame (`value_wind_stub` in `runtime/control.rs`). The two other
     /// sites that grow `dynamic_winds` re-push records that already exist:
     /// `ResumeWindJump`, entering an extent of the continuation being jumped
     /// to, and the composable-continuation invokes, appending the extents they
@@ -402,7 +402,7 @@ pub enum Instruction {
     ///
     /// Never emitted by the compiler. It is the whole body of the one-frame
     /// stub the runtime pushes under each wind thunk of a jump
-    /// (`push_wind_step` in `runtime/vm_state.rs`), so that "the rest of the
+    /// (`push_wind_step` in `runtime/control.rs`), so that "the rest of the
     /// jump" is an ordinary frame: a continuation captured inside the thunk
     /// captures it, and re-entering that continuation resumes the thunk and
     /// then continues the jump, instead of falling back into whatever the
@@ -410,7 +410,7 @@ pub enum Instruction {
     ///
     /// Its frame's registers carry the jump: the target continuation, the
     /// value it delivers, and which of the target's records this step is
-    /// entering (see the `wind_step` module in `runtime/vm_state.rs`).
+    /// entering (see the `wind_step` module in `runtime/control.rs`).
     ResumeWindJump,
 
     /// Take the next step of a composable-continuation invoke that is running
@@ -435,12 +435,12 @@ pub enum Instruction {
     /// Its frame's registers carry the invoke: the continuation, the value it
     /// delivers, where that value's computation returns, and which captured
     /// extent this step is entering (see the `invoke_step` module in
-    /// `runtime/vm_state.rs`).
+    /// `runtime/control.rs`).
     ResumeComposableInvoke,
 
     /// The bookkeeping a `raise` still owes once its handler has returned.
     ///
-    /// The middle instruction of [`raise_step_stub`]'s three — `Call handler`,
+    /// The middle instruction of `raise_step_stub`'s three — `Call handler`,
     /// this, `Return` — and the reason a raise's remainder is a **pc** rather
     /// than Rust code after a nested dispatch loop. What it does depends on
     /// the raise it stands for, which its frame's `CONTINUABLE` register says:
@@ -463,7 +463,7 @@ pub enum Instruction {
     /// wherever the continuation goes.
     ///
     /// Its frame's registers are the `raise_step` module in
-    /// `runtime/vm_state.rs`.
+    /// `runtime/control.rs`.
     ResumeRaise,
 
     // ── Global Definitions ────────────────────────────────────────────────────
