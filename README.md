@@ -211,6 +211,7 @@ Integer (i64) → BigInteger → Rational → Real (f64) → Complex
 
 | Document | Description |
 |----------|-------------|
+| [Agent Instructions](AGENTS.md) | Shared guidance for Codex and Claude Code; [setup and handoffs](docs/README.md#working-with-coding-agents) |
 | [VM Decisions](docs/VM_DECISIONS.md) | Settled VM architecture decisions (master reference) |
 | [VM ISA](docs/VM_ISA.md) | Instruction set architecture and semantics |
 | [VM Compiler](docs/VM_COMPILER.md) | The 5-pass compiler pipeline |

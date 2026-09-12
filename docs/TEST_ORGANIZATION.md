@@ -757,3 +757,64 @@ cargo bench --package patina-benchmarks
 > Unit tests verify component correctness in isolation.
 > Integration tests verify the full interpreter works end-to-end.
 > Compliance tests verify R7RS spec adherence across all backends.
+
+## Local build performance (measured 2026-09-11)
+
+Historical measurements from the agent instructions, retained for troubleshooting.
+These timings describe one machine and checkout; diagnose current slow builds
+before cleaning artifacts, and avoid cleaning a target directory another session uses.
+
+**Locally, the whole Rust gate costs well under a minute — when `target/` is
+healthy.** Measured 2026-09-11 on 10-core Apple silicon, 51 test binaries,
+after touching `patina-vm/src/runtime/vm_state.rs`, which every test binary
+links, so this is the worst realistic case:
+
+| Command | Time |
+|---|---|
+| `cargo build --release` — the repro, the chibi lanes, the benchmarks | **3.2 s** |
+| `cargo test -p patina-tests --test <one file> --no-run` | **0.5–5.5 s** |
+| `cargo test --all --lib --tests` | **2.5 s** to build, **29 s** to run |
+| `cargo clippy --all-targets --all-features` | **1.3 s** |
+| any of them again with no edit in between | 0.1 s |
+| from `cargo clean`: release, all tests, clippy | 11 s, 28 s, 6 s |
+
+So run the full local gate whenever you want the answer before CI has it —
+writing a PR description that states a result, bumping `rust-toolchain.toml`,
+or a change whose blast radius you cannot bound. Clippy and `cargo test` do not
+evict each other's artifacts, and the workspace's only non-default feature
+(`patina-tree-walker/verbose-tracing`) gates no code, so neither is a reason
+to rebuild (measured 2026-09-06).
+
+**When those numbers are 100× worse, `target/` has rotted: run `cargo clean`.**
+On macOS, cargo's default `split-debuginfo = "unpacked"` leaves each test
+binary's debug info in its object files beside it in `target/debug/deps`, and
+nothing deletes the old ones, so every full test build leaves about 1,100
+`*.rcgu.o` files behind. By 2026-09-11 the main checkout held 1.9 million of
+them (69 GB on disk). rustc scans that directory on every invocation, so a
+full test rebuild took **220 s** and clippy **220 s** where a healthy tree
+takes 2.5 s and 1.3 s. Deleting `target/debug/incremental` alone did not help.
+
+That rot, not the number of test binaries, is what this section used to
+measure — 493 s for `cargo test`, 580 s for clippy, explained as "87 binaries
+× ~6 s". An A/B on one machine settled it: in fresh target directories the
+tree before #193 rebuilt its 87 test binaries in 4 s and today's tree its 51 in
+2 s, while today's tree took 220 s in the rotted directory. A test binary costs
+about 0.05 s per full rebuild.
+
+Check with `find target/debug/deps -name '*.o' | wc -l`: thousands are
+normal, a million is the state above. `cargo clean` took 256 s to delete 1.9
+million files, and everything rebuilds from scratch in about 45 s. The root
+fix would be `split-debuginfo = "packed"` in `[profile.test]`, which leaves no
+object files, but `dsymutil` then runs for every binary and a full test
+rebuild takes 9.8 s instead of 2.5 s — measured, not adopted.
+
+**#193's outcome, corrected.** It took the workspace from 87 test binaries to
+**51** (`find crates -path '*/tests/*.rs' -not -path '*/tests/*/*' | wc -l`),
+across 56 suite files and 1757 rows. Its build-time case was the rotted
+directory, so the binaries it removed saved about 2 s a rebuild, not minutes.
+On a healthy target a test is cheap to add in either form: a row in an
+existing `.scm` file needs no rebuild (0.1 s), a new `.scm` file needs a
+`SUITE` entry and so recompiles the driver (1.0 s), and a new `.rs` file
+compiles and links in 0.4 s. What #193 bought is the rest of its case: one
+suite that every backend runs, and chibi and Gauche arbitrating every row
+through `crates/patina-tests/tests/scheme/DIVERGENCES.tsv`.
