@@ -1,6 +1,79 @@
 # Package Manager Design: `patina pkg`
 
+**Status — 2026-09-12:** design proposal, not an implemented command. Library resolution already
+works; [#195](https://github.com/avalonalex/patina/issues/195) tracks acquisition. Investigate the
+existing Snow installer before choosing the broader fetcher proposed below. Bundling follows
+[the current policy](../phase2/R7RS_LARGE_STATUS.md#bundling-policy): R7RS-large libraries,
+including drafts, and SRFIs are eligible; other implementations' libraries stay external.
+
+## #195 investigation: Snow installation layout
+
+**Measured 2026-09-12:** Snow's `generic` target can install source libraries into a root Patina
+consumes without loader changes. This establishes a local installation path, not yet a complete
+end-user acquisition workflow or a reason to close #195.
+
+Used Homebrew's `snow-chibi` / Chibi 0.12.0 and the existing `target/release/patina` (version
+0.1.0), on both backends. All installs went into temporary roots, with isolated configuration and
+repository cache. Archives were reconstructed from the committed corpus or original synthetic
+fixtures, not downloaded release archives. Package suites were skipped during installation and
+the installed libraries were exercised separately. No runtime was rebuilt for this investigation.
+
+| Case | Installation and execution result |
+|---|---|
+| `(chibi irregex)` 0.9.3, whose archive has a top-level `irregex.sld` | Snow installed `chibi/irregex.sld` and `chibi/irregex.scm`; both Patina backends found `"123"` in `"abc123def"` through `irregex-search` |
+| `(chibi match)` 0.9.1, with nested `include "match/match.scm"` | Installed declaration and nested include; matching `(20 22)` and adding its elements returned `42` on both backends |
+| Three synthetic packages: `(example top)` → `(example middle)` → `(example leaf)` | Requesting only `top` from a local Snow repository installed all three, relocating their declarations and includes; both backends returned `42` |
+| Search-path boundary | `(chibi match)` failed without its external root and returned `42` with either `-A` or `PATINA_LIBRARY_PATH`, on both backends |
+| Project default | The installed dependency chain also returned `42` from `./.patina/lib/` without path flags, on both backends |
+
+The exercised CLI shape, with `scratch` naming a temporary directory and `config.scm` containing
+an isolated `input-history` path, was:
+
+```sh
+SNOW_CHIBI_CONFIG="$scratch/config.scm" snow-chibi \
+  --implementations generic --always-no \
+  --repo "$scratch/repo.scm" \
+  --local-user-repository "$scratch/cache" \
+  --install-library-dir "$scratch/installed" \
+  install --skip-tests --use-sudo never '(example top)'
+patina -A "$scratch/installed" "$scratch/main.scm"
+```
+
+For the two corpus packages, an archive pathname replaced the library name and an empty local
+repository replaced the fixture index. Those runs establish local archive installation; they do
+not establish dependency resolution against the live Snow index.
+
+**The include relocation already exists upstream.** Snow runs `default-builder` before
+`default-installer`: the builder copies includes relative to the relocated declaration and
+returns updated library metadata. Verified in the installed 0.12 source and the local Chibi
+checkout at `186e06597c1fbecb48c7a396df2f39c229dcc405`, then exercised by the irregex install.
+`crates/patina-compat/src/run.rs`'s comment claiming Snow leaves those includes unreachable
+describes the installer in isolation and needs correction. Patina's harness still needs its own
+staging because it runs extracted source without invoking Snow's builder.
+
+**Next work, before choosing a fetcher:**
+
+1. Repeat with downloaded, pinned archives and the live index, including a real transitive
+   dependency chain. Record package versions, checksums and how to reproduce an install offline.
+2. Check feature-dependent metadata against Patina. `generic` is a layout target; it does not
+   provide Patina's feature or bundled-library inventory. In particular, verify `(library …)`
+   choices and that installation does not replace shipped SRFIs with unsuitable copies.
+3. Exercise packages needing Patina adaptations. Upstream `(chibi filesystem)` has no portable
+   fallback; a correct installation layout cannot supply the Patina branch maintained in
+   `test-lib/`. Define how users obtain such adaptations without bundling a Chibi API.
+4. Document a supported project-local workflow if these checks pass. Chibi would be an optional
+   acquisition tool, with ordinary Patina execution and routine CI using installed/pinned sources
+   offline. A standalone Patina fetcher is warranted if the external tool or its target model
+   cannot meet that workflow; the six phases below are not prerequisites for library loading.
+
+The existing removal of `lib/chibi/` is complete. Further cleanup should audit public APIs and
+their dependencies against the policy, retaining eligible SRFI/R7RS-large libraries regardless
+of where their implementations originated. Acquisition removes pressure to bundle a foreign API;
+it does not make a standard library ineligible.
+
 ## Summary
+
+The remainder is the broader `patina pkg` proposal, contingent on the investigation above.
 
 A lightweight package manager for Patina that downloads dependencies into a local directory and adds it to the library search path. Compatible with existing Scheme ecosystems (Akku, Snow/snow-fort.org) rather than building a competing registry.
 
@@ -123,30 +196,22 @@ Records exact versions and checksums for reproducible installs:
 
 ## Integration with Existing Library Loading
 
-The integration point is minimal — just one new search path.
+**The search-path hook is implemented.** Current CLI order, from
+`crates/patina-runtime/src/library_registry.rs` and `crates/patina-repl/src/main.rs`:
 
-### Current search path order (from `LibraryRegistry::with_default_paths()`):
+1. `-I` directories, in flag order
+2. `PATINA_LIBRARY_PATH` entries
+3. `./lib/` — project's own libraries
+4. `./.patina/lib/` — installed project dependencies
+5. `$PATINA_HOME/lib/`, if set
+6. Workspace/executable-relative library roots
+7. `-A` directories, in flag order
+8. The script's own directory
 
-1. `./lib/` — project's own libraries
-2. `$PATINA_HOME/lib/` — global libraries
-3. Workspace root `/lib/` — development
-4. `<exe>/../lib/` — bundled R7RS stdlib
-
-### New search path order:
-
-1. `./lib/` — project's own libraries
-2. **`./.patina/lib/`** — installed dependencies (NEW)
-3. `$PATINA_HOME/lib/` — globally installed packages
-4. Workspace root `/lib/` — development
-5. `<exe>/../lib/` — bundled R7RS stdlib
-
-**Implementation:** Add one line to `LibraryRegistry::with_default_paths()`:
-```rust
-// 1.5: .patina/lib/ (project dependencies)
-registry.add_search_path(PathBuf::from("./.patina/lib"));
-```
-
-That's it. No changes to the loader, parser, or import system.
+The first matching library wins. `./lib/` and `./.patina/lib/` are relative to the working
+directory; there is no project-root discovery implied here. Installation must preserve relative
+includes and place declarations where their import names resolve. The loader searches `.sld`
+then `.sls` within each root; R6RS source support remains bounded by the implemented bridge.
 
 ## Source Compatibility: Akku & Snow
 
@@ -206,13 +271,13 @@ patina pkg install --global (chibi test)
 Minimum viable: `patina pkg init`, `patina.pkg` manifest, `--path` dependencies only.
 
 - Parse `patina.pkg` manifest using Patina's own reader
-- Add `.patina/lib/` to search paths
+- Use the existing `.patina/lib/` search path
 - Copy/symlink local path dependencies into `.patina/lib/`
 - This alone is useful for multi-project Scheme development
 
 **Changes:**
 - New crate: `patina-pkg` (CLI subcommand)
-- One-line change to `LibraryRegistry::with_default_paths()`
+- No new search-path hook required
 
 ### Phase 2: Git dependencies (1 week)
 
@@ -308,7 +373,7 @@ Keep it simple initially:
 
 | What | Where | Change |
 |------|-------|--------|
-| Search path | `patina-runtime/src/library_registry.rs` | Add `.patina/lib/` path |
+| Search path | `crates/patina-runtime/src/library_registry.rs` | Already searches `.patina/lib/` |
 | CLI subcommand | `patina-repl/src/main.rs` | Route `pkg` subcommand |
 | Package manager | New: `crates/patina-pkg/` | Manifest parsing, download, install |
 | Manifest parsing | `patina-pkg` | Reuse Patina's reader for s-expr parsing |
