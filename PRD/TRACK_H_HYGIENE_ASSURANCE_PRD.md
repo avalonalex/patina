@@ -1,21 +1,21 @@
 # Track H — Hygiene Assurance PRD
 
 **Created:** 2026-08-31
-**Status:** Proposed — no work item started. Written the day the hygiene queue
-(triage families 36 and 38) closed with the matrix at 28 of 28, because closing
-it exposed the method's ceiling: every one of families 33–39 was found by
-accident, and the fix for each was measured against a hand-enumerated grid.
-This track exists so the *next* family is found by a machine.
-**Scope decision:** **test the property, not the patches.** Hygiene has a
-formal statement — expansion is invariant under α-renaming — and that statement
-is checkable by metamorphic testing, property-based testing, and bounded
-verification, none of which need a theorem prover or an external oracle for
-their first and highest-value increments. Full mechanized verification of the
-expander is explicitly deferred (§4 H5): no community artifact exists to adopt,
-and a hand-built model would drift from the Rust.
-**Dependencies:** none on open PRs. H1 and H2 build only on `main`; H3 needs
-the chibi/Racket harness that scored the matrix on 2026-08-28 made
-repeatable.
+**Updated:** 2026-09-12 — corrected renaming properties and acceptance criteria;
+reviewed implementation status against `main` after #282.
+**Status:** Proposed — H1–H3 have no completed implementation deliverable;
+H4 is unevaluated and optional; H5 remains deferred. Existing regression
+matrices and oracle lanes are foundations, not completion of this track.
+Written when triage families 36 and 38 closed with the matrix at 28 of 28:
+hand-enumerated regressions still leave discovery to chance. This track exists
+so the next family is found by generated tests.
+**Scope decision:** test binding-aware properties over a specified subset,
+with metamorphic and property-based tests before considering verification.
+Uniform spelling substitution alone does not test capture avoidance. Full
+mechanization is deferred to H5; a separate model risks drifting from Rust.
+**Dependencies:** start with H2, then H1; they can be developed independently.
+H3 builds on H1's generator and shrinker and needs a repeatable Chibi/Racket
+runner. H4 is an optional evaluation after H2. Work item IDs remain stable.
 
 ---
 
@@ -42,37 +42,46 @@ What exists today, to build on rather than duplicate:
 
 | Instrument | What it gives | Its ceiling |
 |---|---|---|
-| `crates/patina-tests/tests/hygiene_matrix.rs` | 28 shapes (7 binders × site × read/write), scored against chibi 0.12 **and** Racket 9.3, pinned in both directions | Hand-enumerated; its own header lists six axes it does not cover |
+| `crates/patina-tests/tests/hygiene_matrix.rs` | 28 shapes (7 binders × site × read/write), scored against chibi 0.12 **and** Racket 9.3, pinned in both directions | Hand-enumerated; its own header lists additional axes it does not cover |
 | `PATINA_SCOPE_TRACE` | What scope set a binding actually carries, and how a reference resolved, per phase | Explains a failure; finds nothing on its own |
-| Ambiguity as an error (Flatt's rule, PR #134–#137) | A reference two incomparable bindings could answer is refused, everywhere | Catches under-determination, not capture |
+| Ambiguity as an error (Flatt's rule, PR #134–#137) | Read resolution refuses a reference with no candidate containing all other eligible candidates | Catches under-determination, not capture |
+| `scripts/run_suite_oracles.sh` | Repeatable Chibi/Gauche comparisons with classified divergences | Fixed suite inputs; not H3's generated Chibi/Racket lane |
 | Corpus + Larceny lanes | Real-world programs | Discovery by accident — the lesson of families 33–39 |
 
-The gap: nothing *generates* programs, and nothing states hygiene as a
-property quantified over all programs.
+The gap: no hygiene program generator, binding-aware metamorphic harness,
+or generated resolution-kernel property suite exists. `scope_resolve` has
+example-based unit tests; these do not satisfy H2. Known expected failures
+remain outside the 28 matrix shapes, including introduced definitions (#269)
+and cross-expansion globals (triage family 40). Green CI includes these
+quarantines; it is not a claim that all hygiene behavior is correct.
 
 ## 2. The property
 
-Hygiene has a standard formal statement: **expansion commutes with
-α-renaming** (Herman & Wand, *A Theory of Hygienic Macros*, ESOP 2008;
-restated algorithm-independently in Adams, *Towards the Essence of Hygiene*,
-POPL 2015). Rename a program's identifiers consistently and the observable
-behavior must not change.
+Hygiene preserves binding relationships through expansion. The cited
+α-equivalence results require a definition of binding, not a substitution
+of one spelling everywhere. Herman & Wand use explicit binding
+specifications; Adams explains why arbitrary unexpanded macro syntax does
+not itself reveal its binding structure.
 
-Two consequences make this directly testable:
+For example, suppose a macro's reference to global `x` is incorrectly
+captured by a local `x`. Replacing every `x` with `fresh-x` preserves the
+collision: the buggy expander can give the same wrong answer twice. Renaming
+only the local binder and the references belonging to it breaks the accidental
+capture while preserving the intended program. This is the transformation H1
+must exercise.
 
-1. **Every capture defect is spelling-sensitivity.** Family 36's silent shape
-   is precisely "rename the use-site `x` and the answer changes from 5 to 1."
-   A test for spelling-sensitivity is a test for the whole defect class,
-   including members nobody has written down yet.
-2. **Uniform whole-program renaming needs no oracle.** Renaming one spelling
-   to a fresh one — every occurrence, its `define` included — preserves
-   semantics under *any* correct implementation. Patina can be checked
-   against itself: run the original and the renamed program, demand the same
-   answer. No chibi, no Racket, no reference expander in the loop.
+The first implementation therefore uses a small generated language with
+explicit binder identities and reference edges. Those relationships come
+from the generator's specification, independently of Patina's resolver.
+Serialize an original program and binding-preserving variants, then compare
+observable results on each backend separately. VM/tree-walker agreement is
+additional evidence, not an oracle for a shared frontend defect.
 
-The SRFI 101 episode that surfaced families 33–35 was this experiment run by
-accident: the library's shadowing names *were* an adversarial renaming. This
-track runs it on purpose.
+Uniform whole-program spelling permutation may be a supplementary check over
+this restricted language, but is neither sufficient capture coverage nor a
+replacement for the historical-failure acceptance test. Imported names,
+keywords, quoted data, syntax-rules literals, and constructed symbols cannot
+be treated as ordinary variable occurrences.
 
 ## 3. Goals
 
@@ -102,105 +111,149 @@ track runs it on purpose.
 
 ## 5. Work items
 
-### H1 — α-renaming metamorphic harness *(first: oracle-free, days of work)*
+| Item | Tracking | Status |
+|---|---|---|
+| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Implementation not started |
+| H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Implementation not started |
+| H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Implementation not started |
+| H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
+| H5 | No issue until the syntax-case boundary | Deferred |
 
-A test pass that, given a Scheme test program:
+### H1 — binding-aware metamorphic harness *(oracle-free, after H2 in priority)*
 
-1. picks an identifier spelling written in the program (binder or global),
-2. renames every occurrence uniformly to a fresh spelling (its `define`
-   included),
-3. runs original and renamed on both backends, and
-4. asserts the outputs agree — with the renaming applied to the expected
-   output, so a printed symbol renames with the program.
+Implement a bounded generator in `patina-tests` whose syntax carries stable
+binder identities and references to those identities, plus explicit
+macro-definition and use-site contexts. Start with the matrix's seven binder
+forms, inside/outside sites, and read/write directions. The generator owns
+the binding specification; do not ask Patina to determine the edges being
+tested, and do not rewrite arbitrary source with textual replacement.
 
-Seed sources, in order: the matrix's 28 programs × every user identifier in
-each; the hygiene repros from the Larceny families, which #193 Phase 1
-redistributed out of `larceny_families.rs` into
-`tests/scheme/expansion/hygiene.scm`, `let-syntax.scm`, `ellipsis.scm` and
-`template-references.scm` (family 40's three are the last section of
-`hygiene.scm`, scoped to expect the VM to fail); then `scheme_tests` programs; eventually corpus
-files.
+For each supported seed:
 
-Known edge discipline (each is a skip-rule, not a blocker): programs that
-construct symbols with `string->symbol` or compare against quoted symbols
-whose spelling is load-bearing are skipped or have their expectations
-renamed too; error outcomes compare by error *class*, never message text
-(messages contain names); `PATINA_SCOPE_TRACE` stays available for
-explaining any failure the harness finds.
+1. Emit an original program with intentional spelling collisions.
+2. Rename one binder and exactly its bound references to a fresh spelling,
+   preserving macro definition-site references to other bindings. Exercise
+   both read and assignment occurrences.
+3. Emit controlled poison-shadow variants: add a colliding use-site binder
+   for a macro's definition-site reference only when the generator establishes
+   that it changes no argument binding or other source-level reference.
+   Wrapping arbitrary `(m x)` in a new `x` binding is not invariant.
+4. Run each variant on both backends. Within each backend, compare termination,
+   values and relevant ordered effects against the original. Compare backend
+   answers separately; two implementations sharing a frontend can agree wrong.
 
-**Acceptance:** harness lives in `patina-tests` and runs in the normal
-`cargo test` gate. **Non-vacuity** (repo practice — the baseline is the
-pre-fix commit, not a stash): pointed at `c18f1edf` (main before the family
-36/38 fixes), the harness must fail on the matrix's silent-capture shape;
-pointed at current main, it must pass everything it is seeded with.
+Use the 28 matrix programs as the first seed templates. Extend to targeted
+repros in `tests/scheme/expansion/{hygiene,let-syntax,ellipsis,template-references}.scm`
+only after their binding forms are represented. Arbitrary suite/corpus source
+rewriting is deferred, not an implied first milestone. Preserve quoted data;
+exclude reflective symbol construction, `eval`, unsupported binding forms,
+and unspecified-order effects from the initial language. Report exclusions.
+Compare intentional errors by class, not name-bearing messages, in a separate
+negative-test set; two rejected positive programs are not a successful case.
+Timeouts and crashes are distinct failures, never equivalent outputs.
 
-### H2 — property tests on the resolution kernel *(a day; pure Rust)*
+**Acceptance:** normal `cargo test` gate with deterministic seeds, a fixed case
+budget and time bounds; recorded eligible/executed counts and nonzero coverage
+of each advertised axis. A failing report contains source, transformation,
+seed and backend. A shrinker preserves binding relationships and the failure;
+its result can become a matrix row. Quarantines must name a specific defect
+and fail on unexpected success; do not skip a whole axis to obtain green.
 
-`proptest` suites in `patina-core` over randomly generated scope tables and
-references, encoding the invariants that regressed as universally quantified
-properties:
+**Non-vacuity:** first demonstrate the binding-specific rename detects the
+silent-capture case on historical commit `c18f1edf`, then passes on current
+main. Record the exact seed and result. Demonstrate on that same case why
+uniform spelling replacement alone misses the defect. This is the first
+experiment, before building a larger harness. Current known defects found
+by the harness become explicit regressions and separate fixes, not changed
+metamorphic expectations.
 
-| Property | The family it encodes |
+### H2 — property tests on the resolution kernel *(first priority; pure Rust)*
+
+Add `proptest` suites in `patina-core` over bounded scope sets, ordered
+candidate tables and environment chains. Include empty tables, invisible
+bindings, identical-scope ties, incomparable eligible candidates, and distinct
+bindings holding equal values. State the supported domain explicitly; random
+tests sample it and do not constitute a universal proof.
+
+| Property | Precise outcome and regression family |
 |---|---|
-| On ⊆-chains, resolution is total and never ambiguous | 39 — nested binders accumulate, chains always decide |
-| A reference writes the binding it reads: `set_with_scopes` and `get_with_scopes` land on the same binding for any table | 38 — closed as six separate repros over several PRs; here it is one line |
-| The by-name fallback never returns a binding `is_candidate` rejected for the reference | 36 (step 1) |
-| Resolution is deterministic; an identical-scope-set tie is decided by recency and reported, never raised | 39's TIE half |
+| Chain resolution | Eligible candidates ordered by subset cannot be ambiguous. Return no binding when none is eligible; otherwise select the greatest eligible scope set, breaking identical-set ties by recency. Family 39. |
+| Read/write symmetry | For a uniquely resolvable reference, reading and assignment select the same binding identity, not merely equal values. Check with a fresh sentinel and inspect all bindings. Ambiguous references must be rejected without mutation; unbound references must not create or change a binding. Family 38. |
+| Fallback respects rejection | A by-name fallback cannot recover a scoped binding rejected for this reference. Distinguish that binding from a legitimately visible plain binding of the same spelling. Family 36 step 1. |
+| Determinism and ties | Fixed inputs and candidate order produce the same result. Identical-scope ties select the most recent candidate and remain reportable, not ambiguous. Recency is part of the input; candidate permutation is not generally invariant. Family 39. |
 
-**Acceptance:** each property names its family in a comment. Non-vacuity:
-reverting `set_with_scopes` to exact-match (the pre-#137 rule) makes the
-symmetry property fail within the default case budget.
+**Acceptance:** runs in normal `cargo test`; every property names its family
+and input domain. Use reproducible seeds, bounded cases, and shrinking;
+record seed, minimized table/environment and outcome. Historical non-vacuity:
+the pre-#137 exact-match write rule fails a valid subset read/write case
+within the fixed budget. Record the historical revision and case, then verify
+the corrected behavior on main. Any controlled mutation is supplemental and
+must be documented, not substituted silently for the historical check.
 
-H2's properties are also the named guards for Track Q's hygiene consolidation
-queue (`PRD/TRACK_Q_QUALITY_PRD.md` Q7): in particular, the write-path
-unification (Q7.1) is not attempted before the symmetry property exists.
+H2 may discover current failures: `set_with_scopes` still resolves writes
+separately from reads and does not enforce the same ambiguity rule. Land the
+minimal reproducer before a separate behavior-changing fix, with a narrowly
+identified expected failure if necessary. Unresolved cases stay visible; a
+property's target is not weakened to make current code pass.
 
-### H3 — poison-shadow and differential generators *(a week; needs the external harness scripted)*
+These properties guard Track Q Q7.1's later write-path consolidation. Any
+behavior correction discovered here must be separated from that refactor;
+Q7.1 starts only after its applicable properties pass without quarantine.
 
-Two generators, one discipline:
+### H3 — differential generation and shrinking *(manual or scheduled lane)*
 
-- **Poison-shadow** (oracle-free): for each macro call site in a seed
-  program and each identifier free in that macro's template, wrap the call
-  site in a binder of that spelling (`(let ((list 'poison)) …)`) and assert
-  invariance. This is family 36's shape as a generator — the matrix's
-  `outside` rows quantified over real macros instead of one synthetic `m`.
-- **Differential** (dual oracle): a small grammar over the matrix's axes
-  plus the uncovered ones (macro-generated macros, nesting depth, ellipsis
-  depth, derived binding forms, literals); run patina-VM, patina-tree-walker,
-  chibi 0.12, Racket 9.3; any disagreement is shrunk and promoted to a
-  matrix row. Requires scripting the chibi/Racket harness used to score the
-  matrix on 2026-08-28 so the run is one command.
+Extend H1's binding-aware grammar to macro-generated macros, library imports,
+expansion depth, ellipsis depth, derived binding forms, pattern literals and
+introduced globals. Reuse its controlled poison-shadow transformations and
+shrinker rather than build a second transformation engine.
 
-Generator discipline, from this repo's own recorded lessons: force
-evaluation order through `(define r …)` (never `(list (f) x)` —
-`unspecified-order-fakes-a-divergence`); generate only programs both oracles
-*accept* (agreement on rejection is not agreement on an answer — the
-matrix's own `do-var` lesson); stay out of R7RS "is an error" territory.
+Script one command to run identical generated programs on patina-VM,
+patina-tree-walker, Chibi and Racket. Record the tested versions (the existing
+matrix used Chibi 0.12 and Racket 9.3). The current Chibi/Gauche suite oracle
+script is supporting infrastructure, not completion of this deliverable.
 
-**Acceptance:** a scheduled or manually-run lane (like the Larceny lanes,
-not the per-PR gate); its first sweep either finds a defect (which becomes a
-matrix row + triage family) or establishes a clean baseline at a recorded
-program count.
+Generate positive programs in the agreed language subset. Sequence observable
+effects explicitly, avoid unspecified evaluation order and R7RS "is an error"
+territory. Record rejected, unsupported, timed-out and crashed runs separately;
+none counts as an agreeing successful program. Preserve and classify such
+cases rather than silently discard unexpected oracle failures. An intentional
+negative-program lane is separate. Missing required oracles fail the lane.
+
+Every disagreement is minimized while preserving binding structure and its
+classification, then investigated: it may be a Patina defect, oracle defect,
+language latitude or generator error. Only confirmed Patina defects become
+triage entries and regression rows asserting the justified answer. Do not
+adopt an oracle's answer by majority vote or retire an existing pin blindly.
+
+**Acceptance:** a documented manual/scheduled command, fixed replayable seeds,
+case/time budgets, per-axis generated/accepted/compared/excluded counts and
+retained minimized failures. Reproduce a historical hygiene failure, then run
+a recorded first sweep that yields either classified defects or a clean
+baseline with a nonzero compared count for each claimed axis. Demonstrate the
+shrinker on a failing seed; preserve its seed, versions and reduced source.
+The larger sweep is not required on every PR.
 
 ### H4 — bounded verification of the kernel *(optional; evaluate before committing)*
 
 The resolution kernel (`patina_core::scope_resolve` plus the environment's
-get/set pair) is small and nearly pure. Two routes, either sufficient:
+get/set pair) is small enough to evaluate two different approaches:
 
 - **Kani or Creusot on the real code**: bounded proof that for all tables up
-  to size N, resolution is deterministic, total on chains, and the fallback
+  to size N, resolution is deterministic, follows H2's chain rule, and the fallback
   respects rejection. No model-implementation gap. Evaluate first whether
   the `Rc<RefCell<…>>` environment plumbing needs the kernel extracted
   further (it is already mostly a pure module).
-- **A reference expander**: ~200 lines of Clinger–Rees renaming over a
-  mini-core, obviously correct by inspection, diffed against the desugarer
-  on H3's generated programs. This breaks the shared-frontend blind spot the
-  VM/tree-walker differential cannot: family 36 read identically wrong on
-  both backends because both trusted the same frontend.
+- **An independent reference expander** over a documented mini-core,
+  compared against the desugarer on H3's generated programs. This adds an
+  independent implementation, not a proof: it needs its own reviewed binding
+  specification and validation, and can itself be wrong. Do not assume a line
+  count or correctness by inspection. It addresses the shared-frontend blind
+  spot of comparing only Patina's two backends.
 
 **Acceptance:** a written evaluation (which route, what N or what mini-core
-subset, what it proved) even if the outcome is "not worth it" — the
-evaluation is the deliverable; commitment to more is a separate decision.
+subset, assumptions, exclusions, cost, and exactly what evidence it provides)
+even if the outcome is "not worth it" — the evaluation is the deliverable;
+commitment to more is a separate decision.
 
 ### H5 — deferred: mechanization at the syntax-case boundary
 
@@ -213,20 +266,31 @@ Parked deliberately; nothing in H1–H4 depends on it.
 
 ## 6. Sequencing
 
-H1 → H2 are independent of everything and of each other; both are per-PR
-gates once landed. H3 follows (its poison-shadow half could ship with H1's
-plumbing; its differential half waits on the scripted harness). H4 is opt-in
-after H2 shows where the kernel's edges are. No dependency on Track L; what
-H3 finds feeds the triage queue like any defect.
+Priority is H2 → H1 → H3. H1 and H2 have no implementation dependency on
+each other; both become bounded per-PR gates. H3 reuses H1's binding-aware
+generator and requires external-runner scripting. H4 is opt-in after H2,
+with H3 needed only if evaluating the reference-expander route. H5 stays
+parked; no implementation issue is needed until the syntax-case boundary.
 
 ## 7. Verification (track-wide)
 
-Every harness proves non-vacuity against a recorded historical defect commit
-before it counts as landed: check the harness out beside the defect (`git
-checkout <commit> -- <files>`), watch it fail, then watch it pass on main —
-a green gate that was never seen red proves nothing. The named anchor for
-hygiene: `c18f1edf`, the last main on which the matrix read 10 cells
-wrong.
+Every harness must detect a recorded historical defect before it counts as
+landed. Use an isolated worktree at the historical revision, port only the
+harness and required test plumbing, and document compatibility adaptations.
+Do not transplant the runtime fix along with the harness. Record revision,
+seed, case budget, command and failing semantic observation, then the result
+on main. The anchor for H1 is `c18f1edf`, the last main on which the matrix
+read 10 cells wrong. H2 records the applicable pre-#137 revision explicitly.
+
+H3 must also demonstrate shrinking. H4's deliverable is an evaluation, not a
+mandatory green harness. Existing expected failures remain named and visible;
+new failures get minimized cases and separately reviewed fixes. Distinguish a
+clean tested subset from unexplored axes, skipped cases and quarantined bugs.
+
+Documentation-only updates need path/link checks and `git diff --check`;
+implementation follows AGENTS.md's affected-test and backend verification
+requirements. Preserve the existing matrix, suite oracle classifications and
+runtime boundaries while adding these instruments.
 
 ## 8. References
 
@@ -235,10 +299,11 @@ wrong.
 - W. Clinger, J. Rees. *Macros That Work.* POPL 1991.
 - R. K. Dybvig, R. Hieb, C. Bruggeman. *Syntactic Abstraction in Scheme.*
   LSC 1992 (syntax-case).
-- D. Herman, M. Wand. *A Theory of Hygienic Macros.* ESOP 2008 — hygiene as
-  α-equivalence preservation; the property H1 tests.
-- M. D. Adams. *Towards the Essence of Hygiene.* POPL 2015 —
-  algorithm-independent restatement.
+- D. Herman, M. Wand. *A Theory of Hygienic Macros*.
+  ESOP 2008 — α-equivalence preservation with explicit binding specifications.
+- M. D. Adams. [*Towards the Essence of Hygiene*](https://michaeldadams.org/papers/hygiene/hygiene-2015-popl-authors-copy.pdf).
+  POPL 2015 — algorithm-independent criteria and the binding-structure problem
+  for unexpanded macro syntax.
 - M. Flatt. *Binding as Sets of Scopes.* POPL 2016 — Patina's model; §4's
   use-site scopes are the distinction family 39 reached by a smaller change.
 - S. Ullrich, L. de Moura. *Beyond Notations: Hygienic Macro Expansion for
