@@ -111,6 +111,14 @@ be treated as ordinary variable occurrences.
 
 ## 5. Work items
 
+| Item | Tracking | Status |
+|---|---|---|
+| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Implementation not started |
+| H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Implementation not started |
+| H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Implementation not started |
+| H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
+| H5 | No issue until the syntax-case boundary | Deferred |
+
 ### H1 — binding-aware metamorphic harness *(oracle-free, after H2 in priority)*
 
 Implement a bounded generator in `patina-tests` whose syntax carries stable
