@@ -22,11 +22,14 @@ boundary is a checked claim rather than a stated one.
 
 ## Why this root exists
 
-`PRD/phase2/R7RS_LARGE_STATUS.md` § "Explicitly out of scope" rules out
-bundling *pure-Scheme leaf libraries that are neither standard-track nor
-runtime-forced*, on the grounds that they work fine from a `-A` directory.
-Most of `lib/chibi/` was a standing exception to that rule. Measured importers
-(#194):
+`PRD/phase2/R7RS_LARGE_STATUS.md` § "Bundling policy" includes R7RS-large
+libraries (including drafts) and SRFIs, and keeps implementation-specific
+libraries external. A pure-Scheme `(chibi …)` library stays external even if
+many tests need it; a SRFI implementation sourced from Chibi can ship under
+its SRFI interface. This boundary was made explicit on 2026-09-12.
+
+The earlier cleanup (#194) reached the same outcome by measuring which
+libraries had shipped consumers. Measured importers:
 
 Importers are **as measured before any of it moved**, which is what the
 policy question turns on — the paths below are the pre-move ones and several

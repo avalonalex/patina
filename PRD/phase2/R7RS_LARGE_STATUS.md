@@ -1,6 +1,8 @@
 # R7RS-Large Status Tracking
 
-**Last Updated:** 2026-09-06 — the bundling policy gained a third addition, the standard testing
+**Last Updated:** 2026-09-12 — owner decision: R7RS-large libraries, including drafts, and SRFIs
+are in scope for bundling; libraries tied to another implementation stay external. Eligibility
+does not require immediate implementation of every SRFI. Previously 2026-09-06 — the bundling policy gained a third addition, the standard testing
 API (SRFI 64), and #193's Phase 0 then shipped it: `lib/srfi/64.{sld,scm}` exist and
 `(import (srfi 64))` resolves with no `-A`. Previously 2026-09-01 —
 bookkeeping: the header had read 2026-08-08 while the tables
@@ -145,7 +147,34 @@ Focus on completing R7RS-small before R7RS-large:
 
 ### Bundling policy
 
-**Any SRFI named in the R7RS-large standardization process is in scope for bundling.** Standard-track
+**Bundle R7RS-large libraries (including drafts) and SRFIs. Keep libraries specific to another
+Scheme implementation external.** Owner decision, 2026-09-12; this replaces the earlier restriction
+to edition members plus selected exceptions.
+
+- **R7RS-large draft membership or being a SRFI is sufficient for eligibility.** A SRFI need not
+  belong to an R7RS-large edition, require runtime support, or meet a corpus popularity threshold.
+- **Implementation-specific APIs stay out of the shipped bundle:** Chibi, Gauche, Gambit and Chez
+  libraries remain external dependencies even when pure Scheme or needed by our test lanes.
+  Those consumers supply them through `-A`, `-I` or `PATINA_LIBRARY_PATH`.
+- **Judge the API, not the origin of its implementation.** A SRFI implementation sourced from
+  Chibi is eligible under its SRFI interface. Port or internalize any implementation-specific
+  helpers instead of shipping the foreign implementation's public library namespace. SRFI 130's
+  inlined string helpers are the existing example.
+- **Eligibility sets scope; demand and implementation cost set order.** This is not a claim that
+  every SRFI already ships, or a requirement to implement all of them immediately. Runtime and
+  FFI requirements can still defer an eligible library. Record the version of any draft implemented.
+
+Patina's own public extensions and internal support libraries remain part of Patina. Other
+third-party libraries are obtained separately; [issue #195](https://github.com/avalonalex/patina/issues/195)
+tracks that acquisition workflow. SRFI 64 now falls under the general SRFI rule; `(chibi test)`
+remains external.
+
+#### Historical policy and SRFI 64 implementation record (superseded 2026-09-12)
+
+The following records why earlier ports shipped and the verification obligations they introduced.
+Its narrower eligibility rules and one-testing-library exception are superseded by the policy above.
+
+**Earlier rule: any SRFI named in the R7RS-large standardization process is in scope for bundling.** Standard-track
 SRFIs are commitments the project is making anyway, so the usual objection to bundling — that every
 bundled library is a permanent compatibility promise you cannot withdraw without a breaking change —
 does not apply. That gives a bounded, principled set: the Red and Tangerine tables above, extended as
@@ -237,8 +266,13 @@ explicitly includes **non-standard testing libraries**: `(chibi test)` is suppli
 
 ### Ordering
 
-The policy fixes the *set*; measured dependency in-degree over `compat/vendor/` fixes the *order*.
-**This queue is spent (2026-09-01), with one item added since** — every numbered item below shipped
+The policy fixes eligibility; measured missing dependencies, user needs and implementation cost
+guide the order. Reassess the queue under the broader 2026-09-12 policy: low demand no longer
+excludes a SRFI from scope. The stored corpus names SRFI 114 comparators, 146 (`scheme mapping`),
+160, 165 and 231 as missing dependencies; verify those results before choosing the next port.
+
+**Historical ordering under the earlier policy:** this queue was largely spent on 2026-09-01,
+with one item added since — every numbered item below shipped
 except the two that were always conditional, and the amendment above adds a third: **SRFI 64**
 (decided and shipped 2026-09-06 by #193's Phase 0 — and the one item in-degree does not order, for
 the reason that clause gives). The other two: **SRFI 115** (large; only if the corpus

@@ -1,7 +1,10 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
+**Updated:** 2026-09-12 — owner decision: bundle R7RS-large libraries (including drafts) and
+SRFIs; keep implementation-specific libraries external. L1 eligibility widened and L2 reframed
+around supplied dependencies, with acquisition tracked by #195. The numerical snapshots below
+have not been re-measured for this policy change. Previously 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
 the recorded repros: eight fixed entries moved to `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md` (five from
 the 2026-08-24/25 Larceny sweep that were never re-marked here, two already marked in place, and
 the quasiquoted-vector hygiene entry, which families 33–35 had fixed under it), and the
@@ -15,11 +18,12 @@ family 40 quarantined).
 packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
 deferred; L5.3's lanes: VM **22 of 33** suites clean (8447/8475), tree-walker **21 of 33**
-(8302/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1 is essentially
-spent** — the bundling queue is empty; what remains is SRFI 115 (only if the corpus justifies it)
-and the low-demand Tangerine trio 146/159/160. **L2 is the open bundling front** (`(chibi match)`,
-`(chibi io)`, `(chibi pathname)`, `(chibi show)`/SRFI 166 — the last also worth two corpus
-rows; `(chibi string)`, `(chibi optional)` and `(chibi filesystem)`'s portable half are done). The open defect queue is §6 Open plus the non-hygiene triage families;
+(8302/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1's earlier
+priority list largely shipped; its scope now includes all SRFIs and R7RS-large draft libraries.**
+Remaining work is ordered by demand and cost, rather than excluded for low popularity.
+**L2 supplies implementation-specific libraries externally:** #194–198 removed `lib/chibi/`;
+the test lanes use `test-lib/` and the vendored corpus via `-A`. End-user acquisition remains
+open in #195. The open defect queue is §6 Open plus the non-hygiene triage families;
 the exception-extent cluster (families 22+28) closed 2026-09-01, together with
 the tree-walker `guard` ordering; two quarantined defects turned out to be its
 prerequisites and landed first as #149 and #150.
@@ -60,7 +64,8 @@ The recurring porting frictions (all *resolved* for the existing 9 SRFIs) are ca
 ## 2. Goals
 - A **self-contained compatibility harness in this repo**: one command fetches, runs, and scores the corpus, with no external Scheme toolchain involved.
 - A **measured, repeatable coverage number** ("N of M libraries run") whose failure buckets *are* the prioritised work queue for everything else in this track.
-- Bundle the dependency libraries the corpus actually needs — the high-frequency SRFIs and `(chibi …)` libraries — as directed by that queue rather than by guesswork.
+- Bundle R7RS-large libraries (including drafts) and SRFIs, prioritizing measured gaps and user
+  needs. Supply implementation-specific libraries externally, even when the corpus needs them.
 - Make library loading **degrade gracefully** instead of hard-failing on benign edge cases.
 - Make external library directories usable at all (`-A`/`-I`), which is table stakes independent of any distribution mechanism.
 
@@ -131,18 +136,20 @@ supersede in-degree as the ordering signal — see L3.
 Before porting anything, establish what "popular" actually means, as data. Fetch the snow-fort repository index (an s-expression document) and inventory the chibi library tree, then count **import frequency across all packages**. Output a ranked table of imported library names with counts, checked into `compat/`. This single artefact orders L1 and L2 and sets the corpus for L3 — the candidate lists in this PRD are a *hypothesis* to be replaced by it.
 - **Acceptance:** a committed, regenerable frequency table; L1/L2 below re-ordered to match it.
 
-### L1 — Bundle the SRFIs that policy and data agree on
-**Scope is set by the bundling policy in `PRD/phase2/R7RS_LARGE_STATUS.md`, and ordering by measured
-in-degree over `compat/vendor/`.** The earlier hypothesis in this PRD — leading with SRFI 26, 13 and
-41 — was wrong and has been dropped: those are pure-Scheme leaves with in-degree ≤ 1 that the corpus
-and `-A` already cover, and none is standard-track.
+### L1 — Bundle R7RS-large libraries and SRFIs
+**Scope is set by the bundling policy in `PRD/phase2/R7RS_LARGE_STATUS.md`; measured gaps,
+user needs and implementation cost guide ordering.** Since the owner decision of 2026-09-12,
+R7RS-large draft libraries and SRFIs are eligible independently of edition membership or
+popularity. Low-demand SRFIs such as 13 and 26 are eligible too; their availability through `-A`
+is no longer a reason to exclude them from bundling.
 
-The policy in one line: bundle what R7RS-large names, plus what cannot exist without the runtime,
-plus the legacy aliases the ecosystem actually imports. Everything else stays out.
+The policy in one line: bundle R7RS-large libraries (including drafts) and SRFIs; keep Chibi,
+Gauche, Gambit, Chez and other implementation-specific libraries external. A SRFI's implementation
+may come from one of those projects; its public API, rather than its source origin, decides scope.
 
-**Everything the policy and the measurements agreed on has shipped, and the queue is flat.**
-Compressed 2026-09-01 from the item-by-item log this section used to carry (this file's git
-history has it in full); what remains uncompressed is the open remainder and the lessons.
+**The earlier prioritized wave largely shipped.** The record below was compressed 2026-09-01
+from the item-by-item log (retained in git history); it is not an exhaustive queue under the
+broader policy.
 
 Shipped, in `lib/srfi/` and `lib/scheme/`: SRFI 151 bitwise with `(srfi 60)`/`(srfi 33)` shims
 (Rust primitives; the largest measured gap at in-degree 31/19); the Red-edition `(scheme …)`
@@ -157,12 +164,12 @@ ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideq
 and — for the `(chibi …)` libraries supplied rather than bundled since
 #196/#197 — `test-lib/chibi/PROVENANCE.md`.
 
-**Still open in L1:** SRFI 115 regex — large, and only if the corpus justifies it — the
-low-demand Tangerine trio 146/159/160, and the near-free re-export shims `(srfi 6)`, `(srfi 9)`,
-`(srfi 11)`, `(srfi 39)` (R7RS base already provides the functionality; nothing in the corpus has
-asked for them yet, which is why they have kept not happening). Nothing else: no missing library is worth more than two
-packages, and the one at three, `(chibi)`, is chibi's implementation core and permanently out of
-reach.
+**Remaining L1 candidates:** SRFI 115 regex, the Tangerine trio 146/159/160, and the
+re-export shims `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 39)`. The stored corpus also names
+`(srfi 114 comparators)`, `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
+candidates to verify and prioritize, not an exhaustive list or a commitment to implement all
+SRFIs immediately. Runtime/FFI work may defer an eligible SRFI; implementation-specific `(chibi)`
+remains outside the bundle regardless of demand.
 
 Three lessons this queue recorded, kept because each corrected a filed premise:
 - *SRFI 125 needed no runtime support* — `equal-hash` was a Rust primitive all along and the
@@ -174,17 +181,34 @@ Three lessons this queue recorded, kept because each corrected a filed premise:
 - *In-degree beats intuition* — the original plan led with SRFI 26/13/41 on feel; measurement
   put 130/14 first and the corpus agreed.
 
-*Note:* SRFI 64 is lower priority than its ubiquity elsewhere suggests — Snow packages overwhelmingly
-test with `(chibi test)`, which Patina **supplies from `test-lib/`** (#197; it is not bundled, since
-nothing in `lib/` imports it — see `test-lib/README.md`). **Settled 2026-09-06:** SRFI 64 *is* to be
-bundled, by a deliberate amendment to `PRD/phase2/R7RS_LARGE_STATUS.md` § Bundling policy addition 3,
-which L1 defers to; `(chibi test)` stays supplied. The work is #193's Phase 0. Primitive-backed work goes under
+*SRFI 64 shipped in #193's Phase 0*, following the 2026-09-06 policy amendment. Under the
+2026-09-12 policy it is covered by the general SRFI rule. `(chibi test)` stays supplied from
+`test-lib/` (#197), as an implementation-specific API. Primitive-backed work goes under
 `crates/patina-runtime/src/stdlib/internal_*.rs`, registered in *both* the primitive registry and the
 library builder; aligns with `PRD/PARALLEL_TRACKS.md` Track B3.
 - **Porting patterns to reapply** (from `PRD/phase2/archive/SRFI_PORTING_ISSUES.md`): import `(scheme r5rs)` for R5RS naming (`exact->inexact` etc.); shim `:optional`/`let-optionals`/`receive`/`check-arg`; treat form-feed as whitespace (already fixed); defer arity rejection so `guard` can catch `apply` errors (already fixed); watch the VM control-op edge cases in `PRD/phase2/INSTRUCTION_LEVEL_CONTROL_OPS.md`.
 - **Acceptance:** one integration test per SRFI exercising its headline forms; `./scripts/run_chibi_tests.sh` stays 1226/1226.
 
-### L2 — Bundle the common `(chibi …)` libraries
+### L2 — Supply implementation-specific libraries externally
+
+**Current direction (2026-09-12):** Chibi, Gauche, Gambit and Chez libraries are external
+dependencies. #194–198 completed the Chibi unbundling: maintained adaptations live in `test-lib/`,
+unchanged upstream packages in `compat/vendor/`, and consumers supply their roots with `-A`.
+The stored corpus already passes `(chibi match)` and `(chibi pathname)` without bundling them.
+
+**Remaining work:** [#195](https://github.com/avalonalex/patina/issues/195) tracks obtaining and
+placing external libraries with their dependencies. Verify the installed layout, relative includes
+and dependency closure before choosing an existing installer or a Patina fetcher. Keep routine
+verification offline against pinned sources. SRFI 166 belongs to L1; `(chibi show)` remains here
+even if an implementation of one shares code with the other.
+
+**Acceptance:** programs and verification lanes resolve supplied libraries and their dependencies
+without adding another implementation's public library namespace to the shipped bundle.
+
+#### Historical L2 porting plan (bundling direction superseded)
+
+The following records the original plan and porting findings; it is not a current bundling queue.
+
 Third-party packages frequently `(import (chibi …))`; today only `(chibi test)` exists. Port from the pinned chibi checkout the harness already fetches (locally mirrored at `~/Project/reference/chibi-scheme`), in the order L0.75/L3 dictate. Each ported library also brings its upstream `*-test.sld` suite, which drops straight into the L3 corpus:
 - `(chibi match)` — pure Scheme, pervasive in chibi-authored packages. Highest leverage in this group. (✅ `(chibi optional)` turns out to have shipped long ago, with `(chibi test)` in #39 — noticed in the 2026-09-01 bookkeeping sweep; whether the SRFI ports' ad-hoc `:optional`/`let-optionals` shims can now be retired onto it is unchecked.)
 - ✅ `(chibi string)` — **done 2026-08-14**, bundled as `(srfi 130)`'s dependency rather than on its
@@ -969,7 +993,7 @@ runs the largest suite either; upstream's README records the same for chibi
 0.7.3 and Gauche 0.9.5.
 
 ## 5. Sequencing within the track
-**L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (SRFIs: pure-Scheme set first, then primitive-backed) → **L2** (`chibi` libs) → **L3 re-run**, then loop L1/L2 against the refreshed histogram until the curve flattens.
+**L0** (edge cases) → **L0.5** (CLI surface) → **L0.75** (survey) → **L3 harness + baseline run** → **L1** (bundle R7RS-large/SRFI APIs) / **L2** (supply implementation-specific libraries externally) → **L3 re-run**, then loop L1/L2 against the refreshed histogram. The 2026-09-12 policy broadens L1 beyond edition members; #195's external acquisition workflow is the next L2 investigation.
 
 **L5 is not on that loop, and that is the point.** L1/L2 raise the score against
 the corpus we have; L5 asks whether that corpus is measuring what the headline
