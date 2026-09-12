@@ -1,11 +1,11 @@
 # Track H — Hygiene Assurance PRD
 
 **Created:** 2026-08-31
-**Updated:** 2026-09-12 — H3's four-implementation sweep, historical shrinking
-and first classified findings measured on `0c992ddb` and `c18f1edf`.
+**Updated:** 2026-09-12 — H2's kernel/environment evidence combined with the
+implemented H1/H3 harnesses; discovered runtime defects remain quarantined.
 **Status:** H1's initial harness is implemented for the matrix's 28 shapes.
-H2's harness is provided by [#288](https://github.com/avalonalex/patina/pull/288),
-with three write-path defects tracked separately. H3's initial bounded manual
+H2's kernel/environment harness is implemented, with three write-path defects
+tracked in #289–#291. H3's initial bounded manual
 lane is implemented; its first sweep found defects in triage families 40/41.
 H4 is unevaluated and optional; H5 remains deferred.
 Written when triage families 36 and 38 closed with the matrix at 28 of 28:
@@ -51,10 +51,12 @@ What exists today, to build on rather than duplicate:
 | Corpus + Larceny lanes | Real-world programs | Discovery by accident — the lesson of families 33–39 |
 
 The initial gap was generated assurance: H1 now exercises binding-aware
-transformations over the matrix's subset; H2's kernel/environment properties
-are in #288. Known expected failures remain outside the 28 matrix shapes,
+transformations over the matrix's subset; H2 samples the resolution kernel
+and environment APIs; H3 compares generated programs against external oracles.
+Known expected failures remain outside the 28 matrix shapes,
 including introduced definitions (#269), cross-expansion globals (triage
-family 40), and H2's environment write-path defects (#289–#291). Green CI
+family 40), pattern literals (family 41), and H2's environment write-path
+defects (#289–#291). Green CI
 includes quarantines; it is not a claim that all hygiene behavior is correct.
 
 ## 2. The property
@@ -115,7 +117,7 @@ be treated as ordinary variable occurrences.
 
 | Item | Tracking | Status |
 |---|---|---|
-| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness in #288; behavior fixes tracked in #289–#291 |
+| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness implemented; H2-A/B/C remain quarantined in #289–#291 |
 | H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Initial 28-shape harness implemented; historical check and shrinker demonstrated |
 | H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Initial bounded lane implemented; historical shrinking demonstrated; first sweep classified (families 40/41) |
 | H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
@@ -310,6 +312,68 @@ property's target is not weakened to make current code pass.
 These properties guard Track Q Q7.1's later write-path consolidation. Any
 behavior correction discovered here must be separated from that refactor;
 Q7.1 starts only after its applicable properties pass without quarantine.
+
+#### H2 implementation and evidence — 2026-09-12
+
+The normal `cargo test` gate runs
+[`hygiene_properties.rs`](../crates/patina-core/src/hygiene_properties.rs)
+as a test-only child of `environment`, so snapshots can inspect binding
+identities without adding a runtime API. Its independent oracle uses bitmask
+inclusion, with candidate position and `(frame, scope mask)` as identities.
+It checks all generated cells after assignment and reads back a fresh sentinel
+to distinguish cells that initially held equal values. A child process checks
+that identical-scope ties still produce `TIE` diagnostics without an `AMBIG`.
+
+Supported domain: six scope IDs; ordered tables of 0–12 candidates (including
+empty scope sets); 1–4 environment frames with 0–6 insertions per frame,
+nonempty scoped bindings, optional plain bindings, both name-visible and
+scope-only entries, and initial fixnums 0–2. Environment references are
+nonempty; aliases, empty-reference name lookup, heap values, GC, and
+frontend/backend integration are excluded. Equal-scope redefinitions replace
+the existing cell without moving its insertion position. Every generated
+property uses seed **284**, **256 cases**, and at most **4096 shrink steps**
+with locked `proptest` **1.11.0**. Failure messages retain the minimized input
+and expected/actual outcome; no machine-local seed file is required.
+
+Historical non-vacuity was measured in an isolated worktree at
+**`5b93bf736be8f19b733cdc61bb1da001dc543227`**, the parent of #137
+(`6a86e21`). The public-API probe is
+[`hygiene_subset_property.rs`](../crates/patina-core/tests/hygiene_subset_property.rs),
+test `family38_proper_subset_write_reaches_read_binding`. Porting required
+only the `proptest` dev dependency/lockfile, `"x".to_string()` at the old
+definition API, and removal of the read-result `.unwrap()` because the old
+API returned `Option` directly. No runtime source or toolchain was changed.
+
+Run in either checkout:
+
+```bash
+cargo test -p patina-core --test hygiene_subset_property family38_proper_subset_write_reaches_read_binding -- --exact --nocapture
+```
+
+With seed 284 and the budget above, the historical run exits **101**, shrinking
+to `(mask=1, depth=1, value=0)`: one root binding `x` at `{S0}`, reference
+`{S0,S5}`, successful read of `0`, but assignment of `999` returns `Err("x")`.
+The same generated property passes on the current main runtime (`1393c8f`),
+as does the explicit regression `family38_scoped_write_updates_a_proper_subset_binding`.
+This is a run against historical Rust, not a controlled mutation.
+
+The following minimized cases remain open. Masks use bit `n` for `Sn`;
+frames are root first, insertions oldest first, and all initial values are 0.
+They exercise the environment API; their reachability from Scheme is not
+established by this harness.
+
+| Quarantine | Minimal environment and reference | Required / observed outcome |
+|---|---|---|
+| H2-A ambiguous write | One frame, scoped `x` at masks 1 and 2; reference 3 | Reject with no mutation / writes 999 to mask 2 |
+| H2-B binding identity | Root scoped `x` at mask 3, child at mask 1; reference 3 | Write root mask 3 / writes child mask 1 |
+| H2-C plain fallback | Empty root, child plain `x`; reference 1 | Write child plain binding / returns `Err("x")` |
+
+Each quarantine checks its named failure and rejects unexpected success.
+The arbitrary-environment symmetry property classifies those same input
+shapes independently of the observed result; all generated cases execute.
+Other mismatches fail normally. Run `cargo test -p patina-core --lib
+hygiene_properties -- --nocapture` to print the three minimized outcomes.
+Correcting them is separate work and still blocks Q7.1.
 
 ### H3 — differential generation and shrinking *(manual or scheduled lane)*
 

@@ -1449,3 +1449,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "hygiene_properties.rs"]
+mod hygiene_properties;
