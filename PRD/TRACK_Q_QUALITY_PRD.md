@@ -162,6 +162,16 @@ Chibi's extra entry on `escape+after-reenter` is explicitly recorded as a
 disagreement, and Racket's module-definition re-entry rejection is kept apart
 from a semantic answer. No runtime behavior or divergence pin changed.
 
+**Update 2026-09-11 — #174 gives the VM a control runtime boundary.**
+`runtime/control.rs` owns callable dispatch, control transfers, runtime stubs,
+and the synchronous callback bridge. Its module contract records entry/exit
+state, escape propagation, replacement versus extension, and GC deferral;
+individual helpers state their effects. The instruction dispatcher and loop
+stay in `vm_state.rs`. The unused `maybe_route_error` is removed, and live
+classifiers no longer suppress dead-code warnings. This is a mechanical move
+with explicit runtime-facing exports, not a new execution tier or a change to
+any dynamic-state rule. `docs/VM_RUNTIME.md` §4.7 links the contract.
+
 **The lesson is the one §1.2 already teaches, applied to itself, three times.**
 Every row in that table was measured, but the *cause* attached to two of them
 was inferred from the error text and never checked — a registry name in an

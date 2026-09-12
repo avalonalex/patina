@@ -734,7 +734,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             //
             // The value form runs the same instructions in the same order,
             // from a stub code object the runtime builds (`value_wind_stub` in
-            // `runtime/vm_state.rs`) — that is what makes the two forms agree,
+            // `runtime/control.rs`) — that is what makes the two forms agree,
             // and it is kept in step by hand. Changing the sequence here means
             // changing it there. See that function for the two deliberate
             // differences (an unconditional `Return`, a dedicated discard
