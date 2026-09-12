@@ -21,15 +21,16 @@ This document outlines the design for implementing `syntax-case`, the procedural
 
 1. [Motivation](#motivation)
 2. [Resolve Once, Before the Backends](#resolve-once-before-the-backends)
-3. [Current State](#current-state)
-3. [Syntax Objects](#syntax-objects)
-4. [Core Forms](#core-forms)
-5. [Hygiene Utilities](#hygiene-utilities)
-6. [Quasisyntax](#quasisyntax)
-7. [Implementation Phases](#implementation-phases)
-8. [Integration Strategy](#integration-strategy)
-9. [Testing Strategy](#testing-strategy)
-10. [References](#references)
+3. [Deferred Mechanization (H5)](#deferred-mechanization-at-the-syntax-case-boundary-h5)
+4. [Current State](#current-state)
+5. [Syntax Objects](#syntax-objects)
+6. [Core Forms](#core-forms)
+7. [Hygiene Utilities](#hygiene-utilities)
+8. [Quasisyntax](#quasisyntax)
+9. [Implementation Phases](#implementation-phases)
+10. [Integration Strategy](#integration-strategy)
+11. [Testing Strategy](#testing-strategy)
+12. [References](#references)
 
 ---
 
@@ -106,8 +107,8 @@ shared pipeline, and hand *both* backends fully-resolved code. Then:
   by-name fallback at runtime — the entire class of fallback-capture defects
   (family 36) becomes unrepresentable rather than guarded against;
 - hygiene lives in **one specified algorithm**, which is also the point at
-  which Track H's deferred mechanization (H5) stops shadowing a moving
-  implementation and starts being the spec;
+  which [deferred mechanization (H5)](#deferred-mechanization-at-the-syntax-case-boundary-h5)
+  can be tied to the implementation's specification;
 - Track Q's consolidation queue (Q7) collapses from five items into the
   removal of code the resolved IR no longer reads.
 
@@ -124,9 +125,54 @@ boundary and not a refactor of the current architecture):
    links as bindings, which is also the only known path to *fixing* that
    defect.
 3. **Cross-backend contract.** The resolved IR becomes the backend interface;
-   `hygiene_matrix.rs` and Track H's harnesses are the acceptance gate that
-   the single pass answers exactly what the two-resolver architecture answers
-   today (28 of 28 against chibi and Racket).
+   `hygiene_matrix.rs` and Track H's harnesses preserve the established correct
+   binding behavior. The 28-shape matrix passes against chibi and Racket;
+   additional shapes retain named defects. The rewrite must meet the justified
+   answers and retire the corresponding quarantines when they pass.
+
+---
+
+## Deferred Mechanization at the Syntax-Case Boundary (H5)
+
+**Status:** deferred; transferred from the completed
+[Track H assurance plan](../ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md)
+on 2026-09-12. No proof implementation or new toolchain is committed by this
+design, and no H5 issue is needed until the rewrite reaches this decision.
+
+Revisit mechanization when expansion and resolution have one specified
+algorithm and an explicit resolved-IR contract. A separate model of today's
+distributed desugarer, relinker and backend fallbacks would need to track
+several moving implementations. H4 evaluated that cost and declined an
+additional verifier or reference expander for the current architecture.
+
+Lean 4 is a candidate host: Ullrich and de Moura's
+[*Beyond Notations: Hygienic Macro Expansion for Theorem Proving Languages*](https://arxiv.org/abs/2001.10490)
+(IJCAR 2020; expanded in LMCS 2022) describes the hygienic macro system
+implemented in Lean 4. That is relevant design experience, not an existing
+correctness proof for Patina or a reason to select a proof assistant before
+the specification is settled.
+
+The future evaluation must establish:
+
+1. **Binding specification and scope.** Define identifier identity, literal
+   matching, introduced definitions, imports/phases, and generated macros.
+   State how late code from `eval`, `load` and the REPL is resolved, and which
+   forms, termination assumptions or expansion-fuel bounds are excluded.
+2. **Connection to production Rust.** Specify the refinement, extraction or
+   executable correspondence that keeps the formal algorithm aligned with the
+   shared resolver. List trusted components and assumptions explicitly.
+3. **Observable obligations.** Preserve binding relationships under renaming;
+   read and assignment must select the same binding; ambiguous or unbound
+   accesses must obey their specified outcomes. Keep H1–H3 and the matrix as
+   executable checks, including historical failures and known-defect guards.
+4. **Cost and maintenance decision.** Compare the candidate tools against the
+   actual algorithm, give a scoped pilot and reproducible proof results, and
+   name the ongoing contract/toolchain maintenance. A decision against
+   mechanization remains valid if its benefit does not justify that cost.
+
+This work belongs to the syntax-case rewrite. Current runtime fixes remain
+tracked by #289–#291 and triage families 40/41; neither a future proof nor the
+archiving of Track H closes those defects.
 
 ---
 

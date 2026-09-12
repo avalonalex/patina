@@ -1,23 +1,28 @@
-# Track H — Hygiene Assurance PRD
+# Track H — Hygiene Assurance PRD (archived)
 
 **Created:** 2026-08-31
-**Updated:** 2026-09-12 — H2's kernel/environment evidence combined with the
-implemented H1/H3 harnesses; discovered runtime defects remain quarantined.
-**Status:** H1's initial harness is implemented for the matrix's 28 shapes.
-H2's kernel/environment harness is implemented, with three write-path defects
-tracked in #289–#291. H3's initial bounded manual
-lane is implemented; its first sweep found defects in triage families 40/41.
-H4 is unevaluated and optional; H5 remains deferred.
+**Archived:** 2026-09-12 — H1–H3's initial bounded harnesses are merged in
+[#292](https://github.com/avalonalex/patina/pull/292),
+[#288](https://github.com/avalonalex/patina/pull/288) and
+[#293](https://github.com/avalonalex/patina/pull/293). H4's evaluation is complete:
+no additional verifier or reference expander is adopted for this architecture.
+**Remaining work:** runtime defects #289–#291 and triage families 40/41 stay
+open in the [defect queue](../../../scheme_tests/reports/larceny_triage.md). Closing
+this assurance track does not claim that hygiene is fully correct or proved.
+H5 is now owned by the
+[syntax-case design](../../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
 Written when triage families 36 and 38 closed with the matrix at 28 of 28:
 hand-enumerated regressions still leave discovery to chance. This track exists
 so the next family is found by generated tests.
 **Scope decision:** test binding-aware properties over a specified subset,
 with metamorphic and property-based tests before considering verification.
 Uniform spelling substitution alone does not test capture avoidance. Full
-mechanization is deferred to H5; a separate model risks drifting from Rust.
+mechanization is deferred to the syntax-case design; a separate model risks
+drifting from Rust.
 **Dependencies:** start with H2, then H1; they can be developed independently.
 H3 builds on H1's generator and shrinker and needs a repeatable Chibi/Racket
-runner. H4 is an optional evaluation after H2. Work item IDs remain stable.
+runner. H4 evaluated the next assurance options after H2/H3. Work item IDs
+remain stable for historical links.
 
 ---
 
@@ -109,7 +114,8 @@ be treated as ordinary variable occurrences.
   expander exists to adopt. A hand-built Coq/Lean model of *this* codebase
   would drift from the Rust it models. Revisit at Phase 3 (`syntax-case`):
   re-founding expansion on one specified algorithm is the moment a model is
-  the spec rather than a shadow — see H5.
+  the spec rather than a shadow — see the transferred H5 decision in the
+  [syntax-case design](../../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
 - Replacing the matrix. It stays the human-readable scoreboard and the
   landing place for shrunken counterexamples.
 
@@ -120,8 +126,8 @@ be treated as ordinary variable occurrences.
 | H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness implemented; H2-A/B/C remain quarantined in #289–#291 |
 | H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Initial 28-shape harness implemented; historical check and shrinker demonstrated |
 | H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Initial bounded lane implemented; historical shrinking demonstrated; first sweep classified (families 40/41) |
-| H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Optional evaluation; not started |
-| H5 | No issue until the syntax-case boundary | Deferred |
+| H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Evaluation complete; no additional verifier or reference expander adopted |
+| H5 | [Syntax-case design](../../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5) | Transferred; deferred until that rewrite |
 
 ### H1 — binding-aware metamorphic harness *(oracle-free, after H2 in priority)*
 
@@ -174,11 +180,11 @@ metamorphic expectations.
 #### H1 implementation and evidence — 2026-09-12
 
 The normal test gate runs
-[`hygiene_metamorphic.rs`](../crates/patina-tests/tests/hygiene_metamorphic.rs),
+[`hygiene_metamorphic.rs`](../../../crates/patina-tests/tests/hygiene_metamorphic.rs),
 with its binding model in
-[`hygiene/generator.rs`](../crates/patina-tests/tests/hygiene/generator.rs)
+[`hygiene/generator.rs`](../../../crates/patina-tests/tests/hygiene/generator.rs)
 and process isolation in
-[`hygiene/runner.rs`](../crates/patina-tests/tests/hygiene/runner.rs).
+[`hygiene/runner.rs`](../../../crates/patina-tests/tests/hygiene/runner.rs).
 It uses the existing public interpreter helpers; no resolver, expander,
 backend or dependency change is needed.
 
@@ -316,7 +322,7 @@ Q7.1 starts only after its applicable properties pass without quarantine.
 #### H2 implementation and evidence — 2026-09-12
 
 The normal `cargo test` gate runs
-[`hygiene_properties.rs`](../crates/patina-core/src/hygiene_properties.rs)
+[`hygiene_properties.rs`](../../../crates/patina-core/src/hygiene_properties.rs)
 as a test-only child of `environment`, so snapshots can inspect binding
 identities without adding a runtime API. Its independent oracle uses bitmask
 inclusion, with candidate position and `(frame, scope mask)` as identities.
@@ -338,7 +344,7 @@ and expected/actual outcome; no machine-local seed file is required.
 Historical non-vacuity was measured in an isolated worktree at
 **`5b93bf736be8f19b733cdc61bb1da001dc543227`**, the parent of #137
 (`6a86e21`). The public-API probe is
-[`hygiene_subset_property.rs`](../crates/patina-core/tests/hygiene_subset_property.rs),
+[`hygiene_subset_property.rs`](../../../crates/patina-core/tests/hygiene_subset_property.rs),
 test `family38_proper_subset_write_reaches_read_binding`. Porting required
 only the `proptest` dev dependency/lockfile, `"x".to_string()` at the old
 definition API, and removal of the read-result `.unwrap()` because the old
@@ -441,10 +447,10 @@ records actual version output and the package checksum on every run. Required
 executables, the R7RS language and the library adapter must pass preflight;
 missing or nonfunctional oracles fail before any generated case counts.
 
-[`hygiene/extended.rs`](../crates/patina-tests/tests/hygiene/extended.rs) adds
+[`hygiene/extended.rs`](../../../crates/patina-tests/tests/hygiene/extended.rs) adds
 one axis at a time to H1's binding graph. Both lanes use the same
 `Program::variants` transformation engine and
-[`hygiene/shrink.rs`](../crates/patina-tests/tests/hygiene/shrink.rs) reducer.
+[`hygiene/shrink.rs`](../../../crates/patina-tests/tests/hygiene/shrink.rs) reducer.
 Unused padding identities stay reserved when shrinking, so removing a wrapper
 does not renumber the surviving H3 bindings. Library-private and
 macro-introduced globals have identities distinct from the same-spelled
@@ -474,7 +480,7 @@ rewriting, arbitrary macro arguments, combinations of new axes, recursive
 generated macros, record types, reflective symbols/`eval`, unspecified-order
 effects and intentional negative programs remain outside this first sweep.
 
-[`hygiene/oracles.rs`](../crates/patina-tests/tests/hygiene/oracles.rs) executes
+[`hygiene/oracles.rs`](../../../crates/patina-tests/tests/hygiene/oracles.rs) executes
 the same `main.scm` on all four implementations and the same `generated.sld`
 where a library is present. Racket's collection adapter is just a `#lang r7rs`
 file that includes that `.sld`; it does not rewrite its contents. Values and
@@ -603,7 +609,7 @@ The semantic findings belong to two triage families:
   existing cross-expansion error rows, with VM-only expected failures.
 
 Both families and reduced sources are recorded in the
-[triage queue](../scheme_tests/reports/larceny_triage.md). The fixed suite's
+[triage queue](../../../scheme_tests/reports/larceny_triage.md). The fixed suite's
 expectations fail on unexpected success so a runtime fix must retire them.
 The manual H3 lane retains and fails every disagreement, including these known
 ones; the new findings are not suppressed to produce a green sweep. Existing
@@ -634,44 +640,220 @@ Validation of the harness and regression additions:
 The full Rust workspace and GC differential lanes were not rerun for this
 bounded test-harness change; no interpreter runtime or GC code changed.
 
-### H4 — bounded verification of the kernel *(optional; evaluate before committing)*
+### H4 — bounded verification evaluation *(complete, 2026-09-12)*
 
-The resolution kernel (`patina_core::scope_resolve` plus the environment's
-get/set pair) is small enough to evaluate two different approaches:
+**Decision:** retain H1/H2 as normal gates and H3 as the manual external lane.
+Do not add Kani, Creusot or a fifth expander now. Kani is the preferred option
+to reconsider for a bounded check of the production selector after a specific
+need emerges; whole-expander mechanization belongs to the syntax-case rewrite.
+H4's required deliverable was this evaluation, including a decision against
+adoption. It did not require a new proof harness.
 
-- **Kani or Creusot on the real code**: bounded proof that for all tables up
-  to size N, resolution is deterministic, follows H2's chain rule, and the fallback
-  respects rejection. No model-implementation gap. Evaluate first whether
-  the `Rc<RefCell<…>>` environment plumbing needs the kernel extracted
-  further (it is already mostly a pure module).
-- **An independent reference expander** over a documented mini-core,
-  compared against the desugarer on H3's generated programs. This adds an
-  independent implementation, not a proof: it needs its own reviewed binding
-  specification and validation, and can itself be wrong. Do not assume a line
-  count or correctness by inspection. It addresses the shared-frontend blind
-  spot of comparing only Patina's two backends.
+#### What was evaluated
 
-**Acceptance:** a written evaluation (which route, what N or what mini-core
-subset, assumptions, exclusions, cost, and exactly what evidence it provides)
-even if the outcome is "not worth it" — the evaluation is the deliverable;
-commitment to more is a separate decision.
+The source inspection and experiment use merged commit **`7892a7cf`** and
+Rust **1.97.1**, on an Apple Silicon host. `cargo-kani` and `cargo-creusot`
+are not installed; no symbolic or deductive verifier was run. Tool feasibility
+below comes from current primary documentation and inspection of the code,
+not from a successful build with either verifier.
 
-### H5 — deferred: mechanization at the syntax-case boundary
+The boundary is narrower than the original phrase "kernel plus get/set":
 
-If Phase 3 re-founds expansion on one specified algorithm (see
-`PRD/macro/SYNTAX_CASE_DESIGN.md`), that specification is the moment to
-consider a mechanized model — Lean 4 is the natural host (its own expander
-is the hygiene design built for a theorem-proving language: Ullrich & de
-Moura, IJCAR 2020). Until then a model would shadow a moving implementation.
-Parked deliberately; nothing in H1–H4 depends on it.
+- [`resolve_index`](../../../crates/patina-core/src/scope_resolve.rs) selects an
+  index from caller-ordered candidates and rejects ambiguity. It delegates
+  subset checks to the real `ScopeSet`, whose `SmallVec` holds three scopes
+  inline and spills at four. Empty sets, duplicates and caller ordering matter.
+- Error construction and tie reporting reach allocation, formatting and the
+  diagnostic `OnceLock`/mutex/file sink. The selection algorithm is mostly
+  pure, but the callable function is not a dependency-free arithmetic kernel.
+- [`Environment`](../../../crates/patina-core/src/environment.rs) has a separate
+  per-frame write search, root fallback, name-visible views, aliases,
+  `Rc`/`RefCell` tables and a heap. Proving the selector alone says nothing
+  about which candidates those paths collect or which cell they mutate.
+  H2-A/B/C are concrete counterexamples to the desired environment contract;
+  a faithful verifier would reproduce them until the runtime is fixed.
+- H3 already compares with two independent expanders and found a shared
+  frontend literal defect. Its explicit limits and known failures remain
+  visible. A new reference implementation would need evidence beyond simply
+  agreeing with both Patina backends.
+
+#### Measured bounded baseline
+
+A disposable Rust program called the production `resolve_index` twice for
+every reference and ordered table of **0–4 candidates over four scope IDs**
+(`S0`–`S3`). The independent oracle uses bitmask inclusion: select the first
+eligible set containing every eligible set, return unbound if none is
+eligible, otherwise reject as ambiguous. Payloads are all `()`, so answers
+must be compared by binding index rather than by equal values.
+
+| Result | Cases |
+|---|---:|
+| Unbound | 374,176 |
+| Selected binding | 619,884 |
+| Ambiguous | 124,420 |
+| **Total** | **1,118,480** |
+
+All results and repeated calls agreed. **67,425** selected cases had a repeated
+winning scope set, exercising the supplied recency order. The count is
+`16 × (1 + 16 + 16² + 16³ + 16⁴)`; this includes the inline/spilled storage
+boundary. The measured run made **2,236,960 selector calls in 159.68 ms**,
+excluding its **4.95-second release build**. These are one host's timings,
+not CI or model-checker performance estimates.
+
+This exhausts that input encoding, using valid scope sets constructed through
+the public API, a fixed name, logging disabled and normal allocation. It does
+not establish a symbolic proof, memory-safety proof, arbitrary scope-ID or
+table-size theorem, or environment/expander correctness. It is evaluation
+evidence, not an additional maintained gate. The complete probe is retained
+below so the measurement does not depend on a temporary worktree.
+
+#### Options and cost
+
+| Option | Concrete proposed domain and evidence | Integration and maintenance cost | Decision |
+|---|---|---|---|
+| Kani on production Rust | First pilot: the same four-scope, 0–4-candidate domain, checking returned index, ambiguity, ties and repeated-call determinism. Successful symbolic verification would cover all admitted inputs under the harness assumptions and supported semantics; larger domains need new measurements. | Pin Kani and its Rust toolchain separately; establish dependency support, unwind bounds and the diagnostic boundary. Initial planning cap: two engineering days for a pilot, plus recurring toolchain/CI upkeep. This is an estimate, not measured effort. | Best future fit for a bounded selector check; no adoption now. |
+| Creusot on production Rust | A contract over sorted scope sequences and ordered candidates could target arbitrary finite lengths. Creusot is deductive verification, not merely another bounded enumerator. Correctness is relative to preconditions, loop invariants and dependency contracts. | Specify sorted-set representation, selection and ambiguity invariants, `SmallVec`/iterator behavior and diagnostics; environment ownership needs a separate design. Initial feasibility cap: five engineering days, followed by ongoing contract and prover maintenance. No compatibility or proof-cost measurement was made. | Too much integration for the present selector-only benefit. |
+| Independent reference expander | A first mini-core could admit ≤24 AST nodes, ≤3 lexical binders, ≤2 nonrecursive single-argument transformers and expansion depth ≤3, with `lambda`, application, `quote`, `if`, `set!` and `let-syntax`. Compare resolved binding identities and ordered effects on matching H3 cases. | At least five distinct deliverables: binding specification, parser/IR, expander, canonical binding comparison, and independent validation plus shrinking. Initial planning cap: five engineering days to evaluate this limited core; full H3 parity is a separate project. | Declined. This subset excludes imports, literals, ellipses and generated definitions, so it misses the axes of the new family-40/41 cases. Extending it creates another substantial implementation to maintain. |
+
+Kani supports this host platform, and its releases use their own recent Rust
+nightly; compatibility with Patina's pinned compiler and dependencies would
+need a real pilot. Its documentation requires adequate loop-unwind bounds:
+an unwinding failure or resource exhaustion is not a proof. See
+[installation](https://model-checking.github.io/kani/install-guide.html),
+[toolchain model](https://model-checking.github.io/kani/), and
+[loop bounds](https://model-checking.github.io/kani/tutorial-loop-unwinding.html).
+
+The pilot must call the real selector and real subset operations. If diagnostics
+need isolation, record the excluded behavior and any trusted stub explicitly;
+do not replace selection or environment mutation with a model and call the
+result a proof of Rust. Kani's
+[stubbing](https://model-checking.github.io/kani/reference/experimental/stubbing.html)
+is an unstable feature and brings its own maintenance cost. The proposed pilot
+would cap each proof attempt at five minutes and retain incomplete results;
+no successful symbolic bound or runtime is claimed here.
+
+Creusot requires contracts and usually loop invariants, translates through
+Coma/Why3, and brings a separate prover installation. Its trusted specifications
+must be distinguished from verified implementations. These are documented
+capabilities, not a claim that Patina's `SmallVec`, heap or interior-mutability
+paths are already supported or verified. See the
+[quick start](https://guide.creusot.rs/),
+[loop invariants](https://guide.creusot.rs/basic_concepts/loop_invariants),
+[trusted contracts](https://guide.creusot.rs/trusted.html) and
+[installation](https://guide.creusot.rs/installation.html).
+
+**Why stop here:** the measured small selector domain is cheap to enumerate,
+while the known defects sit in environment integration and expansion. Spend
+runtime work on #289–#291 and families 40/41, retaining their failing guards.
+Reconsider Kani if a selector change needs assurance beyond H2's sampling, or
+after read/write consolidation exposes one shared decision function. Fix the
+known behaviors before Q7.1 consolidation; a kernel proof cannot discharge
+those obligations. A reference expander or mechanized specification should
+be reconsidered when the syntax-case design owns one resolution algorithm.
+These are revisit conditions, not unfinished H4 implementation tasks.
+
+#### Reproducing the evaluation probe
+
+Create a disposable Cargo binary package outside the workspace with a path
+dependency on `patina-core` at commit `7892a7cf` (adjust the checkout path):
+
+```toml
+[package]
+name = "patina-h4-probe"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "/path/to/patina/crates/patina-core" }
+```
+
+Use the Rust source below as `src/main.rs`, then run:
+
+```bash
+PATINA_AMBIGUITY_LOG= cargo +1.97.1 run --release --offline --manifest-path /path/to/probe/Cargo.toml
+```
+
+The offline command needs the crate dependencies cached. Neither a verifier
+installation nor a repository test change is required.
+
+```rust
+use patina_core::{ScopeId, ScopeSet, scope_resolve::resolve_index};
+use std::time::Instant;
+
+// Ordered tables over four scopes, including the SmallVec 3-to-4 boundary.
+const MASKS: usize = 16;
+const MAX_CANDIDATES: u32 = 4;
+
+fn expected(reference: u8, bindings: &[u8]) -> Result<Option<usize>, ()> {
+    let eligible = |mask: u8| mask & reference == mask;
+    if !bindings.iter().any(|&mask| eligible(mask)) {
+        return Ok(None);
+    }
+    // The first eligible set containing every eligible set wins. This oracle
+    // uses no production subset, length, maximum-selection or sorting code.
+    bindings.iter().enumerate().find_map(|(i, &mask)| {
+        (eligible(mask)
+            && bindings.iter().all(|&other| !eligible(other) || other & mask == other))
+        .then_some(i)
+    }).map(Some).ok_or(())
+}
+
+fn main() {
+    let started = Instant::now();
+    let sets: Vec<_> = (0..MASKS).map(|mask| {
+        let mut set = ScopeSet::new();
+        for bit in 0..4 {
+            if mask & (1 << bit) != 0 { set.add_scope(ScopeId(bit)); }
+        }
+        set
+    }).collect();
+    let mut counts = [0usize; 3]; // unbound, selected index, ambiguous
+    let mut repeated_winner = 0usize;
+    for len in 0..=MAX_CANDIDATES {
+        for mut code in 0..MASKS.pow(len) {
+            let bindings: Vec<_> = (0..len).map(|_| {
+                let mask = (code % MASKS) as u8;
+                code /= MASKS;
+                mask
+            }).collect();
+            let table: Vec<_> = bindings.iter()
+                .map(|&mask| (sets[mask as usize].clone(), ())).collect();
+            for reference in 0..MASKS {
+                let want = expected(reference as u8, &bindings);
+                let actual = resolve_index("x", &sets[reference], &table).map_err(|_| ());
+                assert_eq!(actual, want, "reference={reference} table={bindings:?}");
+                assert_eq!(resolve_index("x", &sets[reference], &table).map_err(|_| ()), actual);
+                counts[match actual { Ok(None) => 0, Ok(Some(_)) => 1, Err(()) => 2 }] += 1;
+                if let Ok(Some(i)) = actual {
+                    if bindings.iter().filter(|&&mask| mask == bindings[i]).count() > 1 {
+                        repeated_winner += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(counts.iter().sum::<usize>(), 1_118_480);
+    assert!(counts.iter().all(|&n| n > 0) && repeated_winner > 0);
+    println!("states={} unbound={} selected={} ambiguous={} repeated-winning-set={} selector-calls={} elapsed={:?}",
+        counts.iter().sum::<usize>(), counts[0], counts[1], counts[2], repeated_winner,
+        2 * counts.iter().sum::<usize>(), started.elapsed());
+}
+```
+
+### H5 — transferred to the syntax-case design
+
+Deferred mechanization is now owned by
+[the syntax-case design](../../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
+The future decision and its entry conditions live there, not in this completed
+assurance track.
 
 ## 6. Sequencing
 
-Priority is H2 → H1 → H3. H1 and H2 have no implementation dependency on
-each other; both become bounded per-PR gates. H3 reuses H1's binding-aware
-generator and requires external-runner scripting. H4 is opt-in after H2,
-with H3 needed only if evaluating the reference-expander route. H5 stays
-parked; no implementation issue is needed until the syntax-case boundary.
+The planned priority was H2 → H1 → H3; H1 and H2 could be developed
+independently. H1/H2 are now bounded per-PR gates, H3 is a manual lane, and
+H4's evaluation closes the current track. H5 moved to the syntax-case design;
+it is not a prerequisite for archiving this PRD. The named runtime defects
+remain in their live issues and triage entries.
 
 ## 7. Verification (track-wide)
 

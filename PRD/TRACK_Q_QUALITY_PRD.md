@@ -50,7 +50,7 @@ backend is the one CI exercises least. §1.2 is what that gap was already hiding
 | **No cross-backend differential test exists.** The chibi suite is run twice by two scripts and the two reports are compared by a human reading two files. | `scripts/run_chibi_tests_tree_walker.sh:7` re-execs `run_chibi_tests.sh --tree-walker`; the outputs land in `scheme_tests/reports/compatibility.md` and `compatibility_tree_walker.md` with no programmatic diff. |
 | A primitive is **registered and exported with a body that always errors.** | `with_exception_handler` returns `InternalError("with-exception-handler: not yet implemented - requires CPS integration")` — `patina-primitives/src/primitives/exceptions.rs:285-287` — yet is registered at `:369-375` and exported as `("with-exception-handler", Arity::Exact(2))` in `patina-runtime/src/stdlib/internal_errors.rs:35`. Both backends special-case the name at the call site, so the stub is reachable only as a first-class value — see §1.2. |
 | Two god objects. | `patina-core/src/heap/mod.rs` — 2,878 lines, **155 `pub fn`** (plus 51 in `heap/numeric.rs`, 2,090 lines): a ~200-method surface on the type every crate depends on. `patina-vm/src/runtime/vm_state.rs` — 3,381 lines, 56 functions. |
-| **No property or fuzz testing.** | Zero matches for `proptest`/`quickcheck`/`arbitrary`/`fuzz` across all `Cargo.toml`; no `fuzz/` directory. *(2026-08-31: the hygiene half of this gap has its own track now — `PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md`. Q3 keeps the input-facing layers.)* |
+| **No property or fuzz testing.** | Zero matches for `proptest`/`quickcheck`/`arbitrary`/`fuzz` across all `Cargo.toml`; no `fuzz/` directory at the original measurement. *(2026-09-12: the hygiene portion now has H1/H2 gates and H3's manual lane; see the [completed Track H plan](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md). Q3 keeps the input-facing layers.)* |
 | **No perf regression gate.** After ~15 PRs of Track P work, nothing in CI would catch a regression. | The scoreboard is a manual sweep against a Chibi checkout outside the repo (`~/Project/r7rs-benchmarks`); `crates/patina-tests/benches/` is Criterion-only and not run in CI. |
 | Status numbers are duplicated and have drifted. | `PRD/MILESTONES.md:5` headlines geomean **0.93×**; `PRD/TRACK_P_PERFORMANCE_PRD.md` §1.11 records **0.79×**. `PRD/SNOW_AND_PERF_ROADMAP.md:51-54`'s own housekeeping list of stale links is itself still stale. `PRD/README.md` — the directory's index — still reports **1159/1159**, calls Phase 2 "Next / Planning" (the VM shipped and is the default backend), lists `phase2/VM_BACKEND_DESIGN.md` as "(to be created)", and does not mention Tracks P, L, or Q at all. 221 markdown files / 3.7 MB under `PRD/` vs 16 under `docs/`. |
 | Generated artifacts are version-controlled, so every test run dirties the tree. | `scheme_tests/reports/{compatibility,compatibility_tree_walker}.md` and `results*.txt` — currently modified in the working tree with timestamp-and-timing churn only. |
@@ -345,9 +345,10 @@ stays fast; a nightly job may run a larger budget.
 - **Acceptance:** the three properties above run in CI; each found defect lands
   with its shrunk regression case.
 
-Hygiene properties are deliberately absent from this list: they have their own
-track (`PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md`, item H2), and H2's kernel
-properties double as the named guards for Q7 below.
+Hygiene properties are supplied by the
+[completed Track H plan](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md),
+item H2. Its kernel properties double as the named guards for Q7 below;
+the runtime corrections in #289–#291 still precede Q7.1 consolidation.
 
 ### Q4 — Reduce the `Heap` and `VmState` API surface
 `Heap` exposes ~200 public methods, and the `RefCell` borrow rule documented in

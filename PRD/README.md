@@ -31,7 +31,9 @@ Compile `CoreExpr` IR to bytecode for 5–10× speedup. New `patina-vm/` crate i
 ### Phase 3: syntax-case (Procedural Macros)
 **Status**: Designed
 
-Full `syntax-case` with `syntax->datum`, `datum->syntax`. See `phase2/SYNTAX_CASE_DESIGN.md`.
+Full `syntax-case` with `syntax->datum`, `datum->syntax`. See
+[the syntax-case design](macro/SYNTAX_CASE_DESIGN.md), including the deferred
+mechanization evaluation transferred from Track H.
 
 ### Phase 4: Gradual Typing
 **Status**: Planned
@@ -55,13 +57,15 @@ PRD/
 ├── MILESTONES.md                       # Achievement history
 ├── phase2/
 │   ├── VM_BACKEND_DESIGN.md            # (to be created) VM backend design
-│   ├── SYNTAX_CASE_DESIGN.md
 │   └── R7RS_LARGE_STATUS.md
+├── macro/
+│   └── SYNTAX_CASE_DESIGN.md           # Includes deferred mechanization (H5)
 ```
 
 ## Archive
 
 Completed research and historical documents in `PRD/ARCHIVE/`. Key references:
+- [Track H — Hygiene Assurance](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md) — H1–H3's bounded harnesses and H4's completed evaluation; runtime defects remain in their live issues and triage entries
 - `ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 - `ARCHIVE/source_info_2026_03/SOURCE_INFO_PLAN.md` — source tracking implementation
 - `ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — Phase 1 cleanup tracker
