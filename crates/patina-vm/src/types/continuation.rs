@@ -3,8 +3,6 @@
 //!
 //! See VM_ISA.md §6 and VM_RUNTIME.md §continuations.
 
-use std::rc::Rc;
-
 use super::{CallFrame, Reg};
 use patina_core::tagged_value::TaggedValue;
 
@@ -48,64 +46,12 @@ pub struct PromptFrame {
     pub exception_handler_depth: usize,
 }
 
-/// Records a `dynamic-wind` in progress.
+/// VM wind record with frame-depth-bearing exception handlers.
 ///
-/// The VM maintains a stack of these. When a continuation crossing a wind
-/// boundary is invoked, the VM runs the appropriate `before`/`after` thunks.
-#[derive(Debug, Clone)]
-pub struct DynamicWindRecord {
-    /// Identity of the `dynamic-wind` *call* this record came from. Minted by
-    /// `patina_core::next_dynamic_wind_id`, the same source the tree-walker's
-    /// record uses.
-    ///
-    /// The common prefix of two wind stacks is found by comparing these
-    /// (R7RS §6.10). That scan is positional, which matters: an id is unique
-    /// per call but **may repeat within one live stack**, because invoking a
-    /// composable continuation extends `dynamic_winds` with the records it
-    /// captured. Do not treat it as a key — a map, or a `position()` search —
-    /// without handling duplicates.
-    pub id: u64,
-    /// Thunk to call when entering this dynamic extent.
-    pub before: TaggedValue,
-    /// Thunk to call when leaving this dynamic extent.
-    pub after: TaggedValue,
-    /// The exception handlers installed where `dynamic-wind` was called.
-    ///
-    /// R7RS 6.10: "The before and after thunks are called in the same dynamic
-    /// environment as the call to dynamic-wind", and 6.11 puts the handler
-    /// stack in that environment. So a thunk run by a continuation jump gets
-    /// *this* stack, not whatever is current at the jump — which after a
-    /// `guard` has fired no longer holds the guard's handler, so an
-    /// after-thunk that raised went uncaught instead of reaching the guard a
-    /// second time (Track L §6, the `finally` rule).
-    ///
-    /// Shared, not owned: records are cloned into every captured continuation,
-    /// so a handler stack copied per clone would be a per-capture allocation.
-    /// The tree-walker's record carries the same field for the same reason.
-    ///
-    /// The depths inside are the *installing* frame depths, which mean
-    /// nothing once the stack has moved on; `install_thunk_handlers` clamps
-    /// them before the stack is made live. See there.
-    pub handlers: Rc<[ExceptionHandler]>,
-}
-
-impl DynamicWindRecord {
-    /// Push-site constructor, so the id is minted in exactly one place.
-    ///
-    /// Both call sites used to spell `patina_core::next_dynamic_wind_id()`
-    /// inline, which is two things to keep in step and the only tie between
-    /// the VM and the shared counter. `PushWind` is now the only one — the
-    /// value form of `dynamic-wind` runs that instruction too, in a stub
-    /// frame of its own.
-    pub fn new(before: TaggedValue, after: TaggedValue, handlers: Rc<[ExceptionHandler]>) -> Self {
-        Self {
-            id: patina_core::next_dynamic_wind_id(),
-            before,
-            after,
-            handlers,
-        }
-    }
-}
+/// The saved depths are the installing frame depths. `install_thunk_handlers`
+/// clamps them before making the stack live; composable invocation relocates
+/// them with the captured frames. These operations remain VM-specific.
+pub type DynamicWindRecord = patina_core::WindRecord<ExceptionHandler>;
 
 /// A captured delimited continuation (created by `AbortToPrompt` or
 /// `CaptureComposable`).

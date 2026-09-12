@@ -35,7 +35,7 @@ use std::cell::{Cell, RefCell};
 
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
-use crate::continuation::{CpsContinuation, DynamicWindRecord};
+use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::procedure::Procedure;
@@ -587,17 +587,36 @@ impl<'h> GcVisitor<'h> {
     /// stack it will run them under. A handler reachable only from a record
     /// is live for as long as the record can still run a thunk.
     pub fn visit_wind(&mut self, wind: &DynamicWindRecord) {
+        self.visit_wind_with(wind, trace_exception_handler);
+    }
+
+    /// Trace a backend's wind record, delegating only its handler payloads.
+    /// The callback must visit every GC root carried by a handler.
+    pub fn visit_wind_with<H>(
+        &mut self,
+        wind: &WindRecord<H>,
+        mut trace_handler: impl FnMut(&H, &mut Self),
+    ) {
         self.visit(wind.before);
         self.visit(wind.after);
         for handler in wind.handlers.iter() {
-            trace_exception_handler(handler, self);
+            trace_handler(handler, self);
         }
     }
 
-    /// Trace a stack of `dynamic-wind` records.
+    /// Trace a stack of tree-walker wind records.
     pub fn visit_winds(&mut self, winds: &[DynamicWindRecord]) {
+        self.visit_winds_with(winds, trace_exception_handler);
+    }
+
+    /// Trace a backend's wind stack with its handler-root visitor.
+    pub fn visit_winds_with<H>(
+        &mut self,
+        winds: &[WindRecord<H>],
+        mut trace_handler: impl FnMut(&H, &mut Self),
+    ) {
         for wind in winds {
-            self.visit_wind(wind);
+            self.visit_wind_with(wind, &mut trace_handler);
         }
     }
 
@@ -1276,6 +1295,48 @@ mod tests {
         let reused = heap.alloc_pair(TaggedValue::fixnum(5), TaggedValue::fixnum(6));
         assert_eq!(reused.heap_index(), dead.heap_index());
         assert!(heap.free_pairs.is_empty());
+    }
+
+    #[test]
+    fn wind_records_keep_thunks_and_backend_handler_payloads_alive() {
+        // A backend handler may carry more than one root. The common wind
+        // traversal must delegate all handlers and retain both thunks.
+        struct Handler([TaggedValue; 2]);
+        struct Winds(Vec<WindRecord<Handler>>);
+        impl GcRoots for Winds {
+            fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+                visitor.visit_winds_with(&self.0, |handler, visitor| {
+                    visitor.visit_slice(&handler.0);
+                });
+            }
+        }
+
+        let mut heap = Heap::new();
+        let mut winds = Winds(Vec::new());
+        for _ in 0..2 {
+            let before = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+            let after = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+            let handlers = (0..2)
+                .map(|_| {
+                    Handler([
+                        heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL),
+                        heap.alloc_pair(TaggedValue::fixnum(4), TaggedValue::NULL),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            winds
+                .0
+                .push(WindRecord::new(before, after, handlers.into()));
+        }
+        let dead = heap.alloc_pair(TaggedValue::fixnum(5), TaggedValue::NULL);
+        let stats = MarkSweepCollector::new().collect(&mut heap, &[&winds]);
+        assert_eq!(stats.last_marked.pairs, 12);
+        assert_eq!(heap.free_pairs, vec![dead.heap_index()]);
+
+        // Removing the records must release the same payloads.
+        winds.0.clear();
+        let stats = MarkSweepCollector::new().collect(&mut heap, &[&winds]);
+        assert_eq!(stats.last_swept.pairs, 12);
     }
 
     #[test]
