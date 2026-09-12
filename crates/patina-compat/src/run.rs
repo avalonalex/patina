@@ -210,6 +210,10 @@ fn run_package(
     );
 
     let mut cmd = Command::new(&config.patina);
+    // A user's installed packages must neither shadow the corpus nor fill a
+    // missing dependency and turn a failure into a pass. This also isolates
+    // bootstrap; clearing environment variables after startup is too late.
+    cmd.arg("--isolated-libraries");
     for root in &search_roots {
         cmd.arg("-A").arg(root);
     }
@@ -303,10 +307,9 @@ fn search_roots(
 /// when the package needs no staging, which is the norm).
 ///
 /// The `.sld`'s whole directory is mirrored, not just the file, so its
-/// relative `include`s still resolve from the staged copy. Snow's installer
-/// instead keeps includes at their package-relative paths, which leaves them
-/// unreachable from the `.sld`'s new home; mirroring is the same rename with
-/// that defect fixed.
+/// relative `include`s still resolve from the staged copy. Snow's builder
+/// likewise relocates includes before installation; this harness needs its
+/// own staging because it runs extracted sources without invoking that builder.
 fn stage_off_path_libraries(scratch: &Path, package: &Package) -> Option<PathBuf> {
     // Per package, since the closure can stage several and two of them could
     // otherwise want the same directory.

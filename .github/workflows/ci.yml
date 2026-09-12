@@ -41,6 +41,9 @@ jobs:
         SKIP_CHIBI_TESTS: 1
       run: cargo test --all --lib --tests
 
+    - name: Locked Snow installer integrity tests (offline)
+      run: python3 -B -m unittest discover -s scripts/tests -p 'test_*.py'
+
   chibi:
     name: R7RS Compliance (chibi suite)
     runs-on: ubuntu-latest

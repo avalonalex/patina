@@ -64,6 +64,13 @@ own code with no `(chibi …)` namespace at all, which was the point of #194.
 
 ## Who supplies it
 
+The CLI-based lanes (`patina-compat`, chibi compliance, GC differential and Larceny) enable
+`--isolated-libraries` or its startup setting `PATINA_ISOLATED_LIBRARIES=1`. They load bundled
+roots and explicitly supplied directories; user `PATINA_LIBRARY_PATH`/`PATINA_HOME`, `./lib`,
+`./.patina/lib` and the script's implicit directory cannot shadow or fill their dependencies.
+Explicit `-I`/`-A` roots still work. This does not isolate direct Rust API tests, the content of
+explicit roots, or Scheme file I/O; it is a library-search boundary, not a sandbox.
+
 | Lane | How |
 |---|---|
 | `patina-compat` | a fixed root ahead of each package's own, in `crates/patina-compat/src/run.rs` |

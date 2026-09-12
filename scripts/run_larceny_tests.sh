@@ -169,7 +169,7 @@ run_suite() {
     (
         cd "$LARCENY_TESTS_DIR" &&
         perl -e 'alarm shift; exec @ARGV' "$budget" \
-            "$PATINA_BIN" "${BACKEND_ARGS[@]}" "${LANE_ARGS[@]}" -I . \
+            "$PATINA_BIN" --isolated-libraries "${BACKEND_ARGS[@]}" "${LANE_ARGS[@]}" -I . \
             "$RUN_DIR/$suite.sps" </dev/null
     ) 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$log"
     local rc=${PIPESTATUS[0]}

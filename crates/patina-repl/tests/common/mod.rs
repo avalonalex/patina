@@ -33,6 +33,7 @@ pub fn run_patina_env(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> (Stri
         // which runs after these.
         .env_remove("PATINA_LIBRARY_PATH")
         .env_remove("PATINA_HOME")
+        .env_remove("PATINA_ISOLATED_LIBRARIES")
         .envs(envs.iter().copied())
         .current_dir(cwd)
         .output()

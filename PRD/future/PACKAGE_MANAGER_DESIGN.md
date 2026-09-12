@@ -1,8 +1,8 @@
 # Package Manager Design: `patina pkg`
 
-**Status — 2026-09-12:** design proposal, not an implemented command. Library resolution already
-works; [#195](https://github.com/avalonalex/patina/issues/195) tracks acquisition. Investigate the
-existing Snow installer before choosing the broader fetcher proposed below. Bundling follows
+**Status — 2026-09-12:** `patina pkg` remains a proposal. An explicit, locked-archive installer
+now wraps Snow for a limited project-local workflow (see below); automatic dependency selection
+is still open in [#195](https://github.com/avalonalex/patina/issues/195). Bundling follows
 [the current policy](../phase2/R7RS_LARGE_STATUS.md#bundling-policy): R7RS-large libraries,
 including drafts, and SRFIs are eligible; other implementations' libraries stay external.
 
@@ -47,11 +47,11 @@ not establish dependency resolution against the live Snow index.
 `default-installer`: the builder copies includes relative to the relocated declaration and
 returns updated library metadata. Verified in the installed 0.12 source and the local Chibi
 checkout at `186e06597c1fbecb48c7a396df2f39c229dcc405`, then exercised by the irregex install.
-`crates/patina-compat/src/run.rs`'s comment claiming Snow leaves those includes unreachable
-describes the installer in isolation and needs correction. Patina's harness still needs its own
+`crates/patina-compat/src/run.rs`'s old comment claiming Snow leaves those includes unreachable
+described the installer in isolation and has been corrected. Patina's harness still needs its own
 staging because it runs extracted source without invoking Snow's builder.
 
-**Next work, before choosing a fetcher:**
+**Follow-up questions from the initial study** (results and remaining work below):
 
 1. Repeat with downloaded, pinned archives and the live index, including a real transitive
    dependency chain. Record package versions, checksums and how to reproduce an install offline.
@@ -70,6 +70,107 @@ The existing removal of `lib/chibi/` is complete. Further cleanup should audit p
 their dependencies against the policy, retaining eligible SRFI/R7RS-large libraries regardless
 of where their implementations originated. Acquisition removes pressure to bundle a foreign API;
 it does not make a standard library ineligible.
+
+## Live acquisition, locked installs and test isolation
+
+**Measured 2026-09-12 after #296:** Snow 0.12 installed `(pfds queue)` 1.0.0 from the live
+Snow index, resolving `(pfds lazy-list)` and `(pfds list-helpers)`, both 1.0.0. Both Patina
+backends evaluated `examples/snow-queue.scm` to `(1 2 3)` using that installation. Snow's
+default transport received HTTP 400 for the HTTPS index in this environment; its `--use-curl`
+transport succeeded. No upstream source was added to Patina's bundle.
+
+### A reproducible workflow for an explicitly chosen dependency set
+
+[`scripts/install_snow_locked.py`](../../scripts/install_snow_locked.py) consumes a JSON lock
+file listing requested libraries and the complete selected archive set. It uses Snow's existing
+index/build/install commands, rather than implementing a second Scheme reader or installer.
+It never consults the live index. It supports source libraries only; git sources, installed
+programs, data files and native extensions are outside this wrapper's scope.
+
+The checked-in [PFDS lock](../../examples/snow-pfds.lock.json) records exact versions, HTTPS
+URLs and SHA-256 hashes of the **compressed archive bytes** downloaded during the live study.
+These hashes are not Snow's signature digest. Names and versions describe the selection;
+the archive hashes enforce it. The lock does not automatically calculate dependency closure:
+its author must select and verify it, and Snow must be able to resolve it from the local index.
+
+From the repository root, with Python 3.9+ and Snow installed (tested with Chibi 0.12):
+
+```sh
+# Fetch exactly the locked archives and install into a new project-local root.
+python3 scripts/install_snow_locked.py examples/snow-pfds.lock.json \
+  --cache .patina/cache --dest .patina/lib --fetch
+./target/release/patina --isolated-libraries -A .patina/lib examples/snow-queue.scm
+# (1 2 3)
+
+# Reproduce from the same cached bytes, with no downloads.
+python3 scripts/install_snow_locked.py examples/snow-pfds.lock.json \
+  --cache .patina/cache --dest .patina/reproduced-lib
+diff .patina/lib/.snow-files.json .patina/reproduced-lib/.snow-files.json
+```
+
+Each archive is checked before installation and its staged copy is checked again. A missing
+cache entry fails offline; `--fetch` downloads only missing locked archives. A checksum mismatch
+fails even with `--fetch`, rather than accepting or silently replacing changed bytes. Snow uses
+an isolated configuration and a local index built from the verified archives. Installation occurs
+in a temporary sibling directory and the finished root is published only after Snow succeeds.
+An existing destination is refused. The root retains `.snow-lock.json` and a content inventory
+in `.snow-files.json`; location-dependent Snow `.meta` files are removed, so subsequent
+`snow upgrade` is not the owner of this installation.
+
+Two independent offline installations of the PFDS lock produced identical source-file inventories;
+both backends returned `(1 2 3)` from each. The wrapper's `--fetch` path was also exercised against
+a fresh cache. Integrity tests cover changed cached bytes, wrong download hashes, missing offline
+archives, refusing an existing destination, refusing git metadata, and not publishing a failed
+installation. They run in ordinary CI without Snow or network access.
+
+**Updates are deliberate:** edit/review the lock, install into a new root, run the project's tests
+against that root, then switch the project to it. Keep the previous root until that succeeds.
+An upstream release cannot change the committed lock or an existing install. Reproducing results
+also requires a controlled Patina and installer version; archive hashes alone do not pin tool
+behavior. The installed inventory makes any resulting source transformation visible.
+
+### Keep test dependencies independent of user installations
+
+`--isolated-libraries` (or startup environment setting `PATINA_ISOLATED_LIBRARIES=1`) disables
+`PATINA_LIBRARY_PATH`, `PATINA_HOME`, `./lib`, `./.patina/lib`, and the script's implicit directory
+for library lookup, before either backend loads its bootstrap libraries. Workspace/executable
+bundled roots remain, followed by explicit `-A` roots; explicit `-I` roots precede them. Thus the
+example above consumes project dependencies while retaining Patina's bundled SRFIs. Programs
+needing their own source library directory supply it explicitly as well.
+
+`patina-compat`, both chibi compliance lanes, GC differential probes and the Larceny lane now use
+this mode. The corpus still reports **127 of 161 / 127 of 136 in scope** with a deliberately
+broken `(scheme base)` supplied via the inherited environment. Both chibi backends still pass
+1226/1226. Binary-spawn tests exercise each implicit path independently on both backends, and
+check that an explicit root restores resolution. This is not an isolation mode for Scheme file
+I/O, `load` or `include`, and direct Rust API tests do not automatically opt in.
+
+Affected Rust tests, installer integrity tests, focused clippy, formatting, and GC differential
+checks in release and debug passed. A Larceny `char` spot-check returned 138/139 on the VM and
+overflowed the tree walker's stack; rerunning with isolation disabled produced the same results.
+That comparison is not a passing Larceny lane.
+
+### What still prevents a general Snow workflow
+
+- **Feature-dependent dependency selection:** live `(chibi pathname)` installation through
+  `generic` failed while seeking `(srfi 13)`. Snow 0.12's `check-cond-expand` treats every
+  `(library …)` requirement as true, selecting an optional branch in `(chibi string)` that
+  Patina does not need. This is a resolver limitation, not a missing `.sld` search path.
+  A pinned archive set does not fix that policy; the wrapper fails on unresolved dependencies
+  rather than fetching extras or manufacturing a claim that Patina provides them.
+- **Metadata can differ between the live index and the archive:** indexing the downloaded
+  `(chibi filesystem)` archive pulled in `(chibi test)` despite `--skip-tests`. A lock must cover
+  what Snow actually reads, not just a hand-assumed runtime closure.
+- **Patina adaptations need a distribution decision:** the unmodified upstream
+  `(chibi filesystem)` declaration, supplied directly from its downloaded archive, failed on
+  both backends because `duplicate-file-descriptor` was exported but undefined. Its `cond-expand`
+  has no Patina/portable fallback. The adapted copy in `test-lib/` remains available only from
+  the project; this work does not publish a package or move it back into `lib/`.
+
+Keep #195 open for a target-aware dependency workflow and distribution of maintained adaptations.
+The next decision is whether an upstream Snow improvement/target profile can address those gaps
+or a small Patina resolver is needed. The locked wrapper is useful for verified selections now;
+it does not establish arbitrary Snow-package compatibility or implement the larger proposal below.
 
 ## Summary
 
