@@ -564,6 +564,84 @@ file's header explains the hard way.
 - The fix is the §6 entry's, not a loosening of the tree-walker back to the capture chibi rejects: scoped relinking — Track Q's consolidation queue Q7.5(b) — or the resolve-once architecture recorded in `PRD/macro/SYNTAX_CASE_DESIGN.md`. Until then the three quarantines fail the moment the VM stops answering, which is the signal to replace them with `assert_program_eval_to` error pins.
 - The matrix cannot see this family: it has no macro-introduced-global binder axis (recorded in its "Adding axes" list). The tree-walker's trace shows the refusal as `RESOLVE … via=unbound` on a name whose `BIND` two lines up is a scoped definition.
 
+**H3 positive cases, 2026-09-12.** The generated sweep at runtime `0c992ddb`
+found the opposite direction with seeds **370/371/374/375**: a private define,
+generated macro and getter share one expansion, but a source global has the
+same spelling. The generated macro must reach the private binding. The VM
+instead reaches the source global; the getter still reaches the private one.
+Renaming only the private global and its references removes the collision and
+changes the VM's answer. Tree-walker, Chibi 0.12, Racket 9.3/r7rs-lib and Gauche
+0.9.15 agree with the binding rule in
+[R7RS §4.3](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-6.html).
+This is a new positive shape of the existing global-alias defect, not an
+undefined-reference test or a reason to loosen the tree-walker.
+
+```scheme
+(define x 1)
+(define-syntax install
+  (syntax-rules ()
+    ((_ macro-name getter-name)
+     (begin
+       (define x 11)
+       (define-syntax macro-name (syntax-rules () ((_) x)))
+       (define (getter-name) x)))))
+(install read-private observe-private)
+(list (let ((x 5)) (read-private)) x (observe-private))
+;; Expected (11 1 11); VM (1 1 11).
+```
+
+With `(set! x 99)` as the generated template, sequence the macro call before
+observing the cells: expected local/source/private `(5 1 99)`, VM `(5 99 11)`.
+Both directions are now rows in
+[`expansion/hygiene.scm`](../../crates/patina-tests/tests/scheme/expansion/hygiene.scm),
+named "a generated macro reads its private global despite a source global's
+spelling" and "a generated macro assigns its private global without changing
+the source global". Both are VM-scoped expected failures; an unexpected pass
+requires removing the expectation. H3 replay and minimized sources are recorded
+in [Track H](../../PRD/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3-implementation-and-replay--2026-09-12).
+
+### 41. A template-local identifier matches a helper's differently bound literal — both backends
+
+- **Found by H3, 2026-09-12**, on runtime `0c992ddb`, seeds
+  **364/365/368/369** (ordinary `let` and internal-definition binders, read and
+  write). A helper's literal is bound in the surrounding body; another macro's
+  template binds a distinct local of the same spelling and passes that local
+  to the helper. Both Patina backends select the literal arm instead of the
+  fallback. The VM/tree-walker differential alone cannot see it.
+- **Expected answer:** [R7RS §4.3.2](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-6.html)
+  matches a literal by lexical binding, or by name when both occurrences are
+  unbound. These occurrences are bound differently. Chibi 0.12, Racket
+  9.3/r7rs-lib `dfe5a961` and Gauche 0.9.15 independently take the fallback.
+  This is a confirmed Patina defect, not majority voting over unspecified
+  behavior. The older nested-template row where Gauche disagrees remains
+  unchanged; it exercises a different shape.
+
+```scheme
+(let ((x 5))
+  (define token 1)
+  (define-syntax helper
+    (syntax-rules (token)
+      ((_ token) 799)
+      ((_ other) x)))
+  (define-syntax invoke
+    (syntax-rules () ((_) (let ((token 2)) (helper token)))))
+  (invoke))                       ; expected 5; both Patina backends 799
+```
+
+- Replacing the fallback with `(set! x 99)` and observing `x` after invoking
+  the macro should yield 99; both backends leave it at 5. The minimized read
+  and write programs are pinned in
+  [`expansion/syntax-rules-literals.scm`](../../crates/patina-tests/tests/scheme/expansion/syntax-rules-literals.scm),
+  rows "a template-local binding does not match an enclosing helper's literal"
+  and "a template-local binding selects the helper's fallback assignment".
+  Both have Patina-only expected failures; unexpected success fails the suite
+  and requires removing the expectation. The H3 manual sweep keeps these
+  disagreements red, while the ordinary suite records the known defect.
+- Investigate literal binding comparison in
+  `patina-macros/src/macro_expander/matcher/literal.rs` and the definition/use
+  scopes delivered to it. The earlier spelling-based literal observation
+  below is related context, not proof that every such case has one cause.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.

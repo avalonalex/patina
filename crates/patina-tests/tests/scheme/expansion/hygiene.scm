@@ -19,6 +19,9 @@
 ;; `syntax-rules-literals.scm`, `let-syntax.scm` and `ellipsis.scm` — running
 ;; on both backends and under chibi and Gauche. The integration-binary count
 ;; drops by one with it.
+;; Track H3 adds two positive private-global rows (2026-09-12): 43 total,
+;; including five VM-only expected failures for family 40. Both external
+;; oracles pass all 43; the tree-walker does too.
 ;;
 ;; `hygiene_matrix.rs` is not part of that and stays Rust: 28 shapes scored
 ;; against chibi and Racket, read as a table when a hygiene fix moves a row,
@@ -655,5 +658,46 @@
 (cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-error "a generated getter cannot see a different expansion's private define" #t
   (get))
+
+;; Track H3 seeds 370/371: the positive same-expansion face of family 40.
+;; The generated macro and getter share the introduced definition's binding;
+;; a source-written global with the same spelling is a different binding.
+;; R7RS §4.3's hygienic binding rule requires (11 1 11) / (5 1 99).
+;; Chibi 0.12, Racket 9.3/r7rs-lib, Gauche 0.9.15 and the tree-walker agree.
+;; The VM instead reads 1 or assigns 99 to the source global, leaving the
+;; private value at 11. These must remain top-level definitions: moving them
+;; into a test's local body would exercise a different resolution path.
+(define h3-private-read 1)
+(define-syntax install-private-reader
+  (syntax-rules ()
+    ((_ macro-name getter-name)
+     (begin
+       (define h3-private-read 11)
+       (define-syntax macro-name (syntax-rules () ((_) h3-private-read)))
+       (define (getter-name) h3-private-read)))))
+(install-private-reader read-private observe-private-read)
+(cond-expand (patina-vm (test-expect-fail 1)) (else))
+(test-equal "a generated macro reads its private global despite a source global's spelling"
+  '(11 1 11)
+  (list (let ((h3-private-read 5)) (read-private))
+        h3-private-read (observe-private-read)))
+
+(define h3-private-write 1)
+(define-syntax install-private-writer
+  (syntax-rules ()
+    ((_ macro-name getter-name)
+     (begin
+       (define h3-private-write 11)
+       (define-syntax macro-name (syntax-rules () ((_) (set! h3-private-write 99))))
+       (define (getter-name) h3-private-write)))))
+(install-private-writer write-private observe-private-write)
+;; Sequence the write before observing either cell; list argument order is
+;; unspecified and is not part of the assertion.
+(define h3-private-write-result
+  (let ((h3-private-write 5)) (write-private) h3-private-write))
+(cond-expand (patina-vm (test-expect-fail 1)) (else))
+(test-equal "a generated macro assigns its private global without changing the source global"
+  '(5 1 99)
+  (list h3-private-write-result h3-private-write (observe-private-write)))
 
 (test-end)

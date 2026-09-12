@@ -4,10 +4,16 @@
 //! program, process crash or timeout is counted as equivalent successful output.
 //! The fixed cross-product and seed stream are documented in Track H's PRD.
 mod common;
+#[path = "hygiene/differential.rs"]
+mod differential;
 #[path = "hygiene/generator.rs"]
 mod generator;
+#[path = "hygiene/oracles.rs"]
+mod oracles;
 #[path = "hygiene/runner.rs"]
 mod runner;
+#[path = "hygiene/shrink.rs"]
+mod shrinker;
 
 use generator::{Action, BINDERS, Binder, Case, Site, VARIANTS};
 use runner::{BACKENDS, Failure, Kind};
@@ -49,34 +55,24 @@ fn probe(case: &Case, backend: &str, deadline: Instant) -> Result<Vec<String>, F
 // of every variant. Keep the same backend, failure class and transformation.
 // Neither a new error nor a now-unobservable capture can replace the witness.
 fn shrink(
-    mut case: Case,
+    case: Case,
     backend: &str,
-    mut failure: Failure,
+    failure: Failure,
     deadline: Instant,
 ) -> (Case, Failure, usize) {
-    let mut attempts = 0;
-    loop {
-        let mut accepted = None;
-        for candidate in case.reductions() {
-            if attempts >= SHRINK_BUDGET || remaining(deadline).is_zero() {
-                return (case, failure, attempts);
-            }
-            attempts += 1;
-            if let Err(next) = probe(&candidate, backend, deadline)
-                && (next.kind, next.variant) == (failure.kind, failure.variant)
-            {
-                accepted = Some((candidate, next));
-                break;
-            }
-        }
-        match accepted {
-            Some((next_case, next_failure)) => {
-                case = next_case;
-                failure = next_failure;
-            }
-            None => return (case, failure, attempts),
-        }
-    }
+    let signature = (failure.kind, failure.variant);
+    shrinker::minimize(
+        case,
+        failure,
+        SHRINK_BUDGET,
+        deadline,
+        Case::reductions,
+        |candidate| {
+            probe(candidate, backend, deadline)
+                .err()
+                .filter(|f| (f.kind, f.variant) == signature)
+        },
+    )
 }
 
 fn failure_report(case: &Case, backend: &str, failure: Failure, deadline: Instant) -> String {
