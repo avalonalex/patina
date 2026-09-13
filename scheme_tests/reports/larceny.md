@@ -1,25 +1,25 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-01 16:04:37  
-**Backend:** VM  
-**Lane:** tests/scheme (R7RS-small + Red edition)  
+**Generated:** 2026-09-13 08:33:24\
+**Backend:** VM\
+**Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
 
 This report quotes nothing from the suite. Each failing assertion is a permalink to the test case at the pinned commit, with the procedure under test; the per-suite logs beside this file (untracked) have the full text.
 
 | | |
 |---|---|
-| Suites fully passing | 22 of 33 |
-| Assertions passed | 8447 of 8475 (99.7%) |
+| Suites fully passing | 24 of 33 |
+| Assertions passed | 8508 of 8534 (99.7%) |
 | Suites not reaching a tally | 0 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Assertion failures (28 in 11 suites)
+## Assertion failures (26 in 9 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### base — 8 of 1079 failed
+### base — 8 of 1092 failed
 
 - [base.sld:918](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L918) — `name` `unquote`
 - [base.sld:921](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L921) — `name` `foo`
@@ -30,26 +30,18 @@ Each entry links to the test case; the name after it is the procedure the assert
 - [base.sld:2346](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2346) — `bytevector-u8-ref` `make-bytevector`
 - [base.sld:2347](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2347) — `bytevector-u8-ref` `make-bytevector`
 
-### char — 1 of 139 failed
-
-- [char.body.scm:109](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/char.body.scm#L109) — `chars` `filter-all-chars`
-
 ### charset — 2 of 93 failed
 
 - [charset.sld:108](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L108) — `>=` `char-set-size`
 - [charset.sld:136](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L136) — `cs` `char-set`
 
-### complex — 1 of 61 failed
+### complex — 1 of 69 failed
 
 - [complex.body.scm:89](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/complex.body.scm#L89) — `log`
 
 ### ephemeron — 1 of 6 failed
 
 - [ephemeron.sld:69](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ephemeron.sld#L69) — `map`
-
-### eval — 1 of 3 failed
-
-- [eval.sld:33](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/eval.sld#L33) — `eval` `eval:car`
 
 ### flonum — 1 of 1280 failed
 
@@ -74,7 +66,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [list.sld:589](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L589) — `list` `cells`
 
-### write — 3 of 40 failed
+### write — 3 of 63 failed
 
 - [write.sld:368](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/write.sld#L368) — `write-data` `map`
 - [write.sld:373](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/write.sld#L373) — `write-data` `map`
@@ -84,16 +76,16 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | fail | 1071 | 1079 |
+| base | fail | 1084 | 1092 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
-| char | fail | 138 | 139 |
+| char | pass | 139 | 139 |
 | charset | fail | 91 | 93 |
 | comparator | pass | 158 | 158 |
-| complex | fail | 60 | 61 |
+| complex | fail | 68 | 69 |
 | cxr | pass | 28 | 28 |
 | ephemeron | fail | 5 | 6 |
-| eval | fail | 2 | 3 |
+| eval | pass | 5 | 5 |
 | file | pass | 75 | 75 |
 | flonum | fail | 1279 | 1280 |
 | generator | pass | 49 | 49 |
@@ -104,11 +96,11 @@ Each entry links to the test case; the name after it is the procedure the assert
 | lazy | pass | 33 | 33 |
 | list-queue | pass | 40 | 40 |
 | list | fail | 171 | 172 |
-| load | pass | 1 | 1 |
+| load | pass | 4 | 4 |
 | lseq | pass | 109 | 109 |
 | process-context | pass | 2 | 2 |
 | read | pass | 44 | 44 |
-| repl | pass | 0 | 0 |
+| repl | pass | 10 | 10 |
 | rlist | pass | 82 | 82 |
 | set | pass | 16 | 16 |
 | sort | pass | 2562 | 2562 |
@@ -116,4 +108,4 @@ Each entry links to the test case; the name after it is the procedure the assert
 | text | pass | 1069 | 1069 |
 | time | pass | 2 | 2 |
 | vector | pass | 103 | 103 |
-| write | fail | 37 | 40 |
+| write | fail | 60 | 63 |

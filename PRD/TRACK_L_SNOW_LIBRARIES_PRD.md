@@ -1,10 +1,15 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-09-12 — owner decision: bundle R7RS-large libraries (including drafts) and
+**Updated:** 2026-09-13 — Larceny lane refresh and macro-status audit; see L5.3
+and the triage document's current macro status. Core-syntax import renaming
+and the Unicode stack overflow were still labelled open after their fixes.
+Family 40 remains VM-only; family 41 and H2's three environment-API findings
+remain open despite the original hygiene matrix passing on both backends.
+Previously 2026-09-12 — owner decision: bundle R7RS-large libraries (including drafts) and
 SRFIs; keep implementation-specific libraries external. L1 eligibility widened and L2 reframed
-around supplied dependencies, with acquisition tracked by #195. The numerical snapshots below
-have not been re-measured for this policy change. Previously 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
+around supplied dependencies, with acquisition tracked by #195. The L3 corpus
+snapshot has not been re-measured for this policy change. Previously 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
 the recorded repros: eight fixed entries moved to `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md` (five from
 the 2026-08-24/25 Larceny sweep that were never re-marked here, two already marked in place, and
 the quasiquoted-vector hygiene entry, which families 33–35 had fixed under it), and the
@@ -17,14 +22,17 @@ family 40 quarantined).
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
 packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
-deferred; L5.3's lanes: VM **22 of 33** suites clean (8447/8475), tree-walker **21 of 33**
-(8302/8330, stream budgeted per family 26), R6RS **12 of 16** (4017/4025). **L1's earlier
+deferred; L5.3's lanes, refreshed 2026-09-13: VM **24 of 33** suites reported
+passing (8508/8534), tree-walker **24 of 33** (8508/8534), R6RS **13 of 16**
+(4026/4033). See L5.3 for the `set` top-level-error caveat and the differing
+VM/tree-walker failures. **L1's earlier
 priority list largely shipped; its scope now includes all SRFIs and R7RS-large draft libraries.**
 Remaining work is ordered by demand and cost, rather than excluded for low popularity.
 **L2 supplies implementation-specific libraries externally:** #194–198 removed `lib/chibi/`;
 the test lanes use `test-lib/` and the vendored corpus via `-A`. #195's development workflow now
 covers locked Snow archives and pinned checkouts of maintained adaptations; general resolution
-and public distribution remain deferred. The open defect queue is §6 Open plus the non-hygiene triage families;
+and public distribution remain deferred. The open defect queue is §6 Open plus
+the triage document's current macro status and non-hygiene families;
 the exception-extent cluster (families 22+28) closed 2026-09-01, together with
 the tree-walker `guard` ordering; two quarantined defects turned out to be its
 prerequisites and landed first as #149 and #150.
@@ -904,6 +912,47 @@ its count.
 
 #### L5.3 — Run Larceny's R7RS suites from a reference checkout  *(harness landed 2026-08-24; baseline measured)*
 
+**Current measurement, 2026-09-13.** Release runtime `180a41e5`, pinned upstream
+`fef550c7d392`, using writable copies of the reference checkout so file tests
+can execute. Reports were regenerated from complete lanes, not assembled from
+the focused runs recorded in individual families.
+
+| Lane | Runner-reported passing suites | Assertions passed | No tally |
+|---|---|---|---|
+| R7RS, VM | 24 of 33 | 8508 of 8534 | 0 |
+| R7RS, tree-walker | 24 of 33 | 8508 of 8534 | 0 |
+| R6RS, VM | 13 of 16 | 4026 of 4033 | 1 (`base`) |
+
+The runner's passing-suite count includes `set`: its 16 assertions pass but
+its log still contains the known top-level `set-map` argument-order error.
+These are compatibility measurements, not green test gates; the lanes exit
+nonzero for their remaining failures. R6RS `base` still stops at an empty-body
+`let-syntax`; its seven asserted failures are in `bytevectors` and `enums`.
+The increased assertion denominators include newly reachable guarded tests
+and successful file tests, so they must not be compared as a fixed population.
+The equal VM/tree-walker totals hide different failures: the VM has the
+ephemeron retention assertion, while the tree-walker passes ephemeron 6/6
+but fails the known timing-sensitive `time` assertion. Its `stream` suite
+finishes 81/81 in 359 seconds, within the runner's 600-second floor.
+
+**Verification for the radix fix and audit:** `cargo build --release`;
+`cargo test -p patina-frontend -p patina-primitives --lib --tests` (243 tests);
+`cargo test -p patina-tests --test scheme_suite --test hygiene_matrix`;
+`cargo test -p patina-core --lib hygiene_properties`;
+`cargo test -p patina-tests --test hygiene_metamorphic` (manual H3 ignored);
+the focused core-syntax import and triage-pointer tests; both Chibi compliance
+scripts (1226/1226 each); `scripts/run_suite_oracles.sh` (114 file/oracle pairs,
+Chibi and Gauche, no missing oracle); clippy with all targets/features and
+warnings denied; rustfmt; and `git diff --check`. The full workspace Rust
+test lane, GC differential lanes and generated external H3 sweep were not run.
+
+**Macro progress is tracked separately from these suite totals.** The original
+28-shape matrix passes on both backends; families 40/41 and H2's environment
+properties expose shapes beyond it. The current table in
+[`larceny_triage.md`](../scheme_tests/reports/larceny_triage.md#current-macro-status--audited-2026-09-13)
+distinguishes the closed families, the five VM-only family-40 quarantines,
+the two shared family-41 quarantines, and H2's three open API findings.
+
 **Retargeted.** This item was written as "vendor and run the R6RS test suite",
 and the first thing scoping it found was that the suite cannot load here: its
 harness `tests/r6rs/test.sls` imports the composite `(rnrs)` and uses R6RS
@@ -1277,15 +1326,13 @@ All four are now both-backend rows in `tests/scheme/control/cps-features.scm` ra
 than quarantines. None had a Larceny row.
 
 
-**Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ❌
-**open**, tree-walker only (the VM runs the same suite in 4 s).
-`filter-all-chars` in Larceny's `char.body.scm` is a plain `do` from 0 to
-`#x110000` consing matches onto an accumulator — a tail loop with no
-recursion in the Scheme. Something under it recurses per iteration on the
-tree-walker; the suspects are the collector marking a long continuation
-chain or a long list recursively. Reproduce with the suite
-(`./scripts/run_larceny_tests.sh --tree-walker char`, ~74 s to the crash)
-until a smaller loop is found that does it.
+**Tree-walker: a 1.1M-iteration `do` loop overflows the stack** — ✅
+**fixed 2026-09-12**, #306 / triage family 6. The collector recursively
+followed local continuation environments; a deduplicated worklist now traces
+them iteratively. A 50,000-call regression checks that suspended values survive
+collection. Together with #305's decimal-digit fix, the full Larceny `char`
+suite passes 139/139 on both backends. The former open label here was stale;
+the L5.3 table and triage family already recorded the fix.
 
 **chibi-regexp: `(regexp 'grapheme)` feeds `#<unspecified>` into the NFA
 builder** — ❌ **open**, and the root is architectural. Gauche loads the
@@ -1906,7 +1953,16 @@ only accepted previously-rejected text. So it needs its own decision and its own
 than riding along. The set now lives in one function (`Lexer::is_delimiter`) instead of seven
 inline copies, which is what makes that a one-line decision when someone takes it.
 
-**The backends disagree on renaming core syntax at import** — ❌ **open**. Found 2026-08-16 by
+**The backends disagree on renaming core syntax at import** — ✅ **fixed**
+by the binding-based keyword stages (#86, #88, #89; stage 3 completed
+2026-08-25). Rechecked 2026-09-13:
+`sld_file_loading.rs::test_core_syntax_can_be_renamed_on_import` passes on
+both backends, and the `expansion/keyword-bindings.scm` suite passes as well.
+The open label survived the implementation. Historical diagnosis follows;
+the stage status in `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md` records
+the completed work.
+
+Found 2026-08-16 by
 review of the export-side fix, and pre-existing: that fix touched the export path and `(only …)`,
 not this.
 
@@ -1933,7 +1989,17 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 `cond-expand`, and `(list else)` returns a symbol because of the `base.sld` workaround. They are
 kept there rather than repeated here: they are one defect, and it now has one document.
 
-**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-01; it was both backends when recorded). This is the root of triage family 40, whose three backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm` pin the class; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
+**A template-local binding matches a helper's differently bound literal** —
+❌ **open on both backends**, triage family 41, found by Track H3 on
+2026-09-12. Literal matching chooses the helper's literal arm when a template
+introduces a distinct local binding with the same spelling. The minimized
+read and write cases in `expansion/syntax-rules-literals.scm` remain expected
+failures; Chibi, Gauche and Racket take the fallback. The 2026-09-13 suite and
+oracle reruns retain those results. Investigate binding comparison and the
+definition/use scopes supplied to the matcher; backend agreement alone misses
+this defect. See the triage entry for the original programs and H3 seeds.
+
+**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-13; it was both backends when recorded). This is the root of triage family 40, whose five backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm` pin the class: three cross-expansion refusals plus H3's two positive private-global read/write cases. All five remain quarantined on the VM and pass on the tree-walker; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
 
 *Two symptoms recorded 2026-08-23 while reviewing the VM hygiene work*, both
 the bare name collapsing an identity the rest of the pipeline keeps distinct.

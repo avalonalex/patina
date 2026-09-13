@@ -61,10 +61,46 @@ there either, and the VM lane is untouched. Running chibi's own `(srfi 101 test)
 against the shadowing names (2026-08-26) then found families 33–35; with them
 fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 
+**Full refresh, 2026-09-13 (`180a41e5`).** Both R7RS backends now report
+24/33 suites and 8508/8534 assertions; R6RS VM reports 13/16 and 4026/4033.
+All 33 R7RS suites reach a tally. The equal backend totals mask VM's
+ephemeron failure versus tree-walker's timing-sensitive `time` failure.
+The runner also calls `set` passing despite its known top-level error.
+Track L L5.3 records the complete snapshot, provenance and verification;
+the preceding dated counts are historical.
+
+## Current macro status — audited 2026-09-13
+
+The numbered queue below records the completed 2026-08 work. It is not a list
+of today's unresolved macro defects. Fresh checks on `180a41e5` confirm:
+
+| Area | Current result | Remaining work |
+|---|---|---|
+| Families 14/15/23 and 33–39 | Their regression suites pass; the original hygiene matrix is 28/28 on both backends | These recorded Scheme shapes are closed |
+| Core-syntax import renaming | The library-import regression and keyword suite pass on both backends | Track L §6's old open label was stale |
+| Family 40, introduced globals | Five VM expected failures; all five pass on the tree-walker | Preserve binding identity through global relinking |
+| Family 41, pattern literals | Two expected failures on both backends | Compare the distinct template-local and helper-literal bindings correctly |
+| H2 environment API properties | Ten tests pass, including three quarantines that require the known defect to remain observable | #289 ambiguous writes, #290 outer more-specific binding, #291 non-root plain fallback |
+| `do` result-clause definitions | The existing regression still pins acceptance on both backends | Reject definitions in an expression context; separate from hygiene |
+
+H1's normal generated gate also passes: 112 binding cases, five variants
+apiece, on both backends (seven Rust tests passed; the manual H3 test is
+ignored by default).
+
+The H2 cases are new environment-API counterexamples, not evidence that the
+old 28 Scheme shapes regressed; their reachability from Scheme is not yet
+established. Track H's assurance work is complete, but its runtime findings
+remain open. Details and seeds are in
+[`TRACK_H_HYGIENE_ASSURANCE_PRD.md`](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md).
+The normal suite checks the minimized H3 cases; the full generated external
+H3 sweep was not rerun for this audit. Chibi/Gauche comparisons of the Scheme
+suite match all 114 registered file/oracle pairs.
+
 ## The hygiene queue — ordered, with acceptance criteria
 
-Families 36 and 38 are the open hygiene work, and they are one problem in two
-places. This is the order to take them in and how to know each step is done.
+Families 36 and 38 were the open hygiene work when this plan was written,
+and they were one problem in two places. This records the order taken and
+the acceptance criteria; steps 1 and 2 closed on 2026-08-31.
 Written down because two attempts (PRs #133 and #138) were closed for fixing
 one direction and breaking the other, and neither had a stated definition of
 done.
