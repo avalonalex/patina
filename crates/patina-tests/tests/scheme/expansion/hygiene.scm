@@ -659,14 +659,28 @@
 (test-error "a generated getter cannot see a different expansion's private define" #t
   (get))
 
-;; Track H3 seeds 370/371: the positive same-expansion face of family 40.
-;; The generated macro and getter share the introduced definition's binding;
-;; a source-written global with the same spelling is a different binding.
-;; R7RS §4.3's hygienic binding rule requires (11 1 11) / (5 1 99).
-;; Chibi 0.12, Racket 9.3/r7rs-lib, Gauche 0.9.15 and the tree-walker agree.
-;; The VM instead reads 1 or assigns 99 to the source global, leaving the
-;; private value at 11. These must remain top-level definitions: moving them
-;; into a test's local body would exercise a different resolution path.
+;; Track H3 seeds 370/371: the positive same-expansion face of family 40, and
+;; the half of it that was reachable from ordinary code. The generated macro
+;; and getter share the introduced definition's binding; a source-written
+;; global with the same spelling is a different binding. R7RS §4.3's hygienic
+;; binding rule requires (11 1 11) / (5 1 99). Chibi 0.12, Racket
+;; 9.3/r7rs-lib, Gauche 0.9.15 and the tree-walker agree.
+;;
+;; The VM used to read 1, or assign 99 to the source global and leave the
+;; private value at 11 — no error, wrong numbers, on the default backend. Its
+;; renamer sees one top-level form and built its frames from that form alone,
+;; so a reference carrying an earlier expansion's scopes had no candidate,
+;; degraded to its bare spelling, and was answered by whatever that spelling
+;; meant at run time. Fixed by recording each introduced definition's binding
+;; identity in the environment, which is what a later form resolves against.
+;; The three refusal rows above are the same family and are *not* fixed: they
+;; turn on a scoped reference that resolves to nothing being refused rather
+;; than answered by the bare-name alias, which needs the alias to stop
+;; answering scoped references — see the triage entry.
+;;
+;; These must remain top-level definitions: moving them into a test's local
+;; body would exercise a different resolution path, and the defect was
+;; precisely that a top-level form is compiled on its own.
 (define h3-private-read 1)
 (define-syntax install-private-reader
   (syntax-rules ()
@@ -676,7 +690,6 @@
        (define-syntax macro-name (syntax-rules () ((_) h3-private-read)))
        (define (getter-name) h3-private-read)))))
 (install-private-reader read-private observe-private-read)
-(cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-equal "a generated macro reads its private global despite a source global's spelling"
   '(11 1 11)
   (list (let ((h3-private-read 5)) (read-private))
@@ -695,9 +708,37 @@
 ;; unspecified and is not part of the assertion.
 (define h3-private-write-result
   (let ((h3-private-write 5)) (write-private) h3-private-write))
-(cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-equal "a generated macro assigns its private global without changing the source global"
   '(5 1 99)
   (list h3-private-write-result h3-private-write (observe-private-write)))
+
+
+;; The shape that made this family worth fixing before its three siblings: a
+;; macro with private state and a generated accessor, which is ordinary code
+;; rather than a generated probe. The VM answered (2 0) — the macro's counter
+;; written onto the user's global, the private cell untouched, no error. The
+;; rows above pin the same defect in the spellings H3 generated; this one pins
+;; it in the spelling a person would write, and is the reason the family was
+;; reprioritised.
+;;
+;; The use must sit in a *later* top-level form than the expansion. Wrapped in
+;; a single `begin` the VM was already correct, which is what identified the
+;; boundary as the compile unit rather than the scope rule.
+(define hygiene-clicks 0)
+(define-syntax define-click-counter
+  (syntax-rules ()
+    ((_ bump value)
+     (begin
+       (define hygiene-clicks 0)
+       (define-syntax bump
+         (syntax-rules () ((_) (set! hygiene-clicks (+ hygiene-clicks 1)))))
+       (define (value) hygiene-clicks)))))
+(define-click-counter tick read-clicks)
+(tick)
+(tick)
+
+(test-equal "a macro's private counter does not write to the user's global"
+  '(0 2)
+  (list hygiene-clicks (read-clicks)))
 
 (test-end)

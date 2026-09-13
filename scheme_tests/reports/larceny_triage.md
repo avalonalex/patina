@@ -670,8 +670,31 @@ failure list.
 - **The gate was one test wide, and is now zero.** Enforcement scored 95 of 96 binaries before the fix, failing only `test_let_syntax_nested_lexical_scoping` — this family — and 96 of 96 after. Nothing else in the repo resolved a reference the rule could not decide, so the distance to a determined model was exactly this one shape.
 - With that clear, enforcement stopped being a switch. `resolve_scoped` returns an error for an ambiguous reference on every path: the desugarer reports a `DesugarError`, the VM's renamer a `CompileError`, the tree-walker an `EvalError` at the read. `PATINA_AMBIGUITY_STRICT` is gone with it — once refusing was free, the variable only offered a way to ask for the wrong answer. `PATINA_AMBIGUITY_LOG` stays: the `TIE` half is still reported and never raised, since Flatt's rule cannot see it.
 
-### 40. The VM resolves a cross-expansion macro-introduced global by bare name — VM only since step 1; chibi sides with the tree-walker
-- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "one expansion's definition is not another expansion's reference", "one expansion's definition is not another expansion's write target" and "a generated getter cannot see a different expansion's private define" — three backend-scoped `test-expect-fail` rows pinning the VM as the diverging backend, arbitrated by chibi and Gauche on every oracle run.
+### 40. The VM resolves a cross-expansion macro-introduced global by bare name — VM only since step 1; **the reachable half fixed 2026-09-13**, three refusal rows still open
+- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "one expansion's definition is not another expansion's reference", "one expansion's definition is not another expansion's write target" and "a generated getter cannot see a different expansion's private define" — three backend-scoped `test-expect-fail` rows pinning the VM as the diverging backend, arbitrated by chibi and Gauche on every oracle run. The two H3 positive rows beside them — "a generated macro reads its private global despite a source global's spelling" and "a generated macro assigns its private global without changing the source global" — are **ordinary assertions now**, and the reason they were the ones to fix first is below.
+
+- **The half that was reachable from ordinary code — fixed 2026-09-13.** The family was pinned as five expected failures, which reads as managed. Two of them were also this, on the default backend:
+
+  ```scheme
+  (define count 0)                       ; the user's global
+  (define-syntax define-counter
+    (syntax-rules ()
+      ((_ bump value)
+       (begin (define count 0)           ; the macro's private state
+              (define-syntax bump (syntax-rules () ((_) (set! count (+ count 1)))))
+              (define (value) count)))))
+  (define-counter tick clicks)
+  (tick) (tick)
+  (list count (clicks))   ; was (2 0) on the VM — (0 2) on the tree-walker, chibi and Gauche
+  ```
+
+  No error: the macro's counter wrote onto the user's variable and the private cell never moved. The idiom is ordinary — private state plus a generated accessor — and the only other precondition is that the use sits in a **later top-level form**. Wrapped in one `begin` the VM was already right, which is what identified the mechanism.
+
+- **Mechanism, and why the scopes were never the problem.** `alpha_rename` runs once per top-level form and builds its frames from that form alone (`top_level_define_bindings`), so a definition an *earlier* form introduced is not even a candidate: `PATINA_SCOPE_TRACE` shows `cands=0 … via=byname` on the VM against `cands=1 … via=scoped` on the tree-walker, for the same reference. With no candidate the reference falls out of the renamer as its bare spelling with empty scopes, and the runtime answers it by name — the user's global, or the bare-name alias. Inside one form the scopes decide correctly, so nothing was wrong with the scope sets; what was missing was the renamer's view across compile units.
+
+- **The fix** records each macro-introduced definition's binding identity in the environment, beside the alias that was already installed there: `Environment::define_introduced_global(name, scopes, renamed_to)`, read back by `RenameEnv::resolve` through the same `patina_core::scope_resolve` rule both backends use. The alias stays — removing it would strand definition-environment relinking, and would be issue #269's fix wearing a disguise — so the two records now say different things on purpose: the alias answers the bare spelling at run time, the identity answers a scoped reference at compile time.
+
+- **What is still open, and why it is a different change.** The three refusal rows turn on the opposite direction: a scoped reference that resolves to *nothing* should be refused, as chibi and the tree-walker refuse it, and is instead answered by the bare-name alias. Refusing it means the alias must stop answering scoped references — and the renamer currently emits every unresolved reference with `ScopeSet::new()`, so by the time the runtime sees it the fact that it was scoped is gone. That needs scope information to survive the renamer, which is Q7.5(b)'s scoped relinking or the resolve-once design, and is deliberately not attempted here.
 - Surfaced 2026-08-31 by the review of step 1. One expansion's `(define x …)` introduces a scoped top-level definition; a *different* expansion's template reference to that spelling carries scopes that reject it. Before step 1 both backends answered the value through the by-name fallback; chibi 0.12 errors "undefined variable" on all three shapes — one expansion's hygienically-introduced definition is not another expansion's to see — and since step 1 the tree-walker agrees, so the fix *narrowed* wrongness to one backend and this entry pins the remainder rather than reporting a regression.
 
 ```scheme

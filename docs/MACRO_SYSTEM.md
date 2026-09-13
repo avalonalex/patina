@@ -310,6 +310,33 @@ as well, so that any reference of that spelling could reach it, is what let a
 `let-syntax ((quote …))` around a *call* capture the callee template's
 `quote` (Larceny triage family 33).
 
+**A macro-introduced top-level definition is recorded twice, on purpose.** The
+VM renames one to a global no source mentions, derived from the scope set that
+is its identity, and then records two things about it in the environment: a
+bare-name *alias*, and the *binding identity* itself. They answer different
+questions and neither replaces the other. The alias answers the bare spelling
+at run time, because definition-environment relinking resolves its target by
+name; it is consulted after real bindings, so a user's own global of that
+spelling still wins. The identity answers a *scoped* reference at compile
+time.
+
+The identity is needed because `alpha_rename` runs once per top-level form and
+builds its candidate frames from that form alone. A reference in a later form
+carrying an earlier expansion's scopes therefore has no candidate, and before
+this was recorded it left the renamer as its bare spelling and was answered at
+run time by whatever that name meant — a user's global, or the alias. In the
+assignment direction that silently wrote a macro's private state onto a user's
+variable (Larceny triage family 40). Inside one form the scopes always decided
+correctly, which is what shows the scope sets were never the missing piece.
+
+What the identity does *not* fix is the opposite direction: a scoped reference
+that resolves to nothing is still answered by the alias, where chibi and the
+tree-walker refuse it. Refusing it means the alias must stop answering scoped
+references, and the renamer discards the scope set on every reference it could
+not resolve — so by run time there is nothing left to distinguish them. That
+needs scopes to survive the renamer, which is the scoped-relinking work
+Track Q's Q7.5(b) gates.
+
 **Quoted data in a template is not exempt from any of this.** `(quote datum)`
 compiles as the list it is: the head is a reference resolved where the macro
 was written, and the datum's symbols are renamed like any others, with the

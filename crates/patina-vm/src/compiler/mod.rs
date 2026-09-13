@@ -45,7 +45,7 @@ fn compile_pipeline(
     let alpha_rename::Renamed {
         expr: renamed,
         global_aliases,
-    } = alpha_rename::alpha_rename(expr)?;
+    } = alpha_rename::alpha_rename(expr, resolver.map(|(_, env, _)| env))?;
 
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
     let closed = pass2_closure::Pass2Closure::run(&renamed, &analysis);
@@ -76,8 +76,21 @@ fn compile_pipeline(
                 env.parent().is_none(),
                 "bare-name aliases need a parentless environment"
             );
-            for (bare, renamed_to) in global_aliases {
-                env.define_alias(bare, env.clone(), renamed_to);
+            for (bare, renamed) in global_aliases {
+                // Two records of one definition, and both are needed. The
+                // alias answers the *bare* spelling at run time, which is
+                // what definition-environment relinking asks for. The
+                // identity answers a *scoped* reference at compile time,
+                // which is what a later top-level form needs — this pass
+                // sees one form, so without it that reference degrades to
+                // its spelling and the alias, or a user's global of the same
+                // name, answers instead. Triage family 40.
+                env.define_introduced_global(
+                    bare.clone(),
+                    renamed.scopes.clone(),
+                    renamed.name.clone(),
+                );
+                env.define_alias(bare, env.clone(), renamed.name);
             }
         }
         None => debug_assert!(

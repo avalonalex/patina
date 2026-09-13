@@ -77,6 +77,14 @@ type AliasTarget = (Option<Rc<Environment>>, Rc<str>);
 /// Alias name -> the binding it forwards to.
 type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
 
+/// Per spelling, the macro-introduced top-level definitions of that name:
+/// the scope set each was introduced at, and the global it was renamed to.
+///
+/// A map on the inside as well, keyed by the scope set that *is* the
+/// binding's identity. A list scanned for that key made recording `n`
+/// expansions of one spelling quadratic.
+type IntroducedGlobals = FxHashMap<Rc<str>, FxHashMap<ScopeSet, Rc<str>>>;
+
 /// Simple (non-scoped) binding storage: an append-only list of slots, each
 /// holding its own name, with a hash index built only for large environments.
 ///
@@ -285,6 +293,24 @@ pub struct Environment {
     /// cost a borrow, never an answer.
     has_aliases: Cell<bool>,
     has_visible_scoped: Cell<bool>,
+    /// The identities of the macro-introduced top-level definitions compiled
+    /// so far: for each spelling, the scope sets it was introduced at and the
+    /// global each was renamed to.
+    ///
+    /// Read at *compile* time and never on a lookup path, which is what makes
+    /// a plain table acceptable here where its neighbours carry a `Cell<bool>`
+    /// guard. The VM's `alpha_rename` runs once per top-level form and its
+    /// frames come from that form alone, so without this a reference in a
+    /// later form has no candidate to resolve against, degrades to its bare
+    /// spelling, and is answered by whatever the name means at run time —
+    /// a user's global of that spelling, or the bare-name alias. That is
+    /// Larceny triage family 40, and in the assignment direction it silently
+    /// wrote a macro's private state onto a user's variable.
+    ///
+    /// Only a parentless global environment ever holds entries: they are
+    /// installed beside the aliases in the VM's `compile_pipeline`, which
+    /// asserts that. Lookups therefore do not walk parents.
+    introduced_global_names: RefCell<IntroducedGlobals>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -304,6 +330,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
+            introduced_global_names: RefCell::new(FxHashMap::default()),
             parent: None,
         }
     }
@@ -318,6 +345,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
+            introduced_global_names: RefCell::new(FxHashMap::default()),
             parent: Some(parent),
         }
     }
@@ -470,6 +498,75 @@ impl Environment {
             return None;
         }
         aliases.get(name).cloned()
+    }
+
+    /// Record that a macro-introduced top-level definition of `name`, at
+    /// `scopes`, was renamed to the global `renamed_to`.
+    ///
+    /// The companion of [`define_alias`] for the same definition: the alias
+    /// answers the *bare* spelling at run time, which is what
+    /// definition-environment relinking asks for, and this records the
+    /// *binding identity*, which is what a later form's scoped reference
+    /// needs. Keeping both is deliberate. Dropping the alias would strand
+    /// relinking; dropping this leaves a later form resolving by spelling,
+    /// which is triage family 40.
+    ///
+    /// Two different expansions get different scope sets and so are different
+    /// entries, which is the whole point — and which means a program that
+    /// expands such a macro `n` times records `n` entries. That is
+    /// proportional to something that already grows: each of those expansions
+    /// also defines its own global, under the name recorded here, and those
+    /// are never reclaimed either.
+    ///
+    /// Keyed by the scope set rather than scanned for it, which is not a
+    /// micro-optimisation: a linear scan per insert made compiling `n`
+    /// expansions of one spelling quadratic, measured at 12x main for
+    /// n = 12000. The same key makes a repeated identical `(name, scopes)`
+    /// overwrite, which happens when one expansion is compiled twice.
+    ///
+    /// [`define_alias`]: Self::define_alias
+    pub fn define_introduced_global(&self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
+        self.introduced_global_names
+            .borrow_mut()
+            .entry(name)
+            .or_default()
+            .insert(scopes, renamed_to);
+    }
+
+    /// Call `f` with every macro-introduced top-level definition of `name`:
+    /// the scope set it was introduced at, and the global it was renamed to.
+    ///
+    /// A callback rather than a returned collection because the caller keeps
+    /// only the candidates for one reference, and building the whole list
+    /// first meant cloning every entry — a scope set and an `Rc` apiece — on
+    /// every scoped reference to the spelling, then discarding most of them.
+    ///
+    /// What remains is a scan: a subset query has no better shape, so a
+    /// reference costs one visit per definition of its spelling. Measured
+    /// against a build without any of this, on a file of `n` expansions of
+    /// one macro introducing one spelling: at n = 500, indistinguishable
+    /// (0.01 s both); at n = 12000, 0.68 s against 0.12 s. The second is not
+    /// a shape real code has — it is twelve thousand expansions of a single
+    /// macro — and it is recorded so the next person to see this scan knows
+    /// it was measured rather than overlooked.
+    ///
+    /// The order entries arrive in is unspecified, and nothing may depend on
+    /// it. Ties are what an order would decide, and there are none to decide:
+    /// each scope set appears once, and two distinct sets that are both
+    /// candidates for one reference are refused as ambiguous by
+    /// [`crate::scope_resolve::resolve_index`] rather than settled by
+    /// position.
+    ///
+    /// Parents are not walked: only a parentless global environment holds
+    /// these, as [`define_introduced_global`] describes.
+    ///
+    /// [`define_introduced_global`]: Self::define_introduced_global
+    pub fn for_each_introduced_global(&self, name: &str, mut f: impl FnMut(&ScopeSet, &Rc<str>)) {
+        if let Some(entries) = self.introduced_global_names.borrow().get(name) {
+            for (scopes, renamed_to) in entries {
+                f(scopes, renamed_to);
+            }
+        }
     }
 
     /// The root of this environment's parent chain.
@@ -1447,6 +1544,82 @@ mod tests {
             env.get_with_scopes("x", &ScopeSet::singleton(s2)).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
+    }
+}
+
+#[cfg(test)]
+mod introduced_global_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    fn recorded(env: &Environment, name: &str) -> Vec<(ScopeSet, Rc<str>)> {
+        let mut out = Vec::new();
+        env.for_each_introduced_global(name, |scopes, renamed| {
+            out.push((scopes.clone(), renamed.clone()))
+        });
+        out.sort_by_key(|(scopes, _)| scopes.len());
+        out
+    }
+
+    #[test]
+    fn a_name_with_no_introduced_definition_yields_nothing() {
+        let env = Environment::new();
+        env.define_introduced_global("x".into(), scopes(&[1]), "x #1".into());
+        assert!(recorded(&env, "y").is_empty());
+    }
+
+    /// The property the fix rests on: two expansions of one macro introduce
+    /// the same spelling and must stay two bindings. Collapsing them is what
+    /// the bare-name alias does, and why it cannot answer a scoped reference.
+    #[test]
+    fn two_expansions_of_one_spelling_are_two_entries() {
+        let env = Environment::new();
+        env.define_introduced_global("count".into(), scopes(&[1]), "count #1".into());
+        env.define_introduced_global("count".into(), scopes(&[2]), "count #2".into());
+        let entries = recorded(&env, "count");
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries
+                .iter()
+                .any(|(s, n)| *s == scopes(&[1]) && &**n == "count #1")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(s, n)| *s == scopes(&[2]) && &**n == "count #2")
+        );
+    }
+
+    /// Recording the same identity twice overwrites, so re-compiling one
+    /// expansion does not leave two names for one binding.
+    #[test]
+    fn the_same_identity_recorded_twice_overwrites() {
+        let env = Environment::new();
+        env.define_introduced_global("count".into(), scopes(&[1, 2]), "stale".into());
+        env.define_introduced_global("count".into(), scopes(&[1, 2]), "fresh".into());
+        assert_eq!(
+            recorded(&env, "count"),
+            vec![(scopes(&[1, 2]), Rc::from("fresh"))]
+        );
+    }
+
+    /// A child environment does not see them, which is what lets the lookup
+    /// skip walking parents: only the parentless global environment records
+    /// any, and the VM asserts that where it installs them.
+    #[test]
+    fn entries_are_local_to_the_environment_that_recorded_them() {
+        let parent = Rc::new(Environment::new());
+        parent.define_introduced_global("x".into(), scopes(&[1]), "x #1".into());
+        let child = Environment::with_parent(Rc::clone(&parent));
+        assert!(recorded(&child, "x").is_empty());
+        assert_eq!(recorded(&parent, "x").len(), 1);
     }
 }
 
