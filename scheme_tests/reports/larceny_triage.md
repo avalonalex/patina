@@ -61,10 +61,46 @@ there either, and the VM lane is untouched. Running chibi's own `(srfi 101 test)
 against the shadowing names (2026-08-26) then found families 33–35; with them
 fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 
+**Full refresh, 2026-09-13 (`180a41e5`).** Both R7RS backends now report
+24/33 suites and 8508/8534 assertions; R6RS VM reports 13/16 and 4026/4033.
+All 33 R7RS suites reach a tally. The equal backend totals mask VM's
+ephemeron failure versus tree-walker's timing-sensitive `time` failure.
+The runner also calls `set` passing despite its known top-level error.
+Track L L5.3 records the complete snapshot, provenance and verification;
+the preceding dated counts are historical.
+
+## Current macro status — audited 2026-09-13
+
+The numbered queue below records the completed 2026-08 work. It is not a list
+of today's unresolved macro defects. Fresh checks on `180a41e5` confirm:
+
+| Area | Current result | Remaining work |
+|---|---|---|
+| Families 14/15/23 and 33–39 | Their regression suites pass; the original hygiene matrix is 28/28 on both backends | These recorded Scheme shapes are closed |
+| Core-syntax import renaming | The library-import regression and keyword suite pass on both backends | Track L §6's old open label was stale |
+| Family 40, introduced globals | Five VM expected failures; all five pass on the tree-walker | Preserve binding identity through global relinking |
+| Family 41, pattern literals | Two expected failures on both backends | Compare the distinct template-local and helper-literal bindings correctly |
+| H2 environment API properties | Ten tests pass, including three quarantines that require the known defect to remain observable | #289 ambiguous writes, #290 outer more-specific binding, #291 non-root plain fallback |
+| `do` result-clause definitions | The existing regression still pins acceptance on both backends | Reject definitions in an expression context; separate from hygiene |
+
+H1's normal generated gate also passes: 112 binding cases, five variants
+apiece, on both backends (seven Rust tests passed; the manual H3 test is
+ignored by default).
+
+The H2 cases are new environment-API counterexamples, not evidence that the
+old 28 Scheme shapes regressed; their reachability from Scheme is not yet
+established. Track H's assurance work is complete, but its runtime findings
+remain open. Details and seeds are in
+[`TRACK_H_HYGIENE_ASSURANCE_PRD.md`](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md).
+The normal suite checks the minimized H3 cases; the full generated external
+H3 sweep was not rerun for this audit. Chibi/Gauche comparisons of the Scheme
+suite match all 114 registered file/oracle pairs.
+
 ## The hygiene queue — ordered, with acceptance criteria
 
-Families 36 and 38 are the open hygiene work, and they are one problem in two
-places. This is the order to take them in and how to know each step is done.
+Families 36 and 38 were the open hygiene work when this plan was written,
+and they were one problem in two places. This records the order taken and
+the acceptance criteria; steps 1 and 2 closed on 2026-08-31.
 Written down because two attempts (PRs #133 and #138) were closed for fixing
 one direction and breaking the other, and neither had a stated definition of
 done.
@@ -723,10 +759,12 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
 - Measured: focused Larceny `base` moves from 1083/1092 to **1084/1092 on both backends**, leaving eight other assertions failing. The run uses a writable copy of the pinned upstream suite so its file tests can execute. Both R7RS compliance lanes remain 1226/1226. Direct stdin probes distinguish incomplete input from empty/comment-only input and still accept a complete multiline list.
 - Oracle evidence (2026-09-12): chibi and Gauche both reject `(` with a read error. Chibi instead constructs an abbreviation containing EOF for a lone quote/quasiquote/unquote/unquote-splicing prefix, and its error for `(1 .` fails `read-error?`. Both oracles return EOF for `#1=`. R7RS 6.13.2 requires a read error after an incomplete external representation begins; these differences are registered as oracle defects. Both also return EOF for bare `#;`, which Patina rejects: whether 6.13.2 mandates the same error for an incomplete *comment* remains `needs-investigation`, separate from the fixed incomplete-datum defect. The exact rows and evidence are in `crates/patina-tests/tests/scheme/DIVERGENCES.tsv`; no upstream reports were filed.
 
-### 43. Exact complex `number->string` rejects non-decimal radices — both backends — open
-- Found when #225 corrected `exact?`: Larceny's guarded exact-complex round-trip assertions now execute. All six radix 2/8/16 variants fail before parsing because `number->string` rejects every complex input outside radix 10.
-- Ours: **none yet** — minimal reproduction is `(number->string 1+2i 16)`, which raises instead of producing an exact rectangular representation. The rejection is in `crates/patina-primitives/src/primitives/conversion.rs`; it was not changed by the numeric-root fix.
-- Upstream: [tests/scheme/complex.sld#L58](tests/scheme/complex.sld#L58)–[#L67](tests/scheme/complex.sld#L67). Extend radix formatting to exact real and imaginary components, then verify both explicit-radix and prefixed round-trips. Keep the existing restriction for inexact components separate.
+### 43. Exact complex radix formatting and reading — both backends — ✅ fixed 2026-09-12
+- Found when #225 corrected `exact?`: Larceny's guarded exact-complex round-trip assertions started executing. All six radix 2/8/16 variants failed first at `number->string`; fixing formatting exposed that the shared reader also rejected non-decimal rectangular numbers.
+- Ours: `crates/patina-tests/tests/scheme/data/numeric-operations.scm`, rows "exact complex radix round-trips preserve signs and unit parts", "exact complex radix round-trips preserve rational components", "exact complex radix round-trips preserve bignum components", "the reader shares radix and exactness across complex components", "complex radix reads reject invalid component digits and syntax", and "non-decimal complex formatting still rejects inexact components". The old blanket-rejection row in `crates/patina-tests/tests/scheme/data/conversion.scm` now tests only an inexact complex argument.
+- Fix: `number->string` formats each exact component using the requested radix while retaining its sign and unit-imaginary handling. The shared reader parses each non-decimal component as an integer or rational in that radix, then applies any exactness prefix to both components. Decimal formatting and the existing non-decimal restriction for inexact formatting are unchanged.
+- Upstream: [tests/scheme/complex.sld#L58](tests/scheme/complex.sld#L58)–[#L67](tests/scheme/complex.sld#L67). Focused `complex` improves from **62/69 to 68/69 on both backends**; all six explicit-radix/prefixed round-trips pass. Only the pre-existing `(log -0.0)` expectation remains.
+- Acceptance: numeric operations **124/124 on both backends**, including signed rational and bignum components, imaginary units, uppercase hex digits, both prefix orders, and invalid digits. R7RS compliance stays **1226/1226 on both backends**. Chibi 0.12 writes non-decimal exact complex values but rejects reading them back; these four oracle differences are registered against R7RS 6.2.7/7.1.1. Gauche has no exact non-real complex support, so the four support-dependent rows are skipped there. No upstream report was filed.
 
 ## Not ours — recorded so nobody re-diagnoses them
 

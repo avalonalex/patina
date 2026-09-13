@@ -1,16 +1,16 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-01 12:30:54  
-**Backend:** VM  
-**Lane:** tests/r6rs ((r6rs …) emulation libraries)  
+**Generated:** 2026-09-13 08:33:53\
+**Backend:** VM\
+**Lane:** tests/r6rs ((r6rs …) emulation libraries)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
 
 This report quotes nothing from the suite. Each failing assertion is a permalink to the test case at the pinned commit, with the procedure under test; the per-suite logs beside this file (untracked) have the full text.
 
 | | |
 |---|---|
-| Suites fully passing | 11 of 16 |
-| Assertions passed | 4023 of 4033 (99.8%) |
+| Suites fully passing | 13 of 16 |
+| Assertions passed | 4026 of 4033 (99.8%) |
 | Suites not reaching a tally | 1 |
 
 A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
@@ -23,7 +23,7 @@ The suite's library did not compile, so nothing in it ran. Patina's message:
 |---|---|
 | base | `Error: Parse error in tests/r6rs/base.sld: desugar error: Invalid syntax: let-syntax requires bindings and at least one body expression` |
 
-## Assertion failures (10 in 4 suites)
+## Assertion failures (7 in 2 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -40,15 +40,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 - [enums.sld:99](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/enums.sld#L99) — `enum-set->list` `color-set`
 - [enums.sld:100](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/enums.sld#L100) — `enum-set->list` `color-set`
 
-### eval — 1 of 2 failed
-
-- [eval.sld:16](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/eval.sld#L16) — `eval` `eval:car`
-
-### exceptions — 2 of 9 failed
-
-- (not located) — `#t` `with-exception-handler`
-- (not located) — `v`
-
 ## All suites
 
 | Suite | Status | Passed | Total |
@@ -58,8 +49,8 @@ Each entry links to the test case; the name after it is the procedure the assert
 | bytevectors | fail | 24 | 28 |
 | control | pass | 11 | 11 |
 | enums | fail | 23 | 26 |
-| eval | fail | 1 | 2 |
-| exceptions | fail | 7 | 9 |
+| eval | pass | 2 | 2 |
+| exceptions | pass | 9 | 9 |
 | hashtables | pass | 249 | 249 |
 | io/simple | pass | 56 | 56 |
 | lists | pass | 72 | 72 |
