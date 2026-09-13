@@ -245,10 +245,75 @@ file's header explains the hard way.
 - Left for later (pre-existing, adjacent): `simplest_rational_in_range` truncates its bounds with `as i64`, so any result with |x| ≥ 2^63 is wrong (`(rationalize 1e19 1)` ⇒ `9223372036854775808.0`).
 - The two neighbours first filed here are **not ours**: `(log -0.0)` ⇒ `-inf.0` and `(sqrt -inf.0)` ⇒ `0.0+inf.0i` in chibi, Gauche *and* Chez, exactly as in Patina — [#L361](tests/scheme/inexact.sld#L361) is an approximate comparison that cannot pass with an infinity in it, and [tests/scheme/complex.body.scm#L89](tests/scheme/complex.body.scm#L89) expects `-inf.0+πi`, which no reference produces.
 
-### 10. `environment` rejects a nested import set — both backends
-- Ours: `crates/patina-tests/tests/scheme/stdlib/eval.scm`, row "environment accepts a nested import set" (pinned as the error it is today)
-- Upstream: [tests/scheme/eval.sld#L33](tests/scheme/eval.sld#L33); R6RS lane [tests/r6rs/eval.sld#L16](tests/r6rs/eval.sld#L16)
-- Probably the `prefix`-binds-nowhere symptom recorded in `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`, reached through `environment`.
+### 10. `environment` accepts library names instead of import sets — both backends — ✅ fixed 2026-09-12
+
+**Triaged against `2638450`, fixed 2026-09-12.** This was a shared primitive defect,
+before macro expansion or backend evaluation. It is independent of the already-landed
+keyword-binding work in `PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`; the earlier
+guess that it was that project's `prefix` symptom was incorrect.
+
+- Ours: `crates/patina-tests/tests/scheme/stdlib/eval.scm`, row "environment accepts a nested import set". The correct-result assertion now passes normally; its Patina-only `test-expect-fail` quarantine has been removed.
+- Upstream: [R7RS eval](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/eval.sld#L33), [R7RS load](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/load.sld#L92), and [R6RS eval](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/eval.sld#L16).
+- Contract: [R7RS section 6.12](https://standards.scheme.org/official/r7rs.pdf) constructs an initially empty environment by importing each argument as an import set; the returned environment and its bindings are immutable.
+
+**Cause before the fix.** `primitive_environment` in `crates/patina-primitives/src/primitives/eval.rs`
+fed every argument through `extract_library_name_tagged`, which accepted only a
+flat list of symbols. All four modifiers (`only`, `except`, `prefix`, `rename`)
+therefore failed on their nested library list, even without combining modifiers.
+The same parser rejected the integer in `(srfi 1)`. It then loaded each library and
+copied every export, so accepting the syntax alone would not implement filtering
+or renaming. This path had no import-set semantics.
+
+**Measured boundary before the fix.** Original scratch programs were run on the baseline release
+binary, both backends, chibi and Gauche (`gosh -r7`). Each expression was evaluated
+in an environment constructed from the indicated import set; errors were caught
+outside that environment.
+
+| Import set / expression | Patina VM and tree-walker | chibi and Gauche |
+|---|---|---|
+| `(scheme base)` / `(+ 2 3)` | `5` | `5` |
+| No imports / literal `17` | `17` | `17` |
+| `(scheme base)` / `(let ((x 7)) x)` | `7` | `7` |
+| `(only (scheme base) car cons)` / `(car (cons 2 3))` | error | `2` |
+| `(except (scheme base) car)` / `(+ 2 3)` | error | `5` |
+| `(prefix (scheme base) p:)` / `(p:+ 2 3)` | error | `5` |
+| `(rename (scheme base) (+ plus))` / `(plus 2 3)` | error | `5` |
+| `(prefix (only (scheme base) car cons) p:)` / `(p:car (p:cons 2 3))` | error | `2` |
+| `(srfi 1)` / `(iota 3)` | error | `(0 1 2)` |
+| `(rename (only (scheme base) if) (if choose))` / `(choose #t 7 9)` | error | `7` |
+| `(prefix (scheme base) p:)` / `(p:let ((x 7)) x)` | error | `7` |
+
+The same nested `prefix`/`only` set in an ordinary program import returns `2`
+on all four engines. Focused Larceny runs on an unchanged, writable copy of the
+pinned suite measured **R7RS eval 4/5, load 3/4, and R6RS eval 1/2 on each backend**.
+Each remaining assertion in these three suites reached this defect; these counts
+established the acceptance targets verified below.
+
+**Implementation.** `primitive_environment` now reuses
+`LibraryDefinition::parse_import_set_tagged` from `patina-frontend`, then resolves
+exports through `ApplyContext::load_scheme_library` with one shared implementation.
+Modifiers apply from the library outward, including simultaneous renames, and
+retain the original exported values and syntax bindings. Missing names are checked
+for `only`, `except`, and `rename`; a pair-graph check rejects cyclic runtime
+arguments before entering the parser. Empty `only`, `except`, and `rename` lists
+are now accepted by the shared parser, as R7RS 5.2 permits.
+
+The regression for renamed `define` exposed a spelling-based immutability check
+in `eval`. It now follows the core-syntax binding before expansion and checks for
+outer definitions after expansion (including renamed `define-values`). A procedure
+renamed to `define` remains callable, and procedure-local definitions remain legal.
+No backend import-system or hygiene rewrite was needed.
+
+**Verification after the fix:**
+
+- `stdlib/eval.scm`: **44/44 on both backends**, covering modifiers, numeric names, empty sets, absent names, syntax/macros, renamed primitives, definition rejection, malformed lists and cycles. The Rust suite's assertion floor is 44.
+- Focused Larceny runs: R7RS `eval` **5/5**, `load` **4/4**, R6RS `eval` **2/2**, on **both backends**, using a writable copy of the unchanged pinned checkout. The full-lane scoreboards were not regenerated by this fix.
+- `cargo test -p patina-frontend -p patina-primitives -p patina-tests --lib --tests`: **641 passed, 4 ignored**. Both chibi backend compliance scripts: **1226/1226**. Clippy with all targets/features and warnings denied, rustfmt, and `git diff --check` passed.
+- `run_suite_oracles.sh stdlib/eval.scm`: both oracles match `DIVERGENCES.tsv`. Chibi 0.12 aborts on `only` after `rename`, and its aliased-definition error escapes the suite's handlers; those two rows are skipped there with reasons in the file. Gauche's existing immutable-environment defect also affects the alias, recorded as another row of the same defect. Malformed-input and missing-binding robustness checks are scoped to Patina, rather than requiring external implementations to signal errors or terminate on cyclic input.
+
+All regression cases are original; no Larceny test sources were copied into the
+repository. The pre-fix table above is retained as the diagnosis, not a current
+failure list.
 
 ### 11. `input-port-open?` on an output-only port is an error, not `#f` — both backends — ✅ fixed 2026-08-24
 - Ours: `input_port_open_on_an_output_only_port_is_false`

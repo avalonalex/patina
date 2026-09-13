@@ -152,34 +152,136 @@
 (test-error "defining into null-environment is refused" #t
   (eval '(define x 10) (null-environment 5)))
 
-;; ── A known-open defect ────────────────────────────────────────────────────
+;; ── Import sets (Larceny family 10) ────────────────────────────────────────
 
-;; **A known-open defect, quarantined so it announces its own fix.**
-;; `(prefix (only …) …)` is an ordinary import set, and `environment` should
-;; accept whatever `import` accepts. Ours rejects it: "library name component
-;; must be a symbol, got pair". chibi and Gauche both answer `1`, so this is
-;; our gap and not a difference of opinion.
-;;
-;; The `.rs` row asserted only that this *errors*, with a comment telling the
-;; next reader to replace the assertion by hand when it stops. SRFI 64 has the
-;; mechanism: `test-expect-fail` plus the **right** answer, so the row is xfail
-;; today and xpass the moment it is fixed — and the driver fails the build on
-;; xpass, which is what makes a quarantine retire itself rather than wait to be
-;; noticed.
-;;
-;; **The program is not the `.rs` one, because that one could never pass.** It
-;; used `(eval '(p:car '(1 2)) …)`, and the environment it builds holds exactly
-;; one binding — `p:car`. `quote` is not in it, so `'(1 2)` cannot be
-;; evaluated: chibi and Gauche both get past `environment` and then fail with
-;; "invalid application: (1 2)", because `(quote (1 2))` is an application of an
-;; unbound `quote`. The documented fixed answer of `1` was unreachable. Built
-;; from `cons` instead, the row means what it says, and the oracles reach the
-;; answer the quarantine is waiting for.
-;;
-;; Scoped, because the expectation is about our gap alone.
-(cond-expand (patina (test-expect-fail 1)) (else))
+;; Build the argument with cons: this environment intentionally has no quote.
 (test-equal "environment accepts a nested import set" 1
   (eval '(p:car (p:cons 1 2))
         (environment '(prefix (only (scheme base) car cons) p:))))
+
+(test-equal "environment accepts numeric library names" '(2 3 4 5)
+  (eval '(iota 4 2) (environment '(srfi 1))))
+
+;; Chibi 0.12 looks up the outer only names before applying the inner rename
+;; and aborts outside handlers ("importing unknown binding sum"). Gauche and
+;; R7RS 5.2 agree that only selects names after renaming.
+(cond-expand (chibi (test-skip 1)) (else))
+(test-equal "environment only selects renamed exports" 5
+  (eval '(sum 2 3)
+        (environment '(only (rename (scheme base) (+ sum)) sum))))
+
+(test-equal "environment applies modifiers from the inside outward" '(5 5)
+  (list (eval '(p:+ 2 3)
+              (environment '(except (prefix (scheme base) p:) p:car)))
+        (eval '(p:sum 2 3)
+              (environment '(prefix (rename (only (scheme base) +) (+ sum)) p:)))))
+
+(test-equal "environment accepts empty modifier lists" '(17 5 5)
+  (list (eval 17 (environment '(only (scheme base))))
+        (eval '(+ 2 3) (environment '(except (scheme base))))
+        (eval '(+ 2 3) (environment '(rename (scheme base))))))
+
+(test-equal "environment renames simultaneously" '(8 3)
+  (let ((env (environment '(rename (only (scheme base) car cdr cons)
+                                  (car cdr) (cdr car)))))
+    (list (eval '(car (cons 3 8)) env)
+          (eval '(cdr (cons 3 8)) env))))
+
+(test-equal "environment merges transformed sets" 7
+  (eval '(head (pair 7 9))
+        (environment '(rename (only (scheme base) car) (car head))
+                     '(rename (only (scheme base) cons) (cons pair)))))
+
+;; The evaluator must respect the binding, even when its new name is another
+;; primitive's usual name. A compiler fast path must not turn this into 42.
+(test-equal "environment can rename a primitive over another primitive name" 13
+  (eval '(* 6 7) (environment '(rename (only (scheme base) +) (+ *)))))
+
+(test-equal "a procedure named define is not a definition" 9
+  (eval '(define 4 5)
+        (environment '(rename (only (scheme base) +) (+ define)))))
+
+(test-equal "environment transforms core syntax bindings" 7
+  (eval '(choose #t 7 9)
+        (environment '(rename (only (scheme base) if) (if choose)))))
+
+(test-equal "environment preserves prefixed macro bindings" 12
+  (eval '(p:let ((x 5)) (p:+ x 7))
+        (environment '(prefix (scheme base) p:))))
+
+;; Chibi signals "immutable binding" outside the SRFI 64 assertion's
+;; handlers here (including an explicit guard), aborting the suite. An
+;; isolated probe confirms it refuses the aliased definition too.
+(cond-expand (chibi (test-skip 1)) (else))
+(test-error "a transformed environment remains immutable" #t
+  (eval '(def x 5)
+        (environment '(rename (only (scheme base) define) (define def)))))
+
+;; Definitions expanded from a macro must obey the same restriction, while
+;; definitions local to a returned procedure remain valid.
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "renamed define-values cannot extend an immutable environment" #t
+  (eval '(defs (x) 5)
+        (environment '(rename (scheme base) (define-values defs)))))
+
+(test-equal "eval permits local definitions in a returned procedure" 9
+  ((eval '(lambda (x) (define y (+ x 2)) y)
+         (environment '(scheme base))) 7))
+
+;; These invalid programs must fail on Patina. Chibi may report an unbound
+;; eval identifier outside Scheme handlers; malformed or cyclic import sets
+;; need not be rejected by other implementations. Keep those robustness
+;; checks local, without risking an oracle abort or hang.
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "only does not leak other exports" #t
+  (eval '(cdr (cons 1 2)) (environment '(only (scheme base) car cons))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "except removes its selected binding" #t
+  (eval '(car (cons 1 2)) (environment '(except (scheme base) car))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "rename does not retain the old binding" #t
+  (eval '(+ 2 3) (environment '(rename (scheme base) (+ sum)))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "prefix does not retain bare syntax" #t
+  (eval '(if #t 1 2) (environment '(prefix (scheme base) p:))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "only rejects a missing export" #t
+  (environment '(only (scheme base) no-such-export)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "except rejects a missing export" #t
+  (environment '(except (scheme base) no-such-export)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "rename rejects a missing export" #t
+  (environment '(rename (scheme base) (no-such-export new-name))))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "environment rejects a malformed prefix" #t
+  (environment '(prefix (scheme base) 7)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "environment rejects an improper import set" #t
+  (environment '(only (scheme base) car . cdr)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "environment rejects a negative library component" #t
+  (environment '(srfi -1)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "environment rejects a circular import list" #t
+  (let ((spec (list 'scheme 'base)))
+    (set-cdr! (cdr spec) spec)
+    (environment spec)))
+
+(cond-expand (patina) (else (test-skip 1)))
+(test-error "environment rejects an import modifier containing itself" #t
+  (let ((spec (list 'prefix #f 'p:)))
+    (set-car! (cdr spec) spec)
+    (environment spec)))
 
 (test-end)

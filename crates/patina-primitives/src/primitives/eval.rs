@@ -10,98 +10,176 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry};
-use patina_core::TaggedValue;
-use patina_frontend::Desugarer;
+use patina_core::{CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
+use patina_frontend::{Desugarer, ImportSet, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
 use patina_runtime::environment::Environment;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
-/// Extract library name from a TaggedValue list like (scheme base)
-fn extract_library_name_tagged(
-    tv: TaggedValue,
-    heap: &patina_core::Heap,
-) -> Result<Vec<String>, EvalError> {
-    let mut result = Vec::new();
-    let mut current = tv;
-
-    while !current.is_null() {
-        if !current.is_pair() {
-            return Err(EvalError::TypeError(format!(
-                "environment: expected a proper list for library name, got {}",
-                heap.type_name(current)
-            )));
+/// Runtime arguments can contain cycles even though source import declarations
+/// cannot. Check the pair graph before invoking the recursive import parser;
+/// shared, acyclic sublists are valid and must not be mistaken for cycles.
+fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), EvalError> {
+    let mut active = HashSet::new();
+    let mut complete = HashSet::new();
+    let mut work = vec![(tv, false)];
+    while let Some((value, leaving)) = work.pop() {
+        if leaving {
+            active.remove(&value.raw());
+            complete.insert(value.raw());
+            continue;
         }
-        let car = heap.car(current);
-        match heap.get_symbol_or_identifier_name(car) {
-            Some(name) => result.push(name.to_string()),
-            None => {
-                return Err(EvalError::TypeError(format!(
-                    "environment: library name component must be a symbol, got {}",
-                    heap.type_name(car)
-                )));
+        if complete.contains(&value.raw()) {
+            continue;
+        }
+        if let Some((car, cdr)) = heap.try_pair(value) {
+            if !active.insert(value.raw()) {
+                return Err(EvalError::InvalidSyntax(
+                    "environment: cyclic import set".to_string(),
+                ));
             }
+            work.push((value, true));
+            work.push((cdr, false));
+            work.push((car, false));
         }
-        current = heap.cdr(current);
     }
-
-    if result.is_empty() {
-        return Err(EvalError::TypeError(
-            "environment: library name cannot be empty".to_string(),
-        ));
-    }
-
-    Ok(result)
+    Ok(())
 }
 
-/// (environment list1 ...) → environment-specifier
-///
-/// Creates an immutable environment from the given import sets.
-/// Each argument should be a quoted list like '(scheme base).
+/// Resolve one set from the library outward. This path is shared by both
+/// backends; loading stays behind ApplyContext. Transform the exported names,
+/// retaining the original values (including macro and core-syntax bindings).
+fn environment_imports(
+    ctx: &dyn ApplyContext,
+    set: &ImportSet,
+) -> Result<BTreeMap<String, TaggedValue>, EvalError> {
+    let mut modifiers = Vec::new();
+    let mut current = set;
+    let library_name = loop {
+        match current {
+            ImportSet::Library(name) => break name,
+            ImportSet::Only { import_set, .. }
+            | ImportSet::Except { import_set, .. }
+            | ImportSet::Prefix { import_set, .. }
+            | ImportSet::Rename { import_set, .. } => {
+                modifiers.push(current);
+                current = import_set;
+            }
+        }
+    };
+    let library = ctx
+        .load_scheme_library(library_name)
+        .map_err(|e| EvalError::InvalidSyntax(format!("environment: cannot load library: {e}")))?;
+    let mut bindings: BTreeMap<_, _> = library
+        .exports_iter_tagged()
+        .map(|(name, value)| (name.clone(), value))
+        .collect();
+    let missing = |name: &str| {
+        EvalError::InvalidSyntax(format!(
+            "environment: identifier '{name}' not found in import set"
+        ))
+    };
+    for modifier in modifiers.into_iter().rev() {
+        match modifier {
+            ImportSet::Only { identifiers, .. } => {
+                let mut selected = BTreeMap::new();
+                for name in identifiers {
+                    selected.insert(
+                        name.clone(),
+                        *bindings.get(name).ok_or_else(|| missing(name))?,
+                    );
+                }
+                bindings = selected;
+            }
+            ImportSet::Except { identifiers, .. } => {
+                // Validate against the original set, including repeated names.
+                for name in identifiers {
+                    if !bindings.contains_key(name) {
+                        return Err(missing(name));
+                    }
+                }
+                for name in identifiers {
+                    bindings.remove(name);
+                }
+            }
+            ImportSet::Prefix { prefix, .. } => {
+                bindings = bindings
+                    .into_iter()
+                    .map(|(name, value)| (format!("{prefix}{name}"), value))
+                    .collect();
+            }
+            ImportSet::Rename { renames, .. } => {
+                for (old, _) in renames {
+                    if !bindings.contains_key(old) {
+                        return Err(missing(old));
+                    }
+                }
+                // Rename simultaneously: swaps must not overwrite an input
+                // binding before its own rename is applied.
+                let names: BTreeMap<_, _> = renames.iter().cloned().collect();
+                bindings = bindings
+                    .into_iter()
+                    .map(|(name, value)| (names.get(&name).cloned().unwrap_or(name), value))
+                    .collect();
+            }
+            ImportSet::Library(_) => unreachable!("only modifiers are stacked"),
+        }
+    }
+    Ok(bindings)
+}
+
+/// (environment import-set ...) → immutable environment-specifier
 fn primitive_environment(
     ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
 ) -> Result<TaggedValue, EvalError> {
     let heap = ctx.heap();
+    let import_sets = args
+        .into_iter()
+        .map(|arg| {
+            check_import_datum(arg, &heap.borrow())?;
+            LibraryDefinition::parse_import_set_tagged(arg, heap)
+                .map_err(|e| EvalError::InvalidSyntax(format!("environment: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    // Extract library names from tagged args
-    let lib_names: Vec<Vec<String>> = {
-        let heap_ref = heap.borrow();
-        args.iter()
-            .map(|tv| extract_library_name_tagged(*tv, &heap_ref))
-            .collect::<Result<Vec<_>, _>>()?
-    };
-
-    // Create a fresh empty environment sharing the global heap for TaggedValue compatibility
-    let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
-
-    // Process each import set argument
-    for lib_name in lib_names {
-        // Load the library
-        let library = ctx.load_scheme_library(&lib_name).map_err(|e| {
-            EvalError::InternalError(format!("environment: cannot load library: {}", e))
-        })?;
-
-        // Install exports into the new environment
-        for (name, tv) in library.exports_iter_tagged() {
-            env.define(name.clone(), tv);
+    let env = Rc::new(Environment::with_heap(heap.clone()));
+    for set in &import_sets {
+        for (name, value) in environment_imports(ctx, set)? {
+            env.define(name, value);
         }
     }
-
-    // Return as immutable environment specifier
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
-/// Check if a tagged value represents a definition form
-fn is_definition_tagged(tv: TaggedValue, heap: &patina_core::Heap) -> bool {
+/// Reject core definitions before desugaring: define-syntax installs its
+/// transformer during expansion. Follow the binding so aliases cannot bypass
+/// the immutable-environment check, and a procedure named define still works.
+fn is_definition_tagged(tv: TaggedValue, heap: &patina_core::Heap, env: &Environment) -> bool {
     if !tv.is_pair() {
         return false;
     }
-    let car = heap.car(tv);
-    match heap.get_symbol_or_identifier_name(car) {
-        Some(name) => name == "define" || name == "define-values" || name == "define-syntax",
-        None => false,
+    let form = heap
+        .get_symbol_or_identifier_name(heap.car(tv))
+        .and_then(|name| env.get(name))
+        .and_then(|value| heap.get_core_syntax(value));
+    matches!(form, Some(CoreForm::Define | CoreForm::DefineSyntax))
+}
+
+/// Macros such as define-values can expand to a sequence of definitions.
+/// Only inspect the outer body; definitions local to a lambda remain legal.
+fn has_top_level_definition(expr: &CoreExpr) -> bool {
+    let mut work = vec![expr];
+    while let Some(expr) = work.pop() {
+        match &expr.kind {
+            CoreExprKind::Define { .. } => return true,
+            CoreExprKind::Begin(body) => work.extend(body),
+            _ => {}
+        }
     }
+    false
 }
 
 /// (eval expr-or-def environment-specifier) → values
@@ -139,7 +217,7 @@ fn primitive_eval(
     };
 
     // Check if this is a definition
-    if is_definition_tagged(args[0], &heap.borrow()) && !mutable {
+    if is_definition_tagged(args[0], &heap.borrow(), &env) && !mutable {
         return Err(EvalError::InvalidSyntax(
             "eval: cannot define in immutable environment".to_string(),
         ));
@@ -147,9 +225,15 @@ fn primitive_eval(
 
     // Desugar the expression with macro-aware desugarer (tagged path)
     let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
-    let _core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
+    let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
         EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {}", e))
     })?;
+
+    if !mutable && has_top_level_definition(&core_expr) {
+        return Err(EvalError::InvalidSyntax(
+            "eval: cannot define in immutable environment".to_string(),
+        ));
+    }
 
     // Evaluate via CPS for full continuation support
     ctx.eval_expr(args[0], &env)
