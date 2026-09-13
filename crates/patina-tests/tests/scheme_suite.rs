@@ -111,7 +111,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/rationals.scm", 38),
     ("data/record-types.scm", 23),
     ("data/strings.scm", 149),
-    ("data/vectors.scm", 79),
+    ("data/vectors.scm", 80),
     ("expansion/core-forms.scm", 28),
     ("expansion/define-values.scm", 14),
     ("expansion/derived-forms.scm", 49),

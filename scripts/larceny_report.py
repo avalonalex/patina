@@ -86,6 +86,13 @@ class Source:
     def locate(self, expr):
         """Best-effort (path, line) for an expression, searching forward from
         the previous hit so repeated shapes resolve in suite order."""
+        # `test/unspec` prints its argument wrapped, as `(begin <arg> 'unspec)`,
+        # so the wrapper appears in the log and never in the source. Unwrap it
+        # and look for the argument, which is what the suite actually spells.
+        # Without this every `test/unspec` failure reports "(not located)".
+        unspec = re.fullmatch(r"\(begin (.*) 'unspec\)", expr)
+        if unspec:
+            expr = unspec.group(1)
         key = "".join(expr.split())
         for n in (80, 50, 30, 18):
             needle = key[:n]
@@ -190,9 +197,15 @@ def main():
     out = []
     w = out.append
     w("# Patina vs Larceny's R7RS test suite — by kind of problem\n")
-    w("**Generated:** %s  " % args.generated)
-    w("**Backend:** %s  " % args.backend)
-    w("**Lane:** %s  " % lane_desc)
+    # A backslash, not two trailing spaces: both are a Markdown hard break,
+    # and the tracked reports are checked with `git diff --check`, which
+    # reports trailing whitespace as an error. #308 converted the committed
+    # files by hand and left this generator emitting the spaces, so every
+    # regeneration put them back and every regeneration had to be cleaned up
+    # again.
+    w("**Generated:** %s\\" % args.generated)
+    w("**Backend:** %s\\" % args.backend)
+    w("**Lane:** %s\\" % lane_desc)
     w("**Suite:** larcenists/larceny @ `%s` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`\n" % args.commit[:12])
     w("This report quotes nothing from the suite. Each failing assertion is a permalink to the test case at the pinned commit, with the procedure under test; the per-suite logs beside this file (untracked) have the full text.\n")
     w("| | |\n|---|---|")
