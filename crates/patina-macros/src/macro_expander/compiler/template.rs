@@ -129,12 +129,15 @@ impl Compiler {
         if is_pair {
             let (items, tail) = self.collect_list_items(form)?;
 
-            // Check for quote form: (quote datum). Only outside a
-            // quasiquote: within one, `(quote b)` is two symbols of data and
-            // an `unquote` inside it is still evaluated — `` `(a '(b ,x)) ``
-            // is `(a (quote (b <x>)))` — so there it is compiled as the list
-            // it is, and the datum's symbols become identifiers the
-            // quasiquote evaluators strip back to symbols.
+            // An ellipsis escape written inside a quote: `'(... template)`.
+            //
+            // This is the only thing a `(quote datum)` template needs looked
+            // at specially. The datum itself is compiled like any other list,
+            // so its symbols are renamed and the evaluator strips them back
+            // to symbols — which is also why the check is confined to
+            // quasiquote depth zero: within a quasiquote, `(quote b)` is two
+            // symbols of data and an `unquote` inside it is still evaluated,
+            // `` `(a '(b ,x)) `` being `(a (quote (b <x>)))`.
             if self.quasiquote_depth == 0
                 && items.len() == 2
                 && self
@@ -160,42 +163,17 @@ impl Compiler {
                     }
                 }
 
-                // A quoted datum is compiled like any other list, so it
-                // falls through from here.
+                // No escape: fall through, and compile the whole form as the
+                // list it is.
                 //
-                // It used to take a shortcut when it held no pattern variable
-                // of *this* macro: the datum was emitted verbatim, with no
-                // hygiene renaming inside it. That is wrong for a macro that
-                // writes a macro, and wrong in a way nothing else catches.
-                // The inner `syntax-rules`'s own pattern variable is not a
-                // pattern variable of the outer macro, so `(quote x)` in the
-                // inner template took the shortcut and came out a bare
-                // symbol, while the same `x` in the inner *pattern* took the
-                // ordinary path and came out a scoped identifier. The inner
-                // macro then keyed its pattern variables by identifier
-                // identity, found no match for the bare symbol, and emitted
-                // it literally:
-                //
-                // ```scheme
-                // (define-syntax def-m
-                //   (syntax-rules ()
-                //     ((_ name)
-                //      (define-syntax name
-                //        (syntax-rules () ((_ x) (list x (quote x))))))))
-                // (def-m foo)
-                // (foo 42)     ; was (42 x); chibi and Gauche say (42 42)
-                // ```
-                //
-                // What the shortcut was written for is kept by the ordinary
-                // path: the `quote` at the head is a reference the template
-                // makes, like any other, and `compile_template` resolves it
-                // where the macro was *defined*. Emitted as a bare symbol it
-                // resolved where the macro was *used* — a program importing
-                // SRFI 101, whose `quote` builds random-access lists, got one
-                // where a library's template wrote `'(1 2)`. That is Larceny
-                // family 33's literal form, and the row pinning it still
-                // passes, because the head goes through `compile_template`
-                // here too.
+                // A shortcut used to sit here, emitting the datum verbatim
+                // when it held no pattern variable of *this* macro. That is
+                // wrong for a macro that writes a macro — the inner
+                // `syntax-rules`'s variable is not the outer's — and the
+                // ordinary path keeps what the shortcut was written for,
+                // since `quote` at the head is a reference like any other and
+                // resolves where the macro was defined (Larceny family 33).
+                // Triage family 13 has the repro and the reasoning.
             }
 
             // Check for ellipsis escape: (... template)

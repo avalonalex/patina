@@ -25,13 +25,14 @@
 ;;
 ;; ── Measured 2026-09-13 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   34 pass
-;;   chibi                     33 pass, 1 skipped (the Patina-scoped row)
-;;   Gauche                    33 pass, 1 skipped (the same)
+;;   patina VM / tree-walker   37 pass
+;;   chibi                     36 pass, 1 skipped (the Patina-scoped row)
+;;   Gauche                    36 pass, 1 skipped (the same)
 ;;
 ;; No oracle differs, and the register has no entry for this file. Previously
-;; measured 2026-09-11 at 30 / 29 / 29; the five rows added since are the
-;; quoted-pattern-variable block below.
+;; measured 2026-09-11 at 30 / 29 / 29; the seven rows added since are the
+;; quoted-pattern-variable block below. The count here is the driver's floor
+;; in `scheme_suite.rs` — if you add a row, both move.
 ;;
 ;; `(scheme eval)` is imported for one row that pins a *rejection* the macro
 ;; compiler makes: a `define-syntax` it refuses cannot sit in the file
@@ -405,6 +406,22 @@
 (test-equal "and still is when the macro was written by a macro" '(42 42)
   (generated-quoting-macro 42))
 
+;; Two expansion sites of one template do not share the datum they quote. The
+;; row is here because removing the shortcut changed this: the datum used to
+;; be emitted as one heap object every site reused, and is now built per site.
+;; R7RS §4.1.2 leaves it open — a literal "may be shared" — and chibi and
+;; Gauche both answer #f, so this pins the answer that agrees with them rather
+;; than a requirement. One site evaluated twice still yields one object, on
+;; all three implementations, which is what distinguishes sharing from
+;; allocation per evaluation.
+(define-syntax quoted-vector (syntax-rules () ((quoted-vector) '#(1 2 3))))
+(define (quoted-vector-once) (quoted-vector))
+
+(test-equal "two sites do not share a quoted vector" #f
+  (eq? (quoted-vector) (quoted-vector)))
+(test-equal "but one site evaluated twice does" #t
+  (eq? (quoted-vector-once) (quoted-vector-once)))
+
 ;; The shape the defect was found through: a generated macro that checks its
 ;; own argument against a quoted list built from the outer macro's variables.
 ;; `(r6rs enums)`'s `define-enumeration` is this, and its member check read
@@ -431,6 +448,11 @@
 ;; now, which is what chibi ("too many ...'s") and Gauche ("repetition of
 ;; constant form") do. `eval` because the refusal happens while the
 ;; `define-syntax` is compiled.
+;;
+;; `test-error` passes on any error, so what keeps this row honest is that
+;; nothing else in it can raise: were the macro accepted, `(repeat-a-constant
+;; 1)` would return `(1 (a ...))` rather than fail. That is the same reasoning
+;; the `eval` rows in `quasiquote-templates.scm` spell out for themselves.
 (test-error "an ellipsis over a constant is refused inside quote too" #t
   (eval '(begin
            (define-syntax repeat-a-constant
