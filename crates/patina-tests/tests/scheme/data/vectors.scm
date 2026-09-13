@@ -125,6 +125,21 @@
     (vector-copy! v 0 v 2 5)
     v))
 
+;; R7RS §6.8 says nothing about what `end` defaults to, and says it is an
+;; error if `(- (vector-length to) at)` is less than `(- end start)`. Patina
+;; defaults `end` to the source's length, so copying a five-element vector to
+;; index 2 of itself asks for five elements of room where three remain, and is
+;; refused. chibi and Gauche refuse it too.
+;;
+;; Pinned because Larceny's suite expects the opposite — it truncates the copy
+;; and answers `#(1 2 1 2 3)` — on a line its own author marked
+;; `; FIXME: R7RS doesn't say`. Three implementations against one, on a
+;; question the report leaves open, is a decision worth writing down rather
+;; than a row to chase.
+(test-error "vector-copy! with end omitted will not overrun the destination" #t
+  (let ((v (vector 1 2 3 4 5)))
+    (vector-copy! v 2 v 0)))
+
 (test-equal "vector-append of nothing" #() (vector-append))
 (test-equal "vector-append of the empty vector" #() (vector-append #()))
 (test-equal "vector-append of two empty vectors" #() (vector-append #() #()))
