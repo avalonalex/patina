@@ -310,6 +310,25 @@ as well, so that any reference of that spelling could reach it, is what let a
 `let-syntax ((quote …))` around a *call* capture the callee template's
 `quote` (Larceny triage family 33).
 
+**Quoted data in a template is not exempt from any of this.** `(quote datum)`
+compiles as the list it is: the head is a reference resolved where the macro
+was written, and the datum's symbols are renamed like any others, with the
+evaluator stripping them back to symbols. The one form given special
+treatment is an ellipsis escape written inside a quote, `'(... ⟨template⟩)`.
+
+There used to be a shortcut — a datum holding no pattern variable *of the
+macro being compiled* was emitted verbatim, hygiene and all skipped — and it
+is worth knowing why it is gone, because the reasoning it failed on is easy
+to repeat. A macro that writes a macro compiles the inner template as data,
+so the inner `syntax-rules`'s own pattern variable is not a pattern variable
+of the outer macro. `(quote x)` inside it therefore took the shortcut and
+came out a bare symbol while the same `x` in the inner *pattern* was renamed,
+leaving the inner macro unable to match its own template against its own
+pattern. Removing the shortcut also stopped two expansion sites of one
+template from sharing the object they quote; R7RS §4.1.2 permits either, and
+chibi and Gauche both build one per site. Triage family 13 carries the
+measurements.
+
 ### Literal Matching
 
 Literals use `bound-identifier=?` semantics:

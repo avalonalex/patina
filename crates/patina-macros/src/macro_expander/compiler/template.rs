@@ -129,12 +129,15 @@ impl Compiler {
         if is_pair {
             let (items, tail) = self.collect_list_items(form)?;
 
-            // Check for quote form: (quote datum). Only outside a
-            // quasiquote: within one, `(quote b)` is two symbols of data and
-            // an `unquote` inside it is still evaluated — `` `(a '(b ,x)) ``
-            // is `(a (quote (b <x>)))` — so there it is compiled as the list
-            // it is, and the datum's symbols become identifiers the
-            // quasiquote evaluators strip back to symbols.
+            // An ellipsis escape written inside a quote: `'(... template)`.
+            //
+            // This is the only thing a `(quote datum)` template needs looked
+            // at specially. The datum itself is compiled like any other list,
+            // so its symbols are renamed and the evaluator strips them back
+            // to symbols — which is also why the check is confined to
+            // quasiquote depth zero: within a quasiquote, `(quote b)` is two
+            // symbols of data and an `unquote` inside it is still evaluated,
+            // `` `(a '(b ,x)) `` being `(a (quote (b <x>)))`.
             if self.quasiquote_depth == 0
                 && items.len() == 2
                 && self
@@ -160,28 +163,17 @@ impl Compiler {
                     }
                 }
 
-                // Check if the quoted datum contains pattern variables
-                if self.contains_pattern_vars(items[1]) {
-                    // Has pattern variables - compile normally so they expand
-                    // Fall through to normal list compilation
-                } else {
-                    // No pattern variables: the datum is inserted verbatim,
-                    // with no hygiene renaming inside it. The `quote` in
-                    // front of it is not part of the datum — it is a
-                    // reference the template makes, like any other — and is
-                    // compiled as one, so that it resolves where the macro
-                    // was *defined*. Emitted as a bare symbol with the rest,
-                    // as it used to be, it resolved where the macro was
-                    // *used*: a program importing SRFI 101, whose `quote`
-                    // builds random-access lists, got one where a library's
-                    // template wrote `'(1 2)`. The literal form of Larceny
-                    // family 33.
-                    let head = self.compile_template(items[0], level)?;
-                    return Ok(Template::List(vec![
-                        head,
-                        self.make_literal_template(items[1]),
-                    ]));
-                }
+                // No escape: fall through, and compile the whole form as the
+                // list it is.
+                //
+                // A shortcut used to sit here, emitting the datum verbatim
+                // when it held no pattern variable of *this* macro. That is
+                // wrong for a macro that writes a macro — the inner
+                // `syntax-rules`'s variable is not the outer's — and the
+                // ordinary path keeps what the shortcut was written for,
+                // since `quote` at the head is a reference like any other and
+                // resolves where the macro was defined (Larceny family 33).
+                // Triage family 13 has the repro and the reasoning.
             }
 
             // Check for ellipsis escape: (... template)

@@ -23,15 +23,23 @@
 ;; macro twice (`my-when` and `my-unless`, which the nesting row reuses), this
 ;; file defines it once and says so.
 ;;
-;; ── Measured 2026-09-11 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
+;; ── Measured 2026-09-13 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
 ;;
-;;   patina VM / tree-walker   30 pass
-;;   chibi                     29 pass, 1 skipped (the Patina-scoped row)
-;;   Gauche                    29 pass, 1 skipped (the same)
+;;   patina VM / tree-walker   37 pass
+;;   chibi                     36 pass, 1 skipped (the Patina-scoped row)
+;;   Gauche                    36 pass, 1 skipped (the same)
 ;;
-;; No oracle differs, and the register has no entry for this file.
+;; No oracle differs, and the register has no entry for this file. Previously
+;; measured 2026-09-11 at 30 / 29 / 29; the seven rows added since are the
+;; quoted-pattern-variable block below. The count here is the driver's floor
+;; in `scheme_suite.rs` — if you add a row, both move.
+;;
+;; `(scheme eval)` is imported for one row that pins a *rejection* the macro
+;; compiler makes: a `define-syntax` it refuses cannot sit in the file
+;; directly, since the file would not compile. `quasiquote-templates.scm`
+;; documents the same idiom for the same reason.
 
-(import (scheme base) (srfi 64))
+(import (scheme base) (scheme eval) (srfi 64))
 
 (test-begin "syntax-rules")
 
@@ -367,6 +375,90 @@
   (list
     (my-assert (= 2 2))
     (my-assert (> 5 3))))
+
+;; A pattern variable inside `quote` is substituted, and stays substituted
+;; when the macro holding it was itself written by a macro. Regression: the
+;; template compiler took a shortcut for a quoted datum holding no pattern
+;; variable of the macro being compiled, emitting it verbatim with no hygiene
+;; renaming. The inner macro's variable is not the outer macro's, so `'x`
+;; below took that shortcut and came out a bare symbol, while the same `x` in
+;; the inner *pattern* was renamed — leaving the inner macro unable to match
+;; its own template against its own pattern, and answering `(42 x)` where
+;; chibi and Gauche both answer `(42 42)`.
+;;
+;; The first row is the plain case, which always worked; the pair is what
+;; distinguishes the defect from a general failure to substitute under quote.
+(define-syntax quoting-macro
+  (syntax-rules ()
+    ((quoting-macro x) (list x (quote x)))))
+
+(test-equal "a pattern variable under quote is substituted" '(42 42)
+  (quoting-macro 42))
+
+(define-syntax define-quoting-macro
+  (syntax-rules ()
+    ((define-quoting-macro name)
+     (define-syntax name
+       (syntax-rules ()
+         ((name x) (list x (quote x))))))))
+(define-quoting-macro generated-quoting-macro)
+
+(test-equal "and still is when the macro was written by a macro" '(42 42)
+  (generated-quoting-macro 42))
+
+;; Two expansion sites of one template do not share the datum they quote. The
+;; row is here because removing the shortcut changed this: the datum used to
+;; be emitted as one heap object every site reused, and is now built per site.
+;; R7RS §4.1.2 leaves it open — a literal "may be shared" — and chibi and
+;; Gauche both answer #f, so this pins the answer that agrees with them rather
+;; than a requirement. One site evaluated twice still yields one object, on
+;; all three implementations, which is what distinguishes sharing from
+;; allocation per evaluation.
+(define-syntax quoted-vector (syntax-rules () ((quoted-vector) '#(1 2 3))))
+(define (quoted-vector-once) (quoted-vector))
+
+(test-equal "two sites do not share a quoted vector" #f
+  (eq? (quoted-vector) (quoted-vector)))
+(test-equal "but one site evaluated twice does" #t
+  (eq? (quoted-vector-once) (quoted-vector-once)))
+
+;; The shape the defect was found through: a generated macro that checks its
+;; own argument against a quoted list built from the outer macro's variables.
+;; `(r6rs enums)`'s `define-enumeration` is this, and its member check read
+;; the literal symbol the template wrote instead of the caller's.
+(define-syntax define-member-check
+  (syntax-rules ()
+    ((define-member-check check-name member ...)
+     (define-syntax check-name
+       (syntax-rules ()
+         ((check-name candidate)
+          (if (memq (quote candidate) (quote (member ...)))
+              (quote candidate)
+              'not-a-member)))))))
+(define-member-check colour? black white)
+
+(test-equal "a generated macro checks its argument, not the template's name"
+  'white (colour? white))
+(test-equal "and reports a non-member as one" 'not-a-member (colour? purple))
+
+;; The other half of removing that shortcut, and the one row here that pins a
+;; refusal. An ellipsis needs a pattern variable to repeat, and the compiler
+;; says so — but a quoted datum used to skip the check, so `'(a ...)` was
+;; accepted in a template and `(a ...)` beside it was not. Both are refused
+;; now, which is what chibi ("too many ...'s") and Gauche ("repetition of
+;; constant form") do. `eval` because the refusal happens while the
+;; `define-syntax` is compiled.
+;;
+;; `test-error` passes on any error, so what keeps this row honest is that
+;; nothing else in it can raise: were the macro accepted, `(repeat-a-constant
+;; 1)` would return `(1 (a ...))` rather than fail. That is the same reasoning
+;; the `eval` rows in `quasiquote-templates.scm` spell out for themselves.
+(test-error "an ellipsis over a constant is refused inside quote too" #t
+  (eval '(begin
+           (define-syntax repeat-a-constant
+             (syntax-rules () ((repeat-a-constant y) (list y '(a ...)))))
+           (repeat-a-constant 1))
+        (environment '(scheme base))))
 
 ;; A literal vector passed through a pattern variable compares equal to a
 ;; quoted one. Regression: vectors from pattern variables once had their
