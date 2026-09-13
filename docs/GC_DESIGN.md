@@ -256,7 +256,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | `CompiledMacro` pattern/template literal `TaggedValue`s (`compiled_macro.rs:78,:280`) |
-| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `prompt_stack` — each frame's handler and the continuation below it (`trace_prompt_frame`; the tag is a plain `Rc` struct), `captured_cont_env` (recursive), `resume` (`trace_cont_value`), body literals (§4.4) |
+| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `prompt_stack` — each frame's handler and the continuation below it (`trace_prompt_frame`; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`trace_cont_value`), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 | `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
@@ -640,6 +640,21 @@ This is why every `Rc`-shared structure the visitor walks has a dedup set
 own shared structures. **Stage 3 check:** `VmContinuation` snapshots and
 `CodeObject` sharing have the same potential; if a VM root provider walks an
 `Rc` graph, it must route through `visit_once`.
+
+**Dedup does not bound the Rust call stack.** Larceny family 6 exposed this
+on 2026-09-12: `trace_cont_value(Local)` called `trace_cont_env`, which called
+`trace_cont_value` for the next local continuation. Each node was visited
+only once, but a deep chain still overflowed during collection. The existing
+iterative walk through boxed wrappers did not cover this edge.
+`trace_cont_env` now deduplicates on enqueue and queues an O(1) `ContEnv`
+snapshot. `GcVisitor::drain` processes these alongside heap values and
+captured continuations until all three worklists are empty. The snapshot
+keeps queued entries alive, and every local continuation still traces its
+environment, expression literals and captured continuation environment.
+`collection_at_deep_call_depth_preserves_suspended_values` in
+`crates/patina-tests/tests/gc_tree_walker.rs` collects with 50,000 suspended
+calls and then reads the distinct heap pair retained by each call; the
+depth-30 timing guard beside it continues to check shared-tail dedup.
 
 ### 9.5 Root sets that grow without bound (measured)
 

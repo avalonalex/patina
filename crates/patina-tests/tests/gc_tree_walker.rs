@@ -47,6 +47,28 @@ fn collection_inside_higher_order_primitive() {
 }
 
 #[test]
+fn collection_at_deep_call_depth_preserves_suspended_values() {
+    // Larceny family 6: Local -> ContEnv -> Local was still traced
+    // recursively despite the evaluator's trampoline. A collection while
+    // thousands of non-tail calls were suspended overflowed the Rust stack.
+    // Each frame retains a different heap pair used only after its recursive
+    // call returns, so skipping the deep roots cannot make this test pass.
+    let code = r#"
+        (import (patina debug))
+        (define before (cdr (assq 'collections (gc-stats))))
+        (define (nest n)
+          (if (= n 0)
+              (begin (gc) 0)
+              (let ((saved (cons n '())))
+                (let ((result (nest (- n 1))))
+                  (+ result (car saved))))))
+        (define result (nest 50000))
+        (list result (> (cdr (assq 'collections (gc-stats))) before))
+    "#;
+    assert_eq!(eval_program_tree_walker(code), "(1250025000 #t)");
+}
+
+#[test]
 fn deeply_nested_continuations_collect_promptly() {
     // Regression guard: continuation environments are a persistent Rc list
     // whose nodes each capture the chain below them, so tracing without
