@@ -147,9 +147,13 @@ patina> (define-syntax when
             ((when test body ...)
              (if test (begin body ...)))))
 
+patina> (import (scheme write))
 patina> (when (> 3 2) (display "yes\n"))
 yes
 ```
+
+The default environment provides `(scheme base)`. Import `(scheme read)` for
+`read`, and `(scheme write)` for `write` and `display`, including in the REPL.
 
 The `examples/` directory contains complete programs in portable R7RS-small
 Scheme — a sudoku solver (reads puzzles in the [Project Euler problem 96](https://projecteuler.net/problem=96)

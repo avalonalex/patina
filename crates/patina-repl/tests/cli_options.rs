@@ -32,7 +32,7 @@ fn write_dup_script(dir: &Path) -> String {
     let script = dir.join("prog.scm");
     fs::write(
         &script,
-        "(import (scheme base) (dup))\n(display v)\n(newline)\n",
+        "(import (scheme base) (scheme write) (dup))\n(display v)\n(newline)\n",
     )
     .unwrap();
     script.to_str().unwrap().to_string()
@@ -190,7 +190,7 @@ fn supplied_libraries_need_an_explicit_root() {
     let script = dir.path().join("prog.scm");
     fs::write(
         &script,
-        "(import (scheme base) (chibi filesystem))\n(display (procedure? directory-files))\n",
+        "(import (scheme base) (scheme write) (chibi filesystem))\n(display (procedure? directory-files))\n",
     )
     .unwrap();
     let script = script.to_str().unwrap();

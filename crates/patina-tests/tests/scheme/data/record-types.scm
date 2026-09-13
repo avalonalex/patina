@@ -22,7 +22,7 @@
 ;;
 ;; Divergences are recorded in `DIVERGENCES.tsv`, not restated here.
 
-(import (scheme base) (srfi 64))
+(import (scheme base) (scheme write) (srfi 64))
 
 (test-begin "record-types")
 

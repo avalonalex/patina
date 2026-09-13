@@ -155,8 +155,6 @@
     flush-output-port
     ;; EOF
     eof-object eof-object?
-    ;; Read/write/display (basic)
-    read write display
 
     ;; === System interface (§6.14) ===
     features

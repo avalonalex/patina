@@ -23,7 +23,7 @@ fn test_can_load_scheme_base() {
     assert!(lib.exports_identifier("cdr"));
     assert!(lib.exports_identifier("list"));
     assert!(lib.exports_identifier("map"));
-    assert!(lib.exports_identifier("display"));
+    assert!(lib.exports_identifier("write-string"));
     assert!(lib.exports_identifier("equal?"));
 
     // Should have many exports

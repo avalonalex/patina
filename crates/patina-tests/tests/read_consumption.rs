@@ -52,7 +52,7 @@ fn test_file_port_multiple_datums_one_line() {
     let f = TempFile::new("datums_one_line", "5 40 102334155\n");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme read))
         (define p (open-input-file "{path}"))
         (let* ((a (read p))
                (b (read p))
@@ -71,7 +71,7 @@ fn test_file_port_datums_across_lines() {
     let f = TempFile::new("datums_across_lines", "1\n(2\n 3)\n4 5\n");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme read))
         (define p (open-input-file "{path}"))
         (let* ((a (read p))
                (b (read p))
@@ -92,7 +92,7 @@ fn test_file_port_read_then_read_line() {
     let f = TempFile::new("read_then_read_line", "7 rest of line\nnext\n");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme read))
         (define p (open-input-file "{path}"))
         (let* ((a (read p))
                (l1 (read-line p))
@@ -110,7 +110,7 @@ fn test_file_port_read_then_read_char() {
     let f = TempFile::new("read_then_read_char", "7 x\n");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme read))
         (define p (open-input-file "{path}"))
         (let* ((a (read p))
                (c1 (read-char p))
@@ -128,7 +128,7 @@ fn test_file_port_datum_without_trailing_newline() {
     let f = TempFile::new("no_trailing_newline", "1 2");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme read))
         (define p (open-input-file "{path}"))
         (let* ((a (read p))
                (b (read p))
