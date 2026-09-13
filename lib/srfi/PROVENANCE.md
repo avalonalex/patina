@@ -468,7 +468,12 @@ byte-identical are pinned by
 `crates/patina-tests/tests/bundled_provenance.rs` (its `PINNED` table is the
 authoritative scope), so an unrecorded edit fails the suite.
 
-A file that is *derived* from upstream rather than copied — `130.scm`'s
-sibling `130.chibi-string.scm`, an inlined subset with renames — is not
-byte-identical to anything and so is not pinned, the same boundary the adapted
-ports above sit on. Its header carries what it was derived from and how.
+`130.chibi-string.scm` is derived from upstream: an inlined subset with
+renames, rather than a byte-identical copy. Its header records that derivation,
+and `bundled_provenance.rs` pins the result so later changes remain deliberate.
+The two `PATINA LOCAL EDIT` sites added for #204 fix inherited predicate defects:
+`string-any` starts at the requested cursor, and `string-every` uses a bounded
+scan that preserves the final successful predicate result instead of converting
+it to a boolean. SRFI 130's predicate specification requires both behaviors;
+`tests/scheme/srfi/string-cursors.scm` covers them on both backends, with Chibi's
+contrary results recorded in `DIVERGENCES.tsv`.

@@ -362,6 +362,17 @@ incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now pass
 advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
 finally report that it needs `(chibi net)`, which needs FFI.
 
+**SRFI 130 bounded predicates (#204), 2026-09-12.** The inlined `string-any`
+now starts at the requested cursor; `string-every` has its own bounded scan so it
+also preserves the final successful predicate result, as SRFI 130 requires.
+Regression rows in `tests/scheme/srfi/string-cursors.scm` cover both bounds,
+start-only calls, Unicode cursors, empty ranges, witness values, and short-circuiting.
+The sibling find/skip/count paths were audited through their public SRFI names;
+640 bounded-range probes passed on each backend before the fix. Chibi reproduces
+the predicate defects; the suite's differences are recorded in `DIVERGENCES.tsv`.
+The unchanged upstream suite now has one documented incorrect expectation:
+`string-every` returning 65 instead of its expected `#t` (218/219 agree).
+
 **`build_corpus.py --offline` no longer shrinks the corpus** — ✅ **fixed 2026-08-14.** It used to
 delete ten packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) without an error: their
 `license_evidence` is `srfi-canonical-document`, so their licence was established by fetching

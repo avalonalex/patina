@@ -13,7 +13,8 @@
 ;; rather than matching text, since the two libraries deliberately export many
 ;; of the same identifiers. Five internal helpers come with them (`->cursor`,
 ;; `make-char-predicate`, `complement`, `string-index->cursor`,
-;; `string-concatenate`). Bodies are verbatim.
+;; `string-concatenate`). Bodies are verbatim except for the marked #204
+;; predicate fixes below.
 ;;
 ;; Verified minimal: dropping any one definition fails upstream's
 ;; 219-assertion suite. `%string-index->cursor` is the one whose reachability
@@ -132,23 +133,17 @@
 ;;> \var{char-set-contains?}).  Always returns false if \var{str} is
 ;;> empty.
 
-;; INHERITED UPSTREAM DEFECT, not a local edit: the `start` argument is used
-;; for the emptiness guard below and then *ignored* by the scan, which starts
-;; at `string-cursor-start`. So `(string-any char-numeric? "1abc" 1 4)` answers
-;; `#t` where SRFI 130 requires `#f`, and `string-every` inherits it by
-;; delegation. Present identically in the `(chibi string)` this was taken from,
-;; and upstream's 219-assertion suite does not cover the bounded forms.
-;; Recorded rather than fixed here: #198 moved this code, and changing what it
-;; computes is a conformance fix that wants its own commit and its own test.
+;; PATINA LOCAL EDIT: #204. Upstream computes start only for the emptiness
+;; guard, then scans from the beginning. Share the converted cursor with the
+;; scan so predicates never see characters outside the requested range.
 (define (string-any check str . o)
   (let ((pred (make-char-predicate check))
+        (start (if (pair? o) (->cursor str (car o)) (string-cursor-start str)))
         (end (if (and (pair? o) (pair? (cdr o)))
                  (->cursor str (cadr o))
                  (string-cursor-end str))))
-    (and (string-cursor>? end (if (pair? o)
-                                  (->cursor str (car o))
-                                  (string-cursor-start str)))
-         (let lp ((i (string-cursor-start str)))
+    (and (string-cursor>? end start)
+         (let lp ((i start))
            (let ((i2 (%string-cursor-next str i))
                  (ch (string-cursor-ref str i)))
              (if (string-cursor>=? i2 end)
@@ -159,8 +154,22 @@
 ;;> \var{str}.  \var{check} can be a procedure, char or char-set as in
 ;;> \scheme{string-any}.  Always returns true if \var{str} is empty.
 
+;; PATINA LOCAL EDIT: #204. Negating string-any discards the witness that
+;; SRFI 130 requires: the final predicate result for a nonempty successful
+;; range. Scan from start, stop on #f, and tail-call the last predicate.
 (define (string-every check str . o)
-  (not (apply string-any (complement (make-char-predicate check)) str o)))
+  (let ((pred (make-char-predicate check))
+        (start (if (pair? o) (->cursor str (car o)) (string-cursor-start str)))
+        (end (if (and (pair? o) (pair? (cdr o)))
+                 (->cursor str (cadr o))
+                 (string-cursor-end str))))
+    (or (string-cursor>=? start end)
+        (let lp ((i start))
+          (let ((i2 (%string-cursor-next str i))
+                (ch (string-cursor-ref str i)))
+            (if (string-cursor>=? i2 end)
+                (pred ch)
+                (and (pred ch) (lp i2))))))))
 
 ;;> Returns a cursor pointing to the first position from the left in
 ;;> string for which \var{check} is true.  \var{check} can be a

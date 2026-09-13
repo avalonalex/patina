@@ -190,9 +190,9 @@ macro_rules! suite_tests {
 
 // The expectations table: (test name, library under test, suite library,
 // expected failures, minimum assertions run). Not a skip list — a non-zero
-// failure entry is a defect in *our* port, recorded rather than hidden, and
-// the assertion floor is the count the suite ran when the expectation was
-// recorded (2026-08-12; chibi rows and SRFI 14, 2026-08-19).
+// failure entry records a defect in our port or an explicitly documented
+// upstream expectation, rather than hiding it. The assertion floor is the
+// count the suite ran when the expectation was recorded (2026-08-12; chibi rows and SRFI 14, 2026-08-19).
 suite_tests! {
     (srfi_151_bitwise, "srfi 151", "(srfi 151 test)", 0, 145),
     (srfi_143_fixnum, "srfi 143", "(srfi 143 test)", 0, 141),
@@ -206,8 +206,11 @@ suite_tests! {
     (srfi_128_comparator, "srfi 128", "(srfi 128 test)", 0, 170),
     // Adapted, not verbatim: its two chibi char-set imports were replaced by
     // `(srfi 14)`, test bodies untouched. Why, in
-    // scheme_tests/upstream/README.md.
-    (srfi_130_string, "srfi 130", "(srfi 130 test)", 0, 219),
+    // scheme_tests/upstream/README.md. #204 fixes string-every's witness:
+    // upstream expects #t for (string-every char->integer "aAbA"), but SRFI
+    // 130 requires the final predicate result, 65. Keep that upstream row;
+    // tests/scheme/srfi/string-cursors.scm asserts the specified behavior.
+    (srfi_130_string, "srfi 130", "(srfi 130 test)", 1, 219),
     (srfi_158_generator, "srfi 158", "(srfi 158 test)", 0, 76),
     // The other adapted suite: imports adapted, test bodies untouched. Why,
     // in scheme_tests/upstream/README.md.
@@ -225,8 +228,8 @@ suite_tests! {
     // added the bounded-prefix assertion for it. The reference body Patina
     // ships never had the defect, so the new assertion passed on arrival.
     (srfi_41_stream, "srfi 41", "(srfi 41 test)", 0, 187),
-    // The one row whose non-zero failure count is *not* ours, against the
-    // convention above. chibi's suite does `(list-queue-append! x …)` and
+    // Another upstream expectation rather than a defect in our port: chibi's
+    // suite does `(list-queue-append! x …)` and
     // then asserts `x` is unchanged; SRFI 117 says of that procedure "it is
     // an error to assume anything about the contents of the list-queues
     // after the procedure returns", so the assertion tests chibi's own
