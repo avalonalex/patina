@@ -745,15 +745,18 @@ impl Parser {
 
         // An exactness prefix applies to the whole number (R7RS 6.2.5), so a
         // rectangular complex gets it on each part: `#e1.5+2i` is 3/2+2i.
-        let rectangular =
-            if exactness.is_some() && radix == 10 && (rest.ends_with('i') || rest.ends_with('I')) {
-                Self::rectangular_parts(&rest[..rest.len() - 1])
-            } else {
-                None
-            };
+        // Non-decimal rectangular components likewise share the radix; do
+        // not treat hexadecimal digits like e/f as decimal exponent markers.
+        let rectangular = if (exactness.is_some() || radix != 10)
+            && (rest.ends_with('i') || rest.ends_with('I'))
+        {
+            Self::rectangular_parts(&rest[..rest.len() - 1])
+        } else {
+            None
+        };
         if let Some((re, im)) = rectangular {
             let part = |text: &str| -> Result<TaggedValue, ParseError> {
-                let exact = if exactness == Some(true) {
+                let exact = if exactness == Some(true) && radix == 10 {
                     Self::exact_decimal(text)
                 } else {
                     None
@@ -761,7 +764,13 @@ impl Parser {
                 match exact {
                     Some(ratio) => Ok(self.tagged_rational(ratio?)),
                     None => {
-                        let tv = self.parse_real_component_as_tagged(text)?;
+                        let tv = if radix == 10 {
+                            self.parse_real_component_as_tagged(text)?
+                        } else if text.contains('/') {
+                            self.parse_rational_with_radix(text, radix)?
+                        } else {
+                            self.parse_integer_with_radix(text, radix)?
+                        };
                         self.apply_exactness(tv, exactness, s)
                     }
                 }

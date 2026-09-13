@@ -47,7 +47,7 @@
 ;; `scripts/run_suite_oracles.sh` checks it. Run that rather than trusting a
 ;; comment: it is the file's tallies that went stale twice during Phase 1.
 
-(import (scheme base) (scheme write) (scheme inexact) (scheme complex) (srfi 64))
+(import (scheme base) (scheme read) (scheme write) (scheme inexact) (scheme complex) (srfi 64))
 
 (define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
 
@@ -518,6 +518,62 @@
                (make-rectangular 1.0 2.0) (make-rectangular 0.0 1.0)
                (make-rectangular 1.0 -1.0) (make-rectangular 1.0 +inf.0)
                (make-rectangular 0.0 +inf.0)))))
+
+;; Family 43: each exact component must use the requested radix, with no
+;; radix prefix in the result (R7RS 6.2.7). Check both explicit-radix reads
+;; and reads with a single prefix, preserving exactness as well as value.
+(define (exact-complex-radix-round-trips? z)
+  (let loop ((radices '(2 8 10 16)) (prefixes '("#b" "#o" "#d" "#x")))
+    (if (null? radices)
+        #t
+        (let* ((radix (car radices))
+               (text (number->string z radix))
+               (plain (string->number text radix))
+               (prefixed (string->number (string-append (car prefixes) text))))
+          (and (not (char=? (string-ref text 0) #\#))
+               (eqv? z plain) (exact? plain)
+               (eqv? z prefixed) (exact? prefixed)
+               (loop (cdr radices) (cdr prefixes)))))))
+
+;; Exact non-real complex numbers are optional; Gauche has none.
+(unless (exact? 1+2i) (test-skip 4))
+(test-equal "exact complex radix round-trips preserve signs and unit parts"
+  '(#t #t #t #t #t #t #t #t #t #t)
+  (map exact-complex-radix-round-trips?
+       '(14+15i -14+15i 14-15i -14-15i +15i -15i +i -i 14+i -14-i)))
+(test-equal "exact complex radix round-trips preserve rational components"
+  '(#t #t #t #t #t)
+  (map exact-complex-radix-round-trips?
+       '(7/13+11/17i -7/13+11/17i 7/13-11/17i +11/17i -11/17i)))
+(test-equal "exact complex radix round-trips preserve bignum components"
+  '(#t #t #t)
+  (let ((n (+ (expt 2 200) 15)))
+    (map exact-complex-radix-round-trips?
+         (list (make-rectangular n (- n))
+               (make-rectangular (- n) 1)
+               (make-rectangular (/ n 13) (/ (- n) 17))))))
+
+(test-equal "the reader shares radix and exactness across complex components"
+  '(#t #t #t #t #t)
+  (map (lambda (text expected)
+         (eqv? (read (open-input-string text)) expected))
+       '("#xE+Fi" "#E#X-E/Di" "#X#E1+Fi" "#i#b10+11i" "#o#i-10-11i")
+       '(14+15i -14/13i 1+15i 2.0+3.0i -8.0-9.0i)))
+(test-equal "complex radix reads reject invalid component digits and syntax"
+  '(#f #f #f #f)
+  (map string->number '("#b1+2i" "#o1+8i" "#x1/+fi" "#x1+2+3i")))
+
+;; Patina's existing non-decimal restriction for inexact parts is unchanged.
+(cond-expand (patina) (else (test-skip 1)))
+(test-equal "non-decimal complex formatting still rejects inexact components"
+  '(#t #t #t)
+  (map (lambda (radix)
+         (let loop ((values '(1.0+2i 1+2.0i 1.0+2.0i 0.0+2i 1+0.0i)))
+           (or (null? values)
+               (and (guard (e (#t #t))
+                      (number->string (car values) radix) #f)
+                    (loop (cdr values))))))
+       '(2 8 16)))
 
 ;; `write` must agree with `number->string`; it used to omit the inexact zero
 ;; too, which is how the `sqrt` inexactness stayed invisible. The `.rs` row

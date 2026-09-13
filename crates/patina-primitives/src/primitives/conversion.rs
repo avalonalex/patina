@@ -80,12 +80,13 @@ fn number_to_string(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVal
         }
         real_to_string(f)
     } else if let Some((real_tv, imag_tv)) = heap_ref.get_complex(tv) {
-        if radix != 10 {
+        if radix != 10 && (!heap_ref.is_exact_number(real_tv) || !heap_ref.is_exact_number(imag_tv))
+        {
             return Err(EvalError::InvalidSyntax(
-                "complex numbers can only be converted with radix 10".to_string(),
+                "inexact numbers can only be converted with radix 10".to_string(),
             ));
         }
-        complex_to_string_tagged(real_tv, imag_tv, &heap_ref)
+        complex_to_string_tagged(real_tv, imag_tv, &heap_ref, radix)
     } else {
         return Err(EvalError::TypeError(format!(
             "expected number, got {}",
@@ -269,15 +270,22 @@ fn format_scientific(f: f64) -> String {
 }
 
 /// Format a numeric TaggedValue as a string (for complex number parts)
-fn tagged_number_str(tv: TaggedValue, heap: &patina_core::Heap) -> String {
+fn tagged_number_str(tv: TaggedValue, heap: &patina_core::Heap, radix: i64) -> String {
     if tv.is_fixnum() {
-        return format!("{}", tv.as_fixnum_unchecked());
+        return integer_to_string(tv.as_fixnum_unchecked(), radix);
     }
     if let Some(n) = heap.get_bigint(tv) {
-        return format!("{}", n);
+        return bigint_to_string(n, radix);
     }
     if let Some(r) = heap.get_rational(tv) {
-        return format!("{}", r);
+        if radix == 10 {
+            return r.to_string();
+        }
+        return format!(
+            "{}/{}",
+            bigint_to_string(r.numer(), radix),
+            bigint_to_string(r.denom(), radix)
+        );
     }
     if let Some(f) = heap.get_real(tv) {
         return real_to_string(f);
@@ -299,7 +307,12 @@ fn signed(s: String) -> String {
 }
 
 /// Convert complex number from TaggedValue parts (preserves exactness in display)
-fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::Heap) -> String {
+fn complex_to_string_tagged(
+    r: TaggedValue,
+    i: TaggedValue,
+    heap: &patina_core::Heap,
+    radix: i64,
+) -> String {
     /// Exact ±1 only: `+i` reads back with an *exact* unit imaginary part, so
     /// spelling `(make-rectangular 0.0 1.0)` that way loses the inexactness —
     /// the same mistake as omitting an inexact zero real part. BigInt and
@@ -333,7 +346,7 @@ fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::
     let imag_zero_is_exact = heap.is_exact_zero(i);
 
     if imag_zero_is_exact {
-        tagged_number_str(r, heap)
+        tagged_number_str(r, heap, radix)
     } else if real_zero_is_exact {
         if is_one(i, heap) {
             "+i".to_string()
@@ -343,20 +356,20 @@ fn complex_to_string_tagged(r: TaggedValue, i: TaggedValue, heap: &patina_core::
             // The imaginary part must carry an explicit sign — `2.0i` is not a
             // number at all, and `string->number` rightly rejected what this
             // used to produce, so `number->string` did not round-trip.
-            format!("{}i", signed(tagged_number_str(i, heap)))
+            format!("{}i", signed(tagged_number_str(i, heap, radix)))
         }
     } else if is_one(i, heap) {
-        format!("{}+i", tagged_number_str(r, heap))
+        format!("{}+i", tagged_number_str(r, heap, radix))
     } else if is_neg_one(i, heap) {
-        format!("{}-i", tagged_number_str(r, heap))
+        format!("{}-i", tagged_number_str(r, heap, radix))
     } else {
         // `signed` here too, not just in the pure-imaginary arm: a positive
         // infinity or NaN formats with its own leading `+`, so concatenating
         // another produced `1.0++inf.0i`, which is not a number.
         format!(
             "{}{}i",
-            tagged_number_str(r, heap),
-            signed(tagged_number_str(i, heap))
+            tagged_number_str(r, heap, radix),
+            signed(tagged_number_str(i, heap, radix))
         )
     }
 }

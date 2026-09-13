@@ -33,7 +33,7 @@
 ;; rows failed would still surface — a divergence in the stage would not.
 ;;
 ;; Oracles, measured 2026-09-07. Three rows are scoped to Patina and report a
-;; *skip* elsewhere — complex-part elision, complex radix, and radix strictness
+;; *skip* elsewhere — complex-part elision, inexact complex radix, and radix strictness
 ;; — each because R7RS leaves the answer to the implementation.
 ;;
 ;;   patina VM / tree-walker   61 pass, 1 expected failure (the defect below)
@@ -161,7 +161,7 @@
         (number->string 5+0i)))    ; an exact zero imaginary part is elided
 
 (cond-expand (patina) (else (test-skip 1)))
-(test-error "a complex number has no non-decimal radix" #t (number->string 3+4i 16))
+(test-error "an inexact complex number has no non-decimal radix" #t (number->string 3.0+4.0i 16))
 
 ;; **Larceny family 7** (`scheme_tests/reports/larceny_triage.md`), moved here
 ;; from `larceny_families.rs` because this file is where `string->number`
