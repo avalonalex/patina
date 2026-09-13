@@ -160,28 +160,42 @@ impl Compiler {
                     }
                 }
 
-                // Check if the quoted datum contains pattern variables
-                if self.contains_pattern_vars(items[1]) {
-                    // Has pattern variables - compile normally so they expand
-                    // Fall through to normal list compilation
-                } else {
-                    // No pattern variables: the datum is inserted verbatim,
-                    // with no hygiene renaming inside it. The `quote` in
-                    // front of it is not part of the datum — it is a
-                    // reference the template makes, like any other — and is
-                    // compiled as one, so that it resolves where the macro
-                    // was *defined*. Emitted as a bare symbol with the rest,
-                    // as it used to be, it resolved where the macro was
-                    // *used*: a program importing SRFI 101, whose `quote`
-                    // builds random-access lists, got one where a library's
-                    // template wrote `'(1 2)`. The literal form of Larceny
-                    // family 33.
-                    let head = self.compile_template(items[0], level)?;
-                    return Ok(Template::List(vec![
-                        head,
-                        self.make_literal_template(items[1]),
-                    ]));
-                }
+                // A quoted datum is compiled like any other list, so it
+                // falls through from here.
+                //
+                // It used to take a shortcut when it held no pattern variable
+                // of *this* macro: the datum was emitted verbatim, with no
+                // hygiene renaming inside it. That is wrong for a macro that
+                // writes a macro, and wrong in a way nothing else catches.
+                // The inner `syntax-rules`'s own pattern variable is not a
+                // pattern variable of the outer macro, so `(quote x)` in the
+                // inner template took the shortcut and came out a bare
+                // symbol, while the same `x` in the inner *pattern* took the
+                // ordinary path and came out a scoped identifier. The inner
+                // macro then keyed its pattern variables by identifier
+                // identity, found no match for the bare symbol, and emitted
+                // it literally:
+                //
+                // ```scheme
+                // (define-syntax def-m
+                //   (syntax-rules ()
+                //     ((_ name)
+                //      (define-syntax name
+                //        (syntax-rules () ((_ x) (list x (quote x))))))))
+                // (def-m foo)
+                // (foo 42)     ; was (42 x); chibi and Gauche say (42 42)
+                // ```
+                //
+                // What the shortcut was written for is kept by the ordinary
+                // path: the `quote` at the head is a reference the template
+                // makes, like any other, and `compile_template` resolves it
+                // where the macro was *defined*. Emitted as a bare symbol it
+                // resolved where the macro was *used* — a program importing
+                // SRFI 101, whose `quote` builds random-access lists, got one
+                // where a library's template wrote `'(1 2)`. That is Larceny
+                // family 33's literal form, and the row pinning it still
+                // passes, because the head goes through `compile_template`
+                // here too.
             }
 
             // Check for ellipsis escape: (... template)

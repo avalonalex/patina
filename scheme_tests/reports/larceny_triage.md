@@ -366,9 +366,23 @@ failure list.
 - Ours: none — this is the flip side of accepting bare `@` on input (PRD §6 "Bare `@`"); writing it bare would round-trip through our own reader. Decide, then either pin or leave.
 - Upstream: [tests/scheme/write.sld#L368](tests/scheme/write.sld#L368), [#L373](tests/scheme/write.sld#L373), [#L378](tests/scheme/write.sld#L378)
 
-### 13. R6RS lane only — `(make-bytevector n -1)` and enum sets
-- Ours: none — these exercise the bundled `(r6rs …)` emulation libraries, not R7RS behaviour. R6RS lets `make-bytevector`'s fill be a signed byte; `(r6rs enums)`'s `define-enumeration` constructor fails on a member name.
-- Upstream: [tests/r6rs/bytevectors.sld#L47](tests/r6rs/bytevectors.sld#L47), [#L48](tests/r6rs/bytevectors.sld#L48), [#L65](tests/r6rs/bytevectors.sld#L65), [#L74](tests/r6rs/bytevectors.sld#L74); [tests/r6rs/enums.sld#L97](tests/r6rs/enums.sld#L97), [#L99](tests/r6rs/enums.sld#L99), [#L100](tests/r6rs/enums.sld#L100)
+### 13. `(make-bytevector n -1)` and enum sets — ✅ both fixed 2026-09-13, and both were ours
+
+- **The old entry read "Ours: none — these exercise the bundled `(r6rs …)` emulation libraries, not R7RS behaviour." Both halves of that were wrong**, and the second badly enough to be worth keeping as a lesson: a row reached through an emulation library is not thereby *about* the emulation library. Neither fix touched `lib/r6rs/`.
+- **The fill byte.** R6RS Standard Libraries §2.1 requires `make-bytevector`'s fill to accept -128..255 and store a negative one as `fill + 256`; the shared primitive rejected anything below 0. Fixed by widening that one argument (`get_fill_byte`), deliberately not the other byte arguments — chibi and Gauche reject a negative byte in `bytevector` and `bytevector-u8-set!` too. The R7RS lane asserted it as well (`tests/scheme/base.sld#L2346`, `#L2347`), which is why the entry's "R6RS lane only" title was wrong: Larceny imported the R6RS assertion into its R7RS file, so accepting it is a leniency decision there and a conformance fix here. Ours: `crates/patina-tests/tests/scheme/data/bytevectors.scm`, a new subject file — there was no bytevector coverage in the suite at all.
+- **`define-enumeration`.** Not an R6RS quirk: a core R7RS §4.3.2 defect in template compilation, reducible with no R6RS in sight.
+
+  ```scheme
+  (define-syntax def-m
+    (syntax-rules ()
+      ((_ name) (define-syntax name (syntax-rules () ((_ x) (list x (quote x))))))))
+  (def-m foo)
+  (foo 42)          ; was (42 x) on both backends — chibi and Gauche: (42 42)
+  ```
+
+  The template compiler emitted a quoted datum verbatim when it held no pattern variable *of the macro being compiled*. The inner macro's variable is not the outer's, so `'x` came out a bare symbol while the same `x` in the inner pattern was renamed, and the inner macro could not match its own template against its own pattern. `(r6rs enums)` is that shape: its member check compared the template's literal `<obj>` against the universe, so every member name failed. Removing the shortcut fixes it; what the shortcut was written for — family 33's `quote` *head* resolving at the definition site — is kept, because the head goes through `compile_template` on the ordinary path too. Ours: `crates/patina-tests/tests/scheme/expansion/syntax-rules.scm`, the quoted-pattern-variable block, including the refusal the removal also restores (`'(a ...)` — an ellipsis with nothing to repeat, which chibi and Gauche also refuse).
+- **Measured after both**, on `target/release/patina`: R6RS lane **15 of 16 suites and 4474 of 4474 assertions**, up from 13 of 16 and 4026 of 4033 — every assertion the lane runs now passes, and only `base` fails to load, on the empty `let-syntax` body recorded under "Not ours". R7RS lane 8510 of 8534 on both backends, up from 8508. Both chibi lanes stayed 1226/1226.
+- Upstream: [tests/r6rs/bytevectors.sld#L47](tests/r6rs/bytevectors.sld#L47), [#L48](tests/r6rs/bytevectors.sld#L48), [#L65](tests/r6rs/bytevectors.sld#L65), [#L74](tests/r6rs/bytevectors.sld#L74); [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346), [#L2347](tests/scheme/base.sld#L2347); [tests/r6rs/enums.sld#L97](tests/r6rs/enums.sld#L97), [#L99](tests/r6rs/enums.sld#L99), [#L100](tests/r6rs/enums.sld#L100)
 
 ### 14. A shadowed `...` is no longer the ellipsis (R7RS 4.3.2) — both backends — ✅ fixed 2026-08-25
 - Ours: `crates/patina-tests/tests/scheme/expansion/ellipsis.scm`, rows "a syntax-rules written where dots is bound has no ellipsis" (`(2 1 3)`) and "an escaped ellipsis is still one inside a binding of dots" (`(1)`) — one program in the Rust file, split so each half names itself, and both keep the two macros in one scope because that is the shape a per-macro rule fails. Moved there by #193 Phase 1; Gauche cannot compile either, which the suite's divergence register records.

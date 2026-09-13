@@ -279,42 +279,4 @@ impl Compiler {
     pub(super) fn is_followed_by_ellipsis(&self, items: &[TaggedValue], index: usize) -> bool {
         index + 1 < items.len() && self.is_ellipsis(items[index + 1])
     }
-
-    /// Check if a TaggedValue contains any pattern variables
-    /// Used to determine if a quoted expression needs template expansion
-    pub(super) fn contains_pattern_vars(&self, value: TaggedValue) -> bool {
-        // Handle all identifier types (Symbol, Identifier).
-        //
-        // A substituted identifier is not skipped: the pattern compiler can
-        // bind one as a pattern variable, and a quoted template that mentions
-        // it does need expansion. The lookup is by identity, so a substituted
-        // identifier does not collide with an introduced pattern variable of
-        // the same name.
-        if let Some(key) = self.identifier_key(value) {
-            return self.pvars.contains_key(&key);
-        }
-
-        // Check pairs
-        if value.is_pair() {
-            let items = match self.collect_list_items(value) {
-                Ok((items, _)) => items,
-                Err(_) => return false,
-            };
-            return items.iter().any(|item| self.contains_pattern_vars(*item));
-        }
-
-        // Check vectors
-        if value.is_vector() {
-            let heap = self.heap.borrow();
-            let len = heap.vector_len(value);
-            for i in 0..len {
-                if self.contains_pattern_vars(heap.vector_ref(value, i)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        false
-    }
 }
