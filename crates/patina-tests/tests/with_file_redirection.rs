@@ -17,7 +17,7 @@ fn test_the_previous_port_is_restored_after_a_normal_return() {
     let path = scratch(&dir, "restored.txt");
     assert_program_eval_to(
         &format!(
-            r#"(import (scheme base) (scheme file))
+            r#"(import (scheme base) (scheme file) (scheme write))
                (define sink (open-output-string))
                (parameterize ((current-output-port sink))
                  (with-output-to-file "{path}" (lambda () (display "in-file")))
@@ -42,7 +42,7 @@ fn test_escaping_out_of_the_thunk_restores_the_port() {
     let path = scratch(&dir, "escaped.txt");
     assert_program_eval_to(
         &format!(
-            r#"(import (scheme base) (scheme file))
+            r#"(import (scheme base) (scheme file) (scheme write))
                (define sink (open-output-string))
                (parameterize ((current-output-port sink))
                  (call-with-current-continuation
@@ -92,7 +92,7 @@ fn test_an_error_in_the_thunk_still_restores_the_port() {
     let path = scratch(&dir, "errored.txt");
     assert_program_eval_to(
         &format!(
-            r#"(import (scheme base) (scheme file))
+            r#"(import (scheme base) (scheme file) (scheme write))
                (define sink (open-output-string))
                (parameterize ((current-output-port sink))
                  (guard (e (#t 'caught))

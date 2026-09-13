@@ -32,7 +32,7 @@
 ;; argument order unspecified, and a right-to-left evaluator would run the
 ;; probe first and prove nothing.
 
-(import (scheme base) (scheme lazy) (srfi 64))
+(import (scheme base) (scheme write) (scheme lazy) (srfi 64))
 
 (test-begin "prompts")
 

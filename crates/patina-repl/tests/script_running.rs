@@ -20,7 +20,7 @@ fn shebang_script_runs() {
     let script = temp.path().join("hello.scm");
     fs::write(
         &script,
-        "#!/usr/bin/env patina\n(import (scheme base))\n(display (+ 40 2))\n(newline)\n",
+        "#!/usr/bin/env patina\n(import (scheme base) (scheme write))\n(display (+ 40 2))\n(newline)\n",
     )
     .unwrap();
 
@@ -49,7 +49,7 @@ fn library_beside_script_resolves() {
     let script = temp.path().join("prog.scm");
     fs::write(
         &script,
-        "(import (scheme base) (mylib))\n(display answer)\n(newline)\n",
+        "(import (scheme base) (scheme write) (mylib))\n(display answer)\n(newline)\n",
     )
     .unwrap();
 
@@ -81,7 +81,7 @@ fn project_local_patina_lib_resolves() {
     let script = temp.path().join("main.scm");
     fs::write(
         &script,
-        "(import (scheme base) (dep))\n(display (* 6 dep-value))\n(newline)\n",
+        "(import (scheme base) (scheme write) (dep))\n(display (* 6 dep-value))\n(newline)\n",
     )
     .unwrap();
 

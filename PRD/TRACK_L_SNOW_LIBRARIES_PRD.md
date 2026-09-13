@@ -362,6 +362,13 @@ incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now pass
 advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
 finally report that it needs `(chibi net)`, which needs FFI.
 
+**Standard I/O export boundaries (#211), 2026-09-12.** `(scheme base)` no longer
+exports `read`, `write`, or `display`; these remain available through `(scheme read)`
+and `(scheme write)`, as R7RS Appendix A specifies. The default environment also
+requires these imports because it bootstraps from base. Import-set regression tests
+cover both backends and the proper libraries; affected programs now carry their
+own I/O imports instead of relying on the extra exports.
+
 **SRFI 130 bounded predicates (#204), 2026-09-12.** The inlined `string-any`
 now starts at the requested cursor; `string-every` has its own bounded scan so it
 also preserves the final successful predicate result, as SRFI 130 requires.

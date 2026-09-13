@@ -104,3 +104,59 @@ fn test_only_and_prefix_select_and_rename_at_the_top_level() {
     assert_program_eval_to("(import (only (scheme base) + - *)) (* 2 3 4)", "24");
     assert_program_eval_to("(import (prefix (scheme base) s:)) (s:+ 10 20)", "30");
 }
+
+/// #211: datum I/O belongs to (scheme read)/(scheme write), including when
+/// (scheme base) is selected or renamed by an import set.
+#[test]
+fn datum_io_is_not_exported_by_base() {
+    for name in ["read", "write", "display"] {
+        for program in [
+            format!("(import (scheme base)) {name}"),
+            format!("(import (only (scheme base) {name})) {name}"),
+            format!("(import (except (scheme base) +)) {name}"),
+            format!("(import (prefix (scheme base) b:)) b:{name}"),
+            format!("(import (rename (scheme base) ({name} io))) io"),
+        ] {
+            assert_program_eval_error(&program);
+        }
+    }
+}
+
+/// The default environment bootstraps from base, so it follows the same rule.
+#[test]
+fn datum_io_needs_an_import_in_the_default_environment() {
+    for name in ["read", "write", "display"] {
+        assert_program_eval_error(name);
+    }
+}
+
+#[test]
+fn datum_io_resolves_from_its_standard_libraries() {
+    assert_program_eval_to(
+        r#"(import (scheme base) (only (scheme read) read))
+           (read (open-input-string "42"))"#,
+        "42",
+    );
+    for name in ["write", "display"] {
+        let expected = if name == "write" {
+            r#""\"hello\"""#
+        } else {
+            r#""hello""#
+        };
+        assert_program_eval_to(
+            &format!(
+                r#"(import (scheme base) (rename (only (scheme write) {name}) ({name} out)))
+                   (let ((port (open-output-string)))
+                     (out "hello" port)
+                     (get-output-string port))"#
+            ),
+            expected,
+        );
+    }
+    assert_program_eval_to(
+        "(import (scheme base))
+         (list (procedure? read-char) (procedure? write-char)
+               (procedure? read-string) (procedure? write-string))",
+        "(#t #t #t #t)",
+    );
+}

@@ -160,7 +160,7 @@ fn test_with_output_to_file_rebinds_port() {
     let f = TempFile::new("with_output");
     let code = format!(
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme write))
         (with-output-to-file "{path}"
           (lambda () (display "redirected")))
         (call-with-input-file "{path}"
@@ -493,7 +493,7 @@ fn test_memfs_with_output_to_file() {
     let result = eval_with_overlay_fs(
         &fs,
         r#"
-        (import (scheme file))
+        (import (scheme base) (scheme file) (scheme write))
         (with-output-to-file "/redirected.txt"
           (lambda () (display "hello")))
         (call-with-input-file "/redirected.txt"
