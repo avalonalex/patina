@@ -1037,6 +1037,7 @@ now live, and a test checks that those pointers still resolve.
 | ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` and `(sqrt -inf.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does | inexact (1), complex (1) | both |
 | ✅ `environment` accepts all import-set modifiers and numeric library names — *fixed 2026-09-12*, family 10. Shared resolution, cyclic-input rejection, and definition checks that follow renamed syntax; focused eval 5/5, load 4/4, R6RS eval 2/2 on both backends | eval, load, r6rs eval | both |
 | ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |
+| ✅ `read` returned EOF for an unfinished datum — *fixed 2026-09-12*, family 42. The parser distinguishes clean EOF after whitespace/comments from incomplete input; string, file and stdin reads signal `read-error?` for unfinished datums. Focused `base` improves from 1083/1092 to 1084/1092 on both backends; eight other failures remain. Chibi/Gauche differences on abbreviated datums, labels and a bare datum-comment marker are recorded in the divergence register | base (1) | both |
 | `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@` | write (3) | both |
 | R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` | r6rs bytevectors (4), enums (3) | both |
 

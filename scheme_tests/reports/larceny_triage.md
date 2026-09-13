@@ -707,6 +707,15 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
   scopes delivered to it. The earlier spelling-based literal observation
   below is related context, not proof that every such case has one cause.
 
+### 42. Incomplete input returns EOF instead of a read error — both backends — ✅ fixed 2026-09-12
+
+- Upstream: [tests/scheme/base.sld#L2762](tests/scheme/base.sld#L2762) — the guarded read of an unfinished list must satisfy `read-error?`.
+- Cause: string ports and the shared file/stdin reader mapped every parser `UnexpectedEof` to an EOF object, losing the distinction between no next datum and an unfinished datum.
+- Fix: `Parser::parse_next` returns `None` only after whitespace and complete comments are exhausted; EOF inside a datum remains a parse error. `read` maps that error through its existing read-error classification. Buffered ports still gather more lines before treating incomplete input as an error at physical EOF. String ports consume trailing whitespace and comments when returning EOF.
+- Ours: `crates/patina-tests/tests/scheme/stdlib/ports.scm`, rows "an unfinished list raises a read error", "clean EOF after a datum comment", and "a complete datum precedes an incomplete next datum"; file-port counterparts in `crates/patina-tests/tests/read_consumption.rs`, `test_file_port_incomplete_datum_is_a_read_error`, `test_file_port_clean_eof_after_comments`, and `test_file_port_complete_datum_before_incomplete_datum`.
+- Measured: focused Larceny `base` moves from 1083/1092 to **1084/1092 on both backends**, leaving eight other assertions failing. The run uses a writable copy of the pinned upstream suite so its file tests can execute. Both R7RS compliance lanes remain 1226/1226. Direct stdin probes distinguish incomplete input from empty/comment-only input and still accept a complete multiline list.
+- Oracle evidence (2026-09-12): chibi and Gauche both reject `(` with a read error. Chibi instead constructs an abbreviation containing EOF for a lone quote/quasiquote/unquote/unquote-splicing prefix, and its error for `(1 .` fails `read-error?`. Both oracles return EOF for `#1=`. R7RS 6.13.2 requires a read error after an incomplete external representation begins; these differences are registered as oracle defects. Both also return EOF for bare `#;`, which Patina rejects: whether 6.13.2 mandates the same error for an incomplete *comment* remains `needs-investigation`, separate from the fixed incomplete-datum defect. The exact rows and evidence are in `crates/patina-tests/tests/scheme/DIVERGENCES.tsv`; no upstream reports were filed.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
 - **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
