@@ -378,37 +378,6 @@ impl<'a> CpsEvaluator<'a> {
                     });
                 }
 
-                CpsExprKind::Quasiquote { template, cont } => {
-                    // Evaluate quasiquote template - now works with TaggedValue directly
-                    // The unquotes run as nested form runs under this
-                    // step's dynamic environment, like the `eval` primitive.
-                    let result = try_catchable!(super::quasiquote::eval_quasiquote_in_env(
-                        &super::callback::CallbackContext {
-                            cps: self,
-                            prompt_stack: &prompt_stack,
-                            dynamic_winds: &current_winds,
-                            exception_handlers: &exception_handlers,
-                        },
-                        *template,
-                        &current_env,
-                    ));
-
-                    let k = cont_env
-                        .get(cont)
-                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
-                        .clone();
-
-                    return Ok(StepResult::InvokeContinuation {
-                        cont: k,
-                        value: result,
-                        env: current_env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds: current_winds,
-                        exception_handlers,
-                    });
-                }
-
                 CpsExprKind::PrimOp { op, args, cont } => {
                     // Evaluate args directly to TaggedValue
                     let arg_values: Vec<TaggedValue> = try_catchable!(

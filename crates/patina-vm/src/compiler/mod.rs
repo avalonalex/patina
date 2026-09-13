@@ -22,7 +22,6 @@ pub mod pass3_tail;
 pub mod pass4_registers;
 pub mod pass5_codegen;
 pub mod primitive_calls;
-pub mod quasiquote_expand;
 
 pub(crate) use body_defines::for_each_define;
 
@@ -37,6 +36,33 @@ use std::rc::Rc;
 /// The global environment + registry a compilation unit resolves primitive
 /// callees against. `None` disables `CallPrimitive` emission entirely.
 type PrimitiveResolver<'a> = Option<(&'a SharedHeap, &'a Rc<Environment>, &'a PrimitiveRegistry)>;
+
+/// The constructor resolver [`patina_frontend::lower_quasiquotes`] needs, over
+/// this backend's registry.
+///
+/// Built the way `VmState::install_primitives` builds every primitive,
+/// registry index included, so a call through it dispatches by index like a
+/// call through the global of the same name would. It differs from that
+/// global in one way only: nothing the program imports or defines can
+/// redirect it — which is the whole reason the lowering references these as
+/// values rather than by name (Larceny triage family 34).
+fn registry_constructors<'a>(
+    heap: &'a SharedHeap,
+    registry: &'a PrimitiveRegistry,
+) -> impl Fn(&str) -> Option<patina_core::TaggedValue> + 'a {
+    move |name| {
+        let qualified_name = format!("scheme.base/{name}");
+        let index = registry.resolve_index(&qualified_name)?;
+        let prim = registry.get_by_index(index)?;
+        let proc = patina_core::procedure::Procedure::primitive(
+            prim.name,
+            prim.arity.clone(),
+            Rc::from(qualified_name.as_str()),
+            Some(index),
+        );
+        Some(heap.borrow_mut().alloc_procedure(proc))
+    }
+}
 
 fn compile_pipeline(
     expr: &CoreExpr,
@@ -124,6 +150,123 @@ pub fn compile_with_qq_resolving(
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded = quasiquote_expand::expand_quasiquotes(expr, heap, env, registry)?;
+    let expanded =
+        patina_frontend::lower_quasiquotes(expr, heap, env, &registry_constructors(heap, registry))
+            .map_err(|e| match e {
+                patina_frontend::QuasiquoteError::Desugar(m) => CompileError::Desugar(m),
+                patina_frontend::QuasiquoteError::Internal(m) => CompileError::Internal(m),
+            })?;
     compile_pipeline(&expanded, Some((heap, env, registry)))
+}
+
+/// The lowering itself lives in `patina_frontend`, which cannot name
+/// `PrimitiveRegistry` — `patina-primitives` depends on it. These exercise it
+/// through this backend's resolver, which is the only place both are in scope.
+#[cfg(test)]
+mod quasiquote_lowering_tests {
+    use super::*;
+    use patina_core::core_expr::{CoreExpr, CoreExprKind};
+    use patina_core::heap::Heap;
+    use patina_core::procedure::Procedure;
+    use patina_core::tagged_value::TaggedValue;
+    use patina_frontend::lower_quasiquotes;
+    use std::cell::RefCell;
+
+    fn make_heap() -> SharedHeap {
+        Rc::new(RefCell::new(Heap::new()))
+    }
+
+    fn make_env(heap: &SharedHeap) -> Rc<Environment> {
+        Rc::new(Environment::with_heap(heap.clone()))
+    }
+
+    fn make_registry() -> PrimitiveRegistry {
+        let mut registry = PrimitiveRegistry::new();
+        patina_primitives::register_all(&mut registry);
+        registry
+    }
+
+    #[test]
+    fn expand_self_evaluating() {
+        let heap = make_heap();
+        let env = make_env(&heap);
+        let template = TaggedValue::fixnum(42);
+        let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
+        let expanded = lower_quasiquotes(
+            &expr,
+            &heap,
+            &env,
+            &registry_constructors(&heap, &make_registry()),
+        )
+        .expect("template desugars");
+
+        match &expanded.kind {
+            CoreExprKind::Quote(v) => assert_eq!(v.as_fixnum(), Some(42)),
+            other => panic!("expected Quote, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn expand_symbol() {
+        let heap = make_heap();
+        let env = make_env(&heap);
+        let sym = heap.borrow_mut().intern_symbol("foo");
+        let expr = CoreExpr::new(CoreExprKind::Quasiquote(sym));
+        let expanded = lower_quasiquotes(
+            &expr,
+            &heap,
+            &env,
+            &registry_constructors(&heap, &make_registry()),
+        )
+        .expect("template desugars");
+
+        match &expanded.kind {
+            CoreExprKind::Quote(v) => assert!(heap.borrow().is_symbol(*v)),
+            other => panic!("expected Quote, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn expand_list_no_unquotes() {
+        let heap = make_heap();
+        let env = make_env(&heap);
+        let a = heap.borrow_mut().intern_symbol("a");
+        let b = heap.borrow_mut().intern_symbol("b");
+        let c = heap.borrow_mut().intern_symbol("c");
+        let template = {
+            let mut h = heap.borrow_mut();
+            let t3 = h.alloc_pair(c, TaggedValue::NULL);
+            let t2 = h.alloc_pair(b, t3);
+            h.alloc_pair(a, t2)
+        };
+        let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
+        let expanded = lower_quasiquotes(
+            &expr,
+            &heap,
+            &env,
+            &registry_constructors(&heap, &make_registry()),
+        )
+        .expect("template desugars");
+
+        // Should become (<list primitive> 'a 'b 'c) — the primitive itself,
+        // not a reference to whatever `list` names where the template sits.
+        match &expanded.kind {
+            CoreExprKind::App { func, args } => {
+                assert_eq!(args.len(), 3);
+                match &func.kind {
+                    CoreExprKind::Literal(v) => {
+                        let proc = heap.borrow().get_procedure(*v).expect("a procedure");
+                        match proc.as_ref() {
+                            Procedure::Primitive { qualified_name, .. } => {
+                                assert_eq!(&**qualified_name, "scheme.base/list")
+                            }
+                            other => panic!("expected the list primitive, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected Literal(<list primitive>), got {:?}", other),
+                }
+            }
+            other => panic!("expected App, got {:?}", other),
+        }
+    }
 }

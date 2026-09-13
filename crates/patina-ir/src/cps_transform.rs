@@ -332,14 +332,13 @@ impl CpsTransformer {
                 }
             }
 
-            // Quasiquote template - needs runtime evaluation for unquote/unquote-splicing
-            CoreExprKind::Quasiquote(template) => {
-                // Quasiquote is evaluated at runtime, so we pass the template
-                // to the CPS evaluator which will process unquote/unquote-splicing
-                CpsExpr::new(CpsExprKind::Quasiquote {
-                    template: *template,
-                    cont: k.clone(),
-                })
+            // Lowered before this pass runs, by
+            // `patina_frontend::lower_quasiquotes`, into calls of the list
+            // constructors — the same lowering the VM compiler uses, so both
+            // backends derive one structure (issue #276). A template reaching
+            // here means a caller skipped that step.
+            CoreExprKind::Quasiquote(_) => {
+                panic!("Quasiquote should be lowered before the CPS transform")
             }
 
             CoreExprKind::Import { .. } => {

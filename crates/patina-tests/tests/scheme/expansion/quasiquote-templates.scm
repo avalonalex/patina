@@ -236,4 +236,37 @@
 (test-assert "a circular final list splice remains shared"
   (eq? (cdr (splice-last circular-splice)) circular-splice))
 
+
+;; ── Shapes R7RS does not describe, and the two backends now agree on ────────
+;;
+;; Issue #276. The VM compiled templates and the tree-walker evaluated them
+;; with a separate walker, and the two derived "last", "list context" and
+;; "tail" independently — so on every shape below the VM answered and the
+;; tree-walker refused. One lowering, run before either backend, is what makes
+;; them agree; these rows are what says so.
+;;
+;; R7RS §7.1.4 gives `unquote` one template and §4.2.8 makes anything else an
+;; error, so none of these has a required answer and the oracles split. The
+;; register carries each disagreement. What is *not* latitude is Patina giving
+;; two answers to one program, which is what these pin.
+;;
+;; Written through `eval` for the reason the rows above give: the VM decides
+;; these while compiling, so a row holding one directly would settle the whole
+;; file's fate rather than its own.
+
+(test-equal "a splice outside a list template" '(1 2)
+  (eval '(let ((x '(1 2))) `,@x) (environment '(scheme base))))
+
+(test-equal "an unquote in a dotted tail with extra operands" '(a unquote x y)
+  (eval '(let ((x '(1 2)) (y 9)) `(a unquote x y)) (environment '(scheme base))))
+
+(test-equal "unquote-splicing as a vector template's head" '#(unquote-splicing x)
+  (eval '(let ((x '(1 2))) `#(unquote-splicing x)) (environment '(scheme base))))
+
+(test-equal "a multi-operand unquote in element position" '(foo)
+  (eval '(let ((x 'foo)) `((unquote x x x))) (environment '(scheme base))))
+
+(test-equal "a multi-operand unquote-splicing in element position" '(a)
+  (eval '(let ((x '(a))) `((unquote-splicing x x))) (environment '(scheme base))))
+
 (test-end)
