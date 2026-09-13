@@ -297,36 +297,35 @@ fn expand_template(
                 }
 
                 "unquote" => {
-                    let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote")?;
                     if depth == 0 {
-                        // Evaluate the unquote expression
+                        // A template that *is* an unquote, rather than one
+                        // holding an element that is. R6RS's multi-operand
+                        // form is a splice, and a splice belongs in a list or
+                        // vector template, so there is nothing here for
+                        // several operands to be spliced into; one operand it
+                        // is, and `pair_parts` refuses none.
+                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote")?;
                         return desugar_tagged(inner, cx);
-                    } else {
-                        // Inside nested quasiquote: decrement depth
-                        let expanded = expand_template(inner, cx, depth - 1)?;
-                        let uq_sym = cx.heap.borrow_mut().intern_symbol("unquote");
-                        return make_list_call(
-                            cx,
-                            vec![CoreExpr::new(CoreExprKind::Quote(uq_sym)), expanded],
-                        );
                     }
+                    // Inside a nested quasiquote the form is rebuilt as data,
+                    // so the operand *list* is what must survive: expanded one
+                    // level shallower, as the list template it is. Rebuilding
+                    // a fixed two elements dropped every operand after the
+                    // first, which is what made ``(foo ,,@q) lose its splice.
+                    return rebuild_unquotation(cdr, cx, depth, "unquote");
                 }
 
                 "unquote-splicing" => {
                     if depth == 0 {
-                        // Splicing at top level is an error in standard Scheme,
-                        // but we just return the expanded form
+                        // Splicing where there is no list to splice into.
+                        // R6RS confines a splice to a list or vector template
+                        // and Gauche raises here; Patina inserts the value,
+                        // which is what it has always done and what the
+                        // register records against both oracles.
                         let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote-splicing")?;
                         return desugar_tagged(inner, cx);
-                    } else {
-                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote-splicing")?;
-                        let expanded = expand_template(inner, cx, depth - 1)?;
-                        let uqs_sym = cx.heap.borrow_mut().intern_symbol("unquote-splicing");
-                        return make_list_call(
-                            cx,
-                            vec![CoreExpr::new(CoreExprKind::Quote(uqs_sym)), expanded],
-                        );
                     }
+                    return rebuild_unquotation(cdr, cx, depth, "unquote-splicing");
                 }
 
                 _ => {}
@@ -339,6 +338,26 @@ fn expand_template(
 
     // Other types: quote as-is
     Ok(CoreExpr::new(CoreExprKind::Quote(template)))
+}
+
+/// Rebuild `(<keyword> . operands)` as data, one quasiquote level shallower.
+///
+/// Reached only at depth > 0, where the form is not evaluated but written
+/// back into the structure. The operands are expanded as the list template
+/// they are, so a splice among them still splices —
+/// ``(foo ,,@q) rebuilds as `(foo (unquote <the elements of q>)) — and then
+/// the keyword is consed on. `append` rather than a cons because the
+/// constructor set deliberately has none; see `Constructor`.
+fn rebuild_unquotation(
+    operands: TaggedValue,
+    cx: &Expansion<'_>,
+    depth: i32,
+    keyword: &str,
+) -> Result<CoreExpr, QuasiquoteError> {
+    let expanded_operands = expand_pair_template(operands, cx, depth - 1)?;
+    let sym = cx.heap.borrow_mut().intern_symbol(keyword);
+    let head = make_list_call(cx, vec![CoreExpr::new(CoreExprKind::Quote(sym))])?;
+    make_app(cx, Constructor::Append, vec![head, expanded_operands])
 }
 
 /// Expand a pair/list template, handling unquote-splicing in list elements.
@@ -380,24 +399,49 @@ fn expand_pair_template(
             }
         }
 
-        // Check for (unquote-splicing expr) at this element position
+        // An element that is itself `(unquote …)` or `(unquote-splicing …)`.
+        //
+        // Both take any number of operands, which is the R6RS 11.17 reading:
+        // `(unquote e1 … en)` inserts n values and the splicing spelling
+        // splices n lists. R7RS 7.1.4 admits exactly one of each, so this is
+        // an extension — a deliberate one, matching Gauche, Chez and Larceny,
+        // whose suite asserts it. chibi and Racket take the other reading and
+        // the register records both.
+        //
+        // The one-operand case is the whole of ordinary code and stays on the
+        // cheap path: an unquote contributes to `current_elems` like any
+        // element, so `(a ,x b)` remains one `list` call rather than an
+        // `append` of three segments — the shape family 34's review measured
+        // at +40% when it was routed through segments.
         if depth == 0 && car.is_pair() {
             let (inner_car, inner_cdr) = {
                 let h = cx.heap.borrow();
                 (h.car(car), h.cdr(car))
             };
+            let splicing = cx.heap.borrow().is_named(inner_car, "unquote-splicing");
+            let unquoting = cx.heap.borrow().is_named(inner_car, "unquote");
 
-            if cx.heap.borrow().is_named(inner_car, "unquote-splicing") {
-                let (splice_expr, _rest) = pair_parts(inner_cdr, cx.heap, "unquote-splicing")?;
-
-                // Flush accumulated elements
-                if !current_elems.is_empty() {
-                    segments.push(Segment::List(std::mem::take(&mut current_elems)));
+            if splicing || unquoting {
+                let keyword = if splicing {
+                    "unquote-splicing"
+                } else {
+                    "unquote"
+                };
+                let operands = operand_list(inner_cdr, cx.heap).ok_or_else(|| {
+                    QuasiquoteError::Desugar(format!("{keyword}: operands must be a proper list"))
+                })?;
+                for operand in operands {
+                    let expanded = desugar_tagged(operand, cx)?;
+                    if splicing {
+                        // A splice ends the run of plain elements before it.
+                        if !current_elems.is_empty() {
+                            segments.push(Segment::List(std::mem::take(&mut current_elems)));
+                        }
+                        segments.push(Segment::Splice(expanded));
+                    } else {
+                        current_elems.push(expanded);
+                    }
                 }
-
-                // Add splice segment
-                segments.push(Segment::Splice(desugar_tagged(splice_expr, cx)?));
-
                 current = cdr;
                 continue;
             }
@@ -494,6 +538,28 @@ fn expand_vector_template(
 enum Segment {
     List(Vec<CoreExpr>),
     Splice(CoreExpr),
+}
+
+/// The operands of an `(unquote …)` or `(unquote-splicing …)` form, as a
+/// proper list.
+///
+/// R6RS 11.17 writes both with a `*`: `(unquote <qq template D-1>*)`. R7RS
+/// 7.1.4 gives each exactly one operand and 4.2.8 makes anything else an
+/// error, so accepting a list here is an extension, taken deliberately —
+/// Gauche, Chez and Larceny read it this way and Larceny's suite asserts it.
+/// `None` means the form is improper, which no reading accepts.
+fn operand_list(cdr: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
+    let h = heap.borrow();
+    let mut out = Vec::new();
+    let mut current = cdr;
+    while !current.is_null() {
+        if !current.is_pair() {
+            return None;
+        }
+        out.push(h.car(current));
+        current = h.cdr(current);
+    }
+    Some(out)
 }
 
 /// Get car and cdr from what a template promised would be a pair.

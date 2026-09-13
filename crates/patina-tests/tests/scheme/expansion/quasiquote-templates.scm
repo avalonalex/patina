@@ -124,25 +124,27 @@
 (test-error "unquote-splicing outside a quasiquote is an error" #t
   (eval '(unquote-splicing '(1)) (environment '(scheme base))))
 
-;; An `unquote` with no operand at all. R7RS §7.1.4's grammar gives `unquote`
-;; exactly one `<qq template>`, so `(unquote)` is not one and §4.2.8's closing
-;; sentence makes it an error. These rows exist because of what Patina did
-;; instead: the VM's expansion read the operand with an unchecked `car`, which
-;; is a `debug_assert` in debug builds — it panicked — and in release read
-;; whatever the tagged value pointed at, so `` `(a `(b (unquote))) `` answered
-;; ``(a `(b ,syntax))``, naming a symbol that appears nowhere in the program.
+;; An `unquote` with no operand at all — the zero end of the same `*`.
 ;;
-;; `eval` again, for the reason the rows above give: on the VM the refusal now
-;; happens while the form is compiled. chibi refuses these too. Gauche accepts
-;; them, because R6RS 11.17's grammar reads `(unquote <qq template>*)` with a
-;; zero-or-more operand list and Gauche implements that; the register carries
-;; the three rows. Whether to follow R6RS here is a separate decision from
-;; not reading past the end of the form, and this file takes only the second.
-(test-error "an unquote with no operand is an error" #t
+;; R6RS 11.17 writes `(unquote <qq template D-1>*)`, so none is as legal as
+;; three and inserts nothing. These rows asserted a *refusal* until multi-
+;; operand unquote was adopted, because the decision had not been taken and
+;; refusing was what not reading past the end of the form left behind: the
+;; VM's expansion used to read the operand with an unchecked `car`, which
+;; panicked a debug build and in release read whatever the tagged value
+;; pointed at, answering ``(a `(b ,syntax))`` for the third row below and
+;; naming a symbol that appears nowhere in the program. That read is still
+;; checked; what changed is that a well-formed empty operand list is now an
+;; answer rather than an error.
+;;
+;; Gauche agrees on all three. chibi refuses them, as Patina used to, and the
+;; register carries that.
+(test-equal "an unquote with no operand inserts nothing" '(a)
   (eval '`(a (unquote)) (environment '(scheme base))))
-(test-error "an unquote-splicing with no operand is an error" #t
+(test-equal "an unquote-splicing with no operand splices nothing" '(a)
   (eval '`(a (unquote-splicing)) (environment '(scheme base))))
-(test-error "an unquote with no operand inside a nested template is an error" #t
+(test-equal "a nested template rebuilds an unquote with no operand"
+  '(a (quasiquote (b (unquote))))
   (eval '`(a `(b (unquote))) (environment '(scheme base))))
 
 ;; R7RS §4.2.8 says a spliced expression "must evaluate to a list", which is
@@ -246,9 +248,14 @@
 ;; them agree; these rows are what says so.
 ;;
 ;; R7RS §7.1.4 gives `unquote` one template and §4.2.8 makes anything else an
-;; error, so none of these has a required answer and the oracles split. The
-;; register carries each disagreement. What is *not* latitude is Patina giving
-;; two answers to one program, which is what these pin.
+;; error, so none of these has a *required* answer and the oracles split. Two
+;; of them do have a chosen one: Patina reads R6RS 11.17's
+;; `(unquote <qq template>*)`, so a multi-operand unquote inserts every
+;; operand and the splicing spelling splices every one. That is an extension,
+;; taken deliberately — Gauche, Chez and Larceny read it the same way, and
+;; Larceny's suite asserts it — and chibi and Racket take the other reading,
+;; which the register carries. What is *not* latitude is Patina giving two
+;; answers to one program, which is what all of these pin.
 ;;
 ;; Written through `eval` for the reason the rows above give: the VM decides
 ;; these while compiling, so a row holding one directly would settle the whole
@@ -263,10 +270,10 @@
 (test-equal "unquote-splicing as a vector template's head" '#(unquote-splicing x)
   (eval '(let ((x '(1 2))) `#(unquote-splicing x)) (environment '(scheme base))))
 
-(test-equal "a multi-operand unquote in element position" '(foo)
+(test-equal "a multi-operand unquote in element position" '(foo foo foo)
   (eval '(let ((x 'foo)) `((unquote x x x))) (environment '(scheme base))))
 
-(test-equal "a multi-operand unquote-splicing in element position" '(a)
+(test-equal "a multi-operand unquote-splicing in element position" '(a a)
   (eval '(let ((x '(a))) `((unquote-splicing x x))) (environment '(scheme base))))
 
 (test-end)
