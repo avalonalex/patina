@@ -351,8 +351,14 @@ fn copy_tree(source: &Path, dest: &Path) -> std::io::Result<()> {
 /// Write a synthesized import probe into the scratch directory. The fixed
 /// basename keeps "test" out of the argument path structurally, so probes
 /// always run in strict mode.
+///
+/// The probe imports `(scheme write)` for its own `display` call: since #301
+/// `(scheme base)` exports only what R7RS gives it, and a probe that relied on
+/// the old over-export filed every probe-mode package as
+/// `unbound-identifier` on `display` — 104 packages, none of them a
+/// measurement of Patina.
 fn write_probe(scratch: &std::path::Path, package: &Package) -> PathBuf {
-    let mut source = String::from("(import (scheme base)");
+    let mut source = String::from("(import (scheme base) (scheme write)");
     for lib in &package.provides {
         source.push_str(&format!(" ({})", lib));
     }
@@ -1207,5 +1213,60 @@ mod tests {
             timed_out: true,
         };
         assert_eq!(classify(&out, "probe"), Status::Timeout);
+    }
+
+    /// The probe must import every library whose identifiers it calls. #301
+    /// took `display` out of `(scheme base)`, and a probe importing only base
+    /// filed 104 probe-mode packages as unbound on `display` — a harness
+    /// failure scored as Patina's, and unnoticed because the corpus runs
+    /// out-of-band. Parsing the bundled `.sld` files instead of asserting
+    /// the import list means the next export change to a standard library
+    /// fails here, in `cargo test`, rather than in the next corpus run.
+    #[test]
+    fn the_probe_imports_every_library_it_calls_into() {
+        use patina_frontend::{ExportSpec, LibraryDefinition};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = write_probe(temp.path(), &package("provides-nothing", temp.path()));
+        let source = std::fs::read_to_string(path).unwrap();
+        let heap = patina_core::new_shared_heap();
+        let forms = crate::sexp::parse_all(&source, &heap).unwrap();
+        let (import, calls) = forms.split_first().expect("the probe is not empty");
+        let imported = crate::sexp::tagged_form(*import, "import", &heap)
+            .expect("the probe opens with an import form");
+        assert!(
+            !calls.is_empty(),
+            "the probe calls something after importing"
+        );
+
+        // Every export of every library the probe names, read from the
+        // bundled sources the binary under test resolves them from.
+        let lib_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib");
+        let mut exported = std::collections::BTreeSet::new();
+        for spec in imported {
+            let name = crate::sexp::library_name(spec, &heap).expect("a plain library name");
+            let file = lib_root.join(name.replace(' ', "/")).with_extension("sld");
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", file.display()));
+            let form = crate::sexp::parse_all(&text, &heap).unwrap()[0];
+            let definition = LibraryDefinition::from_tagged(form, &heap)
+                .unwrap_or_else(|e| panic!("parsing {}: {e}", file.display()));
+            for export in definition.exports {
+                exported.insert(match export {
+                    ExportSpec::Identifier(id) => id,
+                    ExportSpec::Rename { external, .. } => external,
+                });
+            }
+        }
+
+        for call in calls {
+            let head = crate::sexp::list_elements(*call, &heap)
+                .and_then(|elems| crate::sexp::symbol_name(elems[0], &heap))
+                .expect("each probe form is a call with a symbol head");
+            assert!(
+                exported.contains(&head),
+                "the probe calls `{head}`, which none of its imports export"
+            );
+        }
     }
 }

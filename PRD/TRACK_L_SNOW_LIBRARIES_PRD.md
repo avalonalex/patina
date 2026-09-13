@@ -1,7 +1,9 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-09-13 — Larceny lane refresh and macro-status audit; see L5.3
+**Updated:** 2026-09-13 — the corpus harness's probe imports `(scheme write)` again and the
+snapshot is re-measured (**127 of 161**, unchanged since 2026-08-26; see L3). Earlier the same
+day — Larceny lane refresh and macro-status audit; see L5.3
 and the triage document's current macro status. Core-syntax import renaming
 and the Unicode stack overflow were still labelled open after their fixes.
 Family 40 remains VM-only; family 41 and H2's three environment-API findings
@@ -9,7 +11,7 @@ remain open despite the original hygiene matrix passing on both backends.
 Previously 2026-09-12 — owner decision: bundle R7RS-large libraries (including drafts) and
 SRFIs; keep implementation-specific libraries external. L1 eligibility widened and L2 reframed
 around supplied dependencies, with acquisition tracked by #195. The L3 corpus
-snapshot has not been re-measured for this policy change. Previously 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
+snapshot was re-measured 2026-09-13; the policy change moved no package. Previously 2026-09-01 — bookkeeping sweep. §6 Open reconciled against the triage doc by running
 the recorded repros: eight fixed entries moved to `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md` (five from
 the 2026-08-24/25 Larceny sweep that were never re-marked here, two already marked in place, and
 the quasiquoted-vector hygiene entry, which families 33–35 had fixed under it), and the
@@ -405,6 +407,19 @@ The sibling find/skip/count paths were audited through their public SRFI names;
 the predicate defects; the suite's differences are recorded in `DIVERGENCES.tsv`.
 The unchanged upstream suite now has one documented incorrect expectation:
 `string-every` returning 65 instead of its expected `#t` (218/219 agree).
+
+**The probe stopped importing what it calls, 2026-09-13 (127 of 161, unchanged).** #301
+(issue #211) took `display` out of `(scheme base)` on 2026-09-12, and the harness's synthesized
+import probe imported only `(scheme base)` before calling `display` — so a re-run scored **23 of
+161**, with 104 probe-mode packages filed as `unbound-identifier` on `display`, none of them a
+measurement of Patina. Nothing noticed because the snapshot is out-of-band by design: the committed
+number was 18 days old and the PRD kept quoting it. The probe now imports `(scheme write)`, and a
+unit test in the harness parses the bundled `base.sld` and `write.sld` and checks that every
+identifier the probe calls is exported by a library it imports, so the next export change to a
+standard library fails `cargo test -p patina-compat` instead of the corpus. Re-measured: the
+per-package matrix is identical to 2026-08-26's; the one recorded difference is chibi-regexp's
+error text, below. The lesson for reading this document: **a corpus number carries its
+measurement date**, and a change to any `(scheme …)` export list is a reason to re-run.
 
 **`build_corpus.py --offline` no longer shrinks the corpus** — ✅ **fixed 2026-08-14.** It used to
 delete ten packages (srfi-2, 25, 29, 31, 42, 64, 106, 170, 227, 235) without an error: their
@@ -1356,19 +1371,14 @@ or silently truncate. **Blocked on a full-Unicode char-set story** (SRFI 14
 beyond Latin-1, or an iset-compatible representation); not a macro defect.
 Two cosmetic defects rode along. The first — the raised error displaying as
 `#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
-an error object, and now names its message and irritants. The second is still open: the
-message doubles its "unhandled exception:" prefix. Neither backend doubles it
-for a plain uncaught raise, so something along this entry's path adds the
-second copy. The candidate is the tree-walker's raise/convert round trip:
-`cps_eval/application.rs` bakes the prefix into the *message field* of
-`EvalError::SchemeException` rather than leaving it to `Display`, and
-`cps_eval/exceptions.rs` converts that error back into an exception object
-with the same message — so a raise the interpreter reports and then re-raises
-carries the prefix into the next report, and `error-object-message` hands a
-Scheme program the interpreter's own diagnostic text. The VM does not have
-this shape: `patina-vm/src/error.rs` supplies the prefix from `Display`.
-Unverified — no program has been found that traverses the round trip twice,
-so this is where to look, not a diagnosis.
+an error object, and now names its message and irritants. The second — the message
+doubling its "unhandled exception:" prefix — is gone as well, measured through
+the harness on 2026-09-13: the VM records
+`unhandled exception: #<error-object: expected a state #<unspecified>>`, one
+prefix, and the tree-walker records the same failure as a `load-error` with no
+prefix at all (`Error evaluating library body: …`). Which change removed the
+doubling was not traced. That the two backends file one failure in two buckets
+is the classifier's prose-contract debt recorded under L3, not a new defect.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.

@@ -33,7 +33,7 @@
   ((slug "chibi-parse") (mode test) (status pass))
   ((slug "chibi-pathname") (mode test) (status pass))
   ((slug "chibi-quoted-printable") (mode test) (status pass))
-  ((slug "chibi-regexp") (mode test) (status parse-error) (errors "unhandled exception: unhandled exception: #<unknown>"))
+  ((slug "chibi-regexp") (mode test) (status parse-error) (errors "unhandled exception: #<error-object: expected a state #<unspecified>>"))
   ((slug "chibi-scribble") (mode test) (status pass))
   ((slug "chibi-show") (mode test) (status parse-error) (errors "syntax-rules literals must be symbols"))
   ((slug "chibi-snow-commands") (mode probe) (status parse-error) (errors "syntax-rules literals must be symbols"))
