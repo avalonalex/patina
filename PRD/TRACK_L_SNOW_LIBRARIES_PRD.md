@@ -362,6 +362,24 @@ incidentally cleared `(srfi 13)` from the queue — chibi-binary-record now pass
 advanced. `(chibi net-dns)` reclassified to out-of-scope: with its imports resolving it could
 finally report that it needs `(chibi net)`, which needs FFI.
 
+**Circular-list collection (#275), 2026-09-12.** `Heap::list_to_vec` detects
+cdr cycles with a second pointer and constant detection space; `list_append`
+and `list_reverse` use the checked collection before allocating output pairs.
+The primitive wrappers for append, reverse, list->vector, and list->string now
+propagate rejection instead of retrying the same list through obsolete fallback
+walks. Length likewise preserves its existing heap-level cycle rejection.
+Append still shares any final argument, including a circular tail; bounded
+list-ref/list-tail and cycles through car values remain valid. Regression rows
+cover both backends and circular quasiquote splices. Chibi/Gauche calls that
+failed to terminate in bounded probes are skipped individually in the oracle
+lane; length and vector cases still run. Reverse now uses a temporary element
+vector, trading linear scratch space for validation before heap allocation.
+
+The caller audit also found an independent unchecked walk in the `list-copy`
+primitive, which must preserve improper tails and does not call these helpers.
+Its circular-input behavior remains follow-up work; this change does not claim
+that every list consumer now detects cycles.
+
 **Standard I/O export boundaries (#211), 2026-09-12.** `(scheme base)` no longer
 exports `read`, `write`, or `display`; these remain available through `(scheme read)`
 and `(scheme write)`, as R7RS Appendix A specifies. The default environment also

@@ -2929,71 +2929,41 @@ impl Heap {
         Some(current)
     }
 
-    /// Convert list to Vec of TaggedValues
-    /// Returns None if not a proper list
+    /// Convert a proper list to a Vec, rejecting improper and circular cdr chains.
+    /// Cycle detection uses constant space beyond the returned elements: `slow`
+    /// advances once for every two pairs collected by `current`.
     pub fn list_to_vec(&self, tv: TaggedValue) -> Option<Vec<TaggedValue>> {
         let mut result = Vec::new();
         let mut current = tv;
+        let mut slow = tv;
+        let mut move_slow = false;
 
-        loop {
-            if current.is_null() {
-                return Some(result);
+        while !current.is_null() {
+            let (car, cdr) = self.try_pair(current)?;
+            result.push(car);
+            current = cdr;
+            if move_slow {
+                // slow follows pairs already visited by current. Nothing can
+                // mutate the chain while this method borrows the heap.
+                slow = self.cdr(slow);
+                if current == slow {
+                    return None;
+                }
             }
-            if !current.is_pair() {
-                return None; // Not a proper list
-            }
-            result.push(self.car(current));
-            current = self.cdr(current);
+            move_slow = !move_slow;
         }
+        Some(result)
     }
 
-    /// Reverse a list
+    /// Reverse a proper list. Validate before allocating any output pairs.
     pub fn list_reverse(&mut self, tv: TaggedValue) -> Option<TaggedValue> {
-        let mut result = TaggedValue::NULL;
-        let mut current = tv;
-
-        loop {
-            if current.is_null() {
-                return Some(result);
-            }
-
-            if current.is_pair() {
-                let car = self.car(current);
-                let cdr = self.cdr(current);
-                result = self.alloc_pair(car, result);
-                current = cdr;
-                continue;
-            }
-
-            return None; // Not a proper list
-        }
+        let elements = self.list_to_vec(tv)?;
+        Some(self.list_from_iter(elements.into_iter().rev()))
     }
 
-    /// Append two lists (creates new pairs for first list)
+    /// Copy the first list's spine onto second, which may be any value.
     pub fn list_append(&mut self, first: TaggedValue, second: TaggedValue) -> Option<TaggedValue> {
-        // If first is null, return second
-        if first.is_null() {
-            return Some(second);
-        }
-
-        // Collect elements from first list
-        let mut elements = Vec::new();
-        let mut current = first;
-
-        loop {
-            if current.is_null() {
-                break;
-            }
-
-            if current.is_pair() {
-                elements.push(self.car(current));
-                current = self.cdr(current);
-                continue;
-            }
-
-            return None; // Not a proper list
-        }
-
+        let elements = self.list_to_vec(first)?;
         Some(self.list_from_iter_with_tail(elements, second))
     }
 
@@ -3128,6 +3098,67 @@ mod tests {
 
         assert!(!heap.is_list(pair));
         assert_eq!(heap.list_len(pair), None);
+    }
+
+    #[test]
+    fn list_collection_rejects_cycles_without_allocating_pairs() {
+        // Exercise both parities, self-cycles, and entry after a finite prefix.
+        for prefix in 0..8 {
+            for cycle in 1..8 {
+                let mut heap = Heap::new();
+                let nodes: Vec<_> = (0..prefix + cycle)
+                    .map(|i| heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL))
+                    .collect();
+                for pair in nodes.windows(2) {
+                    heap.set_cdr(pair[0], pair[1]);
+                }
+                heap.set_cdr(*nodes.last().unwrap(), nodes[prefix as usize]);
+                let before = heap.stats().allocs_since_gc;
+                assert_eq!(heap.list_to_vec(nodes[0]), None);
+                assert_eq!(heap.list_reverse(nodes[0]), None);
+                assert_eq!(heap.list_append(nodes[0], TaggedValue::NULL), None);
+                assert_eq!(heap.stats().allocs_since_gc, before);
+            }
+        }
+    }
+
+    #[test]
+    fn list_collection_preserves_order_and_tail_sharing() {
+        let mut heap = Heap::new();
+        for len in 0..32 {
+            let values: Vec<_> = (0..len).map(TaggedValue::fixnum).collect();
+            let list = heap.list_from_iter(values.iter().copied());
+            assert_eq!(heap.list_to_vec(list), Some(values.clone()));
+            let reversed = heap.list_reverse(list).unwrap();
+            assert_eq!(
+                heap.list_to_vec(reversed),
+                Some(values.into_iter().rev().collect())
+            );
+        }
+        let cycle = heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+        heap.set_cdr(cycle, cycle);
+        let first = heap.list_from_iter([TaggedValue::fixnum(1), TaggedValue::fixnum(2)]);
+        let appended = heap.list_append(first, cycle).unwrap();
+        assert_ne!(appended, first);
+        assert_eq!(heap.list_tail(appended, 2), Some(cycle));
+        assert_eq!(heap.list_append(TaggedValue::NULL, cycle), Some(cycle));
+        assert_eq!(heap.list_tail(cycle, 100), Some(cycle));
+    }
+
+    #[test]
+    fn list_collection_only_follows_cdrs() {
+        let mut heap = Heap::new();
+        let list = heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+        heap.set_car(list, list);
+        assert_eq!(heap.list_to_vec(list), Some(vec![list]));
+        let improper = heap.alloc_pair(list, TaggedValue::fixnum(42));
+        assert_eq!(heap.list_to_vec(improper), None);
+        assert_eq!(heap.list_to_vec(TaggedValue::fixnum(42)), None);
+        assert_eq!(heap.list_reverse(improper), None);
+        assert_eq!(heap.list_append(improper, TaggedValue::NULL), None);
+        let appended = heap.list_append(list, TaggedValue::fixnum(42)).unwrap();
+        assert_eq!(heap.car(appended), list);
+        assert_eq!(heap.cdr(appended), TaggedValue::fixnum(42));
     }
 
     // -------------------------------------------------------------------------

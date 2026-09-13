@@ -255,29 +255,10 @@ pub(super) fn list_to_vector(
         });
     }
 
-    // Try fast path using heap's list_to_vec for native heap lists
-    let tvs_opt = { heap.borrow().list_to_vec(args[0]) };
-
-    if let Some(tvs) = tvs_opt {
-        // Fast path: native heap list - allocate native vector directly
-        Ok(heap.borrow_mut().alloc_vector(tvs))
-    } else {
-        // Slow path: walk tagged list directly (handles boxed pairs)
-        let heap_ref = heap.borrow();
-        let mut elements = Vec::new();
-        let mut current = args[0];
-        while !current.is_null() {
-            if !current.is_pair() {
-                return Err(EvalError::TypeError(
-                    "list->vector: argument must be a proper list".to_string(),
-                ));
-            }
-            elements.push(heap_ref.car(current));
-            current = heap_ref.cdr(current);
-        }
-        drop(heap_ref);
-        Ok(heap.borrow_mut().alloc_vector(elements))
-    }
+    let elements = heap.borrow().list_to_vec(args[0]).ok_or_else(|| {
+        EvalError::TypeError("list->vector: argument must be a proper list".into())
+    })?;
+    Ok(heap.borrow_mut().alloc_vector(elements))
 }
 
 pub(super) fn vector_to_string(

@@ -500,50 +500,20 @@ pub(super) fn list_to_string(
         });
     }
 
-    // Try fast path using heap's list_to_vec
-    let chars_opt = {
-        let heap_ref = heap.borrow();
-        heap_ref.list_to_vec(args[0])
-    };
-
-    let result: Vec<char> = if let Some(char_tvs) = chars_opt {
-        // Fast path: native heap list - chars are already extracted as TaggedValues
-        let mut chars = Vec::with_capacity(char_tvs.len());
-        for tv in char_tvs {
-            if tv.is_char() {
-                chars.push(tv.as_char_unchecked());
-            } else {
-                return Err(EvalError::TypeError(
-                    "list->string expects a list of characters".to_string(),
-                ));
-            }
+    let elements = heap
+        .borrow()
+        .list_to_vec(args[0])
+        .ok_or_else(|| EvalError::TypeError("list->string expects a proper list".into()))?;
+    let mut chars = Vec::with_capacity(elements.len());
+    for tv in elements {
+        if !tv.is_char() {
+            return Err(EvalError::TypeError(
+                "list->string expects a list of characters".into(),
+            ));
         }
-        chars
-    } else {
-        // Slow path: walk the list manually
-        let heap_ref = heap.borrow();
-        let mut chars = Vec::new();
-        let mut current = args[0];
-        while !current.is_null() {
-            if !current.is_pair() {
-                return Err(EvalError::TypeError(
-                    "list->string expects a proper list".to_string(),
-                ));
-            }
-            let car = heap_ref.car(current);
-            if car.is_char() {
-                chars.push(car.as_char_unchecked());
-            } else {
-                return Err(EvalError::TypeError(
-                    "list->string expects a list of characters".to_string(),
-                ));
-            }
-            current = heap_ref.cdr(current);
-        }
-        chars
-    };
-
-    Ok(heap.borrow_mut().alloc_string_chars(result))
+        chars.push(tv.as_char_unchecked());
+    }
+    Ok(heap.borrow_mut().alloc_string_chars(chars))
 }
 
 pub(super) fn string_copy(

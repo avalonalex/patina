@@ -198,4 +198,21 @@
 (test-error "a vector template cannot end in a non-list splice" #t
   (splice-into-vector 42))
 
+;; #275: circular splices must not make append/list->vector allocate forever.
+;; Chibi 0.12 and Gauche 0.9.15 timed out on middle/dotted-tail splices in
+;; bounded subprocess probes (2026-09-12), but both catch the vector case.
+(define circular-splice (list 1 2 3))
+(set-cdr! (cddr circular-splice) (cdr circular-splice))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "a circular middle splice is rejected" #t
+  (splice-into-middle circular-splice))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "a circular splice before a dotted tail is rejected" #t
+  (splice-before-dotted-tail circular-splice))
+(test-error "a circular final vector splice is rejected" #t
+  (splice-into-vector circular-splice))
+;; Preserve the established final-tail sharing rule for list templates.
+(test-assert "a circular final list splice remains shared"
+  (eq? (cdr (splice-last circular-splice)) circular-splice))
+
 (test-end)
