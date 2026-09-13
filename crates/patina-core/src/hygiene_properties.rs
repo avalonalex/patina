@@ -11,15 +11,19 @@
 //! The independent oracle uses integer set inclusion and binding identities.
 //! Every write is checked against a snapshot of *all* generated bindings.
 //! Replays use seed 284, 256 cases/property and at most 4096 shrink steps.
-//! Named quarantines must fail (unexpected success fails the gate). The
-//! unrestricted symmetry property partitions only the three named defect
-//! predicates; every generated case runs and unexpected success is an error.
+//!
+//! There are no quarantines left. The file carried three — #289, #290 and
+//! #291, the write path resolving per frame with its own copy of the rule —
+//! each required to keep failing, plus a classifier that excused their input
+//! shapes in the unrestricted property. All three are fixed; those tests are
+//! ordinary regressions now and the unrestricted property requires every
+//! generated case to hold.
 
 use super::*;
 use crate::scope::ScopeId;
 use crate::scope_resolve::resolve_index;
 use proptest::prelude::*;
-use proptest::test_runner::{Config, RngSeed, TestCaseError, TestError, TestRunner};
+use proptest::test_runner::{Config, RngSeed, TestCaseError, TestRunner};
 
 const SEED: u64 = 284;
 const SENTINEL: i64 = 999;
@@ -39,30 +43,6 @@ fn runner() -> TestRunner {
 fn check<S: Strategy>(strategy: S, test: impl Fn(S::Value) -> Result<(), TestCaseError>) {
     if let Err(error) = runner().run(&strategy, test) {
         panic!("H2 seed={SEED}, cases=256, shrink limit=4096: {error}");
-    }
-}
-
-fn quarantine<S: Strategy>(
-    name: &str,
-    strategy: S,
-    test: impl Fn(S::Value) -> Result<(), TestCaseError>,
-) {
-    // Exercise the entire bounded quarantine domain, not just the first
-    // counterexample. A partial fix must fail on unexpected success too.
-    if let Err(error) = runner().run(&strategy, |input| match test(input) {
-        Err(TestCaseError::Fail(reason)) if reason.to_string().starts_with(name) => Ok(()),
-        other => Err(TestCaseError::fail(format!(
-            "{name}: unexpected outcome: {other:?}"
-        ))),
-    }) {
-        panic!("{name}, seed={SEED}: {error}");
-    }
-    // Run the intended property unchanged to retain a minimized witness.
-    match runner().run(&strategy, test) {
-        Err(TestError::Fail(reason, minimal)) if reason.to_string().starts_with(name) => {
-            eprintln!("QUARANTINE {name}, seed={SEED}, cases=256: {reason}; minimized={minimal:?}");
-        }
-        other => panic!("{name}: unexpected success or unrelated failure: {other:?}"),
     }
 }
 
@@ -366,37 +346,43 @@ fn family36_rejected_scoped_binding_is_not_plain_fallback() {
     );
 }
 
+/// #289: two eligible bindings neither containing the other make the
+/// reference ambiguous. The write must refuse it and change nothing — the
+/// refusal is worth having only because no cell moves.
+///
+/// Both arrangements: the pair in one frame, and split across two, since the
+/// resolution is chain-wide and must see them the same way.
 #[test]
-fn quarantine_h2_a_family38_ambiguous_write_must_reject_without_mutation() {
-    quarantine(
-        "H2-A ambiguous write",
-        (0i64..3, any::<bool>()),
-        |(value, split)| {
-            let frames = if split {
-                vec![
-                    Frame {
-                        plain: None,
-                        bindings: vec![(1, value, false)],
-                    },
-                    Frame {
-                        plain: None,
-                        bindings: vec![(2, value, false)],
-                    },
-                ]
-            } else {
-                vec![Frame {
+fn h2_a_an_ambiguous_write_is_refused_without_mutating() {
+    check((0i64..3, any::<bool>()), |(value, split)| {
+        let frames = if split {
+            vec![
+                Frame {
                     plain: None,
-                    bindings: vec![(1, value, false), (2, value, false)],
-                }]
-            };
-            symmetry(&frames, 3)
-        },
-    );
+                    bindings: vec![(1, value, false)],
+                },
+                Frame {
+                    plain: None,
+                    bindings: vec![(2, value, false)],
+                },
+            ]
+        } else {
+            vec![Frame {
+                plain: None,
+                bindings: vec![(1, value, false), (2, value, false)],
+            }]
+        };
+        symmetry(&frames, 3)
+    });
 }
 
+/// #290: the greatest eligible scope set wins wherever it sits. The write
+/// used to stop at the first frame holding any candidate, so a child's
+/// less-specific binding beat a parent's more-specific one and the reference
+/// then read a cell it had not written.
 #[test]
-fn quarantine_h2_b_family38_outer_more_specific_binding() {
-    quarantine("H2-B binding identity", 0i64..3, |value| {
+fn h2_b_a_more_specific_binding_in_a_parent_wins() {
+    check(0i64..3, |value| {
         symmetry(
             &[
                 Frame {
@@ -413,65 +399,42 @@ fn quarantine_h2_b_family38_outer_more_specific_binding() {
     });
 }
 
+/// #291: with no eligible scoped binding the write falls back by name, and
+/// the fallback starts where the resolution started. Starting at the root
+/// left a plain binding in between readable and unwritable — and, with a
+/// global of the same spelling, sent the assignment out of the frame.
 #[test]
-fn quarantine_h2_c_family38_nonroot_plain_fallback() {
-    quarantine(
-        "H2-C plain fallback",
-        (0i64..3, any::<bool>()),
-        |(value, root_plain)| {
-            symmetry(
-                &[
-                    Frame {
-                        plain: root_plain.then_some(value),
-                        bindings: vec![],
-                    },
-                    Frame {
-                        plain: Some(value),
-                        bindings: vec![],
-                    },
-                ],
-                1,
-            )
-        },
-    );
+fn h2_c_the_fallback_reaches_a_non_root_plain_binding() {
+    check((0i64..3, any::<bool>()), |(value, root_plain)| {
+        symmetry(
+            &[
+                Frame {
+                    plain: root_plain.then_some(value),
+                    bindings: vec![],
+                },
+                Frame {
+                    plain: Some(value),
+                    bindings: vec![],
+                },
+            ],
+            1,
+        )
+    });
 }
 
-// Classify only a specifically known defect shape, independently of the
-// observed result. This does not turn arbitrary property failures into passes.
-fn known_defect(frames: &[Frame], reference: u8) -> Option<&'static str> {
-    match target(frames, reference) {
-        Err(()) => Some("H2-A ambiguous write"),
-        Ok(Some((frame, 0))) if frame != 0 => Some("H2-C plain fallback"),
-        Ok(Some((frame, _)))
-            if frames
-                .iter()
-                .enumerate()
-                .any(|(i, f)| i > frame && f.bindings.iter().any(|b| b.0 & reference == b.0)) =>
-        {
-            Some("H2-B binding identity")
-        }
-        _ => None,
-    }
-}
-
+/// The whole bounded domain, with nothing excused.
+///
+/// This carried three named quarantines — #289, #290 and #291 — and a
+/// `known_defect` classifier that recognised their input shapes so a failure
+/// on one counted as expected. All three are fixed, so the classifier is gone
+/// and every generated case is simply required to hold: the read and the write
+/// name the same binding, an ambiguous reference is refused without mutating,
+/// and an unbound one writes nothing.
 #[test]
-fn family38_unrestricted_environment_symmetry_with_named_quarantines() {
+fn family38_unrestricted_environment_symmetry() {
     check(
         (prop::collection::vec(frame(), 1..5), 1u8..64),
-        |(frames, reference)| {
-            let defect = known_defect(&frames, reference);
-            match (defect, symmetry(&frames, reference)) {
-                (None, result) => result,
-                (Some(name), Err(TestCaseError::Fail(reason)))
-                    if reason.to_string().starts_with(name) =>
-                {
-                    Ok(())
-                }
-                (Some(name), other) => Err(TestCaseError::fail(format!(
-                    "{name}: unexpected success or unrelated failure: {other:?}"
-                ))),
-            }
-        },
+        |(frames, reference)| symmetry(&frames, reference),
     );
 }
 

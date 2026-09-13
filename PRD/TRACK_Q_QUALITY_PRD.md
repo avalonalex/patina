@@ -424,16 +424,32 @@ consolidation must be behavior-identical under the matrix, both chibi suites,
 and the Larceny lanes — one that changes an answer is a defect fix travelling
 incognito and must be split into its own PR with its own pin.
 
-1. **Writes resolve through `scope_resolve`, like reads.**
-   `Environment::set_with_scopes` still resolves per-environment with an inline
-   copy of the most-specific rule and never calls `resolve_index` — so an
-   ambiguous write picks by size where an ambiguous read is refused. Replace
-   with one candidate walk over the chain, resolved once, consumed by both
-   directions; refuse ambiguous writes. First recorded as "the rest of #138
-   worth recovering" in triage family 38 — this row is that item's durable
-   home, since the triage doc deletes itself when its queue empties.
+1. **Writes resolve through `scope_resolve`, like reads.** 🟡 **the behaviour
+   half landed 2026-09-13; the shared walk remains.**
+   `Environment::set_with_scopes` resolved per-environment with an inline copy
+   of the most-specific rule and never called `resolve_index`, so an ambiguous
+   write picked by size where an ambiguous read is refused. It now collects
+   every candidate on the chain and resolves once through `resolve_index`,
+   which closed the three findings Track H's H2 left open: #289 an ambiguous
+   write mutating instead of refusing, #290 the walk stopping at the first
+   frame holding any candidate, #291 the fallback starting at the root and
+   skipping a plain binding in between. Their three quarantines in
+   `hygiene_properties.rs` are ordinary regressions now and the classifier
+   that excused their input shapes is gone, so the unrestricted property
+   requires every generated case to hold. `set_with_scopes` returns a
+   `ScopedSetError` so an ambiguous assignment is reported as one rather than
+   as an undefined variable.
+
+   **What is left is the consolidation this item is named for.** The read's
+   `collect_candidates` and the write's `collect` are now the same walk in the
+   same order, written twice — one yielding values, the other cells. Merging
+   them is behaviour-identical by construction and is what closes this row.
+   First recorded as "the rest of #138 worth recovering" in triage family 38 —
+   this row is that item's durable home, since the triage doc deletes itself
+   when its queue empties.
    **Guard:** Track H's H2 read/write-symmetry property, plus the matrix's
-   write rows and the `an_introduced_macro_can_assign_*` pins.
+   write rows and the `an_introduced_macro_can_assign_*` pins. All green at
+   the behaviour change; the merge must leave them so.
 2. **One `binder_disposition` function.** The two-arm rule — a source-written
    binder binds at the scopes it stands in and stays visible by name; a
    macro-introduced one binds at its own scopes, scoped-only — is hand-copied
@@ -539,8 +555,13 @@ design note on scoped relinking.
   multi-value escape, and handler loss on continuation re-entry —
   `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, previously a comment-only
   divergence, which is exactly the discovery mode this metric exists to end).
-  As of 2026-09-10 the grep answers **6 scoped rows**: the three §1.2 rows
-  and family 40's three (VM). The multi-value-escape and re-entry rows
+  As of 2026-09-13 the grep answers **6 scoped rows**: the three §1.2 rows
+  and family 40's three remaining (VM). It read 6 when written and briefly
+  stood at 8 — family 40 grew from three rows to five on 2026-09-12 when H3
+  found its positive direction, and those two converged on 2026-09-13 when the
+  VM learned to resolve a macro-introduced global across top-level forms. The
+  metric being right again by coincidence is the argument for reading it from
+  the grep rather than from this sentence. The multi-value-escape and re-entry rows
   converged earlier, and the tree-walker's whole nested-trampoline family
   (four callback pins and two scoped rows) converged the same day, taking
   the `assert_divergence` helper with it.

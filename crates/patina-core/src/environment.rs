@@ -77,6 +77,49 @@ type AliasTarget = (Option<Rc<Environment>>, Rc<str>);
 /// Alias name -> the binding it forwards to.
 type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
 
+/// Why a scoped assignment did not happen.
+///
+/// Two outcomes, kept apart because they call for different diagnostics and
+/// because collapsing them is how an ambiguous `set!` came to be reported as
+/// an undefined variable. `Undefined` means no binding of the name is
+/// reachable; `Ambiguous` means two are and set-of-scopes resolution does not
+/// determine which, so nothing was written.
+#[derive(Debug)]
+pub enum ScopedSetError {
+    /// No binding of this name was reachable. Carries the name.
+    Undefined(String),
+    /// The reference names two bindings, neither containing the other. No cell
+    /// was changed.
+    Ambiguous(Box<AmbiguousReference>),
+}
+
+impl std::fmt::Display for ScopedSetError {
+    /// Both arms render a sentence. `Undefined` used to render the bare name,
+    /// which reads as a diagnostic only to a caller that already knows what
+    /// the string is — and the caller that matches the variant, rather than
+    /// formatting it, does not need it at all.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScopedSetError::Undefined(name) => write!(f, "undefined variable: {name}"),
+            ScopedSetError::Ambiguous(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ScopedSetError {
+    /// The ambiguity is a real error in its own right and is reported
+    /// verbatim by [`Display`], so it is also the source. `Undefined` carries
+    /// a name rather than an error and has none.
+    ///
+    /// [`Display`]: std::fmt::Display
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ScopedSetError::Undefined(_) => None,
+            ScopedSetError::Ambiguous(e) => Some(e.as_ref()),
+        }
+    }
+}
+
 /// Per spelling, the macro-introduced top-level definitions of that name:
 /// the scope set each was introduced at, and the global it was renamed to.
 ///
@@ -705,7 +748,7 @@ impl Environment {
     /// The name-only view's reach is *plain* access — [`get`], [`set`], and
     /// the relinker resolving through them — not scoped resolution's
     /// fallback. A **scoped** reference whose resolution rejected this
-    /// binding stays refused (`get_scoped_fallback` / `set_scoped_terminal`):
+    /// binding stays refused (`get_scoped_fallback` / `set_scoped_fallback`):
     /// since the family 36 fix, one expansion's introduced definition is not
     /// reachable from a different expansion's introduced reference, which is
     /// what chibi answers too. The VM still reaches it through its bare-name
@@ -751,161 +794,202 @@ impl Environment {
         table.get(name)?.iter().rposition(|b| b.visible_by_name)
     }
 
-    /// Set an existing scoped binding (searches parent environments)
+    /// Assign through a scoped reference, resolving exactly as [`get_with_scopes`]
+    /// does: every candidate on the chain, one call to the shared rule, and the
+    /// binding it names.
     ///
-    /// Finds the binding matching the scope set and updates its value.
-    /// This is the primary API - accepts TaggedValue directly.
+    /// The two must agree on *which* binding a reference denotes, or a
+    /// reference can read one cell and write another. Three ways they did not,
+    /// all fixed by resolving here the way the read already did — this used to
+    /// walk one environment at a time with an inline copy of the rule:
+    ///
+    /// - an **ambiguous** reference was settled by scope-set size and written,
+    ///   where the read refuses it (#289);
+    /// - the walk **stopped at the first frame** holding any candidate, so a
+    ///   more specific binding in a parent lost to a less specific one in a
+    ///   child (#290);
+    /// - the fallback began **at the root**, so a plain binding in between was
+    ///   unreachable and a global of the same spelling was written instead
+    ///   (#291).
+    ///
+    /// Nothing is written unless the rule names a binding: an ambiguous
+    /// reference leaves every cell as it was, which is what makes the refusal
+    /// worth anything.
+    ///
+    /// [`get_with_scopes`]: Self::get_with_scopes
     pub fn set_with_scopes(
         &self,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
-    ) -> Result<(), String> {
+    ) -> Result<(), ScopedSetError> {
         if scopes.is_empty() {
             // Empty scopes - use simple lookup
-            return self.set(name, value);
+            return self.set(name, value).map_err(ScopedSetError::Undefined);
         }
 
-        // Resolve the way a read does — largest matching subset, most
-        // recent on a tie — so that a reference can write the binding it can
-        // read. Requiring an exact match meant a `set!` a macro introduced,
-        // which carries that macro's scopes on top of the binder's, found
-        // nothing and fell through to the root's by-name `set`. Larceny
-        // triage family 38.
-        let here = {
-            let scoped = self.scoped_bindings.borrow();
-            scoped.get(name).and_then(|bindings| {
-                let mut best: Option<(usize, usize)> = None;
-                for (index, binding) in bindings.iter().enumerate().rev() {
-                    if !crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                        continue;
-                    }
-                    let len = binding.scopes.len();
-                    if best.is_none_or(|(best_len, _)| len > best_len) {
-                        best = Some((len, index));
+        /// Every candidate binding of `name` on this chain, paired with where
+        /// to write it. The read collects values; a write needs the cell, so
+        /// this carries the environment and the index instead.
+        ///
+        /// The order is the read's, and must stay so: latest binding first
+        /// within a frame, innermost frame first. That is what
+        /// [`crate::scope_resolve::resolve_index`] documents, and the read and
+        /// the write have to break a tie the same way or they part company on
+        /// exactly the shapes nobody tests.
+        fn collect<'a>(
+            env: &'a Environment,
+            name: &str,
+            ref_scopes: &ScopeSet,
+            out: &mut Vec<(ScopeSet, (&'a Environment, usize))>,
+        ) {
+            {
+                let scoped = env.scoped_bindings.borrow();
+                if let Some(bindings) = scoped.get(name) {
+                    for (index, binding) in bindings.iter().enumerate().rev() {
+                        if crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes) {
+                            out.push((binding.scopes.clone(), (env, index)));
+                        }
                     }
                 }
-                best
-            })
-        };
-        if crate::scope_trace::enabled() {
-            // One record per environment, because this walk resolves per
-            // environment rather than over the whole chain — so the trace of a
-            // write is a sequence where a read's is a single line. That
-            // asymmetry is triage family 38, visible rather than argued.
-            let scoped = self.scoped_bindings.borrow();
-            // Candidates, not bindings: `cands` has to mean the same thing
-            // here as on the read path or the two cannot be compared, which is
-            // the whole reason to record both.
-            let (count, picked) = match scoped.get(name) {
-                Some(bindings) => (
-                    bindings
-                        .iter()
-                        .filter(|b| crate::scope_resolve::is_candidate(&b.scopes, scopes))
-                        .count(),
-                    here.map(|(_, index)| bindings[index].scopes.clone()),
-                ),
-                None => (0, None),
-            };
-            drop(scoped);
-            use crate::scope_trace::{Op, Outcome};
-            let outcome = if picked.is_some() {
-                Outcome::Scoped
-            } else {
-                Outcome::ByName
-            };
-            crate::scope_trace::resolve(name, scopes, count, picked.as_ref(), Op::Set, outcome);
-        }
-        if let Some((_, index)) = here {
-            let mut scoped = self.scoped_bindings.borrow_mut();
-            if let Some(binding) = scoped.get_mut(name).and_then(|bs| bs.get_mut(index)) {
-                binding.tagged_value = value;
-                drop(scoped);
-                crate::scope_trace::wrote(name, scopes, "scoped");
-                return Ok(());
+            }
+            if let Some(parent) = &env.parent {
+                collect(parent, name, ref_scopes, out);
             }
         }
-        // Check parent
-        if let Some(parent) = &self.parent {
-            parent.set_with_scopes(name, scopes, value)
-        } else {
-            // Fall back to unmarked binding. This is the *root*, the recursion
-            // having walked here — triage family 38's open half — so the
-            // terminal record says which of the two ways the walk ended.
-            let landed = self.set_scoped_terminal(name, scopes, value);
-            crate::scope_trace::wrote(
+
+        let mut candidates: Vec<(ScopeSet, (&Environment, usize))> = Vec::new();
+        collect(self, name, scopes, &mut candidates);
+        let chosen = crate::scope_resolve::resolve_index(name, scopes, &candidates);
+
+        // One record for the whole resolution, as the read writes one. It used
+        // to be one per environment, because the walk was per environment —
+        // and a trace you cannot compare against the read's is a trace that
+        // cannot answer the question it exists for.
+        if crate::scope_trace::enabled() {
+            use crate::scope_trace::{Op, Outcome};
+            let (picked, outcome) = match &chosen {
+                Ok(Some(i)) => (Some(candidates[*i].0.clone()), Outcome::Scoped),
+                Ok(None) => (None, Outcome::ByName),
+                Err(_) => (None, Outcome::Ambiguous),
+            };
+            crate::scope_trace::resolve(
                 name,
                 scopes,
-                if landed.is_ok() {
-                    "byname"
-                } else {
-                    "undefined"
-                },
+                candidates.len(),
+                picked.as_ref(),
+                Op::Set,
+                outcome,
             );
-            landed
+        }
+
+        match chosen {
+            Err(ambiguous) => {
+                crate::scope_trace::wrote(name, scopes, "ambiguous");
+                Err(ScopedSetError::Ambiguous(ambiguous))
+            }
+            Ok(Some(index)) => {
+                let (env, position) = candidates[index].1;
+                let mut scoped = env.scoped_bindings.borrow_mut();
+                match scoped.get_mut(name).and_then(|bs| bs.get_mut(position)) {
+                    Some(binding) => {
+                        binding.tagged_value = value;
+                        drop(scoped);
+                        crate::scope_trace::wrote(name, scopes, "scoped");
+                        Ok(())
+                    }
+                    // The table cannot shrink between collecting and writing —
+                    // nothing removes a scoped binding — so this is
+                    // unreachable rather than merely unlikely. Reported as
+                    // undefined instead of panicking because a wrong answer
+                    // here is a lost assignment, not a corrupt one.
+                    None => Err(ScopedSetError::Undefined(name.to_string())),
+                }
+            }
+            Ok(None) => {
+                let landed = self.set_scoped_fallback(name, scopes, value);
+                crate::scope_trace::wrote(
+                    name,
+                    scopes,
+                    if landed.is_ok() {
+                        "byname"
+                    } else {
+                        "undefined"
+                    },
+                );
+                landed.map_err(ScopedSetError::Undefined)
+            }
         }
     }
 
-    /// The terminal of [`set_with_scopes`]'s fallback: [`set`], except that
-    /// the name-only view of a scoped binding this resolution rejected is not
-    /// written through. That is [`get_scoped_fallback`]'s rule on the write
-    /// side, and it has to hold on both or a reference could clobber by
-    /// spelling a binding it is not allowed to read. Reached only at the
-    /// root — the per-frame walk above already resolved every scoped binding
-    /// on the chain — so the parent arm mirrors [`set`]'s for shape, not for
-    /// traffic.
+    /// The by-name fallback for a scoped assignment no scoped binding
+    /// answered — [`get_scoped_fallback`]'s mirror, and deliberately the same
+    /// shape: plain binding, then alias, then the name-only view of a scoped
+    /// definition, then the parent.
     ///
-    /// [`set`]: Self::set
-    /// [`set_with_scopes`]: Self::set_with_scopes
+    /// It starts where the resolution started, not at the root. Starting at
+    /// the root was #291: a plain binding in an intervening frame could be
+    /// read through this reference and not written, and with a global of the
+    /// same spelling in scope the assignment left the frame entirely and
+    /// changed the global instead.
+    ///
+    /// The one asymmetry with [`get`] is the same one the read has: a frame's
+    /// name-only view is skipped when this resolution *rejected* the binding
+    /// behind it. Reaching by spelling a binding set-of-scopes resolution just
+    /// refused would override the rule with the capture scope sets exist to
+    /// replace, and it must hold on both sides or a reference could clobber by
+    /// spelling what it may not read.
+    ///
     /// [`get_scoped_fallback`]: Self::get_scoped_fallback
-    fn set_scoped_terminal(
+    /// [`get`]: Self::get
+    fn set_scoped_fallback(
         &self,
         name: &str,
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), String> {
-        // Root-only by construction: `set_with_scopes` recurses to the root
-        // before falling back, and per-frame resolution has already rejected
-        // every scoped binding on the chain by then. A non-root call would
-        // run write semantics no test has ever exercised; make that loud.
-        debug_assert!(
-            self.parent.is_none(),
-            "set_scoped_terminal called off the root for `{name}`"
-        );
         if let Some(slot) = self.local_slot(name) {
             self.set_slot_value(slot, value);
             return Ok(());
         }
-        if let Some((target_env, target_name)) = self.alias_target(name) {
+        if self.has_aliases.get()
+            && let Some((target_env, target_name)) = self.alias_target(name)
+        {
             return match target_env {
                 Some(env) => env.set(&target_name, value),
                 None => self.set(&target_name, value),
             };
         }
-        if let Some(i) = self.visible_scoped_index(name) {
-            let mut table = self.scoped_bindings.borrow_mut();
-            if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
-                // Dead arm with a tripwire, exactly as in
-                // `get_scoped_fallback`: the per-frame walk above already
-                // rejected every scoped binding here, so a candidate showing
-                // up means the rule changed under this fallback. Note the
-                // caller would then trace the write as `byname`, which is one
-                // more reason this must never fire silently.
+        if self.has_visible_scoped.get()
+            && let Some(i) = self.visible_scoped_index(name)
+        {
+            let table = self.scoped_bindings.borrow();
+            if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
+                // Provably dead on this path, and asserted rather than pruned
+                // for the reason `get_scoped_fallback` gives for its twin: the
+                // fallback runs only after resolution rejected every scoped
+                // binding on this chain, so a candidate showing up here means
+                // the rule changed underneath and family 36 is back.
                 debug_assert!(
                     !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
-                    "set_scoped_terminal reached a binding of `{name}` that is a \
-                     candidate for {scopes} — the per-frame walk should have \
-                     written it"
+                    "set_scoped_fallback reached a binding of `{name}` that is a \
+                     candidate for {scopes} — resolution should have written it"
                 );
                 if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                    binding.tagged_value = value;
-                    return Ok(());
+                    drop(table);
+                    let mut table = self.scoped_bindings.borrow_mut();
+                    if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
+                        binding.tagged_value = value;
+                        return Ok(());
+                    }
+                    return Err(name.to_string());
                 }
             }
-            // Rejected for these scopes: not writable by spelling.
+            // Rejected for these scopes: fall through to the parent rather
+            // than clobber it by spelling.
         }
         match &self.parent {
-            Some(parent) => parent.set_scoped_terminal(name, scopes, value),
+            Some(parent) => parent.set_scoped_fallback(name, scopes, value),
             None => Err(name.to_string()),
         }
     }
@@ -1544,6 +1628,76 @@ mod tests {
             env.get_with_scopes("x", &ScopeSet::singleton(s2)).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
+    }
+}
+
+#[cfg(test)]
+mod scoped_write_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    /// #289. Two eligible bindings, neither containing the other: the write
+    /// must say *why* it refused, not merely that it did. The variant is the
+    /// whole reason this returns `ScopedSetError` rather than a string — the
+    /// tree-walker reports one as a syntax error and the other as an
+    /// undefined variable — so a test that checked only `is_err` would let
+    /// the two be swapped.
+    #[test]
+    fn an_ambiguous_write_reports_ambiguity() {
+        let env = Environment::new();
+        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
+        match env.set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9)) {
+            Err(ScopedSetError::Ambiguous(e)) => assert_eq!(e.name, "x"),
+            other => panic!("expected an ambiguity, got {other:?}"),
+        }
+        // And nothing moved.
+        assert_eq!(
+            env.get_with_scopes("x", &scopes(&[1])).unwrap(),
+            Some(TaggedValue::fixnum(1))
+        );
+        assert_eq!(
+            env.get_with_scopes("x", &scopes(&[2])).unwrap(),
+            Some(TaggedValue::fixnum(2))
+        );
+    }
+
+    /// The other arm: a name nothing binds is undefined, not ambiguous.
+    #[test]
+    fn a_write_to_nothing_reports_undefined() {
+        let env = Environment::new();
+        match env.set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9)) {
+            Err(ScopedSetError::Undefined(name)) => assert_eq!(name, "absent"),
+            other => panic!("expected undefined, got {other:?}"),
+        }
+    }
+
+    /// Both arms render a sentence, so a caller that formats rather than
+    /// matching gets a diagnostic either way.
+    #[test]
+    fn both_arms_render_a_message() {
+        let env = Environment::new();
+        let undefined = env
+            .set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9))
+            .unwrap_err()
+            .to_string();
+        assert!(undefined.contains("undefined variable"), "{undefined}");
+        assert!(undefined.contains("absent"), "{undefined}");
+
+        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
+        let ambiguous = env
+            .set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9))
+            .unwrap_err()
+            .to_string();
+        assert!(ambiguous.contains("ambiguous reference"), "{ambiguous}");
     }
 }
 

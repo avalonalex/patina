@@ -11,7 +11,7 @@ use crate::eval::error::EvalError;
 use patina_core::Procedure;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind, CpsParam};
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{Environment, ScopeSet, ScopedParam};
+use patina_core::{Environment, ScopeSet, ScopedParam, ScopedSetError};
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -112,9 +112,17 @@ impl<'a> CpsEvaluator<'a> {
             env.set(name, value)
                 .map_err(|_| EvalError::UndefinedVariable(name.to_string()))
         } else {
-            // Scope-based set for hygienic macros
+            // Scope-based set for hygienic macros. The two failures are
+            // reported apart, and as the *read* reports them: an ambiguous
+            // reference is a syntax error naming both bindings, not an
+            // undefined variable. Collapsing them told a programmer their
+            // variable did not exist when the problem was that it existed
+            // twice.
             env.set_with_scopes(name, scopes, value)
-                .map_err(|_| EvalError::UndefinedVariable(name.to_string()))
+                .map_err(|e| match e {
+                    ScopedSetError::Undefined(name) => EvalError::UndefinedVariable(name),
+                    ScopedSetError::Ambiguous(e) => EvalError::InvalidSyntax(e.to_string()),
+                })
         }
     }
 
