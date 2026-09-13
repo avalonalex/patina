@@ -48,17 +48,57 @@ fn get_index(
 /// Extract a byte (0-255) from TaggedValue
 fn get_byte(
     tv: TaggedValue,
+    heap: &std::cell::Ref<'_, patina_core::Heap>,
+    fn_name: &str,
+) -> Result<u8, EvalError> {
+    get_byte_in(tv, heap, fn_name, false)
+}
+
+/// Extract a *fill* byte, which may also be written as a signed byte.
+///
+/// R7RS §6.9 defines a byte as an exact integer in 0..255, so `-1` is outside
+/// what it describes — but it prescribes nothing for the error situation, and
+/// R6RS's `make-bytevector` (Standard Libraries §2.1) *requires* a fill in
+/// -128..255 stored as `fill + 256`. chibi and Gauche both accept a negative
+/// fill here, so this widening only stops rejecting what the field already
+/// takes; the two-argument spelling of one byte is the whole of it.
+///
+/// Deliberately not shared with the other byte arguments. `bytevector` and
+/// `bytevector-u8-set!` reject a negative byte in chibi and in Gauche, so
+/// widening [`get_byte`] itself would move Patina away from both oracles at
+/// two sites to reach one. The ceiling stays 255 either way: Gauche rejects
+/// 256 and -129, and chibi's truncation is not a behaviour to copy.
+fn get_fill_byte(
+    tv: TaggedValue,
+    heap: &std::cell::Ref<'_, patina_core::Heap>,
+    fn_name: &str,
+) -> Result<u8, EvalError> {
+    get_byte_in(tv, heap, fn_name, true)
+}
+
+/// The shared body of [`get_byte`] and [`get_fill_byte`]: the same extraction,
+/// differing only in whether the signed spelling of a byte is accepted.
+fn get_byte_in(
+    tv: TaggedValue,
     _heap: &std::cell::Ref<'_, patina_core::Heap>,
     fn_name: &str,
+    signed_ok: bool,
 ) -> Result<u8, EvalError> {
     if tv.is_fixnum() {
         let n = tv.as_fixnum_unchecked();
         if (0..=255).contains(&n) {
             return Ok(n as u8);
         }
+        if signed_ok && (-128..0).contains(&n) {
+            // The byte `n` denotes in two's complement, which is what R6RS
+            // asks for and what a caller writing -1 for 255 means.
+            return Ok((n + 256) as u8);
+        }
         return Err(EvalError::TypeError(format!(
-            "{}: byte must be in range 0-255, got {}",
-            fn_name, n
+            "{}: byte must be in range {}-255, got {}",
+            fn_name,
+            if signed_ok { "-128" } else { "0" },
+            n
         )));
     }
     Err(EvalError::TypeError(format!(
@@ -104,7 +144,7 @@ pub(super) fn make_bytevector(
 
     let k = get_index(args[0], &heap_ref, "make-bytevector")?;
     let fill = if args.len() == 2 {
-        get_byte(args[1], &heap_ref, "make-bytevector")?
+        get_fill_byte(args[1], &heap_ref, "make-bytevector")?
     } else {
         0
     };
