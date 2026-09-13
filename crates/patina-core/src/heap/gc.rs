@@ -424,6 +424,7 @@ pub struct GcVisitor<'h> {
     marks: MarkBits,
     worklist: Vec<TaggedValue>,
     cont_worklist: Vec<Rc<CpsContinuation>>,
+    cont_env_worklist: Vec<ContEnv>,
     seen_envs: FxHashSet<usize>,
     seen_conts: FxHashSet<usize>,
     seen_exprs: FxHashSet<usize>,
@@ -466,6 +467,7 @@ impl<'h> GcVisitor<'h> {
             marks,
             worklist: Vec::new(),
             cont_worklist: Vec::new(),
+            cont_env_worklist: Vec::new(),
             seen_envs: FxHashSet::default(),
             seen_conts: FxHashSet::default(),
             seen_exprs: FxHashSet::default(),
@@ -661,6 +663,10 @@ impl<'h> GcVisitor<'h> {
                 self.trace_children(tv);
             } else if let Some(k) = self.cont_worklist.pop() {
                 self.trace_continuation_children(&k);
+            } else if let Some(env) = self.cont_env_worklist.pop() {
+                for (_, value) in env.iter() {
+                    trace_cont_value(value, self);
+                }
             } else {
                 break;
             }
@@ -1097,19 +1103,19 @@ impl Collector for MarkSweepCollector {
 /// `ContValue::Local` captures the chain below it, so an un-memoized walk is
 /// exponential (`2ⁿ − 1` node visits — measured at 6.8 s for one collection
 /// at nesting depth 26). Skipping an already-seen chain is safe: its entries,
-/// and therefore its whole tail, were traced when it was first seen.
+/// and therefore its whole tail, are already queued when it is first seen.
+/// Queue an O(1) snapshot rather than tracing recursively: a local
+/// continuation can capture another environment at every Scheme call depth.
 pub fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
-    if !visitor.visit_once(cont_env.gc_identity()) {
-        return;
-    }
-    for (_, value) in cont_env.iter() {
-        trace_cont_value(value, visitor);
+    if visitor.visit_once(cont_env.gc_identity()) {
+        visitor.cont_env_worklist.push(cont_env.clone());
     }
 }
 
 /// Trace a continuation value, walking the `Box<ContValue>` chain
 /// iteratively — most variants differ only in what they visit before handing
-/// off to the continuation they wrap.
+/// off to the continuation they wrap. Local continuation environments and
+/// captured continuations are queued on the visitor's worklists as well.
 pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
     let mut cont = cont;
     loop {
