@@ -124,6 +124,27 @@
 (test-error "unquote-splicing outside a quasiquote is an error" #t
   (eval '(unquote-splicing '(1)) (environment '(scheme base))))
 
+;; An `unquote` with no operand at all. R7RS §7.1.4's grammar gives `unquote`
+;; exactly one `<qq template>`, so `(unquote)` is not one and §4.2.8's closing
+;; sentence makes it an error. These rows exist because of what Patina did
+;; instead: the VM's expansion read the operand with an unchecked `car`, which
+;; is a `debug_assert` in debug builds — it panicked — and in release read
+;; whatever the tagged value pointed at, so `` `(a `(b (unquote))) `` answered
+;; ``(a `(b ,syntax))``, naming a symbol that appears nowhere in the program.
+;;
+;; `eval` again, for the reason the rows above give: on the VM the refusal now
+;; happens while the form is compiled. chibi refuses these too. Gauche accepts
+;; them, because R6RS 11.17's grammar reads `(unquote <qq template>*)` with a
+;; zero-or-more operand list and Gauche implements that; the register carries
+;; the three rows. Whether to follow R6RS here is a separate decision from
+;; not reading past the end of the form, and this file takes only the second.
+(test-error "an unquote with no operand is an error" #t
+  (eval '`(a (unquote)) (environment '(scheme base))))
+(test-error "an unquote-splicing with no operand is an error" #t
+  (eval '`(a (unquote-splicing)) (environment '(scheme base))))
+(test-error "an unquote with no operand inside a nested template is an error" #t
+  (eval '`(a `(b (unquote))) (environment '(scheme base))))
+
 ;; R7RS §4.2.8 says a spliced expression "must evaluate to a list", which is
 ;; an "is an error" case: an implementation may signal it or not. Patina and
 ;; Gauche signal; chibi splices the 42 as if it were empty and answers (a b),
