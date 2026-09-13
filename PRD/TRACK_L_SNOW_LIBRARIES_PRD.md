@@ -1035,7 +1035,7 @@ now live, and a test checks that those pointers still resolve.
 | ✅ Unicode case: `(char-upcase #\ß)` ⇒ `#\S`; `char-ci=?` on final sigma; `string-ci=?` full folding — *fixed 2026-08-24* with the simple mappings (a generated table where std's full mapping expands); `digit-value` over every Nd character still open | char (2), r6rs unicode | both |
 | ✅ `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer — *fixed 2026-08-24* (`string->number` is the reader's number syntax; `#e` on a decimal is exact from the text, in the reader too) | inexact, complex | both |
 | ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` and `(sqrt -inf.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does | inexact (1), complex (1) | both |
-| `environment` rejects a nested import set, `(prefix (only …) …)` | eval, r6rs eval | both |
+| ✅ `environment` accepts all import-set modifiers and numeric library names — *fixed 2026-09-12*, family 10. Shared resolution, cyclic-input rejection, and definition checks that follow renamed syntax; focused eval 5/5, load 4/4, R6RS eval 2/2 on both backends | eval, load, r6rs eval | both |
 | ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |
 | `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@` | write (3) | both |
 | R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` | r6rs bytevectors (4), enums (3) | both |

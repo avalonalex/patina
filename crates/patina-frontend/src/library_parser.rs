@@ -596,9 +596,9 @@ impl LibraryDefinition {
         list: &[TaggedValue],
         heap: &SharedHeap,
     ) -> Result<ImportSet, ParseError> {
-        if list.len() < 3 {
+        if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
-                "only requires at least one identifier".to_string(),
+                "only requires an import set".to_string(),
             ));
         }
 
@@ -627,9 +627,9 @@ impl LibraryDefinition {
         list: &[TaggedValue],
         heap: &SharedHeap,
     ) -> Result<ImportSet, ParseError> {
-        if list.len() < 3 {
+        if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
-                "except requires at least one identifier".to_string(),
+                "except requires an import set".to_string(),
             ));
         }
 
@@ -680,9 +680,9 @@ impl LibraryDefinition {
         list: &[TaggedValue],
         heap: &SharedHeap,
     ) -> Result<ImportSet, ParseError> {
-        if list.len() < 3 {
+        if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
-                "rename requires at least one rename pair".to_string(),
+                "rename requires an import set".to_string(),
             ));
         }
 
@@ -1021,6 +1021,21 @@ mod tests {
             "Error should mention non-negative: {}",
             err
         );
+    }
+
+    #[test]
+    fn empty_import_modifiers_are_valid() {
+        let heap = test_heap();
+        for modifier in ["only", "except", "rename"] {
+            let set = list(
+                vec![
+                    sym(modifier, &heap),
+                    list(vec![sym("scheme", &heap), sym("base", &heap)], &heap),
+                ],
+                &heap,
+            );
+            assert!(LibraryDefinition::parse_import_set_tagged(set, &heap).is_ok());
+        }
     }
 
     #[test]
