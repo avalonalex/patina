@@ -19,14 +19,10 @@
 ;;
 ;; chibi 0.12 ships (srfi 33) and (srfi 142) but not (srfi 60); Gauche 0.9.15
 ;; ships (srfi 60) but neither of the others. Each legacy library is imported
-;; with a prefix, inside a `cond-expand` that names the implementations known
-;; to have it, and each of its rows is skipped where it was not imported. The
+;; with a prefix, inside a `cond-expand` that checks the library's availability,
+;; and each of its rows is skipped where it was not imported. The
 ;; skipped rows still mention the prefixed names, so chibi warns about unbound
 ;; `srfi-60:` references while compiling; they are never evaluated.
-;;
-;; The requirement ought to be `(library (srfi 60))`, which is what R7RS
-;; §4.2.1 provides for this. It is not used because Patina's program-level
-;; `cond-expand` answers every library requirement false (#265).
 ;;
 ;; The SRFI 33 rows found a Patina defect on arrival: `bitwise-merge` and
 ;; `copy-bit-field` used SRFI 151's argument order, and chibi answered both
@@ -36,11 +32,14 @@
         (prefix (scheme bitwise) scheme-bitwise:)
         (srfi 64))
 (cond-expand
-  ((or patina gauche) (import (prefix (srfi 60) srfi-60:)))
+  ((library (srfi 60)) (import (prefix (srfi 60) srfi-60:)))
   (else))
 (cond-expand
-  ((or patina chibi)
-   (import (prefix (srfi 33) srfi-33:) (prefix (srfi 142) srfi-142:)))
+  ((library (srfi 33)) (import (prefix (srfi 33) srfi-33:)))
+  (else))
+
+(cond-expand
+  ((library (srfi 142)) (import (prefix (srfi 142) srfi-142:)))
   (else))
 
 (test-begin "bitwise")
@@ -199,7 +198,7 @@
 
 ;; In-degree 31 over the vendored corpus. It spells things differently from
 ;; 151, so importing 151 is not a substitute.
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60 spellings" '(8 14 6 -13 1024 2 #t 3)
   (list (srfi-60:logand 12 10) (srfi-60:logior 12 10) (srfi-60:logxor 12 10)
         (srfi-60:lognot 12) (srfi-60:ash 1 10) (srfi-60:logcount 12)
@@ -207,24 +206,24 @@
 
 ;; SRFI 60's list conversions are MSB-first — the opposite of SRFI 151's
 ;; bits->list family, which is why 151 renamed them.
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60's integer->list is MSB-first" '(#t #t #f)
   (srfi-60:integer->list 6))
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60's integer->list pads on the left" '(#f #f #t #t #f)
   (srfi-60:integer->list 6 5))
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60's list->integer reads MSB-first" 6
   (srfi-60:list->integer '(#t #t #f)))
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60's conversions round-trip" 12345
   (srfi-60:list->integer (srfi-60:integer->list 12345)))
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "booleans->integer" 10 (srfi-60:booleans->integer #t #f #t #f))
 
 ;; SRFI 60 exports both spellings of eight operators — `logand` *and*
 ;; `bitwise-and`, `ash` *and* `arithmetic-shift`. Easy to lose one half.
-(cond-expand ((or patina gauche)) (else (test-skip 1)))
+(cond-expand ((library (srfi 60))) (else (test-skip 1)))
 (test-equal "SRFI 60 exports the SRFI 33 spellings too" '(8 16 2 8)
   (list (srfi-60:bitwise-and 12 10) (srfi-60:arithmetic-shift 1 4)
         (srfi-60:bit-count 12) (srfi-60:logand 12 10)))
@@ -236,13 +235,13 @@
 ;; the opposite of 151's — so the shim swaps the trailing arguments rather than
 ;; aliasing. mask 5 (101), 3 (011), 0: 142 keeps 3's mask-0 bits, so 2, where
 ;; 151 answers 1 above.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 142))) (else (test-skip 1)))
 (test-equal "SRFI 142's bitwise-if takes mask-0 bits from the second argument" 2
   (srfi-142:bitwise-if 5 3 0))
 
 ;; Unlike SRFI 60's MSB-first `integer->list`, SRFI 142's is LSB-first — the
 ;; very family 151 renamed to `bits->list` without changing the order.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 142))) (else (test-skip 1)))
 (test-equal "SRFI 142's conversions are LSB-first" '((#f #t #t) 6 6 12345)
   (list (srfi-142:integer->list 6)
         (srfi-142:list->integer '(#f #t #t))
@@ -251,7 +250,7 @@
 
 ;; Headline operators reached through the 142 name — including the three
 ;; jkode-sassy, the corpus package that imports it, actually calls.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 142))) (else (test-skip 1)))
 (test-equal "SRFI 142 headline operators" '(8 14 256 3 2)
   (list (srfi-142:bitwise-and 12 10) (srfi-142:bitwise-ior 12 10)
         (srfi-142:arithmetic-shift 1 8) (srfi-142:bit-count 7)
@@ -264,29 +263,29 @@
 ;; I1[k]", which is SRFI 142's `bitwise-if` order. mask 3, 1, 8: bits 0–1 come
 ;; from 8 and the rest from 1, so 0. These rows asserted 9 and 240, SRFI 151's
 ;; answers, until #264.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "bitwise-merge takes mask-0 bits from the second argument" '(0 2)
   (list (srfi-33:bitwise-merge 3 1 8) (srfi-33:bitwise-merge 5 3 0)))
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "SRFI 33's any-bits-set? and all-bits-set?" '(#t #t)
   (list (srfi-33:any-bits-set? 12 10) (srfi-33:all-bits-set? 4 6)))
 
 ;; All five SRFI 33 field operations. `copy-bit-field` takes
 ;; `(size position from to)` like its siblings, not SRFI 60's
 ;; `(to from start end)`, and returns TO with the field replaced by FROM's.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "extract-bit-field" '(15 5)
   (list (srfi-33:extract-bit-field 4 0 255)
         (srfi-33:extract-bit-field 4 8 #xA55A)))
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "replace-bit-field" 245 (srfi-33:replace-bit-field 4 0 5 255))
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "copy-bit-field copies FROM's field into TO" '(15 240)
   (list (srfi-33:copy-bit-field 4 0 255 0) (srfi-33:copy-bit-field 4 4 255 0)))
 ;; test-bit-field? / clear-bit-field are renames of SRFI 151's bit-field-any? /
 ;; bit-field-clear, so they take (n start end) — chibi's (srfi 33) makes the
 ;; same choice.
-(cond-expand ((or patina chibi)) (else (test-skip 1)))
+(cond-expand ((library (srfi 33))) (else (test-skip 1)))
 (test-equal "test-bit-field? and clear-bit-field" '(#t #f 12)
   (list (srfi-33:test-bit-field? 10 1 2) (srfi-33:test-bit-field? 10 2 3)
         (srfi-33:clear-bit-field 15 0 2)))

@@ -15,8 +15,9 @@ use crate::heap::SharedHeap;
 use crate::library::Library;
 use crate::library_registry::LibraryError;
 use patina_core::TaggedValue;
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// Trait for different library loading strategies
 ///
@@ -336,7 +337,49 @@ pub struct LibraryLoaderRegistry {
     evaluating_loaders: Vec<Box<dyn EvaluatingLibraryLoader>>,
 }
 
+/// The heap must not keep library environments (and thus itself) alive.
+/// Backends own the registries; this query borrows them only while answering.
+#[derive(Debug)]
+struct RegistryLibraryAvailability {
+    libraries: Weak<RefCell<crate::LibraryRegistry>>,
+    loaders: Weak<RefCell<LibraryLoaderRegistry>>,
+}
+
+impl patina_core::features::LibraryAvailability for RegistryLibraryAvailability {
+    fn is_available(&self, name: &[String]) -> bool {
+        let (Some(libraries), Some(loaders)) = (self.libraries.upgrade(), self.loaders.upgrade())
+        else {
+            return false;
+        };
+        let paths = {
+            let libraries = libraries.borrow();
+            // Includes inline definitions and registered libraries without a
+            // backing file. Checking availability never executes a library.
+            if libraries.get(name).is_some() {
+                return true;
+            }
+            libraries.search_paths().to_vec()
+        };
+        loaders.borrow().can_load_with_paths(name, &paths)
+    }
+}
+
 impl LibraryLoaderRegistry {
+    /// Give every frontend using this heap the same live library catalogue.
+    /// Install before bootstrap; path changes and inline definitions are read
+    /// at query time rather than frozen in a snapshot.
+    pub fn install_availability_checker(
+        heap: &SharedHeap,
+        libraries: &Rc<RefCell<crate::LibraryRegistry>>,
+        loaders: &Rc<RefCell<Self>>,
+    ) {
+        heap.borrow_mut()
+            .set_library_availability(Rc::new(RegistryLibraryAvailability {
+                libraries: Rc::downgrade(libraries),
+                loaders: Rc::downgrade(loaders),
+            }));
+    }
+
     /// Create a new loader registry
     pub fn new() -> Self {
         Self {
@@ -543,6 +586,28 @@ pub type RustLibraryBuilder = fn(Vec<String>, Rc<Environment>) -> Vec<String>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_handles_do_not_retain_registries() {
+        let heap = patina_core::heap::new_shared_heap();
+        let libraries = Rc::new(RefCell::new(crate::LibraryRegistry::new()));
+        let loaders = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
+        let name = vec!["inline".to_string()];
+        libraries
+            .borrow_mut()
+            .register(Library::new(name.clone()))
+            .unwrap();
+        LibraryLoaderRegistry::install_availability_checker(&heap, &libraries, &loaders);
+        let checker = heap.borrow().library_availability().unwrap();
+        assert!(checker.is_available(&name));
+        let weak_libraries = Rc::downgrade(&libraries);
+        let weak_loaders = Rc::downgrade(&loaders);
+        drop(libraries);
+        drop(loaders);
+        assert!(weak_libraries.upgrade().is_none());
+        assert!(weak_loaders.upgrade().is_none());
+        assert!(!checker.is_available(&name));
+    }
 
     // Mock loader for testing
     struct MockLoader {

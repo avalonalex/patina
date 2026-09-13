@@ -338,6 +338,36 @@ fn isolated_libraries_keep_explicit_order_and_apply_to_eval_print() {
 }
 
 #[test]
+fn library_requirements_respect_isolated_and_explicit_paths() {
+    let cwd = TempDir::new().unwrap();
+    let library = cwd.path().join("lib");
+    fs::create_dir(&library).unwrap();
+    write_dup_lib(&library, "present");
+    let script = cwd.path().join("availability.scm");
+    fs::write(
+        &script,
+        "(import (scheme base) (scheme write))
+         (write (cond-expand ((library (dup)) #t) (else #f)))",
+    )
+    .unwrap();
+    let script = script.to_str().unwrap();
+    run_both_backends(cwd.path(), &[script], "#t");
+    run_both_backends(cwd.path(), &["--isolated-libraries", script], "#f");
+    for flag in ["-I", "-A"] {
+        run_both_backends(
+            cwd.path(),
+            &[
+                "--isolated-libraries",
+                flag,
+                library.to_str().unwrap(),
+                script,
+            ],
+            "#t",
+        );
+    }
+}
+
+#[test]
 fn isolated_environment_setting_takes_effect_before_bootstrap() {
     let cwd = TempDir::new().unwrap();
     let poisoned = cwd.path().join("poison");

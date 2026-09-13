@@ -17,6 +17,13 @@
 
 use std::collections::HashSet;
 
+/// Per-interpreter catalogue queried by `(cond-expand ((library ...)) ...)`.
+/// Implementations discover libraries without importing or executing them.
+/// They must not retain strong references back to the heap that holds them.
+pub trait LibraryAvailability: std::fmt::Debug {
+    fn is_available(&self, name: &[String]) -> bool;
+}
+
 /// Registry of implementation features for cond-expand
 #[derive(Debug, Clone)]
 pub struct FeatureRegistry {

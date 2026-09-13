@@ -14,6 +14,13 @@ use crate::ParseError;
 use patina_core::features::FeatureRegistry;
 use patina_core::{SharedHeap, TaggedValue};
 
+/// Query the interpreter's live catalogue without holding a heap borrow.
+/// A standalone frontend heap has no loaders and therefore no libraries.
+pub fn library_available(heap: &SharedHeap, name: &[String]) -> bool {
+    let availability = heap.borrow().library_availability();
+    availability.is_some_and(|catalogue| catalogue.is_available(name))
+}
+
 /// Evaluate a feature requirement from TaggedValue.
 ///
 /// Returns true if the requirement is satisfied.

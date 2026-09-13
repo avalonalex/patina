@@ -2096,7 +2096,8 @@ impl Desugarer {
         // parser, without any of them being threaded through the others.
         let features = shared_heap.borrow_mut().features_and_close().clone();
 
-        let can_load_library = |_lib_name: &[String]| false;
+        let can_load_library =
+            |lib_name: &[String]| crate::cond_expand::library_available(shared_heap, lib_name);
 
         for (i, &clause_tv) in clauses.iter().enumerate() {
             let clause_list = utils::list_to_vec_tagged(clause_tv, shared_heap)?;

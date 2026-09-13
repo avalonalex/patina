@@ -429,12 +429,8 @@ pub(super) fn vm_load_library(
         lib
     } else {
         // Try evaluating (Scheme .sld) loaders
-        let search_paths_for_checker = search_paths.clone();
-        let loader_reg_clone = loader_registry.clone();
-        let can_load_library = |lib_name: &[String]| {
-            let loaders = loader_reg_clone.borrow();
-            loaders.can_load_with_paths(lib_name, &search_paths_for_checker)
-        };
+        let can_load_library =
+            |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
 
         let parsed = {
             let loaders = loader_registry.borrow();
