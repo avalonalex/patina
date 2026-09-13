@@ -214,4 +214,85 @@
          (b (read p)))
     (list a b)))
 
+;; EOF before a datum starts is normal; EOF inside its representation is a
+;; read error (R7RS 6.13.2). Completed comments do not start a datum.
+(define (read-result p)
+  (guard (e (else (if (and (error-object? e) (read-error? e))
+                     'read-error
+                     'other-error)))
+    (let ((datum (read p)))
+      (if (eof-object? datum) 'eof datum))))
+
+(test-equal "an unfinished list raises a read error" 'read-error
+  (read-result (open-input-string "(")))
+
+(test-equal "an unfinished vector raises a read error" 'read-error
+  (read-result (open-input-string "#(")))
+
+(test-equal "an unfinished bytevector raises a read error" 'read-error
+  (read-result (open-input-string "#u8(")))
+
+(test-equal "a lone quote raises a read error" 'read-error
+  (read-result (open-input-string "'")))
+
+(test-equal "a lone quasiquote raises a read error" 'read-error
+  (read-result (open-input-string "`")))
+
+(test-equal "a lone unquote raises a read error" 'read-error
+  (read-result (open-input-string ",")))
+
+(test-equal "a lone unquote-splicing raises a read error" 'read-error
+  (read-result (open-input-string ",@")))
+
+(test-equal "an unfinished dotted tail raises a read error" 'read-error
+  (read-result (open-input-string "(1 .")))
+
+(test-equal "a datum label without its datum raises a read error" 'read-error
+  (read-result (open-input-string "#1=")))
+
+(test-equal "a datum comment without its datum raises a read error" 'read-error
+  (read-result (open-input-string "#;")))
+
+(test-equal "an unfinished commented list raises a read error" 'read-error
+  (read-result (open-input-string "#; (")))
+
+(test-equal "an unterminated string raises a read error" 'read-error
+  (read-result (open-input-string "\"unfinished")))
+
+(test-equal "an unterminated identifier raises a read error" 'read-error
+  (read-result (open-input-string "|unfinished")))
+
+(test-equal "an unterminated block comment raises a read error" 'read-error
+  (read-result (open-input-string "#| unfinished")))
+
+(define (clean-eof-result input)
+  (let* ((p (open-input-string input))
+         (a (read-result p))
+         (b (read-result p)))
+    (list a b (eof-object? (read-char p)))))
+
+(test-equal "clean EOF after empty input" '(eof eof #t)
+  (clean-eof-result ""))
+
+(test-equal "clean EOF after whitespace" '(eof eof #t)
+  (clean-eof-result " \n"))
+
+(test-equal "clean EOF after a line comment" '(eof eof #t)
+  (clean-eof-result "; comment"))
+
+(test-equal "clean EOF after a block comment" '(eof eof #t)
+  (clean-eof-result "#| comment |#"))
+
+(test-equal "clean EOF after a datum comment" '(eof eof #t)
+  (clean-eof-result "#; (1 2)"))
+
+(test-equal "clean EOF after nested datum comments" '(eof eof #t)
+  (clean-eof-result "#; #; 1 2"))
+
+(test-equal "a complete datum precedes an incomplete next datum" '(1 read-error)
+  (let* ((p (open-input-string "1 ("))
+         (a (read-result p))
+         (b (read-result p)))
+    (list a b)))
+
 (test-end)

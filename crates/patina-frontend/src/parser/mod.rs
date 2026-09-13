@@ -198,6 +198,19 @@ impl Parser {
         Ok(())
     }
 
+    /// Parse the next datum, or return `None` when only whitespace and
+    /// complete comments remain. EOF inside a datum is still an error, as
+    /// required by the Scheme `read` procedure. Incomplete datum comments
+    /// likewise retain their parse errors.
+    pub fn parse_next(&mut self) -> Result<Option<TaggedValue>, ParseError> {
+        self.skip_datum_comments()?;
+        if self.current_token == Token::Eof {
+            Ok(None)
+        } else {
+            self.parse().map(Some)
+        }
+    }
+
     pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
         let result = self.parse_expr().and_then(|tv| self.finish_datum(tv));
         // A label's scope is its outermost datum (R7RS 2.4): the table is
@@ -1348,6 +1361,49 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_next_distinguishes_clean_and_incomplete_eof() {
+        for input in [
+            "",
+            " \n",
+            "; comment",
+            "#| comment |#",
+            "#; (1 2)",
+            "#; #; 1 2",
+        ] {
+            let mut parser = Parser::new(input).unwrap();
+            assert!(parser.parse_next().unwrap().is_none(), "{input:?}");
+        }
+        for input in [
+            "(", "#(", "#u8(", "'", "`", ",", ",@", "(1 .", "#1=", "#;", "#; (",
+        ] {
+            let mut parser = Parser::new(input).unwrap();
+            assert!(
+                matches!(parser.parse_next(), Err(ParseError::UnexpectedEof)),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_next_after_a_complete_datum() {
+        let mut parser = Parser::new("1 #; (2 3)").unwrap();
+        assert_eq!(
+            parser.parse_next().unwrap().unwrap().as_fixnum_unchecked(),
+            1
+        );
+        assert!(parser.parse_next().unwrap().is_none());
+        let mut parser = Parser::new("1 (").unwrap();
+        assert_eq!(
+            parser.parse_next().unwrap().unwrap().as_fixnum_unchecked(),
+            1
+        );
+        assert!(matches!(
+            parser.parse_next(),
+            Err(ParseError::UnexpectedEof)
+        ));
+    }
 
     #[test]
     fn test_parse_atom() {

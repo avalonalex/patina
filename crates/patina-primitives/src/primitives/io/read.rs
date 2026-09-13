@@ -74,16 +74,12 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     }
 
     let remaining = remaining.unwrap();
-    if remaining.trim().is_empty() {
-        return Ok(TaggedValue::EOF);
-    }
-
     // Parse directly into the evaluator's heap
     let mut parser = Parser::new_with_heap(&remaining, heap.clone())
         .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
 
-    match parser.parse() {
-        Ok(tv) => {
+    match parser.parse_next() {
+        Ok(Some(tv)) => {
             // Advance the port past exactly what the parser consumed
             let consumed_bytes: usize = remaining
                 .chars()
@@ -94,7 +90,12 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
             Ok(tv)
         }
-        Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
+        Ok(None) => {
+            // Whitespace and completed comments have also been consumed.
+            port.advance_position(remaining.len())
+                .map_err(|e| EvalError::IOError(e.to_string()))?;
+            Ok(TaggedValue::EOF)
+        }
         Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     }
 }
@@ -117,13 +118,13 @@ fn read_buffered(
             // Constructor failure means the first token is incomplete
             // (e.g. an unterminated string) — fall through for more input
             if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
-                match parser.parse() {
-                    Ok(tv) => {
+                match parser.parse_next() {
+                    Ok(Some(tv)) => {
                         port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
                         return Ok(tv);
                     }
-                    Err(patina_frontend::ParseError::UnexpectedEof) => {
-                        // Datum incomplete — need more input
+                    Ok(None) | Err(patina_frontend::ParseError::UnexpectedEof) => {
+                        // No datum yet, or datum incomplete — need more input
                     }
                     Err(e) => {
                         return Err(EvalError::InvalidSyntax(format!("read: {}", e)));
@@ -142,12 +143,12 @@ fn read_buffered(
                 }
                 let mut parser = Parser::new_with_heap(&buffer, heap.clone())
                     .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
-                return match parser.parse() {
-                    Ok(tv) => {
+                return match parser.parse_next() {
+                    Ok(Some(tv)) => {
                         port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
                         Ok(tv)
                     }
-                    Err(patina_frontend::ParseError::UnexpectedEof) => Ok(TaggedValue::EOF),
+                    Ok(None) => Ok(TaggedValue::EOF),
                     Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
                 };
             }

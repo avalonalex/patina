@@ -48,6 +48,93 @@ impl Drop for TempFile {
 // =============================================================================
 
 #[test]
+fn test_file_port_incomplete_datum_is_a_read_error() {
+    for (i, input) in [
+        "(",
+        "(\n1\n",
+        "#(",
+        "#u8(",
+        "'",
+        "`",
+        ",",
+        ",@",
+        "(1 .",
+        "#1=",
+        "#;",
+        "#; (",
+        "\"unfinished",
+        "|unfinished",
+        "#| unfinished",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let f = TempFile::new(&format!("incomplete_{i}"), input);
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-input-file "{path}"))
+            (define result
+              (guard (e (else (and (error-object? e) (read-error? e))))
+                (read p)
+                #f))
+            (close-input-port p)
+            result
+            "#,
+            path = f.path()
+        );
+        assert_program_eval_to(&code, "#t");
+    }
+}
+
+#[test]
+fn test_file_port_clean_eof_after_comments() {
+    for (i, input) in [
+        "",
+        " \n",
+        "; comment",
+        "#| comment |#",
+        "#; (1 2)",
+        "#; #; 1 2",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let f = TempFile::new(&format!("clean_eof_{i}"), input);
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-input-file "{path}"))
+            (define result (and (eof-object? (read p))
+                                (eof-object? (read p))
+                                (eof-object? (read-char p))))
+            (close-input-port p)
+            result
+            "#,
+            path = f.path()
+        );
+        assert_program_eval_to(&code, "#t");
+    }
+}
+
+#[test]
+fn test_file_port_complete_datum_before_incomplete_datum() {
+    let f = TempFile::new("complete_then_incomplete", "1 (");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file) (scheme read))
+        (define p (open-input-file "{path}"))
+        (define a (read p))
+        (define b (guard (e (else (read-error? e))) (read p) #f))
+        (close-input-port p)
+        (list a b)
+        "#,
+        path = f.path()
+    );
+    assert_program_eval_to(&code, "(1 #t)");
+}
+
+#[test]
 fn test_file_port_multiple_datums_one_line() {
     let f = TempFile::new("datums_one_line", "5 40 102334155\n");
     let code = format!(
