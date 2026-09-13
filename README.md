@@ -203,6 +203,8 @@ External libraries can be supplied with `-A <directory>`, `-I <directory>`,
 ignoring environment overrides, working-directory defaults and the script's directory.
 Bundled libraries precede `-A` roots; `-I` explicitly overrides them. This controls library
 lookup, not filesystem access or Scheme `load`/`include`.
+Program and library `cond-expand` forms can test `(library (name ...))` against
+the current library roots and registered libraries without importing them.
 
 A limited Snow workflow is available for an explicitly selected set of source archives:
 

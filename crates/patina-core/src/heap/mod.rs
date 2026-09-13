@@ -332,6 +332,12 @@ pub struct Heap {
     /// set; putting it here is what collapses those call sites to one place.
     features: crate::features::FeatureRegistry,
 
+    /// Dynamic library catalogue for `cond-expand`, on the same per-instance
+    /// seam as features so `eval`, unquote and library bodies see it too.
+    /// This is not a Scheme value or GC root. The runtime implementation owns
+    /// only weak registry references, avoiding heap -> registry -> heap cycles.
+    library_availability: Option<Rc<dyn crate::features::LibraryAvailability>>,
+
     /// Whether [`Heap::features_and_close`] has been called — debug-only, and
     /// the enforcement behind [`Heap::add_feature`]'s construction-only rule.
     features_read: bool,
@@ -414,6 +420,19 @@ fn real_eqv(a: f64, b: f64) -> bool {
 }
 
 impl Heap {
+    /// Install the runtime's non-loading library query before bootstrap.
+    pub fn set_library_availability(
+        &mut self,
+        availability: Rc<dyn crate::features::LibraryAvailability>,
+    ) {
+        self.library_availability = Some(availability);
+    }
+
+    /// Clone the query handle, then release the heap borrow before calling it.
+    pub fn library_availability(&self) -> Option<Rc<dyn crate::features::LibraryAvailability>> {
+        self.library_availability.clone()
+    }
+
     /// The feature identifiers `cond-expand` treats as true, which R7RS §4.2.1
     /// requires `(features)` to return — one list, one owner.
     pub fn features(&self) -> &crate::features::FeatureRegistry {
@@ -468,6 +487,7 @@ impl Heap {
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         Self {
             features: crate::features::FeatureRegistry::new(),
+            library_availability: None,
             features_read: false,
             pairs: Vec::with_capacity(pairs),
             vectors: Vec::with_capacity(vectors),

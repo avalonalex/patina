@@ -578,6 +578,13 @@ holder means they were correctly marked).
 Deferring payload drop to slot reuse would keep env cycles alive indefinitely
 on quiet arenas.
 
+The heap's `cond-expand` library-availability service is metadata outside the
+Scheme arenas. Its runtime implementation holds **weak** references to the
+library and loader registries, never library environments or `TaggedValue`s.
+It therefore adds no GC roots and cannot form a strong heap → registry → heap
+cycle. `availability_handles_do_not_retain_registries` pins that ownership boundary;
+the backends remain the registry owners.
+
 ---
 
 ## 9. Known Hazards and Policies

@@ -113,10 +113,13 @@ impl LibraryDefinition {
     ///
     /// Expects a list: (define-library <name> <declaration>*)
     ///
-    /// Note: This method cannot check `(library <name>)` requirements in cond-expand.
-    /// Use `from_tagged_with_library_checker` if you need library availability checks.
+    /// Uses the interpreter's library catalogue when installed on this heap.
+    /// Standalone parser heaps have no libraries; callers can instead supply
+    /// an explicit checker through `from_tagged_with_library_checker`.
     pub fn from_tagged(tv: TaggedValue, heap: &SharedHeap) -> Result<Self, ParseError> {
-        Self::from_tagged_with_library_checker(tv, heap, &|_| false)
+        Self::from_tagged_with_library_checker(tv, heap, &|name| {
+            crate::cond_expand::library_available(heap, name)
+        })
     }
 
     /// Parse a define-library form with a library availability checker.

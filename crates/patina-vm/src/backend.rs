@@ -154,6 +154,11 @@ impl VmBackend {
 
         // Initialize library loaders
         backend.init_loaders();
+        LibraryLoaderRegistry::install_availability_checker(
+            backend.global_env.heap(),
+            &backend.library_registry,
+            &backend.loader_registry,
+        );
 
         // Load bootstrap libraries (scheme base, etc.)
         backend.load_bootstrap();
@@ -416,14 +421,15 @@ impl VmBackend {
     /// re-evaluating the form at the REPL redefines it.
     fn eval_inline_define_library(&self, form: TaggedValue) -> Result<(), LibraryError> {
         let heap = self.global_env.heap().clone();
-        let search_paths = self.library_search_paths();
-        let can_load_library = |lib_name: &[String]| {
-            let loaders = self.loader_registry.borrow();
-            loaders.can_load_with_paths(lib_name, &search_paths)
-        };
+        let can_load_library =
+            |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
         let loader = SchemeLibraryLoader::new(self.state.borrow().fs.clone());
-        let parsed =
-            loader.parse_inline_form(form, std::path::Path::new("."), heap, &can_load_library)?;
+        let parsed = loader.parse_inline_form(
+            form,
+            std::path::Path::new("."),
+            heap.clone(),
+            &can_load_library,
+        )?;
 
         let name = parsed.name.clone();
         self.library_registry.borrow_mut().begin_loading(&name)?;
@@ -492,10 +498,8 @@ impl VmBackend {
             lib
         } else {
             // Try evaluating (Scheme .sld) loaders
-            let search_paths_for_checker = search_paths.clone();
             let can_load_library = |lib_name: &[String]| {
-                let loaders = self.loader_registry.borrow();
-                loaders.can_load_with_paths(lib_name, &search_paths_for_checker)
+                patina_frontend::cond_expand::library_available(&heap, lib_name)
             };
 
             let parsed = {

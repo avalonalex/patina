@@ -43,9 +43,9 @@ pub struct Evaluator {
     pub global_env: Rc<Environment>,
     pub(crate) debug: Rc<DebugConfig>,
     /// Registry of loaded libraries
-    pub(crate) library_registry: RefCell<LibraryRegistry>,
+    pub(crate) library_registry: Rc<RefCell<LibraryRegistry>>,
     /// Registry of library loaders (Rust, Scheme, etc.)
-    pub(crate) loader_registry: RefCell<LibraryLoaderRegistry>,
+    pub(crate) loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
     /// Registry of primitive procedures (shared across all backends via patina-primitives)
     pub(crate) primitive_registry: patina_primitives::PrimitiveRegistry,
     /// Virtual filesystem for all file I/O operations
@@ -84,8 +84,8 @@ impl Evaluator {
         // Create library registries
         let mut lib_registry = LibraryRegistry::with_default_paths();
         lib_registry.set_fs(fs.clone());
-        let library_registry = RefCell::new(lib_registry);
-        let loader_registry = RefCell::new(LibraryLoaderRegistry::new());
+        let library_registry = Rc::new(RefCell::new(lib_registry));
+        let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
 
         // Pairing heap with controller: install the policy's trigger
         // threshold (a bare heap defaults to inert) and cache the pending
@@ -110,6 +110,11 @@ impl Evaluator {
 
         // Initialize library loaders
         evaluator.init_loaders();
+        LibraryLoaderRegistry::install_availability_checker(
+            evaluator.global_env.heap(),
+            &evaluator.library_registry,
+            &evaluator.loader_registry,
+        );
 
         // Load bootstrap library
         evaluator.load_bootstrap();
@@ -584,11 +589,8 @@ impl Evaluator {
         } else {
             // Try evaluating loaders (Scheme .sld files)
             // Create a library availability checker for cond-expand
-            // Clone search_paths for use in the closure
-            let search_paths_for_checker = search_paths.clone();
             let can_load_library = |lib_name: &[String]| {
-                let loaders = self.loader_registry.borrow();
-                loaders.can_load_with_paths(lib_name, &search_paths_for_checker)
+                patina_frontend::cond_expand::library_available(self.global_env.heap(), lib_name)
             };
 
             let parsed = {
@@ -709,10 +711,8 @@ impl Evaluator {
     ) -> Result<(), patina_runtime::LibraryError> {
         use patina_frontend::SchemeLibraryLoader;
 
-        let search_paths = self.library_search_paths();
         let can_load_library = |lib_name: &[String]| {
-            let loaders = self.loader_registry.borrow();
-            loaders.can_load_with_paths(lib_name, &search_paths)
+            patina_frontend::cond_expand::library_available(self.global_env.heap(), lib_name)
         };
         let loader = SchemeLibraryLoader::new(self.fs.clone());
         let parsed = loader.parse_inline_form(

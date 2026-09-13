@@ -116,6 +116,17 @@ The recurring porting frictions (all *resolved* for the existing 9 SRFIs) are ca
   (following L0's precedent — this is CLI-layer behaviour), not `crates/patina-tests/`; the
   registry-level prepend/env-path logic has unit tests in `library_registry.rs`.
 
+**Library feature queries (#265, 2026-09-12):** program-level
+`cond-expand` now checks the same live library catalogue as declarations.
+Registered inline libraries, Rust loaders and files on the current search paths
+are visible through `eval`, unquote, nested forms and library bodies as well.
+The query discovers availability without importing or executing the library;
+it does not pre-validate the library's body or transitive dependencies. The
+per-interpreter service holds weak registry references and respects explicit
+paths, isolation and the interpreter's filesystem. `library_availability.rs`
+and the CLI path tests cover these boundaries; the bitwise suite now selects
+its optional SRFIs with `(library ...)` instead of implementation names.
+
 #### Original spec
 External library directories are currently unusable. This is table stakes for any Scheme, independent of distribution mechanism, and every later item depends on it.
 
