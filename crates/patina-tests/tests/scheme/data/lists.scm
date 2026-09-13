@@ -147,4 +147,65 @@
 (test-equal "list? of a circular list" #f
   (let ((x (list 'a))) (set-cdr! x x) (list? x)))
 
+;; #275: proper-list consumers reject circular cdr chains with catchable
+;; errors. A cycle through a car is an ordinary element, not a circular list.
+;; These are R7RS "is an error" inputs; signalling is Patina's choice.
+;; Chibi 0.12 and Gauche 0.9.15 timed out in bounded subprocess probes for
+;; append, reverse, and list->string (2026-09-12). Skip only those calls so
+;; their length/list->vector checks and the valid circular-tail cases run.
+(define self-cycle (list #\a))
+(set-cdr! self-cycle self-cycle)
+(define prefixed-cycle (list #\a #\b #\c #\d))
+(set-cdr! (cdr (cddr prefixed-cycle)) (cdr prefixed-cycle))
+
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "append rejects a self-cycle" #t
+  (append self-cycle '(tail)))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "append rejects a cycle after a prefix" #t
+  (append prefixed-cycle '(tail)))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "reverse rejects a self-cycle" #t
+  (reverse self-cycle))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "reverse rejects a cycle after a prefix" #t
+  (reverse prefixed-cycle))
+(test-error "list->vector rejects a self-cycle" #t
+  (list->vector self-cycle))
+(test-error "list->vector rejects a cycle after a prefix" #t
+  (list->vector prefixed-cycle))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "list->string rejects a self-cycle" #t
+  (list->string self-cycle))
+(cond-expand ((or chibi gauche) (test-skip 1)) (else))
+(test-error "list->string rejects a cycle after a prefix" #t
+  (list->string prefixed-cycle))
+(test-error "length rejects a self-cycle" #t
+  (length self-cycle))
+(test-error "length rejects a cycle after a prefix" #t
+  (length prefixed-cycle))
+(test-assert "append shares a circular final argument"
+  (let ((result (append '(1 2) prefixed-cycle)))
+    (eq? (cddr result) prefixed-cycle)))
+(test-assert "append returns a sole circular argument unchanged"
+  (eq? (append self-cycle) self-cycle))
+(test-equal "bounded access still works on a circular list" '(#\a #\c #t)
+  (list (list-ref self-cycle 9)
+        (list-ref prefixed-cycle 8)
+        (eq? (list-tail prefixed-cycle 7) (cdr prefixed-cycle))))
+(test-assert "a cycle through car remains a valid list element"
+  (let ((x (list #f)))
+    (set-car! x x)
+    (and (eq? (vector-ref (list->vector x) 0) x)
+         (eq? (car (reverse x)) x))))
+(test-equal "append still accepts an improper final argument" '(1 2 . 3)
+  (append '(1) '(2 . 3)))
+;; Chibi/Gauche sometimes discard improper tails rather than signalling.
+;; Those permitted differences are recorded as latitude in DIVERGENCES.tsv.
+(test-error "append rejects an improper non-final argument" #t
+  (append '(1 . 2) '(3)))
+(test-error "reverse rejects an improper list" #t (reverse '(1 . 2)))
+(test-error "list->vector rejects an improper list" #t (list->vector '(1 . 2)))
+(test-error "list->string rejects an improper list" #t (list->string '(#\a . 2)))
+
 (test-end)

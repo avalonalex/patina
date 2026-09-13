@@ -171,83 +171,27 @@ pub(super) fn length(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
         });
     }
 
-    // Fast path: use Heap::list_len for native pairs
-    {
-        let heap_ref = heap.borrow();
-        if let Some(len) = heap_ref.list_len(args[0]) {
-            return Ok(TaggedValue::fixnum(len as i64));
-        }
-    }
-
-    // Slow path: walk via try_pair
-    let mut count = 0usize;
-    let mut current = args[0];
-    loop {
-        if current.is_null() {
-            break;
-        }
-        let (_, cdr) = heap
-            .borrow()
-            .try_pair(current)
-            .ok_or_else(|| EvalError::TypeError("length expects a proper list".into()))?;
-        count += 1;
-        current = cdr;
-    }
-    Ok(TaggedValue::fixnum(count as i64))
+    let len = heap
+        .borrow()
+        .list_len(args[0])
+        .ok_or_else(|| EvalError::TypeError("length expects a proper list".into()))?;
+    Ok(TaggedValue::fixnum(len as i64))
 }
 
 pub(super) fn append(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    if args.is_empty() {
+    let Some((&last, lists)) = args.split_last() else {
         return Ok(TaggedValue::NULL);
+    };
+    // Only non-final arguments must be proper lists. The last argument is
+    // shared as a tail, including when it is an atom or a circular list.
+    let mut result = last;
+    for &list in lists.iter().rev() {
+        result = heap
+            .borrow_mut()
+            .list_append(list, result)
+            .ok_or_else(|| EvalError::TypeError("append expects a proper list".into()))?;
     }
-
-    if args.len() == 1 {
-        return Ok(args[0]);
-    }
-
-    // Try fast path using heap's list_append for native pairs
-    // Fold from right: (append a b c d) = (append a (append b (append c d)))
-    let mut result = args[args.len() - 1];
-    let mut all_native = true;
-
-    for i in (0..args.len() - 1).rev() {
-        let list = args[i];
-
-        // Try heap's list_append for native pairs
-        if let Some(appended) = heap.borrow_mut().list_append(list, result) {
-            result = appended;
-        } else {
-            // list_append failed - not a proper list
-            all_native = false;
-            break;
-        }
-    }
-
-    if all_native {
-        return Ok(result);
-    }
-
-    // Slow path: collect elements via try_pair and rebuild
-    let mut all_cars: Vec<TaggedValue> = Vec::new();
-    for arg in args.iter().take(args.len() - 1) {
-        let mut current = *arg;
-        loop {
-            if current.is_null() {
-                break;
-            }
-            let (car, cdr) = heap
-                .borrow()
-                .try_pair(current)
-                .ok_or_else(|| EvalError::TypeError("append expects a proper list".into()))?;
-            all_cars.push(car);
-            current = cdr;
-        }
-    }
-
-    // Prepend collected elements before the last arg
-    Ok(heap
-        .borrow_mut()
-        .list_from_iter_with_tail(all_cars, args[args.len() - 1]))
+    Ok(result)
 }
 
 pub(super) fn reverse(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
@@ -257,29 +201,9 @@ pub(super) fn reverse(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
             actual: args.len(),
         });
     }
-
-    // Fast path: use Heap::list_reverse for native pairs
-    if (args[0].is_pair() || args[0].is_null())
-        && let Some(reversed) = heap.borrow_mut().list_reverse(args[0])
-    {
-        return Ok(reversed);
-    }
-
-    // Slow path: walk via try_pair and build reversed list
-    let mut result = TaggedValue::NULL;
-    let mut current = args[0];
-    loop {
-        if current.is_null() {
-            break;
-        }
-        let (car, cdr) = heap
-            .borrow()
-            .try_pair(current)
-            .ok_or_else(|| EvalError::TypeError("reverse expects a proper list".into()))?;
-        result = heap.borrow_mut().alloc_pair(car, result);
-        current = cdr;
-    }
-    Ok(result)
+    heap.borrow_mut()
+        .list_reverse(args[0])
+        .ok_or_else(|| EvalError::TypeError("reverse expects a proper list".into()))
 }
 
 pub(super) fn list_ref(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
