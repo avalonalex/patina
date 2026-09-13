@@ -254,7 +254,12 @@ pub(super) fn exact_p(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedV
         });
     }
 
-    Ok(TaggedValue::boolean(heap.borrow().is_exact_number(args[0])))
+    // The heap's is_exact_number helper is for exact real arithmetic
+    // dispatch. R7RS exact? also accepts a complex with two exact parts.
+    let heap_ref = heap.borrow();
+    Ok(TaggedValue::boolean(
+        heap_ref.is_number(args[0]) && !heap_ref.is_inexact_number(args[0]),
+    ))
 }
 
 /// (number? obj) - Fast path for fixnums

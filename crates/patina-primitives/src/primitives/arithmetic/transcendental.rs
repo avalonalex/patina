@@ -5,7 +5,7 @@
 //! - Trigonometric: sin, cos, tan, asin, acos, atan
 //! - Exponential/logarithmic: exp, log
 //!
-//! All operations use Heap methods which delegate to Value methods.
+//! All operations use Heap methods on TaggedValues.
 
 use super::helpers::numeric_err;
 use patina_core::TaggedValue;
@@ -15,7 +15,7 @@ use patina_runtime::SharedHeap;
 // ========== Square Root and Exponentiation ==========
 
 /// (sqrt x) - Square root
-/// Uses Complex64 to handle all cases uniformly, including negative reals
+/// Preserves exact roots; other results use floating-point arithmetic.
 /// R7RS branch cut: principal square root is always in right half-plane (re >= 0)
 pub(super) fn sqrt(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
