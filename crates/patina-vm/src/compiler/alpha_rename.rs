@@ -18,6 +18,7 @@
 use crate::compiler::for_each_define;
 use crate::error::CompileError;
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
+use patina_core::environment::Environment;
 use patina_core::scope::ScopeSet;
 use patina_core::scope_resolve::AmbiguousReference;
 use patina_core::scope_trace;
@@ -39,17 +40,31 @@ struct Binding {
     unique_name: Symbol,
 }
 
+/// A macro-introduced top-level definition, after renaming: the scope set
+/// that gives it its identity, and the global it was renamed to.
+///
+/// The scope set is carried, not re-derived, because the caller records two
+/// things from it — a bare-name alias and a binding identity — and deriving
+/// the identity a second time is how two tables of one fact come to disagree.
+#[derive(Clone)]
+pub(crate) struct RenamedGlobal {
+    pub(crate) scopes: ScopeSet,
+    pub(crate) name: Symbol,
+}
+
 /// Rename environment: stack of binding frames.
 struct RenameEnv {
     frames: Vec<Vec<Binding>>,
     counter: u32,
-    /// `(bare name, renamed global)` for each macro-introduced top-level
+    /// `bare name -> renamed global` for each macro-introduced top-level
     /// definition that was renamed. See `Renamed::global_aliases`.
     ///
-    /// A map, not a list: installing is a keyed insert, so a repeated bare
-    /// name would install and immediately overwrite. Last write wins here for
-    /// the same reason it wins there.
-    global_aliases: FxHashMap<Symbol, Symbol>,
+    /// A map, not a list: installing the *alias* is a keyed insert, so a
+    /// repeated bare name would install and immediately overwrite. Last write
+    /// wins here for the same reason it wins there — and note that the
+    /// binding identities the caller also records are keyed by scope set, so
+    /// they do not collapse the way this does.
+    global_aliases: FxHashMap<Symbol, RenamedGlobal>,
     /// Whether definitions seen right now become globals.
     ///
     /// True until a lambda body is entered, and false inside it — including
@@ -79,16 +94,26 @@ struct RenameEnv {
     ///
     /// [`resolve`]: RenameEnv::resolve
     ambiguous: RefCell<Option<Box<AmbiguousReference>>>,
+    /// The environment this unit will run in, when there is one.
+    ///
+    /// Consulted by [`resolve`] for the macro-introduced globals *earlier*
+    /// top-level forms defined. This pass sees one form at a time, so those
+    /// are invisible to `frames` however deep the walk goes, and a reference
+    /// to one would otherwise degrade to its bare spelling.
+    ///
+    /// [`resolve`]: RenameEnv::resolve
+    global_env: Option<Rc<Environment>>,
 }
 
 impl RenameEnv {
-    fn new() -> Self {
+    fn new(global_env: Option<Rc<Environment>>) -> Self {
         Self {
             frames: vec![],
             counter: 0,
             global_aliases: FxHashMap::default(),
             at_top_level: true,
             ambiguous: RefCell::new(None),
+            global_env,
         }
     }
 
@@ -132,6 +157,21 @@ impl RenameEnv {
                     && patina_core::scope_resolve::is_candidate(&binding.scopes, ref_scopes)
                 {
                     candidates.push((binding.scopes.clone(), binding.unique_name.clone()));
+                }
+            }
+        }
+        // Last, because they are the oldest: everything above came from the
+        // form being compiled, and these were introduced by forms before it.
+        // A candidate here is a definition some earlier expansion made, which
+        // this pass has no other way to see — its frames are built from one
+        // form. Without them a reference carrying an earlier expansion's
+        // scopes finds nothing, falls out of this function as its bare
+        // spelling, and is answered at run time by whatever that spelling
+        // means: a user's global, or the bare-name alias. Triage family 40.
+        if let Some(global_env) = &self.global_env {
+            for (scopes, unique_name) in global_env.introduced_globals(name) {
+                if patina_core::scope_resolve::is_candidate(&scopes, ref_scopes) {
+                    candidates.push((scopes, unique_name));
                 }
             }
         }
@@ -237,13 +277,30 @@ pub(crate) struct Renamed {
     /// identity collapses back to a name, and it is where it has to: the
     /// relinking that consumes this resolves by name. `define_alias` records
     /// the rule.
-    pub(crate) global_aliases: FxHashMap<Symbol, Symbol>,
+    ///
+    /// Each entry carries the scope set as well, so the caller can record the
+    /// binding *identity* alongside the alias — see
+    /// `Environment::define_introduced_global`. That record is keyed by
+    /// `(name, scopes)` and so keeps the two definitions the alias collapses
+    /// distinct, which is what lets a later top-level form resolve to the
+    /// right one.
+    pub(crate) global_aliases: FxHashMap<Symbol, RenamedGlobal>,
 }
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
-pub(crate) fn alpha_rename(expr: &CoreExpr) -> Result<Renamed, CompileError> {
+///
+/// `global_env` is the environment the unit will run in, when there is one.
+/// It supplies the macro-introduced globals *earlier* top-level forms
+/// defined: this pass sees one form at a time, so without them a reference
+/// to a definition another form introduced has no candidate, degrades to its
+/// bare spelling, and is answered at run time by whatever that spelling means
+/// there. Triage family 40.
+pub(crate) fn alpha_rename(
+    expr: &CoreExpr,
+    global_env: Option<&Rc<Environment>>,
+) -> Result<Renamed, CompileError> {
     let _phase = scope_trace::enter(scope_trace::Phase::Compile);
-    let mut env = RenameEnv::new();
+    let mut env = RenameEnv::new(global_env.cloned());
 
     // Without this frame a recursive macro's per-element temporaries all define
     // the same global and the last one wins.
@@ -371,15 +428,23 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
             (
                 CoreExprKind::Define { name, scopes, .. },
                 CoreExprKind::Define { name: new_name, .. },
-            ) if !scopes.is_empty() && new_name != name => Some((name.clone(), new_name.clone())),
+            ) if !scopes.is_empty() && new_name != name => {
+                Some((name.clone(), scopes.clone(), new_name.clone()))
+            }
             _ => None,
         };
-        if let Some((name, new_name)) = rename {
+        if let Some((name, scopes, new_name)) = rename {
             if env.at_top_level {
                 // A global: the bare name is answered by an environment alias
                 // the caller installs, so a user's own global of that name
                 // still wins and a `set!` is not frozen into a copy.
-                env.global_aliases.insert(name, new_name);
+                env.global_aliases.insert(
+                    name,
+                    RenamedGlobal {
+                        scopes,
+                        name: new_name,
+                    },
+                );
             } else {
                 // A local: nothing outside this body resolves it, so the bare
                 // name can simply be bound here too.
@@ -648,7 +713,9 @@ mod tests {
             vec![var("x")],
             ScopeSet::new(),
         );
-        let renamed = alpha_rename(&expr).expect("no ambiguous reference").expr;
+        let renamed = alpha_rename(&expr, None)
+            .expect("no ambiguous reference")
+            .expr;
         match &renamed.kind {
             CoreExprKind::Lambda { body, params, .. } => {
                 let Formals::Fixed(ps) = params else {
@@ -698,7 +765,9 @@ mod tests {
             args: vec![CoreExpr::new(CoreExprKind::Quote(TaggedValue::fixnum(1)))],
         });
 
-        let renamed = alpha_rename(&app).expect("no ambiguous reference").expr;
+        let renamed = alpha_rename(&app, None)
+            .expect("no ambiguous reference")
+            .expr;
 
         fn find_param(expr: &CoreExpr, depth: usize) -> Option<String> {
             match &expr.kind {
@@ -777,7 +846,7 @@ mod tests {
             ScopeSet::singleton(s1),
         );
 
-        let renamed = alpha_rename(&outer_lambda)
+        let renamed = alpha_rename(&outer_lambda, None)
             .expect("no ambiguous reference")
             .expr;
 
