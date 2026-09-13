@@ -712,4 +712,33 @@
   '(5 1 99)
   (list h3-private-write-result h3-private-write (observe-private-write)))
 
+
+;; The shape that made this family worth fixing before its three siblings: a
+;; macro with private state and a generated accessor, which is ordinary code
+;; rather than a generated probe. The VM answered (2 0) — the macro's counter
+;; written onto the user's global, the private cell untouched, no error. The
+;; rows above pin the same defect in the spellings H3 generated; this one pins
+;; it in the spelling a person would write, and is the reason the family was
+;; reprioritised.
+;;
+;; The use must sit in a *later* top-level form than the expansion. Wrapped in
+;; a single `begin` the VM was already correct, which is what identified the
+;; boundary as the compile unit rather than the scope rule.
+(define hygiene-clicks 0)
+(define-syntax define-click-counter
+  (syntax-rules ()
+    ((_ bump value)
+     (begin
+       (define hygiene-clicks 0)
+       (define-syntax bump
+         (syntax-rules () ((_) (set! hygiene-clicks (+ hygiene-clicks 1)))))
+       (define (value) hygiene-clicks)))))
+(define-click-counter tick read-clicks)
+(tick)
+(tick)
+
+(test-equal "a macro's private counter does not write to the user's global"
+  '(0 2)
+  (list hygiene-clicks (read-clicks)))
+
 (test-end)

@@ -169,11 +169,11 @@ impl RenameEnv {
         // spelling, and is answered at run time by whatever that spelling
         // means: a user's global, or the bare-name alias. Triage family 40.
         if let Some(global_env) = &self.global_env {
-            for (scopes, unique_name) in global_env.introduced_globals(name) {
-                if patina_core::scope_resolve::is_candidate(&scopes, ref_scopes) {
-                    candidates.push((scopes, unique_name));
+            global_env.for_each_introduced_global(name, |scopes, unique_name| {
+                if patina_core::scope_resolve::is_candidate(scopes, ref_scopes) {
+                    candidates.push((scopes.clone(), unique_name.clone()));
                 }
-            }
+            });
         }
         // The VM's last sight of scopes: past this a reference is a unique name
         // and the sets are gone, so a VM hygiene question has to be asked at
