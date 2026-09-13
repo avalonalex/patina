@@ -277,6 +277,23 @@ fn run_command(opts: &Options) {
         jobs: opts.jobs,
         supplied_lib_root,
     };
+    // Prove the binary can run the probe at all before scoring the corpus with
+    // it: the probe for a package that provides nothing, run exactly as the
+    // corpus will run it. A failure here would otherwise repeat for every
+    // probe-mode package and be written into `results.scm` as a measurement
+    // of Patina — which is what #301 did while the probe still called
+    // `display`. Same up-front idiom as the supplied-root check above.
+    let self_check = run::self_check(&config);
+    if self_check != run::Status::Pass {
+        eprintln!(
+            "Error: the self-check probe — `(import (scheme base))` and nothing else — did\n\
+             not pass on {}: classified as {:?}.\n\
+             Every probe-mode package would fail the same way, so nothing is scored.",
+            config.patina.display(),
+            self_check
+        );
+        process::exit(2);
+    }
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
     let rendered = report::render(&results, backend, &exclusions, opts.filter.is_none());

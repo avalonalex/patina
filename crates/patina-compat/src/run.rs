@@ -351,16 +351,62 @@ fn copy_tree(source: &Path, dest: &Path) -> std::io::Result<()> {
 /// Write a synthesized import probe into the scratch directory. The fixed
 /// basename keeps "test" out of the argument path structurally, so probes
 /// always run in strict mode.
+///
+/// The probe is the import form and nothing else. It used to end in a
+/// `(display "patina-compat probe ok")` that nothing ever read — `classify`
+/// decides a probe on exit status and stderr alone — and that decorative call
+/// is how #301 (issue #211), which took `display` out of `(scheme base)`,
+/// became a harness failure scored as Patina's: 104 of the 114 probe-mode
+/// packages filed as `unbound-identifier` on `display`. A probe that calls
+/// nothing depends on no library's export list, so no such change can strand
+/// it again, and [`self_check`] proves the binary can run it before a corpus
+/// run is scored.
 fn write_probe(scratch: &std::path::Path, package: &Package) -> PathBuf {
+    let path = scratch.join("probe.scm");
+    std::fs::write(&path, probe_source(package)).expect("write probe file");
+    path
+}
+
+/// The probe's text: an import of `(scheme base)` and every library the
+/// package provides. `(scheme base)` keeps the form well-formed for a package
+/// that provides nothing; it is the one library every corpus program needs
+/// loaded anyway.
+fn probe_source(package: &Package) -> String {
     let mut source = String::from("(import (scheme base)");
     for lib in &package.provides {
         source.push_str(&format!(" ({})", lib));
     }
-    source.push_str(")\n(display \"patina-compat probe ok\")\n(newline)\n");
+    source.push_str(")\n");
+    source
+}
 
-    let path = scratch.join("probe.scm");
-    std::fs::write(&path, source).expect("write probe file");
-    path
+/// Run the probe for a package that provides nothing, on the binary and
+/// backend the corpus will be scored with, and return its classification.
+///
+/// A probe that cannot pass on an empty package cannot pass on any package,
+/// so anything but `Pass` here means the harness or the binary under test —
+/// not a third-party library — is what a corpus run would measure. That is
+/// how #301 wrote 23 of 161 into the committed snapshot; the caller refuses
+/// to score in that case. Only bundled libraries are exercised: the supplied
+/// root is covered by the caller's own directory check.
+pub fn self_check(config: &RunConfig) -> Status {
+    run_package(&self_check_package(config), &[], &BTreeMap::new(), config).status
+}
+
+/// The empty package the self-check runs. Its root is the supplied library
+/// root, which `search_roots` lists first anyway, so the probe sees exactly
+/// the roots every corpus package sees and no directory of its own. The slug
+/// has no "test" in it, so the probe's scratch path keeps strict mode.
+fn self_check_package(config: &RunConfig) -> Package {
+    Package {
+        slug: "self-check".to_string(),
+        root: config.supplied_lib_root.clone(),
+        provides: Vec::new(),
+        depends: Vec::new(),
+        test_depends: Vec::new(),
+        test_script: None,
+        off_path_libraries: Vec::new(),
+    }
 }
 
 struct Captured {
@@ -1207,5 +1253,59 @@ mod tests {
             timed_out: true,
         };
         assert_eq!(classify(&out, "probe"), Status::Timeout);
+    }
+
+    /// The probe is the import form alone. Pinned because the body it used to
+    /// carry — a `display` of a marker nothing read — is what #301 stranded:
+    /// a probe that calls nothing depends on no library's export list, and
+    /// re-adding a call would quietly re-create that dependency.
+    #[test]
+    fn the_probe_is_an_import_form_and_nothing_else() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            probe_source(&package("provides-nothing", temp.path())),
+            "(import (scheme base))\n"
+        );
+        let mut pkg = package("provider", temp.path());
+        pkg.provides = vec!["foo bar".to_string(), "srfi 1".to_string()];
+        assert_eq!(
+            probe_source(&pkg),
+            "(import (scheme base) (foo bar) (srfi 1))\n"
+        );
+        // Written verbatim, under the fixed basename that keeps "test" out of
+        // the argument path.
+        let path = write_probe(temp.path(), &pkg);
+        assert_eq!(path.file_name().unwrap(), "probe.scm");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), probe_source(&pkg));
+    }
+
+    /// The self-check probes an empty package through the same roots every
+    /// corpus package gets, and nothing else — no directory of its own, no
+    /// `test` in its scratch path.
+    #[test]
+    fn the_self_check_package_sees_only_the_shared_roots() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = RunConfig {
+            patina: PathBuf::new(),
+            tree_walker: false,
+            timeout: Duration::from_secs(1),
+            jobs: 1,
+            supplied_lib_root: temp.path().join("supplied"),
+        };
+        let pkg = self_check_package(&config);
+        assert!(!pkg.slug.contains("test"), "{}", pkg.slug);
+        assert!(pkg.provides.is_empty() && pkg.test_script.is_none());
+        let roots = search_roots(
+            &pkg,
+            &[],
+            &BTreeMap::new(),
+            &temp.path().join("scratch"),
+            false,
+            &config.supplied_lib_root,
+        );
+        assert!(
+            !roots.is_empty() && roots.iter().all(|r| *r == config.supplied_lib_root),
+            "{roots:?}"
+        );
     }
 }

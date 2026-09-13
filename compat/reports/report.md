@@ -31,7 +31,7 @@
 | Error | In-scope packages |
 |---|---|
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `unhandled exception: unhandled exception: #<unknown>` | 1 |
+| `unhandled exception: #<error-object: expected a state #<unspecified>>` | 1 |
 
 ## Unbound identifiers
 
