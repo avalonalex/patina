@@ -301,15 +301,41 @@
 
 ;; ── Roots and powers ───────────────────────────────────────────────────────
 ;;
-;; `sqrt` here is always inexact, so `(sqrt 4)` is `2.0` where R7RS §6.2.6
-;; says an exact argument with an exactly representable root should give an
-;; exact result. **Both oracles return the exact `2`**, so this is our gap and
-;; not a three-way difference of opinion — issue #225, classed `patina-defect`
-;; in the register. The row pins what we do today rather than what we should
-;; do, deliberately: fixing `sqrt` will fail it, which is the signal to update
-;; the expectation and retire the register entries in the same change.
-(test-equal "sqrt is inexact even for exact squares" '("2.0" "3.0" "1.4142135623730951" "0.0")
+(test-equal "sqrt preserves exact squares" '("2" "3" "1.4142135623730951" "0")
   (map written (list (sqrt 4) (sqrt 9) (sqrt 2) (sqrt 0))))
+
+(test-equal "sqrt preserves exact rational squares" '("2/3" "3/2" "1/10")
+  (map written (list (sqrt 4/9) (sqrt 9/4) (sqrt 1/100))))
+
+(test-equal "sqrt preserves large exact squares without floating-point conversion" '(#t #t)
+  (let* ((n (+ (expt 2 2000) 1)) (root (sqrt (* n n))))
+    (list (= root n) (exact? root))))
+
+(test-equal "sqrt preserves tiny exact rational squares" '(#t #t)
+  (let* ((n (/ 1 (expt 2 2000))) (root (sqrt (* n n))))
+    (list (= root n) (exact? root))))
+
+(test-equal "sqrt does not mistake a rounded nonsquare for an exact square" '(#f #f #f)
+  (let ((n (+ (expt 2 53) 1)))
+    (map exact? (list (sqrt (- (* n n) 1)) (sqrt (+ (* n n) 1))
+                      (sqrt 4/3)))))
+
+(test-equal "sqrt of exact negative squares is exact" '(#t #t #t #t)
+  (let ((unit (sqrt -1)) (ratio (sqrt -4/9)))
+    (list (= unit +i) (exact? unit)
+          (= ratio (make-rectangular 0 2/3)) (exact? ratio))))
+
+(test-equal "sqrt selects the exact principal root in all complex quadrants"
+  '((#t #t) (#t #t) (#t #t) (#t #t) (#t #t))
+  (map (lambda (input expected)
+         (let ((root (sqrt input))) (list (= root expected) (exact? root))))
+       '(3+4i 3-4i -3+4i -3-4i 5/36+1/3i)
+       (list 2+i 2-i 1+2i 1-2i (make-rectangular 1/2 1/3))))
+
+(test-equal "sqrt keeps inexact inputs and irrational roots inexact"
+  '(#t #t #t #t #t)
+  (map inexact? (list (sqrt 4.0) (sqrt 0.0) (sqrt -1.0)
+                      (sqrt 2) (sqrt 2+2i))))
 
 (test-equal "expt, including a negative exponent giving a ratio"
   '("8" "25" "1" "1/10" "8.0" "8.0" "1" "1")
@@ -398,10 +424,26 @@
   (map written (list (imag-part 3+4i) (imag-part 3.0+4.0i) (imag-part 5)
                      (imag-part +i) (imag-part -2-3i))))
 
-;; Same gap as `sqrt`, same issue #225: both oracles answer the exact `5` to
-;; `(magnitude 5)`.
-(test-equal "magnitude is inexact even for a 3-4-5 triangle" '("5.0" "5.0" "5.0" "1.0")
+(test-equal "magnitude preserves exact real and Pythagorean results" '("5" "5" "5" "1")
   (map written (list (magnitude 3+4i) (magnitude 5) (magnitude -5) (magnitude +i))))
+
+(test-equal "magnitude preserves exact rational results" '("2/3" "2/3" "1" "0")
+  (map written (list (magnitude 2/3) (magnitude -2/3)
+                     (magnitude 3/5+4/5i) (magnitude 0))))
+
+(test-equal "magnitude handles the most negative fixnum exactly" '(#t #t)
+  (let* ((n (- (expt 2 60))) (result (magnitude n)))
+    (list (= result (- n)) (exact? result))))
+
+(test-equal "magnitude preserves huge exact real and complex results" '(#t #t #t #t)
+  (let* ((n (expt 2 2000))
+         (real (magnitude (- n)))
+         (complex (magnitude (make-rectangular (* 3 n) (* 4 n)))))
+    (list (= real n) (exact? real) (= complex (* 5 n)) (exact? complex))))
+
+(test-equal "magnitude keeps inexact inputs and irrational results inexact" '(#t #t #t #t)
+  (map inexact? (list (magnitude 5.0) (magnitude 3.0+4.0i)
+                      (magnitude 1+i) (magnitude 0.0))))
 
 ;; A zero imaginary part collapses to a real; a zero real part is elided.
 (test-equal "make-rectangular" '("3+4i" "5" "+i" "-2-3i")
@@ -540,19 +582,12 @@
 
 ;; ── Complex results from real arguments ────────────────────────────────────
 ;;
-;; `sqrt` always returns an inexact result, so the real part of a pure
-;; imaginary answer is `0.0` and has to be written: `+1.0i` would read back
-;; with an *exact* zero real part, which is a different number. These
-;; expectations were `+1.0i` until the writer stopped omitting an inexact zero
-;; real part, which is what made the inexactness visible.
-(test-equal "sqrt of a negative, and both branch cuts"
-  '("0.0+1.0i" "0.0+1.0i" "0.0+1.0i" "0.0+1.0i" "0.0+1.0i"
-    "1.5537739740300374+0.6435942529055827i")
-  (map written (list (sqrt -1) (sqrt -1.0)
-                     (sqrt -1.0-0.0i)   ; approaching the cut from below
-                     (sqrt -1.0+0.0i)   ; and from above
-                     (inexact (sqrt -1))
-                     (sqrt 2+2i))))
+(test-equal "sqrt of a negative, and both branch cuts" '(#t #t #t #t #t #t)
+  (map close? (list (sqrt -1) (sqrt -1.0)
+                    (sqrt -1.0-0.0i)   ; approaching the cut from below
+                    (sqrt -1.0+0.0i)   ; and from above
+                    (inexact (sqrt -1)) (sqrt 2+2i))
+       (list +i +i +i +i +i 1.5537739740300374+0.6435942529055827i)))
 
 ;; The six rows below replace substring assertions. Each `.rs` row checked
 ;; that the printed form contained a `+`, an `i`, or two or three digits —

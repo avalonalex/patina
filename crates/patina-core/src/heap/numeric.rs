@@ -38,6 +38,50 @@ enum NumData {
 // Free Helper Functions
 // =============================================================================
 
+/// Return a rational square root only when both integer roots are exact.
+/// Testing with integer arithmetic avoids rounding a nearby nonsquare (or
+/// overflowing a large square) through f64 before deciding exactness.
+fn exact_rational_sqrt(value: &BigRational) -> Option<BigRational> {
+    if value.is_negative() {
+        return None;
+    }
+    let numer = value.numer().sqrt();
+    if &numer * &numer != *value.numer() {
+        return None;
+    }
+    let denom = value.denom().sqrt();
+    if &denom * &denom != *value.denom() {
+        return None;
+    }
+    Some(BigRational::new(numer, denom))
+}
+
+/// Principal root of an exact complex number, if its components are rational.
+fn exact_complex_sqrt(
+    real: &BigRational,
+    imag: &BigRational,
+) -> Option<(BigRational, BigRational)> {
+    if imag.is_zero() {
+        let root = exact_rational_sqrt(&real.abs())?;
+        return Some(if real.is_negative() {
+            (BigRational::zero(), root)
+        } else {
+            (root, BigRational::zero())
+        });
+    }
+    let magnitude = exact_rational_sqrt(&(real * real + imag * imag))?;
+    let real_root = exact_rational_sqrt(&((&magnitude + real) / BigInt::from(2)))?;
+    let imag_root = exact_rational_sqrt(&((magnitude - real) / BigInt::from(2)))?;
+    Some((
+        real_root,
+        if imag.is_negative() {
+            -imag_root
+        } else {
+            imag_root
+        },
+    ))
+}
+
 /// GCD for i64 using Euclidean algorithm
 #[inline]
 fn gcd_i64(mut a: i64, mut b: i64) -> i64 {
@@ -1330,20 +1374,26 @@ impl Heap {
         }
     }
 
-    /// Compute magnitude (|z|) of a number (always returns inexact)
+    /// Compute magnitude (|z|), preserving an exactly representable result.
     pub fn magnitude(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
-        if a.is_fixnum() {
-            let n = a.as_fixnum_unchecked();
-            return Ok(self.alloc_real((n as f64).abs()));
-        }
-
         let complex = self.get_complex(a);
         if let Some((real, imag)) = complex {
+            if self.is_exact_number(real) && self.is_exact_number(imag) {
+                let r = self.to_bigrational(real)?;
+                let i = self.to_bigrational(imag)?;
+                if let Some(root) = exact_rational_sqrt(&(&r * &r + &i * &i)) {
+                    return Ok(self.rational_to_tagged(root));
+                }
+            }
             let r = self.numeric_to_f64(real)?;
             let i = self.numeric_to_f64(imag)?;
             return Ok(self.alloc_real((r * r + i * i).sqrt()));
         }
 
+        if self.is_exact_number(a) {
+            let value = self.to_bigrational(a)?.abs();
+            return Ok(self.rational_to_tagged(value));
+        }
         let f = self.numeric_to_f64(a)?;
         Ok(self.alloc_real(f.abs()))
     }
@@ -1798,6 +1848,16 @@ impl Heap {
     /// Square root
     pub fn numeric_sqrt(&mut self, a: TaggedValue) -> Result<TaggedValue, NumericError> {
         let complex = self.get_complex(a);
+        let (real, imag) = complex.unwrap_or((a, TaggedValue::fixnum(0)));
+        if self.is_exact_number(real)
+            && self.is_exact_number(imag)
+            && let Some((real, imag)) =
+                exact_complex_sqrt(&self.to_bigrational(real)?, &self.to_bigrational(imag)?)
+        {
+            let real = self.rational_to_tagged(real);
+            let imag = self.rational_to_tagged(imag);
+            return Ok(self.simplify_complex_tagged(real, imag));
+        }
         if let Some((real, imag)) = complex {
             let re_in = self.numeric_to_f64(real)?;
             let im_in = self.numeric_to_f64(imag)?;

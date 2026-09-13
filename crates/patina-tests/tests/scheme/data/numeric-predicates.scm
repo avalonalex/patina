@@ -141,4 +141,9 @@
 (test-equal "expt 0 0.0" 1.0 (expt 0 0.0))
 (test-equal "expt 0.0 0.0" 1.0 (expt 0.0 0.0))
 
+(test-equal "exactness predicates recognize exact complex components"
+  '((#t #f) (#t #f) (#f #t) (#f #t) (#f #t))
+  (map (lambda (z) (list (exact? z) (inexact? z)))
+       '(3+4i 1/2+1/3i 3.0+4i 3+4.0i 3.0+4.0i)))
+
 (test-end)
