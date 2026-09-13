@@ -260,7 +260,7 @@ fn expand_template(
             match name.as_str() {
                 "quasiquote" => {
                     // Nested quasiquote: increment depth
-                    let (inner, _rest) = pair_parts(cdr, cx.heap);
+                    let (inner, _rest) = pair_parts(cdr, cx.heap, "quasiquote")?;
                     let expanded = expand_template(inner, cx, depth + 1)?;
                     // Reconstruct (quasiquote <expanded>) using a plain symbol
                     // (car may be an identifier with scope marks; we need a bare symbol)
@@ -272,7 +272,7 @@ fn expand_template(
                 }
 
                 "unquote" => {
-                    let (inner, _rest) = pair_parts(cdr, cx.heap);
+                    let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote")?;
                     if depth == 0 {
                         // Evaluate the unquote expression
                         return desugar_tagged(inner, cx);
@@ -291,10 +291,10 @@ fn expand_template(
                     if depth == 0 {
                         // Splicing at top level is an error in standard Scheme,
                         // but we just return the expanded form
-                        let (inner, _rest) = pair_parts(cdr, cx.heap);
+                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote-splicing")?;
                         return desugar_tagged(inner, cx);
                     } else {
-                        let (inner, _rest) = pair_parts(cdr, cx.heap);
+                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote-splicing")?;
                         let expanded = expand_template(inner, cx, depth - 1)?;
                         let uqs_sym = cx.heap.borrow_mut().intern_symbol("unquote-splicing");
                         return make_list_call(
@@ -348,7 +348,7 @@ fn expand_pair_template(
 
         // Check for tail unquote: current IS (unquote expr) — from dotted pair after splice
         if depth == 0 && cx.heap.borrow().is_named(car, "unquote") && cdr.is_pair() {
-            let (uq_expr, rest) = pair_parts(cdr, cx.heap);
+            let (uq_expr, rest) = pair_parts(cdr, cx.heap, "unquote")?;
             if rest.is_null() {
                 tail_expr = Some(desugar_tagged(uq_expr, cx)?);
                 break;
@@ -363,7 +363,7 @@ fn expand_pair_template(
             };
 
             if cx.heap.borrow().is_named(inner_car, "unquote-splicing") {
-                let (splice_expr, _rest) = pair_parts(inner_cdr, cx.heap);
+                let (splice_expr, _rest) = pair_parts(inner_cdr, cx.heap, "unquote-splicing")?;
 
                 // Flush accumulated elements
                 if !current_elems.is_empty() {
@@ -386,7 +386,7 @@ fn expand_pair_template(
             };
 
             if cx.heap.borrow().is_named(cdr_car, "unquote") && cdr_cdr.is_pair() {
-                let (unquote_expr, rest) = pair_parts(cdr_cdr, cx.heap);
+                let (unquote_expr, rest) = pair_parts(cdr_cdr, cx.heap, "unquote")?;
                 if rest.is_null() {
                     // This is (... car . ,expr)
                     current_elems.push(expand_template(car, cx, depth)?);
@@ -471,10 +471,28 @@ enum Segment {
     Splice(CoreExpr),
 }
 
-/// Get car and cdr from a pair.
-fn pair_parts(tv: TaggedValue, heap: &SharedHeap) -> (TaggedValue, TaggedValue) {
+/// Get car and cdr from what a template promised would be a pair.
+///
+/// Checked, because the operand list of `(unquote …)` is written by the
+/// program and can be empty: `` `(a (unquote)) `` reaches here with `tv`
+/// null. `Heap::car` on a non-pair is a `debug_assert` and, in release, a
+/// read of whatever the tagged value points at — that pair of behaviours is
+/// what this returns an error instead of. R7RS 7.1.4 gives `unquote` exactly
+/// one template, so a form with none is not a `<qq template>` and saying so
+/// is the whole fix; whether to *accept* it, as R6RS 11.17's zero-or-more
+/// grammar and Gauche do, is a separate decision this does not take.
+fn pair_parts(
+    tv: TaggedValue,
+    heap: &SharedHeap,
+    form: &str,
+) -> Result<(TaggedValue, TaggedValue), CompileError> {
+    if !tv.is_pair() {
+        return Err(CompileError::Desugar(format!(
+            "{form}: expected one expression after the keyword"
+        )));
+    }
     let h = heap.borrow();
-    (h.car(tv), h.cdr(tv))
+    Ok((h.car(tv), h.cdr(tv)))
 }
 
 /// Desugar a TaggedValue expression (from an unquote) into CoreExpr.
