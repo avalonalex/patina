@@ -11,7 +11,7 @@ use crate::eval::error::EvalError;
 use patina_core::Procedure;
 use patina_core::cps_expr::{CpsExpr, CpsExprKind, CpsParam};
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{Environment, ScopeSet, ScopedParam};
+use patina_core::{Environment, ScopeSet, ScopedParam, ScopedSetError};
 use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
@@ -120,12 +120,8 @@ impl<'a> CpsEvaluator<'a> {
             // twice.
             env.set_with_scopes(name, scopes, value)
                 .map_err(|e| match e {
-                    patina_core::environment::ScopedSetError::Undefined(name) => {
-                        EvalError::UndefinedVariable(name)
-                    }
-                    patina_core::environment::ScopedSetError::Ambiguous(e) => {
-                        EvalError::InvalidSyntax(e.to_string())
-                    }
+                    ScopedSetError::Undefined(name) => EvalError::UndefinedVariable(name),
+                    ScopedSetError::Ambiguous(e) => EvalError::InvalidSyntax(e.to_string()),
                 })
         }
     }

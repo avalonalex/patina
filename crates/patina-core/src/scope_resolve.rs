@@ -16,16 +16,22 @@
 //! copy *for reads*, and it enforces Flatt's ambiguity condition itself, so
 //! neither backend can answer a reference the rule does not determine.
 //!
+//! **Writes come through here too, since #289–#291.** `set_with_scopes` used
+//! to resolve inline and one environment at a time, which is how an ambiguous
+//! `set!` came to be settled by scope-set size where the read refused it; it
+//! now collects the whole chain and calls [`resolve_index`] once, so a write
+//! is checked for ambiguity, raises on one, and appears in this module's
+//! sweep. Note what that does to the sweep's population: tie counts measured
+//! before the change saw reads only.
+//!
 //! Hand-rolled copies remain, all over `Environment`'s tables and none
-//! measured. `set_with_scopes` resolves a write by the same subset rule
-//! since triage family 38, but inline and one environment at a time rather
-//! than through this module; its terminal (`set_scoped_terminal`) and the
-//! read fallback (`get_scoped_fallback`) each apply [`is_candidate`] once
-//! more, to *refuse* a rejected binding rather than to choose one; and
-//! `has_scoped_binding` tests subset with no most-specific rule at all. So a
-//! `set!` still resolves without being checked for ambiguity, and no sweep
-//! says anything about one. Unifying the write with the read is Track Q's
-//! Q7.1 (`PRD/TRACK_Q_QUALITY_PRD.md`).
+//! measured. The two fallbacks — `set_scoped_fallback` and
+//! `get_scoped_fallback` — each apply [`is_candidate`] once more, to *refuse*
+//! a rejected binding rather than to choose one, and `has_scoped_binding`
+//! tests subset with no most-specific rule at all. The read's candidate walk
+//! and the write's are now the same walk written twice, one yielding values
+//! and one cells; merging them is what remains of Track Q's Q7.1
+//! (`PRD/TRACK_Q_QUALITY_PRD.md`).
 //!
 //! Unifying the tie-break was a **behaviour change**, not a pure refactor:
 //! the tree-walker now answers a within-environment tie the way the VM
@@ -234,10 +240,11 @@ pub fn is_candidate(binding: &ScopeSet, reference: &ScopeSet) -> bool {
 ///   rejected; `Environment::get_scoped_fallback`). The tree-walker's
 ///   `RESOLVE` records distinguish how it ended (`via=byname` vs
 ///   `via=unbound`), but this module's sweep does not see or raise it.
-/// - Writes. `Environment::set_with_scopes` resolves by the same subset rule
-///   since triage family 38, but inline and one environment at a time rather
-///   than through [`resolve_scoped`], so a `set!` is logged by neither arm and
-///   an ambiguous one still picks by size instead of raising.
+///   (Writes were listed here until #289–#291: `Environment::set_with_scopes`
+///   resolved inline rather than through [`resolve_scoped`], so a `set!` was
+///   logged by neither arm and an ambiguous one picked by size instead of
+///   raising. It resolves through [`resolve_index`] now, so both arms see it —
+///   which means a tie count taken before that change counted reads only.)
 /// - The VM's `Define` arm resolves *binding* occurrences through
 ///   [`resolve_scoped`], where the tree-walker does not, so VM records include
 ///   definitions and the two backends' counts are not like for like.

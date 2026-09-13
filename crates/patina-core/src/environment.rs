@@ -94,10 +94,28 @@ pub enum ScopedSetError {
 }
 
 impl std::fmt::Display for ScopedSetError {
+    /// Both arms render a sentence. `Undefined` used to render the bare name,
+    /// which reads as a diagnostic only to a caller that already knows what
+    /// the string is — and the caller that matches the variant, rather than
+    /// formatting it, does not need it at all.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ScopedSetError::Undefined(name) => write!(f, "{name}"),
+            ScopedSetError::Undefined(name) => write!(f, "undefined variable: {name}"),
             ScopedSetError::Ambiguous(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ScopedSetError {
+    /// The ambiguity is a real error in its own right and is reported
+    /// verbatim by [`Display`], so it is also the source. `Undefined` carries
+    /// a name rather than an error and has none.
+    ///
+    /// [`Display`]: std::fmt::Display
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ScopedSetError::Undefined(_) => None,
+            ScopedSetError::Ambiguous(e) => Some(e.as_ref()),
         }
     }
 }
@@ -1610,6 +1628,76 @@ mod tests {
             env.get_with_scopes("x", &ScopeSet::singleton(s2)).unwrap(),
             Some(TaggedValue::fixnum(2))
         );
+    }
+}
+
+#[cfg(test)]
+mod scoped_write_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    /// #289. Two eligible bindings, neither containing the other: the write
+    /// must say *why* it refused, not merely that it did. The variant is the
+    /// whole reason this returns `ScopedSetError` rather than a string — the
+    /// tree-walker reports one as a syntax error and the other as an
+    /// undefined variable — so a test that checked only `is_err` would let
+    /// the two be swapped.
+    #[test]
+    fn an_ambiguous_write_reports_ambiguity() {
+        let env = Environment::new();
+        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
+        match env.set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9)) {
+            Err(ScopedSetError::Ambiguous(e)) => assert_eq!(e.name, "x"),
+            other => panic!("expected an ambiguity, got {other:?}"),
+        }
+        // And nothing moved.
+        assert_eq!(
+            env.get_with_scopes("x", &scopes(&[1])).unwrap(),
+            Some(TaggedValue::fixnum(1))
+        );
+        assert_eq!(
+            env.get_with_scopes("x", &scopes(&[2])).unwrap(),
+            Some(TaggedValue::fixnum(2))
+        );
+    }
+
+    /// The other arm: a name nothing binds is undefined, not ambiguous.
+    #[test]
+    fn a_write_to_nothing_reports_undefined() {
+        let env = Environment::new();
+        match env.set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9)) {
+            Err(ScopedSetError::Undefined(name)) => assert_eq!(name, "absent"),
+            other => panic!("expected undefined, got {other:?}"),
+        }
+    }
+
+    /// Both arms render a sentence, so a caller that formats rather than
+    /// matching gets a diagnostic either way.
+    #[test]
+    fn both_arms_render_a_message() {
+        let env = Environment::new();
+        let undefined = env
+            .set_with_scopes("absent", &scopes(&[1]), TaggedValue::fixnum(9))
+            .unwrap_err()
+            .to_string();
+        assert!(undefined.contains("undefined variable"), "{undefined}");
+        assert!(undefined.contains("absent"), "{undefined}");
+
+        env.define_with_scopes("x", scopes(&[1]), TaggedValue::fixnum(1));
+        env.define_with_scopes("x", scopes(&[2]), TaggedValue::fixnum(2));
+        let ambiguous = env
+            .set_with_scopes("x", &scopes(&[1, 2]), TaggedValue::fixnum(9))
+            .unwrap_err()
+            .to_string();
+        assert!(ambiguous.contains("ambiguous reference"), "{ambiguous}");
     }
 }
 
