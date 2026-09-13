@@ -33,7 +33,7 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/133/test.sld` | 93 | 0 | verbatim |
 | `srfi/113/test.sld` | 253 | 0 | verbatim |
 | `srfi/128/test.sld` | 170 | 0 | verbatim |
-| `srfi/130/test.sld` | 219 | 0 | imports |
+| `srfi/130/test.sld` | 219 | 1 | imports — one incorrect upstream witness expectation; see below |
 | `srfi/158/test.sld` | 76 | 0 | verbatim |
 | `srfi/125/test.sld` | 74 | 0 | imports |
 | `srfi/14/test.sld` | 72 | 0 | verbatim |
@@ -106,6 +106,16 @@ standard SRFI 14, which Patina now bundles. So the two imports are replaced by
 `(srfi 14)` and nothing else changes: the diff against upstream is one line, and
 no test body is touched. Recorded here rather than done silently, because the
 value of these suites is that they are not ours to edit.
+
+**#204 exposes one incorrect SRFI 130 expectation (2026-09-12).** The row
+`(string-every (lambda (x) (char->integer x)) "aAbA")` expects `#t`, but
+[SRFI 130](https://srfi.schemers.org/srfi-130/srfi-130.html#string-every)
+requires the final predicate result, `(char->integer #\A)` = 65. Patina now
+returns that witness; the unchanged upstream suite reports 218 passes and this
+one expected failure on each backend. The harness records the failure, while
+`crates/patina-tests/tests/scheme/srfi/string-cursors.scm` independently checks
+the specified behavior, including bounded ranges. Gauche agrees with those
+regressions; Chibi's predicate defects are in the oracle divergence register.
 
 Which exposes something worth fixing: **nothing mechanically guards this tree.**
 `lib/` has `crates/patina-tests/tests/bundled_provenance.rs` hashing every

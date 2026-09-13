@@ -119,8 +119,9 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/130.scm", 0x2979bbeb162b21e1),
     // Not byte-identical to anything: the subset of `(chibi string)` that
     // `(srfi 130)` needs, with `%` renames and a header (#198). Pinned anyway,
-    // as `132.sld` is -- see the module docs.
-    ("lib/srfi/130.chibi-string.scm", 0x1056940f79ecb4fb),
+    // as `132.sld` is -- see the module docs. Re-pinned for #204's bounded
+    // predicate/witness fixes, recorded in lib/srfi/PROVENANCE.md.
+    ("lib/srfi/130.chibi-string.scm", 0xd590c6032851a1a3),
     // Re-pinned 2026-09-06 (#198): the import of `(chibi string)` became an
     // `(include "130.chibi-string.scm")` of the inlined subset, plus `(srfi 14)`
     // directly. The header moved with it. `130.scm` below is untouched by that
