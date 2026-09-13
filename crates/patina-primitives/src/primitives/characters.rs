@@ -369,7 +369,7 @@ pub(super) fn char_alphabetic_p(
     Ok(TaggedValue::boolean(c.is_alphabetic()))
 }
 
-/// (char-numeric? char) - Returns #t if char is numeric
+/// (char-numeric? char) - Returns #t for Unicode decimal digits
 pub(super) fn char_numeric_p(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -382,7 +382,9 @@ pub(super) fn char_numeric_p(
     }
     let heap_ref = heap.borrow();
     let c = get_char(args[0], &heap_ref, "char-numeric?")?;
-    Ok(TaggedValue::boolean(c.is_numeric()))
+    // R7RS requires Numeric_Type=Decimal. Rust's is_numeric() also accepts
+    // other numbers, such as superscripts, fractions and Roman numerals.
+    Ok(TaggedValue::boolean(unicode_digit_value(c).is_some()))
 }
 
 /// (char-whitespace? char) - Returns #t if char is whitespace
@@ -585,22 +587,17 @@ pub(super) fn digit_value(
 /// each script's digits 0-9 are consecutive code points. We can calculate
 /// the digit value by finding the offset from the block's zero character.
 ///
-/// Note: The table below covers Unicode 15.0 Nd ranges. If future Unicode versions
-/// add new decimal digit scripts, this table should be updated. Alternative approaches
-/// like `unicode-general-category` crate could provide automatic updates but would
-/// add a dependency for marginal benefit since decimal digit ranges rarely change.
+/// Shared by `char-numeric?` and `digit-value` so their Unicode coverage agrees.
+/// The table covers Unicode 15.0's 680 Nd characters (68 blocks), checked against
+/// https://www.unicode.org/Public/15.0.0/ucd/UnicodeData.txt.
+/// Update both procedures together by updating this table for a newer version.
 fn unicode_digit_value(c: char) -> Option<u32> {
     // First try ASCII (fast path)
     if let Some(d) = c.to_digit(10) {
         return Some(d);
     }
 
-    // For non-ASCII, check if it's a decimal digit using Unicode properties
-    // A character is a decimal digit if char::is_numeric() returns true AND
-    // it's in the Nd (Decimal Number) category.
-    //
-    // Unicode decimal digit blocks all have 10 consecutive code points.
-    // We can find the digit value by checking known decimal digit ranges.
+    // For non-ASCII, find the digit's offset in a decimal digit block.
     let cp = c as u32;
 
     // List of Unicode decimal digit zero code points (Nd category)
@@ -661,6 +658,7 @@ fn unicode_digit_value(c: char) -> Option<u32> {
         0x11C50, // Bhaiksuki: 𑱐-𑱙
         0x11D50, // Masaram Gondi: 𑵐-𑵙
         0x11DA0, // Gunjala Gondi: 𑶠-𑶩
+        0x11F50, // Kawi: U+11F50-U+11F59
         0x16A60, // Mro: 𖩠-𖩩
         0x16AC0, // Tangsa: 𖫰-𖫹
         0x16B50, // Pahawh Hmong: 𖭐-𖭙
@@ -787,7 +785,7 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         "scheme.char",
         "char-numeric?",
         Arity::Exact(1),
-        "Returns #t if char is numeric.",
+        "Returns #t if char is a Unicode decimal digit.",
         char_numeric_p,
     ));
 
