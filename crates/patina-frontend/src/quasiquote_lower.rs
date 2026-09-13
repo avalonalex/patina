@@ -15,11 +15,13 @@
 //! program that imports SRFI 101 has `cons` and `list` build random-access
 //! lists, and `` `(1 ,x) `` in it must still be a pair. Looked up by name,
 //! it was not, and every `(chibi test)` assertion under that import broke
-//! on its own info alist (Larceny triage family 34). The tree-walker
-//! builds the structure directly and never had the problem.
+//! on its own info alist (Larceny triage family 34). That was the VM's
+//! defect alone while the tree-walker built the structure directly; since
+//! both go through here, the guarantee is one and so is the risk.
 //!
-//! This runs before the main 5-pass compiler pipeline so that the compiler
-//! never needs to handle `Quasiquote` directly.
+//! Runs before either backend lowers anything — ahead of the VM's five-pass
+//! pipeline and ahead of the CPS transform — so neither needs to handle
+//! `Quasiquote` at all. Nothing downstream of this carries that node.
 
 use crate::Desugarer;
 use patina_core::core_expr::{CoreExpr, CoreExprKind};
@@ -300,12 +302,30 @@ fn expand_template(
                     if depth == 0 {
                         // A template that *is* an unquote, rather than one
                         // holding an element that is. R6RS's multi-operand
-                        // form is a splice, and a splice belongs in a list or
-                        // vector template, so there is nothing here for
-                        // several operands to be spliced into; one operand it
-                        // is, and `pair_parts` refuses none.
-                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote")?;
-                        return desugar_tagged(inner, cx);
+                        // form is a splice and a splice belongs in a list or
+                        // vector template, so there is nothing here to splice
+                        // into: one operand, and `pair_parts` refuses none.
+                        //
+                        // Extra operands are refused rather than dropped.
+                        // Taking the first silently was the behaviour before
+                        // multi-operand unquote existed, and once every other
+                        // position inserts all of them, accepting a form here
+                        // and discarding half of it is the one answer that
+                        // teaches the reader something false.
+                        let operands = operand_list(cdr, cx.heap).ok_or_else(|| {
+                            QuasiquoteError::Desugar(
+                                "unquote: operands must be a proper, finite list".to_string(),
+                            )
+                        })?;
+                        let [inner] = operands.as_slice() else {
+                            return Err(QuasiquoteError::Desugar(format!(
+                                "unquote: a template that is itself an unquote takes one \
+                                 expression, not {}; several can only be spliced into a \
+                                 list or vector template",
+                                operands.len()
+                            )));
+                        };
+                        return desugar_tagged(*inner, cx);
                     }
                     // Inside a nested quasiquote the form is rebuilt as data,
                     // so the operand *list* is what must survive: expanded one
@@ -354,6 +374,15 @@ fn rebuild_unquotation(
     depth: i32,
     keyword: &str,
 ) -> Result<CoreExpr, QuasiquoteError> {
+    // Checked here as well as in element position, so that whether a form is
+    // well-formed does not depend on how deeply it is nested: `(unquote . x)`
+    // was refused at depth 0 and quietly rebuilt at depth 1, because
+    // `expand_pair_template` reads an improper tail as a dotted list.
+    if operand_list(operands, cx.heap).is_none() {
+        return Err(QuasiquoteError::Desugar(format!(
+            "{keyword}: operands must be a proper, finite list"
+        )));
+    }
     let expanded_operands = expand_pair_template(operands, cx, depth - 1)?;
     let sym = cx.heap.borrow_mut().intern_symbol(keyword);
     let head = make_list_call(cx, vec![CoreExpr::new(CoreExprKind::Quote(sym))])?;
@@ -418,8 +447,13 @@ fn expand_pair_template(
                 let h = cx.heap.borrow();
                 (h.car(car), h.cdr(car))
             };
-            let splicing = cx.heap.borrow().is_named(inner_car, "unquote-splicing");
-            let unquoting = cx.heap.borrow().is_named(inner_car, "unquote");
+            let (splicing, unquoting) = {
+                let h = cx.heap.borrow();
+                (
+                    h.is_named(inner_car, "unquote-splicing"),
+                    h.is_named(inner_car, "unquote"),
+                )
+            };
 
             if splicing || unquoting {
                 let keyword = if splicing {
@@ -428,7 +462,9 @@ fn expand_pair_template(
                     "unquote"
                 };
                 let operands = operand_list(inner_cdr, cx.heap).ok_or_else(|| {
-                    QuasiquoteError::Desugar(format!("{keyword}: operands must be a proper list"))
+                    QuasiquoteError::Desugar(format!(
+                        "{keyword}: operands must be a proper, finite list"
+                    ))
                 })?;
                 for operand in operands {
                     let expanded = desugar_tagged(operand, cx)?;
@@ -547,19 +583,16 @@ enum Segment {
 /// 7.1.4 gives each exactly one operand and 4.2.8 makes anything else an
 /// error, so accepting a list here is an extension, taken deliberately —
 /// Gauche, Chez and Larceny read it this way and Larceny's suite asserts it.
-/// `None` means the form is improper, which no reading accepts.
+///
+/// `Heap::list_to_vec` rather than a walk of its own, and not only to avoid
+/// a duplicate: it stops on a cycle where a hand-rolled loop does not. A
+/// template may hold one, because the reader accepts a datum label —
+/// `` `(a #0=(unquote . #0#)) `` — and the first version of this function
+/// allocated until the process died on exactly that. `None` covers both
+/// refusals, an improper list and a circular one, which is what the caller
+/// wants: no reading of either report accepts either.
 fn operand_list(cdr: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
-    let h = heap.borrow();
-    let mut out = Vec::new();
-    let mut current = cdr;
-    while !current.is_null() {
-        if !current.is_pair() {
-            return None;
-        }
-        out.push(h.car(current));
-        current = h.cdr(current);
-    }
-    Some(out)
+    heap.borrow().list_to_vec(cdr)
 }
 
 /// Get car and cdr from what a template promised would be a pair.

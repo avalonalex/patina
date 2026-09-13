@@ -415,6 +415,31 @@ pub(super) fn lower_quasiquotes_for(
         .map_err(|e| EvalError::InvalidSyntax(e.to_string()))
 }
 
+/// Does this tree still hold a `Quasiquote`? Debug-only, for the precondition
+/// [`eval_cps_with`] relies on and cannot state in its signature.
+///
+/// Uses the shared `ExprVisitor` rather than a match of its own, so a new
+/// `CoreExpr` variant with children cannot quietly hide a template from it.
+///
+/// Not `#[cfg(debug_assertions)]`: `debug_assert!` still type-checks its
+/// expression in a release build, so the function has to exist there. The
+/// `if cfg!(debug_assertions)` the macro expands to is what keeps the walk
+/// out of a release binary.
+fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
+    #[derive(Default)]
+    struct FindQuasiquote {
+        found: bool,
+    }
+    impl patina_ir::ExprVisitor for FindQuasiquote {
+        fn visit_quasiquote(&mut self, _val: &patina_core::TaggedValue) {
+            self.found = true;
+        }
+    }
+    let mut finder = FindQuasiquote::default();
+    patina_ir::ExprVisitor::visit_expr(&mut finder, expr);
+    finder.found
+}
+
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
@@ -471,6 +496,14 @@ pub(super) fn eval_cps_with(
     // error and stays catchable. Lowering here instead put the failure
     // through `unhandled_is_final`, which marks a catchable error as having
     // escaped a callback — and a `guard` around `eval` then never saw it.
+    //
+    // So this function's caller owes it a lowered tree. The CPS transform
+    // panics on a `Quasiquote`, which is a poor way to learn that, so the
+    // obligation is asserted here rather than left to the comment.
+    debug_assert!(
+        !contains_quasiquote(expr),
+        "eval_cps_with needs a tree its caller has already lowered"
+    );
     let cps_expr = CpsTransformer::new().transform_toplevel(expr);
     CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),

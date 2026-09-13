@@ -276,4 +276,36 @@
 (test-equal "a multi-operand unquote-splicing in element position" '(a a)
   (eval '(let ((x '(a))) `((unquote-splicing x x))) (environment '(scheme base))))
 
+;; A vector template goes through the same element walk, lowered to
+;; `list->vector` over the same segments, so the extension reaches it too.
+;; Pinned separately because "the same walk" is an implementation fact and
+;; this is the observable one.
+(test-equal "a multi-operand unquote in a vector template" '#(a p p b)
+  (eval '(let ((x 'p)) `#(a (unquote x x) b)) (environment '(scheme base))))
+
+(test-equal "a multi-operand unquote-splicing in a vector template" '#(a 1 2 1 2 b)
+  (eval '(let ((x '(1 2))) `#(a (unquote-splicing x x) b)) (environment '(scheme base))))
+
+;; A template that *is* an unquote has no list to splice into, so several
+;; operands are refused rather than truncated to the first — which is what
+;; this did before the extension existed, and would now be the one answer
+;; that quietly discards what the program wrote.
+(test-error "a template that is itself a multi-operand unquote is refused" #t
+  (eval '(let ((a 1) (b 2)) `(unquote a b)) (environment '(scheme base))))
+
+;; An operand list must be proper and finite at every depth. The reader
+;; accepts a datum label, so a template can hold a circular one; walking it
+;; without a cycle check allocated until the process died.
+(test-error "a circular operand list is refused" #t
+  (eval '`(a #0=(unquote . #0#)) (environment '(scheme base))))
+;; Scoped away from the oracles: Gauche does not return on an improper
+;; operand list, and `test-skip` is what keeps one row from costing this file
+;; its whole Gauche column. chibi answers, but a single-oracle comparison on a
+;; shape the reports do not describe is not worth the register entry.
+(cond-expand (patina) (else (test-skip 2)))
+(test-error "an improper operand list is refused" #t
+  (eval '(let ((x 1)) `(a (unquote . x))) (environment '(scheme base))))
+(test-error "and is refused inside a nested template too" #t
+  (eval '(let ((x 1)) ``(a (unquote . x))) (environment '(scheme base))))
+
 (test-end)

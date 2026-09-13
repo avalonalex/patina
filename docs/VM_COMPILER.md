@@ -23,9 +23,10 @@ Intermediate IRs can be inspected for debugging.
 CoreExpr          (from patina-frontend)
     │
     ▼
- Pre-pass A: Quasiquote Expansion (quasiquote_expand.rs)
-    │  Expands Quasiquote(TaggedValue) → calls of the registry's
-    │  list/append/list->vector, referenced as values
+ Shared lowering: patina_frontend::lower_quasiquotes
+    │  Not a VM pass. Both backends run it before lowering anything,
+    │  so no Quasiquote(TaggedValue) reaches either — it becomes calls
+    │  of the registry's list/append/list->vector, as values
     │
     ▼
  Pre-pass B: Alpha Rename (alpha_rename.rs)
@@ -55,8 +56,10 @@ CoreExpr          (from patina-frontend)
        CodeObject — Vec<Instruction>, constant pool, source map
 ```
 
-The entry point is `compile_with_qq()` in `backend.rs`, which chains quasiquote
-expansion → alpha rename → 5 passes.
+The entry point is `compile_with_qq_resolving()` in `compiler/mod.rs`, which
+chains the shared quasiquote lowering → alpha rename → 5 passes. The lowering
+is shared rather than the compiler's own: the tree-walker calls it too, from
+the `eval` primitive's callback and from `eval_cps`.
 
 ---
 
@@ -76,20 +79,27 @@ Define, Import, Expand, App, Apply
 
 ---
 
-## 4. Pre-pass A — Quasiquote Expansion
+## 4. Shared lowering — Quasiquote
 
-**File:** `quasiquote_expand.rs`
+**File:** `patina-frontend/src/quasiquote_lower.rs` (not this crate)
 **Input:** `CoreExpr`
 **Output:** `CoreExpr` with `Quasiquote(TaggedValue)` nodes replaced by
-`App` calls to `list`, `append` and `list->vector`.
+`App` calls to `list`, `append` and `list->vector`. The constructors are
+supplied by the caller, because `patina-primitives` depends on the frontend
+and a pass there cannot name `PrimitiveRegistry` without a cycle.
 
 The callee is the registry's `scheme.base` primitive as a *value* — a
 `Literal` in operator position, allocated once per compilation unit that
 needs it — not a `Var` of that name. A quasiquote denotes the structure it
 writes whatever `list` means where it appears: under `(import (srfi 101))`,
 whose `list` builds random-access lists, `` `(1 ,x) `` must still be a pair,
-and looked up by name it was not (Larceny triage family 34). The
-tree-walker builds the structure directly and never had the problem.
+and looked up by name it was not (Larceny triage family 34). That was the
+VM's defect alone while the tree-walker built the structure directly; both go
+through this lowering now, so the guarantee is one and so is the risk.
+
+An unquotation takes any number of operands, which is R6RS 11.17's reading
+rather than R7RS 7.1.4's — a deliberate extension, recorded in the module and
+in `expansion/quasiquote-templates.scm`.
 
 Interns plain symbols for nested `quasiquote`/`unquote`/`unquote-splicing`
 markers (not raw identifiers with scope marks).
