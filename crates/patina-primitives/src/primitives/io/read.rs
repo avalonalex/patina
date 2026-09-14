@@ -123,7 +123,7 @@ fn read_buffered(
                         port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
                         return Ok(tv);
                     }
-                    Ok(None) | Err(patina_frontend::ParseError::UnexpectedEof) => {
+                    Ok(None) | Err(patina_frontend::ParseError::IncompleteDatum { .. }) => {
                         // No datum yet, or datum incomplete — need more input
                     }
                     Err(e) => {

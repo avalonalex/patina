@@ -1454,3 +1454,40 @@ fn test_a_library_body_importing_only_scheme_r5rs_has_core_syntax() {
         "ok",
     );
 }
+
+// =============================================================================
+// Library files cut short (#329)
+// =============================================================================
+
+/// A `.sld` cut short inside its form, one whose included file is cut short,
+/// and one whole form followed by a datum the file cuts short: none may load,
+/// and each error names the file and where the unfinished datum began.
+#[test]
+fn test_library_files_cut_short_do_not_load() {
+    let eval = test_evaluator();
+    for (name, file, began_at) in [
+        ("truncated", "truncated.sld", "line 2, column 1"),
+        (
+            "truncated-include",
+            "truncated-include-impl.scm",
+            "line 3, column 1",
+        ),
+        (
+            "trailing-garbage",
+            "trailing-garbage.sld",
+            "line 7, column 1",
+        ),
+    ] {
+        let err = eval
+            .load_library(&["test".to_string(), name.to_string()])
+            .expect_err(name)
+            .to_string();
+        assert!(err.contains(file), "{name}: {err}");
+        assert!(
+            err.contains(&format!(
+                "Unexpected end of input inside the datum beginning at {began_at}"
+            )),
+            "{name}: {err}"
+        );
+    }
+}

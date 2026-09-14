@@ -231,15 +231,14 @@ impl<B: Backend> Interpreter<B> {
         let mut parser = Parser::new_with_heap(input, heap.clone())?;
 
         loop {
-            // Check if we've reached EOF by attempting to parse
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     result = self
                         .backend
                         .eval_global(expr)
                         .map_err(InterpreterError::Backend)?;
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => return Err(e.into()),
             }
         }
@@ -267,16 +266,15 @@ impl<B: Backend> Interpreter<B> {
         };
 
         loop {
-            // Check if we've reached EOF by attempting to parse
-            match parser.parse() {
-                Ok(expr) => match self.backend.eval_global(expr) {
+            match parser.parse_next() {
+                Ok(Some(expr)) => match self.backend.eval_global(expr) {
                     Ok(val) => result = val,
                     Err(e) => {
                         // Print error and continue
                         eprintln!("Error: {}", e);
                     }
                 },
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => {
                     // Print parse error and continue
                     eprintln!("Error: {}", e);
@@ -398,14 +396,14 @@ impl Interpreter<TreeWalker> {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             prune_freed_locations(heap, &source_map);
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     result = self
                         .backend
                         .eval_with_source_map(expr, &global, &source_map)
                         .map_err(InterpreterError::Backend)?;
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => return Err(e.into()),
             }
         }
@@ -434,8 +432,8 @@ impl Interpreter<TreeWalker> {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             prune_freed_locations(heap, &source_map);
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     match self
                         .backend
                         .eval_with_source_map(expr, &global, &source_map)
@@ -446,7 +444,7 @@ impl Interpreter<TreeWalker> {
                         }
                     }
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     break;
@@ -510,8 +508,8 @@ impl Interpreter<TreeWalker> {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             prune_freed_locations(heap, &source_map);
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     match self
                         .backend
                         .eval_with_source_map(expr, &global, &source_map)
@@ -521,7 +519,7 @@ impl Interpreter<TreeWalker> {
                         Err(e) => return (Err(e), source_map),
                     }
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => return (Err(e.into()), source_map),
             }
         }
@@ -551,8 +549,8 @@ impl Interpreter<TreeWalker> {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             prune_freed_locations(heap, &source_map);
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     match self
                         .backend
                         .eval_with_source_map(expr, &global, &source_map)
@@ -566,7 +564,7 @@ impl Interpreter<TreeWalker> {
                         }
                     }
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     break;

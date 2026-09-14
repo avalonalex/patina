@@ -224,14 +224,20 @@ impl SchemeLibraryLoader {
         let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
             LibraryError::ParseError {
                 file: path.display().to_string(),
-                message: format!("{:?}", e),
+                message: e.to_string(),
             }
         })?;
 
-        let lib_form = parser.parse().map_err(|e| LibraryError::ParseError {
+        let parse_error = |e: crate::ParseError| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: format!("{:?}", e),
-        })?;
+            message: e.to_string(),
+        };
+        let lib_form = parser.parse().map_err(parse_error)?;
+        // The file is its `define-library` form, so nothing should follow;
+        // read on anyway, so that a file cut short after the form — inside
+        // a datum the loader would otherwise never look at — is reported
+        // rather than loaded as if it were whole.
+        while parser.parse_next().map_err(parse_error)?.is_some() {}
 
         // Parse the define-library form into structured data with library checker
         let lib_def =
@@ -405,13 +411,13 @@ impl SchemeLibraryLoader {
         let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
             LibraryError::ParseError {
                 file: path.display().to_string(),
-                message: format!("{:?}", e),
+                message: e.to_string(),
             }
         })?;
 
         let declarations = parser.parse_all().map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: format!("{:?}", e),
+            message: e.to_string(),
         })?;
 
         // Parse each declaration using LibraryDefinition's parsing logic
@@ -544,12 +550,12 @@ impl SchemeLibraryLoader {
         }
         .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: format!("{:?}", e),
+            message: e.to_string(),
         })?;
 
         parser.parse_all().map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: format!("{:?}", e),
+            message: e.to_string(),
         })
     }
 }

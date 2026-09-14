@@ -170,3 +170,38 @@ fn test_load_result_is_not_error() {
     );
     assert_program_eval_to(&code, "3");
 }
+
+// =============================================================================
+// (scheme load) — a file cut short inside a datum (#329)
+// =============================================================================
+
+#[test]
+fn test_load_rejects_a_file_cut_short_inside_a_datum() {
+    let path = resource_path("truncated.scm");
+    let code = format!(r#"(import (scheme load)) (load "{}")"#, path);
+    assert_program_eval_error(&code);
+    for result in [
+        try_eval_program_vm(&code),
+        try_eval_program_tree_walker(&code),
+    ] {
+        let err = result.expect_err("a file cut short must not load");
+        assert!(
+            err.contains("truncated.scm") && err.contains("line 4, column 1"),
+            "{err}"
+        );
+    }
+}
+
+#[test]
+fn test_load_runs_the_forms_before_the_cut_and_raises_at_it() {
+    let path = resource_path("truncated.scm");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme load))
+        (define outcome (guard (e (#t 'raised)) (load "{}")))
+        (list outcome loaded-before-cut)
+        "#,
+        path
+    );
+    assert_program_eval_to(&code, "(raised 42)");
+}
