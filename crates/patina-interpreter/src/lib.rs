@@ -55,6 +55,7 @@ pub use simple::SimpleInterpreter;
 
 // Re-export types from workspace crates for convenience
 pub use patina_core::TaggedValue;
+pub use patina_core::error::SourceLocation;
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap, prune_freed_locations,
 };
@@ -65,15 +66,48 @@ pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 
 /// Format any `InterpreterError` with source context.
 ///
-/// `EvalError` variants are formatted with caret context via `format_eval_error_with_source`.
-/// Parse/lex/desugar errors fall back to their `Display` implementation.
+/// `EvalError` variants are formatted with caret context via `format_eval_error_with_source`,
+/// and so is a parse error that carries a position. Lex/desugar errors, and
+/// parse errors that do not name a position, fall back to `Display`.
 pub fn format_interpreter_error(
     error: &InterpreterError<EvalError>,
     source_map: &SourceMap,
 ) -> String {
     match error {
         InterpreterError::Backend(eval_err) => format_eval_error_with_source(eval_err, source_map),
+        InterpreterError::Parse(parse_err) => format_parse_error_with_source(parse_err, source_map),
         other => other.to_string(),
+    }
+}
+
+/// Format a `ParseError` with the same caret context an evaluation error gets.
+///
+/// A truncated file is found by the form it cut short, so the position
+/// `IncompleteDatum` carries is worth as much as an evaluation error's — and
+/// worth as little on its own, in a long file across several includes. The
+/// source map already holds the text and the name it came from, which is all
+/// `format_context` needs.
+pub fn format_parse_error_with_source(error: &ParseError, source_map: &SourceMap) -> String {
+    let Some((line, column)) = parse_error_position(error) else {
+        return error.to_string();
+    };
+    let loc = SourceLocation::new(
+        source_map.primary_source().unwrap_or("<unknown>"),
+        line,
+        column,
+    );
+    let mut parts = vec![error.to_string(), format!("  at {}", loc)];
+    if let Some(ctx) = source_map.format_context(&loc) {
+        parts.push(ctx);
+    }
+    parts.join("\n")
+}
+
+/// Where a parse error points, for the errors that say.
+fn parse_error_position(error: &ParseError) -> Option<(u32, u32)> {
+    match error {
+        ParseError::IncompleteDatum { line, column } => Some((*line, *column)),
+        _ => None,
     }
 }
 
@@ -126,6 +160,7 @@ pub fn format_backend_error_with_source<E: std::error::Error + HasSourceLocation
     source_map: &SourceMap,
 ) -> String {
     match error {
+        InterpreterError::Parse(parse_err) => format_parse_error_with_source(parse_err, source_map),
         InterpreterError::Backend(backend_err) => {
             if let Some(loc) = backend_err.source_location() {
                 let mut parts = vec![backend_err.to_string()];
@@ -196,9 +231,12 @@ impl<B: Backend> Interpreter<B> {
         Interpreter { backend }
     }
 
-    /// Evaluate a string containing Scheme code
+    /// Evaluate a string containing one Scheme expression.
     ///
-    /// Uses the backend's evaluation strategy.
+    /// Uses the backend's evaluation strategy. Text after that expression is
+    /// not evaluated, but it must still read: a remainder that ends inside a
+    /// datum is an error rather than something to drop silently. Use
+    /// `eval_program` to evaluate every form in a string.
     ///
     /// # Example
     ///
@@ -210,6 +248,7 @@ impl<B: Backend> Interpreter<B> {
         let heap = self.backend.global_env().heap();
         let mut parser = Parser::new_with_heap(input, heap.clone())?;
         let expr = parser.parse()?;
+        parser.skip_rest()?;
         // Drop parser to release any borrows before evaluation
         drop(parser);
         let result = self
@@ -368,6 +407,7 @@ impl Interpreter<TreeWalker> {
         let mut parser =
             Parser::new_with_source_map(input, heap.clone(), source_name, source_map.clone())?;
         let expr = parser.parse()?;
+        parser.skip_rest()?;
         drop(parser);
         let global = self.backend.global_env().clone();
         let result = self
@@ -472,7 +512,7 @@ impl Interpreter<TreeWalker> {
                 Ok(p) => p,
                 Err(e) => return (Err(e.into()), source_map),
             };
-        let expr = match parser.parse() {
+        let expr = match parser.parse().and_then(|e| parser.skip_rest().map(|()| e)) {
             Ok(e) => e,
             Err(e) => return (Err(e.into()), source_map),
         };
@@ -527,11 +567,16 @@ impl Interpreter<TreeWalker> {
     }
 
     /// Evaluate a program resiliently with a named source; prints rich errors and continues.
+    ///
+    /// Returns the last value and whether the program was read to its end.
+    /// An evaluation error is printed and the run goes on — that is what this
+    /// mode is for — but a read error means part of the program never ran at
+    /// all, and a caller that reports a status must be able to fail on it.
     pub fn eval_program_resilient_with_source_name(
         &self,
         input: &str,
         source_name: &str,
-    ) -> TaggedValue {
+    ) -> (TaggedValue, bool) {
         let mut result = TaggedValue::UNSPECIFIED;
         let heap = self.backend.global_env().heap();
         let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
@@ -541,7 +586,7 @@ impl Interpreter<TreeWalker> {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    return result;
+                    return (result, false);
                 }
             };
         let global = self.backend.global_env().clone();
@@ -564,14 +609,16 @@ impl Interpreter<TreeWalker> {
                         }
                     }
                 }
-                Ok(None) => break,
+                Ok(None) => return (result, true),
                 Err(e) => {
-                    eprintln!("Error: {}", e);
-                    break;
+                    eprintln!(
+                        "Error: {}",
+                        format_parse_error_with_source(&e, &source_map.borrow())
+                    );
+                    return (result, false);
                 }
             }
         }
-        result
     }
 
     /// Format a TaggedValue for display using write notation (machine-readable)

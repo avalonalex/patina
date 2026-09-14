@@ -291,6 +291,46 @@ fn eval_str_requires_a_datum() {
     assert!(is_cut_short(&err), "{err}");
 }
 
+/// `eval_str` evaluates the first expression only, but it must still read
+/// what follows: `"42 (+ 1"` reporting 42 is the same silent acceptance as a
+/// truncated script exiting 0.
+#[test]
+fn eval_str_rejects_a_malformed_suffix_after_the_expression() {
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    for input in ["42 (+ 1", "42 '", "42 #;"] {
+        let err = tree_walker.eval_str(input).expect_err(input);
+        assert!(is_cut_short(&err), "tree-walker {input:?}: {err}");
+        let err = vm.eval_str(input).expect_err(input);
+        assert!(is_cut_short(&err), "vm {input:?}: {err}");
+    }
+    // A complete trailing form is still not evaluated, and still not an error.
+    assert_eq!(
+        tree_walker.eval_str("42 (+ 1 2)").unwrap().as_fixnum(),
+        Some(42)
+    );
+    let err = tree_walker
+        .eval_str_tracked("42 (+ 1")
+        .expect_err("tracked");
+    assert!(is_cut_short(&err), "{err}");
+    let (result, _map) = tree_walker.eval_str_with_source_name("42 (+ 1", "<test>");
+    assert!(is_cut_short(&result.expect_err("with source name")));
+}
+
+/// The diagnostic locates the unfinished form in the file, the way an
+/// evaluation error does — a bare line number is little help in a long file.
+#[test]
+fn a_parse_error_is_rendered_with_its_source_line_and_caret() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let (result, source_map) =
+        interp.eval_program_with_source_name("(define x 1)\n(define y\n  (+ 1", "cut.scm");
+    let err = result.expect_err("cut short");
+    let rendered = patina_interpreter::format_interpreter_error(&err, &source_map.borrow());
+    assert!(rendered.contains("  at cut.scm:2:1"), "{rendered}");
+    assert!(rendered.contains("(define y"), "{rendered}");
+    assert!(rendered.contains('^'), "{rendered}");
+}
+
 #[test]
 fn tracked_eval_program_variants_reject_input_cut_short_inside_a_datum() {
     let interp = TreeWalkInterpreter::new_tree_walker();

@@ -206,7 +206,11 @@ impl Repl {
         run_repl_loop(&mut self.editor, "patina> ", |line| {
             *counter += 1;
             let source_name = format!("<repl-{}>", counter);
-            let (eval_result, source_map) = interp.eval_str_with_source_name(line, &source_name);
+            // Every form on the line, as the VM REPL does: reading only the
+            // first left `(define a 1) (define b 2)` with `b` unbound, and
+            // dropped a trailing datum the line cut short.
+            let (eval_result, source_map) =
+                interp.eval_program_with_source_name(line, &source_name);
             match eval_result {
                 Ok(result) => {
                     if result != patina_core::TaggedValue::UNSPECIFIED {

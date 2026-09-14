@@ -96,7 +96,7 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
             Ok(TaggedValue::EOF)
         }
-        Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
+        Err(e) => Err(read_error(&e)),
     }
 }
 
@@ -123,11 +123,10 @@ fn read_buffered(
                         port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
                         return Ok(tv);
                     }
-                    Ok(None) | Err(patina_frontend::ParseError::IncompleteDatum { .. }) => {
-                        // No datum yet, or datum incomplete — need more input
-                    }
+                    Ok(None) => {} // Only whitespace and comments so far
+                    Err(e) if e.is_incomplete() => {} // Datum unfinished — read on
                     Err(e) => {
-                        return Err(EvalError::InvalidSyntax(format!("read: {}", e)));
+                        return Err(read_error(&e));
                     }
                 }
             }
@@ -149,11 +148,26 @@ fn read_buffered(
                         Ok(tv)
                     }
                     Ok(None) => Ok(TaggedValue::EOF),
-                    Err(e) => Err(EvalError::InvalidSyntax(format!("read: {}", e))),
+                    Err(e) => Err(read_error(&e)),
                 };
             }
         }
     }
+}
+
+/// Render a parse error for `read`.
+///
+/// `IncompleteDatum` drops its line and column on the way out: the parser
+/// counts them from the start of the text it was handed, which here is
+/// whatever the port has not read yet, so they would name a position in a
+/// slice the caller cannot see rather than one in the file.
+fn read_error(e: &patina_frontend::ParseError) -> EvalError {
+    if matches!(e, patina_frontend::ParseError::IncompleteDatum { .. }) {
+        return EvalError::InvalidSyntax(
+            "read: unexpected end of input inside a datum".to_string(),
+        );
+    }
+    EvalError::InvalidSyntax(format!("read: {}", e))
 }
 
 /// Text after the first `consumed_chars` characters of `buffer`

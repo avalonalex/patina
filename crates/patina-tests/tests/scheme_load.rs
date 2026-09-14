@@ -205,3 +205,20 @@ fn test_load_runs_the_forms_before_the_cut_and_raises_at_it() {
     );
     assert_program_eval_to(&code, "(raised 42)");
 }
+
+/// `load` puts the path it was given into its parse errors, so a path that
+/// happens to contain `file` must not turn the read error into a file error.
+#[test]
+fn test_load_of_a_cut_short_file_raises_a_read_error_whatever_the_path() {
+    let path = resource_path("truncated.scm");
+    assert!(path.contains("load-test"), "path under test: {path}");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme load))
+        (guard (e ((read-error? e) 'read-error) ((file-error? e) 'file-error) (#t 'other))
+          (load "{}"))
+        "#,
+        path
+    );
+    assert_program_eval_to(&code, "read-error");
+}

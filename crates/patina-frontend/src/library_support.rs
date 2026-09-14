@@ -113,7 +113,7 @@ impl SchemeLibraryLoader {
             }
             other => LibraryError::ParseError {
                 file,
-                message: format!("{context}{:?}", other),
+                message: format!("{context}{other}"),
             },
         }
     }
@@ -237,7 +237,7 @@ impl SchemeLibraryLoader {
         // read on anyway, so that a file cut short after the form — inside
         // a datum the loader would otherwise never look at — is reported
         // rather than loaded as if it were whole.
-        while parser.parse_next().map_err(parse_error)?.is_some() {}
+        parser.skip_rest().map_err(parse_error)?;
 
         // Parse the define-library form into structured data with library checker
         let lib_def =

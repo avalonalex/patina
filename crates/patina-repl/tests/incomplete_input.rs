@@ -41,12 +41,61 @@ fn p_rejects_a_malformed_suffix_after_a_complete_form() {
         assert!(!ok, "{args:?} succeeded: {stdout}");
         assert_eq!(
             stdout, "",
-            "an expression that fails to read prints nothing: {args:?}"
+            "a `-p` that fails to read prints no value: {args:?}"
         );
         assert!(
             stderr.contains(DIAGNOSTIC) && stderr.contains("line 1, column 4"),
             "{args:?}: {stderr}"
         );
+    }
+}
+
+/// What the forms before the cut did is kept, not rolled back: they ran, so
+/// what they wrote stands. Only the value of the failed `-p` is withheld.
+#[test]
+fn output_written_before_the_cut_survives_the_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.extend_from_slice(&[
+            "-p",
+            r#"(import (scheme base) (scheme write)) (display "hi") (+ 1"#,
+        ]);
+        let (stdout, stderr, ok) = run_patina(dir.path(), &args);
+        assert!(!ok, "{args:?} succeeded");
+        assert_eq!(stdout.trim(), "hi", "{args:?}");
+        assert!(stderr.contains(DIAGNOSTIC), "{args:?}: {stderr}");
+    }
+}
+
+/// Resilient mode (a script path containing `test`) reports evaluation
+/// errors and carries on, so those leave the status alone — but a file it
+/// could not read to the end never ran in full, and must not report success.
+#[test]
+fn a_test_script_fails_on_a_read_error_and_not_on_an_evaluation_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("cut_test.scm"),
+        "(import (scheme base) (scheme write))\n(display \"ran\")\n(define y (+ 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("eval_test.scm"),
+        "(import (scheme base) (scheme write))\n(no-such-procedure)\n(display \"after\")\n",
+    )
+    .unwrap();
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("cut_test.scm");
+        let (_, stderr, ok) = run_patina(dir.path(), &args);
+        assert!(!ok, "a truncated suite must not report success: {args:?}");
+        assert!(stderr.contains(DIAGNOSTIC), "{args:?}: {stderr}");
+
+        let mut args = backend.to_vec();
+        args.push("eval_test.scm");
+        let (stdout, stderr, ok) = run_patina(dir.path(), &args);
+        assert!(ok, "{args:?} must still succeed: {stderr}");
+        assert_eq!(stdout.trim(), "after", "{args:?}");
     }
 }
 
@@ -127,7 +176,9 @@ fn a_test_script_cut_short_or_with_a_stray_paren_reports_it_once() {
 
 /// Run the binary and collect its output, killing it if it is still running
 /// after ten seconds: a runner looping on a parse error would otherwise hang
-/// the suite. Output must fit a pipe buffer, since it is read after exit.
+/// the suite. Both pipes are drained on their own threads while the child
+/// runs, so a flood of output fails on what it printed rather than filling a
+/// pipe buffer and stalling until the deadline.
 fn run_with_deadline(cwd: &Path, args: &[&str]) -> (String, String) {
     use std::io::Read;
     let mut child = Command::new(env!("CARGO_BIN_EXE_patina"))
@@ -137,10 +188,27 @@ fn run_with_deadline(cwd: &Path, args: &[&str]) -> (String, String) {
         .env_remove("PATINA_HOME")
         .env_remove("PATINA_ISOLATED_LIBRARIES")
         .current_dir(cwd)
+        // As `common::run_patina` does through `output()`: a helper that ever
+        // reaches the REPL must not take the test runner's terminal.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn patina binary");
+
+    let mut out = child.stdout.take().expect("stdout pipe");
+    let mut err = child.stderr.take().expect("stderr pipe");
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err.read_to_end(&mut buf);
+        buf
+    });
+
     let started = Instant::now();
     let exited = loop {
         if child.try_wait().expect("wait on patina").is_some() {
@@ -151,22 +219,10 @@ fn run_with_deadline(cwd: &Path, args: &[&str]) -> (String, String) {
             child.wait().ok();
             break false;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(2));
     };
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    child
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut stdout)
-        .ok();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .ok();
+    let stdout = String::from_utf8_lossy(&out_reader.join().expect("stdout reader")).into_owned();
+    let stderr = String::from_utf8_lossy(&err_reader.join().expect("stderr reader")).into_owned();
     assert!(
         exited,
         "patina {args:?} was still running after 10 s; stderr began:\n{}",

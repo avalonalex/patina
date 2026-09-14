@@ -227,3 +227,101 @@ fn test_file_port_datum_without_trailing_newline() {
     );
     assert_program_eval_to(&code, "(1 2 #t)");
 }
+
+// =============================================================================
+// Datums that span lines, and ones the file cuts short (#329)
+// =============================================================================
+
+/// A string literal, a block comment, and a `|…|` identifier may all run past
+/// the end of a line. The line-buffered reader must keep taking lines for
+/// them, exactly as it does for an unclosed list: treating the lexer's
+/// unterminated-construct errors as failures made every such datum unreadable
+/// from a file port, while the same text read fine from a string port.
+#[test]
+fn test_read_takes_more_lines_for_a_datum_that_spans_them() {
+    for (name, content, expected) in [
+        (
+            "multiline_string",
+            "(a \"one\ntwo\")\n(b)\n",
+            // The newline survives the round trip as an escape, so this
+            // expectation is the two characters `\` and `n`, not a newline.
+            r#"((a "one\ntwo") (b) #t)"#,
+        ),
+        (
+            "multiline_block_comment",
+            "(a #| one\ntwo |# b)\n(c)\n",
+            "((a b) (c) #t)",
+        ),
+        (
+            "multiline_bar_identifier",
+            "(a |one\ntwo|)\n(c)\n",
+            "((a |one\ntwo|) (c) #t)",
+        ),
+    ] {
+        let file = TempFile::new(name, content);
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-input-file "{}"))
+            (list (read p) (read p) (eof-object? (read p)))
+            "#,
+            file.path()
+        );
+        assert_program_eval_to(&code, expected);
+    }
+}
+
+/// The same reader must still report a file that ends inside a datum, rather
+/// than waiting for a line that never comes or returning it as an EOF object.
+#[test]
+fn test_read_reports_a_file_that_ends_inside_a_datum() {
+    let file = TempFile::new("cut_short", "(a b\n");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file) (scheme read))
+        (define p (open-input-file "{}"))
+        (guard (e ((read-error? e) 'read-error) (#t 'other)) (read p))
+        "#,
+        file.path()
+    );
+    assert_program_eval_to(&code, "read-error");
+}
+
+/// What `read` raises must not depend on where the file lives. The VM asked
+/// "does the message mention a file?" before "is this a read error?", so a
+/// path with `file` anywhere in it turned a read error into a file error on
+/// that backend only.
+#[test]
+fn test_a_read_error_is_one_whatever_the_path_is_called() {
+    for name in ["plain_cut", "profile_cut"] {
+        let file = TempFile::new(name, "(a b\n");
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-input-file "{}"))
+            (guard (e ((read-error? e) 'read-error) ((file-error? e) 'file-error) (#t 'other))
+              (read p))
+            "#,
+            file.path()
+        );
+        assert_program_eval_to(&code, "read-error");
+    }
+}
+
+/// A byte order mark is not program text, and the lexer drops it — but the
+/// offsets it reports still have to land in the caller's own buffer, which
+/// still has it. One character short left the port re-reading the last
+/// character of the datum it had just returned.
+#[test]
+fn test_a_byte_order_mark_does_not_shift_what_read_consumes() {
+    let file = TempFile::new("byte_order_mark", "\u{feff}(a) (b) 42\n");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file) (scheme read))
+        (define p (open-input-file "{}"))
+        (list (read p) (read p) (read p) (eof-object? (read p)))
+        "#,
+        file.path()
+    );
+    assert_program_eval_to(&code, "((a) (b) 42 #t)");
+}

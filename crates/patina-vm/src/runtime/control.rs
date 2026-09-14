@@ -1084,7 +1084,13 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
         VmError::DivideByZero => (ExceptionKind::Error, "Division by zero".to_string()),
         VmError::Runtime { message } => {
             // Classify sub-errors by message content (matches tree-walker behavior)
-            let kind = if message.contains("Cannot open")
+            // Read before file: the file tests match a bare "file", which any
+            // path can contain, and `load` puts the path it was given into
+            // its parse errors. Asking the narrower question first is what
+            // keeps `(read-error? e)` from depending on where a file lives.
+            let kind = if message.contains("read:") || message.contains("parse") {
+                ExceptionKind::ReadError
+            } else if message.contains("Cannot open")
                 || message.contains("Cannot delete")
                 || message.contains("Cannot read")
                 || message.contains("Cannot write")
@@ -1092,8 +1098,6 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
                 || message.contains("file")
             {
                 ExceptionKind::FileError
-            } else if message.contains("read:") || message.contains("parse") {
-                ExceptionKind::ReadError
             } else {
                 ExceptionKind::Error
             };
