@@ -296,13 +296,18 @@
 ;; An operand list must be proper and finite at every depth. The reader
 ;; accepts a datum label, so a template can hold a circular one; walking it
 ;; without a cycle check allocated until the process died.
+;;
+;; All three are scoped away from the oracles, and the reason is the same for
+;; each: they pin that *Patina* refuses rather than diverges, and no other
+;; implementation's answer corroborates that. Asked anyway, Gauche does not
+;; return on the improper pair. It did complete the circular row on macOS and
+;; did not complete this file at all on CI's Linux build — not reproduced
+;; locally, so the row is scoped rather than explained. `test-skip` prevents
+;; evaluation, which is what keeps one row from costing the file its whole
+;; Gauche column.
+(cond-expand (patina) (else (test-skip 3)))
 (test-error "a circular operand list is refused" #t
   (eval '`(a #0=(unquote . #0#)) (environment '(scheme base))))
-;; Scoped away from the oracles: Gauche does not return on an improper
-;; operand list, and `test-skip` is what keeps one row from costing this file
-;; its whole Gauche column. chibi answers, but a single-oracle comparison on a
-;; shape the reports do not describe is not worth the register entry.
-(cond-expand (patina) (else (test-skip 2)))
 (test-error "an improper operand list is refused" #t
   (eval '(let ((x 1)) `(a (unquote . x))) (environment '(scheme base))))
 (test-error "and is refused inside a nested template too" #t
