@@ -302,21 +302,24 @@
 ;; which is as much as a `test-error` row asks. Gauche cannot run the first
 ;; two at all: compiling the circular template allocates without bound, and
 ;; the flat improper one segfaults gosh, both measured 2026-09-13 inside a
-;; procedure that is never called. So those two are skipped on Gauche alone;
-;; `test-skip` prevents evaluation, which keeps two rows from costing the file
-;; its whole Gauche column. Gauche does run the nested one, and rebuilds the
-;; template where Patina refuses it; that difference is registered.
+;; procedure that is never called. So those two are skipped on Gauche alone,
+;; one skip each, so that neither can drift onto a neighbouring row when rows
+;; move; `test-skip` prevents evaluation, which keeps two rows from costing the
+;; file its whole Gauche column. Gauche does run the nested one, and rebuilds
+;; the template where Patina refuses it; that difference is registered.
 ;;
 ;; All three were once skipped on every oracle, because Gauche "completed the
 ;; circular row on macOS and did not complete this file on CI". It never
 ;; completed that row. The lane's alarm was delivered to Gauche, which raised
 ;; it as a catchable error, so `test-error` scored a spin of the whole timeout
 ;; as a pass; on CI the memory limit aborted the file first. The lane now
-;; kills a timed-out oracle and caps Gauche's heap, so the row would fail the
-;; same way on both.
-(cond-expand (gauche (test-skip 2)) (else))
+;; kills a timed-out oracle and caps Gauche's heap, and its self-checks prove
+;; both before it trusts a result, so a spin like that fails the file on every
+;; platform instead of passing a row.
+(cond-expand (gauche (test-skip 1)) (else))
 (test-error "a circular operand list is refused" #t
   (eval '`(a #0=(unquote . #0#)) (environment '(scheme base))))
+(cond-expand (gauche (test-skip 1)) (else))
 (test-error "an improper operand list is refused" #t
   (eval '(let ((x 1)) `(a (unquote . x))) (environment '(scheme base))))
 (test-error "and is refused inside a nested template too" #t

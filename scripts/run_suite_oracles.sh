@@ -120,20 +120,31 @@ fi
 # cannot be caught, so a file that runs out of time fails to complete on every
 # platform, and the last line of its output says why.
 #
+# The oracle runs in a process group of its own, and the kill is to the group,
+# so anything it starts dies with it rather than holding the output pipe open
+# past the timeout. Both sides set the group, so there is no window in which
+# the alarm could fire at a group that does not exist yet. A group of its own
+# no longer hears the terminal, so an interrupt to the watchdog is passed on.
+# The alarm is cancelled once the oracle is reaped, so it cannot fire into a
+# finished run and kill a group whose id the system has handed out again.
+#
 # perl rather than coreutils `timeout`, which macOS does not ship.
 with_timeout() {
     perl -e '
         my $limit = shift;
         my $pid = fork;
         defined $pid or die "fork: $!";
-        if ($pid == 0) { exec @ARGV; exit 127 }
+        if ($pid == 0) { setpgrp(0, 0); exec @ARGV; exit 127 }
+        setpgrp($pid, $pid);
+        $SIG{INT} = $SIG{TERM} = sub { kill "KILL", -$pid; exit 130 };
         $SIG{ALRM} = sub {
-            kill "KILL", $pid;
+            kill "KILL", -$pid;
             print STDERR "killed after ${limit}s\n";
         };
         alarm $limit;
         my $done;
         do { $done = waitpid($pid, 0) } while ($done == -1 && $!{EINTR});
+        alarm 0;
         exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
     ' "$TIMEOUT" "$@"
 }
@@ -188,6 +199,53 @@ for oracle in "${ORACLES[@]}"; do
         exit 2
     fi
 done
+
+# Prove the two guards this lane's results depend on, for the same reason as
+# the smoke test: each fails silently, by turning a file that should not
+# complete into one that does.
+#
+# A program that never returns must be killed, not scored. Gauche turns the
+# signal an in-process alarm delivers into a catchable error, and a lane that
+# relied on one passed a spinning `test-error` row; this program is that row.
+cat >"$WORK/hang.scm" <<'HANG'
+(import (scheme base) (srfi 64))
+(test-begin "hang")
+(test-error "never returns" #t (let loop () (loop)))
+(test-end)
+HANG
+for oracle in "${ORACLES[@]}"; do
+    out=$(cd "$WORK" && TIMEOUT=2 run_oracle "$oracle" "$WORK/hang.scm")
+    if echo "$out" | grep -q '# of expected passes' || ! echo "$out" | grep -q '^killed after'; then
+        echo -e "${RED}$oracle was not killed by the watchdog on a program that never returns.${NC}" >&2
+        echo "$out" | tail -3 | sed 's/^/      /' >&2
+        echo -e "${DIM}  A row that hangs could then be scored as a pass, so this lane stops here.${NC}" >&2
+        exit 2
+    fi
+done
+
+# Gauche's heap ceiling must hold. It is an environment variable its collector
+# reads, so a value the collector cannot parse, or a build that ignores it,
+# leaves Gauche uncapped with nothing said — and an allocation that never ends
+# is then stopped only by the timeout here, or by CI's `ulimit -v`. chibi's
+# ceiling is a command-line option it would refuse outright if it were wrong.
+cat >"$WORK/grow.scm" <<'GROW'
+(import (scheme base) (srfi 64))
+(test-begin "grow")
+(test-error "allocates without bound" #t
+  (let loop ((keep '())) (loop (cons (make-vector 100000 0) keep))))
+(test-end)
+GROW
+case " ${ORACLES[*]} " in
+    *" gauche "*)
+        out=$(cd "$WORK" && GAUCHE_HEAP=16M TIMEOUT=20 run_oracle gauche "$WORK/grow.scm")
+        if ! echo "$out" | grep -q 'out of memory'; then
+            echo -e "${RED}Gauche did not stop at a 16M heap ceiling (GC_MAXIMUM_HEAP_SIZE).${NC}" >&2
+            echo "$out" | tail -3 | sed 's/^/      /' >&2
+            echo -e "${DIM}  Its ceiling is not in effect, so a file that allocates without bound would run uncapped.${NC}" >&2
+            exit 2
+        fi
+        ;;
+esac
 
 registered_rows() {  # $1=file $2=oracle -> the rows the register expects
     awk -F'\t' -v f="$1" -v o="$2" \
