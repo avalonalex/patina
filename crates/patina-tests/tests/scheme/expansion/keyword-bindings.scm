@@ -22,9 +22,9 @@
 
 ;; ── A local binding shadows a keyword ──────────────────────────────────────
 ;;
-;; Local bindings are not in the desugarer's environment at all, so they are
-;; handled by `shadowed_names` rather than by the lookup — the part of the
-;; rule most likely to be forgotten.
+;; A local binding is recorded in the desugarer's environment at the scopes of
+;; the body that binds it, so shadowing is resolution rather than a rule of its
+;; own — the part most likely to be forgotten.
 
 (test-equal "a let-bound keyword is an ordinary variable" '(5 7 3)
   (list (let ((else 5)) else)
@@ -72,6 +72,39 @@
   (list ((lambda () (begin (define if 4)) (+ if 1)))
         ((lambda () (define (g) (define if 7) if) (g)))
         ((lambda () (define x 3) (if (> x 1) 'yes 'no)))))
+
+;; A definition a macro use produces binds over the body as a written one does.
+;; The body scan used to read only the definitions written in a body, so these
+;; had no binding while the body was desugared: each `else` was matched as
+;; `cond`'s literal — the second from a procedure defined before the
+;; definition — and the `when` refused the whole program as syntax used as a
+;; value. Measured 2026-09-14: chibi 0.12 and Gauche 0.9.15 answer as asserted,
+;; and both Patina backends answered else-arm, else-arm, a desugar-time refusal
+;; and a desugar-time refusal. The `if` program in the second row is the one
+;; `syntax_as_a_value.rs` pinned as a residual, asserting the refusal; it is a
+;; row here now that it is accepted. A record accessor's value is a procedure, which
+;; is true, so its row tells the variable from the literal with `=>`, which a
+;; `cond` `else` clause does not accept.
+(test-equal "an else a macro use defines is not cond's literal"
+  '(fell-through fell-through variable)
+  (list (let ((taken 'fell-through))
+          (let ()
+            (define-values (else) (values #f))
+            (cond (#f 1) (else (set! taken 'else-arm))))
+          taken)
+        (let ((taken 'fell-through))
+          (let ()
+            (define (probe) (cond (#f 1) (else (set! taken 'else-arm))))
+            (define-values (else) (values #f))
+            (probe))
+          taken)
+        (let ()
+          (define-record-type box (make-box v) box? (v else))
+          (cond (#f 1) (else => (lambda (p) (if (procedure? p) 'variable 'odd)))))))
+
+(test-equal "a keyword a macro use defines is an ordinary variable" '(variable 4)
+  (list (let () (define-values (when) (values 'variable)) when)
+        ((lambda () (define-values (if) (values 3)) (+ if 1)))))
 
 ;; ── define-syntax is recognized through its binding ────────────────────────
 ;;

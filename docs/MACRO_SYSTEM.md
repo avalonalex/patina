@@ -383,9 +383,11 @@ head.
 
 This can be answered at desugar time because every binding form the desugarer
 enters records its binders in the environment at their scopes
-(`enter_binding_form`), so a local binding exists to be found before any code
-runs, and its scope set names it: each binding form mints a fresh scope for
-what it binds.
+(`enter_binding_form`) — a body's own definitions included, both the ones
+written in it and the ones its macro uses expand into
+(`produced_definition_names`) — so a local binding exists to be found before
+any code runs, and its scope set names it: each binding form mints a fresh
+scope for what it binds.
 
 Two cases compare by something other than which local binding is reached:
 

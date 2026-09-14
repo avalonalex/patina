@@ -68,6 +68,12 @@ pub enum MacroError {
     #[error("No matching pattern for macro {0}")]
     NoMatchingPattern(String),
 
+    /// A literal comparison the set-of-scopes rule does not determine. Kept
+    /// apart from `InvalidSyntax` so the desugarer can report it as the
+    /// ambiguous reference it is, the way every other such resolution is.
+    #[error("{0}")]
+    AmbiguousReference(String),
+
     /// Error with expansion context for better debugging
     #[error("{message}")]
     WithContext {
