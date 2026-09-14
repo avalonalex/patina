@@ -1152,21 +1152,24 @@
 ;; absolute difference between the counts in the first sob and the
 ;; corresponding counts in the second.
 
-;; We start by copying the entries in the second sob but not the first
-;; into the first.  Then we scan the first sob, computing the absolute
-;; difference of the values and writing them back into the first sob.
-;; It's essential to scan the second sob first, as we are not going to
-;; damage it in the process.  (Hat tip: Sam Tobin-Hochstadt.)
+;; We start by scanning the second sob for the entries it has but the first
+;; does not, and set them aside.  Then we scan the first sob, computing the
+;; absolute difference of the values and writing them into the result, and
+;; only then add the entries set aside.  It's essential to scan the second
+;; sob first, as we are not going to damage it in the process.  (Hat tip:
+;; Sam Tobin-Hochstadt.)  PATINA LOCAL EDIT: upstream's first scan wrote the
+;; entries it found straight into the result; the note inside sob-xor! says
+;; why that was wrong when the result is the first sob.
 
 (define (sob-xor! result sob1 sob2)
   ;; PATINA LOCAL EDIT: upstream wrote each entry only sob2 has straight into
   ;; result-ht during the first scan. `set-xor!` and `bag-xor!` pass sob1 as
   ;; result, so the second scan met those entries in sob1-ht, found each equal
   ;; to its own count in sob2, wrote back zero, and `sob-cleanup!` removed
-  ;; them: `(set-xor! (set c 1 2) (set c 2 3))` answered {1}, and xor with an
-  ;; empty first set answered the empty set. The functional `set-xor` and
-  ;; `bag-xor` pass a fresh result and were right. Collect the entries here
-  ;; and add them once the scan of sob1 is done. Larceny triage family 44.
+  ;; them: `(set-xor! (set c 1 2 3) (set c 2 3 4 5))` answered {1}, and xor
+  ;; with an empty first set answered the empty set. The functional `set-xor`
+  ;; and `bag-xor` pass a fresh result and were right. Collect the entries
+  ;; here and add them once the scan of sob1 is done. Larceny triage family 44.
   (let ((sob1-ht (sob-hash-table sob1))
         (sob2-ht (sob-hash-table sob2))
         (result-ht (sob-hash-table result))

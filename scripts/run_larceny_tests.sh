@@ -25,7 +25,9 @@
 # Exits non-zero if any suite fails, errors, times out, or is truncated: cut
 # short by a top-level error, which leaves behind a tally covering only the
 # assertions that ran before it. The tallies are the suite's own ("N tests
-# passed" / "N of M tests failed."), never re-derived.
+# passed" / "N of M tests failed."), never re-derived. Each suite's status
+# comes from parse_log in scripts/larceny_report.py, the code that also renders
+# the report, so python3 is required.
 
 set -eo pipefail
 
@@ -79,6 +81,11 @@ REPORT="${REPORT_DIR}/larceny${SUFFIX}.md"
 if [ ! -f "$PATINA_BIN" ]; then
     echo -e "${RED}Error: Patina binary not found at $PATINA_BIN${NC}"
     echo "Please build with: cargo build --release"
+    exit 1
+fi
+if ! command -v python3 >/dev/null; then
+    echo -e "${RED}Error: python3 not found${NC}"
+    echo "scripts/larceny_report.py classifies each suite's log and renders the report."
     exit 1
 fi
 if [ ! -d "$LARCENY_TESTS_DIR/tests/scheme" ]; then
@@ -146,7 +153,7 @@ FAILING=()
 run_suite() {
     local suite="$1"
     local log="$LOG_DIR/${suite//\//_}.txt"
-    local start end secs status detail passed failed total errors
+    local start end secs status detail passed total
     # Family 26: two suites are correct on the tree-walker but slow there —
     # `stream` at 315 s (nested infinite streams, down from 792 s before the
     # CPS evaluator's allocation work) and `ephemeron` at 142 s (it allocates
@@ -165,8 +172,7 @@ run_suite() {
         esac
     fi
     start=$(date +%s)
-    # -e off for the whole run-and-parse span: the suite may exit non-zero,
-    # and every grep below legitimately matches nothing for some status.
+    # -e off for the whole run-and-classify span: the suite may exit non-zero.
     set +e
     (
         cd "$LARCENY_TESTS_DIR" &&
@@ -178,43 +184,27 @@ run_suite() {
     end=$(date +%s)
     secs=$((end - start))
 
-    passed=$(grep -E '^[0-9]+ tests passed$' "$log" | tail -1 | awk '{print $1}')
-    failed=$(grep -E '^[0-9]+ of [0-9]+ tests failed\.$' "$log" | tail -1 | awk '{print $1}')
-    total=$(grep -E '^[0-9]+ of [0-9]+ tests failed\.$' "$log" | tail -1 | awk '{print $3}')
-    errors=$(grep -c '^Error' "$log" || true)
-
-    if [ "$rc" -eq 142 ]; then
-        status="timeout"; passed=0; failed=0; total=0
-        detail="no result after ${budget}s"
-    elif [ -n "$passed" ]; then
-        status="pass"; failed=0; total=$passed
-        detail=""
-    elif [ -n "$failed" ]; then
-        status="fail"; passed=$((total - failed))
+    # The exit status goes into the log, so the report, rendered later from the
+    # logs alone, classifies every suite exactly as this line does: both ask
+    # parse_log in scripts/larceny_report.py.
+    echo "--- run_larceny_tests.sh: exit status $rc ---" >> "$log"
+    IFS=$'\t' read -r status passed total detail < <(python3 scripts/larceny_report.py --classify "$log")
+    if [ -z "$status" ]; then
+        status="error"; passed=0; total=0
+        detail="scripts/larceny_report.py could not classify the log"
+    fi
+    case "$status" in
         # Deliberately not quoting the failing expressions: the suite is LGPL
         # and this report is tracked in an MIT repo. They are in the log.
-        detail="${failed} assertion(s) failed — see the log"
-    elif grep -q 'overflowed its stack' "$log"; then
-        status="crash"; passed=0; failed=0; total=0
-        detail="stack overflow (exit $rc)"
-    elif [ "$rc" -ge 128 ]; then
-        status="crash"; passed=0; failed=0; total=0
-        detail="signal $((rc - 128)): $(grep -v '^$' "$log" | tail -1 | cut -c1-120)"
-    else
-        status="error"; passed=0; failed=0; total=0
-        detail="$(grep -m1 '^Error' "$log" | cut -c1-140)"
-    fi
-    if [ "$errors" -gt 0 ] && [ "$status" != "error" ]; then
-        detail="${errors} top-level error(s)${detail:+; ${detail}}"
-        # A top-level error does not end the run program: its later forms
-        # still run, so the harness prints a tally even though the error ended
-        # the suite wherever it hit. That tally covers only the assertions that
-        # ran first, so the suite is not clean whatever it says — `set` scored
-        # pass 16/16 this way with most of its assertions never run.
-        case "$status" in
-            pass | fail) status="truncated" ;;
-        esac
-    fi
+        fail) detail="$((total - passed)) assertion(s) failed — see the log" ;;
+        truncated)
+            detail="cut short by a top-level error${detail:+: $detail}"
+            if [ "$passed" -lt "$total" ]; then
+                detail="$detail; $((total - passed)) assertion(s) failed"
+            fi
+            ;;
+        timeout) detail="no result after ${budget}s" ;;
+    esac
     # Patina's messages name files by absolute path; the report is tracked,
     # so keep the local checkout location out of it.
     detail="${detail//$LARCENY_TESTS_DIR\//}"
@@ -229,7 +219,7 @@ run_suite() {
         fail) icon="⚠️"; FAILING+=("$suite") ;;
         *)    icon="❌"; FAILING+=("$suite") ;;
     esac
-    printf "  %s %-22s %-9s %5s/%-5s %4ss  %s\n" "$icon" "$suite" "$status" "$passed" "$total" "$secs" "$detail"
+    printf "  %s %-22s %-11s %5s/%-5s %4ss  %s\n" "$icon" "$suite" "$status" "$passed" "$total" "$secs" "$detail"
 }
 
 for suite in "${SUITES[@]}"; do
@@ -241,14 +231,10 @@ pct() { awk -v n="$1" -v t="$2" 'BEGIN { if (t == 0) print "n/a"; else printf "%
 # assertion to its test case upstream (a permalink at the pinned commit) —
 # it quotes nothing from the LGPL suite. Rendering needs the suite sources,
 # so it is a small Python helper rather than more awk.
-if command -v python3 >/dev/null; then
-    python3 scripts/larceny_report.py \
-        --logs "$LOG_DIR" --suites "$LARCENY_TESTS_DIR" --lane "$LANE" \
-        --commit "$ACTUAL_COMMIT" --backend "$BACKEND_NAME" \
-        --generated "$(date '+%Y-%m-%d %H:%M:%S')" --out "$REPORT" >/dev/null
-else
-    echo -e "${YELLOW}python3 not found; the report was not rendered (logs are in $LOG_DIR)${NC}"
-fi
+python3 scripts/larceny_report.py \
+    --logs "$LOG_DIR" --suites "$LARCENY_TESTS_DIR" --lane "$LANE" \
+    --commit "$ACTUAL_COMMIT" --backend "$BACKEND_NAME" \
+    --generated "$(date '+%Y-%m-%d %H:%M:%S')" --out "$REPORT" >/dev/null
 
 echo ""
 echo -e "${GREEN}=== Larceny suite summary (${LANE}, ${BACKEND_NAME}) ===${NC}"

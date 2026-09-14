@@ -348,7 +348,8 @@ stays fast; a nightly job may run a larger budget.
 Hygiene properties are supplied by the
 [completed Track H plan](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md),
 item H2. Its kernel properties double as the named guards for Q7 below;
-the runtime corrections in #289–#291 still precede Q7.1 consolidation.
+the runtime corrections for #289–#291, which were to precede Q7.1
+consolidation, landed with #316 (the behaviour half of Q7 item 1).
 
 ### Q4 — Reduce the `Heap` and `VmState` API surface
 `Heap` exposes ~200 public methods, and the `RefCell` borrow rule documented in

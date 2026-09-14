@@ -5,7 +5,9 @@
 top-level error cuts short *truncated* rather than clean (`set`; 23 of 33 on both R7RS backends
 now). Behind the two blockers, measured in scratch copies, `set` held a `set-xor!`/`bag-xor!`
 defect in the bundled SRFI 113 (triage family 44, fixed) and R6RS `base` 2023 of 2034 passing
-assertions; `(scheme charset)` turned out to raise on any character above U+00FF (§6, open).
+assertions; `(scheme charset)` turned out to stop at U+00FF, raising on a character above it and
+clipping a range (§6, open); and `(sqrt -inf.0)`, filed as not ours since 2026-08-24, is ours
+(triage family 46).
 Previously 2026-09-13 — the corpus harness's probe is an import form alone (it called
 `display` for a marker nothing read), `run` self-checks the binary before scoring, and the
 snapshot is re-measured (**127 of 161**, unchanged since 2026-08-26; see L3). Earlier the same
@@ -332,7 +334,11 @@ release binary. Deviations from the spec below, all consequences of L4 vendoring
   "test" resiliently (exit 0 always), which is why test-mode classification reads output rather
   than exit status, and why the harness keeps "test" out of its probe and scratch paths (two
   corpus slugs contain it). An explicit CLI mode flag (`--strict-errors`/`--resilient`) is the
-  deeper fix, in the L0.5 spirit of the CLI growing what the harness needs.
+  deeper fix, in the L0.5 spirit of the CLI growing what the harness needs. The Larceny runner
+  (L5.3) depends on the heuristic the other way round: every run program sits under `tests/`, so
+  a top-level error is reported and the program still reaches its tally, which is what lets a
+  suite read as *truncated* rather than as a load error. When the flag lands, that runner must
+  pass it.
 
 **First measured queue (2026-08-13):** genuine parse errors block 23 packages (bare `@` 9,
 syntax-rules shape restrictions 8, the rest singletons) and load errors 6 more; missing libraries
@@ -986,8 +992,8 @@ test lane, GC differential lanes and generated external H3 sweep were not run.
 properties exposed shapes beyond it. The current table in
 [`larceny_triage.md`](../scheme_tests/reports/larceny_triage.md#current-macro-status--audited-2026-09-13)
 separates the closed families from what is left: three VM-only family-40
-quarantines, with family 41 fixed and H2's three API findings closed by #316
-(both 2026-09-13).
+quarantines, with family 41 fixed by #318 and #321 and H2's three API findings
+closed by #316 on 2026-09-13.
 
 **Retargeted.** This item was written as "vendor and run the R6RS test suite",
 and the first thing scoping it found was that the suite cannot load here: its
@@ -1042,13 +1048,18 @@ One `run/<suite>.sps` program per suite, run from the Lib directory with
 `--allow-r6rs` because those sources use `#vu8(` and brackets. Tallies are
 the harness's own (`N tests passed` / `N of M tests failed.`), never
 re-derived. A suite whose library fails to load reaches no tally and is
-reported as **error** with zero assertions, so the assertion total
+reported as a **load error** with zero assertions, so the assertion total
 under-reports exactly as much as is broken and the *suite* column is the one
 to watch. Crashes and timeouts (perl `alarm`, 300 s — macOS has no `timeout`)
-are their own statuses. So, since 2026-09-14, is **truncated**: a top-level
-error does not stop a run program, so the harness still prints a tally after
-one, but that tally covers only the assertions that ran first. Such a suite is
-not counted clean — `set` had been reported passing, 16 of 16, that way.
+are their own statuses. So, since 2026-09-14, is **truncated**: Patina's
+script runner reports a top-level error and goes on to the next form only in
+the resilient mode it picks for a path containing "test" (L3's recorded
+debt), which every run program here is, so the harness still prints a tally
+after such an error — a tally that covers only the assertions that ran first.
+Such a suite is not counted clean; `set` had been reported passing, 16 of 16,
+that way. One classifier decides every status, for the console and the report
+alike: `parse_log` in `scripts/larceny_report.py`, which reads the exit status
+the runner appends to each log.
 
 **Baseline, 2026-08-24:**
 
@@ -1124,14 +1135,15 @@ now live, and a test checks that those pointers still resolve.
 | ✅ `string->number`: `"+inf.0"`, `"+nan.0"` ⇒ `#f`; `"1+2i"` ⇒ `#f`; `#e1e1000` ⇒ `+inf.0` instead of an exact integer — *fixed 2026-08-24* (`string->number` is the reader's number syntax; `#e` on a decimal is exact from the text, in the reader too) | inexact, complex | both |
 | ✅ Exact `sqrt` and `magnitude` — *fixed 2026-09-12*, #225 / family 31. Integer/rational square tests and exact complex principal roots preserve representable results before any float conversion; `exact?` recognizes exact complex components. Numeric operation/predicate suites pass 118/118 and 93/93 on both backends. Inexact branch behavior is unchanged | curated numeric suites | both |
 | ✅ Exact complex radix formatting and reading — *fixed 2026-09-12*, family 43. The writer and shared reader use the requested radix for both exact components, including rationals and bignums. All six newly enabled round-trips pass; focused `complex` is **68/69 on both backends**, with only the existing `(log -0.0)` expectation remaining | complex (6) | both |
-| ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` and `(sqrt -inf.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does | inexact (1), complex (1) | both |
+| ✅ `rationalize` with infinities — *fixed 2026-08-24*. `(log -0.0)` turned out not to be ours: chibi, Gauche and Chez all answer as Patina does. `(sqrt -inf.0)`, filed with it, is ours (next row) | complex (1) | both |
+| `(sqrt -inf.0)` answers `0.0+inf.0i` while the reader gives `+inf.0i` an exact zero real part, so the suite's `equal?` separates them, where chibi (exact in both) and Gauche and Chez (inexact in both) pass. Filed as not ours with the row above until 2026-09-14. Open, triage family 46 | inexact (1); r6rs base (1, unreached) | both |
 | ✅ `environment` accepts all import-set modifiers and numeric library names — *fixed 2026-09-12*, family 10. Shared resolution, cyclic-input rejection, and definition checks that follow renamed syntax; focused eval 5/5, load 4/4, R6RS eval 2/2 on both backends | eval, load, r6rs eval | both |
 | ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |
 | ✅ `read` returned EOF for an unfinished datum — *fixed 2026-09-12*, family 42. The parser distinguishes clean EOF after whitespace/comments from incomplete input; string, file and stdin reads signal `read-error?` for unfinished datums. Focused `base` improves from 1083/1092 to 1084/1092 on both backends; eight other failures remain. Chibi/Gauche differences on abbreviated datums, labels and a bare datum-comment marker are recorded in the divergence register | base (1) | both |
 | `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@`. The references split: Gauche writes `\|@\|` and chibi `@` (2026-09-14) | write (3) | both |
 | ✅ R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` — *both fixed 2026-09-13*, triage family 13. Neither was the emulation library's: the fill byte was the shared primitive, and the enum a template-compilation defect in core R7RS | r6rs bytevectors (4), enums (3); base (2) | both |
 | ✅ `set-xor!` and `bag-xor!` dropped what only their second argument had — *fixed 2026-09-14*, triage family 44. Both pass their first argument to `sob-xor!` as the result too, and the reference implementation copied the entries only the second argument has into that result before scanning the first argument, a scan that then zeroed them. The lane never reaches the suite's four assertions for it: the suite stops earlier, at upstream's `set-map` argument-order slip | set (4, unreached) | both |
-| `(scheme charset)` raises on any character above U+00FF. The bundled `(srfi 14)` is the Latin-1 reference implementation, a char-set being a 256-character string indexed by code point, so `char-set-contains?`, `char-set` and `string->char-set` raise there, and so does the bundled `(srfi 130)`'s `string-index` on a string holding such a character. Open, triage family 45; §6 has the repro | charset (1) | both |
+| `(scheme charset)` stops at U+00FF. The bundled `(srfi 14)` is the Latin-1 reference implementation, a char-set being a 256-character string indexed by code point: `char-set-contains?`, `char-set` and `string->char-set` raise on a character above U+00FF, and so do the bundled `(srfi 130)`'s `string-index` and `string-skip` given a char-set that meets one, while `ucs-range->char-set` and `char-set:full` silently stop at U+00FF. Open, triage family 45; §6 has the repro | charset (1) | both |
 
 **Not ours**, recorded so nobody re-diagnoses them: `set-map`, `bag-map`,
 `set-unfold` and `bag-unfold` — the suite passes the comparator after the
@@ -1144,12 +1156,13 @@ R6RS `base` suite — R6RS's splicing `let-syntax` allows it and R7RS's does
 not; Gauche and Chez accept it, chibi rejects it as we do, so it is a
 leniency decision rather than a defect. Behind it (measured 2026-09-14, that
 one assertion removed in a scratch copy) 2023 of 2034 assertions pass on both
-backends, and the other 11 are R6RS-only expectations — `number->string`'s
+backends; ten of the other 11 are R6RS-only expectations — `number->string`'s
 precision argument (8), `(log 0)` raising, a splicing `let-syntax` body — and
-the `(sqrt -inf.0)` row above. Tree-walker `time` — a one-second busy loop
-measured at two seconds, i.e. speed. `flonum` — the suite equates `(fl* x x x)`
-with `(flonum (expt x 3))`, which differ by one ulp at x = 1/3; Chez, chibi,
-Gauche and Racket answer as Patina does. The triage doc has each in full.
+the eleventh is `(sqrt -inf.0)`, which is ours (family 46, above). Tree-walker
+`time` — a one-second busy loop measured at two seconds, i.e. speed. `flonum`
+— the suite expects a three-argument `fl*` cube to equal `expt`'s, and at
+x = 1/3 the two differ by one ulp; Chez, chibi, Gauche and Racket answer as
+Patina does. The triage doc has each in full.
 
 For calibration: chibi 0.12 fails `base` on the same nested include
 (`couldn't open input file: "base-test4.scm"`), and Gauche 0.9.15 rejects
@@ -1400,8 +1413,11 @@ and `#<unspecified>` flows into `make-state`. Gauche survives because its
 `(srfi 14)` is the built-in full-Unicode type and the same fallback keeps
 every set homogeneous. Patina cannot take that path today: our `(srfi 14)`
 is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
-at `#xAC00`, regional indicators at `#x1F1E6`), which the port refuses: it
-raises on any character above U+00FF (the next entry, measured 2026-09-14).
+at `#xAC00`, regional indicators at `#x1F1E6`), which the port silently clips:
+the boundary library builds its sets with two-argument `ucs-range->char-set`,
+which drops every code point above U+00FF, so on that path its sets load
+empty, and a character above U+00FF handed to them then raises (the next
+entry, measured 2026-09-14).
 **Blocked on a full-Unicode char-set story** (SRFI 14
 beyond Latin-1, or an iset-compatible representation); not a macro defect.
 Two cosmetic defects rode along. The first — the raised error displaying as
@@ -1428,7 +1444,7 @@ doubles the prefix on the tree-walker and not on the VM. Not yet pinned as a
 divergence row; it belongs in `tests/scheme/` with a `DIVERGENCES.tsv` entry
 once the correct answer is fixed (the VM's).
 
-**`(scheme charset)` raises on any character above U+00FF** — ❌ **open**,
+**`(scheme charset)` stops at U+00FF: a character above it raises, a range above it is clipped** — ❌ **open**,
 both backends. Larceny triage family 45; found 2026-09-14 while re-reading
 why the `charset` suite's size assertion had been filed as not ours.
 
@@ -1442,17 +1458,23 @@ why the `charset` suite's size assertion had been filed as not ours.
 
 The bundled `(srfi 14)` is Olin Shivers' reference implementation, whose own
 header calls it Latin-1 specific: a char-set is a 256-character string
-indexed by code point. The operations measured — `char-set-contains?`,
-`char-set`, `string->char-set` — index past its end for any character above
-U+00FF and raise instead of answering, and so does the bundled `(srfi 130)`'s
-`string-index` on a string holding such a character. `char-set:full` has 256
-members, which is all the Larceny suite asserts; the defect is far wider than
-that assertion. The direction is a full-Unicode representation, which the
-chibi-regexp entry above is blocked on as well. The candidate on hand is
-chibi's: `(chibi char-set)` over `(chibi iset)`, about a thousand lines of
-Scheme with the Unicode classes as iset literals, already in the corpus as
-`chibi-char-set` and `chibi-iset`; some of its libraries import `(chibi)`
-and would need adapting.
+indexed by code point. The operations measured split two ways. Handed a
+character above U+00FF, `char-set-contains?`, `char-set` and
+`string->char-set` index past the string's end and raise, and so do the
+bundled `(srfi 130)`'s `string-index` and `string-skip` when their predicate
+is a char-set that meets such a character; a character or procedure
+predicate is unaffected. Handed a range, `ucs-range->char-set` clips it to
+the first 256 code points without a word unless asked to signal:
+`(ucs-range->char-set #xAC00 #xAC10)` is empty, and `char-set:full` has 256
+members, which is all the Larceny suite asserts. So the defect is far wider
+than that assertion, and half of it answers wrongly rather than raising. The
+direction is a full-Unicode representation, which the chibi-regexp entry
+above is blocked on as well. The candidate is chibi's own `(srfi 14)`:
+`(chibi char-set)` over `(chibi iset)`, with the Unicode classes as iset
+literals in `(chibi char-set full)` (`full.scm`, about 52 KB). The corpus
+vendors `chibi-char-set` and `chibi-iset` but not `full` or `ascii`, which
+would have to come from chibi's own tree, and those two libraries import
+`(chibi)`, so they need adapting too.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.
