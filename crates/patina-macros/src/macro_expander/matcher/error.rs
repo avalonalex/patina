@@ -34,6 +34,11 @@ pub enum MatchError {
 
     /// Internal error (programming error or unsupported case)
     InternalError(String),
+
+    /// A literal comparison whose resolution is ambiguous. Not a failed match:
+    /// trying the next rule would settle the reference by rule order, so the
+    /// expansion stops here.
+    AmbiguousLiteral(String),
 }
 
 impl std::fmt::Display for MatchError {
@@ -108,6 +113,7 @@ impl std::fmt::Display for MatchError {
             MatchError::InternalError(msg) => {
                 write!(f, "Internal pattern matching error: {}", msg)
             }
+            MatchError::AmbiguousLiteral(msg) => write!(f, "{msg}"),
         }
     }
 }

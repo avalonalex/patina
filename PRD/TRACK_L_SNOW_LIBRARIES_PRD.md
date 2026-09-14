@@ -2020,14 +2020,15 @@ prefixed name nowhere while leaving the bare one working, `(null-environment 5)`
 kept there rather than repeated here: they are one defect, and it now has one document.
 
 **A template-local binding matches a helper's differently bound literal** —
-❌ **open on both backends**, triage family 41, found by Track H3 on
-2026-09-12. Literal matching chooses the helper's literal arm when a template
-introduces a distinct local binding with the same spelling. The minimized
-read and write cases in `expansion/syntax-rules-literals.scm` remain expected
-failures; Chibi, Gauche and Racket take the fallback. The 2026-09-13 suite and
-oracle reruns retain those results. Investigate binding comparison and the
-definition/use scopes supplied to the matcher; backend agreement alone misses
-this defect. See the triage entry for the original programs and H3 seeds.
+✅ **fixed on both backends 2026-09-13**, triage family 41, found by Track H3
+on 2026-09-12. Literal matching chose the helper's literal arm when a template
+introduced a distinct local binding with the same spelling, and refused it
+when the same template passed the caller's identifier through. The matcher
+now resolves both identifiers and compares the local bindings they reach. The
+read and write rows in `expansion/syntax-rules-literals.scm` are ordinary
+assertions, beside two added rows for the opposite direction and a template
+binding `else`; chibi and Gauche pass all four. Globals spelled alike still
+match by spelling. See the triage entry for the programs and H3 seeds.
 
 **Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-13; it was both backends when recorded). This is the root of triage family 40, whose five backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm` pin the class: three cross-expansion refusals plus H3's two positive private-global read/write cases. All five remain quarantined on the VM and pass on the tree-walker; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
 

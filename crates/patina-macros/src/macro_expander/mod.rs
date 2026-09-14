@@ -49,19 +49,17 @@ pub use utils::{
 /// # Arguments
 /// * `compiled_macro` - The compiled macro definition
 /// * `flipped_args` - TaggedValue arguments with macro_scope already flipped
-/// * `shadowed_names` - Identifiers shadowed by local bindings
 /// * `macro_scope` - The fresh scope for this expansion
 /// * `original_args` - Original unflipped TaggedValue args (for debug logging)
 /// * `shared_heap` - Shared heap for TaggedValue operations
-#[allow(clippy::too_many_arguments)]
+/// * `use_site` - Where an input identifier resolves when it meets a literal
 fn expand_macro_core_tagged(
     compiled_macro: &CompiledMacro,
     flipped_args: patina_core::TaggedValue,
-    shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
     macro_scope: patina_runtime::ScopeId,
     original_args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
-    use_site_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
+    use_site: Option<UseSite<'_>>,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
 
@@ -90,15 +88,17 @@ fn expand_macro_core_tagged(
         debug_ctx.log_trying_rule(rule_idx, rule);
 
         // Create matcher for this rule with hygiene support and shared heap
-        let matcher = Matcher::new_with_heap(
-            rule.num_pvars,
-            rule.pvar_names.clone(),
-            shadowed_names.clone(),
-            compiled_macro.literals.clone(),
-            shared_heap.clone(),
-        )
-        .with_environments(compiled_macro.definition_env.clone(), use_site_env.cloned())
-        .with_macro_scope(macro_scope);
+        let matcher =
+            Matcher::new_with_heap(rule.num_pvars, rule.pvar_names.clone(), shared_heap.clone())
+                .with_sites(
+                    compiled_macro.definition_env.clone(),
+                    compiled_macro.definition_scopes.clone(),
+                    use_site.map(|(env, _)| env.clone()),
+                    use_site
+                        .map(|(_, scopes)| scopes.clone())
+                        .unwrap_or_default(),
+                )
+                .with_macro_scope(macro_scope);
 
         // Try to match against the pattern
         match matcher.match_pattern_tagged(&rule.pattern, flipped_args) {
@@ -132,6 +132,11 @@ fn expand_macro_core_tagged(
 
                 // Return TaggedValue directly (no conversion needed!)
                 return Ok(expanded_tagged);
+            }
+            // Not a failed match: the literal comparison has no answer, and
+            // trying the next rule would give it one by rule order.
+            Err(MatchError::AmbiguousLiteral(message)) => {
+                return Err(crate::error::MacroError::InvalidSyntax(message));
             }
             Err(e) => {
                 // This rule didn't match, try next one
@@ -441,6 +446,13 @@ fn edit_scope_memo(
     tv
 }
 
+/// Where a macro is being used: the environment, and the scopes a reference
+/// written there without scopes of its own stands in.
+pub type UseSite<'a> = (
+    &'a std::rc::Rc<patina_runtime::Environment>,
+    &'a patina_runtime::ScopeSet,
+);
+
 /// What one expansion produced.
 pub struct MacroExpansion {
     /// The expanded form.
@@ -453,8 +465,8 @@ pub struct MacroExpansion {
     pub scope: patina_runtime::ScopeId,
 }
 
-/// Expand a macro with compile-time shadowing information, returning the
-/// expanded form and the scope this expansion minted.
+/// Expand a macro, returning the expanded form and the scope this expansion
+/// minted.
 ///
 /// The desugarer's relinker needs that scope: a template's free reference to
 /// `list` is aliased to the definition site's `list`, and only the
@@ -466,15 +478,14 @@ pub struct MacroExpansion {
 /// * `compiled_macro` - The compiled macro definition
 /// * `args` - The macro call arguments as TaggedValue
 /// * `shared_heap` - Shared heap for conversions (Rc<RefCell<Heap>>)
-/// * `shadowed_names` - Identifiers shadowed by local bindings at use site
-/// * `use_site_env` - The use site's environment, for R7RS §4.3.2's
-///   binding-based half of literal matching
+/// * `use_site` - Where the macro is being used, which is where an input
+///   identifier resolves when it is compared with a literal (R7RS §4.3.2).
+///   `None` for the direct-API paths, where literals compare by spelling
 pub fn expand_macro_with_scope(
     compiled_macro: &CompiledMacro,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
-    shadowed_names: &std::collections::HashSet<std::rc::Rc<str>>,
-    use_site_env: Option<&std::rc::Rc<patina_runtime::Environment>>,
+    use_site: Option<UseSite<'_>>,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
@@ -493,11 +504,10 @@ pub fn expand_macro_with_scope(
     let expanded_tagged = expand_macro_core_tagged(
         compiled_macro,
         flipped_args,
-        shadowed_names,
         macro_scope,
         args, // original args for debug logging
         shared_heap,
-        use_site_env,
+        use_site,
     )?;
 
     // Step 4: Flip output scopes on expanded result

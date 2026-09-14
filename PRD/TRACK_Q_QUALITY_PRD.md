@@ -474,10 +474,14 @@ incognito and must be split into its own PR with its own pin.
    turns that seam from hoped-for into enforced. Instrumentation rather than
    refactor — it can equally land under Track H's H1 plumbing; whichever
    moves first takes it.
-5. **Retire the remaining spelling-based mechanisms.** (a) Literal matching
-   still compares spellings (`shadowed_names` / `is_literal_shadowed_tagged` —
-   the desugarer's own comment names it the one place shadowing has not moved
-   to bindings). Contained. (b) The relinker resolves macro-generated
+5. **Retire the remaining spelling-based mechanisms.** (a) 🟡 **Local literal
+   matching resolves bindings since 2026-09-13.** The matcher resolves the
+   literal and the input through `Environment::scoped_binding_of` and compares
+   the local bindings they reach, which closed triage family 41 in both
+   directions; `LiteralBinding`, `resolve_literal_bindings` and
+   `is_literal_shadowed_tagged` are deleted, not delegated to. Still by
+   spelling: two *global* names spelled alike match whichever globals they
+   reach, and `shadowed_names` survives for the `apply` head check alone. (b) The relinker resolves macro-generated
    definitions by name, with a documented defect (a user's later global steals
    a macro's private definition — Track L §6's jabberwocky note). Deep — it
    needs scoped relinking and a migration story for definition-environment

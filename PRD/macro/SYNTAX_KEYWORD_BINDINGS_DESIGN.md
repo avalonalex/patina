@@ -436,6 +436,10 @@ Three things fell out of it that were not obvious from the design:
 spellings (`is_literal_shadowed_tagged`). Deciding literal membership by binding is the last
 piece, and is recorded in the triage doc's "not ours" section rather than attempted here.
 
+*Update 2026-09-13:* local literal matching resolves bindings now (triage family 41), and
+`shadowed_names` feeds only the `apply` head check. Two globals spelled alike still match by
+spelling.
+
 ## 5. Migration cost, measured
 
 - **Bundled:** 1 file (`lib/scheme/lazy.sld`), as above.

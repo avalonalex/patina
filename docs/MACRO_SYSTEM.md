@@ -358,24 +358,37 @@ measurements.
 
 ### Literal Matching
 
-Literals use `bound-identifier=?` semantics:
+R7RS §4.3.2 matches an input identifier against a literal by binding: the two
+match when they reach the same lexical binding, or when neither reaches one
+and they are spelled alike. `matches_literal`
+(`patina-macros/src/macro_expander/matcher/literal.rs`) answers that by
+resolving both — the literal where the macro was defined, the input where it
+is used — through `Environment::scoped_binding_of`, which is the walk and the
+rule a scoped read uses. Each side resolves at its identifier's own scopes or,
+for an identifier carrying none beyond the expansion's flipped scope, at the
+scopes of the site it was written in, exactly as `resolve_syntax` resolves a
+head.
 
-```rust
-fn values_match_as_literal(pattern_lit: &Value, input: &Value) -> bool {
-    match (pattern_lit, input) {
-        (Value::Identifier(pat_id), Value::Identifier(inp_id)) => {
-            // Empty pattern scopes = substituted from outer expansion
-            if pat_id.scopes.is_empty() {
-                return true;
-            }
-            // bound-identifier=?: same name AND subset relationship
-            pat_id.name == inp_id.name
-                && pat_id.scopes.is_subset_of(&inp_id.scopes)
-        }
-        // ... other cases
-    }
-}
-```
+This can be answered at desugar time because every binding form the desugarer
+enters records its binders in the environment at their scopes
+(`enter_binding_form`), so a local binding exists to be found before any code
+runs, and its scope set names it: each binding form mints a fresh scope for
+what it binds.
+
+Two cases compare by something other than which local binding is reached:
+
+- **Globals spelled alike match**, whichever global each reaches. A library
+  macro with a `quote` literal therefore still matches a use site whose
+  `quote` is SRFI 101's.
+- **Globals spelled differently match by value** (`denotes_same_binding`),
+  which is what lets `(rename (scheme base) (else alt))` match `else`.
+
+It replaced a set of spellings with a veto: the desugarer's `shadowed_names`
+held every name bound around the use site, a literal was refused when the
+input's spelling was in it, and further rules decided whose identifiers the
+veto could reach. That got triage family 41 wrong in both directions — a
+template's own `token` binding matched a helper's outer `token` literal, and
+the caller's `token` passed through the same template was refused.
 
 ---
 

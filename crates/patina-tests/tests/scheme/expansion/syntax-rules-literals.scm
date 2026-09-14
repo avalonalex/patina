@@ -59,6 +59,9 @@
 ;; Track H3 adds two family-41 rows (2026-09-12): 30 total, with 28 passes
 ;; and two expected failures on each Patina backend. Chibi and Gauche pass
 ;; both new rows; each retains its one registered difference above.
+;; Matching literals by binding (2026-09-13) closes both, and adds two rows
+;; for shapes the spelling test got wrong in the other direction: 32 total,
+;; all passing on both Patina backends. Chibi and Gauche pass all four.
 ;;
 ;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
@@ -431,10 +434,12 @@
 ;; Track H3 seeds 364/365, minimized 2026-09-12 (triage family 41).
 ;; The helper's literal and the enclosing template's local have distinct
 ;; lexical bindings, even though both are called token. R7RS §4.3.2 requires
-;; the fallback rule. Chibi 0.12, Racket 9.3/r7rs-lib and Gauche 0.9.15 agree;
-;; both Patina backends wrongly take the literal arm. These expectations must
-;; be removed when the matcher is fixed: an unexpected pass fails the driver.
-(cond-expand (patina (test-expect-fail 1)) (else))
+;; the fallback rule. Chibi 0.12, Racket 9.3/r7rs-lib and Gauche 0.9.15 agree.
+;; Both Patina backends took the literal arm while the matcher compared
+;; spellings: it refused a literal only when the input's *name* was bound
+;; somewhere around the use, and let only a user's binding veto a template's
+;; identifier, so a template binding its own `token` got past it. It resolves
+;; both identifiers now and compares the bindings they reach.
 (test-equal "a template-local binding does not match an enclosing helper's literal"
   5
   (let ((x 5))
@@ -448,7 +453,6 @@
         ((_) (let ((token 2)) (helper token)))))
     (invoke)))
 
-(cond-expand (patina (test-expect-fail 1)) (else))
 (test-equal "a template-local binding selects the helper's fallback assignment"
   99
   (let ((x 5))
@@ -462,5 +466,38 @@
         ((_) (let ((token 2)) (helper token)))))
     (invoke)
     x))
+
+;; The same template handed the caller's identifier, which the spelling test
+;; got wrong the other way. The template still binds `token`, but the `token`
+;; it passes on is the one written at the call: the outer definition, and so
+;; the literal's own binding. Measured 2026-09-13: chibi 0.12 and Gauche 0.9.15
+;; answer 799; both Patina backends answered 5, refusing the literal because a
+;; `token` was bound somewhere around the use.
+(test-equal "a caller's identifier matches its literal through a template that rebinds the name"
+  799
+  (let ((x 5))
+    (define token 1)
+    (define-syntax helper
+      (syntax-rules (token)
+        ((_ token) 799)
+        ((_ other) x)))
+    (define-syntax invoke
+      (syntax-rules ()
+        ((_ t) (let ((token 2)) (helper t)))))
+    (invoke token)))
+
+;; A template that binds `else` and writes a `cond` clause with it. Both
+;; occurrences are the template's, so the clause's `else` is that local, not
+;; `cond`'s literal, and the clause is a test that fails. The spelling test let
+;; a binding veto a template's identifier only when the user wrote the
+;; binding, so a template's own never did. Measured 2026-09-13: chibi 0.12 and
+;; Gauche 0.9.15 fall through; both Patina backends took the else arm.
+(define-syntax template-bound-else
+  (syntax-rules ()
+    ((_) (let ((else #f) (taken 'fell-through))
+           (cond (#f 1) (else (set! taken 'else-arm)))
+           taken))))
+(test-equal "a template's own binding of else is not cond's literal" 'fell-through
+  (template-bound-else))
 
 (test-end)

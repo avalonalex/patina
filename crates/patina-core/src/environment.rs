@@ -1050,47 +1050,7 @@ impl Environment {
         // Every binding of this name in this environment and its parents,
         // in the order `resolve_scoped` wants them.
         let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
-
-        fn collect_candidates(
-            env: &Environment,
-            name: &str,
-            ref_scopes: &ScopeSet,
-            candidates: &mut Vec<(ScopeSet, TaggedValue)>,
-            debug: bool,
-        ) {
-            // Every candidate binding of the name here, latest first — the
-            // order `resolve_scoped` documents. Candidacy is tested with the
-            // rule's own `is_candidate`, so this is a filter and not a second
-            // copy of the rule; a binding that fails it is shown neither to
-            // the resolver nor to the check, so cloning its scope set would
-            // be waste on a path the tree-walker takes per variable read.
-            let scoped = env.scoped_bindings.borrow();
-            if let Some(bindings) = scoped.get(name) {
-                for binding in bindings.iter().rev() {
-                    let is_candidate =
-                        crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
-                    if debug {
-                        println!(
-                            "[ENV]   Candidate {} ⊆ {} : {}",
-                            binding.scopes,
-                            ref_scopes,
-                            if is_candidate { "YES" } else { "NO" }
-                        );
-                    }
-                    if is_candidate {
-                        candidates.push((binding.scopes.clone(), binding.tagged_value));
-                    }
-                }
-            }
-            drop(scoped);
-
-            // Recurse to parent
-            if let Some(parent) = &env.parent {
-                collect_candidates(parent, name, ref_scopes, candidates, debug);
-            }
-        }
-
-        collect_candidates(self, name, scopes, &mut candidates, debug);
+        self.collect_scoped_candidates(name, scopes, &mut candidates, debug);
 
         // One rule, shared with the VM's renamer: see
         // `crate::scope_resolve::resolve_scoped`. `None` means no candidate
@@ -1211,27 +1171,82 @@ impl Environment {
             .and_then(|p| p.get_scoped_fallback(name, scopes))
     }
 
-    /// Does `name` have a *scoped* binding visible from `scopes`?
+    /// Which scoped binding a reference denotes, named by the scope set it
+    /// was bound at — `None` when no scoped binding is a candidate and a read
+    /// would fall back by name.
     ///
-    /// The question [`get_with_scopes`] cannot answer, because it falls back to
-    /// the plain bindings and returns a value either way. A caller that needs
-    /// to know which of the two it got — `resolve_literal_bindings` in
-    /// `patina-macros` does, since only a scoped binding's identity depends on
-    /// the scopes it was reached with — asks here first.
+    /// The question [`get_with_scopes`] cannot answer, because it returns a
+    /// value, and at desugar time every local binder holds the same
+    /// placeholder. A caller *comparing* two references has to know whether
+    /// they reach one binding: R7RS §4.3.2 matches a `syntax-rules` literal
+    /// that way (`matches_literal` in `patina-macros`).
+    ///
+    /// A scope set is enough to name the binding. Every binding form mints a
+    /// fresh scope for what it binds, so two bindings of one name on a chain
+    /// differ in their scopes — except a procedure's formals and its body's
+    /// definitions, which share the form's scope from a parent and a child
+    /// frame. Every reference that sees the parent's also sees the child's,
+    /// so all of them break that tie the same way.
+    ///
+    /// The walk and the rule are [`get_with_scopes`]'s, so the binding named
+    /// here is the one a read of the same reference reaches, and an ambiguous
+    /// reference is refused here as it is there. No `scope_trace` record: this
+    /// resolves a reference without reading it, and a record of a read that
+    /// did not happen would make the trace disagree with the program.
     ///
     /// [`get_with_scopes`]: Self::get_with_scopes
-    pub fn has_scoped_binding(&self, name: &str, scopes: &ScopeSet) -> bool {
+    pub fn scoped_binding_of(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<Option<ScopeSet>, Box<AmbiguousReference>> {
         if scopes.is_empty() {
-            return false;
+            return Ok(None);
         }
-        self.scoped_bindings
-            .borrow()
-            .get(name)
-            .is_some_and(|bindings| bindings.iter().any(|b| b.scopes.is_subset_of(scopes)))
-            || self
-                .parent
-                .as_ref()
-                .is_some_and(|p| p.has_scoped_binding(name, scopes))
+        let mut candidates: Vec<(ScopeSet, TaggedValue)> = Vec::new();
+        self.collect_scoped_candidates(name, scopes, &mut candidates, false);
+        let chosen = crate::scope_resolve::resolve_index(name, scopes, &candidates)?;
+        Ok(chosen.map(|index| candidates.swap_remove(index).0))
+    }
+
+    /// Every scoped binding of `name` on this chain that is a candidate for a
+    /// reference at `ref_scopes`: latest first within a frame, innermost frame
+    /// first — the order `resolve_scoped` documents.
+    ///
+    /// Candidacy is tested with the rule's own `is_candidate`, so this is a
+    /// filter and not a second copy of the rule; a binding that fails it is
+    /// shown neither to the resolver nor to the check, so cloning its scope
+    /// set would be waste on a path the tree-walker takes per variable read.
+    fn collect_scoped_candidates(
+        &self,
+        name: &str,
+        ref_scopes: &ScopeSet,
+        candidates: &mut Vec<(ScopeSet, TaggedValue)>,
+        debug: bool,
+    ) {
+        {
+            let scoped = self.scoped_bindings.borrow();
+            if let Some(bindings) = scoped.get(name) {
+                for binding in bindings.iter().rev() {
+                    let is_candidate =
+                        crate::scope_resolve::is_candidate(&binding.scopes, ref_scopes);
+                    if debug {
+                        println!(
+                            "[ENV]   Candidate {} ⊆ {} : {}",
+                            binding.scopes,
+                            ref_scopes,
+                            if is_candidate { "YES" } else { "NO" }
+                        );
+                    }
+                    if is_candidate {
+                        candidates.push((binding.scopes.clone(), binding.tagged_value));
+                    }
+                }
+            }
+        }
+        if let Some(parent) = &self.parent {
+            parent.collect_scoped_candidates(name, ref_scopes, candidates, debug);
+        }
     }
 
     /// Check if a binding exists

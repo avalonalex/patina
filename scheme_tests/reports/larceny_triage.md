@@ -745,7 +745,7 @@ the source global". Both are VM-scoped expected failures; an unexpected pass
 requires removing the expectation. H3 replay and minimized sources are recorded
 in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3-implementation-and-replay--2026-09-12).
 
-### 41. A template-local identifier matches a helper's differently bound literal — both backends
+### 41. A template-local identifier matches a helper's differently bound literal — both backends; **fixed 2026-09-13**
 
 - **Found by H3, 2026-09-12**, on runtime `0c992ddb`, seeds
   **364/365/368/369** (ordinary `let` and internal-definition binders, read and
@@ -782,10 +782,20 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
   Both have Patina-only expected failures; unexpected success fails the suite
   and requires removing the expectation. The H3 manual sweep keeps these
   disagreements red, while the ordinary suite records the known defect.
-- Investigate literal binding comparison in
-  `patina-macros/src/macro_expander/matcher/literal.rs` and the definition/use
-  scopes delivered to it. The earlier spelling-based literal observation
-  below is related context, not proof that every such case has one cause.
+- **Fixed 2026-09-13.** The matcher compared spellings with a veto: an input
+  whose spelling was bound anywhere around the use could not match, and only
+  a binding the *user* wrote could veto a template's identifier. That let a
+  template's own `token` binding through, and it also refused two shapes in
+  the opposite direction, measured the same day: the same template handed the
+  *caller's* `token`, which is the literal's own binding (chibi and Gauche
+  799, both backends 5), and a template binding `else` around its own `cond`
+  (chibi and Gauche fall through, both backends took the else arm).
+  `matches_literal` now resolves both identifiers, each at its own site,
+  through `Environment::scoped_binding_of` — the walk and rule a scoped read
+  uses — and compares the local bindings they reach. All four shapes are rows
+  in `expansion/syntax-rules-literals.scm`; the two new ones fail on `main`.
+- The spelling-based literal observation below is only partly closed by this:
+  its local half is, its global half is not.
 
 ### 42. Incomplete input returns EOF instead of a read error — both backends — ✅ fixed 2026-09-12
 
@@ -812,7 +822,7 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
 - **Multi-expression `unquote`** — [tests/scheme/base.sld#L918](tests/scheme/base.sld#L918)–[#L927](tests/scheme/base.sld#L927): `(unquote e1 e2 …)` splicing several expressions is R6RS 11.17; R7RS 7.1.4's grammar gives `unquote` one template. chibi answers `(foo)` exactly as we do (Gauche and Chez accept the R6RS form). The suite is derived from R6RS's.
 - **Overrunning `vector-copy!`** — [tests/scheme/base.sld#L2301](tests/scheme/base.sld#L2301), which upstream itself marks `; FIXME: R7RS doesn't say`: copying five elements to index 2 of a five-vector is "an error" in R7RS 6.8; the suite expects a truncated copy. chibi and Gauche raise, as we do.
 - **`(make-bytevector n -1)`** — [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346), [#L2347](tests/scheme/base.sld#L2347): R7RS 6.9 requires a byte; chibi and Gauche accept a signed byte and answer 255. A leniency decision, same as the R6RS lane's family 13.
-- **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. The review of #132 added the import-level shape: a library's `(syntax-rules (quote) ((_ 'x) 'quoted) …)` under SRFI 101's `quote` still matches the literal by spelling, where chibi (comparing bindings) takes the other rule. Families 14/15 are fixed and this is not: locals became bindings for *resolution*, while the literal matcher still compares spellings (`is_literal_shadowed_tagged`), which is why `shadowed_names` survives as a spelling set feeding it alone. Deciding literal membership by binding is the remaining piece of the same project.
+- **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. The review of #132 added the import-level shape: a library's `(syntax-rules (quote) ((_ 'x) 'quoted) …)` under SRFI 101's `quote` still matches the literal by spelling, where chibi (comparing bindings) takes the other rule. Families 14/15 are fixed and this was not: locals became bindings for *resolution* while the literal matcher kept comparing spellings. **The local half closed 2026-09-13 (family 41)**: the matcher resolves both identifiers and compares the local bindings they reach. What remains is the global half — two names that reach no local binding still match when spelled alike, so the SRFI 101 `quote` shape answers `quoted` before and after that change (measured) — and the `apply` head check, which is now `shadowed_names`' only reader.
 - **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
 
 ## Not defects — bundling queue (L1 item 6) — ✅ empty
