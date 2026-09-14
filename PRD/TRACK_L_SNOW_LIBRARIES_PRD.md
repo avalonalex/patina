@@ -2038,7 +2038,7 @@ match by spelling. See the triage entry for the programs and H3 seeds.
 
 No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
 
-✅ **Both symptoms below answer as chibi and Gauche do on both backends, measured 2026-09-13.** On the VM the reference now resolves at compile time to the introduced global's identity (#315, `PATINA_SCOPE_TRACE` shows `via=scoped`) and never reaches the alias; the relinker was never involved, since definition and use share one environment. What follows is the record of what they were.
+✅ **Both symptoms below answer as chibi and Gauche do on both backends, measured 2026-09-13.** On the VM the reference resolves at compile time to the introduced global's identity (#315, `PATINA_SCOPE_TRACE` shows `via=scoped`), so the alias never supplies its value; until #321 the desugarer's syntax check on the same reference did fall back through the alias, harmlessly, and since #321 that read resolves `via=scoped` too. The relinker was never involved, since definition and use share one environment. What follows is the record of what they were.
 
 *Two symptoms recorded 2026-08-23 while reviewing the VM hygiene work*, both
 the bare name collapsing an identity the rest of the pipeline keeps distinct.
@@ -2059,7 +2059,9 @@ are the VM's alone, produced by its compiler's bare-name alias:
 ;; Patina was 99 · chibi, Gauche 10             — a later user global stole it
 ```
 
-The VM now gives the two `mh`s genuinely distinct globals, and the tree-walker
+*The diagnosis as recorded on 2026-09-01, superseded by the note above: neither
+shape reached the relinker, and the renamer's identity fixed both.* The VM now
+gives the two `mh`s genuinely distinct globals, and the tree-walker
 gives them distinct scoped bindings — the collapse is entirely in the alias
 that answers the *bare* name, because that is what relinking asks for. The
 second shape is the same mechanism read the other way: `get` consults real

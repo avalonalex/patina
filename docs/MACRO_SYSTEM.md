@@ -315,9 +315,11 @@ VM renames one to a global no source mentions, derived from the scope set that
 is its identity, and then records two things about it in the environment: a
 bare-name *alias*, and the *binding identity* itself. They answer different
 questions and neither replaces the other. The alias answers the bare spelling
-at run time, because definition-environment relinking resolves its target by
-name; it is consulted after real bindings, so a user's own global of that
-spelling still wins. The identity answers a *scoped* reference at compile
+at run time, kept because definition-environment relinking resolves its target
+by name, although no `cargo test` or chibi row needs it
+(`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"); it is
+consulted after real bindings, so a user's own global of that spelling still
+wins. The identity answers a *scoped* reference at compile
 time. It also answers a later form's desugar-time reads — a literal
 comparison, and the check for syntax used as a value — because
 `Environment`'s candidate walk takes the root's identities alongside its scoped
@@ -340,8 +342,12 @@ that resolves to nothing is still answered by the alias, where chibi and the
 tree-walker refuse it. Refusing it means the alias must stop answering scoped
 references, and the renamer discards the scope set on every reference it could
 not resolve — so by run time there is nothing left to distinguish them. That
-needs scopes to survive the renamer, which is the scoped-relinking work
-Track Q's Q7.5(b) gates.
+was recorded as needing scopes to survive the renamer. Measured 2026-09-13, it
+needs less: with the bare-name views deleted, an unresolved scoped reference
+still compiles to a bare load, only plain bindings answer it, and all three
+family-40 rows refuse — pending the Larceny lanes and the compat corpus.
+`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized", has the
+measurement and the plan.
 
 **Quoted data in a template is not exempt from any of this.** `(quote datum)`
 compiles as the list it is: the head is a reference resolved where the macro

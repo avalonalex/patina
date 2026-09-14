@@ -262,9 +262,12 @@ pub(crate) struct Renamed {
     /// A macro-introduced top-level definition is renamed, which makes it a
     /// global under a name no source code mentions. The definition-environment
     /// relinking still resolves its target by the *bare* name, so something
-    /// has to answer for it — but a plain definition of that name would
-    /// overwrite a user's own global of the same spelling, and would freeze a
-    /// copy of the value besides.
+    /// answers for it — though no measured program needs that answer:
+    /// jabberwocky never relinks, and deleting this alias with the other
+    /// by-name views fails no `cargo test` or chibi row
+    /// (`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"). A
+    /// plain definition of that name would overwrite a user's own global of
+    /// the same spelling, and would freeze a copy of the value besides.
     ///
     /// `Environment::define_alias` is neither: it is consulted only after real
     /// bindings, so a user's binding wins, and it forwards each access rather
@@ -274,9 +277,8 @@ pub(crate) struct Renamed {
     /// The alias table is keyed by the bare name, so when two forms introduce
     /// the same spelling the later one wins — even though `scoped_global_name`
     /// has just given them distinct globals. That is the one place hygiene
-    /// identity collapses back to a name, and it is where it has to: the
-    /// relinking that consumes this resolves by name. `define_alias` records
-    /// the rule.
+    /// identity collapses back to a name, kept because the relinking that
+    /// consumes this resolves by name. `define_alias` records the rule.
     ///
     /// Each entry carries the scope set as well, so the caller can record the
     /// binding *identity* alongside the alias — see
@@ -406,9 +408,11 @@ fn body_define_bindings(
 /// whose name was rewritten because it carried hygiene scopes.
 ///
 /// The alias exists for the reason `Environment::define_scoped_definition`
-/// documents: the definition-environment relinking resolves its target by
-/// name, so a renamed-only binding is unreachable from a macro-generated
-/// macro's template.
+/// documents, which measurement has since weakened: definition-environment
+/// relinking resolves its target by name, but deleting this splice with the
+/// other by-name views fails no `cargo test` or chibi row, and closes #269's
+/// by-name reach from the use site (`PRD/macro/SYNTAX_CASE_DESIGN.md`,
+/// "Scoped Relinking, Sized").
 ///
 /// A top-level definition records an environment alias for the caller to
 /// install (`Renamed::global_aliases`) rather than defining the bare name,

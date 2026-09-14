@@ -642,9 +642,12 @@ impl Environment {
     ///   answers 10 now, as chibi and Gauche do, because the renamer resolves
     ///   such a reference to the introduced global's identity
     ///   (`define_introduced_global`) and never asks the alias. What the alias
-    ///   still answers is a reference *no* identity accepts — triage family
-    ///   40 — and a source reference to the bare name. `SYNTAX_CASE_DESIGN.md`,
-    ///   "Scoped Relinking, Sized", measures both and what removing it takes.
+    ///   still answers is anything reaching the name that no identity
+    ///   accepts: a scoped reference from a different expansion (triage family
+    ///   40), a source reference to the bare name, a library export of the bare
+    ///   name, and the definition-environment relinker's by-name lookup of its
+    ///   target. `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized",
+    ///   measures each and what removing the alias takes.
     ///
     ///   The bare kind is sound only in an environment with **no parent**,
     ///   since `get` *returns* on an alias hit rather than falling through, so
@@ -741,12 +744,17 @@ impl Environment {
     /// This is what a `define` needs and what `define_with_scopes`
     /// deliberately withholds. A macro-introduced *parameter* must stay
     /// invisible to a reference written in source, so it is filed under its
-    /// scopes alone. A macro-introduced *definition* cannot be: the
-    /// definition-environment relinking that lets a macro-generated macro
-    /// reach its defining environment resolves its target by name
-    /// (`link_definition_env_refs`, and Track L §6 records that it does), so a
-    /// definition reachable only under scopes is unreachable from exactly the
-    /// code that needs it — the R7RS suite's `jabberwocky` test.
+    /// scopes alone. A macro-introduced *definition* is not, for a reason that
+    /// has since been measured not to hold: definition-environment relinking
+    /// resolves its target by name (`link_definition_env_refs`), so a
+    /// definition reachable only under scopes was taken to be unreachable from
+    /// the R7RS suite's `jabberwocky` test. Jabberwocky never relinks — its
+    /// definition and use share an environment and resolve by scopes — and
+    /// filing a macro-introduced definition under its scopes alone fails no
+    /// `cargo test` row and no chibi row (2026-09-13;
+    /// `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"). The
+    /// name-only view stays until that change has run against the Larceny
+    /// lanes and the compat corpus.
     ///
     /// The name-only view's reach is *plain* access — [`get`], [`set`], and
     /// the relinker resolving through them — not scoped resolution's
