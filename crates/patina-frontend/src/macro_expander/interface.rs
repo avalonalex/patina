@@ -94,15 +94,10 @@ impl TestExpander {
             .map_err(|e| format!("Failed to parse expected: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = patina_macros::expand_macro_with_scope(
-            &self.compiled,
-            input_tv,
-            heap,
-            &std::collections::HashSet::new(),
-            None,
-        )
-        .map_err(|e| format!("Expansion failed: {}", e))?
-        .form;
+        let expanded_tv =
+            patina_macros::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
+                .map_err(|e| format!("Expansion failed: {}", e))?
+                .form;
 
         // Compare TaggedValues directly (ignoring gensym/hygiene differences)
         if patina_macros::TestExpander::tagged_forms_equal_ignoring_gensym(
@@ -134,15 +129,10 @@ impl TestExpander {
         let input_tv = parser.parse().map_err(|e| format!("Parse error: {}", e))?;
 
         // Expand using production TaggedValue path
-        let expanded_tv = patina_macros::expand_macro_with_scope(
-            &self.compiled,
-            input_tv,
-            heap,
-            &std::collections::HashSet::new(),
-            None,
-        )
-        .map_err(|e| format!("Expansion error: {}", e))?
-        .form;
+        let expanded_tv =
+            patina_macros::expand_macro_with_scope(&self.compiled, input_tv, heap, None)
+                .map_err(|e| format!("Expansion error: {}", e))?
+                .form;
 
         // Format TaggedValue directly for display
         Ok(patina_core::format_tagged(expanded_tv, &heap.borrow()))

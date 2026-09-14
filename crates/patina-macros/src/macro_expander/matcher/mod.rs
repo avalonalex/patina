@@ -23,8 +23,8 @@ pub use error::MatchError;
 use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::pattern_to_string_with_names;
 use patina_core::{Heap, SharedHeap, TaggedValue};
-use patina_runtime::{LiteralBinding, MatchEnv, PVRef};
-use std::collections::{HashMap, HashSet};
+use patina_runtime::{MatchEnv, PVRef};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Pattern matcher for PVREF-based macro system
@@ -47,34 +47,24 @@ pub struct Matcher {
     /// Optional mapping from PVREF to variable names (for debug output)
     pvar_names: Option<HashMap<PVRef, Rc<str>>>,
 
-    /// Names that are shadowed by local bindings at the macro use site.
-    /// When a literal identifier (like `=>` in cond) is in this set,
-    /// it should NOT match as a literal (R7RS 4.3.2).
-    ///
-    /// This is compile-time shadowing info from the desugarer's `shadowed_names`.
-    shadowed_names: HashSet<Rc<str>>,
-
-    /// Literal identifiers from the macro definition with their binding
-    /// information — whether each was bound where the macro was written.
-    literals: Vec<LiteralBinding>,
-
     /// Shared heap for TaggedValue storage in MatchEnv
     shared_heap: Option<SharedHeap>,
 
-    /// The environment the macro was defined in, and the one it is being used
-    /// in. A literal matches an input identifier that denotes the same
-    /// binding whatever it is spelled (R7RS §4.3.2), and resolving "the same
-    /// binding" needs both — the literal's name means what it meant where the
-    /// macro was written, the input's what it means here. Absent for the
-    /// direct-API paths, which have no environments; the spelling test alone
-    /// then applies, as before.
+    /// Where the macro was defined and where it is being used: at each, an
+    /// environment, and the scopes a reference written there without scopes
+    /// of its own stands in. A literal matches an input that reaches the same
+    /// binding (R7RS §4.3.2); the literal resolves at the first site, the
+    /// input at the second. Absent for the direct-API paths, which have no
+    /// environments, so nothing resolves there and literals compare by
+    /// spelling.
     definition_env: Option<Rc<patina_runtime::Environment>>,
+    definition_scopes: patina_runtime::ScopeSet,
     use_site_env: Option<Rc<patina_runtime::Environment>>,
+    use_site_scopes: patina_runtime::ScopeSet,
 
     /// The scope this expansion flipped onto its input. Everything being
-    /// matched carries it, so anything an input identifier carries *beyond*
-    /// it was put there by a macro that introduced the identifier — which is
-    /// how the shadow veto tells the user's identifiers from a template's.
+    /// matched carries it, so an input identifier carrying nothing else was
+    /// written at the use site and stands in the use site's scopes.
     macro_scope: Option<patina_runtime::ScopeId>,
 }
 
@@ -87,11 +77,11 @@ impl Matcher {
         Self {
             num_pvars,
             pvar_names: None,
-            shadowed_names: HashSet::new(),
-            literals: Vec::new(),
             shared_heap: None,
             definition_env: None,
+            definition_scopes: patina_runtime::ScopeSet::new(),
             use_site_env: None,
+            use_site_scopes: patina_runtime::ScopeSet::new(),
             macro_scope: None,
         }
     }
@@ -105,11 +95,11 @@ impl Matcher {
         Self {
             num_pvars,
             pvar_names: Some(pvar_names),
-            shadowed_names: HashSet::new(),
-            literals: Vec::new(),
             shared_heap: None,
             definition_env: None,
+            definition_scopes: patina_runtime::ScopeSet::new(),
             use_site_env: None,
+            use_site_scopes: patina_runtime::ScopeSet::new(),
             macro_scope: None,
         }
     }
@@ -122,37 +112,38 @@ impl Matcher {
     /// # Arguments
     /// * `num_pvars` - Total number of pattern variables in the pattern
     /// * `pvar_names` - Mapping from PVREF to variable names
-    /// * `shadowed_names` - Names shadowed by local bindings at macro use site
-    /// * `literals` - Literal identifiers from the macro definition with binding info
     /// * `shared_heap` - Shared heap for TaggedValue storage
     pub fn new_with_heap(
         num_pvars: usize,
         pvar_names: HashMap<PVRef, Rc<str>>,
-        shadowed_names: HashSet<Rc<str>>,
-        literals: Vec<LiteralBinding>,
         shared_heap: SharedHeap,
     ) -> Self {
         Self {
             num_pvars,
             pvar_names: Some(pvar_names),
-            shadowed_names,
-            literals,
             shared_heap: Some(shared_heap),
             definition_env: None,
+            definition_scopes: patina_runtime::ScopeSet::new(),
             use_site_env: None,
+            use_site_scopes: patina_runtime::ScopeSet::new(),
             macro_scope: None,
         }
     }
 
-    /// Give the matcher the two environments a binding comparison needs. Both
-    /// optional: without them the literal test is the spelling test alone.
-    pub fn with_environments(
+    /// Give the matcher the two sites a literal comparison resolves at: where
+    /// the macro was defined and where it is used. Each environment is
+    /// optional; without one, nothing resolves on that side.
+    pub fn with_sites(
         mut self,
         definition_env: Option<Rc<patina_runtime::Environment>>,
+        definition_scopes: patina_runtime::ScopeSet,
         use_site_env: Option<Rc<patina_runtime::Environment>>,
+        use_site_scopes: patina_runtime::ScopeSet,
     ) -> Self {
         self.definition_env = definition_env;
+        self.definition_scopes = definition_scopes;
         self.use_site_env = use_site_env;
+        self.use_site_scopes = use_site_scopes;
         self
     }
 
@@ -234,33 +225,24 @@ impl Matcher {
             }
 
             Pattern::Literal(lit) => {
-                // Check for shadowing first
-                if literal::is_literal_shadowed_tagged(
+                let definition = literal::Site {
+                    env: self.definition_env.as_ref(),
+                    scopes: &self.definition_scopes,
+                };
+                let use_site = literal::Site {
+                    env: self.use_site_env.as_ref(),
+                    scopes: &self.use_site_scopes,
+                };
+                let matched = literal::matches_literal(
                     *lit,
                     input,
                     heap,
-                    &self.shadowed_names,
-                    &self.literals,
+                    definition,
+                    use_site,
                     self.macro_scope,
-                ) {
-                    return Err(MatchError::LiteralMismatch {
-                        expected: format!("{:?}", lit),
-                        actual: format!("{} (shadowed)", patina_core::format_tagged(input, heap)),
-                    });
-                }
-
-                // Check for match using TaggedValue literal comparison, then
-                // — for an input spelled differently — whether the two names
-                // denote the same binding after all.
-                if literal::tagged_matches_literal(input, *lit, heap)
-                    || literal::denotes_same_binding(
-                        *lit,
-                        input,
-                        heap,
-                        self.definition_env.as_ref(),
-                        self.use_site_env.as_ref(),
-                    )
-                {
+                )
+                .map_err(MatchError::AmbiguousLiteral)?;
+                if matched {
                     Ok(())
                 } else {
                     Err(MatchError::LiteralMismatch {
@@ -339,11 +321,11 @@ mod tests {
         let matcher = Matcher {
             num_pvars,
             pvar_names: None,
-            shadowed_names: HashSet::new(),
-            literals: Vec::new(),
             shared_heap: Some(heap.clone()),
             definition_env: None,
+            definition_scopes: patina_runtime::ScopeSet::new(),
             use_site_env: None,
+            use_site_scopes: patina_runtime::ScopeSet::new(),
             macro_scope: None,
         };
         (matcher, heap)

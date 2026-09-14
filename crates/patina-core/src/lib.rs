@@ -39,9 +39,7 @@ pub mod tagged_value;
 pub mod vfs;
 
 // Re-export main types for convenience
-pub use compiled_macro::{
-    CompiledMacro, CompiledRule, Identifier, LiteralBinding, Pattern, Template,
-};
+pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
 pub use continuation::{
     CpsContinuation, DynamicWindRecord, WindRecord, next_dynamic_wind_id, next_prompt_id,
 };

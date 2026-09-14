@@ -33,7 +33,7 @@ use super::IdentifierKey;
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
 use patina_core::{SharedHeap, TaggedValue};
-use patina_runtime::{Environment, LiteralBinding, PVRef, Pattern, ScopeSet, Template};
+use patina_runtime::{Environment, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -46,12 +46,6 @@ pub use patina_runtime::{CompiledMacro, CompiledRule};
 ///
 /// Based on Gauche's compile_rules (macro.c:604-683).
 pub struct Compiler {
-    /// Literal identifiers with their binding information
-    ///
-    /// Each literal captures whether it was bound at macro definition time.
-    /// This enables correct `bound-identifier=?` semantics during matching.
-    pub(super) literals: Vec<LiteralBinding>,
-
     /// Literals exactly as written, for identity-based membership tests.
     ///
     /// R7RS 4.3.2 decides literal membership by identifier identity, so a
@@ -128,98 +122,13 @@ fn is_declared_ellipsis(ellipsis: &Option<Rc<str>>) -> bool {
 }
 
 impl Compiler {
-    /// Resolve literal bindings at macro definition time
-    ///
-    /// For each literal name, check if it's bound in the environment or in
-    /// `shadowed_names` (which contains lambda parameters that aren't bound yet
-    /// but will be at runtime). If bound, capture the scopes of that binding.
-    /// This enables correct `bound-identifier=?` semantics during pattern matching.
-    fn resolve_literal_bindings(
-        literal_keys: &[IdentifierKey],
-        env: Option<&Rc<Environment>>,
-        definition_scopes: &ScopeSet,
-        shadowed_names: &std::collections::HashSet<Rc<str>>,
-    ) -> Vec<LiteralBinding> {
-        // Deliberately name-scoped: this resolves where a literal was *bound*
-        // in the definition environment, which is a different question from the
-        // identity test in `is_literal_form`. Two literals spelled alike always
-        // resolve to the same binding, which is why the matcher's shadow lookup
-        // (`is_literal_shadowed_tagged`) can find one by name.
-        literal_keys
-            .iter()
-            .map(|key| {
-                let name = &key.name;
-                // Check if this literal is "bound" - either in the environment
-                // OR in shadowed_names (e.g., lambda parameters not yet evaluated)
-                let binding_scope = if shadowed_names.contains(name) {
-                    // The literal is in shadowed_names - this means it's a lambda parameter
-                    // that will be bound when the lambda is called. Treat it as bound
-                    // with the current definition scopes.
-                    // This is the key fix for "binding before macro definition" - the
-                    // lambda parameter IS bound from the macro's perspective.
-                    Some(definition_scopes.clone())
-                } else if let Some(env) = env {
-                    // Which *kind* of binding, not just whether there is one.
-                    // `get_with_scopes` cannot say: it falls back to the plain
-                    // bindings and returns a value either way, so asking it
-                    // labelled every global binding as scoped.
-                    if env.has_scoped_binding(name, definition_scopes) {
-                        // The literal is bound with scopes - capture the definition scopes
-                        Some(definition_scopes.clone())
-                    } else if env.get(name).is_some() {
-                        // Bound in the plain, unscoped bindings — a global or a
-                        // library binding. Its identity has nothing to do with
-                        // where the macro happened to be *defined*, so record
-                        // no scopes rather than the definition's.
-                        //
-                        // Claiming `definition_scopes` here made any macro
-                        // defined inside a scope unable to match a global
-                        // literal written at the use site, because the matcher
-                        // then compared a non-empty definition scope set
-                        // against an unscoped input and called them different
-                        // bindings:
-                        //
-                        //   (let ()
-                        //     (define-syntax m
-                        //       (syntax-rules (car) ((_ car) 'matched)
-                        //                           ((_ x) 'not-matched)))
-                        //     (m car))
-                        //   ;; chibi, Gauche => matched; was not-matched
-                        //
-                        // Pre-existing and unrelated to what the literal is;
-                        // `car` above is an ordinary procedure. It surfaced
-                        // when syntactic keywords became bindings, because
-                        // `(syntax-rules ::: (...))` then had a literal that
-                        // resolved for the first time.
-                        Some(ScopeSet::new())
-                    } else {
-                        // Not bound - literal is free at definition time
-                        None
-                    }
-                } else {
-                    // No environment - treat as unbound
-                    None
-                };
-
-                LiteralBinding {
-                    name: name.clone(),
-                    binding_scope,
-                }
-            })
-            .collect()
-    }
-
     /// Create a new compiler
     ///
     /// # Arguments
     /// - `literals`: List of literal identifier names
     /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
     pub fn new(literals: Vec<IdentifierKey>, ellipsis: Option<Rc<str>>, heap: SharedHeap) -> Self {
-        let empty_shadowed = std::collections::HashSet::new();
-        let literal_bindings =
-            Self::resolve_literal_bindings(&literals, None, &ScopeSet::new(), &empty_shadowed);
         Self {
-            literals: literal_bindings,
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
@@ -247,15 +156,7 @@ impl Compiler {
         heap: SharedHeap,
     ) -> Self {
         let definition_scopes = ScopeSet::new();
-        let empty_shadowed = std::collections::HashSet::new();
-        let literal_bindings = Self::resolve_literal_bindings(
-            &literals,
-            Some(&env),
-            &definition_scopes,
-            &empty_shadowed,
-        );
         Self {
-            literals: literal_bindings,
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
@@ -287,52 +188,7 @@ impl Compiler {
         scopes: ScopeSet,
         heap: SharedHeap,
     ) -> Self {
-        let empty_shadowed = std::collections::HashSet::new();
-        let literal_bindings =
-            Self::resolve_literal_bindings(&literals, Some(&env), &scopes, &empty_shadowed);
         Self {
-            literals: literal_bindings,
-            literal_keys: literals,
-            ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
-            ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
-            escaped_ellipsis: None,
-            env: Some(env),
-            definition_scopes: scopes,
-            pvars: HashMap::new(),
-            pvar_count: 0,
-            max_level: 0,
-            quasiquote_depth: 0,
-            heap,
-        }
-    }
-
-    /// Create a new compiler with environment, scope set, and shadowed names
-    ///
-    /// This is the most complete constructor that captures all binding information
-    /// for correct `bound-identifier=?` semantics.
-    ///
-    /// # Arguments
-    /// - `literals`: List of literal identifier names
-    /// - `ellipsis`: Symbol to use for ellipsis (typically "...")
-    /// - `env`: Lexical environment where the macro is being defined
-    /// - `scopes`: Scope set at macro definition time
-    /// - `shadowed_names`: Names that are shadowed by local bindings (e.g., lambda parameters)
-    ///
-    /// The `shadowed_names` allows the compiler to treat lambda parameters as "bound"
-    /// even though they're not yet in the environment. This is essential for correct
-    /// literal matching when a literal refers to an enclosing lambda parameter.
-    pub fn with_env_scopes_and_shadowed(
-        literals: Vec<IdentifierKey>,
-        ellipsis: Option<Rc<str>>,
-        env: Rc<Environment>,
-        scopes: ScopeSet,
-        shadowed_names: &std::collections::HashSet<Rc<str>>,
-        heap: SharedHeap,
-    ) -> Self {
-        let literal_bindings =
-            Self::resolve_literal_bindings(&literals, Some(&env), &scopes, shadowed_names);
-        Self {
-            literals: literal_bindings,
             literal_keys: literals,
             ellipsis_is_custom: is_declared_ellipsis(&ellipsis),
             ellipsis: ellipsis.or_else(|| Some(ELLIPSIS.into())),
@@ -416,7 +272,6 @@ impl Compiler {
         let template_symbols = CompiledMacro::collect_template_symbols(&compiled_rules);
         Ok(CompiledMacro {
             name,
-            literals: self.literals.clone(),
             template_symbols,
             rules: compiled_rules,
             max_pvars,

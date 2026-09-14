@@ -27,8 +27,7 @@
 //! Hand-rolled copies remain, all over `Environment`'s tables and none
 //! measured. The two fallbacks — `set_scoped_fallback` and
 //! `get_scoped_fallback` — each apply [`is_candidate`] once more, to *refuse*
-//! a rejected binding rather than to choose one, and `has_scoped_binding`
-//! tests subset with no most-specific rule at all. The read's candidate walk
+//! a rejected binding rather than to choose one. The read's candidate walk
 //! and the write's are now the same walk written twice, one yielding values
 //! and one cells; merging them is what remains of Track Q's Q7.1
 //! (`PRD/TRACK_Q_QUALITY_PRD.md`).

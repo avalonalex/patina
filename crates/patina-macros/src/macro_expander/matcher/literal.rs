@@ -1,184 +1,112 @@
-//! Literal matching and hygiene support
+//! Literal matching: when an input matches a literal in a `syntax-rules`
+//! pattern.
 //!
-//! This module implements literal matching for pattern matching, including
-//! R7RS hygiene support for shadowed literals.
+//! R7RS §4.3.2 gives two ways for an input identifier to match a literal: the
+//! two occurrences have the same lexical binding, or they are the same
+//! identifier and neither has one. Both are answered here by *resolving* the
+//! two — the literal where the macro was defined, the input where it is used —
+//! against the scoped bindings the desugarer records for every binding form it
+//! enters (`enter_binding_form`).
 
 use patina_core::{Heap, TaggedValue};
-use patina_runtime::{Environment, LiteralBinding};
-use std::collections::HashSet;
+use patina_runtime::{Environment, ScopeId, ScopeSet};
 use std::rc::Rc;
 
-/// Check if a TaggedValue literal identifier is shadowed at the macro use site.
+/// One side of a literal comparison: the environment an identifier resolves
+/// in, and the scopes a reference written there stands in when it carries
+/// none of its own — the rule `Desugarer::resolve_syntax` applies to every
+/// head it resolves, so a literal is compared by the binding a reference in
+/// the same place would reach.
+#[derive(Clone, Copy)]
+pub struct Site<'a> {
+    pub env: Option<&'a Rc<Environment>>,
+    pub scopes: &'a ScopeSet,
+}
+
+/// Does `input` match the pattern literal `lit`?
 ///
-/// R7RS 4.3.2: A literal identifier matches an input identifier if both have
-/// the same binding, or both are unbound and have the same name.
+/// Identifiers match when both reach the same local binding, or neither
+/// reaches one and they are spelled alike — or, spelled differently, when
+/// neither is local and both name one global value ([`denotes_same_binding`]).
+/// A literal that is not an identifier is a datum and compares as one.
 ///
-/// This function implements the `bound-identifier=?` semantics:
-/// - If both literal and input are bound with the same scopes, they match
-/// - If both are unbound and have the same name, they match
-/// - If one is bound and the other is unbound (or differently bound), they DON'T match
-pub fn is_literal_shadowed_tagged(
+/// This used to be a spelling test with a veto: the desugarer kept the set of
+/// names bound anywhere around the use site, and an input whose spelling was
+/// in it could not match. A set of spellings cannot say *which* binding, and
+/// the rules added to decide whose identifiers the veto could reach moved the
+/// error between shapes rather than removing it. A template that binds `token`
+/// and passes it to a helper whose literal is an outer `token` took the
+/// literal arm; the same template passing the user's own `token` — the outer
+/// one, and so the literal's binding — was refused. Triage family 41; chibi and
+/// Gauche answer both by binding, and so does this.
+///
+/// `Err` is an ambiguous resolution. It is refused rather than treated as a
+/// mismatch, which would hand the reference to the next rule to decide.
+pub fn matches_literal(
     lit: TaggedValue,
     input: TaggedValue,
     heap: &Heap,
-    shadowed_names: &HashSet<Rc<str>>,
-    literals: &[LiteralBinding],
-    current_macro_scope: Option<patina_runtime::ScopeId>,
-) -> bool {
-    // Extract the literal name from the pattern TaggedValue
-    let lit_name: Rc<str> = match heap.get_symbol_or_identifier_name(lit) {
-        Some(name) => Rc::from(name),
-        None => return false, // Non-identifier literals can't be shadowed
+    definition: Site<'_>,
+    use_site: Site<'_>,
+    macro_scope: Option<ScopeId>,
+) -> Result<bool, String> {
+    let Some(lit_name) = heap.get_symbol_or_identifier_name(lit) else {
+        return Ok(heap.tagged_values_equal(lit, input));
     };
-
-    // Find the literal binding information for this literal
-    let literal_binding = literals
-        .iter()
-        .find(|lb| lb.name.as_ref() == lit_name.as_ref());
-
-    // If this literal is not in the macro's literals list, it's not subject to shadowing checks
-    let literal_binding = match literal_binding {
-        Some(lb) => lb,
-        None => return false,
+    let Some(input_name) = heap.get_symbol_or_identifier_name(input) else {
+        return Ok(false);
     };
+    // The expansion flipped its own scope onto the input, so an input
+    // identifier carrying nothing else was written at the use site. The scope
+    // can stay in the set it is resolved with: it was minted after every
+    // binding that exists, so no candidate carries it.
+    let lit_binding = || local_binding(lit_name, scopes_of(lit, heap), None, definition);
+    let input_binding = || local_binding(input_name, scopes_of(input, heap), macro_scope, use_site);
 
-    // Get input name from TaggedValue
-    let input_name: Rc<str> = match heap.get_symbol_or_identifier_name(input) {
-        Some(name) => Rc::from(name),
-        None => return false, // Input is not an identifier
-    };
-
-    // Names must match for shadowing to be relevant
-    if lit_name.as_ref() != input_name.as_ref() {
-        return false;
+    if lit_name == input_name {
+        return Ok(lit_binding()? == input_binding()?);
     }
-
-    // The shadow set is keyed by *spelling*: it says "something named this is
-    // locally bound somewhere in the enclosing desugar", with no scope to say
-    // where. That is enough for an identifier the user wrote, and not enough
-    // for one a macro introduced — which denotes what it denoted where its
-    // template was written, the whole point of hygiene.
-    //
-    // Scope tells the two apart. This expansion has already flipped its own
-    // `macro_scope` onto everything it is matching, so that scope is on both.
-    // An identifier the user wrote carries nothing else — a substitution
-    // through an outer macro marks it and unmarks it again on the way out —
-    // while an introduced one keeps the scope of the macro that introduced it.
-    let introduced = |tv, flipped: bool| {
-        heap.get_identifier_data_any(tv).is_some_and(|(_, scopes)| {
-            scopes
-                .iter()
-                .any(|scope| !flipped || Some(*scope) != current_macro_scope)
-        })
-    };
-    // The literal's own origin decides whose shadows can reach the input.
-    //
-    // A literal written in plain source — `cond`'s `else`, in `(scheme base)` —
-    // can only be shadowed for an input written in plain source too. A
-    // template-introduced `else` denoting base's `else` is a different
-    // identifier from the use site's `(let ((else #f)) …)`, and vetoing it
-    // rejected a legal program: since #89 the `else` clause demoted to a test
-    // clause and `else` was then read as a value.
-    //
-    // A literal a template introduced — `(let-syntax ((n (syntax-rules (k) …`
-    // inside a macro that also writes `(let ((k 99)) (n k))` — is in that
-    // template's world, where the template's own bindings do shadow it.
-    //
-    // R7RS §4.3.2's own example is the first kind and still behaves:
-    // `(let ((=> #f)) (cond (#t => 'ok)))` vetoes, because the `=>` is the
-    // user's.
-    let shadows_can_reach_input = introduced(lit, false) || !introduced(input, true);
-    let shadowed_at_use_site = shadows_can_reach_input && shadowed_names.contains(&input_name);
-
-    // Apply bound-identifier=? semantics
-    match &literal_binding.binding_scope {
-        None => {
-            // Literal was unbound at macro definition time
-            if shadowed_at_use_site {
-                return true; // Shadowed (should NOT match)
-            }
-            false // Not shadowed (should match)
-        }
-        Some(literal_scopes) => {
-            // Literal was bound at macro definition time
-            if shadowed_at_use_site {
-                // Both name a bound identifier, so this is `bound-identifier=?`
-                // proper: same binding only if they were written with the same
-                // scopes. A literal a macro's own template introduced and bound
-                // — `(let ((k 1)) (let-syntax ((n (syntax-rules (k) …))))` —
-                // is not the user's `k`, whatever the two are spelled.
-                let scopes_of = |tv| {
-                    heap.get_identifier_data_any(tv)
-                        .map(|(_, scopes)| scopes)
-                        .unwrap_or_default()
-                };
-                scopes_of(lit) != scopes_of(input)
-            } else {
-                // Check input identifier scopes (native or boxed via unified method)
-                if let Some((_, id_scopes)) = heap.get_identifier_data_any(input) {
-                    if literal_scopes.is_subset_of(&id_scopes) {
-                        false // Same or compatible binding
-                    } else {
-                        true // Different binding contexts
-                    }
-                } else {
-                    // Input is a bare Symbol - at top level
-                    !literal_scopes.is_empty()
-                }
-            }
-        }
-    }
+    // Spelled differently, the two can still be one binding — a global
+    // imported under a rename. A local binding is never renamed, so either
+    // side reaching one rules it out.
+    Ok(
+        denotes_same_binding(lit, input, heap, definition.env, use_site.env)
+            && lit_binding()?.is_none()
+            && input_binding()?.is_none(),
+    )
 }
 
-/// Check if a TaggedValue input matches a TaggedValue literal from the pattern.
+/// The local binding `name` reaches from `site`, named by its scope set; `None`
+/// for a global or an unbound name.
 ///
-/// Both pattern and input are TaggedValues stored on the heap.
-pub fn tagged_matches_literal(input: TaggedValue, pattern_lit: TaggedValue, heap: &Heap) -> bool {
-    // Check if pattern is a symbol
-    if let Some(pat_name) = heap.get_symbol_name(pattern_lit) {
-        // Pattern is a Symbol - input must be an identifier with matching name
-        return match heap.get_symbol_or_identifier_name(input) {
-            Some(input_name) => pat_name == input_name,
-            None => false,
-        };
-    }
-
-    // Check if pattern is an identifier (native or boxed, unified)
-    if let Some((pat_name, _)) = heap.get_identifier_data_any(pattern_lit) {
-        // Names alone, matching the three other arms of this function.
-        //
-        // R7RS 4.3.2: a literal matches an input identifier when both denote
-        // the same binding, *or both are unbound and have the same name*. This
-        // function cannot see bindings — that is what the caller's
-        // `is_literal_shadowed_tagged` veto is for, and it runs first. So the
-        // only question left here is whether the spellings agree.
-        //
-        // Requiring the literal's scopes to be a subset of the input's answered
-        // a different question. It made an *introduced* literal (which carries
-        // the enclosing expansion's scopes) unable to match a *substituted*
-        // input (which carries none), even with both unbound:
-        //
-        //   (define-syntax m
-        //     (syntax-rules ()
-        //       ((_ e) (let-syntax ((n (syntax-rules (k) ((n k) 'lit)
-        //                                                ((n x) 'notlit))))
-        //                (n e)))))
-        //   (m k)  ;; => lit, per Chez and Gauche; was 'notlit
-        return match heap.get_symbol_or_identifier_name(input) {
-            Some(input_name) => pat_name.as_ref() == input_name,
-            None => false,
-        };
-    }
-
-    // For non-identifier types (booleans, numbers, etc.), use heap equality
-    heap.tagged_values_equal(pattern_lit, input)
+/// `own` is what the identifier carries. Carrying nothing but `ignoring` means
+/// it was written at the site, and so stands in the site's scopes.
+fn local_binding(
+    name: &str,
+    own: ScopeSet,
+    ignoring: Option<ScopeId>,
+    site: Site<'_>,
+) -> Result<Option<ScopeSet>, String> {
+    let Some(env) = site.env else {
+        return Ok(None);
+    };
+    let scopes = if own.iter().all(|scope| Some(*scope) == ignoring) {
+        site.scopes
+    } else {
+        &own
+    };
+    env.scoped_binding_of(name, scopes)
+        .map_err(|ambiguous| ambiguous.to_string())
 }
 
-/// R7RS §4.3.2's other half: a literal also matches an input identifier that
-/// *denotes the same binding*, however it is spelled.
-///
-/// [`tagged_matches_literal`] can only compare spellings, so a keyword imported
-/// under a rename never matched its own literal:
+fn scopes_of(tv: TaggedValue, heap: &Heap) -> ScopeSet {
+    heap.get_identifier_data_any(tv)
+        .map(|(_, scopes)| scopes)
+        .unwrap_or_default()
+}
+
+/// R7RS §4.3.2's same-binding half for two *differently spelled* names: a
+/// keyword imported under a rename still matches its own literal.
 ///
 /// ```scheme
 /// (import (scheme base) (rename (scheme base) (else alt)))
@@ -187,7 +115,7 @@ pub fn tagged_matches_literal(input: TaggedValue, pattern_lit: TaggedValue, heap
 ///
 /// Each name is resolved in its own environment — the literal's in the one the
 /// macro was defined in, the input's at the use site — which is what the report
-/// specifies and what the spelling test approximates.
+/// specifies. [`matches_literal`] only asks once neither side is local.
 ///
 /// The comparison is on the *value*, and only when that value is a heap object.
 /// Environments hold values, not binding identities (an import under a rename

@@ -190,11 +190,10 @@ fn is_quote_spelling(name: &str) -> bool {
 /// accumulates as we enter binding forms (lambda, let-syntax, etc.). This
 /// enables scope-based hygiene lookup where identifiers carry scope information.
 ///
-/// **Name Shadowing**: The desugarer also tracks which names are shadowed by
-/// local bindings (lambda parameters). These names should not be treated as
-/// macro calls, even if a macro with that name exists in the environment.
-/// This handles cases like `(let ((let odd?)) (let 8))` where the inner `let`
-/// should call the variable, not expand the macro.
+/// **Name Shadowing**: a local binding is recorded in the environment at the
+/// scopes of the body that binds it, so shadowing is resolution: in
+/// `(let ((let odd?)) (let 8))` the inner `let` resolves to the variable, not
+/// the macro.
 /// What a head symbol, variable reference or `set!` target names, when it
 /// names syntax rather than a value.
 ///
@@ -228,8 +227,9 @@ pub struct Desugarer {
     /// Accumulates scopes as we enter binding forms
     current_scopes: ScopeSet,
 
-    /// Names that are shadowed by local bindings (lambda parameters)
-    /// These should not be treated as macro calls
+    /// Names bound by the enclosing binding forms, by spelling. Only the
+    /// `apply` lowering reads it; every other question about shadowing is
+    /// answered by resolving against `env`.
     shadowed_names: std::collections::HashSet<Rc<str>>,
 
     /// Optional source map for looking up source positions of parsed forms
@@ -440,11 +440,9 @@ impl Desugarer {
             child
         };
 
-        // Still recorded by spelling for the *literal* matcher, which compares
-        // spellings rather than bindings (`is_literal_shadowed_tagged`). That
-        // is the one place shadowing has not moved to bindings yet; it is the
-        // triage doc's "spelling-based literal matching" item, and it is a
-        // separate change from this one.
+        // Still recorded by spelling for one reader: the `apply` lowering in
+        // `desugar_list`, the last head recognized by spelling (its comment
+        // says why). Literal matching resolves the bindings recorded above.
         let mut shadowed = self.shadowed_names.clone();
         shadowed.extend(names);
 
@@ -1162,11 +1160,11 @@ impl Desugarer {
                 &compiled_macro,
                 list, // Pass TaggedValue directly
                 shared_heap,
-                &self.shadowed_names,
-                // The use site's environment, for the half of R7RS §4.3.2 that
-                // compares bindings rather than spellings: an auxiliary
-                // keyword imported under a rename still names its own literal.
-                Some(&self.env),
+                // Where an input identifier resolves when it meets a literal.
+                // R7RS §4.3.2 matches the two by binding, so the input is
+                // looked up here, standing in the scopes a reference written
+                // here stands in.
+                Some((&self.env, &self.current_scopes)),
             )
             .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
 
@@ -2457,12 +2455,11 @@ impl Desugarer {
         let rules_start = literals_index + 1;
         let rules = self.parse_macro_rules_tagged(&list[rules_start..], &name, shared_heap)?;
 
-        let mut compiler = Compiler::with_env_scopes_and_shadowed(
+        let mut compiler = Compiler::with_env_and_scopes(
             literals,
             custom_ellipsis,
             env.clone(),
             scopes.clone(),
-            &self.shadowed_names,
             env.heap().clone(),
         );
         let macro_name = name.clone();
