@@ -731,11 +731,11 @@ fn primitive_load(
         })?;
 
     loop {
-        match parser.parse() {
-            Ok(expr) => {
+        match parser.parse_next() {
+            Ok(Some(expr)) => {
                 ctx.eval_expr(expr, &env)?;
             }
-            Err(patina_frontend::ParseError::UnexpectedEof) => break,
+            Ok(None) => break,
             Err(e) => {
                 return Err(EvalError::InvalidSyntax(format!(
                     "load: parse error in '{}': {}",

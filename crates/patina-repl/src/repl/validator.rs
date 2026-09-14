@@ -1,3 +1,4 @@
+use patina_frontend::Parser;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 
 pub struct SchemeValidator;
@@ -6,64 +7,103 @@ impl SchemeValidator {
     pub fn new() -> Self {
         SchemeValidator
     }
+}
 
-    fn count_parens(input: &str) -> (i32, i32) {
-        let mut paren_balance = 0;
-        let mut bracket_balance = 0;
-        let mut in_string = false;
-        let mut escape_next = false;
-        let mut in_comment = false;
-        let mut prev_char = '\0';
-
-        for ch in input.chars() {
-            if ch == '\n' {
-                in_comment = false;
+/// Whether the line so far stops part-way through a datum, so the editor
+/// should take another one.
+///
+/// The reader answers this, rather than a paren count: counting cannot know
+/// that the parenthesis in `#\(` is a character and not an opener, that the
+/// one in `#|(|#` is inside a comment, or that `'` and `#;` are waiting for a
+/// datum of their own. A counter got each of those wrong in both directions —
+/// holding a complete line open forever, and evaluating an unfinished one.
+///
+/// Anything else is handed on as complete, including input that is plainly
+/// wrong: a stray `)` is a mistake to report now, not a reason to sit and
+/// wait for input that cannot fix it.
+fn needs_more_input(input: &str) -> bool {
+    match Parser::new(input) {
+        // A constructor failure is the first token failing to lex, which for
+        // an unterminated string or block comment means the same thing.
+        Err(e) => e.is_incomplete(),
+        Ok(mut parser) => loop {
+            match parser.parse_next() {
+                Ok(Some(_)) => continue,
+                Ok(None) => return false,
+                Err(e) => return e.is_incomplete(),
             }
-
-            if in_comment {
-                prev_char = ch;
-                continue;
-            }
-
-            if escape_next {
-                escape_next = false;
-                prev_char = ch;
-                continue;
-            }
-
-            match ch {
-                '\\' if in_string => escape_next = true,
-                '"' => in_string = !in_string,
-                // Only treat `;` as line comment if not preceded by `#` (datum comment)
-                ';' if !in_string && prev_char != '#' => in_comment = true,
-                '(' if !in_string => paren_balance += 1,
-                ')' if !in_string => paren_balance -= 1,
-                '[' if !in_string => bracket_balance += 1,
-                ']' if !in_string => bracket_balance -= 1,
-                _ => {}
-            }
-
-            prev_char = ch;
-        }
-
-        (paren_balance, bracket_balance)
+        },
     }
 }
 
 impl Validator for SchemeValidator {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
-        let input = ctx.input();
-        let (paren_balance, bracket_balance) = Self::count_parens(input);
-
-        if paren_balance > 0 || bracket_balance > 0 {
-            // More opening than closing - continue to next line
+        if needs_more_input(ctx.input()) {
             Ok(ValidationResult::Incomplete)
-        } else if paren_balance < 0 || bracket_balance < 0 {
-            // More closing than opening - syntax error but accept it so user sees error
-            Ok(ValidationResult::Valid(None))
         } else {
-            // Balanced - good to evaluate
             Ok(ValidationResult::Valid(None))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_more_input;
+
+    #[test]
+    fn takes_another_line_only_while_a_datum_is_unfinished() {
+        for input in [
+            "(+ 1",
+            "(let ((x 1))",
+            "'",
+            "`(a ,",
+            "#(1 2",
+            "#u8(1",
+            "#;",
+            "(display \"unterminated",
+            "(+ 1 #| unterminated",
+            "(a |unterminated",
+            "(1 . 2",
+        ] {
+            assert!(needs_more_input(input), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn a_complete_line_is_evaluated() {
+        for input in [
+            "",
+            "   ",
+            "42",
+            "(+ 1 2)",
+            "(let ((x 1)) x)",
+            "; just a comment",
+            "#| block |#",
+            "#;(dropped) 1",
+            "(display \"a (paren) in a string\")",
+            "(+ 1 #| a ( comment |# 2)",
+            "(write #\\()",
+            "(write #\\))",
+            "(a |bar ( identifier|)",
+            "(1 . 2)",
+        ] {
+            assert!(!needs_more_input(input), "{input:?}");
+        }
+    }
+
+    /// Input that cannot be fixed by typing more is reported, not waited on.
+    #[test]
+    fn a_line_that_is_simply_wrong_is_not_held_open() {
+        for input in [
+            "(display 1))",
+            ")",
+            "(1 . 2 3)",
+            "#u8(300)",
+            // Square brackets are R6RS, off by default: holding the line open
+            // would wait for a `]` the reader would refuse anyway.
+            "[vector 1",
+        ] {
+            assert!(!needs_more_input(input), "{input:?}");
         }
     }
 }

@@ -189,3 +189,162 @@ fn source_map_entries_pruned_after_collection() {
          vs {uncollected} with (list)"
     );
 }
+
+// =============================================================================
+// Input that ends inside a datum (#329)
+// =============================================================================
+
+use patina_interpreter::{InterpreterError, ParseError};
+
+/// Programs cut short inside a datum, after zero or more complete forms.
+const CUT_SHORT: &[&str] = &[
+    "(+ 1",
+    "42 (+ 1",
+    "(define x 1)\n(define y (+ x",
+    "#(1 2",
+    "#u8(1",
+    "'",
+    "`(a ,",
+    "(1 .",
+    "1 #;",
+    "#1=(a",
+];
+
+/// Programs whose text after the last form is whitespace and complete comments.
+const CLEANLY_ENDED: &[&str] = &[
+    "42",
+    "42 \n",
+    "42 ; a line comment",
+    "42 #| a block comment |#",
+    "42 #;(a datum comment) ",
+    "42 #; #; 1 2",
+];
+
+fn is_cut_short<E: std::error::Error>(err: &InterpreterError<E>) -> bool {
+    matches!(
+        err,
+        InterpreterError::Parse(ParseError::IncompleteDatum { .. })
+    )
+}
+
+#[test]
+fn eval_program_rejects_input_cut_short_inside_a_datum() {
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    for input in CUT_SHORT {
+        let err = tree_walker.eval_program(input).expect_err(input);
+        assert!(is_cut_short(&err), "tree-walker {input:?}: {err}");
+        let err = vm.eval_program(input).expect_err(input);
+        assert!(is_cut_short(&err), "vm {input:?}: {err}");
+    }
+}
+
+#[test]
+fn eval_program_ends_cleanly_after_trailing_whitespace_and_comments() {
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    for input in CLEANLY_ENDED {
+        let results = [
+            (
+                "tree-walker",
+                tree_walker.eval_program(input).map_err(|e| e.to_string()),
+            ),
+            ("vm", vm.eval_program(input).map_err(|e| e.to_string())),
+        ];
+        for (backend, result) in results {
+            let value = result.unwrap_or_else(|e| panic!("{backend} {input:?}: {e}"));
+            assert_eq!(value.as_fixnum(), Some(42), "{backend} {input:?}");
+        }
+    }
+}
+
+#[test]
+fn eval_program_names_where_the_unfinished_datum_began() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let err = interp
+        .eval_program("(define x 1)\n(define y\n  (+ x")
+        .expect_err("cut short");
+    assert!(
+        matches!(
+            err,
+            InterpreterError::Parse(ParseError::IncompleteDatum { line: 2, column: 1 })
+        ),
+        "{err}"
+    );
+    assert_eq!(
+        err.to_string(),
+        "Parse error: Unexpected end of input inside the datum beginning at line 2, column 1"
+    );
+}
+
+#[test]
+fn eval_str_requires_a_datum() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    for input in ["", "  ", "; only a comment", "#;(only a datum comment)"] {
+        let err = interp.eval_str(input).expect_err(input);
+        assert!(
+            matches!(err, InterpreterError::Parse(ParseError::UnexpectedEof)),
+            "{input:?}: {err}"
+        );
+    }
+    let err = interp.eval_str("(+ 1").expect_err("cut short");
+    assert!(is_cut_short(&err), "{err}");
+}
+
+/// `eval_str` evaluates the first expression only, but it must still read
+/// what follows: `"42 (+ 1"` reporting 42 is the same silent acceptance as a
+/// truncated script exiting 0.
+#[test]
+fn eval_str_rejects_a_malformed_suffix_after_the_expression() {
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    for input in ["42 (+ 1", "42 '", "42 #;"] {
+        let err = tree_walker.eval_str(input).expect_err(input);
+        assert!(is_cut_short(&err), "tree-walker {input:?}: {err}");
+        let err = vm.eval_str(input).expect_err(input);
+        assert!(is_cut_short(&err), "vm {input:?}: {err}");
+    }
+    // A complete trailing form is still not evaluated, and still not an error.
+    assert_eq!(
+        tree_walker.eval_str("42 (+ 1 2)").unwrap().as_fixnum(),
+        Some(42)
+    );
+    let err = tree_walker
+        .eval_str_tracked("42 (+ 1")
+        .expect_err("tracked");
+    assert!(is_cut_short(&err), "{err}");
+    let (result, _map) = tree_walker.eval_str_with_source_name("42 (+ 1", "<test>");
+    assert!(is_cut_short(&result.expect_err("with source name")));
+}
+
+/// The diagnostic locates the unfinished form in the file, the way an
+/// evaluation error does — a bare line number is little help in a long file.
+#[test]
+fn a_parse_error_is_rendered_with_its_source_line_and_caret() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let (result, source_map) =
+        interp.eval_program_with_source_name("(define x 1)\n(define y\n  (+ 1", "cut.scm");
+    let err = result.expect_err("cut short");
+    let rendered = patina_interpreter::format_interpreter_error(&err, &source_map.borrow());
+    assert!(rendered.contains("  at cut.scm:2:1"), "{rendered}");
+    assert!(rendered.contains("(define y"), "{rendered}");
+    assert!(rendered.contains('^'), "{rendered}");
+}
+
+#[test]
+fn tracked_eval_program_variants_reject_input_cut_short_inside_a_datum() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let err = interp.eval_program_tracked("42 (+ 1").expect_err("tracked");
+    assert!(is_cut_short(&err), "{err}");
+    let (result, _source_map) = interp.eval_program_with_source_name("42 (+ 1", "<test>");
+    let err = result.expect_err("with source name");
+    assert!(is_cut_short(&err), "{err}");
+    // The forms before the cut have run by then, as they would under `load`.
+    let (result, _source_map) =
+        interp.eval_program_with_source_name("(define ran-before-cut 7)\n(define y (+", "<test>");
+    assert!(is_cut_short(&result.expect_err("with source name")));
+    assert_eq!(
+        interp.eval_str("ran-before-cut").unwrap().as_fixnum(),
+        Some(7)
+    );
+}

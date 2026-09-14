@@ -111,6 +111,9 @@ pub struct Lexer {
     /// Char offset just past the end of the token returned by the
     /// previous `next_token` call (0 before any token is returned)
     prev_token_end: usize,
+    /// 1 when a leading U+FEFF was dropped, so offsets reported outward can
+    /// be put back into the caller's own input.
+    bom_offset: usize,
     /// Whether the R6RS surface syntax R7RS reserves is read — resolved once
     /// here rather than per token. See [`crate::dialect`].
     allow_r6rs: bool,
@@ -155,6 +158,7 @@ impl Lexer {
             line: 1,
             column: 1,
             prev_token_end: 0,
+            bom_offset: usize::from(input.starts_with('\u{feff}')),
             allow_r6rs: crate::dialect::allow_r6rs(),
             open_delimiters: Vec::new(),
         }
@@ -212,8 +216,13 @@ impl Lexer {
     /// Char offset just past the end of the token returned by the previous
     /// `next_token` call. Used to determine exactly how much input a parse
     /// consumed.
+    ///
+    /// Counted in the input the caller handed over, byte order mark included:
+    /// the lexer drops a leading one, but `read` maps this offset back onto
+    /// its own buffer, and an offset one character short there left the port
+    /// re-reading the last character of every datum.
     pub fn prev_token_end(&self) -> usize {
-        self.prev_token_end
+        self.prev_token_end + self.bom_offset
     }
 
     /// Read the `u8(` that both `#u8(` and `#vu8(` end with, positioned on

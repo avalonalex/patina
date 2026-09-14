@@ -18,8 +18,19 @@ pub enum ParseError {
     #[error("Lexer error: {0}")]
     LexError(#[from] LexError),
 
-    #[error("Unexpected EOF")]
+    /// The input ended where a datum was required: `parse` was called with
+    /// nothing left but whitespace and comments. `parse_next` reports that
+    /// case as `Ok(None)` instead, so a caller reading forms until the end
+    /// of the input never sees this.
+    #[error("Unexpected end of input")]
     UnexpectedEof,
+
+    /// The input ended inside a datum. `line` and `column` are where that
+    /// datum — the outermost one being read — began: the end of the input
+    /// is where the reader stopped, not where the problem is, and a
+    /// truncated file is found by the form it cut short.
+    #[error("Unexpected end of input inside the datum beginning at line {line}, column {column}")]
+    IncompleteDatum { line: u32, column: u32 },
 
     #[error("Unexpected token: {0:?}")]
     UnexpectedToken(Token),
@@ -50,6 +61,29 @@ pub enum ParseError {
     NativeExtensionRequired(String),
 }
 
+impl ParseError {
+    /// Whether the input ran out part-way through something, as opposed to
+    /// text that stays wrong however much more follows.
+    ///
+    /// A reader fed one line at a time — `read` on a file or on stdin, and a
+    /// REPL deciding whether to keep taking lines — needs more input for
+    /// these and must report every other error where it stands. The lexer's
+    /// unterminated constructs belong here beside `IncompleteDatum`: a string
+    /// and a block comment may both span lines, so an unterminated one at the
+    /// end of the buffer says only that the datum is not finished yet.
+    pub fn is_incomplete(&self) -> bool {
+        matches!(
+            self,
+            ParseError::IncompleteDatum { .. }
+                | ParseError::LexError(
+                    LexError::UnterminatedString
+                        | LexError::UnterminatedVerticalBarIdentifier
+                        | LexError::UnterminatedBlockComment
+                )
+        )
+    }
+}
+
 pub struct Parser {
     lexer: Lexer,
     current_token: Token,
@@ -70,6 +104,9 @@ pub struct Parser {
     source_map: Option<Rc<RefCell<SourceMap>>>,
     /// Name of the source being parsed (e.g., file path, "<repl>", "<eval>")
     source_name: Rc<str>,
+    /// Where the outermost datum being read began, so that running out of
+    /// input however deep inside it reports that position.
+    datum_start: (u32, u32),
 }
 
 impl Parser {
@@ -83,6 +120,7 @@ impl Parser {
             current_token: spanned.token,
             current_token_line: spanned.line,
             current_token_column: spanned.column,
+            datum_start: (spanned.line, spanned.column),
             heap,
             labels: HashMap::new(),
             pending_refs: Vec::new(),
@@ -130,6 +168,7 @@ impl Parser {
             current_token: spanned.token,
             current_token_line: spanned.line,
             current_token_column: spanned.column,
+            datum_start: (spanned.line, spanned.column),
             heap,
             labels: HashMap::new(),
             pending_refs: Vec::new(),
@@ -153,6 +192,7 @@ impl Parser {
             current_token: spanned.token,
             current_token_line: spanned.line,
             current_token_column: spanned.column,
+            datum_start: (spanned.line, spanned.column),
             heap,
             labels: HashMap::new(),
             pending_refs: Vec::new(),
@@ -199,26 +239,62 @@ impl Parser {
     }
 
     /// Parse the next datum, or return `None` when only whitespace and
-    /// complete comments remain. EOF inside a datum is still an error, as
-    /// required by the Scheme `read` procedure. Incomplete datum comments
-    /// likewise retain their parse errors.
+    /// complete comments remain. Input that ends inside a datum is an
+    /// `IncompleteDatum` error, as required of the Scheme `read` procedure
+    /// — so is an incomplete datum comment — and a caller reading forms
+    /// until the end of the input must treat only `Ok(None)` as that end.
     pub fn parse_next(&mut self) -> Result<Option<TaggedValue>, ParseError> {
-        self.skip_datum_comments()?;
-        if self.current_token == Token::Eof {
-            Ok(None)
-        } else {
+        if self.at_datum()? {
             self.parse().map(Some)
+        } else {
+            Ok(None)
         }
     }
 
+    /// Consume any leading datum comments and say whether a datum follows,
+    /// recording where it begins for `incomplete_datum`.
+    ///
+    /// Each comment in a *sequential* run is its own datum, so `#;(1) #;`
+    /// is reported against the second `#;` rather than the first. A *nested*
+    /// run — `#; #;` — is one construct, and like an unfinished nested list
+    /// is reported against where that construct starts.
+    fn at_datum(&mut self) -> Result<bool, ParseError> {
+        loop {
+            self.datum_start = (self.current_token_line, self.current_token_column);
+            if self.current_token != Token::DatumComment {
+                return Ok(self.current_token != Token::Eof);
+            }
+            self.advance()?; // consume #;
+            self.skip_datum()?; // skip the commented datum
+        }
+    }
+
+    /// The error for input that ran out inside the datum being read.
+    fn incomplete_datum(&self) -> ParseError {
+        let (line, column) = self.datum_start;
+        ParseError::IncompleteDatum { line, column }
+    }
+
+    /// Parse one datum, which must be there: `UnexpectedEof` when only
+    /// whitespace and comments remain. Use `parse_next` to read up to the
+    /// end of the input.
     pub fn parse(&mut self) -> Result<TaggedValue, ParseError> {
-        let result = self.parse_expr().and_then(|tv| self.finish_datum(tv));
+        let result = self.parse_one_datum();
         // A label's scope is its outermost datum (R7RS 2.4): the table is
         // cleared for the next one — also after a failed datum, so one bad
-        // form cannot poison the next with "Duplicate datum label".
+        // form cannot poison the next with "Duplicate datum label". Every
+        // exit of `parse_one_datum` passes through here, which is why it is
+        // a separate function rather than three copies of these two lines.
         self.labels.clear();
         self.pending_refs.clear();
         result
+    }
+
+    fn parse_one_datum(&mut self) -> Result<TaggedValue, ParseError> {
+        if !self.at_datum()? {
+            return Err(ParseError::UnexpectedEof);
+        }
+        self.parse_expr().and_then(|tv| self.finish_datum(tv))
     }
 
     /// Resolve the placeholders of a complete outermost datum, and reject a
@@ -236,21 +312,33 @@ impl Parser {
         Ok(self.resolve_labels(tv))
     }
 
-    /// Parse all expressions from the input until EOF.
+    /// Parse every datum up to the end of the input, for files that hold
+    /// several top-level forms (included files, library bodies).
     ///
-    /// Returns a vector of all parsed expressions. Useful for parsing
-    /// files that contain multiple top-level expressions (like included files).
+    /// Ends after trailing whitespace and comments — a datum comment
+    /// included — and fails with `IncompleteDatum` if the input ends inside
+    /// a datum, so a file cut short is never read as a shorter whole one.
     pub fn parse_all(&mut self) -> Result<Vec<TaggedValue>, ParseError> {
         let mut exprs = Vec::new();
-        while self.current_token != Token::Eof {
-            let expr = self.parse_expr()?;
-            // Resolve labels for each top-level expression
-            exprs.push(self.finish_datum(expr)?);
-            // Clear labels between top-level expressions
-            self.labels.clear();
-            self.pending_refs.clear();
+        while let Some(expr) = self.parse_next()? {
+            exprs.push(expr);
         }
         Ok(exprs)
+    }
+
+    /// Consume whatever is left of the input without building it, reporting
+    /// only whether it reads: a remainder that ends inside a datum is an
+    /// `IncompleteDatum` error, and everything complete is discarded.
+    ///
+    /// For callers that want one datum but must not let a truncated tail pass
+    /// unnoticed. Reading the remainder with `parse_next` would answer the
+    /// same question, but would allocate every discarded datum on the
+    /// caller's heap for the garbage collector to find later.
+    pub fn skip_rest(&mut self) -> Result<(), ParseError> {
+        while self.at_datum()? {
+            self.skip_datum()?;
+        }
+        Ok(())
     }
 
     /// Consume any run of `#;` datum comments, skipping each commented datum.
@@ -378,7 +466,7 @@ impl Parser {
                     Ok(self.heap.borrow_mut().alloc_label_placeholder(label))
                 }
             }
-            Token::Eof => Err(ParseError::UnexpectedEof),
+            Token::Eof => Err(self.incomplete_datum()),
             token => Err(ParseError::UnexpectedToken(token.clone())),
         }
     }
@@ -413,7 +501,7 @@ impl Parser {
                 self.advance()?; // consume #n#
                 Ok(())
             }
-            Token::Eof => Err(ParseError::UnexpectedEof),
+            Token::Eof => Err(self.incomplete_datum()),
             token => Err(ParseError::UnexpectedToken(token.clone())),
         }
     }
@@ -424,7 +512,13 @@ impl Parser {
 
         while self.current_token != Token::RightParen {
             if self.current_token == Token::Eof {
-                return Err(ParseError::UnexpectedEof);
+                return Err(self.incomplete_datum());
+            }
+            // As in `parse_list`: a datum comment may sit right before the
+            // closer, and the list being skipped is still a list.
+            self.skip_datum_comments()?;
+            if self.current_token == Token::RightParen {
+                break;
             }
             if self.current_token == Token::Dot {
                 self.advance()?; // consume .
@@ -434,6 +528,11 @@ impl Parser {
             self.skip_datum()?;
         }
 
+        // A dotted list leaves the loop by `break`, so this guard is where
+        // `(1 . 2` — input that ran out after the tail — arrives.
+        if self.current_token == Token::Eof {
+            return Err(self.incomplete_datum());
+        }
         if self.current_token != Token::RightParen {
             return Err(ParseError::UnexpectedToken(self.current_token.clone()));
         }
@@ -452,7 +551,7 @@ impl Parser {
 
         while self.current_token != Token::RightParen {
             if self.current_token == Token::Eof {
-                return Err(ParseError::UnexpectedEof);
+                return Err(self.incomplete_datum());
             }
 
             // A datum comment may sit immediately before the closing paren
@@ -479,6 +578,11 @@ impl Parser {
             elements.push(self.parse_expr()?);
         }
 
+        // As in `skip_list`: the dotted branch breaks out of the loop, so
+        // `(1 . 2` reaches this guard with nothing left to read.
+        if self.current_token == Token::Eof {
+            return Err(self.incomplete_datum());
+        }
         if self.current_token != Token::RightParen {
             return Err(ParseError::UnexpectedToken(self.current_token.clone()));
         }
@@ -502,7 +606,7 @@ impl Parser {
 
         while self.current_token != Token::RightParen {
             if self.current_token == Token::Eof {
-                return Err(ParseError::UnexpectedEof);
+                return Err(self.incomplete_datum());
             }
             // As in parse_list: `#(a #;b)` — a datum comment may precede `)`.
             self.skip_datum_comments()?;
@@ -526,7 +630,7 @@ impl Parser {
 
         while self.current_token != Token::RightParen {
             if self.current_token == Token::Eof {
-                return Err(ParseError::UnexpectedEof);
+                return Err(self.incomplete_datum());
             }
 
             // As in parse_list: a datum comment may appear between bytes.
@@ -556,6 +660,10 @@ impl Parser {
                 };
                 bytes.push(byte);
                 self.advance()?;
+            } else if self.current_token == Token::Eof {
+                // Reachable once the datum comments above are stripped:
+                // `#u8(1 #;2` runs out here rather than at the loop's guard.
+                return Err(self.incomplete_datum());
             } else {
                 return Err(ParseError::InvalidSyntax(
                     "Bytevector must contain only bytes (0-255)".to_string(),
@@ -1389,7 +1497,7 @@ mod tests {
         ] {
             let mut parser = Parser::new(input).unwrap();
             assert!(
-                matches!(parser.parse_next(), Err(ParseError::UnexpectedEof)),
+                matches!(parser.parse_next(), Err(ParseError::IncompleteDatum { .. })),
                 "{input:?}"
             );
         }
@@ -1410,8 +1518,116 @@ mod tests {
         );
         assert!(matches!(
             parser.parse_next(),
-            Err(ParseError::UnexpectedEof)
+            Err(ParseError::IncompleteDatum { line: 1, column: 3 })
         ));
+    }
+
+    #[test]
+    fn test_incomplete_datum_names_where_the_datum_began() {
+        for (input, line, column) in [
+            ("(", 1, 1),
+            ("42\n  (1 (2", 2, 3),
+            ("'", 1, 1),
+            ("#(1 #(2", 1, 1),
+            ("#u8(1", 1, 1),
+            ("(1 .", 1, 1),
+            ("#1=(a", 1, 1),
+            ("1 2 #;", 1, 5),
+            ("1 #;(2) #;", 1, 9),
+        ] {
+            let mut parser = Parser::new(input).unwrap();
+            let err = loop {
+                match parser.parse_next() {
+                    Ok(Some(_)) => continue,
+                    Ok(None) => panic!("{input:?} ended cleanly"),
+                    Err(e) => break e,
+                }
+            };
+            assert!(
+                matches!(err, ParseError::IncompleteDatum { line: l, column: c } if (l, c) == (line, column)),
+                "{input:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_requires_a_datum_where_parse_next_ends_cleanly() {
+        for input in ["", "   ", "; a comment", "#|block|#", "#;(1) ", "#; #; 1 2"] {
+            assert!(
+                matches!(
+                    Parser::new(input).unwrap().parse(),
+                    Err(ParseError::UnexpectedEof)
+                ),
+                "{input:?}"
+            );
+            assert!(
+                Parser::new(input).unwrap().parse_next().unwrap().is_none(),
+                "{input:?}"
+            );
+        }
+    }
+
+    /// Shapes that used to leave the `IncompleteDatum` contract by another
+    /// door: a dotted list breaks out of its loop and meets the closing
+    /// guard with nothing left, and a bytevector element position blamed the
+    /// missing element for not being a byte.
+    #[test]
+    fn test_running_out_after_a_dotted_tail_or_a_byte_is_an_incomplete_datum() {
+        for input in [
+            "(1 . 2",
+            "'(a . b",
+            "(1 . (2",
+            "#;(1 . 2",
+            "#u8(1 #;2",
+            "#u8(#;1",
+        ] {
+            let err = Parser::new(input).unwrap().parse_next().unwrap_err();
+            assert!(
+                matches!(err, ParseError::IncompleteDatum { .. }),
+                "{input:?}: {err}"
+            );
+        }
+    }
+
+    /// Skipping a commented-out datum must accept everything parsing one
+    /// does, a datum comment before the closer included.
+    #[test]
+    fn test_a_datum_comment_may_sit_before_the_closer_of_a_skipped_list() {
+        for input in [
+            "#;(a #;b) 42",
+            "#;(a #;(b c)) 42",
+            "#;#(a #;b) 42",
+            "#;(a b #;c) 42",
+        ] {
+            let tv = Parser::new(input)
+                .unwrap()
+                .parse_next()
+                .unwrap_or_else(|e| panic!("{input:?}: {e}"))
+                .unwrap_or_else(|| panic!("{input:?}: no datum"));
+            assert_eq!(tv.as_fixnum(), Some(42), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_all_ends_after_a_trailing_datum_comment() {
+        let all = Parser::new("1 2 #;(3)").unwrap().parse_all().unwrap();
+        assert_eq!(all.len(), 2);
+        let all = Parser::new("#;(0) 1 #;2 #|c|# ; c\n")
+            .unwrap()
+            .parse_all()
+            .unwrap();
+        assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_all_rejects_input_cut_short_inside_a_datum() {
+        for (input, line, column) in [("1 2 (3", 1, 5), ("(1)\n(2\n", 2, 1), ("1 #;", 1, 3)] {
+            let err = Parser::new(input).unwrap().parse_all().unwrap_err();
+            assert!(
+                matches!(err, ParseError::IncompleteDatum { line: l, column: c } if (l, c) == (line, column)),
+                "{input:?}: {err}"
+            );
+        }
     }
 
     #[test]

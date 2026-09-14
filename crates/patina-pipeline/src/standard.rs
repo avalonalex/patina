@@ -85,9 +85,9 @@ impl Pipeline for StandardPipeline {
         // Step 2: Evaluate each expression in sequence
         loop {
             // Try to parse next expression (returns TaggedValue)
-            let expr = match parser.parse() {
-                Ok(expr) => expr,
-                Err(patina_frontend::parser::ParseError::UnexpectedEof) => break,
+            let expr = match parser.parse_next() {
+                Ok(Some(expr)) => expr,
+                Ok(None) => break,
                 Err(e) => return Err(PipelineError::Frontend(e.into())),
             };
 

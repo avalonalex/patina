@@ -476,8 +476,8 @@ impl Evaluator {
             patina_frontend::Desugarer::with_env(eval_env.clone()).with_fs(self.fs.clone());
 
         loop {
-            match parser.parse() {
-                Ok(tagged) => {
+            match parser.parse_next() {
+                Ok(Some(tagged)) => {
                     // Desugar TaggedValue to CoreExpr - desugar_tagged manages heap borrows internally
                     let core_expr = match desugarer.desugar_tagged(tagged, heap) {
                         Ok(ce) => ce,
@@ -500,7 +500,7 @@ impl Evaluator {
                         );
                     }
                 }
-                Err(patina_frontend::ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => {
                     tracing::warn!(
                         path = %extras_path.display(),

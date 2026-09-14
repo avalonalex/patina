@@ -245,8 +245,12 @@ fn run_script_tree_walker(filename: &str, opts: &CliOptions) {
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {
-        interp.eval_program_resilient_with_source_name(&code, filename);
-        process::exit(0);
+        // Resilient mode reports each evaluation error and carries on, so its
+        // status says nothing about them. A read error is different: the rest
+        // of the file never ran, which a truncated suite must not pass off as
+        // a clean one.
+        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(&code, filename);
+        process::exit(if read_to_end { 0 } else { 1 });
     } else {
         let (result, source_map) = interp.eval_program_with_source_name(&code, filename);
         match result {
@@ -343,8 +347,10 @@ fn run_script_vm(filename: &str, opts: &CliOptions) {
     let is_test_file = filename.contains("test") || code.contains("test-begin");
 
     if is_test_file {
-        eval_program_resilient_vm(&interp, &code, filename);
-        process::exit(0);
+        // As in `run_script_tree_walker`: evaluation errors do not change the
+        // status here, a file that could not be read to its end does.
+        let read_to_end = eval_program_resilient_vm(&interp, &code, filename);
+        process::exit(if read_to_end { 0 } else { 1 });
     } else {
         let (result, source_map) = eval_program_vm(&interp, &code, filename);
         match result {
@@ -369,7 +375,7 @@ fn eval_program_vm(
     Result<patina_core::TaggedValue, patina_interpreter::InterpreterError<VmBackendError>>,
     std::rc::Rc<std::cell::RefCell<patina_interpreter::SourceMap>>,
 ) {
-    use patina_interpreter::{InterpreterError, ParseError, Parser, SourceMap};
+    use patina_interpreter::{InterpreterError, Parser, SourceMap};
 
     let mut result = patina_core::TaggedValue::UNSPECIFIED;
     let heap = interp.backend().global_env().heap();
@@ -385,8 +391,8 @@ fn eval_program_vm(
         // Drop SourceMap entries for slots the previous form's evaluation
         // freed, before this iteration's parse can reuse them (§9.1).
         patina_interpreter::prune_freed_locations(heap, &source_map);
-        match parser.parse() {
-            Ok(expr) => {
+        match parser.parse_next() {
+            Ok(Some(expr)) => {
                 match interp
                     .backend()
                     .eval_with_source_map(expr, &global, &source_map)
@@ -396,22 +402,24 @@ fn eval_program_vm(
                     Err(e) => return (Err(e), source_map),
                 }
             }
-            Err(ParseError::UnexpectedEof) => break,
+            Ok(None) => break,
             Err(e) => return (Err(e.into()), source_map),
         }
     }
     (Ok(result), source_map)
 }
 
-/// Evaluate a program resiliently (continue on errors) with source map support.
+/// Evaluate a program resiliently (continue on errors) with source map
+/// support, returning whether the program was read to its end.
 fn eval_program_resilient_vm(
     interp: &Interpreter<VmBackend>,
     input: &str,
     source_name: &str,
-) -> patina_core::TaggedValue {
-    use patina_interpreter::{ParseError, Parser, SourceMap};
+) -> bool {
+    use patina_interpreter::{
+        InterpreterError, Parser, SourceMap, format_backend_error_with_source,
+    };
 
-    let mut result = patina_core::TaggedValue::UNSPECIFIED;
     let heap = interp.backend().global_env().heap();
     let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
     let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
@@ -420,7 +428,7 @@ fn eval_program_resilient_vm(
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
-                return result;
+                return false;
             }
         };
     let global = interp.backend().global_env().clone();
@@ -428,34 +436,33 @@ fn eval_program_resilient_vm(
         // Drop SourceMap entries for slots the previous form's evaluation
         // freed, before this iteration's parse can reuse them (§9.1).
         patina_interpreter::prune_freed_locations(heap, &source_map);
-        match parser.parse() {
-            Ok(expr) => {
-                match interp
+        match parser.parse_next() {
+            Ok(Some(expr)) => {
+                if let Err(e) = interp
                     .backend()
                     .eval_with_source_map(expr, &global, &source_map)
                 {
-                    Ok(val) => result = val,
-                    Err(e) => {
-                        if let Some(loc) = e.source_location() {
-                            let mut parts = vec![format!("Error: {}", e)];
-                            parts.push(format!("  at {}", loc));
-                            if let Some(ctx) = source_map.borrow().format_context(loc) {
-                                parts.push(ctx);
-                            }
-                            eprintln!("{}", parts.join("\n"));
-                        } else {
-                            eprintln!("Error: {}", e);
-                        }
-                    }
+                    eprintln!(
+                        "Error: {}",
+                        format_backend_error_with_source(
+                            &InterpreterError::Backend(e),
+                            &source_map.borrow()
+                        )
+                    );
                 }
             }
-            Err(ParseError::UnexpectedEof) => break,
+            Ok(None) => return true,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                // The parser leaves the offending token where it was, so
+                // reading on would report it again, without end.
+                eprintln!(
+                    "Error: {}",
+                    patina_interpreter::format_parse_error_with_source(&e, &source_map.borrow())
+                );
+                return false;
             }
         }
     }
-    result
 }
 
 fn run_repl_tree_walker(opts: &CliOptions) {
@@ -477,7 +484,7 @@ fn run_repl_tree_walker(opts: &CliOptions) {
 fn run_repl_vm(opts: &CliOptions) {
     use patina_core::TaggedValue;
     use patina_core::debug_format::format_tagged;
-    use patina_interpreter::{ParseError, Parser, SourceMap};
+    use patina_interpreter::{Parser, SourceMap};
 
     let interp = Interpreter::new(VmBackend::new());
     apply_library_paths(interp.backend(), opts, None);
@@ -530,8 +537,8 @@ fn run_repl_vm(opts: &CliOptions) {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             patina_interpreter::prune_freed_locations(&heap, &source_map);
-            match parser.parse() {
-                Ok(expr) => {
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
                     match interp
                         .backend()
                         .eval_with_source_map(expr, &global, &source_map)
@@ -550,7 +557,7 @@ fn run_repl_vm(opts: &CliOptions) {
                         }
                     }
                 }
-                Err(ParseError::UnexpectedEof) => break,
+                Ok(None) => break,
                 Err(e) => return Some(format!("Error: {}", e)),
             }
         }
