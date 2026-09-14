@@ -5,10 +5,10 @@
 ;; what only the second argument has into that result before scanning the
 ;; first, so the scan met the copies as the first argument's own entries,
 ;; zeroed each against its count in the second, and cleaned them away:
-;; `(set-xor! {1 2} {2 3})` answered `{1}`. Larceny's `set` suite asserts it,
-;; but those assertions never ran here: the suite stops earlier, at an
-;; argument-order slip of its own. Larceny triage family 44, and the PATINA
-;; LOCAL EDIT in `lib/srfi/113/sets-impl.scm`.
+;; `(set-xor! {1 2 3} {2 3 4 5})`, the first row below, answered `{1}`.
+;; Larceny's `set` suite has assertions for this that never ran here: the
+;; suite stops earlier, at an argument-order slip of its own. Larceny triage
+;; family 44, and the PATINA LOCAL EDIT in `lib/srfi/113/sets-impl.scm`.
 ;;
 ;; SRFI 113 lets a linear-update procedure reuse its first argument or not, so
 ;; every row compares values, written out, and never identity.

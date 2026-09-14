@@ -38,7 +38,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
 | SRFI 1 | `(scheme list)` | List library | ✅ shipped | ✅ shipped |
-| SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped — **Latin-1 only**: raises on any character above U+00FF (Track L §6, 2026-09-14) | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
+| SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped — **Latin-1 only**: raises on a character above U+00FF, and silently clips ranges and predefined sets at U+00FF (Track L §6, 2026-09-14) | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
 | SRFI 41 | `(scheme stream)` | Streams (lazy lists) | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 41)`, 2026-08-25) |
 | SRFI 101 | `(scheme rlist)` | Random-access lists | ✅ shipped | ✅ shipped (r-prefixed alias, 2026-08-26) |
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |

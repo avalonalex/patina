@@ -20,8 +20,10 @@
 ;; on both backends and under chibi and Gauche. The integration-binary count
 ;; drops by one with it.
 ;; Track H3 adds two positive private-global rows (2026-09-12): 43 total,
-;; including five VM-only expected failures for family 40. Both external
-;; oracles pass all 43; the tree-walker does too.
+;; including five VM-only expected failures for family 40. #315 (2026-09-13)
+;; fixed those two rows on the VM and added a 44th, leaving three VM-only
+;; expected failures, the family's refusal rows. Both external oracles pass
+;; all 44; the tree-walker does too.
 ;;
 ;; `hygiene_matrix.rs` is not part of that and stays Rust: 28 shapes scored
 ;; against chibi and Racket, read as a table when a hygiene fix moves a row,

@@ -9,6 +9,11 @@ procedure under test — because the suite is LGPL and the report is tracked.
 
     larceny_report.py --logs DIR --suites DIR --lane r7rs|r6rs --commit SHA \
                       --backend NAME --out FILE
+    larceny_report.py --classify LOG
+
+The second form is how scripts/run_larceny_tests.sh decides each suite's status
+as it goes. parse_log is the one classifier, so the console summary, the lane's
+exit status and this report cannot disagree about a log.
 """
 
 import argparse
@@ -31,15 +36,48 @@ def read_log(path):
         return f.read()
 
 
+def code_cell(text, limit=160):
+    """Patina's message as a code span in a Markdown table cell. A message can
+    carry backticks of its own (the VM puts an unbound variable's name between
+    them), so the fence is one backtick longer than the longest run inside, and
+    padded with a space on each side, which the renderer strips."""
+    text = " ".join(text.split())[:limit].replace("|", "\\|")
+    if not text:
+        return ""
+    runs = [len(r) for r in re.findall(r"`+", text)]
+    if not runs:
+        return "`%s`" % text
+    fence = "`" * (max(runs) + 1)
+    return "%s %s %s" % (fence, text, fence)
+
+
+# scripts/run_larceny_tests.sh appends this line to every log once the suite's
+# process has exited, so a timeout or a crash is read from the exit status
+# rather than guessed from the text.
+EXIT_TRAILER = re.compile(r"(?m)^--- run_larceny_tests\.sh: exit status (\d+) ---$")
+
+
 def parse_log(text):
-    """Return (status, passed, total, detail, failing_expressions)."""
+    """Return (status, passed, total, detail, failing_expressions).
+
+    A log without the runner's exit-status trailer (written by hand, or by an
+    older runner) is classified from its text alone."""
+    trailer = EXIT_TRAILER.findall(text)
+    rc = int(trailer[-1]) if trailer else None
+    text = EXIT_TRAILER.sub("", text)
     passed = re.findall(r"(?m)^(\d+) tests passed$", text)
     failed = re.findall(r"(?m)^(\d+) of (\d+) tests failed\.$", text)
     exprs = []
     # Blocks are "Expression:\n <expr...>\nResult:" — the expression may span lines.
     for m in re.finditer(r"(?ms)^Expression:\n(.*?)\nResult:", text):
         exprs.append(" ".join(m.group(1).split()))
-    first_error = next((l for l in text.splitlines() if l.startswith("Error")), "")
+    # Lines end at "\n" only. str.splitlines() also breaks at \r, \x0b, U+2028
+    # and others, which a written symbol can carry raw, and would find an
+    # "Error" line inside a failing assertion's Result.
+    first_error = next((l for l in text.split("\n") if l.startswith("Error")), "")
+    if rc == 142:
+        # SIGALRM: the runner's perl alarm, whatever the log got as far as.
+        return "timeout", 0, 0, "no result before the timeout", exprs
     if "overflowed its stack" in text:
         return "crash", 0, 0, "stack overflow", exprs
     if passed or failed:
@@ -49,15 +87,27 @@ def parse_log(text):
             n, t = int(failed[-1][0]), int(failed[-1][1])
             status, p = "fail", t - n
         if first_error:
-            # A top-level error does not end the run program: its later forms
-            # still run, so the harness prints a tally even though the error
-            # ended the suite wherever it hit. The tally covers only what ran
-            # first — `set` scored pass 16/16 this way — so it is not clean.
+            # Cut short. Patina's script runner reports a top-level error and
+            # goes on to the next form only in its resilient mode, which it
+            # picks for any script path containing "test"
+            # (crates/patina-repl/src/main.rs), and every tests/*/run/*.sps is
+            # one. So `(report-test-results)` still prints a tally after the
+            # error has ended `(run-...-tests)`, and that tally covers only the
+            # assertions that ran first: `set` scored pass 16/16 this way.
+            # Outside that mode the first top-level error ends the program with
+            # no tally, and the log reads as a load error instead (Track L PRD,
+            # L3's recorded debt on the test-file heuristic).
             return "truncated", p, t, first_error, exprs
         return status, p, t, "", exprs
     m = re.search(r"Library \(([^)]*)\) not found", first_error)
     if m:
         return "not-bundled", 0, 0, "(" + m.group(1) + ")", exprs
+    if rc is not None:
+        if rc >= 128:
+            return "crash", 0, 0, "signal %d" % (rc - 128), exprs
+        if "panicked at" in text:
+            return "crash", 0, 0, "panic (exit %d)" % rc, exprs
+        return "load-error", 0, 0, first_error, exprs
     if "Abort trap" in text or "signal" in text:
         return "crash", 0, 0, "aborted", exprs
     if not text.strip() or "Running tests" in text and not first_error:
@@ -158,16 +208,25 @@ def suite_files(suites_dir, lane, suite):
     return files
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--logs", required=True)
-    ap.add_argument("--suites", required=True, help="the test/R7RS/Lib directory")
-    ap.add_argument("--lane", choices=["r7rs", "r6rs"], required=True)
-    ap.add_argument("--commit", required=True)
-    ap.add_argument("--backend", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--classify", metavar="LOG",
+                    help="print one log's status, passed, total and detail, tab-separated, and exit")
+    ap.add_argument("--logs")
+    ap.add_argument("--suites", help="the test/R7RS/Lib directory")
+    ap.add_argument("--lane", choices=["r7rs", "r6rs"])
+    ap.add_argument("--commit")
+    ap.add_argument("--backend")
+    ap.add_argument("--out")
     ap.add_argument("--generated", default="")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.classify:
+        status, passed, total, detail, _ = parse_log(read_log(args.classify))
+        print("\t".join((status, str(passed), str(total), " ".join(detail.split()))))
+        return 0
+    missing = [o for o in ("logs", "suites", "lane", "commit", "backend", "out") if getattr(args, o) is None]
+    if missing:
+        ap.error("the following arguments are required: " + ", ".join("--" + o for o in missing))
 
     rows = []
     for name in sorted(os.listdir(args.logs)):
@@ -228,7 +287,7 @@ def main():
         w("Bundling work, not defects — each is a Red-edition library Patina does not ship yet.\n")
         w("| Suite | Missing |\n|---|---|")
         for s, _, _, _, d, _ in by["not-bundled"]:
-            w("| %s | `%s` |" % (s, d))
+            w("| %s | %s |" % (s, code_cell(d)))
         w("")
     crashed = by["crash"] + by["timeout"]
     if crashed:
@@ -243,27 +302,24 @@ def main():
         w("The suite's library did not compile, so nothing in it ran. Patina's message:\n")
         w("| Suite | Message |\n|---|---|")
         for s, _, _, _, d, _ in by["load-error"]:
-            w("| %s | `%s` |" % (s, d.replace("|", "\\|")[:160]))
+            w("| %s | %s |" % (s, code_cell(d)))
         w("")
     if by["truncated"]:
         w("## Cut short by a top-level error (%d)\n" % len(by["truncated"]))
-        w("A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. Patina's message:\n")
+        w("A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. An assertion that failed before the error is listed under the failures below. Patina's message:\n")
         w("| Suite | Tally | Message |\n|---|---|---|")
         for s, _, p, t, d, _ in by["truncated"]:
-            w("| %s | %d of %d passed | `%s` |" % (s, p, t, d.replace("|", "\\|")[:160]))
+            w("| %s | %d of %d passed | %s |" % (s, p, t, code_cell(d)))
         w("")
-        for s, _, p, t, _, links in by["truncated"]:
-            if links:
-                w("### %s — %d of %d failed\n" % (s, t - p, t))
-                for l in links:
-                    w("- " + l)
-                w("")
-    if by["fail"]:
-        n_fail = sum(r[3] - r[2] for r in by["fail"])
-        w("## Assertion failures (%d in %d suites)\n" % (n_fail, len(by["fail"])))
+    # Every tallied suite with a failure, cut short or not, so the heading's
+    # count is exactly the assertion total's shortfall.
+    failing = [r for r in rows if r[1] in ("fail", "truncated") and r[3] > r[2]]
+    if failing:
+        n_fail = sum(r[3] - r[2] for r in failing)
+        w("## Assertion failures (%d in %d suites)\n" % (n_fail, len(failing)))
         w("Each entry links to the test case; the name after it is the procedure the assertion exercises.\n")
-        for s, _, p, t, _, links in by["fail"]:
-            w("### %s — %d of %d failed\n" % (s, t - p, t))
+        for s, st, p, t, _, links in failing:
+            w("### %s — %d of %d failed%s\n" % (s, t - p, t, " (cut short)" if st == "truncated" else ""))
             for l in links:
                 w("- " + l)
             w("")

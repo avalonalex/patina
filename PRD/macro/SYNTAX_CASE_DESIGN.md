@@ -364,9 +364,10 @@ The future evaluation must establish:
    name the ongoing contract/toolchain maintenance. A decision against
    mechanization remains valid if its benefit does not justify that cost.
 
-This work belongs to the syntax-case rewrite. Current runtime fixes remain
-tracked by #289–#291 and triage families 40/41; neither a future proof nor the
-archiving of Track H closes those defects.
+This work belongs to the syntax-case rewrite. Of the runtime defects it was
+waiting on, #289–#291 were closed by #316 and triage family 41 by #318 and
+#321; family 40 remains open, and neither a future proof nor the archiving of
+Track H closes it.
 
 ---
 

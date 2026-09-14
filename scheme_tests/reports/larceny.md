@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-14 11:57:01\
+**Generated:** 2026-09-14 13:55:19\
 **Backend:** VM\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -18,7 +18,7 @@ A suite that cannot load reaches no tally, and one cut short by a top-level erro
 
 ## Cut short by a top-level error (1)
 
-A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. Patina's message:
+A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. An assertion that failed before the error is listed under the failures below. Patina's message:
 
 | Suite | Tally | Message |
 |---|---|---|

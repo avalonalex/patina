@@ -1189,3 +1189,77 @@ fn every_triage_pointer_names_something_that_exists() {
          this check is now reading past most of it."
     );
 }
+
+/// Every permalink in the triage doc's "Not ours" list still names an
+/// assertion a tracked Larceny report shows failing.
+///
+/// `every_triage_pointer_names_something_that_exists` reads only `- Ours:`
+/// lines, so nothing noticed when #314 and #317 made two "Not ours"
+/// assertions pass: the reports those PRs regenerated dropped the links, and
+/// the doc went on filing both as failing for a day. A struck-through bullet
+/// (`- ~~`) records an assertion that no longer fails, and is skipped. A link
+/// the lane cannot reach — its suite fails to load, or a top-level error cuts
+/// the suite short before that assertion — is accepted when the report lists
+/// the suite in that section instead.
+#[test]
+fn every_not_ours_link_still_fails_in_a_tracked_report() {
+    let reports = repo_root().join("scheme_tests/reports");
+    let Ok(doc) = read(&reports.join("larceny_triage.md")) else {
+        // Disposable by its own header, like the pointer check above.
+        return;
+    };
+    let report = |name: &str| read(&reports.join(name)).unwrap_or_default();
+    let r7rs = report("larceny.md") + &report("larceny_tree_walker.md");
+    let r6rs = report("larceny_r6rs.md");
+    let not_ours = doc
+        .split("\n## ")
+        .find(|section| section.starts_with("Not ours"))
+        .expect("the triage doc has lost its \"Not ours\" section");
+    // Whether the report section under `heading` has a table row for `suite`.
+    let lists = |text: &str, heading: &str, suite: &str| {
+        text.split("\n## ")
+            .find(|section| section.starts_with(heading))
+            .is_some_and(|section| section.contains(&format!("\n| {suite} |")))
+    };
+
+    let mut checked = 0;
+    let bullets = not_ours
+        .lines()
+        .filter(|line| line.starts_with("- ") && !line.starts_with("- ~~"));
+    for bullet in bullets {
+        for href in bullet
+            .split("](")
+            .skip(1)
+            .filter_map(|rest| rest.split(')').next())
+        {
+            let Some((path, line)) = href.split_once("#L") else {
+                continue;
+            };
+            let (text, name) = if let Some(name) = path.strip_prefix("tests/r6rs/") {
+                (&r6rs, name)
+            } else if let Some(name) = path.strip_prefix("tests/scheme/") {
+                (&r7rs, name)
+            } else {
+                continue;
+            };
+            // `complex.body.scm` is the `complex` suite, `arithmetic/fixnums.sld` its own.
+            let suite = name.split('.').next().unwrap_or(name);
+            let failing = text.contains(&format!("/test/R7RS/Lib/{path}#L{line})"));
+            let unreachable = lists(text, "Failed to load", suite)
+                || lists(text, "Cut short by a top-level error", suite);
+            assert!(
+                failing || unreachable,
+                "the triage doc's \"Not ours\" list links {href}, but no tracked Larceny \
+                 report lists that assertion as failing, or its suite `{suite}` as failing \
+                 to load or cut short. If it passes now, strike the bullet through \
+                 (`- ~~**…**~~ — no longer failing: …`) and say what fixed it."
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked > 5,
+        "only {checked} \"Not ours\" links were checked — the list's link shape has \
+         probably changed and this check is reading past it."
+    );
+}
