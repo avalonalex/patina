@@ -196,6 +196,52 @@ vocabulary, requires a note, and checks that every registered row still names a
 test that exists — a rename would otherwise leave the lane reporting one edit
 as two mismatches.
 
+**When an oracle hangs or crashes on one row, opt that row out of that oracle,
+and say why beside it.** SRFI 64 stops a file where its interpreter dies, so
+one troublesome row costs the oracle every row after it; a skip in front of the
+row costs only the row:
+
+```scheme
+;; Gauche 0.9.15 allocates without bound compiling this template (measured
+;; 2026-09-13 inside a procedure that is never called), so it is skipped there.
+(cond-expand (gauche (test-skip 1)) (else))
+(test-error "a circular operand list is refused" #t ...)
+```
+
+One skip per row, even for adjacent rows: `(test-skip 2)` binds to whichever
+two rows follow it, and an edit between them moves the skip onto a row nobody
+chose. The comment carries the measurement, as a register note would, so the
+opt-out can be re-checked against a new oracle version instead of inherited.
+`rg -B1 '\((gauche|chibi|\(or chibi gauche\)) \(test-skip' crates/patina-tests/tests/scheme`
+lists every opt-out with its row.
+
+The lane reports such a file as "did not complete", ending with the watchdog's
+`killed after 60s` or the oracle's own out-of-memory message. Neither names the
+row, and Gauche's output is buffered when it is not writing to a terminal, so
+an abort loses even the `FAIL` lines before it. To find the row by hand, give
+Gauche a line-buffered port and a runner that announces each test:
+
+```sh
+gosh -r7 -u srfi.64 \
+  -e '(set! (port-buffering (current-output-port)) :line)' \
+  -e '(test-runner-factory (let ((make (test-runner-factory))) (lambda () (let* ((r (make)) (begin! (test-runner-on-test-begin r))) (test-runner-on-test-begin! r (lambda (r) (display "%%%% begin ") (write (test-runner-test-name r)) (newline) (begin! r))) r))))' \
+  crates/patina-tests/tests/scheme/<file>.scm
+```
+
+The last `%%%% begin` line before the failure is the row. chibi needs nothing
+extra when it errors, and leaves nothing to read when it is killed.
+
+Opt a row out only when the oracle cannot run it; a row whose answer merely
+differs belongs in the register. And keep the `*` for a file where the
+trouble precedes every row, as in `control/prompts.scm`, whose note records
+why importing Gauche's own prompt procedures would not rescue it.
+
+The lane trusts this because it checks its guards first. Beside the smoke test,
+it runs a program that never returns under a two-second timeout and requires
+it to be killed rather than scored, and it requires Gauche to stop at a 16M
+heap ceiling. The first guards the failure #317 hid: an in-process alarm that
+Gauche caught let a spinning `test-error` row pass.
+
 **Where a new `.scm` file goes: directory by kind, filename by concern.** The
 directory is one of the seven above and says what *sort* of thing the file is
 about; the filename keeps the concern name the test has always had
