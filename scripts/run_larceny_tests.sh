@@ -22,8 +22,10 @@
 #                         family 26. Burning 300 s to report "timeout" told us
 #                         nothing that five minutes of tally does not.
 #
-# Exits non-zero if any suite fails, errors, or times out. The tallies are the
-# suite's own ("N tests passed" / "N of M tests failed."), never re-derived.
+# Exits non-zero if any suite fails, errors, times out, or is truncated: cut
+# short by a top-level error, which leaves behind a tally covering only the
+# assertions that ran before it. The tallies are the suite's own ("N tests
+# passed" / "N of M tests failed."), never re-derived.
 
 set -eo pipefail
 
@@ -203,7 +205,15 @@ run_suite() {
         detail="$(grep -m1 '^Error' "$log" | cut -c1-140)"
     fi
     if [ "$errors" -gt 0 ] && [ "$status" != "error" ]; then
-        detail="${errors} top-level error(s); ${detail}"
+        detail="${errors} top-level error(s)${detail:+; ${detail}}"
+        # A top-level error does not end the run program: its later forms
+        # still run, so the harness prints a tally even though the error ended
+        # the suite wherever it hit. That tally covers only the assertions that
+        # ran first, so the suite is not clean whatever it says — `set` scored
+        # pass 16/16 this way with most of its assertions never run.
+        case "$status" in
+            pass | fail) status="truncated" ;;
+        esac
     fi
     # Patina's messages name files by absolute path; the report is tracked,
     # so keep the local checkout location out of it.
@@ -219,7 +229,7 @@ run_suite() {
         fail) icon="⚠️"; FAILING+=("$suite") ;;
         *)    icon="❌"; FAILING+=("$suite") ;;
     esac
-    printf "  %s %-22s %-8s %5s/%-5s %4ss  %s\n" "$icon" "$suite" "$status" "$passed" "$total" "$secs" "$detail"
+    printf "  %s %-22s %-9s %5s/%-5s %4ss  %s\n" "$icon" "$suite" "$status" "$passed" "$total" "$secs" "$detail"
 }
 
 for suite in "${SUITES[@]}"; do

@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-13 17:04:00\
+**Generated:** 2026-09-14 12:07:26\
 **Backend:** VM\
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -11,9 +11,10 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 |---|---|
 | Suites fully passing | 15 of 16 |
 | Assertions passed | 4474 of 4474 (100.0%) |
+| Suites cut short by a top-level error | 0 |
 | Suites not reaching a tally | 1 |
 
-A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
+A suite that cannot load reaches no tally, and one cut short by a top-level error reaches only part of one, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
 ## Failed to load (1)
 

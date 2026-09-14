@@ -1,7 +1,12 @@
 # Track L — Third-Party Library Compatibility PRD
 
 **Created:** 2026-06-20
-**Updated:** 2026-09-13 — the corpus harness's probe is an import form alone (it called
+**Updated:** 2026-09-14 — Larceny lanes re-run after the runner learned to call a suite that a
+top-level error cuts short *truncated* rather than clean (`set`; 23 of 33 on both R7RS backends
+now). Behind the two blockers, measured in scratch copies, `set` held a `set-xor!`/`bag-xor!`
+defect in the bundled SRFI 113 (triage family 44, fixed) and R6RS `base` 2023 of 2034 passing
+assertions; `(scheme charset)` turned out to raise on any character above U+00FF (§6, open).
+Previously 2026-09-13 — the corpus harness's probe is an import form alone (it called
 `display` for a marker nothing read), `run` self-checks the binary before scoring, and the
 snapshot is re-measured (**127 of 161**, unchanged since 2026-08-26; see L3). Earlier the same
 day — Larceny lane refresh and macro-status audit; see L5.3
@@ -24,10 +29,10 @@ family 40 quarantined).
 **Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
 packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
-deferred; L5.3's lanes, refreshed 2026-09-13: VM **24 of 33** suites reported
-passing (8508/8534), tree-walker **24 of 33** (8508/8534), R6RS **13 of 16**
-(4026/4033). See L5.3 for the `set` top-level-error caveat and the differing
-VM/tree-walker failures. **L1's earlier
+deferred; L5.3's lanes, refreshed 2026-09-14: VM **23 of 33** suites clean
+(8514/8534), tree-walker **23 of 33** (8514/8534), R6RS **15 of 16**
+(4474/4474). See L5.3 for `set`, which the runner now reports as truncated
+rather than passing, and for the differing VM/tree-walker failures. **L1's earlier
 priority list largely shipped; its scope now includes all SRFIs and R7RS-large draft libraries.**
 Remaining work is ordered by demand and cost, rather than excluded for low popularity.
 **L2 supplies implementation-specific libraries externally:** #194–198 removed `lib/chibi/`;
@@ -934,28 +939,36 @@ its count.
 
 #### L5.3 — Run Larceny's R7RS suites from a reference checkout  *(harness landed 2026-08-24; baseline measured)*
 
-**Current measurement, 2026-09-13.** Release runtime `180a41e5`, pinned upstream
-`fef550c7d392`, using writable copies of the reference checkout so file tests
-can execute. Reports were regenerated from complete lanes, not assembled from
-the focused runs recorded in individual families.
+**Current measurement, 2026-09-14.** Release runtime built from `66cc1bbc`
+with the bundled SRFI 113 fix from triage family 44 (a library file; no Rust
+source changed), pinned upstream `fef550c7d392`, run from the reference
+checkout, the three lanes one after another on an otherwise idle machine.
+Reports were regenerated from complete lanes, not assembled from the focused
+runs recorded in individual families.
 
-| Lane | Runner-reported passing suites | Assertions passed | No tally |
-|---|---|---|---|
-| R7RS, VM | 24 of 33 | 8508 of 8534 | 0 |
-| R7RS, tree-walker | 24 of 33 | 8508 of 8534 | 0 |
-| R6RS, VM | 13 of 16 | 4026 of 4033 | 1 (`base`) |
+| Lane | Clean suites | Truncated | Assertions passed | No tally |
+|---|---|---|---|---|
+| R7RS, VM | 23 of 33 | 1 (`set`) | 8514 of 8534 | 0 |
+| R7RS, tree-walker | 23 of 33 | 1 (`set`) | 8514 of 8534 | 0 |
+| R6RS, VM | 15 of 16 | 0 | 4474 of 4474 | 1 (`base`) |
 
-The runner's passing-suite count includes `set`: its 16 assertions pass but
-its log still contains the known top-level `set-map` argument-order error.
-These are compatibility measurements, not green test gates; the lanes exit
-nonzero for their remaining failures. R6RS `base` still stops at an empty-body
-`let-syntax`; its seven asserted failures are in `bytevectors` and `enums`.
-The increased assertion denominators include newly reachable guarded tests
-and successful file tests, so they must not be compared as a fixed population.
+The suite count fell by one from the day before without any defect
+appearing: the runner used to count `set` as passing, because the harness
+prints a tally after the top-level `set-map` argument-order error, and it
+reports that suite as truncated now. The assertion totals are where family 13
+and #317 took them. These are compatibility measurements, not green test
+gates; the lanes exit nonzero for their remaining failures. What the two
+blockers hide is not in these totals; it was measured in scratch copies of
+the suite with the blocking forms corrected: `set` runs 253 assertions, 251
+passing once family 44 was fixed, and R6RS `base`, still stopped by an
+empty-body `let-syntax`, runs 2034 with 2023 passing. The increased
+denominators of earlier refreshes include newly reachable guarded tests and
+successful file tests, so they must not be compared as a fixed population.
 The equal VM/tree-walker totals hide different failures: the VM has the
-ephemeron retention assertion, while the tree-walker passes ephemeron 6/6
-but fails the known timing-sensitive `time` assertion. Its `stream` suite
-finishes 81/81 in 359 seconds, within the runner's 600-second floor.
+ephemeron retention assertion, while the tree-walker passes ephemeron 6/6 but
+fails the known timing-sensitive `time` assertion. The 2026-09-13 measurement
+this replaces, from release runtime `180a41e5`, read 24 of 33 and 8508 of
+8534 on both R7RS backends and 13 of 16, 4026 of 4033, on R6RS.
 
 **Verification for the radix fix and audit:** `cargo build --release`;
 `cargo test -p patina-frontend -p patina-primitives --lib --tests` (243 tests);
@@ -970,10 +983,11 @@ test lane, GC differential lanes and generated external H3 sweep were not run.
 
 **Macro progress is tracked separately from these suite totals.** The original
 28-shape matrix passes on both backends; families 40/41 and H2's environment
-properties expose shapes beyond it. The current table in
+properties exposed shapes beyond it. The current table in
 [`larceny_triage.md`](../scheme_tests/reports/larceny_triage.md#current-macro-status--audited-2026-09-13)
-distinguishes the closed families, the five VM-only family-40 quarantines,
-the two shared family-41 quarantines, and H2's three open API findings.
+separates the closed families from what is left: three VM-only family-40
+quarantines, with family 41 fixed and H2's three API findings closed by #316
+(both 2026-09-13).
 
 **Retargeted.** This item was written as "vendor and run the R6RS test suite",
 and the first thing scoping it found was that the suite cannot load here: its
@@ -1031,7 +1045,10 @@ re-derived. A suite whose library fails to load reaches no tally and is
 reported as **error** with zero assertions, so the assertion total
 under-reports exactly as much as is broken and the *suite* column is the one
 to watch. Crashes and timeouts (perl `alarm`, 300 s — macOS has no `timeout`)
-are their own statuses.
+are their own statuses. So, since 2026-09-14, is **truncated**: a top-level
+error does not stop a run program, so the harness still prints a tally after
+one, but that tally covers only the assertions that ran first. Such a suite is
+not counted clean — `set` had been reported passing, 16 of 16, that way.
 
 **Baseline, 2026-08-24:**
 
@@ -1111,18 +1128,28 @@ now live, and a test checks that those pointers still resolve.
 | ✅ `environment` accepts all import-set modifiers and numeric library names — *fixed 2026-09-12*, family 10. Shared resolution, cyclic-input rejection, and definition checks that follow renamed syntax; focused eval 5/5, load 4/4, R6RS eval 2/2 on both backends | eval, load, r6rs eval | both |
 | ✅ `input-port-open?` on an output-only port was a type error, not `#f` — *fixed 2026-08-24*; `file` is clean | file | both |
 | ✅ `read` returned EOF for an unfinished datum — *fixed 2026-09-12*, family 42. The parser distinguishes clean EOF after whitespace/comments from incomplete input; string, file and stdin reads signal `read-error?` for unfinished datums. Focused `base` improves from 1083/1092 to 1084/1092 on both backends; eight other failures remain. Chibi/Gauche differences on abbreviated datums, labels and a bare datum-comment marker are recorded in the divergence register | base (1) | both |
-| `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@` | write (3) | both |
-| R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` | r6rs bytevectors (4), enums (3) | both |
+| `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@`. The references split: Gauche writes `\|@\|` and chibi `@` (2026-09-14) | write (3) | both |
+| ✅ R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` — *both fixed 2026-09-13*, triage family 13. Neither was the emulation library's: the fill byte was the shared primitive, and the enum a template-compilation defect in core R7RS | r6rs bytevectors (4), enums (3); base (2) | both |
+| ✅ `set-xor!` and `bag-xor!` dropped what only their second argument had — *fixed 2026-09-14*, triage family 44. Both pass their first argument to `sob-xor!` as the result too, and the reference implementation copied the entries only the second argument has into that result before scanning the first argument, a scan that then zeroed them. The lane never reaches the suite's four assertions for it: the suite stops earlier, at upstream's `set-map` argument-order slip | set (4, unreached) | both |
+| `(scheme charset)` raises on any character above U+00FF. The bundled `(srfi 14)` is the Latin-1 reference implementation, a char-set being a 256-character string indexed by code point, so `char-set-contains?`, `char-set` and `string->char-set` raise there, and so does the bundled `(srfi 130)`'s `string-index` on a string holding such a character. Open, triage family 45; §6 has the repro | charset (1) | both |
 
-**Not ours**, recorded so nobody re-diagnoses them: `set-map` — the suite
-calls `(set-map proc comparator set)`; SRFI 113's text, chibi and Patina all
-have `(set-map comparator proc set)`. `delete-duplicates!` — the suite
+**Not ours**, recorded so nobody re-diagnoses them: `set-map`, `bag-map`,
+`set-unfold` and `bag-unfold` — the suite passes the comparator after the
+procedure, where SRFI 113, chibi and Patina put it first; `set-map`'s call
+raises at top level and ends the suite 16 assertions in, which the runner has
+reported as truncated since 2026-09-14. `delete-duplicates!` — the suite
 requires the result to reuse the input's cells, which SRFI 1 permits but does
 not require. `(let-syntax ())` with an empty body, which is what blocks the
 R6RS `base` suite — R6RS's splicing `let-syntax` allows it and R7RS's does
 not; Gauche and Chez accept it, chibi rejects it as we do, so it is a
-leniency decision rather than a defect. Tree-walker `time` — a one-second
-busy loop measured at two seconds, i.e. speed.
+leniency decision rather than a defect. Behind it (measured 2026-09-14, that
+one assertion removed in a scratch copy) 2023 of 2034 assertions pass on both
+backends, and the other 11 are R6RS-only expectations — `number->string`'s
+precision argument (8), `(log 0)` raising, a splicing `let-syntax` body — and
+the `(sqrt -inf.0)` row above. Tree-walker `time` — a one-second busy loop
+measured at two seconds, i.e. speed. `flonum` — the suite equates `(fl* x x x)`
+with `(flonum (expt x 3))`, which differ by one ulp at x = 1/3; Chez, chibi,
+Gauche and Racket answer as Patina does. The triage doc has each in full.
 
 For calibration: chibi 0.12 fails `base` on the same nested include
 (`couldn't open input file: "base-test4.scm"`), and Gauche 0.9.15 rejects
@@ -1373,8 +1400,9 @@ and `#<unspecified>` flows into `make-state`. Gauche survives because its
 `(srfi 14)` is the built-in full-Unicode type and the same fallback keeps
 every set homogeneous. Patina cannot take that path today: our `(srfi 14)`
 is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
-at `#xAC00`, regional indicators at `#x1F1E6`), which the port would refuse
-or silently truncate. **Blocked on a full-Unicode char-set story** (SRFI 14
+at `#xAC00`, regional indicators at `#x1F1E6`), which the port refuses: it
+raises on any character above U+00FF (the next entry, measured 2026-09-14).
+**Blocked on a full-Unicode char-set story** (SRFI 14
 beyond Latin-1, or an iset-compatible representation); not a macro defect.
 Two cosmetic defects rode along. The first — the raised error displaying as
 `#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
@@ -1399,6 +1427,32 @@ hands it the original condition with its irritants; re-raising that object
 doubles the prefix on the tree-walker and not on the VM. Not yet pinned as a
 divergence row; it belongs in `tests/scheme/` with a `DIVERGENCES.tsv` entry
 once the correct answer is fixed (the VM's).
+
+**`(scheme charset)` raises on any character above U+00FF** — ❌ **open**,
+both backends. Larceny triage family 45; found 2026-09-14 while re-reading
+why the `charset` suite's size assertion had been filed as not ours.
+
+```scheme
+(import (scheme base) (scheme write) (scheme charset))
+(write (char-set-contains? char-set:letter (integer->char #x3BB)))   ; λ
+;; Patina, both backends => raises: string-ref index 955 out of bounds
+;;                          for string of length 256
+;; chibi, Gauche         => #t
+```
+
+The bundled `(srfi 14)` is Olin Shivers' reference implementation, whose own
+header calls it Latin-1 specific: a char-set is a 256-character string
+indexed by code point. The operations measured — `char-set-contains?`,
+`char-set`, `string->char-set` — index past its end for any character above
+U+00FF and raise instead of answering, and so does the bundled `(srfi 130)`'s
+`string-index` on a string holding such a character. `char-set:full` has 256
+members, which is all the Larceny suite asserts; the defect is far wider than
+that assertion. The direction is a full-Unicode representation, which the
+chibi-regexp entry above is blocked on as well. The candidate on hand is
+chibi's: `(chibi char-set)` over `(chibi iset)`, about a thousand lines of
+Scheme with the Unicode classes as iset literals, already in the corpus as
+`chibi-char-set` and `chibi-iset`; some of its libraries import `(chibi)`
+and would need adapting.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.

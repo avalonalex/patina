@@ -1159,20 +1159,32 @@
 ;; damage it in the process.  (Hat tip: Sam Tobin-Hochstadt.)
 
 (define (sob-xor! result sob1 sob2)
+  ;; PATINA LOCAL EDIT: upstream wrote each entry only sob2 has straight into
+  ;; result-ht during the first scan. `set-xor!` and `bag-xor!` pass sob1 as
+  ;; result, so the second scan met those entries in sob1-ht, found each equal
+  ;; to its own count in sob2, wrote back zero, and `sob-cleanup!` removed
+  ;; them: `(set-xor! (set c 1 2) (set c 2 3))` answered {1}, and xor with an
+  ;; empty first set answered the empty set. The functional `set-xor` and
+  ;; `bag-xor` pass a fresh result and were right. Collect the entries here
+  ;; and add them once the scan of sob1 is done. Larceny triage family 44.
   (let ((sob1-ht (sob-hash-table sob1))
         (sob2-ht (sob-hash-table sob2))
-        (result-ht (sob-hash-table result)))
+        (result-ht (sob-hash-table result))
+        (only-in-sob2 '()))
     (hash-table-for-each
       (lambda (key value2)
         (let ((value1 (hash-table-ref/default sob1-ht key 0)))
           (if (= value1 0)
-              (hash-table-set! result-ht key value2))))
+              (set! only-in-sob2 (cons (cons key value2) only-in-sob2)))))
       sob2-ht)
     (hash-table-for-each
       (lambda (key value1)
         (let ((value2 (hash-table-ref/default sob2-ht key 0)))
           (hash-table-set! result-ht key (abs (- value1 value2)))))
       sob1-ht)
+    (for-each
+      (lambda (entry) (hash-table-set! result-ht (car entry) (cdr entry)))
+      only-in-sob2)
     (sob-cleanup! result)))
 
 (define (set-xor set1 set2)
