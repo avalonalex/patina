@@ -135,7 +135,7 @@ impl CpsExpr {
     }
 
     /// Visit every heap value embedded in this expression tree
-    /// (`Literal` nodes and `Quasiquote` templates). GC tracing hook.
+    /// (`Literal` nodes). GC tracing hook.
     ///
     /// `seen` deduplicates by node address: bodies are shared via `Rc` across
     /// closures, so the caller passes one set per collection and shared
@@ -150,7 +150,6 @@ impl CpsExpr {
         }
         match &self.kind {
             CpsExprKind::Literal(tv) => f(*tv),
-            CpsExprKind::Quasiquote { template, .. } => f(*template),
             CpsExprKind::Var { .. } | CpsExprKind::ContRef(_) => {}
             CpsExprKind::Lambda { body, .. } => body.for_each_literal(seen, f),
             CpsExprKind::LetVal { value, body, .. } => {
@@ -364,18 +363,6 @@ pub enum CpsExprKind {
         cont: ContVar,
     },
 
-    // ==================== Template ====================
-    /// Quasiquote template evaluation
-    /// (quasiquote template k)
-    ///
-    /// Evaluates a quasiquote template, processing unquote and unquote-splicing.
-    /// The template is a TaggedValue that may contain unquote/unquote-splicing forms
-    /// which need to be evaluated at runtime.
-    Quasiquote {
-        template: TaggedValue,
-        cont: ContVar,
-    },
-
     // ==================== Primitives ====================
     /// Primitive operation (known at compile time)
     /// These don't need CPS transformation since they don't capture continuations.
@@ -556,7 +543,6 @@ impl CpsExprKind {
             CpsExprKind::Set { .. } => "set!",
             CpsExprKind::Define { .. } => "define",
             CpsExprKind::CallCC { .. } => "call/cc",
-            CpsExprKind::Quasiquote { .. } => "quasiquote",
             CpsExprKind::PrimOp { .. } => "prim-op",
             CpsExprKind::Halt(_) => "halt",
         }
@@ -648,9 +634,6 @@ impl std::fmt::Display for CpsExprKind {
             }
             CpsExprKind::CallCC { proc, cont } => {
                 write!(f, "(call/cc {} #{})", proc, cont)
-            }
-            CpsExprKind::Quasiquote { template, cont } => {
-                write!(f, "(quasiquote {} #{})", template, cont)
             }
             CpsExprKind::PrimOp { op, args, cont } => {
                 write!(f, "({:?}", op)?;

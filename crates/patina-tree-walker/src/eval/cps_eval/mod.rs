@@ -69,7 +69,6 @@ mod environment;
 mod exceptions;
 mod gc_roots;
 mod prompts;
-pub mod quasiquote;
 mod step;
 mod types;
 mod wind;
@@ -382,6 +381,65 @@ fn is_continuation_escape(e: &EvalError) -> bool {
 ///
 /// # Returns
 /// The result of evaluating the expression as TaggedValue
+/// Lower every `Quasiquote` in `expr` before the CPS transform sees it.
+///
+/// The tree-walker used to evaluate templates with a walker of its own while
+/// the VM compiled them, and the two derived "last", "list context" and
+/// "tail" independently — so they disagreed on template shapes neither report
+/// pins down, this backend refusing where the VM answered (issue #276). One
+/// lowering, shared, is what makes them agree by construction.
+///
+/// It is also faster here than the walker was. Measured over a million
+/// iterations of `` `(a ,i b ,acc) ``: 1.47 s through the constructors
+/// against 2.50 s building the structure directly, with splicing unchanged.
+/// The direct walk looked like the cheaper option and was not.
+pub(super) fn lower_quasiquotes_for(
+    expr: &patina_core::CoreExpr,
+    evaluator: &super::Evaluator,
+) -> Result<patina_core::CoreExpr, EvalError> {
+    let heap = evaluator.global_env.heap();
+    let registry = evaluator.primitive_registry();
+    let constructors = |name: &str| {
+        let qualified_name = format!("scheme.base/{name}");
+        let index = registry.resolve_index(&qualified_name)?;
+        let prim = registry.get_by_index(index)?;
+        let proc = patina_core::procedure::Procedure::primitive(
+            prim.name,
+            prim.arity.clone(),
+            Rc::from(qualified_name.as_str()),
+            Some(index),
+        );
+        Some(heap.borrow_mut().alloc_procedure(proc))
+    };
+    patina_frontend::lower_quasiquotes(expr, heap, &evaluator.global_env, &constructors)
+        .map_err(|e| EvalError::InvalidSyntax(e.to_string()))
+}
+
+/// Does this tree still hold a `Quasiquote`? Debug-only, for the precondition
+/// [`eval_cps_with`] relies on and cannot state in its signature.
+///
+/// Uses the shared `ExprVisitor` rather than a match of its own, so a new
+/// `CoreExpr` variant with children cannot quietly hide a template from it.
+///
+/// Not `#[cfg(debug_assertions)]`: `debug_assert!` still type-checks its
+/// expression in a release build, so the function has to exist there. The
+/// `if cfg!(debug_assertions)` the macro expands to is what keeps the walk
+/// out of a release binary.
+fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
+    #[derive(Default)]
+    struct FindQuasiquote {
+        found: bool,
+    }
+    impl patina_ir::ExprVisitor for FindQuasiquote {
+        fn visit_quasiquote(&mut self, _val: &patina_core::TaggedValue) {
+            self.found = true;
+        }
+    }
+    let mut finder = FindQuasiquote::default();
+    patina_ir::ExprVisitor::visit_expr(&mut finder, expr);
+    finder.found
+}
+
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
@@ -402,6 +460,10 @@ pub fn eval_cps(
         }
         return Ok(TaggedValue::UNSPECIFIED);
     }
+
+    // Lower quasiquote before the CPS transform, so no `Quasiquote` reaches
+    // the evaluator and both backends derive one structure.
+    let expr = &lower_quasiquotes_for(expr, evaluator)?;
 
     // Transform CoreExpr to CpsExpr
     let transformer = CpsTransformer::new();
@@ -429,6 +491,19 @@ pub(super) fn eval_cps_with(
         // An import touches no dynamic state; the plain entry handles it.
         return eval_cps(expr, env, evaluator);
     }
+    // Not lowered here: the one caller is the `eval` primitive's callback,
+    // which lowers beside its desugar so a bad template is the caller's
+    // error and stays catchable. Lowering here instead put the failure
+    // through `unhandled_is_final`, which marks a catchable error as having
+    // escaped a callback — and a `guard` around `eval` then never saw it.
+    //
+    // So this function's caller owes it a lowered tree. The CPS transform
+    // panics on a `Quasiquote`, which is a poor way to learn that, so the
+    // obligation is asserted here rather than left to the comment.
+    debug_assert!(
+        !contains_quasiquote(expr),
+        "eval_cps_with needs a tree its caller has already lowered"
+    );
     let cps_expr = CpsTransformer::new().transform_toplevel(expr);
     CpsEvaluator::new(evaluator).eval_in_env_with(
         Rc::new(cps_expr),

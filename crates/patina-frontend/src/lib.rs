@@ -23,6 +23,7 @@ pub mod library_parser;
 pub mod library_support;
 pub mod macro_expander;
 pub mod parser;
+pub mod quasiquote_lower;
 pub mod source_map;
 
 // Re-export main types
@@ -33,4 +34,5 @@ pub use lexer::{LexError, Lexer, Spanned, Token};
 pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
 pub use library_support::{SchemeLibraryLoader, is_define_library_form};
 pub use parser::{ParseError, Parser};
+pub use quasiquote_lower::{ConstructorResolver, QuasiquoteError, lower_quasiquotes};
 pub use source_map::{SourceMap, prune_freed_locations};
