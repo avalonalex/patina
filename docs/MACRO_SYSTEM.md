@@ -318,7 +318,13 @@ questions and neither replaces the other. The alias answers the bare spelling
 at run time, because definition-environment relinking resolves its target by
 name; it is consulted after real bindings, so a user's own global of that
 spelling still wins. The identity answers a *scoped* reference at compile
-time.
+time. It also answers a later form's desugar-time reads — a literal
+comparison, and the check for syntax used as a value — because
+`Environment`'s candidate walk takes the root's identities alongside its scoped
+table. The tree-walker files such a definition in the scoped table itself, so
+before the walk took both, the two backends' desugarers saw different bindings
+for one reference: the VM matched a macro-introduced `else` as `cond`'s
+literal, and refused a macro-introduced `when` as syntax.
 
 The identity is needed because `alpha_rename` runs once per top-level form and
 builds its candidate frames from that form alone. A reference in a later form

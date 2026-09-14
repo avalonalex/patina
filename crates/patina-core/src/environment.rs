@@ -1214,12 +1214,27 @@ impl Environment {
 
     /// Every scoped binding of `name` on this chain that is a candidate for a
     /// reference at `ref_scopes`: latest first within a frame, innermost frame
-    /// first — the order `resolve_scoped` documents.
+    /// first — the order `resolve_scoped` documents — and, at the root, the
+    /// macro-introduced top-level definitions the VM renamed.
+    ///
+    /// Those last are the same kind of binding as a scoped definition, kept in
+    /// a different table. The tree-walker files a macro-introduced top-level
+    /// definition in the scoped table when it runs; the VM renames it and
+    /// records only its identity ([`define_introduced_global`]), so a walk of
+    /// the scoped table alone saw it on one backend and not the other. A later
+    /// form's desugar-time reads then disagreed: a generated macro's `cond`
+    /// matched a macro-introduced `else` as its literal on the VM only, and
+    /// once that was fixed, rejected the same `else` in test position as
+    /// "syntax used as a value" on the VM only. They come last, as the oldest,
+    /// which is also where `RenameEnv::resolve` puts them. The tree-walker
+    /// never records one, so its per-read walk pays an empty-map check.
     ///
     /// Candidacy is tested with the rule's own `is_candidate`, so this is a
     /// filter and not a second copy of the rule; a binding that fails it is
     /// shown neither to the resolver nor to the check, so cloning its scope
     /// set would be waste on a path the tree-walker takes per variable read.
+    ///
+    /// [`define_introduced_global`]: Self::define_introduced_global
     fn collect_scoped_candidates(
         &self,
         name: &str,
@@ -1247,8 +1262,57 @@ impl Environment {
                 }
             }
         }
-        if let Some(parent) = &self.parent {
-            parent.collect_scoped_candidates(name, ref_scopes, candidates, debug);
+        match &self.parent {
+            Some(parent) => parent.collect_scoped_candidates(name, ref_scopes, candidates, debug),
+            None => self.collect_introduced_globals(name, ref_scopes, candidates, debug),
+        }
+    }
+
+    /// The root's share of [`collect_scoped_candidates`]: each macro-introduced
+    /// top-level definition of `name` the VM renamed, paired with the value its
+    /// renamed global holds. One that is recorded but not yet bound — its
+    /// defining form was compiled and has not run — is not a binding yet, and
+    /// is not a candidate.
+    ///
+    /// [`collect_scoped_candidates`]: Self::collect_scoped_candidates
+    fn collect_introduced_globals(
+        &self,
+        name: &str,
+        ref_scopes: &ScopeSet,
+        candidates: &mut Vec<(ScopeSet, TaggedValue)>,
+        debug: bool,
+    ) {
+        // The tree-walker's case, on every scoped read: nothing recorded, so
+        // return before `for_each_introduced_global` hashes the name.
+        if self.introduced_global_names.borrow().is_empty() {
+            return;
+        }
+        // Collected before any value is read, so no borrow of the identity
+        // table is held across a read of the bindings.
+        let mut found: Vec<(ScopeSet, Rc<str>)> = Vec::new();
+        self.for_each_introduced_global(name, |scopes, renamed_to| {
+            if crate::scope_resolve::is_candidate(scopes, ref_scopes) {
+                found.push((scopes.clone(), renamed_to.clone()));
+            }
+        });
+        for (scopes, renamed_to) in found {
+            let value = self.bindings.borrow().get(&renamed_to);
+            if debug {
+                println!(
+                    "[ENV]   Introduced global {} as {} ⊆ {} : {}",
+                    name,
+                    renamed_to,
+                    ref_scopes,
+                    if value.is_some() {
+                        "YES"
+                    } else {
+                        "NOT YET BOUND"
+                    }
+                );
+            }
+            if let Some(value) = value {
+                candidates.push((scopes, value));
+            }
         }
     }
 

@@ -38,6 +38,10 @@
 ;; The expected failure is a Patina defect this migration found: a body's
 ;; introduced definition is reachable from the use site by name. Gauche's two
 ;; are the duplicate-formal rows, which R7RS leaves it free to accept.
+;;
+;; 2026-09-14 adds one row, a later form reading a macro-introduced global
+;; spelled like a keyword: 19 rows, and chibi and Gauche pass it. It introduces
+;; `when`, which no other row does.
 
 (import (scheme base) (scheme eval) (srfi 64))
 
@@ -311,6 +315,28 @@
 
 (test-equal "a minted global name is not writable from source" '(41 2)
   (list (minted-a) (minted-b)))
+
+;; A later form reaching a macro-introduced top-level definition by its scopes
+;; reads the variable, even when the name is also a keyword the program
+;; imports. `define-when-probe` defines `when` and a macro whose template reads
+;; that `when`. Measured 2026-09-14: chibi 0.12, Gauche 0.9.15 and the
+;; tree-walker answer `variable`; the VM refused the program while desugaring,
+;; "invalid use of syntax as a value". The VM renames such a definition and
+;; records its identity apart from the scoped bindings a desugar-time read
+;; walked, so the later form's read fell back by name and found `(scheme
+;; base)`'s `when`. The literal-matching half of the same gap is in
+;; `syntax-rules-literals.scm`.
+(define-syntax define-when-probe
+  (syntax-rules ()
+    ((_ probe)
+     (begin (define when 'variable)
+            (define-syntax probe (syntax-rules () ((_) when)))))))
+
+(define-when-probe when-probe)
+
+(test-equal "a later form reads a macro-introduced global spelled like a keyword"
+  'variable
+  (when-probe))
 
 ;; A macro's introduced definition must not overwrite a global of the same
 ;; name that source code wrote. The bare name is answered by an `Environment`

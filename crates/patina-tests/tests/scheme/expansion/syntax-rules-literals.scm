@@ -62,6 +62,8 @@
 ;; Matching literals by binding (2026-09-13) closes both, and adds two rows
 ;; for shapes the spelling test got wrong in the other direction: 32 total,
 ;; all passing on both Patina backends. Chibi and Gauche pass all four.
+;; Two more (2026-09-14) for a literal compared against a macro-introduced
+;; top-level binding, where the two backends disagreed: 34 total.
 ;;
 ;; ── Where the rest of `hygiene.rs` went ─────────────────────────────────────
 ;;
@@ -499,5 +501,36 @@
            taken))))
 (test-equal "a template's own binding of else is not cond's literal" 'fell-through
   (template-bound-else))
+
+;; The same question at top level, across forms. `define-marker-probe` defines
+;; `marker` and a macro whose template hands that `marker` to `literal-probe`.
+;; The two are different bindings — the literal's `marker` is unbound where
+;; `literal-probe` was defined, the input's is the one the expansion introduced
+;; — so the fallback arm is taken. Measured 2026-09-14: chibi 0.12, Gauche
+;; 0.9.15 and the tree-walker take it; the VM took the literal arm. The
+;; tree-walker records a macro-introduced top-level definition in the
+;; environment's scoped table, while the VM renames it and records only its
+;; identity, which the literal comparison did not consult. Found reviewing the
+;; change that made literals compare bindings (#318).
+;;
+;; The second row is the control: a `marker` written in source is unbound at
+;; both sites and spelled alike, so it matches everywhere. Kept at the end of
+;; the file because the rows before it define top-level names of their own.
+(define-syntax literal-probe
+  (syntax-rules (marker)
+    ((_ marker) 'literal-arm)
+    ((_ other) 'fallback-arm)))
+(define-syntax define-marker-probe
+  (syntax-rules ()
+    ((_ probe)
+     (begin (define marker 'introduced)
+            (define-syntax probe (syntax-rules () ((_) (literal-probe marker))))))))
+(define-marker-probe marker-probe)
+(test-equal "a literal does not match a macro-introduced top-level binding of its name"
+  'fallback-arm
+  (marker-probe))
+(test-equal "and a source-written identifier of that name still matches it"
+  'literal-arm
+  (literal-probe marker))
 
 (test-end)
