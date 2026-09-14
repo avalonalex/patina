@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-13 17:03:59\
+**Generated:** 2026-09-14 11:57:01\
 **Backend:** VM\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,11 +9,20 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 24 of 33 |
+| Suites fully passing | 23 of 33 |
 | Assertions passed | 8514 of 8534 (99.8%) |
+| Suites cut short by a top-level error | 1 |
 | Suites not reaching a tally | 0 |
 
-A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
+A suite that cannot load reaches no tally, and one cut short by a top-level error reaches only part of one, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
+
+## Cut short by a top-level error (1)
+
+A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. Patina's message:
+
+| Suite | Tally | Message |
+|---|---|---|
+| set | 16 of 16 passed | `Error: runtime error: Type error: %record-ref: expected record, got procedure` |
 
 ## Assertion failures (20 in 9 suites)
 
@@ -96,7 +105,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | read | pass | 44 | 44 |
 | repl | pass | 10 | 10 |
 | rlist | pass | 82 | 82 |
-| set | pass | 16 | 16 |
+| set | truncated | 16 | 16 |
 | sort | pass | 2562 | 2562 |
 | stream | pass | 81 | 81 |
 | text | pass | 1069 | 1069 |

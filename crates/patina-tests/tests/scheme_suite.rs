@@ -133,6 +133,7 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/vertical-bar-identifiers.scm", 32),
     ("srfi/bitwise.scm", 81),
     ("srfi/fixnums.scm", 54),
+    ("srfi/sets.scm", 4),
     ("srfi/sorting.scm", 5),
     ("srfi/string-cursors.scm", 15),
     ("stdlib/comparators.scm", 5),

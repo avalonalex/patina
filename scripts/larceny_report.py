@@ -19,7 +19,7 @@ from collections import OrderedDict
 
 REPO = "https://github.com/larcenists/larceny/blob/{commit}/test/R7RS/Lib/{path}#L{line}"
 
-STATUS_ORDER = ["not-bundled", "crash", "timeout", "load-error", "fail", "pass"]
+STATUS_ORDER = ["not-bundled", "crash", "timeout", "load-error", "truncated", "fail", "pass"]
 BINDING_FORMS = {"let", "let*", "letrec", "letrec*", "let-values", "let*-values",
                  "begin", "lambda", "do", "guard", "call-with-current-continuation",
                  "call/cc", "dynamic-wind", "parameterize", "if", "cond", "case",
@@ -42,11 +42,19 @@ def parse_log(text):
     first_error = next((l for l in text.splitlines() if l.startswith("Error")), "")
     if "overflowed its stack" in text:
         return "crash", 0, 0, "stack overflow", exprs
-    if passed:
-        return "pass", int(passed[-1]), int(passed[-1]), "", exprs
-    if failed:
-        n, t = int(failed[-1][0]), int(failed[-1][1])
-        return "fail", t - n, t, "", exprs
+    if passed or failed:
+        if passed:
+            status, p, t = "pass", int(passed[-1]), int(passed[-1])
+        else:
+            n, t = int(failed[-1][0]), int(failed[-1][1])
+            status, p = "fail", t - n
+        if first_error:
+            # A top-level error does not end the run program: its later forms
+            # still run, so the harness prints a tally even though the error
+            # ended the suite wherever it hit. The tally covers only what ran
+            # first — `set` scored pass 16/16 this way — so it is not clean.
+            return "truncated", p, t, first_error, exprs
+        return status, p, t, "", exprs
     m = re.search(r"Library \(([^)]*)\) not found", first_error)
     if m:
         return "not-bundled", 0, 0, "(" + m.group(1) + ")", exprs
@@ -171,7 +179,7 @@ def main():
         # a tracked file.
         detail = detail.replace(os.path.abspath(args.suites) + "/", "").replace(os.path.expanduser("~") + "/", "~/")
         links = []
-        if status == "fail":
+        if status in ("fail", "truncated"):
             src = Source(suite_files(args.suites, args.lane, suite))
             for e in exprs:
                 path, line = src.locate(e)
@@ -211,8 +219,9 @@ def main():
     w("| | |\n|---|---|")
     w("| Suites fully passing | %d of %d |" % (n_clean, n_suites))
     w("| Assertions passed | %d of %d (%s) |" % (tot_p, tot_t, pct))
-    w("| Suites not reaching a tally | %d |\n" % (n_suites - n_clean - len(by["fail"])))
-    w("A suite that cannot load reaches no tally, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.\n")
+    w("| Suites cut short by a top-level error | %d |" % len(by["truncated"]))
+    w("| Suites not reaching a tally | %d |\n" % (n_suites - n_clean - len(by["fail"]) - len(by["truncated"])))
+    w("A suite that cannot load reaches no tally, and one cut short by a top-level error reaches only part of one, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.\n")
 
     if by["not-bundled"]:
         w("## Library under test not bundled (%d)\n" % len(by["not-bundled"]))
@@ -236,6 +245,19 @@ def main():
         for s, _, _, _, d, _ in by["load-error"]:
             w("| %s | `%s` |" % (s, d.replace("|", "\\|")[:160]))
         w("")
+    if by["truncated"]:
+        w("## Cut short by a top-level error (%d)\n" % len(by["truncated"]))
+        w("A top-level form of the suite's run program raised, and the program carried on to print a tally. The tally counts only the assertions that ran before the error, so the suite is not clean whatever it says, and the rest of it is unmeasured. Patina's message:\n")
+        w("| Suite | Tally | Message |\n|---|---|---|")
+        for s, _, p, t, d, _ in by["truncated"]:
+            w("| %s | %d of %d passed | `%s` |" % (s, p, t, d.replace("|", "\\|")[:160]))
+        w("")
+        for s, _, p, t, _, links in by["truncated"]:
+            if links:
+                w("### %s — %d of %d failed\n" % (s, t - p, t))
+                for l in links:
+                    w("- " + l)
+                w("")
     if by["fail"]:
         n_fail = sum(r[3] - r[2] for r in by["fail"])
         w("## Assertion failures (%d in %d suites)\n" % (n_fail, len(by["fail"])))

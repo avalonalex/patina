@@ -65,22 +65,34 @@ fixed it passes 56 of 56 on both backends, and the lanes are unchanged.
 24/33 suites and 8508/8534 assertions; R6RS VM reports 13/16 and 4026/4033.
 All 33 R7RS suites reach a tally. The equal backend totals mask VM's
 ephemeron failure versus tree-walker's timing-sensitive `time` failure.
-The runner also calls `set` passing despite its known top-level error.
-Track L L5.3 records the complete snapshot, provenance and verification;
-the preceding dated counts are historical.
+The runner also called `set` passing despite its known top-level error, until
+the refresh below. Track L L5.3 records the complete snapshot, provenance and
+verification; the preceding dated counts are historical.
+
+**Refresh, 2026-09-14.** Both R7RS backends report **23/33** suites and
+8514/8534 assertions, and R6RS 15/16 and 4474/4474. The assertion totals are
+where family 13 and #317 (the four multi-operand `unquote` rows) had already
+taken them; the suite count fell by one because the runner and report now call
+a suite **truncated**, not clean, when a top-level error cuts it short, and
+`set` is that suite. Neither number shows what the two blockers hide. Measured
+in scratch copies of the suite with the blocking forms corrected, `set` runs
+253 assertions rather than 16 (251 passing after family 44's fix), and R6RS
+`base` runs 2034, 2023 of them passing; "Not ours" has both.
 
 ## Current macro status — audited 2026-09-13
 
 The numbered queue below records the completed 2026-08 work. It is not a list
-of today's unresolved macro defects. Fresh checks on `180a41e5` confirm:
+of today's unresolved macro defects. Fresh checks on `180a41e5` confirm the
+table below; its family 40, family 41 and H2 rows were brought up to date on
+2026-09-14 from the fixes merged since (#315, #316, #318, #321, #324):
 
 | Area | Current result | Remaining work |
 |---|---|---|
 | Families 14/15/23 and 33–39 | Their regression suites pass; the original hygiene matrix is 28/28 on both backends | These recorded Scheme shapes are closed |
 | Core-syntax import renaming | The library-import regression and keyword suite pass on both backends | Track L §6's old open label was stale |
-| Family 40, introduced globals | Five VM expected failures; all five pass on the tree-walker | Preserve binding identity through global relinking |
-| Family 41, pattern literals | Two expected failures on both backends | Compare the distinct template-local and helper-literal bindings correctly |
-| H2 environment API properties | Ten tests pass, including three quarantines that require the known defect to remain observable | #289 ambiguous writes, #290 outer more-specific binding, #291 non-root plain fallback |
+| Family 40, introduced globals | Three VM expected failures in `expansion/hygiene.scm`, all passing on the tree-walker; #315 fixed the other two of the original five | Preserve binding identity through global relinking (Track L §6, relinking by name) |
+| Family 41, pattern literals | ✅ Fixed 2026-09-13 (#318, #321; #324 added macro-produced definitions): the rows are ordinary assertions on both backends | Global names spelled alike still match by spelling — "Not ours", spelling-based literal matching |
+| H2 environment API properties | ✅ No quarantines left: #316 (2026-09-13) resolves a scoped write the way the read resolves it, closing #289, #290 and #291 | None |
 | `do` result-clause definitions | The existing regression still pins acceptance on both backends | Reject definitions in an expression context; separate from hygiene |
 
 H1's normal generated gate also passes: 112 binding cases, five variants
@@ -365,6 +377,7 @@ failure list.
 ### 12. `write` spells the symbol `@` as `|@|` — both backends, a decision
 - Ours: none — this is the flip side of accepting bare `@` on input (PRD §6 "Bare `@`"); writing it bare would round-trip through our own reader. Decide, then either pin or leave.
 - Upstream: [tests/scheme/write.sld#L368](tests/scheme/write.sld#L368), [#L373](tests/scheme/write.sld#L373), [#L378](tests/scheme/write.sld#L378)
+- The references split, so neither settles it (2026-09-14): Gauche 0.9.15 writes `|@|`, as Patina does, and chibi 0.12 writes `@`.
 
 ### 13. `(make-bytevector n -1)` and enum sets — ✅ both fixed 2026-09-13, and both were ours
 
@@ -838,17 +851,33 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
 - Upstream: [tests/scheme/complex.sld#L58](tests/scheme/complex.sld#L58)–[#L67](tests/scheme/complex.sld#L67). Focused `complex` improves from **62/69 to 68/69 on both backends**; all six explicit-radix/prefixed round-trips pass. Only the pre-existing `(log -0.0)` expectation remains.
 - Acceptance: numeric operations **124/124 on both backends**, including signed rational and bignum components, imaginary units, uppercase hex digits, both prefix orders, and invalid digits. R7RS compliance stays **1226/1226 on both backends**. Chibi 0.12 writes non-decimal exact complex values but rejects reading them back; these four oracle differences are registered against R7RS 6.2.7/7.1.1. Gauche has no exact non-real complex support, so the four support-dependent rows are skipped there. No upstream report was filed.
 
+### 44. `set-xor!` and `bag-xor!` drop what only the second argument has — both backends — ✅ fixed 2026-09-14
+- Found 2026-09-14 by running `set` past upstream's own argument-order slips (under "Not ours") in a scratch copy of the suite. The lane never reaches these assertions: the suite stops at the first slip, 16 assertions in.
+- Cause: both procedures pass their first argument to `sob-xor!` as the result as well as an operand. The reference implementation copied the entries only the second argument has into the result, then scanned the first argument — which now held those entries too — and wrote back the absolute difference of the counts, zero for each copy, so `sob-cleanup!` removed them. `(set-xor! (set c 1 2) (set c 2 3))` answered `{1}`, and xor with an empty first set answered the empty set. The functional `set-xor` and `bag-xor` pass a fresh result and were right.
+- Fix: `sob-xor!` collects those entries in its first scan and adds them after the second, a PATINA LOCAL EDIT in `lib/srfi/113/sets-impl.scm`. The other linear-update procedures were read for the same shape and run against their functional forms, chibi and Gauche: intersection and difference scan once; union writes `max`, which comes out the same in either order; sum scans its first argument first, and the counts it writes back are never zero.
+- Ours: `crates/patina-tests/tests/scheme/srfi/sets.scm`, rows "set-xor! keeps the elements only its second argument has", "bag-xor! keeps what only its second argument has, with its count", "set-xor! of a set with itself is empty" and "bag-sum! counts what only its second argument has once". Against the unfixed library the first two fail on both backends and the other two pass.
+- Oracles: Gauche 0.9.15's `set-xor!` and `bag-xor!` answer as Patina's did; chibi 0.12 is right there, but its `bag-sum` and `bag-sum!` count an element twice when only the second bag holds it. All three are registered as oracle defects in `crates/patina-tests/tests/scheme/DIVERGENCES.tsv`; none is filed upstream.
+- Upstream: [tests/scheme/set.sld#L839](tests/scheme/set.sld#L839) and [#L844](tests/scheme/set.sld#L844) (sets), [#L849](tests/scheme/set.sld#L849) and [#L854](tests/scheme/set.sld#L854) (bags) — Larceny's own regression assertions, marked there as its ticket #721.
+- Measured in that scratch copy, `set-map` and `bag-map` corrected: `set` 247 of 253 before the fix and 251 of 253 after, on both backends; the two left are upstream's `set-unfold` and `bag-unfold` argument order. The lanes do not move.
+
+### 45. `(scheme charset)` raises on any character above U+00FF — both backends — open
+- Ours: none yet; Track L §6 has the repro. `(char-set-contains? char-set:letter #\λ)` raises a `string-ref` index error on both backends where chibi and Gauche answer `#t`, and `char-set`, `string->char-set` and the bundled `(srfi 130)`'s `string-index` raise the same way.
+- Upstream: [tests/scheme/charset.sld#L108](tests/scheme/charset.sld#L108), `char-set:full`'s size, which is 256 here.
+- Cause: the bundled `(srfi 14)` is the Latin-1 reference implementation, which stores a char-set as a 256-character string indexed by code point. It sat under "Not ours" until 2026-09-14 as "the bundled SRFI 14 is the Latin-1 reference port" — true, and it hid that the port raises rather than answering. The Larceny assertion is the mildest symptom there is.
+- Direction: a full-Unicode representation, which Track L §6's chibi-regexp entry is blocked on too; the §6 entry for this family names the candidate.
+
 ## Not ours — recorded so nobody re-diagnoses them
 
-- **`set-map` argument order.** The `set` suite calls `(set-map proc comparator set)` in a bare `set!` outside any assertion (it surfaces as two top-level errors, not as failing assertions, so the reports do not link it); SRFI 113's text, chibi and Patina all have `(set-map comparator proc set)`.
+- **Argument order in `set`: `set-map`, `bag-map`, `set-unfold`, `bag-unfold`.** SRFI 113 puts the comparator first — its text spells out `set-map` and `set-unfold`, and the bag procedures follow the set ones — and chibi and Patina agree; the suite passes it after the procedure. `set-map` at [tests/scheme/set.sld#L255](tests/scheme/set.sld#L255) sits in a bare `set!` outside any assertion, so it raises at top level and ends `run-set-tests` there, 16 assertions in; `bag-map` ([#L506](tests/scheme/set.sld#L506)) and everything after it never runs. The runner called that a clean pass until 2026-09-14 and reports it as truncated now. With both calls corrected in a scratch copy the suite runs 253 assertions, and `set-unfold` ([#L265](tests/scheme/set.sld#L265)) and `bag-unfold` ([#L516](tests/scheme/set.sld#L516)) then fail as ordinary assertions for the same reason; Gauche 0.9.15 takes `set-unfold`'s comparator last, as the suite does. The rest of what the correction exposed was ours: family 44.
 - **`delete-duplicates!` cell reuse** — [tests/scheme/list.sld#L589](tests/scheme/list.sld#L589) requires the result to reuse the input's cells; SRFI 1 permits that, it does not require it.
-- **`(let-syntax ())` with an empty body** — [tests/r6rs/base.sld#L1571](tests/r6rs/base.sld#L1571) blocks the R6RS `base` suite. R6RS's splicing `let-syntax` allows it, R7RS's does not; Gauche and Chez accept, chibi rejects as we do. A leniency decision, not a defect.
+- **`(let-syntax ())` with an empty body** — [tests/r6rs/base.sld#L1571](tests/r6rs/base.sld#L1571) blocks the R6RS `base` suite. R6RS's splicing `let-syntax` allows it, R7RS's does not; Gauche and Chez accept, chibi rejects as we do. A leniency decision, not a defect. **What it blocks, measured 2026-09-14** in a scratch copy with that one assertion removed: the suite loads and runs 2034 assertions, 2023 of them passing on both backends, and none of the 11 failures is an R7RS defect. Eight round-trip numbers through `number->string` with R6RS's precision argument ([#L970](tests/r6rs/base.sld#L970)): Chez implements it (`(number->string 1.0 10 5)` is `"1.0|53"`), chibi ignores the argument, and Gauche rejects it as Patina does. One expects `(log 0)` to raise ([#L895](tests/r6rs/base.sld#L895)); Chez does, and chibi, Gauche and Patina answer `-inf.0`. One uses a definition made inside a `let-syntax` body from after the form ([#L1563](tests/r6rs/base.sld#L1563)): R6RS splices the body and Chez answers 42, while chibi, Gauche and Patina, following R7RS, find the name unbound. The last is `(sqrt -inf.0)` ([#L908](tests/r6rs/base.sld#L908)), the R7RS lane's expectation again, where chibi, Gauche and Chez all answer as Patina does. The two `let-syntax` rows are one decision: whether `(r6rs base)` should provide R6RS's splicing `let-syntax`.
 - **Tree-walker `time`** — [tests/scheme/time.sld#L49](tests/scheme/time.sld#L49): a one-second busy loop measured at two seconds. Speed, not correctness.
-- **Multi-expression `unquote`** — [tests/scheme/base.sld#L918](tests/scheme/base.sld#L918)–[#L927](tests/scheme/base.sld#L927): `(unquote e1 e2 …)` splicing several expressions is R6RS 11.17; R7RS 7.1.4's grammar gives `unquote` one template. chibi answers `(foo)` exactly as we do (Gauche and Chez accept the R6RS form). The suite is derived from R6RS's.
+- ~~**Multi-expression `unquote`**~~ — no longer failing: #317 (2026-09-13) reads `(unquote e1 e2 …)` as R6RS 11.17 does, and the four assertions at [tests/scheme/base.sld#L918](tests/scheme/base.sld#L918)–[#L927](tests/scheme/base.sld#L927) pass.
 - **Overrunning `vector-copy!`** — [tests/scheme/base.sld#L2301](tests/scheme/base.sld#L2301), which upstream itself marks `; FIXME: R7RS doesn't say`: copying five elements to index 2 of a five-vector is "an error" in R7RS 6.8; the suite expects a truncated copy. chibi and Gauche raise, as we do.
-- **`(make-bytevector n -1)`** — [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346), [#L2347](tests/scheme/base.sld#L2347): R7RS 6.9 requires a byte; chibi and Gauche accept a signed byte and answer 255. A leniency decision, same as the R6RS lane's family 13.
+- ~~**`(make-bytevector n -1)`**~~ — no longer failing: family 13 (2026-09-13) accepts a signed fill byte, as chibi and Gauche already did, and [tests/scheme/base.sld#L2346](tests/scheme/base.sld#L2346) and [#L2347](tests/scheme/base.sld#L2347) pass.
+- **`fl*` against `expt`** — [tests/scheme/flonum.sld#L632](tests/scheme/flonum.sld#L632) expects `(fl* x x x)` to equal `(flonum (expt x 3))` for every `x` in its sample; at `x` = 1/3 the two differ by one ulp, 0.037037037037037035 against 0.03703703703703703. R7RS does not say how `expt` computes an inexact power: Chez, chibi, Gauche and Racket answer as Patina does, and Guile computes `(expt x 3)` by repeated multiplication, as the suite assumes. Noted as not ours when `flonum` was bundled (2026-08-26), and first recorded here 2026-09-14.
 - **Spelling-based literal matching and `apply`-head check** (review of #114, pre-existing): the literal matcher and the `apply` head test judge by spelling, so `(let ((else #f)) …)` around a macro using `my-cond`'s `else` literal, or a local `apply` around a template's `(apply f x)`, answer differently from chibi. The review of #132 added the import-level shape: a library's `(syntax-rules (quote) ((_ 'x) 'quoted) …)` under SRFI 101's `quote` still matches the literal by spelling, where chibi (comparing bindings) takes the other rule. Families 14/15 are fixed and this was not: locals became bindings for *resolution* while the literal matcher kept comparing spellings. **The local half closed 2026-09-13 (family 41)**: the matcher resolves both identifiers and compares the local bindings they reach. What remains is the global half — two names that reach no local binding still match when spelled alike, so the SRFI 101 `quote` shape answers `quoted` before and after that change (measured) — and the `apply` head check, which is now `shadowed_names`' only reader.
-- **`charset`, now that it loads** (2 of 93): [tests/scheme/charset.sld](tests/scheme/charset.sld) expects `char-set:full` to hold every code point — the bundled SRFI 14 is the Latin-1 reference port (PRD §6, chibi-regexp entry: blocked on a full-Unicode char-set story) — and expects `char-set-cursor` to iterate ascending, which SRFI 14 leaves unspecified.
+- **`charset`'s cursor order** — [tests/scheme/charset.sld#L136](tests/scheme/charset.sld#L136) expects `char-set-cursor` to walk a set in ascending order, which SRFI 14 leaves unspecified. Its neighbour at [#L108](tests/scheme/charset.sld#L108), `char-set:full`'s size, was filed here as well until 2026-09-14; that one is a symptom of family 45, which is ours.
 
 ## Not defects — bundling queue (L1 item 6) — ✅ empty
 
