@@ -607,13 +607,16 @@
 ;; only the VM answers 10. One expansion's private definition is not another
 ;; expansion's to see, and three implementations say so. The VM still
 ;; answers: its compiler installs a bare-name alias for a renamed
-;; macro-introduced global (`alpha_rename`'s `rename_body`), the mechanism
-;; whose by-name reach `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 already records
-;; as undecidable-under-renaming — the jabberwocky-steal defect.
+;; macro-introduced global (`alpha_rename`'s `rename_body`), kept for relinking
+;; by name. The jabberwocky steal that mechanism was once blamed for is fixed;
+;; these rows are what the alias still answers.
 ;;
 ;; The unusual direction is the reason to read these before "fixing" one:
-;; closing them means fixing relinking-by-name, not loosening the tree-walker
-;; back to the capture chibi rejects.
+;; closing them means removing the bare-name views, not loosening the
+;; tree-walker back to the capture chibi rejects. A 2026-09-13 mutation that
+;; removed them made all three refuse on the VM and failed nothing else in
+;; `cargo test` or the chibi lanes (`PRD/macro/SYNTAX_CASE_DESIGN.md`,
+;; "Scoped Relinking, Sized").
 ;;
 ;; The definitions are top-level forms, as in the original programs; only the
 ;; use is inside the row, so that the refusal is a caught error and not a dead

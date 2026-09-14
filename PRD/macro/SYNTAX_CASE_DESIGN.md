@@ -124,8 +124,10 @@ boundary and not a refactor of the current architecture):
    library-private helpers by name today (the `jabberwocky` constraint —
    Track L §6). Resolved IR must carry those links as bindings. *Sized
    2026-09-13 in [Scoped Relinking, Sized](#scoped-relinking-sized): the
-   steal defect once recorded here is already fixed, the by-name views can be
-   deleted without this rewrite, and the relinking change left is contained.*
+   steal defect once recorded here is already fixed; a mutation indicates the
+   by-name views can be deleted without this rewrite, pending the Larceny
+   lanes, the suite oracles and the compat corpus, which it did not run; and
+   the relinking change left is contained.*
 3. **Cross-backend contract.** The resolved IR becomes the backend interface;
    `hygiene_matrix.rs` and Track H's harnesses preserve the established correct
    binding behavior. The 28-shape matrix passes against chibi and Racket;
@@ -136,10 +138,13 @@ boundary and not a refactor of the current architecture):
 
 ## Scoped Relinking, Sized
 
-*(Added 2026-09-13. Track Q's Q7.5(b) is gated on "a written design note", and
-prerequisite 2 above names the same work; this is that note. Measured against
-`main` at `9105d328` — the family-41 literal change landing beside it does not
-touch this path — with chibi 0.12 and Gauche 0.9.15 as oracles.)*
+*(Added 2026-09-13, corrected 2026-09-14. Track Q's Q7.5(b) is gated on "a
+written design note", and prerequisite 2 above names the same work; this is
+that note. The mutation below ran on `main` at `9105d328`. The Patina columns
+of the first table were first measured with #318's build and re-measured on
+`main` at `42fffa05`, after #321: every answer is unchanged, and the one
+mechanism that changed is noted in its row. Oracles: chibi 0.12 and Gauche
+0.9.15.)*
 
 Prerequisite 2 says macro-generated macros resolve library-private helpers
 *by name*, and that resolved IR must carry those links as bindings. Checked
@@ -178,7 +183,7 @@ desugarer on its own.
 
 | Shape | VM | TW | chibi | Gauche | Reaches V1–V4? |
 |---|---|---|---|---|---|
-| Jabberwocky in one program (chibi's `r7rs-tests.scm`) | 42 | 42 | 42 | 42 | No. `PATINA_SCOPE_TRACE` shows the reference under its own spelling, never an alias, resolving `via=scoped` — the tree-walker's table, the VM's introduced-global identity (#315) |
+| Jabberwocky in one program (chibi's `r7rs-tests.scm`) | 42 | 42 | 42 | 42 | No, since #321. The VM compiles the reference to the introduced global's identity (#315, `via=scoped`) and the tree-walker reads its scoped table. Before #321 the VM's *desugar-time* read of the same reference, the check for syntax used as a value, found no candidate and fell back by name through V1 (`phase=desugar … cands=0 via=byname`); since #321 it resolves `via=scoped` there too. That fallback only ever answered "not syntax", which a deleted V1 answers as well |
 | Track L §6, "a later user global steals it" | 10 | 10 | 10 | 10 | No. Recorded there as 99; the VM's compile-time resolution now picks the introduced global's identity (`via=scoped`), so the user's global never competes, and §6 was stale |
 | Track L §6, "two expansions share one binding" | (10 20) | (10 20) | (10 20) | (10 20) | No. Recorded as (20 20); same |
 | Jabberwocky in a library, generated macro used inside it | 10 | 10 | 10 | 10 | No: one environment |
@@ -205,14 +210,23 @@ refuse, or are never reached.**
 
 ### Removing them, measured
 
-What depends on the views was measured rather than argued. A scratch worktree
-at `origin/main` deleted V1 and V2, and made the tree-walker bind a
-*macro-introduced* definition at its scopes only, through a flag on the CPS
-`Define` recording that the name carried scopes before `define_scopes` gave
-source-written internal defines their body's. A first attempt keyed on
-non-empty scopes alone hid every source-written internal define too, since the
-CPS transform scopes those as well; its 40 failures were all that mistake, all
-on the tree-walker, and none are counted here.
+What depends on the views was measured rather than argued, in a scratch
+worktree at `origin/main` (`9105d328`) with three edits:
+
+- **V1:** drop the `env.define_alias(bare, env.clone(), renamed.name)` call in
+  `compile_pipeline` (`patina-vm/src/compiler/mod.rs`), keeping the
+  `define_introduced_global` call beside it.
+- **V2:** in `alpha_rename::rename_body`'s non-top-level arm, push only the
+  renamed `Define`, without the `(define bare renamed)` spliced after it.
+- **V3:** add `introduced: bool` to `CpsExprKind::Define`, set in the CPS
+  transform's `Define` arm from the name's scopes *before* `define_scopes`
+  replaces them, and in `step.rs`'s `Define` arm call `define_with_scopes`
+  when it is set and `define_scoped_definition` otherwise.
+
+The flag is the part to get right. A first attempt that keyed on non-empty
+scopes in `step.rs` alone hid every source-written internal define too, since
+`define_scopes` scopes those as well; its 40 failures were all that mistake,
+all on the tree-walker, and none are counted here.
 
 | Check | Result |
 |---|---|
@@ -222,10 +236,12 @@ on the tree-walker, and none are counted here.
 | The probes above | family 40 refuses on both backends, both variants; #269's `define` half is unbound on both; a top-level source reference is unbound; a library exporting an introduced define fails to load, as it does in chibi and Gauche; the exported getter still errors; #269's `define-syntax` half is unchanged |
 | Not run | the Larceny lanes, the suite oracles, the compat corpus |
 
-**Nothing the test suites cover depends on V1–V3 for a macro-introduced
-definition.** Deleting them closes family 40 and #269's `define` half, and
-does not need the relinker fixed first, because the relinker never reached
-those shapes.
+**Nothing `cargo test` or the chibi lanes cover depends on V1–V3 for a
+macro-introduced definition.** The Larceny lanes, the suite oracles and the
+compat corpus have not been asked, and they are where third-party code relying
+on a bare-name top-level definition would show. On this evidence, deleting the
+views closes family 40 and #269's `define` half, and does not need the
+relinker fixed first, because the relinker never reached those shapes.
 
 ### The design
 
@@ -261,6 +277,15 @@ related.
    two occurrences of one spelling from different expansions get different
    aliases. With step 1 landed first there is no by-name view left for this to
    lean on, which is the point.
+
+   One question the step has to settle before it is written. A scoped
+   identifier in `Template::Literal` keeps the identity an *outer* macro gave
+   it, so the binding it names lives where that outer macro's template was
+   written. That need not be the generated macro's definition environment:
+   a macro from one library can generate a macro inside another. Resolved in
+   the generated macro's environment, such an identifier finds nothing, or a
+   different binding of the same spelling. It has to carry the environment
+   that gave it its identity, or the step has to show the two cannot differ.
 3. **V4, separately:** bind a `define-syntax` at its name's scopes. #269's
    keyword half, and independent of both.
 
