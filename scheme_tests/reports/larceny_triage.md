@@ -794,6 +794,21 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
   through `Environment::scoped_binding_of` — the walk and rule a scoped read
   uses — and compares the local bindings they reach. All four shapes are rows
   in `expansion/syntax-rules-literals.scm`; the two new ones fail on `main`.
+- **Review of that fix, 2026-09-14: it split the backends, and a second split
+  sat beneath.** `scoped_binding_of` walked only the environment's scoped
+  table. The tree-walker records a macro-introduced top-level definition there
+  when it runs; the VM renames it and records its identity separately. So a
+  later form's literal compared with such a definition resolved as local on
+  the tree-walker and non-local on the VM, and the VM took the literal arm
+  where the tree-walker, chibi and Gauche took the fallback. Fixing only that
+  moved the `else` spelling of the shape from a wrong arm to a desugar error on
+  the VM: the syntax-as-value check reads through the same walk, found
+  `(scheme base)`'s keyword, and refused. That half was already on `main`
+  without any literal: a generated macro reading a macro-introduced top-level
+  `when` was refused on the VM and read as a variable everywhere else. Both
+  close by giving the shared candidate walk the root's introduced-global
+  identities; rows in `syntax-rules-literals.scm` and
+  `introduced-definitions.scm` pin them.
 - The spelling-based literal observation below is only partly closed by this:
   its local half is, its global half is not.
 
