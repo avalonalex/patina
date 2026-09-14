@@ -21,16 +21,17 @@ This document outlines the design for implementing `syntax-case`, the procedural
 
 1. [Motivation](#motivation)
 2. [Resolve Once, Before the Backends](#resolve-once-before-the-backends)
-3. [Deferred Mechanization (H5)](#deferred-mechanization-at-the-syntax-case-boundary-h5)
-4. [Current State](#current-state)
-5. [Syntax Objects](#syntax-objects)
-6. [Core Forms](#core-forms)
-7. [Hygiene Utilities](#hygiene-utilities)
-8. [Quasisyntax](#quasisyntax)
-9. [Implementation Phases](#implementation-phases)
-10. [Integration Strategy](#integration-strategy)
-11. [Testing Strategy](#testing-strategy)
-12. [References](#references)
+3. [Scoped Relinking, Sized](#scoped-relinking-sized)
+4. [Deferred Mechanization (H5)](#deferred-mechanization-at-the-syntax-case-boundary-h5)
+5. [Current State](#current-state)
+6. [Syntax Objects](#syntax-objects)
+7. [Core Forms](#core-forms)
+8. [Hygiene Utilities](#hygiene-utilities)
+9. [Quasisyntax](#quasisyntax)
+10. [Implementation Phases](#implementation-phases)
+11. [Integration Strategy](#integration-strategy)
+12. [Testing Strategy](#testing-strategy)
+13. [References](#references)
 
 ---
 
@@ -120,15 +121,183 @@ boundary and not a refactor of the current architecture):
    pipeline needs a story for late-arriving code (re-run the resolver per
    `eval` unit, as the VM effectively does today).
 2. **Definition-environment relinking.** Macro-generated macros resolve
-   library-private helpers by name today (the `jabberwocky` constraint, with
-   its documented steal defect — Track L §6). Resolved IR must carry those
-   links as bindings, which is also the only known path to *fixing* that
-   defect.
+   library-private helpers by name today (the `jabberwocky` constraint —
+   Track L §6). Resolved IR must carry those links as bindings. *Sized
+   2026-09-13 in [Scoped Relinking, Sized](#scoped-relinking-sized): the
+   steal defect once recorded here is already fixed, the by-name views can be
+   deleted without this rewrite, and the relinking change left is contained.*
 3. **Cross-backend contract.** The resolved IR becomes the backend interface;
    `hygiene_matrix.rs` and Track H's harnesses preserve the established correct
    binding behavior. The 28-shape matrix passes against chibi and Racket;
    additional shapes retain named defects. The rewrite must meet the justified
    answers and retire the corresponding quarantines when they pass.
+
+---
+
+## Scoped Relinking, Sized
+
+*(Added 2026-09-13. Track Q's Q7.5(b) is gated on "a written design note", and
+prerequisite 2 above names the same work; this is that note. Measured against
+`main` at `9105d328` — the family-41 literal change landing beside it does not
+touch this path — with chibi 0.12 and Gauche 0.9.15 as oracles.)*
+
+Prerequisite 2 says macro-generated macros resolve library-private helpers
+*by name*, and that resolved IR must carry those links as bindings. Checked
+against the code, the by-name path turns out narrower and less load-bearing
+than that statement, so this section starts from measurements rather than from
+the constraint as recorded.
+
+### What answers a macro-introduced definition by its spelling
+
+| | Where | What it does |
+|---|---|---|
+| **V1** | VM, `compile_pipeline` | `env.define_alias(bare, env, renamed)` for each macro-introduced *top-level* definition the renamer renamed. `Environment::get`/`set` consult it after plain bindings, so `LoadGlobal`'s cache-miss path reaches it. |
+| **V2** | VM, `alpha_rename::rename_body` | Splices `(define bare renamed)` beside each renamed *body* definition. |
+| **V3** | tree-walker, `step.rs` `Define` | `define_scoped_definition`: filed under its scopes *and* visible by name. `get`/`set` read the name-only view; `get_scoped_fallback`/`set_scoped_fallback` refuse it to a scoped reference that rejected it. |
+| **V4** | desugarer, `desugar_define_syntax_tagged` | `env.define(name, macro)`: a keyword binds by spelling whatever scopes its name carries. |
+
+V1–V3 exist for one consumer, `link_definition_env_refs`, and their docs say
+so. It rewrites a template's free references so they resolve where the macro
+was defined; it decides **once per spelling** over `template_symbols`, detects
+a candidate with the name-only `def_env.get(name)`, and installs an alias whose
+target `(def_env, name)` is looked up by name on every access. A definition
+reachable only under its scopes is invisible to all three steps.
+
+V3's table has two more users that are not in scope, and a change to it has to
+leave them alone: a parameter written in source (`application.rs`) and an
+internal define written in source, which the CPS transform's `define_scopes`
+stamps with its body's scopes, are both stored scoped *and* visible by name,
+which is how source references reach them. V4 is not a relinking artifact either. The
+call never looks at the name's scopes, which makes it #269's `define-syntax`
+half and the one expected failure in `introduced-definitions.scm`. It has been
+grouped with the family-40 rows as "scopes surviving the renamer"; neither the
+code nor the measurement below supports that, and it is fixable in the
+desugarer on its own.
+
+### What they serve, measured
+
+| Shape | VM | TW | chibi | Gauche | Reaches V1–V4? |
+|---|---|---|---|---|---|
+| Jabberwocky in one program (chibi's `r7rs-tests.scm`) | 42 | 42 | 42 | 42 | No. `PATINA_SCOPE_TRACE` shows the reference under its own spelling, never an alias, resolving `via=scoped` — the tree-walker's table, the VM's introduced-global identity (#315) |
+| Track L §6, "a later user global steals it" | 10 | 10 | 10 | 10 | No. Recorded there as 99; the VM's compile-time resolution now picks the introduced global's identity (`via=scoped`), so the user's global never competes, and §6 was stale |
+| Track L §6, "two expansions share one binding" | (10 20) | (10 20) | (10 20) | (10 20) | No. Recorded as (20 20); same |
+| Jabberwocky in a library, generated macro used inside it | 10 | 10 | 10 | 10 | No: one environment |
+| **Jabberwocky in a library, generated macro exported to the program** | **error** | **error** | 10 | 10 | Never reached — below |
+| Family 40, `(def-x)` then `(use-x)` | 10 | error | error | error | **V1** |
+| Family 40, `use-x` compiled inside a procedure before `(def-x)` runs | 10 | error | error | error | **V1**, at run time |
+| A source reference to a top-level introduced define | 1 | 1 | unbound | unbound | V1 / V3 — R7RS §4.3.2 permits either at top level |
+| A library exporting a top-level introduced define by its bare name | 1 | 1 | unbound | unbound | V1 / V3 |
+| #269, `(let () (def-var) hidden-v)` | 10 | 10 | unbound | unbound | V2 / V3 — a defect, since this is a body |
+| #269, `(let () (def-mac) (hidden-m))` | m | m | unbound | unbound | V4 |
+
+The exported-getter row is the shape the by-name path exists for, and it fails
+before reaching it. `CompiledMacro::collect_template_symbols` skips
+`Template::Literal`, which is how the template compiler emits an identifier
+that already carries scopes — exactly the generated macro's reference to the
+introduced definition. So it is never a template symbol and never relinked,
+and it reaches the program carrying the library's scopes: `PATINA_SCOPE_TRACE`
+shows `RESOLVE phase=desugar name="mh" ref={S136,S137} cands=0 … via=unbound`
+on both backends. The only record of this was a comment in
+`link_definition_env_refs` ("dies earlier at the Template::Literal skip").
+
+**In every measured shape, V1–V3 either answer a reference chibi and Gauche
+refuse, or are never reached.**
+
+### Removing them, measured
+
+What depends on the views was measured rather than argued. A scratch worktree
+at `origin/main` deleted V1 and V2, and made the tree-walker bind a
+*macro-introduced* definition at its scopes only, through a flag on the CPS
+`Define` recording that the name carried scopes before `define_scopes` gave
+source-written internal defines their body's. A first attempt keyed on
+non-empty scopes alone hid every source-written internal define too, since the
+CPS transform scopes those as well; its 40 failures were all that mistake, all
+on the tree-walker, and none are counted here.
+
+| Check | Result |
+|---|---|
+| `cargo test --all --lib --tests --no-fail-fast` | 1194 passed, 1 failed |
+| The one failure | `hygiene.scm`'s three family-40 expected failures pass on the VM — the quarantine reporting a fix |
+| chibi's R7RS suite, VM and tree-walker | 1226/1226 each, jabberwocky included |
+| The probes above | family 40 refuses on both backends, both variants; #269's `define` half is unbound on both; a top-level source reference is unbound; a library exporting an introduced define fails to load, as it does in chibi and Gauche; the exported getter still errors; #269's `define-syntax` half is unchanged |
+| Not run | the Larceny lanes, the suite oracles, the compat corpus |
+
+**Nothing the test suites cover depends on V1–V3 for a macro-introduced
+definition.** Deleting them closes family 40 and #269's `define` half, and
+does not need the relinker fixed first, because the relinker never reached
+those shapes.
+
+### The design
+
+A macro-introduced definition is reachable through its binding identity — its
+name and the scope set it was introduced at — and never through its spelling.
+Measured above, that is two independent changes, and a third that only looked
+related.
+
+1. **Delete the by-name views.** V1 and V2 on the VM. On the tree-walker a
+   macro-introduced `define` binds at its scopes only, which needs the CPS
+   `Define` to carry whether the name was introduced, since `define_scopes`
+   erases that today. `define_introduced_global` stays: it is the identity. A
+   scoped reference with no scoped candidate still compiles to a bare
+   `LoadGlobal`, and with only plain bindings left to answer it the family-40
+   rows refuse, including the compiled-before-defined variant that no
+   compile-time check could reach. #269's `define` half closes on both
+   backends. The doc comments justifying the views go with them
+   (`Renamed::global_aliases`, `define_alias`'s bare-name kind,
+   `define_scoped_definition`, `rename_body`). What stays: the scoped tables,
+   `visible_by_name` for source-written parameters and internal defines, and
+   the fallbacks' refusal arms that guard them. Removing those is
+   resolve-once's work, not this.
+2. **Relink an identifier to a binding.** Needed for the exported getter, and
+   for nothing else measured. `template_symbols` becomes the template's free
+   *identifiers*, `(name, scopes)`, taken from `Template::Symbol` and from
+   scoped identifiers in `Template::Literal`. Each resolves in the definition
+   environment at its own scopes — `get_with_scopes` on the tree-walker's
+   table, `for_each_introduced_global` for a VM-renamed global — and the alias
+   installed for it names the binding found: a plain name for a plain or
+   renamed global, `(name, scopes)` for a scoped one, which `alias_target`
+   then reads with the scoped read rather than `get`. Rewriting stays keyed on
+   the expansion scope (family 35's discriminator) and adds the scope set, so
+   two occurrences of one spelling from different expansions get different
+   aliases. With step 1 landed first there is no by-name view left for this to
+   lean on, which is the point.
+3. **V4, separately:** bind a `define-syntax` at its name's scopes. #269's
+   keyword half, and independent of both.
+
+### Behaviour it changes
+
+Everything in the first table moves to the chibi and Gauche answer. Two of those
+moves are at top level, where R7RS permits either answer and code written
+against Patina could rely on the current one: a source reference to a
+macro-introduced definition becomes unbound, and a library exporting one by its
+bare name fails to load. So the compat corpus, whose snapshot is known to go
+stale silently, has to run against step 1 before it lands, as do the Larceny
+lanes and the suite oracles, which the experiment did not run.
+
+### Guards
+
+Step 1: the three family-40 rows in `hygiene.scm` lose `test-expect-fail`, and
+new rows pin #269's `define` half in a body and the compiled-before-defined
+family-40 variant. Step 2: a new row for the exported getter, with its library
+under `test-lib/`. Step 3: the row in `introduced-definitions.scm` loses its
+expectation. Required green throughout: `hygiene_matrix.rs`, both chibi lanes
+(jabberwocky), SRFI 101's shadowing suite, the three Larceny lanes, the suite
+oracles, and the compat corpus.
+
+### What this sizes
+
+Prerequisite 2 does not size the rewrite up. Step 1 is three small deletions, a
+flag on one CPS node, and the doc comments that justified them; step 2 is one
+desugarer function and its rewrite keying, `collect_template_symbols`, and an
+optional scope set on `AliasTarget`. After both, every relinking alias names a
+binding and no runtime path answers an introduced definition by its spelling,
+which is what the prerequisite asks resolved IR to carry.
+
+What resolve-once still has to solve is elsewhere. The obstacle the Q7 deferral
+did not name is that the desugarer's binding table *is* the runtime
+`Environment`; then there are the scoped tables and fallbacks that exist for the
+tree-walker's per-read resolution; and prerequisite 1, which the pipeline
+already meets by resolving per top-level form.
 
 ---
 
