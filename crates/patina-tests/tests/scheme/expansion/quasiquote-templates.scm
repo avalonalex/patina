@@ -297,15 +297,24 @@
 ;; accepts a datum label, so a template can hold a circular one; walking it
 ;; without a cycle check allocated until the process died.
 ;;
-;; All three are scoped away from the oracles, and the reason is the same for
-;; each: they pin that *Patina* refuses rather than diverges, and no other
-;; implementation's answer corroborates that. Asked anyway, Gauche does not
-;; return on the improper pair. It did complete the circular row on macOS and
-;; did not complete this file at all on CI's Linux build — not reproduced
-;; locally, so the row is scoped rather than explained. `test-skip` prevents
-;; evaluation, which is what keeps one row from costing the file its whole
-;; Gauche column.
-(cond-expand (patina) (else (test-skip 3)))
+;; chibi refuses all three, for reasons of its own — "invalid use of auxiliary
+;; syntax" for the circular list, "car: not a pair" for both improper ones —
+;; which is as much as a `test-error` row asks. Gauche cannot run the first
+;; two at all: compiling the circular template allocates without bound, and
+;; the flat improper one segfaults gosh, both measured 2026-09-13 inside a
+;; procedure that is never called. So those two are skipped on Gauche alone;
+;; `test-skip` prevents evaluation, which keeps two rows from costing the file
+;; its whole Gauche column. Gauche does run the nested one, and rebuilds the
+;; template where Patina refuses it; that difference is registered.
+;;
+;; All three were once skipped on every oracle, because Gauche "completed the
+;; circular row on macOS and did not complete this file on CI". It never
+;; completed that row. The lane's alarm was delivered to Gauche, which raised
+;; it as a catchable error, so `test-error` scored a spin of the whole timeout
+;; as a pass; on CI the memory limit aborted the file first. The lane now
+;; kills a timed-out oracle and caps Gauche's heap, so the row would fail the
+;; same way on both.
+(cond-expand (gauche (test-skip 2)) (else))
 (test-error "a circular operand list is refused" #t
   (eval '`(a #0=(unquote . #0#)) (environment '(scheme base))))
 (test-error "an improper operand list is refused" #t

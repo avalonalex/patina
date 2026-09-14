@@ -149,9 +149,10 @@ jobs:
       run: |
         export PATH="$ORACLES/bin:$PATH"
         export LD_LIBRARY_PATH="$ORACLES/lib:${LD_LIBRARY_PATH:-}"
-        # A backstop under the script's own chibi heap ceiling: no oracle
-        # process may take the runner down, whatever file it is stuck on. An
-        # oracle that hits it fails its file, which the lane reports.
+        # A backstop under the script's own heap ceilings for chibi and
+        # Gauche: no oracle process may take the runner down, whatever file
+        # it is stuck on. An oracle that hits it fails its file, which the
+        # lane reports.
         ulimit -v 6291456
         chibi-scheme -V
         gosh -V | head -1

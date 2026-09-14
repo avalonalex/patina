@@ -12,6 +12,7 @@
 # Environment:
 #   SUITE_ORACLE_TIMEOUT       seconds per file per oracle (default 60)
 #   SUITE_ORACLE_CHIBI_HEAP    chibi's maximum heap (default 2G); see run_oracle
+#   SUITE_ORACLE_GAUCHE_HEAP   Gauche's maximum heap (default 2G); see run_oracle
 #   CHIBI / GOSH               override the interpreter binaries
 #   SUITE_ORACLES_REQUIRE_ALL  set to 1 to fail, rather than skip, when an
 #                              oracle is missing — what CI sets, since a lane
@@ -62,6 +63,7 @@ SUITE_DIR="crates/patina-tests/tests/scheme"
 REGISTER="$SUITE_DIR/DIVERGENCES.tsv"
 TIMEOUT="${SUITE_ORACLE_TIMEOUT:-60}"
 CHIBI_HEAP="${SUITE_ORACLE_CHIBI_HEAP:-2G}"
+GAUCHE_HEAP="${SUITE_ORACLE_GAUCHE_HEAP:-2G}"
 CHIBI="${CHIBI:-chibi-scheme}"
 GOSH="${GOSH:-gosh}"
 
@@ -106,21 +108,55 @@ if [ "${SUITE_ORACLES_REQUIRE_ALL:-0}" = 1 ] && [ ${#ORACLES[@]} -lt 2 ]; then
     exit 2
 fi
 
-# Run one file under one oracle, with a portable timeout. `perl -e 'alarm'` is
-# the idiom run_larceny_tests.sh already uses; macOS has no coreutils timeout.
+# Run a command for at most $TIMEOUT seconds, then kill it outright.
 #
-# chibi also gets a heap ceiling (`-h initial/max`; 2M is its default initial
-# size, so only the maximum changes). A file it cannot finish —
-# `control/wind-thunk-exceptions.scm`, registered `*` — does not merely spin:
-# it allocates without bound, and on a CI runner it exhausted memory in under
-# 40 s and took the whole step down before the alarm fired. With a ceiling it
-# fails with chibi's own out-of-memory error, which is the "does not
-# complete" the register already records.
+# A watchdog, not an alarm in the oracle's own process. This used to be
+# `perl -e 'alarm shift; exec @ARGV'`, which delivers SIGALRM to the oracle —
+# and Gauche turns SIGALRM into a catchable error. A row that hung inside
+# `test-error` therefore *passed* when the alarm fired, and its file completed:
+# `quasiquote-templates.scm`'s circular-operand row did exactly that on macOS
+# after spinning for the whole timeout, while on CI the memory limit aborted
+# the file first, and the difference read as a platform one (#317). SIGKILL
+# cannot be caught, so a file that runs out of time fails to complete on every
+# platform, and the last line of its output says why.
+#
+# perl rather than coreutils `timeout`, which macOS does not ship.
+with_timeout() {
+    perl -e '
+        my $limit = shift;
+        my $pid = fork;
+        defined $pid or die "fork: $!";
+        if ($pid == 0) { exec @ARGV; exit 127 }
+        $SIG{ALRM} = sub {
+            kill "KILL", $pid;
+            print STDERR "killed after ${limit}s\n";
+        };
+        alarm $limit;
+        my $done;
+        do { $done = waitpid($pid, 0) } while ($done == -1 && $!{EINTR});
+        exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+    ' "$TIMEOUT" "$@"
+}
+
+# Run one file under one oracle.
+#
+# Both oracles get a heap ceiling, because a file an oracle cannot finish does
+# not merely spin: it allocates without bound. chibi on
+# `control/wind-thunk-exceptions.scm` (registered `*`) exhausted a CI runner's
+# memory in under 40 s and took the whole step down before any timeout, and
+# Gauche compiling a circular quasiquote template reached CI's `ulimit -v` in
+# under a minute. With a ceiling each fails with its own out-of-memory error,
+# which is the "does not complete" the register records — and fails that way
+# on macOS too, where `ulimit -v` is refused and nothing else would stop it.
+#
+# chibi's ceiling is `-h initial/max` (2M is its default initial size, so only
+# the maximum changes). Gauche's collector reads GC_MAXIMUM_HEAP_SIZE, set
+# through `env` so it reaches the process the watchdog execs.
 run_oracle() {
     local oracle=$1 file=$2
     case "$oracle" in
-        chibi)  perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$CHIBI" -h "2M/$CHIBI_HEAP" "$file" 2>&1 </dev/null || true ;;
-        gauche) perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" "$GOSH" -r7 "$file" 2>&1 </dev/null || true ;;
+        chibi)  with_timeout "$CHIBI" -h "2M/$CHIBI_HEAP" "$file" 2>&1 </dev/null || true ;;
+        gauche) with_timeout env GC_MAXIMUM_HEAP_SIZE="$GAUCHE_HEAP" "$GOSH" -r7 "$file" 2>&1 </dev/null || true ;;
     esac
 }
 
