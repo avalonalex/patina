@@ -25,20 +25,21 @@
 //! its own form refused; the rows that show the rule *accepting* things are a
 //! suite file, `tests/scheme/expansion/keyword-bindings.scm`.
 //!
-//! **It has recorded residuals**, all pinned at the bottom of this file. The check asks what a name resolves to *while the
-//! form is being desugared*, and what the desugarer knows then is not
-//! everything: a name that is not syntax yet still loads `#<macro>` or
-//! `#<syntax:…>` as a value.
-//!
-//! That one is a missed rejection. The third is not, and is why this
-//! paragraph no longer claims the rule "never" rejects wrongly: a keyword a
-//! *macro expansion* rebinds is invisible to the body scan that
-//! `body_definition_names` performs, so the check still sees the core binding
-//! and rejects a legal program. Written-out internal definitions are seen
-//! (audit C2); expansions are not. Closing any of the three means resolving
-//! later — at every variable *read*, on the VM's hottest instruction, or after
-//! expanding a body's macro uses. The residual is the price; it is written
+//! **It has one recorded residual**, pinned at the bottom of this file. The
+//! check asks what a name resolves to *while the form is being desugared*,
+//! and what the desugarer knows then is not everything: a name that is not
+//! syntax yet still loads `#<macro>` or `#<syntax:…>` as a value. That is a
+//! missed rejection, and closing it means resolving at every variable *read*,
+//! on the VM's hottest instruction. The residual is the price; it is written
 //! down rather than implied.
+//!
+//! A second residual rejected legal programs, and closed on 2026-09-14. The
+//! body scan read only the definitions written in a body, so a keyword a
+//! *macro use* rebinds there — `(define-values (if) (values 3))` — left the
+//! check seeing the core binding. The scan now expands a copy of each
+//! body-level macro use to read what it defines, without moving the real
+//! expansion (`produced_definition_names`); its programs are rows in
+//! `keyword-bindings.scm`, since they are the rule accepting something.
 
 mod common;
 use common::{
@@ -207,27 +208,6 @@ fn test_a_forward_reference_to_syntax_is_not_caught() {
          (define-syntax foo (syntax-rules () ((_) 1)))
          (f)",
         "(#<macro>)",
-    );
-}
-
-/// A definition a macro *expands into* is not seen by the body scan.
-///
-/// `body_definition_names` reads the forms as written, before expansion, so a
-/// keyword bound by `define-record-type` or `define-values` is invisible to
-/// it. Same coarseness as the spelling test below and in the same direction —
-/// a missed shadow, never an invented one — but it costs a legal program here
-/// rather than a missed rejection, so it is the sharper of the two residuals.
-/// chibi accepts this.
-///
-/// Closing it means expanding the body's macro uses before scanning it, which
-/// reorders expansion against definition and is a change to when hygiene
-/// happens, not a bug fix.
-#[test]
-fn test_a_definition_introduced_by_a_macro_is_not_seen_by_the_body_scan() {
-    assert_program_eval_error(
-        "(import (scheme base))
-         (define (f) (define-values (if) (values 3)) (+ if 1))
-         (f)",
     );
 }
 

@@ -20,8 +20,8 @@ mod literal;
 
 pub use error::MatchError;
 
-use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::pattern_to_string_with_names;
+use crate::macro_expander::{Pattern, Site};
 use patina_core::{Heap, SharedHeap, TaggedValue};
 use patina_runtime::{MatchEnv, PVRef};
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ use std::rc::Rc;
 /// The Matcher stores matched values as TaggedValue in MatchEnv for memory efficiency.
 /// When a SharedHeap is provided, values are converted to TaggedValue during storage.
 /// The Expander retrieves TaggedValues and converts back to Value for template expansion.
-pub struct Matcher {
+pub struct Matcher<'a> {
     /// Number of pattern variables (determines MatchEnv size)
     num_pvars: usize,
 
@@ -50,17 +50,14 @@ pub struct Matcher {
     /// Shared heap for TaggedValue storage in MatchEnv
     shared_heap: Option<SharedHeap>,
 
-    /// Where the macro was defined and where it is being used: at each, an
-    /// environment, and the scopes a reference written there without scopes
-    /// of its own stands in. A literal matches an input that reaches the same
-    /// binding (R7RS §4.3.2); the literal resolves at the first site, the
-    /// input at the second. Absent for the direct-API paths, which have no
-    /// environments, so nothing resolves there and literals compare by
-    /// spelling.
-    definition_env: Option<Rc<patina_runtime::Environment>>,
-    definition_scopes: patina_runtime::ScopeSet,
-    use_site_env: Option<Rc<patina_runtime::Environment>>,
-    use_site_scopes: patina_runtime::ScopeSet,
+    /// Where the macro was defined and where it is being used. A literal
+    /// matches an input that reaches the same binding (R7RS §4.3.2); the
+    /// literal resolves at the first site, the input at the second. Absent for
+    /// the direct-API paths, which have no environments, so nothing resolves
+    /// there and literals compare by spelling. Borrowed, because both are the
+    /// same for every rule an expansion tries.
+    definition: Option<Site<'a>>,
+    use_site: Option<Site<'a>>,
 
     /// The scope this expansion flipped onto its input. Everything being
     /// matched carries it, so an input identifier carrying nothing else was
@@ -68,7 +65,7 @@ pub struct Matcher {
     macro_scope: Option<patina_runtime::ScopeId>,
 }
 
-impl Matcher {
+impl<'a> Matcher<'a> {
     /// Create a new matcher
     ///
     /// # Arguments
@@ -78,10 +75,8 @@ impl Matcher {
             num_pvars,
             pvar_names: None,
             shared_heap: None,
-            definition_env: None,
-            definition_scopes: patina_runtime::ScopeSet::new(),
-            use_site_env: None,
-            use_site_scopes: patina_runtime::ScopeSet::new(),
+            definition: None,
+            use_site: None,
             macro_scope: None,
         }
     }
@@ -96,10 +91,8 @@ impl Matcher {
             num_pvars,
             pvar_names: Some(pvar_names),
             shared_heap: None,
-            definition_env: None,
-            definition_scopes: patina_runtime::ScopeSet::new(),
-            use_site_env: None,
-            use_site_scopes: patina_runtime::ScopeSet::new(),
+            definition: None,
+            use_site: None,
             macro_scope: None,
         }
     }
@@ -122,10 +115,8 @@ impl Matcher {
             num_pvars,
             pvar_names: Some(pvar_names),
             shared_heap: Some(shared_heap),
-            definition_env: None,
-            definition_scopes: patina_runtime::ScopeSet::new(),
-            use_site_env: None,
-            use_site_scopes: patina_runtime::ScopeSet::new(),
+            definition: None,
+            use_site: None,
             macro_scope: None,
         }
     }
@@ -133,17 +124,9 @@ impl Matcher {
     /// Give the matcher the two sites a literal comparison resolves at: where
     /// the macro was defined and where it is used. Each environment is
     /// optional; without one, nothing resolves on that side.
-    pub fn with_sites(
-        mut self,
-        definition_env: Option<Rc<patina_runtime::Environment>>,
-        definition_scopes: patina_runtime::ScopeSet,
-        use_site_env: Option<Rc<patina_runtime::Environment>>,
-        use_site_scopes: patina_runtime::ScopeSet,
-    ) -> Self {
-        self.definition_env = definition_env;
-        self.definition_scopes = definition_scopes;
-        self.use_site_env = use_site_env;
-        self.use_site_scopes = use_site_scopes;
+    pub fn with_sites(mut self, definition: Option<Site<'a>>, use_site: Option<Site<'a>>) -> Self {
+        self.definition = definition;
+        self.use_site = use_site;
         self
     }
 
@@ -225,20 +208,12 @@ impl Matcher {
             }
 
             Pattern::Literal(lit) => {
-                let definition = literal::Site {
-                    env: self.definition_env.as_ref(),
-                    scopes: &self.definition_scopes,
-                };
-                let use_site = literal::Site {
-                    env: self.use_site_env.as_ref(),
-                    scopes: &self.use_site_scopes,
-                };
                 let matched = literal::matches_literal(
                     *lit,
                     input,
                     heap,
-                    definition,
-                    use_site,
+                    self.definition,
+                    self.use_site,
                     self.macro_scope,
                 )
                 .map_err(MatchError::AmbiguousLiteral)?;
@@ -316,16 +291,14 @@ mod tests {
     use std::cell::RefCell;
 
     /// Helper to create a SharedHeap and Matcher for tests
-    fn make_test_matcher(num_pvars: usize) -> (Matcher, SharedHeap) {
+    fn make_test_matcher(num_pvars: usize) -> (Matcher<'static>, SharedHeap) {
         let heap = Rc::new(RefCell::new(Heap::new()));
         let matcher = Matcher {
             num_pvars,
             pvar_names: None,
             shared_heap: Some(heap.clone()),
-            definition_env: None,
-            definition_scopes: patina_runtime::ScopeSet::new(),
-            use_site_env: None,
-            use_site_scopes: patina_runtime::ScopeSet::new(),
+            definition: None,
+            use_site: None,
             macro_scope: None,
         };
         (matcher, heap)

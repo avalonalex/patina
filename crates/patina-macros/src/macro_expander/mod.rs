@@ -59,7 +59,7 @@ fn expand_macro_core_tagged(
     macro_scope: patina_runtime::ScopeId,
     original_args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
-    use_site: Option<UseSite<'_>>,
+    use_site: Option<Site<'_>>,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
 
@@ -83,6 +83,13 @@ fn expand_macro_core_tagged(
     // Create expander with macro scope for hygiene
     let expander = Expander::new_with_heap(macro_scope, shared_heap.clone());
 
+    // Borrowed rather than cloned into each rule's matcher: both sites are the
+    // same for every rule this expansion tries.
+    let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
+        env,
+        scopes: &compiled_macro.definition_scopes,
+    });
+
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
         debug_ctx.log_trying_rule(rule_idx, rule);
@@ -90,14 +97,7 @@ fn expand_macro_core_tagged(
         // Create matcher for this rule with hygiene support and shared heap
         let matcher =
             Matcher::new_with_heap(rule.num_pvars, rule.pvar_names.clone(), shared_heap.clone())
-                .with_sites(
-                    compiled_macro.definition_env.clone(),
-                    compiled_macro.definition_scopes.clone(),
-                    use_site.map(|(env, _)| env.clone()),
-                    use_site
-                        .map(|(_, scopes)| scopes.clone())
-                        .unwrap_or_default(),
-                )
+                .with_sites(definition, use_site)
                 .with_macro_scope(macro_scope);
 
         // Try to match against the pattern
@@ -136,7 +136,7 @@ fn expand_macro_core_tagged(
             // Not a failed match: the literal comparison has no answer, and
             // trying the next rule would give it one by rule order.
             Err(MatchError::AmbiguousLiteral(message)) => {
-                return Err(crate::error::MacroError::InvalidSyntax(message));
+                return Err(crate::error::MacroError::AmbiguousReference(message));
             }
             Err(e) => {
                 // This rule didn't match, try next one
@@ -446,12 +446,16 @@ fn edit_scope_memo(
     tv
 }
 
-/// Where a macro is being used: the environment, and the scopes a reference
-/// written there without scopes of its own stands in.
-pub type UseSite<'a> = (
-    &'a std::rc::Rc<patina_runtime::Environment>,
-    &'a patina_runtime::ScopeSet,
-);
+/// One side of a literal comparison: where a macro was defined, or where it is
+/// being used. The environment an identifier resolves in, and the scopes a
+/// reference written there without scopes of its own stands in — the rule
+/// `Desugarer::resolve_syntax` applies to every head it resolves, so a literal
+/// is compared by the binding a reference in the same place would reach.
+#[derive(Clone, Copy)]
+pub struct Site<'a> {
+    pub env: &'a std::rc::Rc<patina_runtime::Environment>,
+    pub scopes: &'a patina_runtime::ScopeSet,
+}
 
 /// What one expansion produced.
 pub struct MacroExpansion {
@@ -485,7 +489,7 @@ pub fn expand_macro_with_scope(
     compiled_macro: &CompiledMacro,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
-    use_site: Option<UseSite<'_>>,
+    use_site: Option<Site<'_>>,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
@@ -508,16 +512,120 @@ pub fn expand_macro_with_scope(
         args, // original args for debug logging
         shared_heap,
         use_site,
-    )?;
+    );
+
+    // Exit expansion (decrement depth) — on the error path too. A caller that
+    // recovers from a failed expansion, as the desugarer's body pre-pass does,
+    // would otherwise leave the tracer one level deeper for each failure.
+    MacroTracer::exit_expansion();
+    let expanded_tagged = expanded_tagged?;
 
     // Step 4: Flip output scopes on expanded result
     let result = flip_scope_on_tagged(expanded_tagged, macro_scope, shared_heap);
-
-    // Exit expansion (decrement depth)
-    MacroTracer::exit_expansion();
 
     Ok(MacroExpansion {
         form: result,
         scope: macro_scope,
     })
+}
+
+/// A literal comparison the set-of-scopes rule cannot decide stops the
+/// expansion and is reported as an ambiguous reference, rather than failing
+/// the rule and letting a later one decide it by order; a comparison it can
+/// decide picks a rule as usual.
+#[cfg(test)]
+mod ambiguous_literal_tests {
+    use super::*;
+    use patina_core::TaggedValue;
+    use patina_runtime::{Environment, ScopeId, ScopeSet};
+    use std::rc::Rc;
+
+    /// Expand `(m else)`, where `m` is `(syntax-rules (else) ((_ else)
+    /// 'literal) ((_ x) 'fallback))` defined where `else` is unbound, and the
+    /// use site binds `else` locally at each of `bindings`. The input `else`
+    /// carries `reference`.
+    fn expand_against_local_elses(
+        bindings: &[ScopeSet],
+        reference: ScopeSet,
+    ) -> Result<String, crate::error::MacroError> {
+        use patina_frontend::parser::Parser;
+
+        let definition_env = Rc::new(Environment::new());
+        let heap = definition_env.heap().clone();
+        let form = Parser::new_with_heap(
+            "(syntax-rules (else) ((_ else) 'literal) ((_ x) 'fallback))",
+            heap.clone(),
+        )
+        .expect("parser")
+        .parse()
+        .expect("syntax-rules form");
+        let parsed = parse_syntax_rules(form, &heap.borrow()).expect("syntax-rules");
+        let mut compiler = Compiler::with_env(
+            parsed.literals,
+            parsed.custom_ellipsis,
+            definition_env.clone(),
+            heap.clone(),
+        );
+        let compiled = compiler
+            .compile_macro("m".into(), parsed.rules)
+            .expect("compiled");
+
+        let use_site_env = Rc::new(Environment::with_parent(definition_env));
+        for scopes in bindings {
+            use_site_env.define_with_scopes("else", scopes.clone(), TaggedValue::UNSPECIFIED);
+        }
+        let args = {
+            let mut h = heap.borrow_mut();
+            let input = h.alloc_identifier(Rc::from("else"), reference);
+            let tail = h.alloc_pair(input, TaggedValue::NULL);
+            let head = h.intern_symbol("m");
+            h.alloc_pair(head, tail)
+        };
+        let use_site_scopes = ScopeSet::new();
+        let expansion = expand_macro_with_scope(
+            &compiled,
+            args,
+            &heap,
+            Some(Site {
+                env: &use_site_env,
+                scopes: &use_site_scopes,
+            }),
+        )?;
+        Ok(patina_core::format_tagged(expansion.form, &heap.borrow()))
+    }
+
+    #[test]
+    fn an_undecidable_literal_stops_the_expansion_as_an_ambiguous_reference() {
+        let (s1, s2) = (ScopeId::fresh(), ScopeId::fresh());
+        let result = expand_against_local_elses(
+            &[ScopeSet::singleton(s1), ScopeSet::singleton(s2)],
+            ScopeSet::singleton(s1).with_scope(s2),
+        );
+        match result {
+            Err(crate::error::MacroError::AmbiguousReference(message)) => {
+                assert!(message.contains("ambiguous"), "{message}");
+            }
+            other => panic!(
+                "expected an ambiguous reference, with the fallback rule never tried: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn a_local_else_the_rule_decides_takes_the_fallback_rule() {
+        let (s1, s2) = (ScopeId::fresh(), ScopeId::fresh());
+        let form = expand_against_local_elses(
+            &[ScopeSet::singleton(s1)],
+            ScopeSet::singleton(s1).with_scope(s2),
+        )
+        .expect("one candidate is not ambiguous");
+        assert!(form.contains("fallback"), "{form}");
+    }
+
+    #[test]
+    fn an_unbound_else_takes_the_literal_rule() {
+        let form = expand_against_local_elses(&[], ScopeSet::singleton(ScopeId::fresh()))
+            .expect("nothing to resolve");
+        assert!(form.contains("literal"), "{form}");
+    }
 }

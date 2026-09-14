@@ -809,6 +809,16 @@ in [the archived Track H plan](../../PRD/ARCHIVE/completed_planning/TRACK_H_HYGI
   close by giving the shared candidate walk the root's introduced-global
   identities; rows in `syntax-rules-literals.scm` and
   `introduced-definitions.scm` pin them.
+- **Body definitions a macro produces, 2026-09-14.** The body pre-pass that
+  gives local definitions their desugar-time bindings read only the `define`s
+  written in a body, so a definition from `define-values` or
+  `define-record-type` had none. A body-local `else` from either was matched
+  as `cond`'s literal — even from a procedure defined before it — and a
+  body-local `when` from `define-values` was refused as syntax used as a value,
+  refusing the whole program; chibi 0.12 and Gauche 0.9.15 read all three as
+  the variables they are. `produced_definition_names` now expands each
+  body-level macro use once, only to read what it defines, and binds those
+  names too. Rows in `keyword-bindings.scm` pin all three shapes.
 - The spelling-based literal observation below is only partly closed by this:
   its local half is, its global half is not.
 

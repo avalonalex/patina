@@ -472,10 +472,11 @@ impl Desugarer {
     /// rejects a legal program and head position silently picks the core form
     /// over the local binding.
     ///
-    /// Only definitions *written* in the body are seen, not ones a macro use
-    /// expands into (`define-record-type`, `define-values`). That is the same
-    /// coarseness `resolve_syntax` already documents, and in the same
-    /// direction: a missed shadow, never an invented one.
+    /// Only definitions *written* in the body are seen here. The ones a macro
+    /// use expands into (`define-values`, `define-record-type`) are found by
+    /// [`produced_definition_names`] once these are entered.
+    ///
+    /// [`produced_definition_names`]: Self::produced_definition_names
     fn body_definition_names(
         &self,
         body_tvs: &[TaggedValue],
@@ -486,6 +487,125 @@ impl Desugarer {
             self.collect_definition_names(*tv, shared_heap, &mut names);
         }
         names
+    }
+
+    /// Enter the definitions a body's macro uses produce, on top of the ones
+    /// written in it: [`produced_definition_names`], scoped and bound as
+    /// [`enter_binding_form`] binds any other body definition. A body whose
+    /// macro uses define nothing gets no extra environment.
+    ///
+    /// [`produced_definition_names`]: Self::produced_definition_names
+    /// [`enter_binding_form`]: Self::enter_binding_form
+    fn enter_produced_definitions(
+        self,
+        body_tvs: Vec<TaggedValue>,
+        binding_scope: ScopeId,
+        shared_heap: &SharedHeap,
+    ) -> (Self, Vec<TaggedValue>) {
+        let produced = self.produced_definition_names(&body_tvs, shared_heap);
+        if produced.is_empty() {
+            return (self, body_tvs);
+        }
+        let body_tvs = Self::scope_body(&produced, &body_tvs, binding_scope, shared_heap);
+        (self.enter_binding_form(produced, binding_scope), body_tvs)
+    }
+
+    /// The names a body's *macro uses* define — `define-values`,
+    /// `define-record-type`, anything whose expansion is a definition — which
+    /// [`body_definition_names`] cannot see, since it reads the forms as
+    /// written.
+    ///
+    /// Without them the body's desugar-time reads went wrong in both
+    /// directions chibi and Gauche get right: a body-local `else` from
+    /// `define-values` or a record accessor was matched as `cond`'s literal,
+    /// even from a procedure defined before it, and a body-local `when` was
+    /// refused as syntax used as a value.
+    ///
+    /// Each body form whose head names a macro is expanded here only to read
+    /// what it defines, and the expansion is thrown away: the form is
+    /// desugared from its original text, and expanded again, with every name
+    /// found here bound. That is one extra expansion per macro use at a body's
+    /// top level, and it keeps this a pre-pass — nothing it does is visible
+    /// except the names. Relinking and source stamping are skipped for the
+    /// same reason, and an expansion that fails is ignored, since the dispatch
+    /// that desugars the form expands it again and reports the failure.
+    ///
+    /// Only names from the use site are kept. A name the expansion introduced
+    /// carries the scope that expansion minted, and the real expansion mints
+    /// a different one, so nothing could reach a binding recorded for it here.
+    ///
+    /// Asked after the written definitions are entered, so a macro use is
+    /// expanded, and its literals are matched, as the real desugar will do it.
+    ///
+    /// [`body_definition_names`]: Self::body_definition_names
+    fn produced_definition_names(
+        &self,
+        body_tvs: &[TaggedValue],
+        shared_heap: &SharedHeap,
+    ) -> Vec<(Rc<str>, ScopeSet)> {
+        let mut names = Vec::new();
+        for tv in body_tvs {
+            self.collect_produced_names(*tv, shared_heap, &mut names, 0);
+        }
+        names
+    }
+
+    /// Add the names the macro uses in `tv` define to `out`, descending through
+    /// `begin` and into each expansion. `depth` bounds a macro that expands into
+    /// a use of itself forever, which the real desugar would not finish either.
+    fn collect_produced_names(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+        out: &mut Vec<(Rc<str>, ScopeSet)>,
+        depth: usize,
+    ) {
+        const DEPTH_LIMIT: usize = 64;
+        if depth > DEPTH_LIMIT || !tv.is_pair() {
+            return;
+        }
+        let (head, cdr) = {
+            let heap = shared_heap.borrow();
+            heap.get_pair(tv)
+        };
+        let Some((head_name, head_scopes)) = self.identifier_of(head, shared_heap) else {
+            return;
+        };
+        match self.resolve_syntax(&head_name, &head_scopes).ok().flatten() {
+            Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
+                let mut current = cdr;
+                while current.is_pair() {
+                    let (car, next) = {
+                        let heap = shared_heap.borrow();
+                        heap.get_pair(current)
+                    };
+                    self.collect_produced_names(car, shared_heap, out, depth);
+                    current = next;
+                }
+            }
+            Some(SyntaxRef::Macro(compiled_macro)) => {
+                let Ok(expansion) = patina_macros::expand_macro_with_scope(
+                    &compiled_macro,
+                    tv,
+                    shared_heap,
+                    Some(patina_macros::Site {
+                        env: &self.env,
+                        scopes: &self.current_scopes,
+                    }),
+                ) else {
+                    return;
+                };
+                let mut found = Vec::new();
+                self.collect_definition_names(expansion.form, shared_heap, &mut found);
+                self.collect_produced_names(expansion.form, shared_heap, &mut found, depth + 1);
+                out.extend(
+                    found
+                        .into_iter()
+                        .filter(|(_, scopes)| !scopes.contains(&expansion.scope)),
+                );
+            }
+            _ => {}
+        }
     }
 
     /// Add the names `tv` defines to `out`, descending through `begin`, which
@@ -1164,9 +1284,19 @@ impl Desugarer {
                 // R7RS §4.3.2 matches the two by binding, so the input is
                 // looked up here, standing in the scopes a reference written
                 // here stands in.
-                Some((&self.env, &self.current_scopes)),
+                Some(patina_macros::Site {
+                    env: &self.env,
+                    scopes: &self.current_scopes,
+                }),
             )
-            .map_err(|e| DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", e)))?;
+            .map_err(|e| match e {
+                // Refused as every resolution the rule does not determine is,
+                // not reported as a failed expansion.
+                patina_macros::MacroError::AmbiguousReference(message) => {
+                    DesugarError::AmbiguousReference(message)
+                }
+                other => DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", other)),
+            })?;
 
             // Referential transparency: a template's free identifiers denote what
             // they were bound to where the macro was *defined*. Link any that the
@@ -1321,6 +1451,8 @@ impl Desugarer {
         let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
         let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, shared_heap);
         let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
+        let (body_desugarer, body_tvs) =
+            body_desugarer.enter_produced_definitions(body_tvs, binding_scope, shared_heap);
 
         // Desugar body expressions with internal define-syntax handling
         let body =
@@ -1594,6 +1726,8 @@ impl Desugarer {
             let defined = body_desugarer.body_definition_names(&body_tvs, shared_heap);
             let body_tvs = Self::scope_body(&defined, &body_tvs, binding_scope, shared_heap);
             let body_desugarer = body_desugarer.enter_binding_form(defined, binding_scope);
+            let (body_desugarer, body_tvs) =
+                body_desugarer.enter_produced_definitions(body_tvs, binding_scope, shared_heap);
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()

@@ -8,20 +8,9 @@
 //! against the scoped bindings the desugarer records for every binding form it
 //! enters (`enter_binding_form`).
 
+use crate::macro_expander::Site;
 use patina_core::{Heap, TaggedValue};
-use patina_runtime::{Environment, ScopeId, ScopeSet};
-use std::rc::Rc;
-
-/// One side of a literal comparison: the environment an identifier resolves
-/// in, and the scopes a reference written there stands in when it carries
-/// none of its own — the rule `Desugarer::resolve_syntax` applies to every
-/// head it resolves, so a literal is compared by the binding a reference in
-/// the same place would reach.
-#[derive(Clone, Copy)]
-pub struct Site<'a> {
-    pub env: Option<&'a Rc<Environment>>,
-    pub scopes: &'a ScopeSet,
-}
+use patina_runtime::{ScopeId, ScopeSet};
 
 /// Does `input` match the pattern literal `lit`?
 ///
@@ -46,8 +35,8 @@ pub fn matches_literal(
     lit: TaggedValue,
     input: TaggedValue,
     heap: &Heap,
-    definition: Site<'_>,
-    use_site: Site<'_>,
+    definition: Option<Site<'_>>,
+    use_site: Option<Site<'_>>,
     macro_scope: Option<ScopeId>,
 ) -> Result<bool, String> {
     let Some(lit_name) = heap.get_symbol_or_identifier_name(lit) else {
@@ -70,7 +59,7 @@ pub fn matches_literal(
     // imported under a rename. A local binding is never renamed, so either
     // side reaching one rules it out.
     Ok(
-        denotes_same_binding(lit, input, heap, definition.env, use_site.env)
+        denotes_same_binding(lit_name, input_name, definition, use_site)
             && lit_binding()?.is_none()
             && input_binding()?.is_none(),
     )
@@ -85,9 +74,9 @@ fn local_binding(
     name: &str,
     own: ScopeSet,
     ignoring: Option<ScopeId>,
-    site: Site<'_>,
+    site: Option<Site<'_>>,
 ) -> Result<Option<ScopeSet>, String> {
-    let Some(env) = site.env else {
+    let Some(site) = site else {
         return Ok(None);
     };
     let scopes = if own.iter().all(|scope| Some(*scope) == ignoring) {
@@ -95,7 +84,8 @@ fn local_binding(
     } else {
         &own
     };
-    env.scoped_binding_of(name, scopes)
+    site.env
+        .scoped_binding_of(name, scopes)
         .map_err(|ambiguous| ambiguous.to_string())
 }
 
@@ -115,7 +105,9 @@ fn scopes_of(tv: TaggedValue, heap: &Heap) -> ScopeSet {
 ///
 /// Each name is resolved in its own environment — the literal's in the one the
 /// macro was defined in, the input's at the use site — which is what the report
-/// specifies. [`matches_literal`] only asks once neither side is local.
+/// specifies. [`matches_literal`] asks only about names spelled differently,
+/// and only once neither reaches a local binding; it settles a pair spelled
+/// alike by binding before it gets here.
 ///
 /// The comparison is on the *value*, and only when that value is a heap object.
 /// Environments hold values, not binding identities (an import under a rename
@@ -124,27 +116,16 @@ fn scopes_of(tv: TaggedValue, heap: &Heap) -> ScopeSet {
 /// two unrelated names that merely both hold `#t` or `0` from being called the
 /// same binding. Syntactic keywords — what auxiliary literals actually are —
 /// are interned markers, so identity is exact for them.
-pub fn denotes_same_binding(
-    lit: TaggedValue,
-    input: TaggedValue,
-    heap: &Heap,
-    definition_env: Option<&Rc<Environment>>,
-    use_site_env: Option<&Rc<Environment>>,
+fn denotes_same_binding(
+    lit_name: &str,
+    input_name: &str,
+    definition: Option<Site<'_>>,
+    use_site: Option<Site<'_>>,
 ) -> bool {
-    let (Some(definition_env), Some(use_site_env)) = (definition_env, use_site_env) else {
+    let (Some(definition), Some(use_site)) = (definition, use_site) else {
         return false;
     };
-    let (Some(lit_name), Some(input_name)) = (
-        heap.get_symbol_or_identifier_name(lit),
-        heap.get_symbol_or_identifier_name(input),
-    ) else {
-        return false;
-    };
-    if lit_name == input_name {
-        // The spelling test already answered this one, either way.
-        return false;
-    }
-    match (definition_env.get(lit_name), use_site_env.get(input_name)) {
+    match (definition.env.get(lit_name), use_site.env.get(input_name)) {
         (Some(lit_value), Some(input_value)) => lit_value.is_object() && lit_value == input_value,
         _ => false,
     }
