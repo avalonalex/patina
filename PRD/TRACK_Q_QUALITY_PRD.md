@@ -481,11 +481,17 @@ incognito and must be split into its own PR with its own pin.
    directions; `LiteralBinding`, `resolve_literal_bindings` and
    `is_literal_shadowed_tagged` are deleted, not delegated to. Still by
    spelling: two *global* names spelled alike match whichever globals they
-   reach, and `shadowed_names` survives for the `apply` head check alone. (b) The relinker resolves macro-generated
-   definitions by name, with a documented defect (a user's later global steals
-   a macro's private definition — Track L §6's jabberwocky note). Deep — it
-   needs scoped relinking and a migration story for definition-environment
-   references; not to be started casually.
+   reach, and `shadowed_names` survives for the `apply` head check alone. (b) 🟡 **Sized 2026-09-13** in
+   `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" — the design
+   note this item was gated on. The recorded steal defect is already fixed (the
+   VM resolves such a reference to the introduced global's identity, #315). A
+   mutation measured that the bare-name views of macro-introduced definitions
+   can be deleted with nothing in the test suites depending on them, which
+   closes triage family 40 and #269's `define` half. The relinking fix those
+   views were kept for is a separate, smaller change, for a newly recorded
+   defect: a generated macro exported from its library cannot reach the
+   library's introduced definition. Not deep; not landed either — the Larceny
+   lanes and the compat corpus have not run against the deletion.
    **Guard for both:** the matrix, both chibi suites, and SRFI 101's
    shadowing-names suite (56 of 56 today — the accidental adversarial-renaming
    experiment that found families 33–35).
@@ -517,8 +523,8 @@ is the proof that they were needed.
 
 **Q7** rides behind its guards rather than this ordering: Q7.1 waits for Track
 H's H2; Q7.2 and Q7.3 can go any time under the matrix; Q7.4 lands with
-whichever of Q7 or Track H's H1 moves first; Q7.5(b) not before a written
-design note on scoped relinking.
+whichever of Q7 or Track H's H1 moves first; Q7.5(b)'s design note is written
+(2026-09-13), and its deletion step waits on the compat corpus.
 
 ## 6. Risks & mitigations
 

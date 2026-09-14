@@ -636,12 +636,15 @@ impl Environment {
     /// - The VM's compiler installs one under a **bare** name, for a
     ///   macro-introduced global it renamed. `get` consults `bindings` first,
     ///   so a real binding of that name wins — which is what keeps a macro's
-    ///   temporary from overwriting a user's global of the same spelling, and
-    ///   is *also* why a user's later global of that spelling steals the
-    ///   macro's private definition (`(jab get 10) (define mh 99) (get)` is
-    ///   99 here, 10 in chibi and Gauche). Both directions follow from the
-    ///   bare name, and neither is fixable while relinking resolves by name;
-    ///   Track L §6 records that as the open defect it is.
+    ///   temporary from overwriting a user's global of the same spelling. It
+    ///   used to be why a user's later global of that spelling stole the
+    ///   macro's private definition, `(jab get 10) (define mh 99) (get)`; that
+    ///   answers 10 now, as chibi and Gauche do, because the renamer resolves
+    ///   such a reference to the introduced global's identity
+    ///   (`define_introduced_global`) and never asks the alias. What the alias
+    ///   still answers is a reference *no* identity accepts — triage family
+    ///   40 — and a source reference to the bare name. `SYNTAX_CASE_DESIGN.md`,
+    ///   "Scoped Relinking, Sized", measures both and what removing it takes.
     ///
     ///   The bare kind is sound only in an environment with **no parent**,
     ///   since `get` *returns* on an alias hit rather than falling through, so

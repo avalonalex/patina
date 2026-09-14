@@ -2030,7 +2030,15 @@ assertions, beside two added rows for the opposite direction and a template
 binding `else`; chibi and Gauche pass all four. Globals spelled alike still
 match by spelling. See the triage entry for the programs and H3 seeds.
 
-**Definition-env relinking rewrites by name** — ❌ **open, VM only since the 2026-08/09 hygiene arc** (re-measured 2026-09-13; it was both backends when recorded). This is the root of triage family 40, whose five backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm` pin the class: three cross-expansion refusals plus H3's two positive private-global read/write cases. All five remain quarantined on the VM and pass on the tree-walker; the fix route recorded there is scoped relinking (Track Q's Q7.5(b)) or the resolve-once design in `PRD/macro/SYNTAX_CASE_DESIGN.md`. No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
+**Definition-env relinking rewrites by name** — ❌ **open.** Sized in `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" (2026-09-13), the design note Track Q's Q7.5(b) was gated on. Three faces, all measured 2026-09-13:
+
+- **Triage family 40, VM only.** Three backend-scoped `test-expect-fail` rows in `tests/scheme/expansion/hygiene.scm`: a different expansion's reference to a macro-introduced global is answered by the VM's bare-name alias, where the tree-walker, chibi and Gauche refuse it — including when the reference is compiled before the definition runs. H3's two positive private-global rows that were pinned beside them were fixed by #315 without touching relinking.
+- **#269, both backends.** A definition a template introduces in a body is reachable from the use site by its bare name.
+- **Newly recorded: a generated macro exported from its library cannot reach the library's introduced definition.** A library that expands `jab` in its body and exports the generated `get` answers `unbound variable: mh` on both backends; chibi and Gauche answer 10. The relinker never sees the reference: the template compiler emits an identifier that already carries scopes as `Template::Literal`, and `collect_template_symbols` skips those. Used inside the library it works on both.
+
+No longer blocked on the quasiquoted-vector entry — that one is fixed (see the Fixed table).
+
+✅ **Both symptoms below answer as chibi and Gauche do on both backends, measured 2026-09-13.** On the VM the reference now resolves at compile time to the introduced global's identity (#315, `PATINA_SCOPE_TRACE` shows `via=scoped`) and never reaches the alias; the relinker was never involved, since definition and use share one environment. What follows is the record of what they were.
 
 *Two symptoms recorded 2026-08-23 while reviewing the VM hygiene work*, both
 the bare name collapsing an identity the rest of the pipeline keeps distinct.
@@ -2045,10 +2053,10 @@ are the VM's alone, produced by its compiler's bare-name alias:
     ((_ h v) (begin (define mh v) (define-syntax h (syntax-rules () ((_) mh)))))))
 
 (jab get1 10) (jab get2 20) (list (get1) (get2))
-;; Patina (20 20) · chibi, Gauche (10 20)   — two expansions share one binding
+;; Patina was (20 20) · chibi, Gauche (10 20)   — two expansions shared one binding
 
 (jab get 10) (define mh 99) (get)
-;; Patina 99 · chibi, Gauche 10             — a later user global steals it
+;; Patina was 99 · chibi, Gauche 10             — a later user global stole it
 ```
 
 The VM now gives the two `mh`s genuinely distinct globals, and the tree-walker
