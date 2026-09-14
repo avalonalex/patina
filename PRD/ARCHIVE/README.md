@@ -2,7 +2,7 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2026-09-12
+**Last Updated:** 2026-09-14
 
 ---
 
@@ -18,7 +18,9 @@ properties, H3's four-implementation sweep and shrinking, and H4's evaluation
 against a measured bounded selector baseline. H4 adopts no additional verifier
 or reference expander for the current architecture.
 
-Runtime defects #289–#291 and triage families 40/41 remain open. The deferred
+Triage family 40 remains open; the runtime defects #289–#291 closed
+2026-09-13 in #316 and family 41 in #318 and #321, all after this archiving.
+The deferred
 H5 mechanization decision moved to the
 [syntax-case design](../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
 

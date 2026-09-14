@@ -20,6 +20,8 @@ The [Track H PRD](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md)
 is archived with the evaluation and replay evidence. H5 moved to the
 [syntax-case design](macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
 The write-path defects #289–#291 and triage families 40/41 remain open.
+*Update 2026-09-14:* #289–#291 closed 2026-09-13 in #316 and family 41 in #318
+and #321; family 40 is still open.
 
 ## 2026-08-07: VM Faster Than Chibi — Scoreboard Geomean 0.93×
 

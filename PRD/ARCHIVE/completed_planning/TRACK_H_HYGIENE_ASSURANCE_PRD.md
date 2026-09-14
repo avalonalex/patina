@@ -6,8 +6,13 @@
 [#288](https://github.com/avalonalex/patina/pull/288) and
 [#293](https://github.com/avalonalex/patina/pull/293). H4's evaluation is complete:
 no additional verifier or reference expander is adopted for this architecture.
-**Remaining work:** runtime defects #289–#291 and triage families 40/41 stay
-open in the [defect queue](../../../scheme_tests/reports/larceny_triage.md). Closing
+**Remaining work:** triage family 40 stays
+open in the [defect queue](../../../scheme_tests/reports/larceny_triage.md).
+*(Corrected 2026-09-14: this read "runtime defects #289–#291 and triage
+families 40/41". Both closed after this archiving — #289–#291 on 2026-09-13 in
+[#316](https://github.com/avalonalex/patina/pull/316), and family 41 in [#318](https://github.com/avalonalex/patina/pull/318) and [#321](https://github.com/avalonalex/patina/pull/321). The sections
+below keep the record of what they were, each with its own dated note.)*
+Closing
 this assurance track does not claim that hygiene is fully correct or proved.
 H5 is now owned by the
 [syntax-case design](../../macro/SYNTAX_CASE_DESIGN.md#deferred-mechanization-at-the-syntax-case-boundary-h5).
@@ -63,6 +68,10 @@ including introduced definitions (#269), cross-expansion globals (triage
 family 40), pattern literals (family 41), and H2's environment write-path
 defects (#289–#291). Green CI
 includes quarantines; it is not a claim that all hygiene behavior is correct.
+
+*Update 2026-09-14:* of that list, #289–#291 closed 2026-09-13 in [#316](https://github.com/avalonalex/patina/pull/316)
+and family 41 in [#318](https://github.com/avalonalex/patina/pull/318) and [#321](https://github.com/avalonalex/patina/pull/321). #269 and family 40 are still open, so the
+caveat on green CI stands — with fewer quarantines behind it.
 
 ## 2. The property
 
@@ -123,7 +132,7 @@ be treated as ordinary variable occurrences.
 
 | Item | Tracking | Status |
 |---|---|---|
-| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness implemented; H2-A/B/C remain quarantined in #289–#291 |
+| H2 | [#284](https://github.com/avalonalex/patina/issues/284) | Harness implemented; H2-A/B/C closed 2026-09-13 by [#316](https://github.com/avalonalex/patina/pull/316) — ordinary regressions now, not quarantines |
 | H1 | [#285](https://github.com/avalonalex/patina/issues/285) | Initial 28-shape harness implemented; historical check and shrinker demonstrated |
 | H3 | [#286](https://github.com/avalonalex/patina/issues/286) | Initial bounded lane implemented; historical shrinking demonstrated; first sweep classified (families 40/41) |
 | H4 | [#287](https://github.com/avalonalex/patina/issues/287) | Evaluation complete; no additional verifier or reference expander adopted |
@@ -363,7 +372,9 @@ The same generated property passes on the current main runtime (`1393c8f`),
 as does the explicit regression `family38_scoped_write_updates_a_proper_subset_binding`.
 This is a run against historical Rust, not a controlled mutation.
 
-The following minimized cases remain open. Masks use bit `n` for `Sn`;
+The following minimized cases were open when this was written and closed
+2026-09-13 in [#316](https://github.com/avalonalex/patina/pull/316); the observed half of the last column is what the
+runtime did then, not what it does now. Masks use bit `n` for `Sn`;
 frames are root first, insertions oldest first, and all initial values are 0.
 They exercise the environment API; their reachability from Scheme is not
 established by this harness.
@@ -374,12 +385,22 @@ established by this harness.
 | H2-B binding identity | Root scoped `x` at mask 3, child at mask 1; reference 3 | Write root mask 3 / writes child mask 1 |
 | H2-C plain fallback | Empty root, child plain `x`; reference 1 | Write child plain binding / returns `Err("x")` |
 
-Each quarantine checks its named failure and rejects unexpected success.
+Each quarantine checked its named failure and rejected unexpected success.
 The arbitrary-environment symmetry property classifies those same input
 shapes independently of the observed result; all generated cases execute.
-Other mismatches fail normally. Run `cargo test -p patina-core --lib
-hygiene_properties -- --nocapture` to print the three minimized outcomes.
-Correcting them is separate work and still blocks Q7.1.
+Other mismatches fail normally. Correcting them was separate work, and was
+done: [#316](https://github.com/avalonalex/patina/pull/316), 2026-09-13. `Environment::set_with_scopes` collects
+candidates chain-wide and resolves once through `resolve_index`, the way the
+read does, so all three required outcomes hold. There are no quarantines left
+in `hygiene_properties.rs` and nothing prints the three minimized outcomes any
+more: the three are ordinary regressions
+(`h2_a_an_ambiguous_write_is_refused_without_mutating`,
+`h2_b_a_more_specific_binding_in_a_parent_wins`,
+`h2_c_the_fallback_reaches_a_non_root_plain_binding`), the `known_defect`
+classifier that excused their input shapes is gone, and
+`family38_unrestricted_environment_symmetry` requires every generated case to
+hold. `cargo test -p patina-core --lib hygiene_properties` is 10 passed, 0
+ignored.
 
 ### H3 — differential generation and shrinking *(manual or scheduled lane)*
 
@@ -596,7 +617,8 @@ The semantic findings belong to two triage families:
   reduced values, the read should yield 5 rather than 799; the fallback write
   should change the local to 99 rather than leave it at 5. Two portable rows
   in `expansion/syntax-rules-literals.scm` assert those answers with Patina-only
-  expected failures.
+  expected failures. *(They are ordinary assertions since [#318](https://github.com/avalonalex/patina/pull/318); the file
+  has no expected failures now.)*
 - **Family 40, VM only:** seeds **370/371/374/375** generate private state and
   a macro in the same expansion, alongside a source global with the same
   spelling. The generated macro must reach the private binding. The VM instead
@@ -607,6 +629,9 @@ The semantic findings belong to two triage families:
   `(1 1 x 11)`; the write observation is `(5 1 x 99)`, versus `(5 99 x 11)`.
   Two positive rows in `expansion/hygiene.scm` now complement family 40's
   existing cross-expansion error rows, with VM-only expected failures.
+  *(Those two lost their expected failures in
+  [#315](https://github.com/avalonalex/patina/pull/315), 2026-09-13; the three
+  refusal rows beside them are what family 40 is now.)*
 
 Both families and reduced sources are recorded in the
 [triage queue](../../../scheme_tests/reports/larceny_triage.md). The fixed suite's
@@ -671,7 +696,9 @@ The boundary is narrower than the original phrase "kernel plus get/set":
   `Rc`/`RefCell` tables and a heap. Proving the selector alone says nothing
   about which candidates those paths collect or which cell they mutate.
   H2-A/B/C are concrete counterexamples to the desired environment contract;
-  a faithful verifier would reproduce them until the runtime is fixed.
+  a faithful verifier would reproduce them until the runtime is fixed. *(It
+  was, 2026-09-13, in [#316](https://github.com/avalonalex/patina/pull/316); the argument about the boundary does not
+  depend on those three being open.)*
 - H3 already compares with two independent expanders and found a shared
   frontend literal defect. Its explicit limits and known failures remain
   visible. A new reference implementation would need evidence beyond simply
@@ -745,6 +772,9 @@ paths are already supported or verified. See the
 **Why stop here:** the measured small selector domain is cheap to enumerate,
 while the known defects sit in environment integration and expansion. Spend
 runtime work on #289–#291 and families 40/41, retaining their failing guards.
+*(Update 2026-09-14: #289–#291 closed 2026-09-13 in [#316](https://github.com/avalonalex/patina/pull/316) and family 41
+in [#318](https://github.com/avalonalex/patina/pull/318) and [#321](https://github.com/avalonalex/patina/pull/321), each keeping its guard as an ordinary regression.
+Family 40 is where that runtime work now goes.)*
 Reconsider Kani if a selector change needs assurance beyond H2's sampling, or
 after read/write consolidation exposes one shared decision function. Fix the
 known behaviors before Q7.1 consolidation; a kernel proof cannot discharge
