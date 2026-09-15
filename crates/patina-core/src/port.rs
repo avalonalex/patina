@@ -12,7 +12,7 @@ use crate::vfs::{FileSystem, ReadPort, WritePort};
 use std::cell::RefCell;
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// A Scheme port for I/O operations
 #[derive(Debug, Clone)]
@@ -93,6 +93,69 @@ thread_local! {
     /// standard input depends on it, because the reader running the program
     /// and the program's own reads take their text from the one stream.
     static STDIN_UNREAD: Rc<RefCell<Unread>> = Rc::new(RefCell::new(Unread::default()));
+
+    /// The file output ports opened on this thread, so that what a program left
+    /// in them can be written out when it ends ([`flush_open_output_files`]).
+    static OUTPUT_FILES: RefCell<OutputFiles> = const {
+        RefCell::new(OutputFiles {
+            ports: Vec::new(),
+            prune_at: OutputFiles::MIN_PRUNE_AT,
+        })
+    };
+}
+
+/// Every file output port opened on a thread, held weakly. A port that has
+/// been dropped flushed its writer as it went.
+struct OutputFiles {
+    ports: Vec<Weak<RefCell<PortData>>>,
+    /// How many entries to hold before dropping those of ports that are gone,
+    /// so the list follows the ports alive rather than every port ever opened,
+    /// at an amortised constant cost per port.
+    prune_at: usize,
+}
+
+impl OutputFiles {
+    const MIN_PRUNE_AT: usize = 16;
+
+    fn note(&mut self, data: &Rc<RefCell<PortData>>) {
+        if self.ports.len() >= self.prune_at {
+            self.ports.retain(|port| port.strong_count() > 0);
+            self.prune_at = (2 * self.ports.len()).max(Self::MIN_PRUNE_AT);
+        }
+        self.ports.push(Rc::downgrade(data));
+    }
+}
+
+/// Write out what every file output port still open on this thread holds in
+/// its buffer, for a program that is ending, and return each port that could
+/// not be written, with the reason.
+///
+/// A program need not close its ports, and what it wrote to one it left open
+/// is kept, as chibi and Gauche keep it (#343). The process ends with
+/// `std::process::exit`, which runs no destructor, so a writer's buffer that
+/// nothing flushes first is lost.
+pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
+    let ports: Vec<_> = OUTPUT_FILES.with(|files| {
+        files
+            .borrow()
+            .ports
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
+    });
+    let mut failures = Vec::new();
+    for port in ports {
+        let mut data = port.borrow_mut();
+        if let PortData::File(FilePortData {
+            path,
+            handle: FileHandle::Output(writer),
+        }) = &mut *data
+            && let Err(error) = writer.flush()
+        {
+            failures.push((path.clone(), error));
+        }
+    }
+    failures
 }
 
 /// Whether a port operates on characters (textual) or bytes (binary)
@@ -315,14 +378,21 @@ impl Port {
     /// Open a file for writing (creates or truncates) via the given filesystem.
     pub fn open_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let writer = fs.open_write(std::path::Path::new(path))?;
-        Ok(Self::new_port(
-            PortKind::Textual,
+        Ok(Self::new_output_file(PortKind::Textual, path, writer))
+    }
+
+    /// A file output port, noted for [`flush_open_output_files`].
+    fn new_output_file(kind: PortKind, path: &str, writer: Box<dyn WritePort>) -> Rc<Port> {
+        let port = Self::new_port(
+            kind,
             PortDirection::Output,
             PortData::File(FilePortData {
                 path: PathBuf::from(path),
                 handle: FileHandle::Output(writer),
             }),
-        ))
+        );
+        OUTPUT_FILES.with(|files| files.borrow_mut().note(&port.data));
+        port
     }
 
     /// Open a binary file for reading via the given filesystem.
@@ -341,14 +411,7 @@ impl Port {
     /// Open a binary file for writing (creates or truncates) via the given filesystem.
     pub fn open_binary_output_file(path: &str, fs: &dyn FileSystem) -> io::Result<Rc<Port>> {
         let writer = fs.open_write(std::path::Path::new(path))?;
-        Ok(Self::new_port(
-            PortKind::Binary,
-            PortDirection::Output,
-            PortData::File(FilePortData {
-                path: PathBuf::from(path),
-                handle: FileHandle::Output(writer),
-            }),
-        ))
+        Ok(Self::new_output_file(PortKind::Binary, path, writer))
     }
 
     /// Take the buffered pushback text, leaving the buffer empty.

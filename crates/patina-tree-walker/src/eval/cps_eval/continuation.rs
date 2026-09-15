@@ -652,7 +652,7 @@ impl<'a> CpsEvaluator<'a> {
                 // Reached only by arriving, which `jump_to_continuation` ends
                 // the process at; ended here too, so no path runs on past an
                 // exit.
-                std::process::exit(patina_runtime::exit_status::status_for_exit(status))
+                patina_runtime::exit_status::end_process(status)
             }
 
             ContValue::ComposableInvokeStep {

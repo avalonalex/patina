@@ -1331,7 +1331,7 @@ pub(super) fn step_wind_jump(
     // Arrived. At `exit`'s target every extent has been left, and there is no
     // machine to restore.
     if let Some(status) = cc.exit_status {
-        std::process::exit(patina_runtime::exit_status::status_for_exit(status));
+        patina_runtime::exit_status::end_process(status);
     }
     state.registers = cc.registers.clone();
     state.frames = cc.frames.clone();
