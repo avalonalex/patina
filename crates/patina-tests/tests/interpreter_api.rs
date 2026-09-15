@@ -121,7 +121,7 @@ fn test_gcd_with_let_values() {
 }
 
 /// A form that fails must not leave the interpreter in the middle of it. The
-/// REPL and the resilient script mode both evaluate form by form on one
+/// REPL and a script run with `-k` both evaluate form by form on one
 /// interpreter, and an error is where the VM used to be left holding the
 /// frames, handlers and winds of the form it had abandoned: the next form's
 /// own error was then delivered to the *previous* form's handler, or its

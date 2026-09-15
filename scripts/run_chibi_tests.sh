@@ -86,13 +86,15 @@ echo "Test file: $TEST_FILE"
 echo "Results:   $RESULTS_FILE"
 echo ""
 
-# The exit status carries no information here: the suite ends with bare
-# (test-end) and never calls (test-exit), and the CLI runs a file whose name
-# contains "test" resiliently, exiting 0 whatever happened. Failures are learnt
-# from the parsed tally below, and an aborted run from TRUE_TOTAL being 0.
+# -k reports an error that escapes to top level and runs the next form anyway,
+# so the suite still reaches its tally. The exit status is not read: the suite
+# ends with bare (test-end) and never calls (test-exit), so a failed assertion
+# exits 0, and the `if` below tests the trailing sed in any case. Failures are
+# learnt from the parsed tally below, escaped errors from ERROR_COUNT, and an
+# aborted run from TRUE_TOTAL being 0.
 # The pipeline also colourises, so strip escapes on the way to disk -- the
 # saved log stays readable and every parse below sees the same plain text.
-if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
+if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -k -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
     echo -e "${GREEN}Suite completed${NC}"
 else
     echo -e "${YELLOW}Suite completed with failures${NC}"

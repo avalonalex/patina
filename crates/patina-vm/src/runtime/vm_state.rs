@@ -723,8 +723,8 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
         // records their extents installed, an escape parked mid-flight. None
         // of it can be resumed, and the next `execute` runs "until the frame
         // stack is empty" — left in place, the abandoned frames would be
-        // where that next form *returns to*, and a REPL or resilient-mode
-        // script would run the dead frames after it, re-reporting the old
+        // where that next form *returns to*, and a REPL or a script run with
+        // `-k` would run the dead frames after it, re-reporting the old
         // error. Winds are dropped, not unwound: their after-thunks were
         // never owed a run by an abort, and one that raised would abort the
         // recovery.

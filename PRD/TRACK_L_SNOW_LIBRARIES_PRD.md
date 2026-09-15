@@ -306,7 +306,8 @@ release binary. Deviations from the spec below, all consequences of L4 vendoring
 - **Results are an s-expression**, `compat/reports/results.scm` — read back by the harness with
   patina-frontend's own parser; no serialization dependency added.
 - **Execution modes:** packages with a `(test "run-tests.scm")` declaration run their own suite
-  (classified from output — the patina CLI runs test-named files resiliently, exit 0 always);
+  (run with `-k`, so a top-level error is reported and the suite still reaches its tally;
+  classified from that tally first, then from exit status and stderr);
   the rest get a synthesized import probe of every library they provide (strict mode, exit
   meaningful). Cross-package deps resolve via `-A` from each package's transitive closure over
   the corpus's `package.scm` metadata. Packages run from a scratch cwd so their test loggers
@@ -328,17 +329,18 @@ release binary. Deviations from the spec below, all consequences of L4 vendoring
   `include: parse error in '{}'` to `include: could not parse '{}'` is a plainly harmless-looking
   improvement that would silently move a package from `parse-error` to `runtime-error`, a bucket
   read as "our runtime broke", with every test still green. The durable fix is a machine-readable
-  error mode in the CLI — the same shape as the `--strict-errors` flag recorded below, and the
-  same reason it is deferred rather than done here.
-- **Recorded debt — the CLI's test-file heuristic.** `main.rs` runs any file whose name contains
-  "test" resiliently (exit 0 always), which is why test-mode classification reads output rather
-  than exit status, and why the harness keeps "test" out of its probe and scratch paths (two
-  corpus slugs contain it). An explicit CLI mode flag (`--strict-errors`/`--resilient`) is the
-  deeper fix, in the L0.5 spirit of the CLI growing what the harness needs. The Larceny runner
-  (L5.3) depends on the heuristic the other way round: every run program sits under `tests/`, so
-  a top-level error is reported and the program still reaches its tally, which is what lets a
-  suite read as *truncated* rather than as a load error. When the flag lands, that runner must
-  pass it.
+  error mode in the CLI, the same shape as the explicit mode flag recorded below. That flag has
+  since landed as `-k`; this one is still deferred.
+- **Recorded debt, closed 2026-09-15 (#335) — the CLI's test-file heuristic.** `main.rs` used to
+  run any file whose path contained "test", or whose text contained `test-begin`, resiliently and
+  with exit 0 always, which is why test-mode classification read output rather than exit status
+  and why the harness kept "test" out of its probe and scratch paths. It shipped as one flag,
+  `-k`/`--keep-going`, rather than the `--strict-errors`/`--resilient` pair proposed here: strict
+  is the default and needs no flag, and carrying on past an error no longer implies success. A
+  program that reported an error exits non-zero with or without `-k`, even if it later calls
+  `(exit 0)`. Test mode passes `-k` and probes do not, and the scratch-path mangling is gone. The
+  Larceny runner (L5.3), which depended on the heuristic the other way round to reach a tally
+  after a top-level error, passes `-k` too.
 
 **First measured queue (2026-08-13):** genuine parse errors block 23 packages (bare `@` 9,
 syntax-rules shape restrictions 8, the rest singletons) and load errors 6 more; missing libraries
@@ -1051,11 +1053,10 @@ re-derived. A suite whose library fails to load reaches no tally and is
 reported as a **load error** with zero assertions, so the assertion total
 under-reports exactly as much as is broken and the *suite* column is the one
 to watch. Crashes and timeouts (perl `alarm`, 300 s — macOS has no `timeout`)
-are their own statuses. So, since 2026-09-14, is **truncated**: Patina's
-script runner reports a top-level error and goes on to the next form only in
-the resilient mode it picks for a path containing "test" (L3's recorded
-debt), which every run program here is, so the harness still prints a tally
-after such an error — a tally that covers only the assertions that ran first.
+are their own statuses. So, since 2026-09-14, is **truncated**: the runner
+passes `-k`, so Patina reports a top-level error and goes on to the next form,
+and the harness still prints a tally after such an error — a tally that covers
+only the assertions that ran first.
 Such a suite is not counted clean; `set` had been reported passing, 16 of 16,
 that way. One classifier decides every status, for the console and the report
 alike: `parse_log` in `scripts/larceny_report.py`, which reads the exit status

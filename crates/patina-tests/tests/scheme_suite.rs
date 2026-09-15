@@ -451,7 +451,7 @@ fn every_scheme_file_passes_on_both_backends() {
                      from a scratch directory — SRFI 64 puts per-assertion detail in a \
                      log beside the cwd, not on stdout:\n  \
                      (cd $(mktemp -d) && $OLDPWD/target/release/patina {flag} -A $OLDPWD/test-lib \
-                     $OLDPWD/crates/patina-tests/tests/scheme/{name} && cat {stem}.log)",
+                     $OLDPWD/crates/patina-tests/tests/scheme/{name}; cat {stem}.log)",
                     counts.fail
                 ));
             }

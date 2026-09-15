@@ -89,7 +89,8 @@ fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Ev
     };
 
     // Note: In a full implementation, we would run dynamic-wind handlers here
-    std::process::exit(code);
+    // A success is withheld from a program that already reported an error (-k).
+    std::process::exit(patina_runtime::exit_status::status_for_exit(code));
 }
 
 /// Exit immediately without running handlers.
@@ -102,7 +103,8 @@ fn emergency_exit(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         exit_code_from_arg(args[0])?
     };
 
-    std::process::exit(code);
+    // A success is withheld from a program that already reported an error (-k).
+    std::process::exit(patina_runtime::exit_status::status_for_exit(code));
 }
 
 /// Extract an exit code from a TaggedValue argument

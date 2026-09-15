@@ -23,6 +23,10 @@ struct CliOptions {
     append_paths: Vec<String>,
     /// `-p` expressions, evaluated in order; each result is printed.
     eval_exprs: Vec<String>,
+    /// `-k`: report each evaluation error and go on to the next top-level form
+    /// instead of stopping at the first. It changes how much of a program runs,
+    /// never what its exit status says.
+    keep_going: bool,
 }
 
 fn parse_args(args: &[String]) -> CliOptions {
@@ -35,6 +39,7 @@ fn parse_args(args: &[String]) -> CliOptions {
         prepend_paths: Vec::new(),
         append_paths: Vec::new(),
         eval_exprs: Vec::new(),
+        keep_going: false,
     };
 
     let mut iter = args.iter();
@@ -50,6 +55,7 @@ fn parse_args(args: &[String]) -> CliOptions {
             }
             "--tree-walker" => opts.use_tree_walker = true,
             "--interactive" | "-i" => opts.interactive = true,
+            "--keep-going" | "-k" => opts.keep_going = true,
             // Set before constructing either backend: bootstrap itself must
             // not resolve through a user's environment or project directory.
             // SAFETY: argument parsing runs before any threads are started.
@@ -171,6 +177,12 @@ fn main() {
         eprintln!("Error: --trace traces the VM and cannot be combined with --tree-walker");
         process::exit(1);
     }
+    // -k decides how much of a program runs, so it needs a program that runs:
+    // `-p` stops at its first error by design, and `--dump` runs nothing.
+    if opts.keep_going && (!opts.eval_exprs.is_empty() || opts.dump) {
+        eprintln!("Error: -k runs a program, and cannot be combined with -p or --dump");
+        process::exit(1);
+    }
     if !opts.eval_exprs.is_empty() {
         if opts.filename.is_some() || opts.dump || opts.trace {
             eprintln!("Error: -p cannot be combined with a script file, --dump, or --trace");
@@ -199,6 +211,12 @@ fn main() {
         // A terminal is a person, so it gets the session. `-i` says so for the
         // contexts where a person is at the other end of a pipe anyway — a
         // container without a tty, an editor's inferior-Scheme buffer.
+        if opts.keep_going {
+            // A session already reports each error and carries on, so the flag
+            // could change nothing here.
+            eprintln!("Error: -k runs a program, and a session already carries on past errors");
+            process::exit(1);
+        }
         if opts.use_tree_walker {
             run_repl_tree_walker(&opts);
         } else {
@@ -215,13 +233,11 @@ fn main() {
 /// reading a pipe cannot report what it never gets to keep: it dropped a
 /// program's unfinished last form in silence and exited 0.
 ///
-/// Three things still separate this from `patina program.scm`, because a
+/// Two things still separate this from `patina program.scm`, because a
 /// redirect does not carry what a path carries:
 ///
 /// - there is no directory to resolve libraries beside, so `-I`/`-A` and the
 ///   search path are all a program here has;
-/// - there is no file name for the heuristic that puts a suite in resilient
-///   mode, so only a `test-begin` in the text selects it;
 /// - the program cannot read its own standard input, which it has been
 ///   handed to as source.
 fn run_stdin_program(opts: &CliOptions) -> ! {
@@ -279,6 +295,8 @@ fn print_help() {
     eprintln!("                 (library ...), and versioned library names");
     eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
     eprintln!("  --trace        Execute with instruction-level tracing to stderr");
+    eprintln!("  -k, --keep-going  Report each error and run the next top-level form");
+    eprintln!("                 anyway; the exit status still reports the failure");
     eprintln!("  -I <dir>       Prepend a directory to the library search path");
     eprintln!("  -A <dir>       Append a directory to the library search path");
     eprintln!("  --isolated-libraries  Use bundled roots and explicit -I/-A paths only");
@@ -294,7 +312,8 @@ fn print_help() {
     eprintln!("  PATINA_ALLOW_R6RS    Same as --allow-r6rs when set to anything but 0");
     eprintln!("  PATINA_ISOLATED_LIBRARIES  Same as --isolated-libraries when set to 1");
     eprintln!();
-    eprintln!("If FILE is provided, run it as a script.");
+    eprintln!("If FILE is provided, run it as a script. A program that reports an error");
+    eprintln!("exits non-zero, with or without -k, even if it later calls (exit 0).");
     eprintln!("Otherwise, read a program from standard input, or start an");
     eprintln!("interactive REPL when standard input is a terminal or -i is given.");
     eprintln!("A program read from standard input cannot resolve libraries beside");
@@ -321,26 +340,23 @@ fn run_program_tree_walker(
 ) -> ! {
     let interp = TreeWalkInterpreter::new_tree_walker();
     apply_library_paths(interp.backend(), opts, script_path);
-    let is_test_file = source_name.contains("test") || code.contains("test-begin");
+    if opts.keep_going {
+        // -k is a recovery policy, not a verdict: every error is reported and
+        // the next top-level form runs anyway, and the status still says the
+        // program failed.
+        let (_, outcome) = interp.eval_program_resilient_with_source_name(code, source_name);
+        process::exit(if outcome.clean() { 0 } else { 1 });
+    }
 
-    if is_test_file {
-        // Resilient mode reports each evaluation error and carries on, so its
-        // status says nothing about them. A read error is different: the rest
-        // of the file never ran, which a truncated suite must not pass off as
-        // a clean one.
-        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(code, source_name);
-        process::exit(if read_to_end { 0 } else { 1 });
-    } else {
-        let (result, source_map) = interp.eval_program_with_source_name(code, source_name);
-        match result {
-            Ok(_) => process::exit(0),
-            Err(e) => {
-                eprintln!(
-                    "Error: {}",
-                    format_interpreter_error(&e, &source_map.borrow())
-                );
-                process::exit(1);
-            }
+    let (result, source_map) = interp.eval_program_with_source_name(code, source_name);
+    match result {
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!(
+                "Error: {}",
+                format_interpreter_error(&e, &source_map.borrow())
+            );
+            process::exit(1);
         }
     }
 }
@@ -393,6 +409,15 @@ fn run_program_vm_trace(
     backend.set_tracer(Some(handle.clone()));
     let interp = Interpreter::new(backend);
     apply_library_paths(interp.backend(), opts, script_path);
+    // -k reaches tracing too, so a file gets the same status traced and
+    // untraced.
+    if opts.keep_going {
+        let outcome = eval_program_keep_going_vm(&interp, code, source_name);
+        if !outcome.clean() {
+            eprintln!("--- Trace: {} events recorded ---", handle.borrow().len());
+        }
+        process::exit(if outcome.clean() { 0 } else { 1 });
+    }
     let (result, source_map) = eval_program_vm(&interp, code, source_name);
     match result {
         Ok(_) => process::exit(0),
@@ -423,24 +448,22 @@ fn run_program_vm(
 ) -> ! {
     let interp = Interpreter::new(VmBackend::new());
     apply_library_paths(interp.backend(), opts, script_path);
-    let is_test_file = source_name.contains("test") || code.contains("test-begin");
+    if opts.keep_going {
+        // As in `run_program_tree_walker`: carrying on past an error does not
+        // stop the status from reporting it.
+        let outcome = eval_program_keep_going_vm(&interp, code, source_name);
+        process::exit(if outcome.clean() { 0 } else { 1 });
+    }
 
-    if is_test_file {
-        // As in `run_program_tree_walker`: evaluation errors do not change
-        // the status here, a file that could not be read to its end does.
-        let read_to_end = eval_program_resilient_vm(&interp, code, source_name);
-        process::exit(if read_to_end { 0 } else { 1 });
-    } else {
-        let (result, source_map) = eval_program_vm(&interp, code, source_name);
-        match result {
-            Ok(_) => process::exit(0),
-            Err(e) => {
-                eprintln!(
-                    "Error: {}",
-                    format_backend_error_with_source(&e, &source_map.borrow())
-                );
-                process::exit(1);
-            }
+    let (result, source_map) = eval_program_vm(&interp, code, source_name);
+    match result {
+        Ok(_) => process::exit(0),
+        Err(e) => {
+            eprintln!(
+                "Error: {}",
+                format_backend_error_with_source(&e, &source_map.borrow())
+            );
+            process::exit(1);
         }
     }
 }
@@ -488,18 +511,23 @@ fn eval_program_vm(
     (Ok(result), source_map)
 }
 
-/// Evaluate a program resiliently (continue on errors) with source map
-/// support, returning whether the program was read to its end.
-fn eval_program_resilient_vm(
+/// Evaluate a whole program under `-k`: report each error and go on to the
+/// next top-level form, then say how it went.
+///
+/// The VM's counterpart to `Interpreter::eval_program_resilient_with_source_name`.
+/// Like it, each error is recorded process-wide, so a later `(exit 0)` cannot
+/// report success.
+fn eval_program_keep_going_vm(
     interp: &Interpreter<VmBackend>,
     input: &str,
     source_name: &str,
-) -> bool {
+) -> patina_interpreter::ProgramOutcome {
     use patina_interpreter::{
-        InterpreterError, Parser, SourceMap, format_backend_error_with_source,
+        InterpreterError, Parser, ProgramOutcome, SourceMap, format_backend_error_with_source,
     };
 
     let heap = interp.backend().global_env().heap();
+    let mut eval_errors = 0usize;
     let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
     let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
     let mut parser =
@@ -507,7 +535,11 @@ fn eval_program_resilient_vm(
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
-                return false;
+                patina_runtime::exit_status::note_error_reported();
+                return ProgramOutcome {
+                    eval_errors,
+                    read_to_end: false,
+                };
             }
         };
     let global = interp.backend().global_env().clone();
@@ -521,6 +553,8 @@ fn eval_program_resilient_vm(
                     .backend()
                     .eval_with_source_map(expr, &global, &source_map)
                 {
+                    eval_errors += 1;
+                    patina_runtime::exit_status::note_error_reported();
                     eprintln!(
                         "Error: {}",
                         format_backend_error_with_source(
@@ -530,7 +564,12 @@ fn eval_program_resilient_vm(
                     );
                 }
             }
-            Ok(None) => return true,
+            Ok(None) => {
+                return ProgramOutcome {
+                    eval_errors,
+                    read_to_end: true,
+                };
+            }
             Err(e) => {
                 // The parser leaves the offending token where it was, so
                 // reading on would report it again, without end.
@@ -538,7 +577,11 @@ fn eval_program_resilient_vm(
                     "Error: {}",
                     patina_interpreter::format_parse_error_with_source(&e, &source_map.borrow())
                 );
-                return false;
+                patina_runtime::exit_status::note_error_reported();
+                return ProgramOutcome {
+                    eval_errors,
+                    read_to_end: false,
+                };
             }
         }
     }
