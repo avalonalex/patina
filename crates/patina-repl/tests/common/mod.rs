@@ -16,7 +16,22 @@ pub fn run_patina(cwd: &Path, args: &[&str]) -> (String, String, bool) {
 
 /// Like [`run_patina`], with extra environment variables set on the child.
 pub fn run_patina_env(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> (String, String, bool) {
-    let output = Command::new(env!("CARGO_BIN_EXE_patina"))
+    let output = patina_command(cwd, args, envs)
+        .output()
+        .expect("failed to spawn patina binary");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.success(),
+    )
+}
+
+/// The binary, its working directory, and a scrubbed environment — the part
+/// every spawn helper needs, in one place so the reasoning below has one
+/// home. Callers add their own stdio and waiting.
+pub fn patina_command(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_patina"));
+    command
         .args(args)
         // A dialect inherited from the developer's shell would decide what the
         // reader accepts, so tests that assert on it could pass or fail for a
@@ -35,14 +50,8 @@ pub fn run_patina_env(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> (Stri
         .env_remove("PATINA_HOME")
         .env_remove("PATINA_ISOLATED_LIBRARIES")
         .envs(envs.iter().copied())
-        .current_dir(cwd)
-        .output()
-        .expect("failed to spawn patina binary");
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.success(),
-    )
+        .current_dir(cwd);
+    command
 }
 
 /// The workspace root, for tests that need a repo path. Encodes the

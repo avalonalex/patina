@@ -111,12 +111,18 @@ Patina prioritizes clarity over cleverness:
 ## Quick Start
 
 ```bash
-# Build and run the REPL
+# Build, then start the REPL (standard input must be a terminal)
 cargo build --release
 ./target/release/patina
 
 # Run a Scheme script (uses VM backend by default)
 ./target/release/patina script.scm
+
+# A program on standard input is a program, not a session: it is diagnosed
+# and the exit status says whether it ran. Pass -i to force the REPL where
+# standard input is a pipe (a container without a tty, an editor buffer).
+./target/release/patina < script.scm
+./target/release/patina -i
 
 # Use the tree-walking backend instead
 ./target/release/patina --tree-walker script.scm
