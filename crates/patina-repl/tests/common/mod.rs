@@ -49,6 +49,9 @@ pub fn patina_command(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Comma
         .env_remove("PATINA_LIBRARY_PATH")
         .env_remove("PATINA_HOME")
         .env_remove("PATINA_ISOLATED_LIBRARIES")
+        // A session saves its history under HOME, and a test's input has no
+        // business in the developer's own `~/.patina_history`.
+        .env("HOME", cwd)
         .envs(envs.iter().copied())
         .current_dir(cwd);
     command
@@ -114,26 +117,15 @@ pub const BOTH_BACKENDS: [&[&str]; 2] = [&[], &["--tree-walker"]];
 /// Run the binary and collect its output, killing it if it is still running
 /// after ten seconds: a runner looping on a parse error would otherwise hang
 /// the suite, and so would one that never finishes reading standard input.
-/// Both pipes are drained on their own threads while the child runs, so a
-/// flood of output fails on what it printed rather than filling a pipe
-/// buffer and stalling until the deadline.
 ///
 /// `input` is written to the child's standard input and the pipe then closed,
 /// as a shell redirect does. `None` closes it immediately, which is what the
 /// binary sees from `< /dev/null`.
 pub fn run_with_deadline(cwd: &Path, args: &[&str], input: Option<&str>) -> (String, String, bool) {
-    use std::io::{Read, Write};
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
+    use std::io::Write;
 
-    let mut child = patina_command(cwd, args, &[])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn patina binary");
-
-    let mut sink = child.stdin.take().expect("stdin pipe");
+    let mut patina = spawn_patina(cwd, args);
+    let mut sink = patina.stdin.take().expect("stdin pipe");
     let input = input.unwrap_or("").to_owned();
     // On its own thread: a child that exits without reading leaves this
     // write blocked or broken, and neither should fail the run — the
@@ -141,39 +133,93 @@ pub fn run_with_deadline(cwd: &Path, args: &[&str], input: Option<&str>) -> (Str
     let writer = std::thread::spawn(move || {
         let _ = sink.write_all(input.as_bytes());
     });
-    let mut out = child.stdout.take().expect("stdout pipe");
-    let mut err = child.stderr.take().expect("stderr pipe");
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = out.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err.read_to_end(&mut buf);
-        buf
-    });
-
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("wait on patina") {
-            break Some(status);
-        }
-        if started.elapsed() > Duration::from_secs(10) {
-            child.kill().ok();
-            child.wait().ok();
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    };
+    let result = patina.finish();
     let _ = writer.join();
-    let stdout = String::from_utf8_lossy(&out_reader.join().expect("stdout reader")).into_owned();
-    let stderr = String::from_utf8_lossy(&err_reader.join().expect("stderr reader")).into_owned();
-    let status = status.unwrap_or_else(|| {
-        panic!(
-            "patina {args:?} was still running after 10 s; stderr began:\n{}",
-            stderr.lines().take(3).collect::<Vec<_>>().join("\n")
-        )
-    });
-    (stdout, stderr, status.success())
+    result
+}
+
+/// A running patina whose standard input is a pipe the test writes to in
+/// stages, for claims about when a program acts on what it has been given.
+/// Both output pipes are drained on their own threads while it runs, so a
+/// flood of output fails on what it printed rather than filling a pipe buffer
+/// and stalling until the deadline.
+pub struct RunningPatina {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    stdout: std::thread::JoinHandle<Vec<u8>>,
+    stderr: std::thread::JoinHandle<Vec<u8>>,
+    args: Vec<String>,
+}
+
+pub fn spawn_patina(cwd: &Path, args: &[&str]) -> RunningPatina {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = patina_command(cwd, args, &[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn patina binary");
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    };
+    RunningPatina {
+        stdin: child.stdin.take(),
+        stdout: drain(Box::new(child.stdout.take().expect("stdout pipe"))),
+        stderr: drain(Box::new(child.stderr.take().expect("stderr pipe"))),
+        child,
+        args: args.iter().map(|arg| arg.to_string()).collect(),
+    }
+}
+
+impl RunningPatina {
+    /// Write `text` to standard input and flush it, leaving the pipe open. A
+    /// child that has already exited is not an error here: its stderr, which
+    /// [`RunningPatina::finish`] returns, is the better report.
+    pub fn write(&mut self, text: &str) {
+        use std::io::Write;
+
+        if let Some(stdin) = &mut self.stdin {
+            let _ = stdin.write_all(text.as_bytes());
+            let _ = stdin.flush();
+        }
+    }
+
+    /// Close standard input, wait for the child to exit, and return its
+    /// (stdout, stderr, success) — failing the test, after killing the child,
+    /// if it is still running ten seconds later.
+    pub fn finish(mut self) -> (String, String, bool) {
+        use std::time::{Duration, Instant};
+
+        drop(self.stdin.take());
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("wait on patina") {
+                break Some(status);
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                self.child.kill().ok();
+                self.child.wait().ok();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        let stdout =
+            String::from_utf8_lossy(&self.stdout.join().expect("stdout reader")).into_owned();
+        let stderr =
+            String::from_utf8_lossy(&self.stderr.join().expect("stderr reader")).into_owned();
+        let status = status.unwrap_or_else(|| {
+            panic!(
+                "patina {:?} was still running after 10 s; stderr began:\n{}",
+                self.args,
+                stderr.lines().take(3).collect::<Vec<_>>().join("\n")
+            )
+        });
+        (stdout, stderr, status.success())
+    }
 }

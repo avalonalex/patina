@@ -598,7 +598,7 @@ source location — misattributed diagnostics, never unsoundness.
 **Implemented (stage 4b)** as the recording flavor: sweep pushes each
 reclaimed slot's raw bits into a capped buffer on the heap
 (`Heap::take_gc_freed_bits`), recorded only once a source-mapped session has
-called `enable_gc_freed_tracking` (done by `Parser::new_with_source_map`, so
+called `enable_gc_freed_tracking` (done by `Parser::new_with_source_map` and `Parser::recording_into`, so
 plain backend use pays nothing). The run loops in `patina-interpreter` and
 `patina-repl` drain via `prune_freed_locations` at the top of each
 parse–eval iteration — sweeps happen only during evaluation and raw-bits

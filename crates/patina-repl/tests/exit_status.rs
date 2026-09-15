@@ -231,7 +231,7 @@ fn keep_going_is_refused_where_it_cannot_change_anything() {
     }
 }
 
-/// Standard input goes to the same runner as a file, so the text half of the
+/// A program on standard input is judged as a file is, so the text half of the
 /// old sniff reached it too: a piped failing program that mentioned
 /// `test-begin` exited 0.
 #[test]

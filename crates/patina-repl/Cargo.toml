@@ -24,6 +24,10 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tempfile = "3"
 
+# A pseudo-terminal, for driving a session the way a person at a terminal does.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"
+
 [[bin]]
 name = "patina"
 path = "src/main.rs"

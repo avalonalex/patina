@@ -9,8 +9,10 @@
 //! - **History** - Command history saved to ~/.patina_history
 //! - **Rich terminal** - Built on rustyline for a modern CLI experience
 
+pub mod program_stream;
 pub mod repl;
 
 // Re-export main REPL type and shared editor infrastructure
+pub use program_stream::run_program_stream;
 pub use repl::Repl;
 pub use repl::{SchemeHelper, make_editor, run_repl_loop};

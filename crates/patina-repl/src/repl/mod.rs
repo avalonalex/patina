@@ -4,6 +4,7 @@ mod validator;
 
 use self::highlighter::SchemeHighlighter;
 use self::validator::SchemeValidator;
+pub use self::validator::needs_more_input;
 use patina_interpreter::{TreeWalkInterpreter, format_interpreter_error};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
@@ -43,6 +44,13 @@ impl SchemeHelper {
             hinter: HistoryHinter::new(),
         }
     }
+
+    /// The input that was still unfinished at the last line the editor
+    /// accepted. The editor drops a partly-typed form when its input ends, and
+    /// this is what a session reports in its place.
+    pub fn take_pending_input(&self) -> Option<String> {
+        self.validator.take_pending()
+    }
 }
 
 impl rustyline::Helper for SchemeHelper {}
@@ -65,6 +73,7 @@ impl Hinter for SchemeHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        self.validator.saw_edit_buffer(line);
         self.hinter.hint(line, pos, ctx)
     }
 }
@@ -116,17 +125,21 @@ pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
 /// `eval`   — called with each non-empty, non-comment line; returns:
 ///            - `None` to print nothing (e.g. for `#<unspecified>`)
 ///            - `Some(output)` to print a result or error
-///            - returning `Err` (via the closure returning a sentinel) to stop is handled
-///              by the closure itself; use the `bool` return to signal quit.
 ///
-/// Returns when the user types `(exit)`, `,exit`, `,quit`, or Ctrl+D.
-pub fn run_repl_loop<F>(editor: &mut Editor<SchemeHelper, FileHistory>, prompt: &str, mut eval: F)
+/// Returns whether the session ended cleanly: `true` after `(exit)`, `,exit`,
+/// `,quit` or the end of input, and `false` when input ended part-way through
+/// a form or the editor failed.
+pub fn run_repl_loop<F>(
+    editor: &mut Editor<SchemeHelper, FileHistory>,
+    prompt: &str,
+    mut eval: F,
+) -> bool
 where
     F: FnMut(&str) -> Option<String>,
 {
     use std::io::Write;
 
-    loop {
+    let clean = loop {
         let _ = std::io::stdout().flush();
 
         match editor.readline(prompt) {
@@ -137,7 +150,7 @@ where
                 }
                 if line == "(exit)" || line == ",exit" || line == ",quit" {
                     println!("Goodbye!");
-                    break;
+                    break true;
                 }
 
                 let _ = editor.add_history_entry(line);
@@ -149,24 +162,48 @@ where
                 }
             }
             Err(ReadlineError::Interrupted) => {
+                // Ctrl+C abandons whatever was being typed.
+                if let Some(helper) = editor.helper() {
+                    helper.take_pending_input();
+                }
                 println!("^C");
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("Goodbye!");
-                break;
+                // Input that is not a terminal ended part-way through a form: the
+                // editor has thrown the form away, but the validator kept what of
+                // it had been accepted. (At a terminal input ends only on an empty
+                // line, and the validator forgets what was erased.) A session cut
+                // off inside a form has not ended cleanly: run what arrived, which
+                // reports where the unfinished form began, as a file would.
+                let pending = editor
+                    .helper()
+                    .and_then(|helper| helper.take_pending_input());
+                match pending {
+                    Some(pending) => {
+                        if let Some(output) = eval(&pending) {
+                            eprintln!("{}", output);
+                        }
+                        break false;
+                    }
+                    None => {
+                        println!("Goodbye!");
+                        break true;
+                    }
+                }
             }
             Err(err) => {
                 eprintln!("Error: {:?}", err);
-                break;
+                break false;
             }
         }
-    }
+    };
 
     if let Some(mut path) = dirs::home_dir() {
         path.push(".patina_history");
         let _ = editor.save_history(&path);
     }
+    clean
 }
 
 impl Repl {
@@ -185,7 +222,10 @@ impl Repl {
         &self.interpreter
     }
 
-    pub fn run(&mut self) -> rustyline::Result<()> {
+    /// Run the session, and say whether it ended cleanly: `false` means its
+    /// input ended part-way through a form, which has been reported, or the
+    /// editor failed.
+    pub fn run(&mut self) -> bool {
         println!("Patina Scheme R7RS Interpreter");
         println!("Version {}", env!("CARGO_PKG_VERSION"));
         println!();
@@ -224,8 +264,6 @@ impl Repl {
                     format_interpreter_error(&e, &source_map.borrow())
                 )),
             }
-        });
-
-        Ok(())
+        })
     }
 }

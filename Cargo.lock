@@ -629,6 +629,7 @@ name = "patina-repl"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "libc",
  "nu-ansi-term",
  "patina-core",
  "patina-frontend",
