@@ -12,6 +12,9 @@ use std::process;
 struct CliOptions {
     filename: Option<String>,
     use_tree_walker: bool,
+    /// `-i`: take the interactive session even though standard input is not
+    /// a terminal.
+    interactive: bool,
     dump: bool,
     trace: bool,
     /// `-I` directories, in command-line order (first listed = searched first).
@@ -26,6 +29,7 @@ fn parse_args(args: &[String]) -> CliOptions {
     let mut opts = CliOptions {
         filename: None,
         use_tree_walker: false,
+        interactive: false,
         dump: false,
         trace: false,
         prepend_paths: Vec::new(),
@@ -45,6 +49,7 @@ fn parse_args(args: &[String]) -> CliOptions {
                 process::exit(0);
             }
             "--tree-walker" => opts.use_tree_walker = true,
+            "--interactive" | "-i" => opts.interactive = true,
             // Set before constructing either backend: bootstrap itself must
             // not resolve through a user's environment or project directory.
             // SAFETY: argument parsing runs before any threads are started.
@@ -158,6 +163,14 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let opts = parse_args(&args[1..]);
 
+    // Tracing is a VM instrument (`patina_vm::tracer`), so the two flags
+    // together cannot both be honoured. Saying so beats running the other
+    // backend and reporting nothing, which is what silently dropping one of
+    // them amounted to.
+    if opts.trace && opts.use_tree_walker {
+        eprintln!("Error: --trace traces the VM and cannot be combined with --tree-walker");
+        process::exit(1);
+    }
     if !opts.eval_exprs.is_empty() {
         if opts.filename.is_some() || opts.dump || opts.trace {
             eprintln!("Error: -p cannot be combined with a script file, --dump, or --trace");
@@ -182,11 +195,67 @@ fn main() {
         }
     } else if opts.dump {
         dump_bytecode_stdin();
-    } else if opts.use_tree_walker {
-        run_repl_tree_walker(&opts);
+    } else if opts.interactive || std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        // A terminal is a person, so it gets the session. `-i` says so for the
+        // contexts where a person is at the other end of a pipe anyway — a
+        // container without a tty, an editor's inferior-Scheme buffer.
+        if opts.use_tree_walker {
+            run_repl_tree_walker(&opts);
+        } else {
+            run_repl_vm(&opts);
+        }
     } else {
-        run_repl_vm(&opts);
+        run_stdin_program(&opts);
     }
+}
+
+/// Run a program read from standard input.
+///
+/// It goes to the same runner a file argument uses, because a line editor
+/// reading a pipe cannot report what it never gets to keep: it dropped a
+/// program's unfinished last form in silence and exited 0.
+///
+/// Three things still separate this from `patina program.scm`, because a
+/// redirect does not carry what a path carries:
+///
+/// - there is no directory to resolve libraries beside, so `-I`/`-A` and the
+///   search path are all a program here has;
+/// - there is no file name for the heuristic that puts a suite in resilient
+///   mode, so only a `test-begin` in the text selects it;
+/// - the program cannot read its own standard input, which it has been
+///   handed to as source.
+fn run_stdin_program(opts: &CliOptions) -> ! {
+    let code = read_stdin_source();
+    if opts.trace {
+        run_program_vm_trace(&code, "<stdin>", None, opts);
+    } else if opts.use_tree_walker {
+        run_program_tree_walker(&code, "<stdin>", None, opts);
+    } else {
+        run_program_vm(&code, "<stdin>", None, opts);
+    }
+}
+
+/// Read a source file, or exit saying why.
+fn read_source_file(filename: &str) -> String {
+    match fs::read_to_string(filename) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("Error reading file '{}': {}", filename, e);
+            process::exit(1);
+        }
+    }
+}
+
+/// Read all of standard input as source, or exit saying why.
+fn read_stdin_source() -> String {
+    use std::io::Read;
+
+    let mut code = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut code) {
+        eprintln!("Error reading stdin: {}", e);
+        process::exit(1);
+    }
+    code
 }
 
 /// The directory containing the script being run, for program-relative
@@ -205,6 +274,7 @@ fn print_help() {
     eprintln!("  --help, -h     Show this help message");
     eprintln!("  --version      Print the version and exit");
     eprintln!("  --tree-walker  Use the tree-walking backend instead of the VM");
+    eprintln!("  -i, --interactive  Start the REPL even when stdin is not a terminal");
     eprintln!("  --allow-r6rs   Also read the R6RS syntax R7RS reserves: [ ], #vu8(,");
     eprintln!("                 (library ...), and versioned library names");
     eprintln!("  --dump         Compile to bytecode and disassemble (no execution)");
@@ -225,34 +295,43 @@ fn print_help() {
     eprintln!("  PATINA_ISOLATED_LIBRARIES  Same as --isolated-libraries when set to 1");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
-    eprintln!("Otherwise, start an interactive REPL.");
+    eprintln!("Otherwise, read a program from standard input, or start an");
+    eprintln!("interactive REPL when standard input is a terminal or -i is given.");
+    eprintln!("A program read from standard input cannot resolve libraries beside");
+    eprintln!("itself, and cannot read its own input; pass it as FILE if it must.");
     eprintln!();
     eprintln!("The default backend is the register-based bytecode VM.");
     eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
 }
 
-fn run_script_tree_walker(filename: &str, opts: &CliOptions) {
-    let code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", filename, e);
-            process::exit(1);
-        }
-    };
+fn run_script_tree_walker(filename: &str, opts: &CliOptions) -> ! {
+    let code = read_source_file(filename);
+    run_program_tree_walker(&code, filename, Some(filename), opts);
+}
 
+/// Run a whole program, whatever it was read from.
+///
+/// `source_name` labels it in diagnostics; `script_path` is the file it came
+/// from, when there is one, for library resolution relative to the program.
+fn run_program_tree_walker(
+    code: &str,
+    source_name: &str,
+    script_path: Option<&str>,
+    opts: &CliOptions,
+) -> ! {
     let interp = TreeWalkInterpreter::new_tree_walker();
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    let is_test_file = filename.contains("test") || code.contains("test-begin");
+    apply_library_paths(interp.backend(), opts, script_path);
+    let is_test_file = source_name.contains("test") || code.contains("test-begin");
 
     if is_test_file {
         // Resilient mode reports each evaluation error and carries on, so its
         // status says nothing about them. A read error is different: the rest
         // of the file never ran, which a truncated suite must not pass off as
         // a clean one.
-        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(&code, filename);
+        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(code, source_name);
         process::exit(if read_to_end { 0 } else { 1 });
     } else {
-        let (result, source_map) = interp.eval_program_with_source_name(&code, filename);
+        let (result, source_map) = interp.eval_program_with_source_name(code, source_name);
         match result {
             Ok(_) => process::exit(0),
             Err(e) => {
@@ -266,30 +345,15 @@ fn run_script_tree_walker(filename: &str, opts: &CliOptions) {
     }
 }
 
-fn dump_bytecode_file(filename: &str) {
-    let code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", filename, e);
-            process::exit(1);
-        }
-    };
-    dump_bytecode(&code);
+fn dump_bytecode_file(filename: &str) -> ! {
+    dump_bytecode(&read_source_file(filename));
 }
 
-fn dump_bytecode_stdin() {
-    use std::io::Read;
-    let mut code = String::new();
-    std::io::stdin()
-        .read_to_string(&mut code)
-        .unwrap_or_else(|e| {
-            eprintln!("Error reading stdin: {}", e);
-            process::exit(1);
-        });
-    dump_bytecode(&code);
+fn dump_bytecode_stdin() -> ! {
+    dump_bytecode(&read_stdin_source());
 }
 
-fn dump_bytecode(code: &str) {
+fn dump_bytecode(code: &str) -> ! {
     let backend = VmBackend::new();
     match backend.disasm_source(code) {
         Ok(()) => process::exit(0),
@@ -300,18 +364,26 @@ fn dump_bytecode(code: &str) {
     }
 }
 
-fn run_script_vm_trace(filename: &str, opts: &CliOptions) {
+fn run_script_vm_trace(filename: &str, opts: &CliOptions) -> ! {
+    let code = read_source_file(filename);
+    run_program_vm_trace(&code, filename, Some(filename), opts);
+}
+
+/// Trace a whole program, whatever it was read from.
+///
+/// The counterpart of [`run_program_vm`] under `--trace`, so the flag reaches
+/// a program on standard input the way `--dump` already does. Tracing is a VM
+/// instrument, which is why `main` refuses `--trace` with `--tree-walker`
+/// rather than quietly running the other backend.
+fn run_program_vm_trace(
+    code: &str,
+    source_name: &str,
+    script_path: Option<&str>,
+    opts: &CliOptions,
+) -> ! {
     use patina_vm::tracer::StepTracer;
     use std::cell::RefCell;
     use std::rc::Rc;
-
-    let code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", filename, e);
-            process::exit(1);
-        }
-    };
 
     let backend = VmBackend::new();
     // Create a live-printing tracer, enabled AFTER bootstrap
@@ -320,11 +392,15 @@ fn run_script_vm_trace(filename: &str, opts: &CliOptions) {
     let handle = Rc::new(RefCell::new(tracer));
     backend.set_tracer(Some(handle.clone()));
     let interp = Interpreter::new(backend);
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    match interp.eval_program(&code) {
+    apply_library_paths(interp.backend(), opts, script_path);
+    let (result, source_map) = eval_program_vm(&interp, code, source_name);
+    match result {
         Ok(_) => process::exit(0),
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!(
+                "Error: {}",
+                format_backend_error_with_source(&e, &source_map.borrow())
+            );
             // Print trace summary on error
             let t = handle.borrow();
             eprintln!("--- Trace: {} events recorded ---", t.len());
@@ -333,26 +409,29 @@ fn run_script_vm_trace(filename: &str, opts: &CliOptions) {
     }
 }
 
-fn run_script_vm(filename: &str, opts: &CliOptions) {
-    let code = match fs::read_to_string(filename) {
-        Ok(content) => content,
-        Err(e) => {
-            eprintln!("Error reading file '{}': {}", filename, e);
-            process::exit(1);
-        }
-    };
+fn run_script_vm(filename: &str, opts: &CliOptions) -> ! {
+    let code = read_source_file(filename);
+    run_program_vm(&code, filename, Some(filename), opts);
+}
 
+/// The VM's counterpart to [`run_program_tree_walker`].
+fn run_program_vm(
+    code: &str,
+    source_name: &str,
+    script_path: Option<&str>,
+    opts: &CliOptions,
+) -> ! {
     let interp = Interpreter::new(VmBackend::new());
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    let is_test_file = filename.contains("test") || code.contains("test-begin");
+    apply_library_paths(interp.backend(), opts, script_path);
+    let is_test_file = source_name.contains("test") || code.contains("test-begin");
 
     if is_test_file {
-        // As in `run_script_tree_walker`: evaluation errors do not change the
-        // status here, a file that could not be read to its end does.
-        let read_to_end = eval_program_resilient_vm(&interp, &code, filename);
+        // As in `run_program_tree_walker`: evaluation errors do not change
+        // the status here, a file that could not be read to its end does.
+        let read_to_end = eval_program_resilient_vm(&interp, code, source_name);
         process::exit(if read_to_end { 0 } else { 1 });
     } else {
-        let (result, source_map) = eval_program_vm(&interp, &code, filename);
+        let (result, source_map) = eval_program_vm(&interp, code, source_name);
         match result {
             Ok(_) => process::exit(0),
             Err(e) => {
