@@ -8,7 +8,7 @@ use super::control::{
     abort_to_prompt, call_any, call_closure_from_regs, call_value, call_value_with_probe,
     capture_delimited, captured_handlers, classify_error, exec_call_primitive,
     exec_call_primitive_direct, find_prompt, finish_delimited_invoke, invoke_step, is_catchable,
-    park_escape, pop_resolved_extents, push_invoke_step, raise_step, self_tail_call,
+    park_escape, park_transfer, pop_resolved_extents, push_invoke_step, raise_step, self_tail_call,
     spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
@@ -51,7 +51,9 @@ pub struct VmState {
     /// reason, and rooted for the same reason (`gc_roots.rs`).
     pub(crate) pending_escape: Option<TaggedValue>,
     /// Set while an `abort-current-continuation` is travelling to the landing
-    /// it built, and only then.
+    /// it built, and only then: by `abort_to_prompt`, and again by each later
+    /// step of a travel that has after thunks to run (`ResumeWindJump`), since
+    /// the loop that runs a thunk clears it on the way in (#342).
     ///
     /// An abort is not a return. It cuts every stack back to its prompt and
     /// pushes one stub frame that has yet to run, so a Rust primitive whose
@@ -1556,11 +1558,24 @@ fn dispatch_one_instruction(
                 state.dynamic_winds.push(record.clone());
             }
 
+            // An abort's travel is a transfer at every step. This loop cleared
+            // `pending_transfer` when it resumed into the thunk that has just
+            // returned, and the landing the step may now arrive at can sit at
+            // exactly the depth a callback's return leaves: parked as a plain
+            // escape, `force` read it as its thunk returning (#342). Read
+            // before the step, which can replace the machine.
+            let abort_landing = state
+                .get_vm_continuation(target)
+                .is_some_and(|cc| cc.abort_landing);
             step_wind_jump(state, target, value)?;
             // Whether that pushed the next thunk's frames or arrived and
             // replaced the stack, the loop that owns what is now on the stack
             // decides — the same signal every continuation invoke sends.
-            return Err(park_escape(state, value));
+            return Err(if abort_landing {
+                park_transfer(state, value)
+            } else {
+                park_escape(state, value)
+            });
         }
 
         // ── Continuations ───────────────────────────────────────────────

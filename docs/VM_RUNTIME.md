@@ -658,8 +658,22 @@ the wrong thing to measure it against — that reaches its converter through
 already said where new boundaries go, having been written after the *previous*
 one-of-four fix in the same function.
 
+**Every step of an abort's travel sets it, not only the first** (issue #342).
+An abort with a `dynamic-wind` to leave cannot cut the machine back in place:
+it describes the landing as a jump target and travels there, one after thunk
+at a time. A dispatch loop that runs one of those thunks is resuming into a
+frame it owns, so it clears `pending_transfer` on the way in, and the step
+that arrived used to park as a plain escape. When the landing was below the
+boundary, `across_reentry` saw a callback's return depth and no transfer:
+`force` cached the abort's value in tail position, and in non-tail position
+wrote its result into a register window the landing had removed, which
+panicked. The landing is marked (`VmContinuation::abort_landing`), and
+`ResumeWindJump` parks each step of a travel to one with `park_transfer`.
+
 `escape_from_primitive.rs` sweeps every re-entrant primitive by **both**
-transfers now, which is what makes the next missed boundary visible.
+transfers now, each crossing nothing and crossing a `dynamic-wind`, in tail
+and non-tail position, with a prompt handler whose answer is not the value
+the abort carries. That is what makes the next missed boundary visible.
 
 ---
 

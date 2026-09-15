@@ -57,8 +57,11 @@
 //! 1. A full jump schedules its next wind thunk or restores its target. Its
 //!    caller uses [`park_escape`] to store the delivered value in
 //!    `state.pending_escape` and returns `VmError::ContinuationEscape`.
-//!    [`abort_to_prompt`] additionally sets `pending_transfer`: its landing
-//!    stub can have exactly the depth of an ordinary callback return.
+//!    An abort additionally sets `pending_transfer` ([`park_transfer`]): its
+//!    landing stub can have exactly the depth of an ordinary callback return.
+//!    It does so at every step of its travel, not only in [`abort_to_prompt`]:
+//!    a driver that resumes into one of its after thunks clears the flag, and
+//!    the next step (`ResumeWindJump`) sets it again.
 //! 2. Propagate the error immediately. Do not store a callback result, run a
 //!    pending consumer, or truncate dynamic stacks belonging to the abandoned
 //!    call. Ordinary Rust resource cleanup is still required. All synchronous
@@ -746,6 +749,7 @@ fn handle_control_primitive(
                 registers: state.registers.clone(),
                 deliver_reg: dst,
                 exit_status: None,
+                abort_landing: false,
             };
             let cont_tv = state.alloc_vm_continuation(cont);
             // Call proc with the continuation object.
@@ -779,6 +783,7 @@ fn handle_control_primitive(
                 registers: Vec::new(),
                 deliver_reg: 0,
                 exit_status: Some(status),
+                abort_landing: false,
             });
             step_wind_jump(state, target, TaggedValue::UNSPECIFIED)?;
             return Err(park_escape(state, TaggedValue::UNSPECIFIED));
@@ -2121,6 +2126,7 @@ pub(super) fn abort_to_prompt(
         // and the abort's value reaches the handler as an argument instead.
         deliver_reg: abort_step::RESULT,
         exit_status: None,
+        abort_landing: true,
     };
     let target_tv = state.alloc_vm_continuation(target);
     match step_wind_jump(state, target_tv, val) {
@@ -2745,11 +2751,16 @@ pub(super) fn park_escape(state: &mut VmState, value: TaggedValue) -> VmError {
 /// [`park_escape`] for a transfer that installed a landing to run, rather than
 /// unwinding to one that was already there. See [`VmState::pending_transfer`].
 ///
+/// An abort with an extent to leave parks this way at every step of its
+/// travel: here in [`abort_to_prompt`] for the first, and in `ResumeWindJump`
+/// for each after it, since the loop that ran the thunk in between cleared the
+/// flag on its way into the thunk (#342).
+///
 /// # State contract
 ///
 /// Sets pending_transfer as well as pending_escape for an abort landing.
 /// Leaves all dynamic stacks as prepared by the caller and returns the sentinel.
-fn park_transfer(state: &mut VmState, value: TaggedValue) -> VmError {
+pub(super) fn park_transfer(state: &mut VmState, value: TaggedValue) -> VmError {
     state.pending_transfer = true;
     park_escape(state, value)
 }

@@ -71,7 +71,8 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     const PRELUDE: &str = "(import (scheme base) (scheme lazy) (scheme file) \
                            (scheme eval) (scheme repl)) \
                            (define esc #f) \
-                           (define t (make-continuation-prompt-tag 'p))";
+                           (define t (make-continuation-prompt-tag 'p)) \
+                           (define unwound 0)";
 
     let bodies = [
         "(member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
@@ -88,16 +89,21 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
         format!(r#"(call-with-output-file "{output}" (lambda (p) LEAVE))"#),
     ];
 
-    for (transfer, wrap, leave) in [
+    for (transfer, wrap, leave, value) in [
         (
             "escape",
             "(call/cc (lambda (k) (set! esc k) BODY))",
             "(esc 'x)",
+            "x",
         ),
         (
             "abort",
-            "(call-with-continuation-prompt (lambda () BODY) t (lambda (v k2) v))",
+            // The handler's answer is not the abort's value, so a callback
+            // that returned `'x` cannot pass for a handled abort — which is
+            // how #342 got past this sweep when the handler returned `v`.
+            "(call-with-continuation-prompt (lambda () BODY) t (lambda (v k2) (list 'handled v)))",
             "(abort-current-continuation t 'x)",
+            "(handled x)",
             // Both backends since 2026-09-10. Until then the tree-walker ran
             // most of these callbacks on a nested trampoline that started
             // every stack empty, so the abort found no prompt — the
@@ -108,12 +114,35 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
             // so it unwinds through the primitive the same way.
         ),
     ] {
-        for body in &bodies {
-            let program = format!(
-                "{PRELUDE} {}",
-                wrap.replace("BODY", &body.replace("LEAVE", leave))
-            );
-            assert_eq!(common::eval_program(&program), "x", "[{transfer}] {body}");
+        // In non-tail position the primitive's result has a register to go to
+        // in a frame the transfer removes.
+        for (position, place) in [("tail", "BODY"), ("non-tail", "(car (list BODY))")] {
+            // A `dynamic-wind` between the transfer and its target makes it
+            // travel, running the after thunk on the way (#342); with
+            // nothing to leave, an abort cuts the machine back in place.
+            for (crossing, around, unwinds) in [
+                ("nothing", "LEAVE", 0),
+                (
+                    "a dynamic-wind",
+                    "(dynamic-wind (lambda () #f) (lambda () LEAVE) \
+                     (lambda () (set! unwound (+ unwound 1))))",
+                    1,
+                ),
+            ] {
+                let leave = around.replace("LEAVE", leave);
+                for body in &bodies {
+                    let body = place.replace("BODY", &body.replace("LEAVE", &leave));
+                    let program = format!(
+                        "{PRELUDE} (define r {}) (list r unwound)",
+                        wrap.replace("BODY", &body)
+                    );
+                    assert_eq!(
+                        common::eval_program(&program),
+                        format!("({value} {unwinds})"),
+                        "[{transfer}, {position}, crossing {crossing}] {body}"
+                    );
+                }
+            }
         }
     }
 }
