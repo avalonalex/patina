@@ -174,6 +174,88 @@ fn a_test_script_cut_short_or_with_a_stray_paren_reports_it_once() {
     }
 }
 
+/// `patina < program.scm` means what `patina program.scm` means.
+///
+/// A line editor reading a pipe cannot report what it never gets to keep: at
+/// end of input it drops a partly-read form, so a cut-short program printed
+/// its prefix, said "Goodbye!", and exited 0. chibi, Gauche and Chez all
+/// report this; being the only one that stays quiet is the defect, and a
+/// silent success is the part a shell script cannot see.
+#[test]
+fn a_program_on_standard_input_is_diagnosed_and_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let cut =
+        "(import (scheme base) (scheme write))\n(display \"ran\")\n(newline)\n(define y (+ 1\n";
+    for backend in BOTH_BACKENDS {
+        let (stdout, stderr, ok) = run_patina_stdin(dir.path(), backend, cut);
+        assert!(
+            !ok,
+            "{backend:?} succeeded on a cut-short program: {stdout}"
+        );
+        assert_eq!(stdout.trim(), "ran", "{backend:?}");
+        assert!(
+            stderr.contains(DIAGNOSTIC) && stderr.contains("<stdin>:4:1"),
+            "{backend:?}: {stderr}"
+        );
+        assert!(
+            !stdout.contains("Goodbye!") && !stderr.contains("Goodbye!"),
+            "a program is not a session: {backend:?}"
+        );
+    }
+}
+
+/// The same path must still run what is not broken, and must keep reporting
+/// evaluation failures through the status.
+#[test]
+fn a_whole_program_on_standard_input_runs_and_reports_its_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    for backend in BOTH_BACKENDS {
+        let (stdout, stderr, ok) = run_patina_stdin(
+            dir.path(),
+            backend,
+            "(import (scheme base) (scheme write))\n(display (+ 40 2))\n",
+        );
+        assert!(ok, "{backend:?}: {stderr}");
+        assert_eq!(stdout.trim(), "42", "{backend:?}");
+
+        let (_, _, ok) = run_patina_stdin(
+            dir.path(),
+            backend,
+            "(import (scheme base))\n(no-such-procedure)\n",
+        );
+        assert!(!ok, "an unbound variable must fail: {backend:?}");
+    }
+}
+
+/// Run the binary with `input` on standard input, as a shell redirect does.
+fn run_patina_stdin(cwd: &Path, args: &[&str], input: &str) -> (String, String, bool) {
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_patina"))
+        .args(args)
+        .env_remove("PATINA_ALLOW_R6RS")
+        .env_remove("PATINA_LIBRARY_PATH")
+        .env_remove("PATINA_HOME")
+        .env_remove("PATINA_ISOLATED_LIBRARIES")
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn patina binary");
+    child
+        .stdin
+        .take()
+        .expect("stdin pipe")
+        .write_all(input.as_bytes())
+        .expect("write program to stdin");
+    let out = child.wait_with_output().expect("wait on patina");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
+}
+
 /// Run the binary and collect its output, killing it if it is still running
 /// after ten seconds: a runner looping on a parse error would otherwise hang
 /// the suite. Both pipes are drained on their own threads while the child

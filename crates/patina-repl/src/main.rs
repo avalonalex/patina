@@ -182,10 +182,39 @@ fn main() {
         }
     } else if opts.dump {
         dump_bytecode_stdin();
-    } else if opts.use_tree_walker {
-        run_repl_tree_walker(&opts);
+    } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        if opts.use_tree_walker {
+            run_repl_tree_walker(&opts);
+        } else {
+            run_repl_vm(&opts);
+        }
     } else {
-        run_repl_vm(&opts);
+        run_stdin_program(&opts);
+    }
+}
+
+/// Run a program piped in on standard input.
+///
+/// `patina < program.scm` means the same thing as `patina program.scm`: a
+/// line editor reading a pipe cannot report what it never gets to keep, and
+/// dropped a program's unfinished last form in silence, exiting 0. Reading
+/// the stream whole hands it to the same runner a file uses, so it is
+/// diagnosed and the status says so.
+///
+/// Only a terminal gets the session. There is no file to resolve libraries
+/// beside, so `-I`/`-A` and the search path are all a program here has.
+fn run_stdin_program(opts: &CliOptions) -> ! {
+    use std::io::Read;
+
+    let mut code = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut code) {
+        eprintln!("Error reading stdin: {}", e);
+        process::exit(1);
+    }
+    if opts.use_tree_walker {
+        run_program_tree_walker(&code, "<stdin>", None, opts);
+    } else {
+        run_program_vm(&code, "<stdin>", None, opts);
     }
 }
 
@@ -225,7 +254,8 @@ fn print_help() {
     eprintln!("  PATINA_ISOLATED_LIBRARIES  Same as --isolated-libraries when set to 1");
     eprintln!();
     eprintln!("If FILE is provided, run it as a script.");
-    eprintln!("Otherwise, start an interactive REPL.");
+    eprintln!("Otherwise, read a program from standard input, or start an");
+    eprintln!("interactive REPL when standard input is a terminal.");
     eprintln!();
     eprintln!("The default backend is the register-based bytecode VM.");
     eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
@@ -239,20 +269,32 @@ fn run_script_tree_walker(filename: &str, opts: &CliOptions) {
             process::exit(1);
         }
     };
+    run_program_tree_walker(&code, filename, Some(filename), opts);
+}
 
+/// Run a whole program, whatever it was read from.
+///
+/// `source_name` labels it in diagnostics; `script_path` is the file it came
+/// from, when there is one, for library resolution relative to the program.
+fn run_program_tree_walker(
+    code: &str,
+    source_name: &str,
+    script_path: Option<&str>,
+    opts: &CliOptions,
+) -> ! {
     let interp = TreeWalkInterpreter::new_tree_walker();
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    let is_test_file = filename.contains("test") || code.contains("test-begin");
+    apply_library_paths(interp.backend(), opts, script_path);
+    let is_test_file = source_name.contains("test") || code.contains("test-begin");
 
     if is_test_file {
         // Resilient mode reports each evaluation error and carries on, so its
         // status says nothing about them. A read error is different: the rest
         // of the file never ran, which a truncated suite must not pass off as
         // a clean one.
-        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(&code, filename);
+        let (_, read_to_end) = interp.eval_program_resilient_with_source_name(code, source_name);
         process::exit(if read_to_end { 0 } else { 1 });
     } else {
-        let (result, source_map) = interp.eval_program_with_source_name(&code, filename);
+        let (result, source_map) = interp.eval_program_with_source_name(code, source_name);
         match result {
             Ok(_) => process::exit(0),
             Err(e) => {
@@ -341,18 +383,27 @@ fn run_script_vm(filename: &str, opts: &CliOptions) {
             process::exit(1);
         }
     };
+    run_program_vm(&code, filename, Some(filename), opts);
+}
 
+/// The VM's counterpart to [`run_program_tree_walker`].
+fn run_program_vm(
+    code: &str,
+    source_name: &str,
+    script_path: Option<&str>,
+    opts: &CliOptions,
+) -> ! {
     let interp = Interpreter::new(VmBackend::new());
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    let is_test_file = filename.contains("test") || code.contains("test-begin");
+    apply_library_paths(interp.backend(), opts, script_path);
+    let is_test_file = source_name.contains("test") || code.contains("test-begin");
 
     if is_test_file {
         // As in `run_script_tree_walker`: evaluation errors do not change the
         // status here, a file that could not be read to its end does.
-        let read_to_end = eval_program_resilient_vm(&interp, &code, filename);
+        let read_to_end = eval_program_resilient_vm(&interp, code, source_name);
         process::exit(if read_to_end { 0 } else { 1 });
     } else {
-        let (result, source_map) = eval_program_vm(&interp, &code, filename);
+        let (result, source_map) = eval_program_vm(&interp, code, source_name);
         match result {
             Ok(_) => process::exit(0),
             Err(e) => {
