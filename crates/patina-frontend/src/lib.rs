@@ -15,6 +15,7 @@
 //! ```
 
 pub mod cond_expand;
+pub mod datum_scan;
 pub mod desugarer;
 pub mod dialect;
 pub mod error;
@@ -28,6 +29,7 @@ pub mod source_map;
 
 // Re-export main types
 pub use cond_expand::evaluate_feature_requirement_tagged;
+pub use datum_scan::DatumScan;
 pub use desugarer::{DesugarError, Desugarer};
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, Spanned, Token};

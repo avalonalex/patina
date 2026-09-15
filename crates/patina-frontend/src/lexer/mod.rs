@@ -164,6 +164,33 @@ impl Lexer {
         }
     }
 
+    /// Start counting lines at `line` rather than 1, for input cut from a longer
+    /// stream at the start of that line. Call before reading any token.
+    ///
+    /// A byte order mark is a mark only at the start of the whole stream, so one
+    /// at the start of a later piece is put back as the character it is there.
+    pub fn starting_at_line(mut self, line: u32) -> Self {
+        debug_assert_eq!(self.position, 0, "starting_at_line after reading");
+        self.line = line;
+        if line > 1 && self.bom_offset == 1 {
+            self.input.insert(0, '\u{feff}');
+            self.bom_offset = 0;
+        }
+        self
+    }
+
+    /// Start with `#!fold-case` in effect or not, for a piece of a program read
+    /// after an earlier piece changed it. Call before reading any token.
+    pub fn folding_case(mut self, fold_case: bool) -> Self {
+        self.fold_case = fold_case;
+        self
+    }
+
+    /// Whether `#!fold-case` is in effect at this point of the input.
+    pub fn folds_case(&self) -> bool {
+        self.fold_case
+    }
+
     /// Create a lexer with case-folding enabled from the start.
     ///
     /// This is used for `include-ci` which reads files in case-insensitive mode.
@@ -439,7 +466,7 @@ impl Lexer {
     /// What this function is for is making that decision live in one place:
     /// the set was written out seven times before, which is why the question
     /// had no home.
-    fn is_delimiter(ch: char) -> bool {
+    pub(crate) fn is_delimiter(ch: char) -> bool {
         ch.is_whitespace() || matches!(ch, '(' | ')' | '[' | ']' | '"' | ';')
     }
 

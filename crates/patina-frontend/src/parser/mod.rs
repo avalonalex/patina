@@ -146,11 +146,28 @@ impl Parser {
         source_name: Rc<str>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Result<Self, ParseError> {
+        Self::new_with_source_map_at_line(input, heap, source_name, source_map, 1, false)
+    }
+
+    /// Like [`Parser::new_with_source_map`], for `input` that is one piece of a
+    /// longer program read a piece at a time. `first_line` is the program's line
+    /// the piece starts on, which must be the start of a line. Positions, and
+    /// the lines the source map quotes, are then the program's, not the piece's.
+    /// `fold_case` is whether `#!fold-case` was in effect where the previous
+    /// piece ended; [`Parser::folds_case`] reports it for the next.
+    pub fn new_with_source_map_at_line(
+        input: &str,
+        heap: SharedHeap,
+        source_name: Rc<str>,
+        source_map: Rc<RefCell<SourceMap>>,
+        first_line: u32,
+        fold_case: bool,
+    ) -> Result<Self, ParseError> {
         // Store source text for caret-style error display, and where it came
         // from, for resolving a relative `include` beside the program.
         {
             let mut sm = source_map.borrow_mut();
-            sm.set_source_text(input.to_string());
+            sm.set_source_text_from_line(input.to_string(), first_line);
             sm.set_primary_source(&source_name);
         }
         // The map is keyed by raw bits, so slots the GC reclaims must be
@@ -161,7 +178,9 @@ impl Parser {
         // map is empty, so the prune itself is a no-op).
         heap.borrow_mut().enable_gc_freed_tracking();
         crate::source_map::prune_freed_locations(&heap, &source_map);
-        let mut lexer = Lexer::new(input);
+        let mut lexer = Lexer::new(input)
+            .starting_at_line(first_line)
+            .folding_case(fold_case);
         let spanned = lexer.next_token()?;
         Ok(Parser {
             lexer,
@@ -220,6 +239,12 @@ impl Parser {
     /// preserve the remainder for subsequent input operations.
     pub fn consumed_end(&self) -> usize {
         self.lexer.prev_token_end()
+    }
+
+    /// Whether `#!fold-case` is in effect where this parser has read to, so the
+    /// next piece of the same program can start with it.
+    pub fn folds_case(&self) -> bool {
+        self.lexer.folds_case()
     }
 
     /// Record a source location for a TaggedValue in the source map (if present)
@@ -1628,6 +1653,99 @@ mod tests {
                 "{input:?}: {err}"
             );
         }
+    }
+
+    /// A piece parsed from a later line of a program reports that program's
+    /// positions, for the forms it records and for input that ends inside one.
+    #[test]
+    fn a_piece_parsed_at_a_later_line_reports_the_program_s_positions() {
+        let heap = patina_core::new_shared_heap();
+        let sm = Rc::new(RefCell::new(SourceMap::new()));
+        let mut parser = Parser::new_with_source_map_at_line(
+            "(a b)\n(c\n",
+            heap,
+            Rc::from("<stdin>"),
+            sm.clone(),
+            7,
+            false,
+        )
+        .unwrap();
+        let first = parser.parse_next().unwrap().unwrap();
+        let (line, column) = {
+            let map = sm.borrow();
+            let loc = map.get(first).expect("a list records its position");
+            (loc.line, loc.column)
+        };
+        assert_eq!((line, column), (7, 1));
+        let err = parser.parse_next().unwrap_err();
+        assert!(
+            matches!(err, ParseError::IncompleteDatum { line: 8, column: 1 }),
+            "{err}"
+        );
+        assert_eq!(sm.borrow().get_line(8), Some("(c"));
+    }
+
+    /// A byte order mark is dropped at the start of a program, and is an
+    /// ordinary character at the start of a later piece, as it is mid-file.
+    #[test]
+    fn a_byte_order_mark_is_a_mark_only_at_the_start_of_the_program() {
+        let heap = patina_core::new_shared_heap();
+        let at_start = Parser::new_with_source_map_at_line(
+            "\u{feff}42",
+            heap.clone(),
+            Rc::from("<stdin>"),
+            Rc::new(RefCell::new(SourceMap::new())),
+            1,
+            false,
+        )
+        .unwrap()
+        .parse_next();
+        assert!(matches!(at_start, Ok(Some(v)) if v.as_fixnum() == Some(42)));
+        let later = Parser::new_with_source_map_at_line(
+            "\u{feff}42",
+            heap,
+            Rc::from("<stdin>"),
+            Rc::new(RefCell::new(SourceMap::new())),
+            5,
+            false,
+        )
+        .and_then(|mut parser| parser.parse_next());
+        assert!(!matches!(later, Ok(Some(v)) if v.as_fixnum() == Some(42)));
+    }
+
+    /// A piece can start with `#!fold-case` in effect and reports whether it
+    /// still is at its end, so a program read a piece at a time folds case the
+    /// way a file does.
+    #[test]
+    fn fold_case_carries_from_one_piece_of_a_program_to_the_next() {
+        let heap = patina_core::new_shared_heap();
+        let map = || Rc::new(RefCell::new(SourceMap::new()));
+        let name = || Rc::<str>::from("<stdin>");
+        let mut first = Parser::new_with_source_map_at_line(
+            "#!fold-case\n",
+            heap.clone(),
+            name(),
+            map(),
+            1,
+            false,
+        )
+        .unwrap();
+        assert!(first.parse_next().unwrap().is_none());
+        assert!(first.folds_case(), "the directive is in effect after it");
+        let mut second = Parser::new_with_source_map_at_line(
+            "HELLO\n",
+            heap.clone(),
+            name(),
+            map(),
+            2,
+            first.folds_case(),
+        )
+        .unwrap();
+        let symbol = second.parse_next().unwrap().unwrap();
+        assert_eq!(
+            patina_core::debug_format::format_tagged(symbol, &heap.borrow()),
+            "hello"
+        );
     }
 
     #[test]

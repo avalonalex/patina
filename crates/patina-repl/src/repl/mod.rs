@@ -4,6 +4,7 @@ mod validator;
 
 use self::highlighter::SchemeHighlighter;
 use self::validator::SchemeValidator;
+pub use self::validator::needs_more_input;
 use patina_interpreter::{TreeWalkInterpreter, format_interpreter_error};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
@@ -42,6 +43,13 @@ impl SchemeHelper {
             validator: SchemeValidator::new(),
             hinter: HistoryHinter::new(),
         }
+    }
+
+    /// The input that was still unfinished at the last line the editor
+    /// accepted. The editor drops a partly-typed form when its input ends, and
+    /// this is what a session reports in its place.
+    pub fn take_pending_input(&self) -> Option<String> {
+        self.validator.take_pending()
     }
 }
 
@@ -119,14 +127,20 @@ pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
 ///            - returning `Err` (via the closure returning a sentinel) to stop is handled
 ///              by the closure itself; use the `bool` return to signal quit.
 ///
-/// Returns when the user types `(exit)`, `,exit`, `,quit`, or Ctrl+D.
-pub fn run_repl_loop<F>(editor: &mut Editor<SchemeHelper, FileHistory>, prompt: &str, mut eval: F)
+/// Returns whether the session ended cleanly: `true` after `(exit)`, `,exit`,
+/// `,quit` or the end of input, and `false` when input ended part-way through
+/// a form or the editor failed.
+pub fn run_repl_loop<F>(
+    editor: &mut Editor<SchemeHelper, FileHistory>,
+    prompt: &str,
+    mut eval: F,
+) -> bool
 where
     F: FnMut(&str) -> Option<String>,
 {
     use std::io::Write;
 
-    loop {
+    let clean = loop {
         let _ = std::io::stdout().flush();
 
         match editor.readline(prompt) {
@@ -137,7 +151,7 @@ where
                 }
                 if line == "(exit)" || line == ",exit" || line == ",quit" {
                     println!("Goodbye!");
-                    break;
+                    break true;
                 }
 
                 let _ = editor.add_history_entry(line);
@@ -149,24 +163,46 @@ where
                 }
             }
             Err(ReadlineError::Interrupted) => {
+                // Ctrl+C abandons whatever was being typed.
+                if let Some(helper) = editor.helper() {
+                    helper.take_pending_input();
+                }
                 println!("^C");
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("Goodbye!");
-                break;
+                // The editor has thrown away a form that was still being typed,
+                // but the validator kept what of it had been accepted. A session
+                // cut off inside a form has not ended cleanly: run what arrived,
+                // which reports where the unfinished form began, as a file would.
+                let pending = editor
+                    .helper()
+                    .and_then(|helper| helper.take_pending_input());
+                match pending {
+                    Some(pending) => {
+                        if let Some(output) = eval(&pending) {
+                            eprintln!("{}", output);
+                        }
+                        break false;
+                    }
+                    None => {
+                        println!("Goodbye!");
+                        break true;
+                    }
+                }
             }
             Err(err) => {
                 eprintln!("Error: {:?}", err);
-                break;
+                break false;
             }
         }
-    }
+    };
 
     if let Some(mut path) = dirs::home_dir() {
         path.push(".patina_history");
         let _ = editor.save_history(&path);
     }
+    clean
 }
 
 impl Repl {
@@ -185,7 +221,9 @@ impl Repl {
         &self.interpreter
     }
 
-    pub fn run(&mut self) -> rustyline::Result<()> {
+    /// Run the session. `Ok(false)` means its input ended part-way through a
+    /// form, which has been reported.
+    pub fn run(&mut self) -> rustyline::Result<bool> {
         println!("Patina Scheme R7RS Interpreter");
         println!("Version {}", env!("CARGO_PKG_VERSION"));
         println!();
@@ -203,7 +241,7 @@ impl Repl {
         let interp = &self.interpreter;
         let counter = &mut self.expr_counter;
 
-        run_repl_loop(&mut self.editor, "patina> ", |line| {
+        let clean = run_repl_loop(&mut self.editor, "patina> ", |line| {
             *counter += 1;
             let source_name = format!("<repl-{}>", counter);
             // Every form on the line, as the VM REPL does: reading only the
@@ -226,6 +264,6 @@ impl Repl {
             }
         });
 
-        Ok(())
+        Ok(clean)
     }
 }

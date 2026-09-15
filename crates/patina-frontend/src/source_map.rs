@@ -16,9 +16,13 @@ use std::collections::HashMap;
 #[derive(Debug, Default)]
 pub struct SourceMap {
     locations: HashMap<u64, SourceLocation>,
-    /// The full source text, used for pretty error formatting (caret display).
+    /// The source text, used for pretty error formatting (caret display).
     /// Populated by `Parser::new_with_source_map`.
     source_text: Option<String>,
+    /// How many lines of the program came before `source_text`'s first line,
+    /// when the text is one piece of a program read a piece at a time. Zero for
+    /// text that starts at the top of its source.
+    line_offset: u32,
     /// The name the parser was given for that text — a file path when the
     /// program came from one, `<eval>`/`<repl>` otherwise. Populated with
     /// `source_text`; the desugarer resolves a top-level relative `include`
@@ -36,6 +40,7 @@ impl SourceMap {
         Self {
             locations: HashMap::new(),
             source_text: None,
+            line_offset: 0,
             primary_source: None,
             expansion_records: HashMap::new(),
         }
@@ -43,7 +48,15 @@ impl SourceMap {
 
     /// Store the source text for caret-style error display.
     pub fn set_source_text(&mut self, text: String) {
+        self.set_source_text_from_line(text, 1);
+    }
+
+    /// Store the source text of one piece of a longer program, which starts on
+    /// that program's line `first_line`. Lines are then asked for by the
+    /// program's numbering, and a line outside the piece is not there.
+    pub fn set_source_text_from_line(&mut self, text: String, first_line: u32) {
         self.source_text = Some(text);
+        self.line_offset = first_line.saturating_sub(1);
     }
 
     /// Record where the source text came from (see `primary_source`).
@@ -59,7 +72,10 @@ impl SourceMap {
     /// Return the (1-indexed) line from the stored source text, if available.
     pub fn get_line(&self, line: u32) -> Option<&str> {
         let text = self.source_text.as_deref()?;
-        text.lines().nth((line as usize).saturating_sub(1))
+        let index = (line as usize)
+            .saturating_sub(1)
+            .checked_sub(self.line_offset as usize)?;
+        text.lines().nth(index)
     }
 
     /// Format a caret-style error context block for a source location.
@@ -157,6 +173,22 @@ pub fn prune_freed_locations(heap: &SharedHeap, source_map: &RefCell<SourceMap>)
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn a_piece_of_a_longer_program_answers_by_the_program_s_line_numbers() {
+        let mut sm = SourceMap::new();
+        sm.set_source_text_from_line("(display 1)\n(car 5)\n".to_string(), 10);
+        assert_eq!(sm.get_line(10), Some("(display 1)"));
+        assert_eq!(sm.get_line(11), Some("(car 5)"));
+        assert_eq!(sm.get_line(9), None, "a line before the piece is not in it");
+        assert_eq!(sm.get_line(12), None);
+        sm.set_source_text("x\n".to_string());
+        assert_eq!(
+            sm.get_line(1),
+            Some("x"),
+            "whole text starts at line 1 again"
+        );
+    }
 
     #[test]
     fn test_source_map_basic() {

@@ -1,8 +1,8 @@
 use patina_interpreter::{
     Backend, Interpreter, TreeWalkInterpreter, format_backend_error_with_source,
-    format_interpreter_error,
+    format_eval_error_with_source, format_interpreter_error,
 };
-use patina_repl::{Repl, make_editor, run_repl_loop};
+use patina_repl::{Repl, make_editor, run_program_stream, run_repl_loop};
 use patina_vm::{VmBackend, VmBackendError};
 use std::env;
 use std::fs;
@@ -227,28 +227,105 @@ fn main() {
     }
 }
 
-/// Run a program read from standard input.
+/// Run a program read from standard input, a run of complete lines at a time.
 ///
-/// It goes to the same runner a file argument uses, because a line editor
-/// reading a pipe cannot report what it never gets to keep: it dropped a
-/// program's unfinished last form in silence and exited 0.
+/// Unlike a file it is not read whole first: each run of lines is evaluated as
+/// soon as it holds only complete forms, so a producer that waits on the
+/// program's output makes progress, and memory follows the largest form rather
+/// than the stream (#333). It gets a program's diagnostics and exit status, not
+/// a session's: a line editor reading a pipe dropped an unfinished last form in
+/// silence and exited 0 (#331).
 ///
-/// Two things still separate this from `patina program.scm`, because a
+/// Three things still separate this from `patina program.scm`, because a
 /// redirect does not carry what a path carries:
 ///
 /// - there is no directory to resolve libraries beside, so `-I`/`-A` and the
 ///   search path are all a program here has;
-/// - the program cannot read its own standard input, which it has been
-///   handed to as source.
+/// - a read from standard input inside the program takes the lines after those
+///   holding the form being run, and later positions do not count them;
+/// - an error located in a form read earlier is reported by position without
+///   the text of its line, which is not kept.
 fn run_stdin_program(opts: &CliOptions) -> ! {
-    let code = read_stdin_source();
-    if opts.trace {
-        run_program_vm_trace(&code, "<stdin>", None, opts);
+    // Locked per line rather than for the run: a program that reads standard
+    // input itself takes the same lock, and would wait on it forever.
+    let next_line = || {
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => Ok(None),
+            Ok(_) => Ok(Some(line)),
+            Err(e) => Err(e),
+        }
+    };
+    let outcome = if opts.trace {
+        use patina_vm::tracer::StepTracer;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let backend = VmBackend::new();
+        let mut tracer = StepTracer::new();
+        tracer.print_live = true;
+        let handle = Rc::new(RefCell::new(tracer));
+        backend.set_tracer(Some(handle.clone()));
+        let interp = Interpreter::new(backend);
+        apply_library_paths(interp.backend(), opts, None);
+        let outcome = stream_into_vm(&interp, next_line, opts.keep_going);
+        if !outcome.clean() {
+            eprintln!("--- Trace: {} events recorded ---", handle.borrow().len());
+        }
+        outcome
     } else if opts.use_tree_walker {
-        run_program_tree_walker(&code, "<stdin>", None, opts);
+        let interp = TreeWalkInterpreter::new_tree_walker();
+        apply_library_paths(interp.backend(), opts, None);
+        let global = interp.backend().global_env().clone();
+        let heap = global.heap().clone();
+        run_program_stream(
+            next_line,
+            &heap,
+            "<stdin>",
+            opts.keep_going,
+            |datum, source_map| {
+                interp
+                    .backend()
+                    .eval_with_source_map(datum, &global, source_map)
+                    .map(|_| ())
+                    .map_err(|e| format_eval_error_with_source(&e, &source_map.borrow()))
+            },
+        )
     } else {
-        run_program_vm(&code, "<stdin>", None, opts);
-    }
+        let interp = Interpreter::new(VmBackend::new());
+        apply_library_paths(interp.backend(), opts, None);
+        stream_into_vm(&interp, next_line, opts.keep_going)
+    };
+    process::exit(if outcome.clean() { 0 } else { 1 });
+}
+
+/// Feed a program arriving on standard input to the VM, a run of complete lines
+/// at a time.
+fn stream_into_vm(
+    interp: &Interpreter<VmBackend>,
+    next_line: impl FnMut() -> std::io::Result<Option<String>>,
+    keep_going: bool,
+) -> patina_interpreter::ProgramOutcome {
+    let global = interp.backend().global_env().clone();
+    let heap = global.heap().clone();
+    run_program_stream(
+        next_line,
+        &heap,
+        "<stdin>",
+        keep_going,
+        |datum, source_map| {
+            interp
+                .backend()
+                .eval_with_source_map(datum, &global, source_map)
+                .map(|_| ())
+                .map_err(|e| {
+                    format_backend_error_with_source(
+                        &patina_interpreter::InterpreterError::Backend(e),
+                        &source_map.borrow(),
+                    )
+                })
+        },
+    )
 }
 
 /// Read a source file, or exit saying why.
@@ -316,8 +393,10 @@ fn print_help() {
     eprintln!("exits non-zero, with or without -k, even if it later calls (exit 0).");
     eprintln!("Otherwise, read a program from standard input, or start an");
     eprintln!("interactive REPL when standard input is a terminal or -i is given.");
-    eprintln!("A program read from standard input cannot resolve libraries beside");
-    eprintln!("itself, and cannot read its own input; pass it as FILE if it must.");
+    eprintln!("A program read from standard input runs each form as the lines holding");
+    eprintln!("it arrive. It cannot resolve libraries beside itself, and a read from");
+    eprintln!("standard input inside it takes the lines that follow; pass it as FILE");
+    eprintln!("if either matters.");
     eprintln!();
     eprintln!("The default backend is the register-based bytecode VM.");
     eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
@@ -591,9 +670,13 @@ fn run_repl_tree_walker(opts: &CliOptions) {
     match Repl::new() {
         Ok(mut repl) => {
             apply_library_paths(repl.interpreter().backend(), opts, None);
-            if let Err(e) = repl.run() {
-                eprintln!("REPL error: {}", e);
-                process::exit(1);
+            match repl.run() {
+                Ok(true) => {}
+                Ok(false) => process::exit(1),
+                Err(e) => {
+                    eprintln!("REPL error: {}", e);
+                    process::exit(1);
+                }
             }
         }
         Err(e) => {
@@ -606,7 +689,7 @@ fn run_repl_tree_walker(opts: &CliOptions) {
 fn run_repl_vm(opts: &CliOptions) {
     use patina_core::TaggedValue;
     use patina_core::debug_format::format_tagged;
-    use patina_interpreter::{Parser, SourceMap};
+    use patina_interpreter::{InterpreterError, Parser, SourceMap, format_parse_error_with_source};
 
     let interp = Interpreter::new(VmBackend::new());
     apply_library_paths(interp.backend(), opts, None);
@@ -635,7 +718,7 @@ fn run_repl_vm(opts: &CliOptions) {
         }
     };
 
-    run_repl_loop(&mut editor, "patina> ", |line| {
+    let clean = run_repl_loop(&mut editor, "patina> ", |line| {
         // Special form: (vm-compile <expr>) -- compile and disassemble without executing.
         if let Some(rest) = line.strip_prefix("(vm-compile ") {
             let inner = rest.trim_end().strip_suffix(')').unwrap_or(rest.trim_end());
@@ -651,7 +734,12 @@ fn run_repl_vm(opts: &CliOptions) {
         let mut parser =
             match Parser::new_with_source_map(line, heap.clone(), sname, source_map.clone()) {
                 Ok(p) => p,
-                Err(e) => return Some(format!("Error: {}", e)),
+                Err(e) => {
+                    return Some(format!(
+                        "Error: {}",
+                        format_parse_error_with_source(&e, &source_map.borrow())
+                    ));
+                }
             };
         let global = interp.backend().global_env().clone();
         let mut result = TaggedValue::UNSPECIFIED;
@@ -667,20 +755,23 @@ fn run_repl_vm(opts: &CliOptions) {
                     {
                         Ok(val) => result = val,
                         Err(e) => {
-                            if let Some(loc) = e.source_location() {
-                                let mut parts = vec![format!("Error: {}", e)];
-                                parts.push(format!("  at {}", loc));
-                                if let Some(ctx) = source_map.borrow().format_context(loc) {
-                                    parts.push(ctx);
-                                }
-                                return Some(parts.join("\n"));
-                            }
-                            return Some(format!("Error: {}", e));
+                            return Some(format!(
+                                "Error: {}",
+                                format_backend_error_with_source(
+                                    &InterpreterError::Backend(e),
+                                    &source_map.borrow()
+                                )
+                            ));
                         }
                     }
                 }
                 Ok(None) => break,
-                Err(e) => return Some(format!("Error: {}", e)),
+                Err(e) => {
+                    return Some(format!(
+                        "Error: {}",
+                        format_parse_error_with_source(&e, &source_map.borrow())
+                    ));
+                }
             }
         }
         if result != TaggedValue::UNSPECIFIED {
@@ -689,4 +780,7 @@ fn run_repl_vm(opts: &CliOptions) {
             None
         }
     });
+    if !clean {
+        process::exit(1);
+    }
 }
