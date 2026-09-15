@@ -177,7 +177,9 @@ where
                             eprintln!("Error: {}", message);
                             self.eval_errors += 1;
                             patina_runtime::exit_status::note_error_reported();
-                            if !self.keep_going {
+                            // An error that interrupted an `exit` stops even
+                            // `-k`; the caller ends the process.
+                            if !self.keep_going || patina_runtime::exit_status::exit_interrupted() {
                                 return Some(self.outcome(false));
                             }
                         }

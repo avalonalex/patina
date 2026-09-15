@@ -73,53 +73,34 @@ fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
     Ok(h.list_from_iter(arg_tvs))
 }
 
-/// Exit the program with optional status.
+/// Exit the program with optional status, without unwinding.
 ///
-/// R7RS says this should run dynamic-wind handlers first, but since we don't
-/// have dynamic-wind fully implemented, we just exit.
+/// R7RS 6.14 has `exit` run the after thunk of every outstanding
+/// `dynamic-wind` first. That takes the backend's own continuation machinery,
+/// so both backends intercept `exit` before it reaches the registry — the VM as
+/// a control primitive, the tree-walker when it applies a primitive (#336).
+/// What is left here is `exit` for a caller with no dynamic-wind machinery,
+/// which ends the process as `emergency-exit` does.
 ///
 /// - No argument or #t: exit with success (0)
 /// - #f: exit with failure (1)
 /// - Integer: exit with that code
 fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let code = if args.is_empty() {
-        0 // Success
-    } else {
-        exit_code_from_arg(args[0])?
-    };
-
-    // Note: In a full implementation, we would run dynamic-wind handlers here
-    // A success is withheld from a program that already reported an error (-k).
-    std::process::exit(patina_runtime::exit_status::status_for_exit(code));
+    exit_now(args)
 }
 
 /// Exit immediately without running handlers.
 ///
 /// This corresponds to _exit() in POSIX.
 fn emergency_exit(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    let code = if args.is_empty() {
-        0 // Success
-    } else {
-        exit_code_from_arg(args[0])?
-    };
-
-    // A success is withheld from a program that already reported an error (-k).
-    std::process::exit(patina_runtime::exit_status::status_for_exit(code));
+    exit_now(args)
 }
 
-/// Extract an exit code from a TaggedValue argument
-fn exit_code_from_arg(arg: TaggedValue) -> Result<i32, EvalError> {
-    if arg == TaggedValue::TRUE {
-        Ok(0)
-    } else if arg == TaggedValue::FALSE {
-        Ok(1)
-    } else if arg.is_fixnum() {
-        Ok(arg.as_fixnum_unchecked() as i32)
-    } else {
-        Err(EvalError::TypeError(
-            "exit expects boolean or integer".to_string(),
-        ))
-    }
+/// End the process with the status `args` ask for, running nothing first.
+fn exit_now(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
+    let status = patina_runtime::exit_status::requested_status(args)?;
+    // A success is withheld from a program that already reported an error (-k).
+    std::process::exit(patina_runtime::exit_status::status_for_exit(status));
 }
 
 /// Get the value of an environment variable.

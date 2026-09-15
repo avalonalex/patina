@@ -157,6 +157,9 @@ where
 
                 if let Some(output) = eval(line) {
                     println!("{}", output);
+                    // An error that interrupted an `exit` still ends the
+                    // session (`patina_runtime::exit_status`).
+                    patina_runtime::exit_status::exit_if_interrupted();
                 } else {
                     eprint!(""); // flush workaround
                 }
@@ -183,6 +186,7 @@ where
                     Some(pending) => {
                         if let Some(output) = eval(&pending) {
                             eprintln!("{}", output);
+                            patina_runtime::exit_status::exit_if_interrupted();
                         }
                         break false;
                     }

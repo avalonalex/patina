@@ -17,6 +17,8 @@ use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult
 use crate::eval::error::EvalError;
 use patina_core::DynamicWindRecord;
 use patina_core::ExceptionKind;
+use std::collections::HashSet;
+use std::rc::Rc;
 
 impl<'a> CpsEvaluator<'a> {
     /// Route catchable errors through CPS exception handlers
@@ -168,7 +170,83 @@ impl<'a> CpsEvaluator<'a> {
             })
         } else {
             // No handlers - propagate the error as-is
-            Err(err)
+            Err(unhandled(err, &cont, &cont_env, &prompt_stack))
+        }
+    }
+}
+
+/// `err`, which no handler takes, on its way out to be reported: noting the
+/// `exit` it interrupted, when it was raised by an after thunk that `exit` is
+/// running or by something that thunk called, so that the runner reporting it
+/// still ends the process (`patina_runtime::exit_status`).
+///
+/// Called wherever an error leaves the evaluator unhandled, with the
+/// continuation it was raised in.
+pub(super) fn unhandled(
+    err: EvalError,
+    cont: &ContValue,
+    cont_env: &ContEnv,
+    prompt_stack: &[PromptFrame],
+) -> EvalError {
+    if let Some(status) = exit_in_progress(cont, cont_env, prompt_stack) {
+        patina_runtime::exit_status::note_interrupted_exit(status);
+    }
+    err
+}
+
+/// The status of the `exit` whose travel `cont` runs on into, if any.
+///
+/// An error raised where `cont` is the continuation was raised inside that
+/// travel exactly when the chain from `cont` reaches the jump to an exit's
+/// landing (`apply_exit`): a travel something abandoned is no longer on any
+/// chain, and a continuation captured inside one of its thunks carries the jump
+/// back when it is re-entered. It is the tree-walker's answer to the VM's
+/// frame scan (`exit_in_progress` in `patina-vm`), for a continuation that is a
+/// chain rather than a stack. The rest of a `Local` is named in its
+/// continuation environment, the rest of a prompt body waits on the prompt
+/// stack, and a jump runs on into its target, so the walk follows all three,
+/// and memoises the environments and continuations chains share.
+fn exit_in_progress(
+    cont: &ContValue,
+    cont_env: &ContEnv,
+    prompt_stack: &[PromptFrame],
+) -> Option<i32> {
+    let mut conts: Vec<&ContValue> = vec![cont];
+    conts.extend(prompt_stack.iter().map(|frame| &frame.cont));
+    let mut envs: Vec<&ContEnv> = vec![cont_env];
+    let mut seen_envs = HashSet::new();
+    let mut seen_targets = HashSet::new();
+    loop {
+        if let Some(env) = envs.pop() {
+            if seen_envs.insert(env.gc_identity()) {
+                conts.extend(env.iter().map(|(_, value)| value));
+            }
+            continue;
+        }
+        let mut targets = Vec::new();
+        match conts.pop()? {
+            ContValue::ExitLanding { status } => return Some(*status),
+            ContValue::Local { cont_env, .. } => envs.push(cont_env),
+            ContValue::Captured(target) | ContValue::Jump { target, .. } => targets.push(target),
+            ContValue::ComposableInvokeStep { target, cont, .. } => {
+                conts.push(cont);
+                targets.push(target);
+            }
+            ContValue::CallWithValuesConsumer { original_cont, .. }
+            | ContValue::ForceCache { original_cont, .. }
+            | ContValue::DynamicWindCleanup { original_cont, .. }
+            | ContValue::DynamicWindAfterDone { original_cont, .. }
+            | ContValue::ExceptionHandlerCleanup { original_cont }
+            | ContValue::RaiseHandlerReturn { original_cont, .. } => conts.push(original_cont),
+            ContValue::DynamicWindSetup { cleanup_cont, .. } => conts.push(cleanup_cont),
+            ContValue::AbortLanding { cont, .. } => conts.push(cont),
+            ContValue::Halt | ContValue::PromptBoundary { .. } => {}
+        }
+        for target in targets {
+            if seen_targets.insert(Rc::as_ptr(target)) {
+                conts.extend(target.resume.as_ref());
+                envs.push(&target.captured_cont_env);
+            }
         }
     }
 }

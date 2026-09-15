@@ -175,4 +175,9 @@ pub struct VmContinuation {
     /// when the continuation is invoked. This is the `dst` register from the
     /// `Call call/cc` instruction that captured the continuation.
     pub deliver_reg: Reg,
+
+    /// `Some` for the target an `exit` travels to: arriving at it ends the
+    /// process with this status instead of restoring a machine, since there is
+    /// none to restore — every frame, extent, prompt and handler is empty.
+    pub exit_status: Option<i32>,
 }

@@ -1220,6 +1220,8 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 cont
             }
 
+            ContValue::ExitLanding { .. } => return,
+
             ContValue::ComposableInvokeStep {
                 target,
                 value,

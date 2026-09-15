@@ -34,6 +34,7 @@ fn continuation_pinning(payload: TaggedValue) -> VmContinuation {
         exception_handlers: vec![],
         registers: vec![payload],
         deliver_reg: 0,
+        exit_status: None,
     }
 }
 

@@ -728,6 +728,13 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
         // error. Winds are dropped, not unwound: their after-thunks were
         // never owed a run by an abort, and one that raised would abort the
         // recovery.
+        //
+        // Unless the error interrupted an `exit`: the runner that reports it
+        // must still end the process, so it is noted before the frames that
+        // say so are gone.
+        if let Some(status) = super::control::exit_in_progress(state) {
+            patina_runtime::exit_status::note_interrupted_exit(status);
+        }
         state.frames.clear();
         state.registers.clear();
         state.pending_escape = None;

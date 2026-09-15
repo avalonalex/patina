@@ -134,12 +134,15 @@ fn inline_op_for(qualified_name: &str) -> Option<InlineOp> {
 /// (call/cc, dynamic-wind, values, prompts, apply) or lives next to code that
 /// is; same for the exception machinery in `patina.internal.errors`
 /// (raise/raise-continuable/error/with-exception-handler are VM-intercepted).
+/// `exit` is the one intercepted primitive bound elsewhere, in
+/// `patina.internal.system` beside `emergency-exit`, so it is named on its own.
 /// The test below cross-checks this against `VM_INTERCEPTED_PRIMITIVES` — if
 /// an intercepted primitive ever moves outside these prefixes, that test
 /// fails instead of the interception being silently bypassed.
 pub(crate) fn is_excluded(qualified_name: &str) -> bool {
     qualified_name.starts_with("patina.internal.control/")
         || qualified_name.starts_with("patina.internal.errors/")
+        || qualified_name == "patina.internal.system/exit"
 }
 
 /// Build the `CallPrimitive` emission map for one compilation unit.
