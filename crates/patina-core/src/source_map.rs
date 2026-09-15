@@ -4,8 +4,8 @@
 //! is recorded with its source position. This allows the desugarer and
 //! evaluator to attach source locations to CoreExpr/CpsExpr nodes.
 
-use patina_core::error::SourceLocation;
-use patina_core::{GcFreedBits, SharedHeap, TaggedValue};
+use crate::error::SourceLocation;
+use crate::{GcFreedBits, SharedHeap, TaggedValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -288,7 +288,7 @@ mod tests {
 
     #[test]
     fn prune_freed_drops_reclaimed_entries_only() {
-        use patina_core::{Collector, GcRoots, GcVisitor, MarkSweepCollector};
+        use crate::{Collector, GcRoots, GcVisitor, MarkSweepCollector};
 
         // A root provider keeping one of the two datums alive.
         struct Keep(TaggedValue);
@@ -298,7 +298,7 @@ mod tests {
             }
         }
 
-        let heap = patina_core::new_shared_heap();
+        let heap = crate::new_shared_heap();
         heap.borrow_mut().enable_gc_freed_tracking();
         let live = heap
             .borrow_mut()

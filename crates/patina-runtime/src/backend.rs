@@ -15,7 +15,8 @@
 //! - Providing access to the global environment for introspection
 
 use crate::Environment;
-use patina_core::TaggedValue;
+use patina_core::{SourceMap, TaggedValue};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Core trait for interpreter backend implementations
@@ -70,6 +71,23 @@ pub trait Backend {
         let global = self.global_env().clone();
         self.eval(expr, &global)
     }
+
+    /// Evaluate an expression the parser read into `source_map`, so that what
+    /// the evaluation reports carries the positions recorded there.
+    ///
+    /// Every caller that reads a program with positions — a file, standard
+    /// input, a session — evaluates through this, which is what lets that
+    /// reading be written once for all backends. A backend that does not
+    /// track positions evaluates the expression as `eval` does.
+    fn eval_with_source_map(
+        &self,
+        expr: TaggedValue,
+        env: &Rc<Environment>,
+        source_map: &Rc<RefCell<SourceMap>>,
+    ) -> Result<TaggedValue, Self::Error> {
+        let _ = source_map;
+        self.eval(expr, env)
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +127,21 @@ mod tests {
         let result = backend.eval_global(expr).unwrap();
 
         assert_eq!(result.as_fixnum(), Some(42));
+    }
+
+    /// A backend that does not track positions evaluates with a source map as
+    /// it does without one.
+    #[test]
+    fn eval_with_source_map_defaults_to_eval() {
+        let backend = MockBackend {
+            global: Rc::new(Environment::new()),
+        };
+        let source_map = Rc::new(RefCell::new(SourceMap::new()));
+        let global = backend.global_env().clone();
+        let result = backend
+            .eval_with_source_map(TaggedValue::fixnum(7), &global, &source_map)
+            .unwrap();
+        assert_eq!(result.as_fixnum(), Some(7));
     }
 
     #[test]

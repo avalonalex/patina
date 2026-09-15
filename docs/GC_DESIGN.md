@@ -116,7 +116,7 @@ have to be taught about:
 
 1. `Heap::symbol_table` maps names to bare `HeapIndex` (`heap/mod.rs:255`).
 2. `SourceMap` keys source locations by `tv.raw_bits()`
-   (`crates/patina-frontend/src/source_map.rs:17-19,67,72`).
+   (`crates/patina-core/src/source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CallFrame.closure: Option<HeapIndex>` (`crates/patina-vm/src/types/mod.rs:52`).
 5. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.

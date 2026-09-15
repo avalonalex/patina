@@ -938,7 +938,7 @@ of a file import but ~85% of this loop's overhead.
 **Three smaller survivors of the same shape**, none on a measured hot path, listed so the class is
 counted rather than rediscovered:
 - `SourceMap`'s byte-offset→line lookup rescans the whole source per call
-  (`patina-frontend/src/source_map.rs`). Called once per *error*, which would be fine — except
+  (`patina-core/src/source_map.rs`). Called once per *error*, which would be fine — except
   `eval_program_resilient_with_source_name` (`patina-interpreter/src/lib.rs`) prints and continues,
   so cost is O(errors × source length). A lazily built line-start index fixes it.
 - `read_buffered` re-parses the accumulated buffer from scratch after every appended line, so a
