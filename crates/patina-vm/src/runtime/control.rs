@@ -745,6 +745,7 @@ fn handle_control_primitive(
                 exception_handlers: state.exception_handlers.clone(),
                 registers: state.registers.clone(),
                 deliver_reg: dst,
+                exit_status: None,
             };
             let cont_tv = state.alloc_vm_continuation(cont);
             // Call proc with the continuation object.
@@ -752,6 +753,35 @@ fn handle_control_primitive(
             if let Some(result) = call_any(state, proc, &[cont_tv], dst)? {
                 state.set_reg(dst, result);
             }
+        }
+
+        VmControlPrimitive::Exit => {
+            // R7RS 6.14: run the after thunk of every outstanding
+            // `dynamic-wind`, then end the process. That is a jump to a
+            // continuation outside every extent — chibi's `exit` is exactly
+            // that, followed by `emergency-exit` — so it is one. The travel
+            // runs each after thunk innermost first, in a frame of its own and
+            // under the handler stack of its own `dynamic-wind` call, and the
+            // arrival (`step_wind_jump`) ends the process instead of restoring
+            // a machine. An after thunk that escapes abandons the exit as it
+            // would any jump, and one that calls `exit` starts a new travel
+            // from where this one had got to (#336).
+            let status = patina_runtime::exit_status::requested_status(args).map_err(|e| {
+                VmError::Runtime {
+                    message: e.to_string(),
+                }
+            })?;
+            let target = state.alloc_vm_continuation(VmContinuation {
+                frames: Vec::new(),
+                dynamic_winds: Vec::new(),
+                prompt_stack: Vec::new(),
+                exception_handlers: Vec::new(),
+                registers: Vec::new(),
+                deliver_reg: 0,
+                exit_status: Some(status),
+            });
+            step_wind_jump(state, target, TaggedValue::UNSPECIFIED)?;
+            return Err(park_escape(state, TaggedValue::UNSPECIFIED));
         }
 
         VmControlPrimitive::Values => {
@@ -1298,7 +1328,11 @@ pub(super) fn step_wind_jump(
         );
     }
 
-    // Arrived.
+    // Arrived. At `exit`'s target every extent has been left, and there is no
+    // machine to restore.
+    if let Some(status) = cc.exit_status {
+        std::process::exit(patina_runtime::exit_status::status_for_exit(status));
+    }
     state.registers = cc.registers.clone();
     state.frames = cc.frames.clone();
     state.dynamic_winds = cc.dynamic_winds.clone();
@@ -1331,6 +1365,34 @@ pub(super) fn step_wind_jump(
         state.registers[top_base + cc.deliver_reg as usize] = value;
     }
     Ok(())
+}
+
+/// The status of the `exit` whose travel the machine is still in, if any: that
+/// of the innermost wind-step frame whose jump targets an `exit`.
+///
+/// An error that reaches the top level from inside such a travel was raised by
+/// an after thunk `exit` is running, or by something that thunk called, and
+/// `execute` notes it so that the runner reporting the error still ends the
+/// process (`patina_runtime::exit_status`). The frames say so exactly: a travel
+/// something abandoned has had its stub frames replaced, and a continuation
+/// captured inside one of its thunks carries them back when it is re-entered.
+///
+/// # State contract
+///
+/// Read-only. Must run before the frames and registers are cleared.
+pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
+    let stub = state.wind_jump_code?;
+    state
+        .frames
+        .iter()
+        .rev()
+        .filter(|frame| frame.code.id == stub)
+        .find_map(|frame| {
+            let target = *state
+                .registers
+                .get(frame.register_base + wind_step::TARGET as usize)?;
+            state.get_vm_continuation(target)?.exit_status
+        })
 }
 
 /// Push a stub frame carrying the rest of the jump, install the handler stack
@@ -1822,6 +1884,7 @@ pub(crate) enum VmControlPrimitive {
     Raise,
     RaiseContinuable,
     Error,
+    Exit,
 }
 
 /// The single source of truth for which qualified names the VM intercepts.
@@ -1831,7 +1894,7 @@ pub(crate) enum VmControlPrimitive {
 /// `compiler/primitive_calls.rs`).
 ///
 /// The predicate is "the registry cannot implement this — it needs the VM's
-/// own call machinery". For eleven of the twelve the reason is control flow: a
+/// own call machinery". For twelve of the thirteen the reason is control flow: a
 /// directly dispatched registry handler would bypass the VM's
 /// continuation/exception cooperation. `apply` is the exception and is why the
 /// predicate is worded that way rather than as "control primitives": spreading
@@ -1875,6 +1938,9 @@ pub(crate) const VM_INTERCEPTED_PRIMITIVES: &[(&str, VmControlPrimitive)] = &[
         VmControlPrimitive::RaiseContinuable,
     ),
     ("patina.internal.errors/error", VmControlPrimitive::Error),
+    // Bound in `(patina internal system)` with `emergency-exit`, which is not
+    // intercepted: it runs no after thunks, so the registry's is all it needs.
+    ("patina.internal.system/exit", VmControlPrimitive::Exit),
 ];
 
 /// If `func_val` is a VM-intercepted control primitive, return which one.
@@ -2054,6 +2120,7 @@ pub(super) fn abort_to_prompt(
         // arrival. Nothing reads this one — the stub's `Call` overwrites it —
         // and the abort's value reaches the handler as an argument instead.
         deliver_reg: abort_step::RESULT,
+        exit_status: None,
     };
     let target_tv = state.alloc_vm_continuation(target);
     match step_wind_jump(state, target_tv, val) {

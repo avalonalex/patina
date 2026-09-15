@@ -194,6 +194,15 @@ impl<'a> CpsEvaluator<'a> {
                             exception_handlers,
                         ),
 
+                        "exit" => self.apply_exit(
+                            args,
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        ),
+
                         "with-exception-handler" => self.apply_with_exception_handler(
                             args,
                             cont,
@@ -640,11 +649,17 @@ impl<'a> CpsEvaluator<'a> {
             // `guard` re-raises with `raise-continuable`, so "continuable" here
             // described the expansion rather than the user's code.
             let msg = format!("unhandled exception: {}", exception_str);
-            Err(EvalError::SchemeException {
+            let err = EvalError::SchemeException {
                 kind: ExceptionKind::Error,
                 message: msg,
                 irritants_display: String::new(),
-            })
+            };
+            Err(super::exceptions::unhandled(
+                err,
+                &cont,
+                &cont_env,
+                &prompt_stack,
+            ))
         }
     }
 
@@ -730,11 +745,17 @@ impl<'a> CpsEvaluator<'a> {
                 .map(|tv| format_display_tagged(*tv, heap))
                 .collect::<Vec<_>>()
                 .join(" ");
-            Err(EvalError::SchemeException {
+            let err = EvalError::SchemeException {
                 kind: ExceptionKind::Error,
                 message,
                 irritants_display,
-            })
+            };
+            Err(super::exceptions::unhandled(
+                err,
+                &cont,
+                &cont_env,
+                &prompt_stack,
+            ))
         }
     }
 
@@ -872,7 +893,12 @@ impl<'a> CpsEvaluator<'a> {
         let declined_by_every_handler = super::types::take_unhandled_in_callback();
 
         match prim_result {
-            Err(err) if declined_by_every_handler => Err(err),
+            Err(err) if declined_by_every_handler => Err(super::exceptions::unhandled(
+                err,
+                &cont,
+                &cont_env,
+                &prompt_stack,
+            )),
             Ok(result_tagged) => {
                 // Return InvokeContinuation step instead of recursive call
                 Ok(StepResult::InvokeContinuation {

@@ -353,6 +353,17 @@ pub enum ContValue {
         /// The prompt's continuation, which the handler's value goes to.
         cont: Box<ContValue>,
     },
+    /// Where an `exit` lands: every extent has been left, so the process ends
+    /// with `status`.
+    ///
+    /// The exit *travels* here through `jump_to_continuation` like any jump,
+    /// which is what runs the after thunk of every outstanding `dynamic-wind`
+    /// first (R7RS 6.14, #336); the arrival ends the process rather than
+    /// resuming anything.
+    ExitLanding {
+        /// The status the process ends with.
+        status: i32,
+    },
     /// A composable invoke in progress: the `before` thunk of the captured
     /// extent at `index` has just returned, so its record is entered now and
     /// the next one's thunk runs, until the chain itself can be resumed with

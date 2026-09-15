@@ -103,6 +103,9 @@ impl TreeWalker {
     ) -> Result<TaggedValue, EvalError> {
         use patina_frontend::Desugarer;
 
+        // A form starts with no interrupted `exit` noted; see
+        // `patina_runtime::exit_status`.
+        patina_runtime::exit_status::forget_interrupted_exit();
         let internal_heap = self.evaluator.global_env.heap();
 
         // An inline (define-library ...) is a library definition, not an

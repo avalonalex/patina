@@ -122,6 +122,16 @@ pub const BOTH_BACKENDS: [&[&str]; 2] = [&[], &["--tree-walker"]];
 /// as a shell redirect does. `None` closes it immediately, which is what the
 /// binary sees from `< /dev/null`.
 pub fn run_with_deadline(cwd: &Path, args: &[&str], input: Option<&str>) -> (String, String, bool) {
+    let (stdout, stderr, status) = run_with_deadline_status(cwd, args, input);
+    (stdout, stderr, status.success())
+}
+
+/// [`run_with_deadline`], with the exit status itself.
+pub fn run_with_deadline_status(
+    cwd: &Path,
+    args: &[&str],
+    input: Option<&str>,
+) -> (String, String, std::process::ExitStatus) {
     use std::io::Write;
 
     let mut patina = spawn_patina(cwd, args);
@@ -133,7 +143,7 @@ pub fn run_with_deadline(cwd: &Path, args: &[&str], input: Option<&str>) -> (Str
     let writer = std::thread::spawn(move || {
         let _ = sink.write_all(input.as_bytes());
     });
-    let result = patina.finish();
+    let result = patina.finish_with_status();
     let _ = writer.join();
     result
 }
@@ -193,7 +203,13 @@ impl RunningPatina {
     /// Close standard input, wait for the child to exit, and return its
     /// (stdout, stderr, success) — failing the test, after killing the child,
     /// if it is still running ten seconds later.
-    pub fn finish(mut self) -> (String, String, bool) {
+    pub fn finish(self) -> (String, String, bool) {
+        let (stdout, stderr, status) = self.finish_with_status();
+        (stdout, stderr, status.success())
+    }
+
+    /// [`RunningPatina::finish`], with the exit status itself.
+    pub fn finish_with_status(mut self) -> (String, String, std::process::ExitStatus) {
         use std::time::{Duration, Instant};
 
         drop(self.stdin.take());
@@ -220,6 +236,6 @@ impl RunningPatina {
                 stderr.lines().take(3).collect::<Vec<_>>().join("\n")
             )
         });
-        (stdout, stderr, status.success())
+        (stdout, stderr, status)
     }
 }

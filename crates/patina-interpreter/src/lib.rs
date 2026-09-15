@@ -330,6 +330,7 @@ impl<B: Backend> Interpreter<B> {
                     Err(e) => {
                         // Print error and continue
                         eprintln!("Error: {}", e);
+                        patina_runtime::exit_status::exit_if_interrupted();
                     }
                 },
                 Ok(None) => break,
@@ -415,6 +416,7 @@ impl<B: Backend> Interpreter<B> {
     pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
         let (value, end, _) = self.run_forms(input, "<eval>", |error, _| {
             eprintln!("Error: {}", error);
+            patina_runtime::exit_status::exit_if_interrupted();
             None
         });
         if let FormsEnd::Unreadable(error) = end {
@@ -446,6 +448,7 @@ impl<B: Backend> Interpreter<B> {
             eval_errors += 1;
             patina_runtime::exit_status::note_error_reported();
             eprintln!("Error: {}", format_error_with_source(&error, source_map));
+            patina_runtime::exit_status::exit_if_interrupted();
             None
         });
         if let FormsEnd::Unreadable(error) = &end {

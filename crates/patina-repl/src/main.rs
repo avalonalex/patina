@@ -163,6 +163,7 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
+                patina_runtime::exit_status::exit_if_interrupted();
                 process::exit(1);
             }
         }
@@ -296,6 +297,7 @@ where
                         "Error: {}",
                         format_backend_error_with_source(&e, &source_map.borrow())
                     );
+                    patina_runtime::exit_status::exit_if_interrupted();
                     false
                 }
             }

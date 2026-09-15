@@ -175,6 +175,7 @@ where
                         let version = self.input.unread_version();
                         if let Err(message) = (self.eval_form)(datum, &self.source_map) {
                             eprintln!("Error: {}", message);
+                            patina_runtime::exit_status::exit_if_interrupted();
                             self.eval_errors += 1;
                             patina_runtime::exit_status::note_error_reported();
                             if !self.keep_going {

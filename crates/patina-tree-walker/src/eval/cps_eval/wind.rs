@@ -103,11 +103,67 @@ impl<'a> CpsEvaluator<'a> {
         // outermost loop then ran the rest of the callback as the rest of
         // the program: the callback's value became the form's, and the
         // `define` around the primitive never bound anything.
+        // At `exit`'s landing (`apply_exit`) every extent has been left, and
+        // there is nothing to resume.
+        if let Some(ContValue::ExitLanding { status }) = &target.resume {
+            std::process::exit(patina_runtime::exit_status::status_for_exit(*status));
+        }
         if target.trampoline == super::types::current_trampoline() {
             return Ok(super::continuation::resume_step(&target, value));
         }
         set_pending_escape(value, target);
         Err(EvalError::ContinuationEscape)
+    }
+
+    /// `(exit [status])`: run the after thunk of every outstanding
+    /// `dynamic-wind`, then end the process (R7RS 6.14, #336).
+    ///
+    /// That is a jump to a continuation outside every extent — chibi's `exit`
+    /// is exactly that, followed by `emergency-exit` — so it is one. The travel
+    /// runs each after thunk innermost first, as a step whose continuation is
+    /// the jump and under the handler stack of its own `dynamic-wind` call, and
+    /// arriving at the [`ContValue::ExitLanding`] ends the process. An after
+    /// thunk that escapes abandons the exit as it would any jump, and one that
+    /// calls `exit` starts a new travel from where this one had got to.
+    pub(super) fn apply_exit(
+        &self,
+        args: Vec<TaggedValue>,
+        cont: ContValue,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<StepResult, EvalError> {
+        let status = match patina_runtime::exit_status::requested_status(&args) {
+            Ok(status) => status,
+            Err(err) => {
+                return self.maybe_route_error_through_cps(
+                    err,
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
+            }
+        };
+        let landing = self.capture(
+            &ContValue::ExitLanding { status },
+            &cont_env,
+            None,
+            super::types::current_trampoline(),
+            false,
+            &[],
+            &[],
+            &[],
+        );
+        self.jump_to_continuation(
+            TaggedValue::UNSPECIFIED,
+            landing,
+            cont_env,
+            prompt_stack,
+            dynamic_winds,
+        )
     }
 
     /// Force a promise in CPS mode

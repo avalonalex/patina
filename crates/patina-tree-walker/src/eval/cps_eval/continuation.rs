@@ -563,12 +563,18 @@ impl<'a> CpsEvaluator<'a> {
                     } else {
                         // No handler - propagate to Rust level
                         use patina_core::ExceptionKind;
-                        Err(EvalError::SchemeException {
+                        let err = EvalError::SchemeException {
                             kind: ExceptionKind::Error,
                             message: "exception handler returned from non-continuable exception"
                                 .to_string(),
                             irritants_display: String::new(),
-                        })
+                        };
+                        Err(super::exceptions::unhandled(
+                            err,
+                            &original_cont,
+                            &cont_env,
+                            &prompt_stack,
+                        ))
                     }
                 }
             }
@@ -640,6 +646,13 @@ impl<'a> CpsEvaluator<'a> {
                     dynamic_winds,
                     exception_handlers,
                 })
+            }
+
+            ContValue::ExitLanding { status } => {
+                // Reached only by arriving, which `jump_to_continuation` ends
+                // the process at; ended here too, so no path runs on past an
+                // exit.
+                std::process::exit(patina_runtime::exit_status::status_for_exit(status))
             }
 
             ContValue::ComposableInvokeStep {

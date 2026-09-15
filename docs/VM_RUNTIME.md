@@ -390,6 +390,7 @@ intercepted at call dispatch time.
 | `Raise` | `raise` | Pop handler, push `raise_step_stub` — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
 | `Error` | `error` | Construct error object, then Raise |
+| `Exit` | `exit` | Jump to an empty target outside every extent: the travel runs each outstanding after thunk (§5.3), and arrival ends the process (#336) |
 
 ### 5.2 Exception Handling
 
@@ -700,6 +701,7 @@ component nobody carried, that one catches a shape nobody tried.
 | wind thunk (jump, abort) | push stub | — | — | — | replaced by the record's own |
 | wind thunk (invoke re-entry) | — | — | — | — | the invoke site's |
 | wind thunk (ordinary call) | — | — | — | — | the live stack |
+| `exit` | *travels to a target with nothing in it* — the `full invoke` row, except that arrival ends the process | | | | |
 
 Notes on the cells that are not a plain yes:
 
@@ -716,6 +718,14 @@ Notes on the cells that are not a plain yes:
   live stack and had the two defects that follow: the wrong handler for a
   raise from a thunk, and a continuation captured in one restarting the thunk
   from the top on re-entry, losing the abort's value.
+- **`exit` is a jump whose target is empty** (#336). Its travel leaves every
+  extent the way any jump leaves them, one after thunk per step under its own
+  record's handler stack, and `step_wind_jump` ends the process on arrival
+  instead of installing a machine. So an after thunk that escapes abandons the
+  exit, one that calls `exit` starts a new travel from where the first had got
+  to, and an error nothing handles while the travel's stub frames are still on
+  the stack is reported and still ends the process: `execute` finds the exit
+  in the frames (`exit_in_progress`) and notes it for the runner.
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.
