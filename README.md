@@ -120,7 +120,7 @@ cargo build --release
 
 # A program on standard input is a program, not a session: it is diagnosed
 # and the exit status says whether it ran. Each form runs as soon as the
-# lines holding it arrive, so a producer that waits on its output keeps
+# line that ends it arrives, so a producer that waits on its output keeps
 # going. Pass -i to force the REPL where standard input is a pipe (a
 # container without a tty, an editor buffer).
 ./target/release/patina < script.scm

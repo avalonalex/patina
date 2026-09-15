@@ -91,12 +91,41 @@ fn describe_char(ch: char) -> String {
     }
 }
 
+/// Where a reader stands in its text: a character offset with the line and
+/// column it falls on, and the one piece of reader state that outlives a
+/// token, whether `#!fold-case` is in effect.
+///
+/// A reader that stops and later carries on — a program read as it arrives,
+/// which cannot parse a form until the lines holding it are in — resumes from
+/// one of these with [`Lexer::resuming`], so positions stay the source's own
+/// and a directive read earlier still holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReaderState {
+    /// Characters of the text before this point.
+    pub offset: usize,
+    pub line: u32,
+    pub column: u32,
+    pub fold_case: bool,
+}
+
+impl ReaderState {
+    /// The start of a source.
+    pub const START: ReaderState = ReaderState {
+        offset: 0,
+        line: 1,
+        column: 1,
+        fold_case: false,
+    };
+}
+
 /// A token with its source position
 #[derive(Debug, Clone)]
 pub struct Spanned {
     pub token: Token,
     pub line: u32,
     pub column: u32,
+    /// Where the token begins, with the reader state there.
+    pub start: ReaderState,
 }
 
 pub struct Lexer {
@@ -108,9 +137,10 @@ pub struct Lexer {
     line: u32,
     /// Current column number (1-based)
     column: u32,
-    /// Char offset just past the end of the token returned by the
-    /// previous `next_token` call (0 before any token is returned)
-    prev_token_end: usize,
+    /// Where the token returned by the previous `next_token` call ended (the
+    /// start of the input before any token is returned). Its offset does not
+    /// count a dropped byte order mark; the accessors add it back.
+    prev_token_end: ReaderState,
     /// 1 when a leading U+FEFF was dropped, so offsets reported outward can
     /// be put back into the caller's own input.
     bom_offset: usize,
@@ -157,38 +187,31 @@ impl Lexer {
             fold_case: false,
             line: 1,
             column: 1,
-            prev_token_end: 0,
+            prev_token_end: ReaderState::START,
             bom_offset: usize::from(input.starts_with('\u{feff}')),
             allow_r6rs: crate::dialect::allow_r6rs(),
             open_delimiters: Vec::new(),
         }
     }
 
-    /// Start counting lines at `line` rather than 1, for input cut from a longer
-    /// stream at the start of that line. Call before reading any token.
+    /// Read `input` from `at`, a point an earlier reader of the same source
+    /// stopped at, rather than from its start: positions carry on from `at`,
+    /// and so does `#!fold-case`.
     ///
-    /// A byte order mark is a mark only at the start of the whole stream, so one
-    /// at the start of a later piece is put back as the character it is there.
-    pub fn starting_at_line(mut self, line: u32) -> Self {
-        debug_assert_eq!(self.position, 0, "starting_at_line after reading");
-        self.line = line;
-        if line > 1 && self.bom_offset == 1 {
-            self.input.insert(0, '\u{feff}');
-            self.bom_offset = 0;
+    /// `input` is taken as it is. Only [`Lexer::new`], reading a source from
+    /// its start, drops a byte order mark; anywhere else U+FEFF is a character.
+    pub fn resuming(input: &str, at: ReaderState) -> Self {
+        Lexer {
+            input: input.chars().collect(),
+            position: at.offset,
+            fold_case: at.fold_case,
+            line: at.line,
+            column: at.column,
+            prev_token_end: at,
+            bom_offset: 0,
+            allow_r6rs: crate::dialect::allow_r6rs(),
+            open_delimiters: Vec::new(),
         }
-        self
-    }
-
-    /// Start with `#!fold-case` in effect or not, for a piece of a program read
-    /// after an earlier piece changed it. Call before reading any token.
-    pub fn folding_case(mut self, fold_case: bool) -> Self {
-        self.fold_case = fold_case;
-        self
-    }
-
-    /// Whether `#!fold-case` is in effect at this point of the input.
-    pub fn folds_case(&self) -> bool {
-        self.fold_case
     }
 
     /// Create a lexer with case-folding enabled from the start.
@@ -202,17 +225,17 @@ impl Lexer {
         }
     }
 
-    /// Read the R6RS syntax R7RS reserves, whatever the ambient setting says.
+    /// Read the R6RS syntax R7RS reserves or not, whatever the ambient
+    /// setting says.
     ///
     /// The setting is an environment variable and therefore process-wide,
     /// which is right for a person choosing how their program is read and
     /// wrong for a caller that knows: a test asserting bracket behaviour would
     /// otherwise have to set a variable every other test in the binary can
-    /// see. Nothing in the interpreter calls this — the dialect comes from
-    /// [`crate::dialect`] there.
-    #[cfg(test)]
-    pub fn allowing_r6rs(mut self) -> Self {
-        self.allow_r6rs = true;
+    /// see, and a reader that builds a lexer per line has resolved the
+    /// setting once already.
+    pub fn reading_r6rs(mut self, allow: bool) -> Self {
+        self.allow_r6rs = allow;
         self
     }
 
@@ -226,18 +249,43 @@ impl Lexer {
         // The current position is exactly the end of the previously
         // returned token — record it before skipping whitespace so callers
         // can tell how much input the previous tokens consumed
-        self.prev_token_end = self.position;
+        self.prev_token_end = self.raw_state();
         self.skip_whitespace_and_comments()?;
 
-        let line = self.line;
-        let column = self.column;
-
+        let start = self.state();
         let token = self.lex_token()?;
         Ok(Spanned {
             token,
-            line,
-            column,
+            line: start.line,
+            column: start.column,
+            start,
         })
+    }
+
+    fn raw_state(&self) -> ReaderState {
+        ReaderState {
+            offset: self.position,
+            line: self.line,
+            column: self.column,
+            fold_case: self.fold_case,
+        }
+    }
+
+    /// Where the lexer stands, its offset counted in the caller's input.
+    pub fn state(&self) -> ReaderState {
+        ReaderState {
+            offset: self.position + self.bom_offset,
+            ..self.raw_state()
+        }
+    }
+
+    /// Where the token returned by the previous `next_token` call ended, its
+    /// offset counted in the caller's input. See [`Lexer::prev_token_end`].
+    pub fn prev_token_end_state(&self) -> ReaderState {
+        ReaderState {
+            offset: self.prev_token_end.offset + self.bom_offset,
+            ..self.prev_token_end
+        }
     }
 
     /// Char offset just past the end of the token returned by the previous
@@ -249,7 +297,7 @@ impl Lexer {
     /// its own buffer, and an offset one character short there left the port
     /// re-reading the last character of every datum.
     pub fn prev_token_end(&self) -> usize {
-        self.prev_token_end + self.bom_offset
+        self.prev_token_end_state().offset
     }
 
     /// Read the `u8(` that both `#u8(` and `#vu8(` end with, positioned on
@@ -362,11 +410,13 @@ impl Lexer {
 
     fn advance(&mut self) {
         if self.position < self.input.len() {
+            // Saturating: a program read as it arrives has no length, and a
+            // position that stops counting beats one that wraps or panics.
             if self.input[self.position] == '\n' {
-                self.line += 1;
+                self.line = self.line.saturating_add(1);
                 self.column = 1;
             } else {
-                self.column += 1;
+                self.column = self.column.saturating_add(1);
             }
         }
         self.position += 1;
@@ -1230,7 +1280,7 @@ mod tests {
     #[test]
     fn test_brackets_are_refused_by_default() {
         // `Lexer::new` follows the ambient setting, which is R7RS unless a
-        // person asked otherwise; `allowing_r6rs` is what the rest of these
+        // person asked otherwise; `reading_r6rs(true)` is what the rest of these
         // cases use to opt in without touching a process-wide variable.
         let mut lexer = Lexer::new("[a]");
         assert!(matches!(
@@ -1247,7 +1297,7 @@ mod tests {
 
     #[test]
     fn test_square_brackets_read_as_parentheses() {
-        let mut lexer = Lexer::new("[a]").allowing_r6rs();
+        let mut lexer = Lexer::new("[a]").reading_r6rs(true);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1261,7 +1311,7 @@ mod tests {
     fn test_brackets_delimit_the_token_before_them() {
         // The reason `is_delimiter` had to widen: without `]` in the set the
         // number reader swallows it and rejects `1]` as a malformed number.
-        let mut lexer = Lexer::new("[x 1][y 2]").allowing_r6rs();
+        let mut lexer = Lexer::new("[x 1][y 2]").reading_r6rs(true);
         for expected in [
             Token::LeftParen,
             Token::Identifier("x".to_string()),
@@ -1278,7 +1328,7 @@ mod tests {
 
     #[test]
     fn test_mismatched_delimiters_are_rejected() {
-        let mut lexer = Lexer::new("[a)").allowing_r6rs();
+        let mut lexer = Lexer::new("[a)").reading_r6rs(true);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1292,7 +1342,7 @@ mod tests {
             })
         ));
 
-        let mut lexer = Lexer::new("(a]").allowing_r6rs();
+        let mut lexer = Lexer::new("(a]").reading_r6rs(true);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1312,7 +1362,7 @@ mod tests {
         // `#(` and `#u8(` open with a parenthesis whatever precedes it, so a
         // `]` must not close them.
         for src in ["#(1]", "#u8(1]"] {
-            let mut lexer = Lexer::new(src).allowing_r6rs();
+            let mut lexer = Lexer::new(src).reading_r6rs(true);
             lexer.next_token_kind().unwrap();
             lexer.next_token_kind().unwrap();
             assert!(
@@ -1329,14 +1379,14 @@ mod tests {
     fn test_unmatched_closer_is_left_to_the_parser() {
         // The REPL lexes incomplete input while a form is still being typed,
         // so a closer with nothing open must not be a lexer error.
-        let mut lexer = Lexer::new(")]").allowing_r6rs();
+        let mut lexer = Lexer::new(")]").reading_r6rs(true);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
     }
 
     #[test]
     fn test_r6rs_bytevector_syntax() {
-        let mut lexer = Lexer::new("#vu8(1 2)").allowing_r6rs();
+        let mut lexer = Lexer::new("#vu8(1 2)").reading_r6rs(true);
         assert_eq!(lexer.next_token_kind().unwrap(), Token::BytevectorOpen);
         assert_eq!(
             lexer.next_token_kind().unwrap(),
@@ -1349,7 +1399,7 @@ mod tests {
         assert_eq!(lexer.next_token_kind().unwrap(), Token::RightParen);
 
         // `#v` not followed by `u8(` is still an error.
-        let mut lexer = Lexer::new("#vx").allowing_r6rs();
+        let mut lexer = Lexer::new("#vx").reading_r6rs(true);
         assert!(lexer.next_token_kind().is_err());
     }
 

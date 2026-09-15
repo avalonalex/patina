@@ -73,6 +73,7 @@ impl Hinter for SchemeHelper {
     type Hint = String;
 
     fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<String> {
+        self.validator.saw_edit_buffer(line);
         self.hinter.hint(line, pos, ctx)
     }
 }
@@ -124,8 +125,6 @@ pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
 /// `eval`   — called with each non-empty, non-comment line; returns:
 ///            - `None` to print nothing (e.g. for `#<unspecified>`)
 ///            - `Some(output)` to print a result or error
-///            - returning `Err` (via the closure returning a sentinel) to stop is handled
-///              by the closure itself; use the `bool` return to signal quit.
 ///
 /// Returns whether the session ended cleanly: `true` after `(exit)`, `,exit`,
 /// `,quit` or the end of input, and `false` when input ended part-way through
@@ -171,10 +170,12 @@ where
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                // The editor has thrown away a form that was still being typed,
-                // but the validator kept what of it had been accepted. A session
-                // cut off inside a form has not ended cleanly: run what arrived,
-                // which reports where the unfinished form began, as a file would.
+                // Input that is not a terminal ended part-way through a form: the
+                // editor has thrown the form away, but the validator kept what of
+                // it had been accepted. (At a terminal input ends only on an empty
+                // line, and the validator forgets what was erased.) A session cut
+                // off inside a form has not ended cleanly: run what arrived, which
+                // reports where the unfinished form began, as a file would.
                 let pending = editor
                     .helper()
                     .and_then(|helper| helper.take_pending_input());
@@ -221,9 +222,10 @@ impl Repl {
         &self.interpreter
     }
 
-    /// Run the session. `Ok(false)` means its input ended part-way through a
-    /// form, which has been reported.
-    pub fn run(&mut self) -> rustyline::Result<bool> {
+    /// Run the session, and say whether it ended cleanly: `false` means its
+    /// input ended part-way through a form, which has been reported, or the
+    /// editor failed.
+    pub fn run(&mut self) -> bool {
         println!("Patina Scheme R7RS Interpreter");
         println!("Version {}", env!("CARGO_PKG_VERSION"));
         println!();
@@ -241,7 +243,7 @@ impl Repl {
         let interp = &self.interpreter;
         let counter = &mut self.expr_counter;
 
-        let clean = run_repl_loop(&mut self.editor, "patina> ", |line| {
+        run_repl_loop(&mut self.editor, "patina> ", |line| {
             *counter += 1;
             let source_name = format!("<repl-{}>", counter);
             // Every form on the line, as the VM REPL does: reading only the
@@ -262,8 +264,6 @@ impl Repl {
                     format_interpreter_error(&e, &source_map.borrow())
                 )),
             }
-        });
-
-        Ok(clean)
+        })
     }
 }

@@ -26,8 +26,73 @@ pub struct Port {
     /// Text already read from the underlying source but not yet consumed
     /// (e.g. the rest of a line after `read` parses one datum from it).
     /// Textual input operations drain this before touching the source.
-    /// Shared behind `Rc` so cloned ports stay in sync, like `data`.
-    pushback: Rc<RefCell<String>>,
+    /// Shared behind `Rc` so cloned ports stay in sync, like `data`, and
+    /// shared by every standard input port (see [`Port::stdin`]).
+    pushback: Rc<RefCell<Unread>>,
+}
+
+/// Text a port has read from its source and not yet handed out.
+///
+/// Consumed from the front by moving an offset, so taking a character or a
+/// datum off a long buffer does not copy what is left, and versioned, so a
+/// reader sharing the buffer can tell whether another has taken or put back
+/// text since it last looked.
+#[derive(Debug, Default)]
+struct Unread {
+    text: String,
+    /// Bytes at the front of `text` already consumed.
+    start: usize,
+    /// Changes whenever the unread text does.
+    version: u64,
+}
+
+impl Unread {
+    fn as_str(&self) -> &str {
+        &self.text[self.start..]
+    }
+
+    fn consume(&mut self, bytes: usize) {
+        self.start += bytes;
+        debug_assert!(self.text.is_char_boundary(self.start));
+        // Reclaim the consumed front once it is most of the buffer, so the
+        // copy is paid for by what was consumed rather than on every call.
+        if self.start == self.text.len() {
+            self.text.clear();
+            self.start = 0;
+        } else if self.start > 4096 && self.start * 2 > self.text.len() {
+            self.text.drain(..self.start);
+            self.start = 0;
+        }
+        self.version += 1;
+    }
+
+    fn take(&mut self) -> String {
+        let mut text = std::mem::take(&mut self.text);
+        text.drain(..self.start);
+        self.start = 0;
+        self.version += 1;
+        text
+    }
+
+    fn replace(&mut self, text: String) {
+        self.text = text;
+        self.start = 0;
+        self.version += 1;
+    }
+
+    fn push_str(&mut self, text: &str) {
+        self.text.push_str(text);
+        self.version += 1;
+    }
+}
+
+thread_local! {
+    /// The unread text of standard input. There is one standard input however
+    /// many ports read it, so they share this: text one of them reads ahead
+    /// and leaves unconsumed is still there for the next. A program read from
+    /// standard input depends on it, because the reader running the program
+    /// and the program's own reads take their text from the one stream.
+    static STDIN_UNREAD: Rc<RefCell<Unread>> = Rc::new(RefCell::new(Unread::default()));
 }
 
 /// Whether a port operates on characters (textual) or bytes (binary)
@@ -153,7 +218,7 @@ impl Port {
             kind,
             direction,
             data: Rc::new(RefCell::new(data)),
-            pushback: Rc::new(RefCell::new(String::new())),
+            pushback: Rc::new(RefCell::new(Unread::default())),
         })
     }
 
@@ -205,13 +270,15 @@ impl Port {
         )
     }
 
-    /// Create a stdin port
+    /// Create a stdin port. Every stdin port shares one buffer of unread
+    /// text, since they all read the one stream.
     pub fn stdin() -> Rc<Port> {
-        Self::new_port(
-            PortKind::Textual,
-            PortDirection::Input,
-            PortData::Stdio(StdioKind::Stdin),
-        )
+        Rc::new(Port {
+            kind: PortKind::Textual,
+            direction: PortDirection::Input,
+            data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
+            pushback: STDIN_UNREAD.with(Rc::clone),
+        })
     }
 
     /// Create a stdout port
@@ -287,14 +354,56 @@ impl Port {
     /// Take the buffered pushback text, leaving the buffer empty.
     /// Used by `read` to resume from text it previously buffered.
     pub fn take_pushback(&self) -> String {
-        std::mem::take(&mut *self.pushback.borrow_mut())
+        self.pushback.borrow_mut().take()
     }
 
     /// Store text that was read from the underlying source but not
     /// consumed. Textual input operations deliver it before reading
     /// from the source again.
     pub fn set_pushback(&self, text: String) {
-        *self.pushback.borrow_mut() = text;
+        self.pushback.borrow_mut().replace(text);
+    }
+
+    /// A copy of the text read from the source and not yet consumed.
+    pub fn unread_text(&self) -> String {
+        self.pushback.borrow().as_str().to_owned()
+    }
+
+    /// The length in bytes of the text read from the source and not yet
+    /// consumed.
+    pub fn unread_len(&self) -> usize {
+        self.pushback.borrow().as_str().len()
+    }
+
+    /// Consume the first `bytes` bytes of the unread text, which must end on
+    /// a character boundary.
+    pub fn consume_unread(&self, bytes: usize) {
+        self.pushback.borrow_mut().consume(bytes);
+    }
+
+    /// A number that changes whenever the unread text does, whichever port
+    /// sharing it consumed, replaced or added to it.
+    pub fn unread_version(&self) -> u64 {
+        self.pushback.borrow().version
+    }
+
+    /// Read the next line from the source onto the end of the unread text and
+    /// return it, or `None` at the end of the source.
+    ///
+    /// For a reader that has to see a line before it knows how much of the
+    /// line to consume, and that leaves the rest readable through the port.
+    pub fn pull_line(&self) -> io::Result<Option<String>> {
+        if self.direction != PortDirection::Input {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not an input port",
+            ));
+        }
+        let line = self.read_line_from_source()?;
+        if let Some(line) = &line {
+            self.pushback.borrow_mut().push_str(line);
+        }
+        Ok(line)
     }
 
     /// Check if port is open
@@ -324,7 +433,7 @@ impl Port {
 
     /// Close the port. For file output ports, finalizes (flushes) the writer first.
     pub fn close(&self) {
-        self.pushback.borrow_mut().clear();
+        self.pushback.borrow_mut().replace(String::new());
         let mut data = self.data.borrow_mut();
         // Finalize write ports before closing
         if let PortData::File(ref mut fp) = *data
@@ -348,8 +457,8 @@ impl Port {
         // Deliver buffered pushback text before reading the source
         {
             let mut pb = self.pushback.borrow_mut();
-            if let Some(ch) = pb.chars().next() {
-                pb.drain(..ch.len_utf8());
+            if let Some(ch) = pb.as_str().chars().next() {
+                pb.consume(ch.len_utf8());
                 return Ok(Some(ch));
             }
         }
@@ -648,7 +757,7 @@ impl Port {
         }
 
         // Buffered pushback text is delivered first, so peek there first
-        if let Some(ch) = self.pushback.borrow().chars().next() {
+        if let Some(ch) = self.pushback.borrow().as_str().chars().next() {
             return Ok(Some(ch));
         }
 
@@ -714,7 +823,7 @@ impl Port {
             ));
         }
 
-        if !self.pushback.borrow().is_empty() {
+        if !self.pushback.borrow().as_str().is_empty() {
             return Ok(true);
         }
 
@@ -1088,12 +1197,15 @@ impl Port {
         // Buffered pushback text comes first. If it holds a complete line,
         // return it; otherwise it is the start of a line whose remainder
         // still has to come from the source.
-        let mut prefix = self.take_pushback();
-        if let Some(newline_pos) = prefix.find('\n') {
-            let rest = prefix.split_off(newline_pos + 1);
-            self.set_pushback(rest);
-            return Ok(Some(prefix));
+        {
+            let mut pb = self.pushback.borrow_mut();
+            if let Some(newline_pos) = pb.as_str().find('\n') {
+                let line = pb.as_str()[..=newline_pos].to_owned();
+                pb.consume(newline_pos + 1);
+                return Ok(Some(line));
+            }
         }
+        let mut prefix = self.take_pushback();
         match self.read_line_from_source()? {
             Some(line) => {
                 prefix.push_str(&line);
@@ -1331,6 +1443,39 @@ mod tests {
         assert_eq!(port.take_pushback(), "z".to_string());
         assert_eq!(port.take_pushback(), String::new());
         assert!(!port.char_ready().unwrap());
+    }
+
+    /// Every standard input port reads the one stream, so text one of them
+    /// read ahead and left unconsumed is there for the others.
+    #[test]
+    fn stdin_ports_share_their_unread_text() {
+        let reader = Port::stdin();
+        let program = Port::stdin();
+        reader.set_pushback("(a) (b)\n".to_string());
+        assert_eq!(program.read_char().unwrap(), Some('('));
+        assert_eq!(reader.unread_text(), "a) (b)\n");
+        assert_eq!(program.take_pushback(), "a) (b)\n");
+    }
+
+    /// A reader that pulls lines onto the unread text and consumes it from
+    /// the front can tell, by its version, whether anything else took text.
+    #[test]
+    fn pulled_lines_are_unread_until_consumed_and_consuming_changes_the_version() {
+        let port = Port::new_input_string("one\ntwo\n".to_string());
+        let before = port.unread_version();
+        assert_eq!(port.pull_line().unwrap().as_deref(), Some("one\n"));
+        assert_eq!(port.unread_text(), "one\n");
+        port.consume_unread(2);
+        assert_eq!(port.unread_text(), "e\n");
+        assert_ne!(port.unread_version(), before);
+
+        let version = port.unread_version();
+        assert_eq!(port.peek_char().unwrap(), Some('e'));
+        assert_eq!(port.unread_version(), version, "peeking takes nothing");
+        assert_eq!(port.pull_line().unwrap().as_deref(), Some("two\n"));
+        assert_eq!(port.read_line().unwrap().as_deref(), Some("e\n"));
+        assert_eq!(port.unread_text(), "two\n");
+        assert_eq!(port.pull_line().unwrap(), None);
     }
 
     #[test]

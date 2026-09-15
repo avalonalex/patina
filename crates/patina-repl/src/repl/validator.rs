@@ -21,6 +21,18 @@ impl SchemeValidator {
         self.pending.borrow_mut().take()
     }
 
+    /// Note the editor's buffer while a terminal line is being edited.
+    ///
+    /// At a terminal the editor asks for a hint on every change to the line,
+    /// and ends input only on an empty one, so by the end of input whatever
+    /// was recorded has been erased: an empty buffer forgets it. Input that is
+    /// not a terminal is never edited, and keeps its record to the end.
+    pub fn saw_edit_buffer(&self, buffer: &str) {
+        if buffer.is_empty() {
+            *self.pending.borrow_mut() = None;
+        }
+    }
+
     /// Decide whether `input` is finished, remembering it when it is not.
     fn judge(&self, input: &str) -> ValidationResult {
         if needs_more_input(input) {
@@ -97,6 +109,22 @@ mod tests {
             None,
             "a finished form leaves nothing"
         );
+    }
+
+    /// At a terminal, erasing a form that was being typed forgets it: input
+    /// can end there only on an empty line, and must not report the form.
+    #[test]
+    fn an_erased_form_is_forgotten() {
+        let validator = SchemeValidator::new();
+        assert!(matches!(
+            validator.judge("(define y"),
+            ValidationResult::Incomplete
+        ));
+        validator.saw_edit_buffer("(define y\n  (+ 1");
+        validator.saw_edit_buffer("(de");
+        assert!(validator.pending.borrow().is_some(), "still being typed");
+        validator.saw_edit_buffer("");
+        assert_eq!(validator.take_pending(), None);
     }
 
     #[test]

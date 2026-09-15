@@ -17,11 +17,12 @@ use std::collections::HashMap;
 pub struct SourceMap {
     locations: HashMap<u64, SourceLocation>,
     /// The source text, used for pretty error formatting (caret display).
-    /// Populated by `Parser::new_with_source_map`.
+    /// Populated by `Parser::new_with_source_map`, or a line at a time by
+    /// [`SourceMap::push_source_line`] for a source read as it arrives.
     source_text: Option<String>,
-    /// How many lines of the program came before `source_text`'s first line,
-    /// when the text is one piece of a program read a piece at a time. Zero for
-    /// text that starts at the top of its source.
+    /// How many lines of the source came before `source_text`'s first line:
+    /// zero for text that starts at the top of its source, more once a source
+    /// read a line at a time has had its oldest lines forgotten.
     line_offset: u32,
     /// The name the parser was given for that text — a file path when the
     /// program came from one, `<eval>`/`<repl>` otherwise. Populated with
@@ -48,20 +49,63 @@ impl SourceMap {
 
     /// Store the source text for caret-style error display.
     pub fn set_source_text(&mut self, text: String) {
-        self.set_source_text_from_line(text, 1);
+        self.source_text = Some(text);
+        self.line_offset = 0;
     }
 
-    /// Store the source text of one piece of a longer program, which starts on
-    /// that program's line `first_line`. Lines are then asked for by the
-    /// program's numbering, and a line outside the piece is not there.
-    pub fn set_source_text_from_line(&mut self, text: String, first_line: u32) {
-        self.source_text = Some(text);
-        self.line_offset = first_line.saturating_sub(1);
+    /// Add line `line` of a source read a line at a time, with or without its
+    /// line ending. Lines come in order, one after another; the first one
+    /// added may be any line.
+    pub fn push_source_line(&mut self, line: u32, text: &str) {
+        let text = text.strip_suffix('\n').unwrap_or(text);
+        let text = text.strip_suffix('\r').unwrap_or(text);
+        if self.source_text.is_none() {
+            self.line_offset = line.saturating_sub(1);
+        }
+        let source = self.source_text.get_or_insert_with(String::new);
+        source.push_str(text);
+        source.push('\n');
+    }
+
+    /// Keep the source text within `max_bytes` by forgetting its oldest lines
+    /// — never `keep_from_line` or a line after it — together with the macro
+    /// expansion records located on them.
+    ///
+    /// For a source read as it arrives, whose text would otherwise grow with
+    /// the stream. A diagnostic located on a forgotten line still gives its
+    /// position, without the quoted line or the expansion chain. Once over the
+    /// budget it forgets down to half of it, so the forgetting is paid for by
+    /// half a budget of new text rather than by every line.
+    pub fn forget_old_source_lines(&mut self, max_bytes: usize, keep_from_line: u32) {
+        let Some(text) = &mut self.source_text else {
+            return;
+        };
+        if text.len() <= max_bytes {
+            return;
+        }
+        let mut cut = 0;
+        let mut first_line = self.line_offset.saturating_add(1);
+        while text.len() - cut > max_bytes / 2 && first_line < keep_from_line {
+            let Some(end) = text[cut..].find('\n') else {
+                break;
+            };
+            cut += end + 1;
+            first_line += 1;
+        }
+        if cut == 0 {
+            return;
+        }
+        text.drain(..cut);
+        self.line_offset = first_line - 1;
+        self.expansion_records
+            .retain(|&(line, _), _| line >= first_line);
     }
 
     /// Record where the source text came from (see `primary_source`).
     pub fn set_primary_source(&mut self, name: &str) {
-        self.primary_source = Some(name.to_string());
+        if self.primary_source.as_deref() != Some(name) {
+            self.primary_source = Some(name.to_string());
+        }
     }
 
     /// The name the parser was given for the current source text, if any.
@@ -174,14 +218,38 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// A source read a line at a time is quoted by its own line numbers, and
+    /// forgetting old lines bounds what is held without dropping the line an
+    /// unfinished datum began on, or the expansion records of lines kept.
     #[test]
-    fn a_piece_of_a_longer_program_answers_by_the_program_s_line_numbers() {
+    fn lines_read_one_at_a_time_are_quoted_and_the_oldest_forgotten() {
         let mut sm = SourceMap::new();
-        sm.set_source_text_from_line("(display 1)\n(car 5)\n".to_string(), 10);
-        assert_eq!(sm.get_line(10), Some("(display 1)"));
-        assert_eq!(sm.get_line(11), Some("(car 5)"));
-        assert_eq!(sm.get_line(9), None, "a line before the piece is not in it");
-        assert_eq!(sm.get_line(12), None);
+        let loc = |line| SourceLocation {
+            source: Arc::from("<stdin>"),
+            line,
+            column: 1,
+            length: None,
+        };
+        for line in 1..=4 {
+            sm.push_source_line(line, &format!("(form {line})\r\n"));
+            sm.record_expansion(&loc(line), format!("m{line}"));
+        }
+        assert_eq!(sm.get_line(2), Some("(form 2)"));
+        assert_eq!(sm.get_line(5), None);
+
+        sm.forget_old_source_lines(1000, 4);
+        assert_eq!(sm.get_line(1), Some("(form 1)"), "within the budget");
+
+        sm.forget_old_source_lines(10, 3);
+        assert_eq!(sm.get_line(2), None);
+        assert!(sm.get_expansions(&loc(2)).is_none());
+        assert_eq!(
+            sm.get_line(3),
+            Some("(form 3)"),
+            "an unfinished datum's line stays"
+        );
+        assert_eq!(sm.get_expansions(&loc(3)), Some(&["m3".to_string()][..]));
+
         sm.set_source_text("x\n".to_string());
         assert_eq!(
             sm.get_line(1),

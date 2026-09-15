@@ -32,7 +32,7 @@ pub use cond_expand::evaluate_feature_requirement_tagged;
 pub use datum_scan::DatumScan;
 pub use desugarer::{DesugarError, Desugarer};
 pub use error::FrontendError;
-pub use lexer::{LexError, Lexer, Spanned, Token};
+pub use lexer::{LexError, Lexer, ReaderState, Spanned, Token};
 pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
 pub use library_support::{SchemeLibraryLoader, is_define_library_form};
 pub use parser::{ParseError, Parser};
