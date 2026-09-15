@@ -35,6 +35,7 @@ pub mod record_type;
 pub mod scope;
 pub mod scope_resolve;
 pub mod scope_trace;
+pub mod source_map;
 pub mod tagged_value;
 pub mod vfs;
 
@@ -55,6 +56,7 @@ pub use procedure::{Arity, Procedure};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use record_type::{RecordTypeDescriptor, next_record_type_id};
 pub use scope::{ScopeId, ScopeSet};
+pub use source_map::{SourceMap, prune_freed_locations};
 
 // TaggedValue and heap types for compact value representation
 pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scopes};

@@ -1,12 +1,12 @@
 use patina_core::TaggedValue;
 use patina_interpreter::{
-    Backend, Interpreter, InterpreterError, ProgramOutcome, SourceMap, TreeWalkInterpreter,
-    format_backend_error_with_source, format_eval_error_with_source, format_interpreter_error,
+    Backend, HasSourceLocation, Interpreter, ProgramOutcome, TreeWalkInterpreter,
+    format_backend_error_with_source, format_error_with_source,
 };
 use patina_repl::repl::needs_more_input;
 use patina_repl::{Repl, make_editor, run_program_stream, run_repl_loop};
+use patina_vm::VmBackend;
 use patina_vm::tracer::StepTracer;
-use patina_vm::{VmBackend, VmBackendError};
 use std::cell::RefCell;
 use std::env;
 use std::fs;
@@ -203,13 +203,15 @@ fn main() {
     if let Some(file) = &opts.filename {
         if opts.dump {
             dump_bytecode_file(file);
-        } else if opts.trace {
-            run_script_vm_trace(file, &opts);
-        } else if opts.use_tree_walker {
-            run_script_tree_walker(file, &opts);
-        } else {
-            run_script_vm(file, &opts);
         }
+        let code = read_source_file(file);
+        run(
+            Program::Script {
+                code: &code,
+                filename: file,
+            },
+            &opts,
+        );
     } else if opts.dump {
         dump_bytecode_stdin();
     } else if opts.interactive || std::io::IsTerminal::is_terminal(&std::io::stdin()) {
@@ -228,11 +230,81 @@ fn main() {
             run_repl_vm(&opts);
         }
     } else {
-        run_stdin_program(&opts);
+        run(Program::Stdin, &opts);
     }
 }
 
-/// Run a program read from standard input.
+/// What a run evaluates as a program.
+enum Program<'a> {
+    /// A script's text, read whole, and the file it was read from.
+    Script { code: &'a str, filename: &'a str },
+    /// Standard input, run as it arrives.
+    Stdin,
+}
+
+/// Run `program` on the backend the options select, and exit with its status:
+/// 0 when it ran cleanly, 1 when it reported an error, with or without `-k`.
+fn run(program: Program<'_>, opts: &CliOptions) -> ! {
+    // A script's own directory is searched for its libraries.
+    let script = match program {
+        Program::Script { filename, .. } => Some(filename),
+        Program::Stdin => None,
+    };
+    let clean = if opts.trace {
+        // Tracing is a VM instrument, which is why `main` refuses `--trace`
+        // with `--tree-walker` rather than quietly running the other backend.
+        let (interp, tracer) = traced_vm();
+        apply_library_paths(interp.backend(), opts, script);
+        let clean = run_program(&interp, &program, opts.keep_going);
+        if !clean {
+            eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
+        }
+        clean
+    } else if opts.use_tree_walker {
+        let interp = TreeWalkInterpreter::new_tree_walker();
+        apply_library_paths(interp.backend(), opts, script);
+        run_program(&interp, &program, opts.keep_going)
+    } else {
+        let interp = Interpreter::new(VmBackend::new());
+        apply_library_paths(interp.backend(), opts, script);
+        run_program(&interp, &program, opts.keep_going)
+    };
+    process::exit(if clean { 0 } else { 1 });
+}
+
+/// Run `program` on `interp`, reporting each error as it arises, and say
+/// whether it ran cleanly.
+///
+/// `keep_going` is `-k`, a recovery policy and not a verdict: every error is
+/// reported and the next top-level form runs anyway, and a program that
+/// reported one still did not run cleanly.
+fn run_program<B: Backend>(interp: &Interpreter<B>, program: &Program<'_>, keep_going: bool) -> bool
+where
+    B::Error: HasSourceLocation,
+{
+    match *program {
+        Program::Script { code, filename } if keep_going => interp
+            .eval_program_resilient_with_source_name(code, filename)
+            .1
+            .clean(),
+        Program::Script { code, filename } => {
+            let (result, source_map) = interp.eval_program_with_source_name(code, filename);
+            match result {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!(
+                        "Error: {}",
+                        format_backend_error_with_source(&e, &source_map.borrow())
+                    );
+                    false
+                }
+            }
+        }
+        Program::Stdin => stream_stdin(interp, keep_going).clean(),
+    }
+}
+
+/// Run standard input as a program on `interp`.
 ///
 /// It is not read whole first: each form runs as soon as the line that ends it
 /// arrives, so a producer that waits on the program's output makes progress,
@@ -250,74 +322,19 @@ fn main() {
 /// - the program's text and its own input are one stream, so a read from
 ///   standard input inside it continues right after the form being run, as it
 ///   does in chibi and Gauche.
-fn run_stdin_program(opts: &CliOptions) -> ! {
-    let outcome = if opts.trace {
-        let (interp, tracer) = traced_vm();
-        apply_library_paths(interp.backend(), opts, None);
-        let outcome = stream_stdin(&interp, opts.keep_going);
-        if !outcome.clean() {
-            eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
-        }
-        outcome
-    } else if opts.use_tree_walker {
-        let interp = TreeWalkInterpreter::new_tree_walker();
-        apply_library_paths(interp.backend(), opts, None);
-        stream_stdin(&interp, opts.keep_going)
-    } else {
-        let interp = Interpreter::new(VmBackend::new());
-        apply_library_paths(interp.backend(), opts, None);
-        stream_stdin(&interp, opts.keep_going)
-    };
-    process::exit(if outcome.clean() { 0 } else { 1 });
-}
-
-/// Run standard input as a program on `interp`, each form as it arrives.
-fn stream_stdin<B: Backend + EvalSourceMapped>(
-    interp: &Interpreter<B>,
-    keep_going: bool,
-) -> ProgramOutcome {
-    let heap = interp.backend().global_env().heap().clone();
+fn stream_stdin<B: Backend>(interp: &Interpreter<B>, keep_going: bool) -> ProgramOutcome
+where
+    B::Error: HasSourceLocation,
+{
+    let backend = interp.backend();
+    let heap = backend.global_env().heap().clone();
     let input = patina_runtime::Port::stdin();
     run_program_stream(&input, &heap, "<stdin>", keep_going, |datum, source_map| {
-        interp.backend().eval_source_mapped(datum, source_map)
-    })
-}
-
-/// Evaluate a datum with its source positions, rendering an error for
-/// printing: both backends have `eval_with_source_map`, but `Backend` does
-/// not, and each renders its own error type.
-trait EvalSourceMapped {
-    fn eval_source_mapped(
-        &self,
-        datum: TaggedValue,
-        source_map: &Rc<RefCell<SourceMap>>,
-    ) -> Result<(), String>;
-}
-
-impl EvalSourceMapped for VmBackend {
-    fn eval_source_mapped(
-        &self,
-        datum: TaggedValue,
-        source_map: &Rc<RefCell<SourceMap>>,
-    ) -> Result<(), String> {
-        let result = self.eval_with_source_map(datum, self.global_env(), source_map);
-        result.map(|_| ()).map_err(|e| {
-            format_backend_error_with_source(&InterpreterError::Backend(e), &source_map.borrow())
-        })
-    }
-}
-
-impl EvalSourceMapped for patina_tree_walker::TreeWalker {
-    fn eval_source_mapped(
-        &self,
-        datum: TaggedValue,
-        source_map: &Rc<RefCell<SourceMap>>,
-    ) -> Result<(), String> {
-        let result = self.eval_with_source_map(datum, self.global_env(), source_map);
-        result
+        backend
+            .eval_with_source_map(datum, backend.global_env(), source_map)
             .map(|_| ())
-            .map_err(|e| format_eval_error_with_source(&e, &source_map.borrow()))
-    }
+            .map_err(|e| format_error_with_source(&e, &source_map.borrow()))
+    })
 }
 
 /// A VM interpreter that traces each instruction to stderr as it runs, with
@@ -407,31 +424,6 @@ fn print_help() {
     eprintln!("Use --tree-walker to switch to the CPS tree-walking interpreter.");
 }
 
-fn run_script_tree_walker(filename: &str, opts: &CliOptions) -> ! {
-    let code = read_source_file(filename);
-    let interp = TreeWalkInterpreter::new_tree_walker();
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    if opts.keep_going {
-        // -k is a recovery policy, not a verdict: every error is reported and
-        // the next top-level form runs anyway, and the status still says the
-        // program failed.
-        let (_, outcome) = interp.eval_program_resilient_with_source_name(&code, filename);
-        process::exit(if outcome.clean() { 0 } else { 1 });
-    }
-
-    let (result, source_map) = interp.eval_program_with_source_name(&code, filename);
-    match result {
-        Ok(_) => process::exit(0),
-        Err(e) => {
-            eprintln!(
-                "Error: {}",
-                format_interpreter_error(&e, &source_map.borrow())
-            );
-            process::exit(1);
-        }
-    }
-}
-
 fn dump_bytecode_file(filename: &str) -> ! {
     dump_bytecode(&read_source_file(filename));
 }
@@ -447,180 +439,6 @@ fn dump_bytecode(code: &str) -> ! {
         Err(e) => {
             eprintln!("Error: {}", e);
             process::exit(1);
-        }
-    }
-}
-
-/// Run a script on the VM under `--trace`. Tracing is a VM instrument, which
-/// is why `main` refuses `--trace` with `--tree-walker` rather than quietly
-/// running the other backend.
-fn run_script_vm_trace(filename: &str, opts: &CliOptions) -> ! {
-    let code = read_source_file(filename);
-    let (interp, tracer) = traced_vm();
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    // -k reaches tracing too, so a file gets the same status traced and
-    // untraced.
-    if opts.keep_going {
-        let outcome = eval_program_keep_going_vm(&interp, &code, filename);
-        if !outcome.clean() {
-            eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
-        }
-        process::exit(if outcome.clean() { 0 } else { 1 });
-    }
-    let (result, source_map) = eval_program_vm(&interp, &code, filename);
-    match result {
-        Ok(_) => process::exit(0),
-        Err(e) => {
-            eprintln!(
-                "Error: {}",
-                format_backend_error_with_source(&e, &source_map.borrow())
-            );
-            eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
-            process::exit(1);
-        }
-    }
-}
-
-/// The VM's counterpart to [`run_script_tree_walker`].
-fn run_script_vm(filename: &str, opts: &CliOptions) -> ! {
-    let code = read_source_file(filename);
-    let interp = Interpreter::new(VmBackend::new());
-    apply_library_paths(interp.backend(), opts, Some(filename));
-    if opts.keep_going {
-        // As in `run_script_tree_walker`: carrying on past an error does not
-        // stop the status from reporting it.
-        let outcome = eval_program_keep_going_vm(&interp, &code, filename);
-        process::exit(if outcome.clean() { 0 } else { 1 });
-    }
-
-    let (result, source_map) = eval_program_vm(&interp, &code, filename);
-    match result {
-        Ok(_) => process::exit(0),
-        Err(e) => {
-            eprintln!(
-                "Error: {}",
-                format_backend_error_with_source(&e, &source_map.borrow())
-            );
-            process::exit(1);
-        }
-    }
-}
-
-/// Evaluate a program with source map support for the VM backend.
-fn eval_program_vm(
-    interp: &Interpreter<VmBackend>,
-    input: &str,
-    source_name: &str,
-) -> (
-    Result<patina_core::TaggedValue, patina_interpreter::InterpreterError<VmBackendError>>,
-    std::rc::Rc<std::cell::RefCell<patina_interpreter::SourceMap>>,
-) {
-    use patina_interpreter::{InterpreterError, Parser, SourceMap};
-
-    let mut result = patina_core::TaggedValue::UNSPECIFIED;
-    let heap = interp.backend().global_env().heap();
-    let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-    let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-    let mut parser =
-        match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-            Ok(p) => p,
-            Err(e) => return (Err(e.into()), source_map),
-        };
-    let global = interp.backend().global_env().clone();
-    loop {
-        // Drop SourceMap entries for slots the previous form's evaluation
-        // freed, before this iteration's parse can reuse them (§9.1).
-        patina_interpreter::prune_freed_locations(heap, &source_map);
-        match parser.parse_next() {
-            Ok(Some(expr)) => {
-                match interp
-                    .backend()
-                    .eval_with_source_map(expr, &global, &source_map)
-                    .map_err(InterpreterError::Backend)
-                {
-                    Ok(val) => result = val,
-                    Err(e) => return (Err(e), source_map),
-                }
-            }
-            Ok(None) => break,
-            Err(e) => return (Err(e.into()), source_map),
-        }
-    }
-    (Ok(result), source_map)
-}
-
-/// Evaluate a whole program under `-k`: report each error and go on to the
-/// next top-level form, then say how it went.
-///
-/// The VM's counterpart to `Interpreter::eval_program_resilient_with_source_name`.
-/// Like it, each error is recorded process-wide, so a later `(exit 0)` cannot
-/// report success.
-fn eval_program_keep_going_vm(
-    interp: &Interpreter<VmBackend>,
-    input: &str,
-    source_name: &str,
-) -> patina_interpreter::ProgramOutcome {
-    use patina_interpreter::{
-        InterpreterError, Parser, ProgramOutcome, SourceMap, format_backend_error_with_source,
-    };
-
-    let heap = interp.backend().global_env().heap();
-    let mut eval_errors = 0usize;
-    let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-    let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-    let mut parser =
-        match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                patina_runtime::exit_status::note_error_reported();
-                return ProgramOutcome {
-                    eval_errors,
-                    read_to_end: false,
-                };
-            }
-        };
-    let global = interp.backend().global_env().clone();
-    loop {
-        // Drop SourceMap entries for slots the previous form's evaluation
-        // freed, before this iteration's parse can reuse them (§9.1).
-        patina_interpreter::prune_freed_locations(heap, &source_map);
-        match parser.parse_next() {
-            Ok(Some(expr)) => {
-                if let Err(e) = interp
-                    .backend()
-                    .eval_with_source_map(expr, &global, &source_map)
-                {
-                    eval_errors += 1;
-                    patina_runtime::exit_status::note_error_reported();
-                    eprintln!(
-                        "Error: {}",
-                        format_backend_error_with_source(
-                            &InterpreterError::Backend(e),
-                            &source_map.borrow()
-                        )
-                    );
-                }
-            }
-            Ok(None) => {
-                return ProgramOutcome {
-                    eval_errors,
-                    read_to_end: true,
-                };
-            }
-            Err(e) => {
-                // The parser leaves the offending token where it was, so
-                // reading on would report it again, without end.
-                eprintln!(
-                    "Error: {}",
-                    patina_interpreter::format_parse_error_with_source(&e, &source_map.borrow())
-                );
-                patina_runtime::exit_status::note_error_reported();
-                return ProgramOutcome {
-                    eval_errors,
-                    read_to_end: false,
-                };
-            }
         }
     }
 }
@@ -642,7 +460,6 @@ fn run_repl_tree_walker(opts: &CliOptions) {
 
 fn run_repl_vm(opts: &CliOptions) {
     use patina_core::debug_format::format_tagged;
-    use patina_interpreter::{Parser, format_parse_error_with_source};
 
     let interp = Interpreter::new(VmBackend::new());
     apply_library_paths(interp.backend(), opts, None);
@@ -685,56 +502,14 @@ fn run_repl_vm(opts: &CliOptions) {
             };
         }
 
-        // Parse with source map for better error reporting.
-        let source_map = Rc::new(RefCell::new(SourceMap::new()));
-        let sname: Rc<str> = Rc::from("<repl>");
-        let mut parser =
-            match Parser::new_with_source_map(line, heap.clone(), sname, source_map.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    return Some(format!(
-                        "Error: {}",
-                        format_parse_error_with_source(&e, &source_map.borrow())
-                    ));
-                }
-            };
-        let global = interp.backend().global_env().clone();
-        let mut result = TaggedValue::UNSPECIFIED;
-        loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            patina_interpreter::prune_freed_locations(&heap, &source_map);
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    match interp
-                        .backend()
-                        .eval_with_source_map(expr, &global, &source_map)
-                    {
-                        Ok(val) => result = val,
-                        Err(e) => {
-                            return Some(format!(
-                                "Error: {}",
-                                format_backend_error_with_source(
-                                    &InterpreterError::Backend(e),
-                                    &source_map.borrow()
-                                )
-                            ));
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    return Some(format!(
-                        "Error: {}",
-                        format_parse_error_with_source(&e, &source_map.borrow())
-                    ));
-                }
-            }
-        }
-        if result != TaggedValue::UNSPECIFIED {
-            Some(format_tagged(result, &heap.borrow()))
-        } else {
-            None
+        let (result, source_map) = interp.eval_program_with_source_name(line, "<repl>");
+        match result {
+            Ok(value) if value == TaggedValue::UNSPECIFIED => None,
+            Ok(value) => Some(format_tagged(value, &heap.borrow())),
+            Err(e) => Some(format!(
+                "Error: {}",
+                format_backend_error_with_source(&e, &source_map.borrow())
+            )),
         }
     });
     if !clean {

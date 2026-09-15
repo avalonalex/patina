@@ -101,9 +101,9 @@ patina-repl --tree-walker --debug <script.scm>       (flag or separate binary �
 returns it only on completion (`patina-interpreter/src/lib.rs:491–528`), so during
 every pause — which is *inside* that call — the session would hold nothing, and the map
 is the only thing that turns a `SourceLocation` into a displayable line
-(`SourceMap::format_context`, `patina-frontend/src/source_map.rs:72`). Instead the
+(`SourceMap::format_context`, `patina-core/src/source_map.rs`). Instead the
 session owns an `Rc<RefCell<SourceMap>>`, parses with `Parser::new_with_source_map`,
-and evaluates form by form through `TreeWalker::eval_with_source_map`
+and evaluates form by form through `Backend::eval_with_source_map`
 (`crates/patina-tree-walker/src/backend.rs:98`) — the same shape as the existing
 runner, minus the discard. It must also call `prune_freed_locations` at each form
 boundary, as the existing drivers do.

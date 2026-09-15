@@ -93,19 +93,6 @@ impl TreeWalker {
         &self.evaluator
     }
 
-    /// Evaluate an expression with source map support
-    ///
-    /// The source map provides source positions recorded by the parser,
-    /// which are attached to CoreExpr nodes during desugaring.
-    pub fn eval_with_source_map(
-        &self,
-        expr: TaggedValue,
-        env: &Rc<Environment>,
-        source_map: &Rc<RefCell<SourceMap>>,
-    ) -> Result<TaggedValue, EvalError> {
-        self.eval_datum(expr, env, Some(source_map))
-    }
-
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
     fn eval_datum(
@@ -168,6 +155,17 @@ impl Backend for TreeWalker {
 
     fn global_env(&self) -> &Rc<Environment> {
         &self.evaluator.global_env
+    }
+
+    /// The source map's positions are attached to CoreExpr nodes during
+    /// desugaring.
+    fn eval_with_source_map(
+        &self,
+        expr: TaggedValue,
+        env: &Rc<Environment>,
+        source_map: &Rc<RefCell<SourceMap>>,
+    ) -> Result<TaggedValue, Self::Error> {
+        self.eval_datum(expr, env, Some(source_map))
     }
 }
 

@@ -18,10 +18,10 @@ patina/
 ├── test-lib/               # third-party libraries the test lanes supply with
 │                           # `-A`, NOT bundled — see test-lib/README.md
 └── crates/
-    ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr, CpsExpr, scope sets
+    ├── patina-core/        # TaggedValue, Heap, Environment, CoreExpr, CpsExpr, scope sets, SourceMap
     ├── patina-runtime/     # Backend trait, LibraryRegistry, internal stdlib primitives
     ├── patina-ir/          # ExprVisitor, CPS transform, re-exports CoreExpr types
-    ├── patina-frontend/    # Lexer, Parser, Desugarer, SourceMap
+    ├── patina-frontend/    # Lexer, Parser, Desugarer
     ├── patina-macros/      # syntax-rules with Racket-style scope-set hygiene
     ├── patina-pipeline/    # StandardPipeline orchestration
     ├── patina-primitives/  # Shared backend-agnostic primitive implementations

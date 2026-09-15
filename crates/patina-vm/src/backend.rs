@@ -171,20 +171,6 @@ impl VmBackend {
         self.state.borrow_mut().tracer = tracer;
     }
 
-    /// Evaluate an expression with source map support.
-    ///
-    /// The source map provides source positions recorded by the parser,
-    /// which are attached to CoreExpr nodes during desugaring, then
-    /// threaded through the compiler pipeline into CodeObject source maps.
-    pub fn eval_with_source_map(
-        &self,
-        expr: TaggedValue,
-        _env: &Rc<Environment>,
-        source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
-    ) -> Result<TaggedValue, VmBackendError> {
-        self.eval_datum(expr, Some(source_map))
-    }
-
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
     ///
@@ -727,6 +713,18 @@ impl Backend for VmBackend {
     fn global_env(&self) -> &Rc<Environment> {
         &self.global_env
     }
+
+    /// The source map's positions are attached to CoreExpr nodes during
+    /// desugaring, then threaded through the compiler pipeline into
+    /// CodeObject source maps.
+    fn eval_with_source_map(
+        &self,
+        expr: TaggedValue,
+        _env: &Rc<Environment>,
+        source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
+    ) -> Result<TaggedValue, Self::Error> {
+        self.eval_datum(expr, Some(source_map))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -743,6 +741,26 @@ mod tests {
         let interp = Interpreter::new(backend);
         // Use eval_program to handle multiple top-level expressions.
         interp.eval_program(code).expect("eval failed")
+    }
+
+    /// The interpreter's source-named evaluation is generic over backends, so
+    /// a program run on the VM gets its errors placed and quoted from the
+    /// source map, and `-k`'s outcome counts them, as on the tree-walker.
+    #[test]
+    fn source_named_evaluation_places_and_counts_vm_errors() {
+        let interp = Interpreter::new(VmBackend::new());
+        let (result, source_map) =
+            interp.eval_program_with_source_name("(define x 1)\n\n(no-such x)\n", "t.scm");
+        let error = result.expect_err("an unbound variable");
+        let rendered =
+            patina_interpreter::format_backend_error_with_source(&error, &source_map.borrow());
+        assert!(rendered.contains("t.scm:3:1"), "{rendered}");
+        assert!(rendered.contains("3 | (no-such x)"), "{rendered}");
+
+        let (_, outcome) =
+            interp.eval_program_resilient_with_source_name("(no-such)\n(also-no-such)\n", "k.scm");
+        assert_eq!(outcome.eval_errors, 2);
+        assert!(outcome.read_to_end);
     }
 
     #[test]

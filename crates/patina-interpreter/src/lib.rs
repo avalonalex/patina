@@ -63,6 +63,8 @@ pub use patina_ir::CoreExpr;
 pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_runtime::{Arity, Backend, Environment, Procedure};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// What running a whole program with `-k` has to report back.
 ///
@@ -88,18 +90,15 @@ impl ProgramOutcome {
 
 /// Format any `InterpreterError` with source context.
 ///
-/// `EvalError` variants are formatted with caret context via `format_eval_error_with_source`,
-/// and so is a parse error that carries a position. Lex/desugar errors, and
-/// parse errors that do not name a position, fall back to `Display`.
+/// The tree-walker's name for [`format_backend_error_with_source`]: an
+/// evaluation error, and a parse error that carries a position, get caret
+/// context; lex/desugar errors, and parse errors that do not name a position,
+/// fall back to `Display`.
 pub fn format_interpreter_error(
     error: &InterpreterError<EvalError>,
     source_map: &SourceMap,
 ) -> String {
-    match error {
-        InterpreterError::Backend(eval_err) => format_eval_error_with_source(eval_err, source_map),
-        InterpreterError::Parse(parse_err) => format_parse_error_with_source(parse_err, source_map),
-        other => other.to_string(),
-    }
+    format_backend_error_with_source(error, source_map)
 }
 
 /// Format a `ParseError` with the same caret context an evaluation error gets.
@@ -133,10 +132,12 @@ fn parse_error_position(error: &ParseError) -> Option<(u32, u32)> {
     }
 }
 
-/// Format an `EvalError` with source context from a `SourceMap`.
+/// Format an evaluation error, from any backend, with source context from a
+/// `SourceMap`.
 ///
-/// When the error has a `WithLocation` variant, this prints a caret-style
-/// context block showing the relevant source line and position:
+/// When the error carries a location, this prints a caret-style context block
+/// showing the relevant source line and position, and the macro expansion
+/// chain recorded there:
 ///
 /// ```text
 ///    1 | (define (foo) x)
@@ -146,7 +147,10 @@ fn parse_error_position(error: &ParseError) -> Option<(u32, u32)> {
 /// ```
 ///
 /// Falls back to `error.to_string()` when no source context is available.
-pub fn format_eval_error_with_source(error: &EvalError, source_map: &SourceMap) -> String {
+pub fn format_error_with_source<E: std::error::Error + HasSourceLocation>(
+    error: &E,
+    source_map: &SourceMap,
+) -> String {
     if let Some(loc) = error.source_location() {
         let mut parts = vec![error.to_string()];
         parts.push(format!("  at {}", loc));
@@ -183,30 +187,23 @@ pub fn format_backend_error_with_source<E: std::error::Error + HasSourceLocation
 ) -> String {
     match error {
         InterpreterError::Parse(parse_err) => format_parse_error_with_source(parse_err, source_map),
-        InterpreterError::Backend(backend_err) => {
-            if let Some(loc) = backend_err.source_location() {
-                let mut parts = vec![backend_err.to_string()];
-                parts.push(format!("  at {}", loc));
-                if let Some(ctx) = source_map.format_context(loc) {
-                    parts.push(ctx);
-                }
-                if let Some(names) = source_map.get_expansions(loc) {
-                    if names.len() == 1 {
-                        parts.push(format!("  macro expansion: {}", names[0]));
-                    } else {
-                        parts.push(format!(
-                            "  macro expansion chain: {}",
-                            names.join(" \u{2192} ")
-                        ));
-                    }
-                }
-                parts.join("\n")
-            } else {
-                backend_err.to_string()
-            }
-        }
+        InterpreterError::Backend(backend_err) => format_error_with_source(backend_err, source_map),
         other => other.to_string(),
     }
+}
+
+/// What an evaluation returns with the source map that placed the text it
+/// read, for formatting an error it reports.
+pub type WithSourceMap<T> = (T, Rc<RefCell<SourceMap>>);
+
+/// How reading a program a form at a time ended.
+enum FormsEnd<E> {
+    /// Every form was read.
+    Read,
+    /// An evaluation error the caller chose to stop at.
+    Stopped(E),
+    /// The text could not be read on from here.
+    Unreadable(ParseError),
 }
 
 /// High-level interpreter interface that combines parsing and evaluation
@@ -349,6 +346,175 @@ impl<B: Backend> Interpreter<B> {
         result
     }
 
+    /// Evaluate a string containing one expression with its source positions,
+    /// naming the source `source_name`, and return the source map that placed
+    /// it for formatting an error. See [`Interpreter::eval_str`].
+    pub fn eval_str_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        let heap = self.backend.global_env().heap();
+        let source_map = Rc::new(RefCell::new(SourceMap::new()));
+        let mut parser = match Parser::new_with_source_map(
+            input,
+            heap.clone(),
+            Rc::from(source_name),
+            source_map.clone(),
+        ) {
+            Ok(p) => p,
+            Err(e) => return (Err(e.into()), source_map),
+        };
+        let expr = match parser.parse().and_then(|e| parser.skip_rest().map(|()| e)) {
+            Ok(e) => e,
+            Err(e) => return (Err(e.into()), source_map),
+        };
+        drop(parser);
+        let global = self.backend.global_env().clone();
+        let result = self
+            .backend
+            .eval_with_source_map(expr, &global, &source_map)
+            .map_err(InterpreterError::Backend);
+        (result, source_map)
+    }
+
+    /// [`Interpreter::eval_str_with_source_name`] for a source named `<eval>`.
+    pub fn eval_str_tracked(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
+        self.eval_str_with_source_name(input, "<eval>").0
+    }
+
+    /// Evaluate a program (multiple expressions) with its source positions,
+    /// naming the source `source_name`; stop at the first error, and return
+    /// the source map for formatting it.
+    pub fn eval_program_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        let (value, end, source_map) = self.run_forms(input, source_name, |error, _| Some(error));
+        let result = match end {
+            FormsEnd::Read => Ok(value),
+            FormsEnd::Stopped(error) => Err(InterpreterError::Backend(error)),
+            FormsEnd::Unreadable(error) => Err(error.into()),
+        };
+        (result, source_map)
+    }
+
+    /// [`Interpreter::eval_program_with_source_name`] for a source named
+    /// `<eval>`.
+    pub fn eval_program_tracked(
+        &self,
+        input: &str,
+    ) -> Result<TaggedValue, InterpreterError<B::Error>> {
+        self.eval_program_with_source_name(input, "<eval>").0
+    }
+
+    /// Evaluate a program with source positions, printing each error and
+    /// continuing past evaluation errors, as [`Interpreter::eval_program_resilient`]
+    /// does. Returns the last value evaluated.
+    pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
+        let (value, end, _) = self.run_forms(input, "<eval>", |error, _| {
+            eprintln!("Error: {}", error);
+            None
+        });
+        if let FormsEnd::Unreadable(error) = end {
+            eprintln!("Error: {}", error);
+        }
+        value
+    }
+
+    /// Evaluate a program with a named source, reporting each error and
+    /// carrying on to the next top-level form: the CLI's `-k`.
+    ///
+    /// Carrying on is a recovery policy, not a verdict. The returned
+    /// [`ProgramOutcome`] counts the errors reported and says whether the
+    /// program was read to its end; a caller that owns an exit status must fail
+    /// on either, and [`ProgramOutcome::clean`] is that test. Each error is also
+    /// recorded process-wide, through
+    /// [`patina_runtime::exit_status::note_error_reported`], so a program that
+    /// calls `(exit 0)` after failing still exits non-zero.
+    pub fn eval_program_resilient_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> (TaggedValue, ProgramOutcome)
+    where
+        B::Error: HasSourceLocation,
+    {
+        let mut eval_errors = 0usize;
+        let (value, end, source_map) = self.run_forms(input, source_name, |error, source_map| {
+            eval_errors += 1;
+            patina_runtime::exit_status::note_error_reported();
+            eprintln!("Error: {}", format_error_with_source(&error, source_map));
+            None
+        });
+        if let FormsEnd::Unreadable(error) = &end {
+            eprintln!(
+                "Error: {}",
+                format_parse_error_with_source(error, &source_map.borrow())
+            );
+            patina_runtime::exit_status::note_error_reported();
+        }
+        let outcome = ProgramOutcome {
+            eval_errors,
+            read_to_end: matches!(end, FormsEnd::Read),
+        };
+        (value, outcome)
+    }
+
+    /// Read `input` a form at a time and evaluate each with its source
+    /// positions: the one loop behind the source-named evaluations.
+    ///
+    /// An evaluation error goes to `on_error`, with the source map for
+    /// formatting it, which gives the error back to stop there or returns
+    /// `None` to carry on with the next form. A read error always stops: the
+    /// parser leaves the offending token where it was, so reading on would
+    /// report it again without end. Returns the last value evaluated, how
+    /// reading ended, and the source map.
+    fn run_forms(
+        &self,
+        input: &str,
+        source_name: &str,
+        mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
+    ) -> (TaggedValue, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
+        let mut value = TaggedValue::UNSPECIFIED;
+        let heap = self.backend.global_env().heap();
+        let source_map = Rc::new(RefCell::new(SourceMap::new()));
+        let mut parser = match Parser::new_with_source_map(
+            input,
+            heap.clone(),
+            Rc::from(source_name),
+            source_map.clone(),
+        ) {
+            Ok(parser) => parser,
+            Err(error) => return (value, FormsEnd::Unreadable(error), source_map),
+        };
+        let global = self.backend.global_env().clone();
+        loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this iteration's parse can reuse them (§9.1).
+            prune_freed_locations(heap, &source_map);
+            match parser.parse_next() {
+                Ok(Some(expr)) => {
+                    match self
+                        .backend
+                        .eval_with_source_map(expr, &global, &source_map)
+                    {
+                        Ok(result) => value = result,
+                        Err(error) => {
+                            let stop = on_error(error, &source_map.borrow());
+                            if let Some(error) = stop {
+                                return (value, FormsEnd::Stopped(error), source_map);
+                            }
+                        }
+                    }
+                }
+                Ok(None) => return (value, FormsEnd::Read, source_map),
+                Err(error) => return (value, FormsEnd::Unreadable(error), source_map),
+            }
+        }
+    }
+
     /// Get a reference to the underlying backend
     ///
     /// This allows access to backend-specific functionality that's not
@@ -413,257 +579,6 @@ impl Interpreter<TreeWalker> {
     /// This method is only available when using the TreeWalker backend.
     pub fn evaluator(&self) -> &Evaluator {
         self.backend.evaluator()
-    }
-
-    /// Evaluate a string with source map tracking (TreeWalker-specific)
-    ///
-    /// Source positions from the parser are attached to CoreExpr nodes,
-    /// enabling better error messages with source locations.
-    pub fn eval_str_tracked(
-        &self,
-        input: &str,
-    ) -> Result<TaggedValue, InterpreterError<EvalError>> {
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let source_name: std::rc::Rc<str> = std::rc::Rc::from("<eval>");
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, source_map.clone())?;
-        let expr = parser.parse()?;
-        parser.skip_rest()?;
-        drop(parser);
-        let global = self.backend.global_env().clone();
-        let result = self
-            .backend
-            .eval_with_source_map(expr, &global, &source_map)
-            .map_err(InterpreterError::Backend)?;
-        Ok(result)
-    }
-
-    /// Evaluate a program with source map tracking (TreeWalker-specific)
-    ///
-    /// Source positions from the parser are attached to CoreExpr nodes.
-    pub fn eval_program_tracked(
-        &self,
-        input: &str,
-    ) -> Result<TaggedValue, InterpreterError<EvalError>> {
-        let mut result = TaggedValue::UNSPECIFIED;
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let source_name: std::rc::Rc<str> = std::rc::Rc::from("<eval>");
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name, source_map.clone())?;
-        let global = self.backend.global_env().clone();
-
-        loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            prune_freed_locations(heap, &source_map);
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    result = self
-                        .backend
-                        .eval_with_source_map(expr, &global, &source_map)
-                        .map_err(InterpreterError::Backend)?;
-                }
-                Ok(None) => break,
-                Err(e) => return Err(e.into()),
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// Evaluate a program with source map tracking, continuing on errors
-    pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
-        let mut result = TaggedValue::UNSPECIFIED;
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let source_name: std::rc::Rc<str> = std::rc::Rc::from("<eval>");
-        let mut parser =
-            match Parser::new_with_source_map(input, heap.clone(), source_name, source_map.clone())
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    return result;
-                }
-            };
-        let global = self.backend.global_env().clone();
-
-        loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            prune_freed_locations(heap, &source_map);
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    match self
-                        .backend
-                        .eval_with_source_map(expr, &global, &source_map)
-                    {
-                        Ok(val) => result = val,
-                        Err(e) => {
-                            eprintln!("Error: {}", e);
-                        }
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    break;
-                }
-            }
-        }
-
-        result
-    }
-
-    /// Evaluate a string with a named source and return the source map for error formatting.
-    pub fn eval_str_with_source_name(
-        &self,
-        input: &str,
-        source_name: &str,
-    ) -> (
-        Result<TaggedValue, InterpreterError<EvalError>>,
-        std::rc::Rc<std::cell::RefCell<SourceMap>>,
-    ) {
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-        let mut parser =
-            match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-                Ok(p) => p,
-                Err(e) => return (Err(e.into()), source_map),
-            };
-        let expr = match parser.parse().and_then(|e| parser.skip_rest().map(|()| e)) {
-            Ok(e) => e,
-            Err(e) => return (Err(e.into()), source_map),
-        };
-        drop(parser);
-        let global = self.backend.global_env().clone();
-        let result = self
-            .backend
-            .eval_with_source_map(expr, &global, &source_map)
-            .map_err(InterpreterError::Backend);
-        (result, source_map)
-    }
-
-    /// Evaluate a program (multiple expressions) with a named source; return source map.
-    pub fn eval_program_with_source_name(
-        &self,
-        input: &str,
-        source_name: &str,
-    ) -> (
-        Result<TaggedValue, InterpreterError<EvalError>>,
-        std::rc::Rc<std::cell::RefCell<SourceMap>>,
-    ) {
-        let mut result = TaggedValue::UNSPECIFIED;
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-        let mut parser =
-            match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-                Ok(p) => p,
-                Err(e) => return (Err(e.into()), source_map),
-            };
-        let global = self.backend.global_env().clone();
-        loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            prune_freed_locations(heap, &source_map);
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    match self
-                        .backend
-                        .eval_with_source_map(expr, &global, &source_map)
-                        .map_err(InterpreterError::Backend)
-                    {
-                        Ok(val) => result = val,
-                        Err(e) => return (Err(e), source_map),
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => return (Err(e.into()), source_map),
-            }
-        }
-        (Ok(result), source_map)
-    }
-
-    /// Evaluate a program with a named source, reporting each error and
-    /// carrying on to the next top-level form: the CLI's `-k`.
-    ///
-    /// Carrying on is a recovery policy, not a verdict. The returned
-    /// [`ProgramOutcome`] counts the errors reported and says whether the
-    /// program was read to its end; a caller that owns an exit status must fail
-    /// on either, and [`ProgramOutcome::clean`] is that test. Each error is also
-    /// recorded process-wide, through
-    /// [`patina_runtime::exit_status::note_error_reported`], so a program that
-    /// calls `(exit 0)` after failing still exits non-zero.
-    pub fn eval_program_resilient_with_source_name(
-        &self,
-        input: &str,
-        source_name: &str,
-    ) -> (TaggedValue, ProgramOutcome) {
-        let mut result = TaggedValue::UNSPECIFIED;
-        let mut eval_errors = 0usize;
-        let heap = self.backend.global_env().heap();
-        let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
-        let mut parser =
-            match Parser::new_with_source_map(input, heap.clone(), sname, source_map.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    patina_runtime::exit_status::note_error_reported();
-                    let outcome = ProgramOutcome {
-                        eval_errors,
-                        read_to_end: false,
-                    };
-                    return (result, outcome);
-                }
-            };
-        let global = self.backend.global_env().clone();
-        loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            prune_freed_locations(heap, &source_map);
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    match self
-                        .backend
-                        .eval_with_source_map(expr, &global, &source_map)
-                    {
-                        Ok(val) => result = val,
-                        Err(e) => {
-                            eval_errors += 1;
-                            patina_runtime::exit_status::note_error_reported();
-                            eprintln!(
-                                "Error: {}",
-                                format_eval_error_with_source(&e, &source_map.borrow())
-                            );
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let outcome = ProgramOutcome {
-                        eval_errors,
-                        read_to_end: true,
-                    };
-                    return (result, outcome);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Error: {}",
-                        format_parse_error_with_source(&e, &source_map.borrow())
-                    );
-                    patina_runtime::exit_status::note_error_reported();
-                    let outcome = ProgramOutcome {
-                        eval_errors,
-                        read_to_end: false,
-                    };
-                    return (result, outcome);
-                }
-            }
-        }
     }
 
     /// Format a TaggedValue for display using write notation (machine-readable)
@@ -885,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_eval_error_with_source() {
+    fn test_format_error_with_source() {
         let interp = TreeWalkInterpreter::new_tree_walker();
         let heap = interp.evaluator().global_env.heap();
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
@@ -898,7 +813,7 @@ mod tests {
         let global = interp.evaluator().global_env.clone();
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
         if let Err(eval_err) = result {
-            let formatted = format_eval_error_with_source(&eval_err, &sm.borrow());
+            let formatted = format_error_with_source(&eval_err, &sm.borrow());
             // Should include the caret context since source text was stored
             assert!(
                 formatted.contains("bad-var") || formatted.contains("at"),
@@ -937,7 +852,7 @@ mod tests {
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
         assert!(result.is_err(), "expected error for undefined y");
         let eval_err = result.unwrap_err();
-        let formatted = format_eval_error_with_source(&eval_err, &sm.borrow());
+        let formatted = format_error_with_source(&eval_err, &sm.borrow());
         assert!(
             formatted.contains("macro expansion: let"),
             "should show macro expansion chain, got: {formatted}"
@@ -961,7 +876,7 @@ mod tests {
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
         assert!(result.is_err(), "expected error for undefined y");
         let eval_err = result.unwrap_err();
-        let formatted = format_eval_error_with_source(&eval_err, &sm.borrow());
+        let formatted = format_error_with_source(&eval_err, &sm.borrow());
         // cond expands first — at minimum "macro expansion: cond" or a chain should appear
         assert!(
             formatted.contains("macro expansion"),
@@ -1028,7 +943,7 @@ mod tests {
         let result = interp.backend().eval_with_source_map(expr, &global, &sm);
         assert!(result.is_err());
         let eval_err = result.unwrap_err();
-        let formatted = format_eval_error_with_source(&eval_err, &sm.borrow());
+        let formatted = format_error_with_source(&eval_err, &sm.borrow());
         // Should contain error message but NOT "macro expansion" line
         assert!(
             formatted.contains("undefined-var"),
