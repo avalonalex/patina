@@ -1,5 +1,9 @@
-//! Whether a running program has already reported an error, and whether an
-//! `exit` it called was interrupted by one.
+//! Whether a running program has already reported an error, whether an `exit`
+//! it called was interrupted by one, and how the process ends.
+//!
+//! Every way a program ends goes through [`end_process`], which writes out
+//! what the program left in file ports it never closed before the process ends
+//! (#343).
 //!
 //! `patina -k` reports each evaluation error and carries on to the next
 //! top-level form, so a program can reach an `(exit 0)` after it has already
@@ -45,6 +49,26 @@ pub fn status_for_exit(requested: i32) -> i32 {
     } else {
         requested
     }
+}
+
+/// End the process with `requested`, as [`status_for_exit`] adjusts it, once
+/// the output the program left in file ports it never closed is written.
+///
+/// Every way a program ends comes here: running off its end, an error that
+/// stops it, `exit` arriving, and `emergency-exit`, which skips the after
+/// thunks and not the program's output — chibi keeps that output too, and
+/// Gauche drops it (#343). A port that cannot be written is reported, and the
+/// program has then reported an error, so a success it asked for is withheld.
+pub fn end_process(requested: i32) -> ! {
+    for (path, error) in patina_core::port::flush_open_output_files() {
+        eprintln!(
+            "Error: could not write the output to {}: {}",
+            path.display(),
+            error
+        );
+        note_error_reported();
+    }
+    std::process::exit(status_for_exit(requested))
 }
 
 /// The status `exit` asks for with `args`, or the error it reports for them.
@@ -103,7 +127,7 @@ pub fn exit_interrupted() -> bool {
 pub fn exit_if_interrupted() {
     if let Some(status) = take_interrupted_exit() {
         note_error_reported();
-        std::process::exit(status_for_exit(status));
+        end_process(status);
     }
 }
 

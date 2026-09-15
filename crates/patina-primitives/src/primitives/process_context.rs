@@ -89,18 +89,22 @@ fn exit_proc(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Ev
     exit_now(args)
 }
 
-/// Exit immediately without running handlers.
+/// End the process without running any outstanding `dynamic-wind` after thunk
+/// (R7RS 6.14).
 ///
-/// This corresponds to _exit() in POSIX.
+/// The output a program left in open file ports is still written: what
+/// `emergency-exit` skips is the program's cleanup, not its output. chibi
+/// agrees; Gauche drops that output, as POSIX `_exit` would (#343).
 fn emergency_exit(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     exit_now(args)
 }
 
-/// End the process with the status `args` ask for, running nothing first.
+/// End the process with the status `args` ask for, running no after thunk
+/// first.
 fn exit_now(args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let status = patina_runtime::exit_status::requested_status(args)?;
     // A success is withheld from a program that already reported an error (-k).
-    std::process::exit(patina_runtime::exit_status::status_for_exit(status));
+    patina_runtime::exit_status::end_process(status);
 }
 
 /// Get the value of an environment variable.

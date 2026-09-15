@@ -106,7 +106,7 @@ impl<'a> CpsEvaluator<'a> {
         // At `exit`'s landing (`apply_exit`) every extent has been left, and
         // there is nothing to resume.
         if let Some(ContValue::ExitLanding { status }) = &target.resume {
-            std::process::exit(patina_runtime::exit_status::status_for_exit(*status));
+            patina_runtime::exit_status::end_process(*status);
         }
         if target.trampoline == super::types::current_trampoline() {
             return Ok(super::continuation::resume_step(&target, value));

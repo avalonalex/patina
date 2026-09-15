@@ -164,11 +164,11 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
             Err(e) => {
                 eprintln!("Error: {}", e);
                 patina_runtime::exit_status::exit_if_interrupted();
-                process::exit(1);
+                patina_runtime::exit_status::end_process(1);
             }
         }
     }
-    process::exit(0);
+    patina_runtime::exit_status::end_process(0);
 }
 
 fn main() {
@@ -273,7 +273,7 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
     // An error that interrupted an `exit` stopped the program; the exit it
     // asked for decides the status, now that the trace count is out.
     patina_runtime::exit_status::exit_if_interrupted();
-    process::exit(if clean { 0 } else { 1 });
+    patina_runtime::exit_status::end_process(if clean { 0 } else { 1 });
 }
 
 /// Run `program` on `interp`, reporting each error as it arises, and say
@@ -451,9 +451,8 @@ fn run_repl_tree_walker(opts: &CliOptions) {
     match Repl::new() {
         Ok(mut repl) => {
             apply_library_paths(repl.interpreter().backend(), opts, None);
-            if !repl.run() {
-                process::exit(1);
-            }
+            let clean = repl.run();
+            patina_runtime::exit_status::end_process(if clean { 0 } else { 1 });
         }
         Err(e) => {
             eprintln!("Failed to initialize REPL: {}", e);
@@ -516,7 +515,5 @@ fn run_repl_vm(opts: &CliOptions) {
             )),
         }
     });
-    if !clean {
-        process::exit(1);
-    }
+    patina_runtime::exit_status::end_process(if clean { 0 } else { 1 });
 }
