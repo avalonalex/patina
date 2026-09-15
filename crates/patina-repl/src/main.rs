@@ -270,6 +270,9 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         apply_library_paths(interp.backend(), opts, script);
         run_program(&interp, &program, opts.keep_going)
     };
+    // An error that interrupted an `exit` stopped the program; the exit it
+    // asked for decides the status, now that the trace count is out.
+    patina_runtime::exit_status::exit_if_interrupted();
     process::exit(if clean { 0 } else { 1 });
 }
 
@@ -297,7 +300,6 @@ where
                         "Error: {}",
                         format_backend_error_with_source(&e, &source_map.borrow())
                     );
-                    patina_runtime::exit_status::exit_if_interrupted();
                     false
                 }
             }

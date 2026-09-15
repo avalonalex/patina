@@ -435,6 +435,10 @@ impl<B: Backend> Interpreter<B> {
     /// recorded process-wide, through
     /// [`patina_runtime::exit_status::note_error_reported`], so a program that
     /// calls `(exit 0)` after failing still exits non-zero.
+    ///
+    /// An error that interrupted an `exit` stops the run instead of carrying
+    /// on, and the caller ends the process with
+    /// [`patina_runtime::exit_status::exit_if_interrupted`].
     pub fn eval_program_resilient_with_source_name(
         &self,
         input: &str,
@@ -448,8 +452,9 @@ impl<B: Backend> Interpreter<B> {
             eval_errors += 1;
             patina_runtime::exit_status::note_error_reported();
             eprintln!("Error: {}", format_error_with_source(&error, source_map));
-            patina_runtime::exit_status::exit_if_interrupted();
-            None
+            // The program asked to exit, so it does not carry on; the caller
+            // ends the process.
+            patina_runtime::exit_status::exit_interrupted().then_some(error)
         });
         if let FormsEnd::Unreadable(error) = &end {
             eprintln!(

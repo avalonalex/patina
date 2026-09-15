@@ -85,8 +85,17 @@ pub fn forget_interrupted_exit() {
     INTERRUPTED_EXIT.store(NO_EXIT, Ordering::Relaxed);
 }
 
+/// Whether the error just reported interrupted an `exit`, without forgetting
+/// it. A runner that would carry on past the error stops instead, and leaves
+/// ending the process to whoever owns its last words: the CLI reports a
+/// `--trace` run's event count first.
+pub fn exit_interrupted() -> bool {
+    INTERRUPTED_EXIT.load(Ordering::Relaxed) != NO_EXIT
+}
+
 /// End the process if the error just reported interrupted an `exit`, and return
-/// otherwise. Every runner calls this after reporting an error nothing handled.
+/// otherwise. Whatever owns the process calls this after an error nothing
+/// handled has been reported, once it has said anything else it has to say.
 ///
 /// The program asked to exit and has also reported an error, so it gets the
 /// status any program that reported an error gets: a success it asked for is
@@ -132,7 +141,9 @@ mod tests {
     #[test]
     fn an_interrupted_exit_is_taken_once_and_can_be_forgotten() {
         note_interrupted_exit(3);
+        assert!(exit_interrupted());
         assert_eq!(take_interrupted_exit(), Some(3));
+        assert!(!exit_interrupted());
         assert_eq!(take_interrupted_exit(), None);
         note_interrupted_exit(0);
         forget_interrupted_exit();

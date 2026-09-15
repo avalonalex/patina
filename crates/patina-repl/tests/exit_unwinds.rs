@@ -286,6 +286,26 @@ fn an_unhandled_error_in_an_after_thunk_while_exiting_is_reported_and_ends_the_p
         let (_, stderr, code) = run(backend, &["-k"], &failing("0"));
         assert_eq!(code, 1, "{backend:?}: {stderr}");
 
+        // A traced run still reports its event count before the process ends.
+        if backend.is_empty() {
+            for (label, (stdout, stderr, code)) in [
+                ("file", run(backend, &["--trace"], &failing("3"))),
+                ("-k", run(backend, &["--trace", "-k"], &failing("3"))),
+                ("stdin", run_stdin(backend, &["--trace"], &failing("3"))),
+                (
+                    "stdin -k",
+                    run_stdin(backend, &["--trace", "-k"], &failing("3")),
+                ),
+            ] {
+                assert_eq!(code, 3, "--trace {label}: {stderr}");
+                assert!(!stdout.contains("next form"), "--trace {label}: {stdout}");
+                assert!(
+                    stderr.contains("events recorded ---"),
+                    "--trace {label}: no event count"
+                );
+            }
+        }
+
         let (stdout, stderr, code) = run_stdin(backend, &["-i"], &failing("3"));
         assert_eq!(code, 3, "{backend:?} session: {stdout}{stderr}");
         assert!(
