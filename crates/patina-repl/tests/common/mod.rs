@@ -72,7 +72,7 @@ pub fn repo_root() -> std::path::PathBuf {
 /// `patina-repl/src/main.rs`), so a claim about what does *not* resolve is
 /// only half-pinned if it runs on one of them.
 pub fn expect_failure_on_both_backends(cwd: &Path, args: &[&str], check: impl Fn(&str)) {
-    for extra in [&[][..], &["--tree-walker"][..]] {
+    for extra in BOTH_BACKENDS {
         let mut full = extra.to_vec();
         full.extend_from_slice(args);
         let (stdout, stderr, ok) = run_patina(cwd, &full);
@@ -88,7 +88,7 @@ pub fn expect_failure_on_both_backends(cwd: &Path, args: &[&str], check: impl Fn
 /// Run the same argument list on both backends (the default VM and
 /// `--tree-walker`), asserting success and exact trimmed stdout.
 pub fn run_both_backends(cwd: &Path, args: &[&str], expect_stdout: &str) {
-    for extra in [&[][..], &["--tree-walker"][..]] {
+    for extra in BOTH_BACKENDS {
         let mut full = extra.to_vec();
         full.extend_from_slice(args);
         let (stdout, stderr, ok) = run_patina(cwd, &full);
@@ -105,4 +105,75 @@ pub fn run_both_backends(cwd: &Path, args: &[&str], expect_stdout: &str) {
             stderr
         );
     }
+}
+
+/// The argument prefixes that select each backend, the VM first. A claim about
+/// the binary is made on both.
+pub const BOTH_BACKENDS: [&[&str]; 2] = [&[], &["--tree-walker"]];
+
+/// Run the binary and collect its output, killing it if it is still running
+/// after ten seconds: a runner looping on a parse error would otherwise hang
+/// the suite, and so would one that never finishes reading standard input.
+/// Both pipes are drained on their own threads while the child runs, so a
+/// flood of output fails on what it printed rather than filling a pipe
+/// buffer and stalling until the deadline.
+///
+/// `input` is written to the child's standard input and the pipe then closed,
+/// as a shell redirect does. `None` closes it immediately, which is what the
+/// binary sees from `< /dev/null`.
+pub fn run_with_deadline(cwd: &Path, args: &[&str], input: Option<&str>) -> (String, String, bool) {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let mut child = patina_command(cwd, args, &[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn patina binary");
+
+    let mut sink = child.stdin.take().expect("stdin pipe");
+    let input = input.unwrap_or("").to_owned();
+    // On its own thread: a child that exits without reading leaves this
+    // write blocked or broken, and neither should fail the run — the
+    // child's own stderr is the better report, so a broken pipe is dropped.
+    let writer = std::thread::spawn(move || {
+        let _ = sink.write_all(input.as_bytes());
+    });
+    let mut out = child.stdout.take().expect("stdout pipe");
+    let mut err = child.stderr.take().expect("stderr pipe");
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = out.read_to_end(&mut buf);
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = err.read_to_end(&mut buf);
+        buf
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait on patina") {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            child.kill().ok();
+            child.wait().ok();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let _ = writer.join();
+    let stdout = String::from_utf8_lossy(&out_reader.join().expect("stdout reader")).into_owned();
+    let stderr = String::from_utf8_lossy(&err_reader.join().expect("stderr reader")).into_owned();
+    let status = status.unwrap_or_else(|| {
+        panic!(
+            "patina {args:?} was still running after 10 s; stderr began:\n{}",
+            stderr.lines().take(3).collect::<Vec<_>>().join("\n")
+        )
+    });
+    (stdout, stderr, status.success())
 }

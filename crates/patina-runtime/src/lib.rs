@@ -21,6 +21,7 @@
 pub mod backend;
 pub mod error;
 pub mod eval_error;
+pub mod exit_status;
 pub mod library_loader;
 pub mod library_registry;
 pub mod macro_debug;

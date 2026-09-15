@@ -2,12 +2,12 @@
 //!
 //! Two execution modes per package:
 //! - **test** — the package ships a test program (`(test "run-tests.scm")` in
-//!   its `package.scm`); run it. The patina CLI runs files whose name
-//!   contains "test" resiliently (exit 0 regardless), so classification
-//!   reads the output, not the exit status.
+//!   its `package.scm`); run it with `-k`, so an error that escapes to top
+//!   level is reported and the suite still reaches its tally. Classification
+//!   reads that tally first, then the exit status and stderr.
 //! - **probe** — no test program; synthesize `(import ...)` of every library
-//!   the package provides. Probes run in strict mode, so the exit status is
-//!   meaningful.
+//!   the package provides, and run it without `-k`, so its first error ends
+//!   it and the exit status says so.
 
 use crate::corpus::{self, Package};
 use std::collections::BTreeMap;
@@ -185,14 +185,10 @@ fn run_package(
     // log files into their cwd (srfi-64 always does), and the vendored trees
     // must stay byte-identical to upstream. Library includes are unaffected —
     // they resolve against their .sld's own directory.
-    //
-    // The scratch path must not contain the substring "test" (some slugs
-    // do), or the CLI's test-file heuristic would run a probe resiliently
-    // and its exit status would stop meaning anything.
     let scratch = std::env::temp_dir().join(format!(
         "patina-compat-{}-{}",
         std::process::id(),
-        package.slug.replace("test", "t-st")
+        package.slug
     ));
     let _ = std::fs::create_dir_all(&scratch);
 
@@ -219,6 +215,12 @@ fn run_package(
     }
     if config.tree_walker {
         cmd.arg("--tree-walker");
+    }
+    // A test program keeps going past an error that escapes to top level, so
+    // its tally still prints for `test_suite_failed` to read. A probe does
+    // not: its first error is its verdict.
+    if mode == "test" {
+        cmd.arg("-k");
     }
     cmd.arg(&script)
         .current_dir(&scratch)
@@ -348,9 +350,8 @@ fn copy_tree(source: &Path, dest: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write a synthesized import probe into the scratch directory. The fixed
-/// basename keeps "test" out of the argument path structurally, so probes
-/// always run in strict mode.
+/// Write a synthesized import probe into the scratch directory. Probes run
+/// without `-k`, so the first error ends one and its exit status says so.
 ///
 /// The probe is the import form and nothing else. It used to end in a
 /// `(display "patina-compat probe ok")` that nothing ever read — `classify`
@@ -395,8 +396,7 @@ pub fn self_check(config: &RunConfig) -> Status {
 
 /// The empty package the self-check runs. Its root is the supplied library
 /// root, which `search_roots` lists first anyway, so the probe sees exactly
-/// the roots every corpus package sees and no directory of its own. The slug
-/// has no "test" in it, so the probe's scratch path keeps strict mode.
+/// the roots every corpus package sees and no directory of its own.
 fn self_check_package(config: &RunConfig) -> Package {
     Package {
         slug: "self-check".to_string(),
@@ -542,8 +542,10 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::OutOfScope(stubs);
     }
 
-    // Resilient test runs always exit 0, so "Error:" on stderr is the only
-    // runtime-failure signal there; strict probes also surface via exit.
+    // A test run under `-k` and a probe both exit non-zero once an error is
+    // reported. The stderr check stays beside the status, so the verdict does
+    // not rest on one signal: a suite that reached its own `(test-exit)` is
+    // judged by what it printed as well as by how it ended.
     if out.stderr.contains("Error") || !out.exit_ok {
         return Status::RuntimeError;
     }
@@ -1272,16 +1274,14 @@ mod tests {
             probe_source(&pkg),
             "(import (scheme base) (foo bar) (srfi 1))\n"
         );
-        // Written verbatim, under the fixed basename that keeps "test" out of
-        // the argument path.
+        // Written verbatim, under a fixed basename.
         let path = write_probe(temp.path(), &pkg);
         assert_eq!(path.file_name().unwrap(), "probe.scm");
         assert_eq!(std::fs::read_to_string(path).unwrap(), probe_source(&pkg));
     }
 
     /// The self-check probes an empty package through the same roots every
-    /// corpus package gets, and nothing else — no directory of its own, no
-    /// `test` in its scratch path.
+    /// corpus package gets, and nothing else: no directory of its own.
     #[test]
     fn the_self_check_package_sees_only_the_shared_roots() {
         let temp = tempfile::tempdir().unwrap();
@@ -1293,7 +1293,6 @@ mod tests {
             supplied_lib_root: temp.path().join("supplied"),
         };
         let pkg = self_check_package(&config);
-        assert!(!pkg.slug.contains("test"), "{}", pkg.slug);
         assert!(pkg.provides.is_empty() && pkg.test_script.is_none());
         let roots = search_roots(
             &pkg,

@@ -172,12 +172,15 @@ run_suite() {
         esac
     fi
     start=$(date +%s)
+    # -k: a top-level error is reported and the suite goes on to its tally, so
+    # larceny_report.py can tell a suite cut short (truncated) from one that never
+    # loaded. Without it the first such error ends the run with no tally.
     # -e off for the whole run-and-classify span: the suite may exit non-zero.
     set +e
     (
         cd "$LARCENY_TESTS_DIR" &&
         perl -e 'alarm shift; exec @ARGV' "$budget" \
-            "$PATINA_BIN" --isolated-libraries "${BACKEND_ARGS[@]}" "${LANE_ARGS[@]}" -I . \
+            "$PATINA_BIN" --isolated-libraries -k "${BACKEND_ARGS[@]}" "${LANE_ARGS[@]}" -I . \
             "$RUN_DIR/$suite.sps" </dev/null
     ) 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$log"
     local rc=${PIPESTATUS[0]}

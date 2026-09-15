@@ -87,16 +87,15 @@ def parse_log(text):
             n, t = int(failed[-1][0]), int(failed[-1][1])
             status, p = "fail", t - n
         if first_error:
-            # Cut short. Patina's script runner reports a top-level error and
-            # goes on to the next form only in its resilient mode, which it
-            # picks for any script path containing "test"
-            # (crates/patina-repl/src/main.rs), and every tests/*/run/*.sps is
-            # one. So `(report-test-results)` still prints a tally after the
-            # error has ended `(run-...-tests)`, and that tally covers only the
-            # assertions that ran first: `set` scored pass 16/16 this way.
-            # Outside that mode the first top-level error ends the program with
-            # no tally, and the log reads as a load error instead (Track L PRD,
-            # L3's recorded debt on the test-file heuristic).
+            # Cut short. The runner passes -k, so Patina reports a top-level
+            # error and goes on to the next form, and `(report-test-results)`
+            # still prints a tally after the error has ended `(run-...-tests)`.
+            # That tally covers only the assertions that ran first: `set` scored
+            # pass 16/16 this way. Such a run exits 1, and this branch is reached
+            # before the status is read, which is what keeps a suite cut short
+            # apart from one that never loaded. Without -k the first top-level
+            # error ends the program with no tally, and the log would read as a
+            # load error.
             return "truncated", p, t, first_error, exprs
         return status, p, t, "", exprs
     m = re.search(r"Library \(([^)]*)\) not found", first_error)

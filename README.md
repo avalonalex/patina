@@ -124,6 +124,10 @@ cargo build --release
 ./target/release/patina < script.scm
 ./target/release/patina -i
 
+# A program that reports an error exits non-zero. -k reports every error and
+# runs the next top-level form anyway, and the run still fails.
+./target/release/patina -k script.scm
+
 # Use the tree-walking backend instead
 ./target/release/patina --tree-walker script.scm
 

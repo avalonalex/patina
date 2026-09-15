@@ -42,6 +42,9 @@ SUITE=scheme_tests/chibi/r7rs-tests.scm
 # The suite reports through (chibi test), which Patina supplies from test-lib/
 # rather than bundling (see test-lib/README.md).
 SUPPLIED=(-A test-lib)
+# -k so the suite reaches its tally even if an error escapes to top level; each
+# lane's status is captured below and still fails the lane.
+RUN_ARGS=(-k "${SUPPLIED[@]}")
 
 # Every lane must show the framework's grand total, and the *expected* total,
 # before anything is diffed.
@@ -94,12 +97,22 @@ for backend_flag in "" "--tree-walker"; do
     name=${backend_flag:-"vm"}
     name=${name#--}
 
-    PATINA_GC=0 "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt"
-    "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt"
-    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "${SUPPLIED[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt"
+    # Each lane's status is captured rather than left to `set -e`: the tally
+    # check below says why a run failed, which an abort at this line would not,
+    # and a status that is non-zero after a full tally, such as a crash on the
+    # way out or an error -k carried on past, still fails the lane after it.
+    rc_off=0 rc_default=0 rc_stress=0
+    PATINA_GC=0 "$BIN" $backend_flag "${RUN_ARGS[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-off.txt" || rc_off=$?
+    "$BIN" $backend_flag "${RUN_ARGS[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-default.txt" || rc_default=$?
+    PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "${RUN_ARGS[@]}" "$SUITE" 2>&1 | normalise > "$OUT/$name-stress.txt" || rc_stress=$?
 
     for lane in off default stress; do
         assert_suite_ran "$name $lane lane" "$OUT/$name-$lane.txt" || fail=1
+        rc_var="rc_$lane"
+        if [ "${!rc_var}" -ne 0 ]; then
+            echo "FAIL $name $lane lane: patina exited ${!rc_var}"
+            fail=1
+        fi
     done
 
     for lane in default stress; do

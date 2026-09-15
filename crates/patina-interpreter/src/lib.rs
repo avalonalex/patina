@@ -64,6 +64,28 @@ pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_runtime::{Arity, Backend, Environment, Procedure};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 
+/// What running a whole program with `-k` has to report back.
+///
+/// Carrying on past an error decides how much of the program runs, never
+/// whether it succeeded: both fields feed [`ProgramOutcome::clean`], which is
+/// what a caller that owns an exit status must consult.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgramOutcome {
+    /// Errors reported while evaluating top-level forms.
+    pub eval_errors: usize,
+    /// Whether the program was read to its end. A read error ends the run even
+    /// under `-k`, because nothing after an unfinished datum can be read, so the
+    /// rest of the program never ran.
+    pub read_to_end: bool,
+}
+
+impl ProgramOutcome {
+    /// The whole program ran, and nothing went wrong in it.
+    pub fn clean(&self) -> bool {
+        self.eval_errors == 0 && self.read_to_end
+    }
+}
+
 /// Format any `InterpreterError` with source context.
 ///
 /// `EvalError` variants are formatted with caret context via `format_eval_error_with_source`,
@@ -566,18 +588,23 @@ impl Interpreter<TreeWalker> {
         (Ok(result), source_map)
     }
 
-    /// Evaluate a program resiliently with a named source; prints rich errors and continues.
+    /// Evaluate a program with a named source, reporting each error and
+    /// carrying on to the next top-level form: the CLI's `-k`.
     ///
-    /// Returns the last value and whether the program was read to its end.
-    /// An evaluation error is printed and the run goes on — that is what this
-    /// mode is for — but a read error means part of the program never ran at
-    /// all, and a caller that reports a status must be able to fail on it.
+    /// Carrying on is a recovery policy, not a verdict. The returned
+    /// [`ProgramOutcome`] counts the errors reported and says whether the
+    /// program was read to its end; a caller that owns an exit status must fail
+    /// on either, and [`ProgramOutcome::clean`] is that test. Each error is also
+    /// recorded process-wide, through
+    /// [`patina_runtime::exit_status::note_error_reported`], so a program that
+    /// calls `(exit 0)` after failing still exits non-zero.
     pub fn eval_program_resilient_with_source_name(
         &self,
         input: &str,
         source_name: &str,
-    ) -> (TaggedValue, bool) {
+    ) -> (TaggedValue, ProgramOutcome) {
         let mut result = TaggedValue::UNSPECIFIED;
+        let mut eval_errors = 0usize;
         let heap = self.backend.global_env().heap();
         let source_map = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let sname: std::rc::Rc<str> = std::rc::Rc::from(source_name);
@@ -586,7 +613,12 @@ impl Interpreter<TreeWalker> {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("Error: {}", e);
-                    return (result, false);
+                    patina_runtime::exit_status::note_error_reported();
+                    let outcome = ProgramOutcome {
+                        eval_errors,
+                        read_to_end: false,
+                    };
+                    return (result, outcome);
                 }
             };
         let global = self.backend.global_env().clone();
@@ -602,6 +634,8 @@ impl Interpreter<TreeWalker> {
                     {
                         Ok(val) => result = val,
                         Err(e) => {
+                            eval_errors += 1;
+                            patina_runtime::exit_status::note_error_reported();
                             eprintln!(
                                 "Error: {}",
                                 format_eval_error_with_source(&e, &source_map.borrow())
@@ -609,13 +643,24 @@ impl Interpreter<TreeWalker> {
                         }
                     }
                 }
-                Ok(None) => return (result, true),
+                Ok(None) => {
+                    let outcome = ProgramOutcome {
+                        eval_errors,
+                        read_to_end: true,
+                    };
+                    return (result, outcome);
+                }
                 Err(e) => {
                     eprintln!(
                         "Error: {}",
                         format_parse_error_with_source(&e, &source_map.borrow())
                     );
-                    return (result, false);
+                    patina_runtime::exit_status::note_error_reported();
+                    let outcome = ProgramOutcome {
+                        eval_errors,
+                        read_to_end: false,
+                    };
+                    return (result, outcome);
                 }
             }
         }
