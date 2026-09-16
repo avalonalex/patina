@@ -64,7 +64,7 @@ impl GcRoots for VmState {
         // rather than everything ever compiled. It covers every frame's
         // `code` too: a frame holding a code object is itself what keeps that
         // object in the store.
-        for code in self.code_store.iter().flatten() {
+        for code in self.code_store.iter() {
             visitor.visit_slice(&code.constants);
         }
 

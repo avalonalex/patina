@@ -315,12 +315,13 @@ Linear scan per function:
 
 ### 10.1 Key Features
 
-- **`CodeObjectId(u32)`** — unique ID from global atomic counter (`fresh_code_id()`)
+- **`CodeObjectId::label()`** — names each code object, and the `MakeClosure`
+  that makes a closure of it, until `VmState::load_unit` gives it a store slot
 - **Forward jump patching** — emits `Jump { target: 0 }`, patches after body emission
 - **Constant deduplication** — identical `TaggedValue` constants share pool entries
 - **Two-pass top-level define** — pre-scans all `Define` names before compiling bodies
-- **Nested lambdas** — compiled recursively, each gets own `CodeObject` stored in
-  `code_store`
+- **Nested lambdas** — compiled recursively, each gets own `CodeObject`, loaded
+  into `code_store` with the top-level code as one unit
 
 ### 10.2 Lambda Prologue
 

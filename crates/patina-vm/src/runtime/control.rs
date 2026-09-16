@@ -1499,9 +1499,8 @@ fn runtime_stub(
     if let Some(id) = slot(state) {
         return state.code_object(id);
     }
-    let id = CodeObjectId::fresh();
-    state.load(CodeObject {
-        id,
+    let id = state.load(CodeObject {
+        id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
         live_closures: std::cell::Cell::new(0),
@@ -2806,7 +2805,7 @@ pub(super) fn call_value(
 pub(super) fn call_value_with_probe(
     state: &mut VmState,
     func_val: TaggedValue,
-    closure_code_id: Option<u32>,
+    closure_code_id: Option<u64>,
     arg_vals: &[TaggedValue],
     dst: u16,
 ) -> Result<(), VmError> {
@@ -2883,7 +2882,7 @@ pub(super) fn tail_call_value(
 pub(super) fn tail_call_value_with_probe(
     state: &mut VmState,
     func_val: TaggedValue,
-    closure_code_id: Option<u32>,
+    closure_code_id: Option<u64>,
     arg_vals: &[TaggedValue],
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {

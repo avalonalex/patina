@@ -26,17 +26,20 @@ No value conversion is needed.
 ```rust
 #[derive(Clone)]   // ← non-negotiable; required for stack-snapshot continuations
 pub struct CallFrame {
-    pub code_id:       CodeObjectId,    // index into VmState::code_store
     pub pc:            usize,           // program counter
     pub register_base: usize,           // offset into VmState::registers
     pub num_regs:      u16,             // register window size
     pub closure:       Option<HeapIndex>, // heap index of VmClosure (if any)
     pub return_reg:    Reg,             // where to write result in caller
+    pub code:          Rc<CodeObject>,  // the code this frame runs
 }
 ```
 
-Code objects are looked up in `VmState::code_store` by `CodeObjectId`, not
-stored directly in the frame.
+A frame holds the code it runs, resolved once when the frame is pushed, so the
+dispatch loop reads instructions without a store lookup, and the frame's `Rc`
+keeps that code loaded. A closure names its code by `CodeObjectId` — a slot in
+`VmState::code_store` and the generation of the code in it (VM_ISA.md §2.3) —
+and a call looks it up there.
 
 ### 2.2 `VmState`
 
@@ -62,8 +65,8 @@ pub struct VmState {
     /// Exception handler stack (with-exception-handler).
     pub exception_handlers: Vec<ExceptionHandler>,
 
-    /// Compiled code objects, indexed by the sequential CodeObjectId.
-    pub code_store: Vec<Option<Rc<CodeObject>>>,
+    /// Loaded code objects, indexed by the slot in their CodeObjectId.
+    pub code_store: Vec<Rc<CodeObject>>,
 
     /// Global environment.
     pub globals: Rc<Environment>,

@@ -37,7 +37,7 @@ fn disassemble_one(
     println!(
         "{}┌─ CodeObject #{} \"{}\" ({}, {} regs, {} instructions)",
         indent,
-        co.id.0,
+        co.id,
         name,
         arity_str,
         co.num_regs,
@@ -52,7 +52,7 @@ fn disassemble_one(
         println!("{}│  {:>4}  {}", indent, pc, line);
     }
 
-    println!("{}└─ end #{}", indent, co.id.0);
+    println!("{}└─ end #{}", indent, co.id);
 
     // Recursively disassemble nested lambdas in the order they appear.
     for id in nested_ids {
@@ -147,7 +147,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
             format!(
                 "MakeClosure  r{} ← closure(#{}, [{}])",
                 dst,
-                code_id.0,
+                code_id,
                 fv.join(", ")
             )
         }

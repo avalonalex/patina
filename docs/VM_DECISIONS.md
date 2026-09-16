@@ -39,7 +39,7 @@ no conversion is the right baseline.
 ```rust
 // Stored on heap as HeapObjectData::VmClosure
 HeapObjectData::VmClosure {
-    code_id: u32,                    // CodeObjectId
+    code_id: u64,                    // CodeObjectId
     free_vars: Vec<TaggedValue>,     // captured values by index, O(1) access
 }
 ```
