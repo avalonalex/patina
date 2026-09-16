@@ -15,4 +15,4 @@ pub mod repl;
 // Re-export main REPL type and shared editor infrastructure
 pub use program_stream::run_program_stream;
 pub use repl::Repl;
-pub use repl::{SchemeHelper, make_editor, run_repl_loop};
+pub use repl::{Lines, SchemeHelper, run_repl_loop, session_lines};

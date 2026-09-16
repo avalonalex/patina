@@ -8,10 +8,12 @@ pub use self::validator::needs_more_input;
 use patina_interpreter::{TreeWalkInterpreter, format_interpreter_error};
 use rustyline::error::ReadlineError;
 use rustyline::history::FileHistory;
+use rustyline::validate::ValidationResult;
 use rustyline::{CompletionType, Config, EditMode, Editor};
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 pub struct Repl {
-    editor: Editor<SchemeHelper, FileHistory>,
+    lines: Lines,
     interpreter: TreeWalkInterpreter,
     expr_counter: u32,
 }
@@ -97,10 +99,133 @@ impl rustyline::validate::Validator for SchemeHelper {
     }
 }
 
-/// Build a shared rustyline editor with the Scheme helper (highlighting, validation, hints).
+/// Where a session's lines come from.
+///
+/// At a terminal, the line editor: history, highlighting, editing a form over
+/// several lines. Anything else — a pipe, an editor's inferior-Scheme buffer,
+/// a program driving Patina — is read directly instead, because rustyline's
+/// own path for input that is not a terminal walks the whole form again for
+/// every line added to it, which costs time proportional to the square of the
+/// form's length (#348). chibi, Gauche and Chez stay flat where that was
+/// quadratic, by reading a datum from the port rather than deciding whether a
+/// buffer is finished; reading the lines here is the same idea, and the
+/// session's own reader already reads each line once (#341).
+pub enum Lines {
+    /// A terminal, with the line editor.
+    Editing(Box<Editor<SchemeHelper, FileHistory>>),
+    Piped(Box<PipedLines>),
+}
+
+/// Lines read straight from input that is not a terminal.
+///
+/// It follows what rustyline does there, so a session reads the same text: the
+/// line ending is dropped, a `\x08` erases the grapheme before it — a letter
+/// with its combining marks, not one character of one — and the form is taken
+/// once the validator says it is finished.
+///
+/// The erasing is done to the form as it is built, walking back one grapheme
+/// from its end, rather than reading the whole form again for every line, which
+/// is what cost time proportional to its square.
+pub struct PipedLines {
+    validator: SchemeValidator,
+}
+
+impl PipedLines {
+    fn readline(&mut self) -> Result<String, ReadlineError> {
+        use std::io::BufRead;
+
+        let mut form = String::new();
+        loop {
+            let mut line = String::new();
+            if std::io::stdin().lock().read_line(&mut line)? == 0 {
+                return Err(ReadlineError::Eof);
+            }
+            let ended_with_newline = line.ends_with('\n');
+            let mut ended_with_return = false;
+            if ended_with_newline {
+                line.pop();
+                ended_with_return = line.ends_with('\r');
+                if ended_with_return {
+                    line.pop();
+                }
+            }
+            for grapheme in UnicodeSegmentation::graphemes(line.as_str(), true) {
+                if grapheme == "\u{8}" {
+                    erase_last_grapheme(&mut form);
+                } else {
+                    form.push_str(grapheme);
+                }
+            }
+            if !matches!(self.validator.judge(&form), ValidationResult::Incomplete) {
+                return Ok(form);
+            }
+            // Unfinished: the line ending goes back, and the next line joins it.
+            if ended_with_return {
+                form.push('\r');
+            }
+            if ended_with_newline {
+                form.push('\n');
+            }
+        }
+    }
+}
+
+/// Drop the last grapheme of `form`, which is what a `\x08` erases.
+fn erase_last_grapheme(form: &mut String) {
+    let mut cursor = GraphemeCursor::new(form.len(), form.len(), true);
+    if let Ok(Some(boundary)) = cursor.prev_boundary(form, 0) {
+        form.truncate(boundary);
+    }
+}
+
+impl Lines {
+    fn readline(&mut self, prompt: &str) -> Result<String, ReadlineError> {
+        match self {
+            Lines::Editing(editor) => editor.readline(prompt),
+            Lines::Piped(piped) => piped.readline(),
+        }
+    }
+
+    /// Keep `line` for the history of a session a person is typing at. Input
+    /// that is not a terminal leaves no history, as it leaves none in chibi,
+    /// Gauche or Chez.
+    fn remember(&mut self, line: &str) {
+        if let Lines::Editing(editor) = self {
+            let _ = editor.add_history_entry(line);
+        }
+    }
+
+    /// What had been read of a form the input ended inside.
+    fn take_pending_input(&mut self) -> Option<String> {
+        match self {
+            Lines::Editing(editor) => editor
+                .helper()
+                .and_then(|helper| helper.take_pending_input()),
+            Lines::Piped(piped) => piped.validator.take_pending(),
+        }
+    }
+
+    fn save_history(&mut self) {
+        if let Lines::Editing(editor) = self
+            && let Some(mut path) = dirs::home_dir()
+        {
+            path.push(".patina_history");
+            let _ = editor.save_history(&path);
+        }
+    }
+}
+
+/// Where a session reads its lines from, with the Scheme helper (highlighting,
+/// validation, hints) when that is a terminal. See [`Lines`].
 ///
 /// Used by both the tree-walker REPL and the VM REPL.
-pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
+pub fn session_lines() -> rustyline::Result<Lines> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Ok(Lines::Piped(Box::new(PipedLines {
+            validator: SchemeValidator::new(),
+        })));
+    }
+
     let config = Config::builder()
         .history_ignore_space(true)
         .completion_type(CompletionType::List)
@@ -116,7 +241,7 @@ pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
         let _ = editor.load_history(&path);
     }
 
-    Ok(editor)
+    Ok(Lines::Editing(Box::new(editor)))
 }
 
 /// Run a generic REPL loop using a shared rustyline editor.
@@ -129,11 +254,7 @@ pub fn make_editor() -> rustyline::Result<Editor<SchemeHelper, FileHistory>> {
 /// Returns whether the session ended cleanly: `true` after `(exit)`, `,exit`,
 /// `,quit` or the end of input, and `false` when input ended part-way through
 /// a form or the editor failed.
-pub fn run_repl_loop<F>(
-    editor: &mut Editor<SchemeHelper, FileHistory>,
-    prompt: &str,
-    mut eval: F,
-) -> bool
+pub fn run_repl_loop<F>(lines: &mut Lines, prompt: &str, mut eval: F) -> bool
 where
     F: FnMut(&str) -> Option<String>,
 {
@@ -142,7 +263,7 @@ where
     let clean = loop {
         let _ = std::io::stdout().flush();
 
-        match editor.readline(prompt) {
+        match lines.readline(prompt) {
             Ok(line) => {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with(';') {
@@ -153,7 +274,7 @@ where
                     break true;
                 }
 
-                let _ = editor.add_history_entry(line);
+                lines.remember(line);
 
                 if let Some(output) = eval(line) {
                     println!("{}", output);
@@ -166,9 +287,7 @@ where
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl+C abandons whatever was being typed.
-                if let Some(helper) = editor.helper() {
-                    helper.take_pending_input();
-                }
+                lines.take_pending_input();
                 println!("^C");
                 continue;
             }
@@ -179,9 +298,7 @@ where
                 // line, and the validator forgets what was erased.) A session cut
                 // off inside a form has not ended cleanly: run what arrived, which
                 // reports where the unfinished form began, as a file would.
-                let pending = editor
-                    .helper()
-                    .and_then(|helper| helper.take_pending_input());
+                let pending = lines.take_pending_input();
                 match pending {
                     Some(pending) => {
                         if let Some(output) = eval(&pending) {
@@ -203,10 +320,7 @@ where
         }
     };
 
-    if let Some(mut path) = dirs::home_dir() {
-        path.push(".patina_history");
-        let _ = editor.save_history(&path);
-    }
+    lines.save_history();
     clean
 }
 
@@ -214,7 +328,7 @@ impl Repl {
     /// Create a new REPL with full continuation support.
     pub fn new() -> rustyline::Result<Self> {
         Ok(Repl {
-            editor: make_editor()?,
+            lines: session_lines()?,
             interpreter: TreeWalkInterpreter::new_tree_walker(),
             expr_counter: 0,
         })
@@ -247,7 +361,7 @@ impl Repl {
         let interp = &self.interpreter;
         let counter = &mut self.expr_counter;
 
-        run_repl_loop(&mut self.editor, "patina> ", |line| {
+        run_repl_loop(&mut self.lines, "patina> ", |line| {
             *counter += 1;
             let source_name = format!("<repl-{}>", counter);
             // Every form on the line, as the VM REPL does: reading only the
@@ -269,5 +383,31 @@ impl Repl {
                 )),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::erase_last_grapheme;
+
+    /// A `\x08` erases the grapheme before it, which is what rustyline does
+    /// with a pipe: a letter and the marks on it go together.
+    #[test]
+    fn erasing_takes_the_whole_grapheme() {
+        let mut form = String::from("ab");
+        erase_last_grapheme(&mut form);
+        assert_eq!(form, "a");
+
+        let mut form = String::from("xe\u{301}");
+        erase_last_grapheme(&mut form);
+        assert_eq!(form, "x", "the letter goes with its combining mark");
+
+        let mut form = String::from("a\n");
+        erase_last_grapheme(&mut form);
+        assert_eq!(form, "a", "a line ending is a grapheme of its own");
+
+        let mut form = String::new();
+        erase_last_grapheme(&mut form);
+        assert_eq!(form, "", "nothing to erase");
     }
 }

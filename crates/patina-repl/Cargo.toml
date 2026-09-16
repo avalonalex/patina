@@ -17,6 +17,7 @@ patina-vm = { path = "../patina-vm" }
 rustyline = { version = "17.0.2", features = ["derive"] }
 nu-ansi-term = "0.50"  # For syntax highlighting
 dirs = "6.0.0"  # For finding home directory to save history
+unicode-segmentation = "1.13"  # Erasing a grapheme for a \x08, as rustyline does
 
 # Error handling
 thiserror = { workspace = true }
