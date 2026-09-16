@@ -13,7 +13,7 @@ use super::control::{
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::VmError;
-use crate::types::code_object::{CodeObject, GlobalCacheEntry};
+use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
@@ -85,10 +85,20 @@ pub struct VmState {
     pub dynamic_winds: Vec<DynamicWindRecord>,
     /// Stack of installed exception handlers (`with-exception-handler`).
     pub exception_handlers: Vec<ExceptionHandler>,
-    /// All compiled `CodeObject`s, indexed densely by `CodeObjectId` (ids
-    /// are process-wide sequential — see `CodeObjectId::fresh`). Slots for
-    /// ids loaded into other `VmState`s stay `None`.
-    pub(crate) code_store: Vec<Option<Rc<CodeObject>>>,
+    /// The loaded `CodeObject`s, each in the slot its `CodeObjectId` names.
+    /// A slot whose code has been let go holds `empty_code` until
+    /// [`VmState::load_unit`] gives it to other code.
+    pub(crate) code_store: Vec<Rc<CodeObject>>,
+    /// What an empty slot of `code_store` holds: code with no instructions,
+    /// named by a label, which no loaded code's id is. A lookup then checks
+    /// only that the slot's code has the id asked for, which turns away an
+    /// empty slot as well as one holding later code — a branch fewer on every
+    /// closure call than an `Option` slot, and about 1% of a call-heavy loop.
+    pub(crate) empty_code: Rc<CodeObject>,
+    /// The ids the next code loaded is given, one for each empty slot: the
+    /// slot with the generation after the code it last held. A slot that has
+    /// used every generation is left out, and stays empty (#352).
+    pub(crate) free_code_ids: Vec<CodeObjectId>,
     /// The code each compilation loaded together, keyed by the id it runs
     /// from: a top-level form's code, with the code of the lambdas in it. A
     /// unit is kept or let go whole, since code that is not running can still
@@ -191,6 +201,18 @@ impl VmState {
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
             code_store: Vec::new(),
+            empty_code: Rc::new(CodeObject {
+                id: CodeObjectId::label(),
+                name: None,
+                instructions: Vec::new(),
+                constants: Vec::new(),
+                num_regs: 0,
+                arity: Arity::Fixed(0),
+                source_map: Vec::new(),
+                global_cache: Vec::new(),
+                live_closures: Cell::new(0),
+            }),
+            free_code_ids: Vec::new(),
             code_units: FxHashMap::default(),
             wind_jump_code: None,
             value_wind_code: None,
@@ -255,33 +277,73 @@ impl VmState {
         }
     }
 
-    /// Load a `CodeObject` (and nested ones) into the code store.
-    pub fn load(&mut self, code: CodeObject) {
-        let idx = code.id.index();
-        if idx >= self.code_store.len() {
-            self.code_store.resize(idx + 1, None);
-        }
-        self.code_store[idx] = Some(Rc::new(code));
-    }
-
-    pub fn load_all(&mut self, codes: impl IntoIterator<Item = CodeObject>) {
-        for c in codes {
-            self.load(c);
-        }
+    /// Load a code object that makes no closure, outside any unit, and return
+    /// the id it runs from. For the runtime's own stubs, which are never let
+    /// go.
+    pub(super) fn load(&mut self, mut code: CodeObject) -> CodeObjectId {
+        debug_assert!(
+            !code
+                .instructions
+                .iter()
+                .any(|instr| matches!(instr, Instruction::MakeClosure { .. })),
+            "a code object loaded alone makes a closure, of code not loaded with it"
+        );
+        let id = self.next_code_id();
+        code.id = id;
+        self.code_store[id.index()] = Rc::new(code);
+        id
     }
 
     /// Load what one compilation produced — `top`, and the code nested in it —
     /// as a unit, and return the id to run it from.
     ///
+    /// Each code object is given a slot here, and the labels the compiler
+    /// named it by, in its own id and in the `MakeClosure`s that make a
+    /// closure of it, are replaced by that slot's id (#352).
+    ///
     /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
     /// nothing it left behind can run it again (#338).
     pub fn load_unit(&mut self, top: CodeObject, nested: Vec<CodeObject>) -> CodeObjectId {
-        let top_id = top.id;
-        let members = nested.iter().map(|code| code.id).collect();
-        self.load(top);
-        self.load_all(nested);
+        let ids: FxHashMap<CodeObjectId, CodeObjectId> = std::iter::once(&top)
+            .chain(&nested)
+            .map(|code| (code.id, self.next_code_id()))
+            .collect();
+        debug_assert_eq!(
+            ids.len(),
+            nested.len() + 1,
+            "a unit names two of its code objects by one label"
+        );
+        let top_id = ids[&top.id];
+        let members = nested.iter().map(|code| ids[&code.id]).collect();
+        for mut code in std::iter::once(top).chain(nested) {
+            code.id = ids[&code.id];
+            for instr in &mut code.instructions {
+                if let Instruction::MakeClosure { code_id, .. } = instr {
+                    // The compiler returns the code of every lambda it
+                    // compiled alongside the code that makes it.
+                    debug_assert!(
+                        ids.contains_key(code_id),
+                        "{:?} makes a closure of {code_id:?}, which was not compiled with it",
+                        code.id
+                    );
+                    *code_id = ids.get(code_id).copied().unwrap_or(*code_id);
+                }
+            }
+            let slot = code.id.index();
+            self.code_store[slot] = Rc::new(code);
+        }
         self.code_units.insert(top_id, members);
         top_id
+    }
+
+    /// The id to give the next code loaded: an empty slot's, or a new slot's.
+    fn next_code_id(&mut self) -> CodeObjectId {
+        self.free_code_ids.pop().unwrap_or_else(|| {
+            let slot = u32::try_from(self.code_store.len())
+                .expect("more than u32::MAX code objects loaded at once");
+            self.code_store.push(Rc::clone(&self.empty_code));
+            CodeObjectId::new(slot, 0)
+        })
     }
 
     /// Let go of the unit loaded to run from `top`, if nothing can run any of
@@ -299,7 +361,13 @@ impl VmState {
             return;
         }
         let nested = self.code_units.remove(&top).unwrap_or_default();
-        release_unit(&mut self.code_store, top, &nested);
+        release_unit(
+            &mut self.code_store,
+            &self.empty_code,
+            &mut self.free_code_ids,
+            top,
+            &nested,
+        );
     }
 
     #[inline(always)]
@@ -334,11 +402,12 @@ impl VmState {
     fn after_collection(&mut self) {
         let freed = self.heap.borrow_mut().take_gc_freed_closure_code_ids();
         for id in freed {
-            let code = self.loaded_code(CodeObjectId(id));
+            let id = CodeObjectId(id);
+            let code = self.loaded_code(id);
             // Counted when it was made, and its code kept while it lived.
             debug_assert!(
                 code.is_some_and(|code| code.live_closures.get() > 0),
-                "a freed closure of {id}, whose code counts no live closure"
+                "a freed closure of {id:?}, whose code counts no live closure"
             );
             if let Some(code) = code {
                 code.live_closures
@@ -346,10 +415,12 @@ impl VmState {
             }
         }
         let store = &mut self.code_store;
+        let free = &mut self.free_code_ids;
+        let empty = &self.empty_code;
         self.code_units.retain(|&top, nested| {
             let in_use = unit_in_use(store, top, nested);
             if !in_use {
-                release_unit(store, top, nested);
+                release_unit(store, empty, free, top, nested);
             }
             in_use
         });
@@ -774,32 +845,39 @@ pub(super) fn vm_eval_expr(
 // Execution loop
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The code loaded for `id`, if any.
+/// The code loaded for `id`, if any — none once it has been let go, even when
+/// its slot holds other code by now.
 #[inline(always)]
-fn loaded(store: &[Option<Rc<CodeObject>>], id: CodeObjectId) -> Option<&Rc<CodeObject>> {
-    store.get(id.index()).and_then(Option::as_ref)
+fn loaded(store: &[Rc<CodeObject>], id: CodeObjectId) -> Option<&Rc<CodeObject>> {
+    store.get(id.index()).filter(|code| code.id == id)
 }
 
 /// Whether a frame, a captured continuation or a live closure still needs any
 /// of the unit that runs from `top`. A frame and a continuation hold the code
 /// itself, so the store's `Rc` is then not the only one; a closure names it by
 /// id, and is counted.
-fn unit_in_use(
-    store: &[Option<Rc<CodeObject>>],
-    top: CodeObjectId,
-    nested: &[CodeObjectId],
-) -> bool {
+fn unit_in_use(store: &[Rc<CodeObject>], top: CodeObjectId, nested: &[CodeObjectId]) -> bool {
     std::iter::once(&top).chain(nested).any(|&id| {
         loaded(store, id)
             .is_some_and(|code| code.live_closures.get() > 0 || Rc::strong_count(code) > 1)
     })
 }
 
-/// Drop a unit's code from the store.
-fn release_unit(store: &mut [Option<Rc<CodeObject>>], top: CodeObjectId, nested: &[CodeObjectId]) {
+/// Drop a unit's code from the store, and give its slots to later code.
+fn release_unit(
+    store: &mut [Rc<CodeObject>],
+    empty: &Rc<CodeObject>,
+    free: &mut Vec<CodeObjectId>,
+    top: CodeObjectId,
+    nested: &[CodeObjectId],
+) {
     for &id in std::iter::once(&top).chain(nested) {
-        if let Some(slot) = store.get_mut(id.index()) {
-            *slot = None;
+        let Some(slot) = store.get_mut(id.index()) else {
+            continue;
+        };
+        if slot.id == id {
+            *slot = Rc::clone(empty);
+            free.extend(id.next_generation());
         }
     }
 }
@@ -810,7 +888,7 @@ fn release_unit(store: &mut [Option<Rc<CodeObject>>], top: CodeObjectId, nested:
 #[inline(never)]
 fn missing_code_object(id: CodeObjectId) -> VmError {
     VmError::Runtime {
-        message: format!("missing CodeObject {:?}", id),
+        message: format!("missing CodeObject #{id}"),
     }
 }
 
@@ -1193,7 +1271,7 @@ fn dispatch_one_instruction(
     let code: &CodeObject = cur_code;
 
     let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
-        message: format!("PC {} out of bounds in {:?}", pc, code.id),
+        message: format!("PC {} out of bounds in #{}", pc, code.id),
     })?;
 
     // ── Trace: before instruction ────────────────────────────────────

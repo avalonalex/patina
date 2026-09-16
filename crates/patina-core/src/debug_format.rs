@@ -219,7 +219,13 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::PromptTag(tag) => write!(buf, "{}", tag).unwrap(),
         HeapObjectData::LabelPlaceholder(n) => write!(buf, "#<label-placeholder:{}>", n).unwrap(),
         HeapObjectData::VmClosure { code_id, .. } => {
-            write!(buf, "#<procedure:{}>", code_id).unwrap()
+            // The VM's `CodeObjectId`: its slot in the low half and its
+            // generation in the high, printed as the VM's traces print it.
+            let (slot, generation) = (*code_id as u32, (*code_id >> 32) as u32);
+            match generation {
+                0 => write!(buf, "#<procedure:{slot}>").unwrap(),
+                _ => write!(buf, "#<procedure:{slot}.{generation}>").unwrap(),
+            }
         }
         HeapObjectData::MutableCell(cell) => {
             buf.push_str("#<cell:");

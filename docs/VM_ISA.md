@@ -51,7 +51,7 @@ continuations.
 ### 2.3 Code Object
 
 ```rust
-pub struct CodeObjectId(pub u32);  // global atomic counter
+pub struct CodeObjectId(pub u64);  // slot (low 32 bits) + generation (high 32)
 
 pub struct CodeObject {
     pub id:           CodeObjectId,
@@ -69,8 +69,18 @@ pub enum Arity {
 }
 ```
 
-Code objects are stored in `VmState::code_store` (a dense `Vec<Option<Rc<CodeObject>>>`
-indexed by the sequential `CodeObjectId`) and looked up by ID at runtime.
+Code objects are stored in `VmState::code_store` (a `Vec<Rc<CodeObject>>`
+indexed by the slot in a `CodeObjectId`) and looked up by ID at runtime.
+
+The compiler names code by a label, which `MakeClosure` in the code around it
+uses too. `VmState::load_unit` gives each code object a slot and replaces both,
+and a slot whose code has been let go is given to later code with the next
+generation, so the store grows with the code loaded at once rather than with
+all the code ever compiled (#352). A lookup checks the generation: an id naming
+code that has gone finds nothing rather than whatever took its slot. An empty
+slot holds a shared placeholder whose id is a label, so that one comparison
+turns it away too. A slot that has used every generation is not given out
+again, so ids never repeat.
 
 What one compilation produces — a top-level form's code and the code of the
 lambdas in it — is loaded as a unit and released as one, once no frame, captured
@@ -86,7 +96,7 @@ closure of a lambda nested in it.
 ```rust
 // Stored in the heap as HeapObjectData::VmClosure
 HeapObjectData::VmClosure {
-    code_id: u32,                    // CodeObjectId
+    code_id: u64,                    // CodeObjectId
     free_vars: Vec<TaggedValue>,     // captured values, indexed by slot
 }
 ```

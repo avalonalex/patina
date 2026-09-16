@@ -200,8 +200,9 @@ pub enum HeapObjectData {
     Ephemeron(RefCell<Option<(TaggedValue, TaggedValue)>>),
     /// A VM bytecode closure: code id + captured free variables + globals env.
     VmClosure {
-        /// Serialised as `u32` to avoid a direct dependency on patina-vm types.
-        code_id: u32,
+        /// The VM's `CodeObjectId`, as its raw `u64`, to avoid a direct
+        /// dependency on patina-vm types.
+        code_id: u64,
         free_vars: Vec<TaggedValue>,
         /// The global environment this closure was compiled against.
         /// `LoadGlobal`/`StoreGlobal` use this instead of `VmState::globals`.
@@ -388,7 +389,7 @@ pub struct Heap {
     /// that nothing can run again (#338). A closure holds its code by id
     /// alone, so this is the only way its death reaches that count. `None`
     /// (the default) means nobody consumes them and sweep records nothing.
-    gc_freed_closure_code_ids: Option<Vec<u32>>,
+    gc_freed_closure_code_ids: Option<Vec<u64>>,
 
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
@@ -598,7 +599,7 @@ impl Heap {
 
     /// Drain the code ids of the VM closures reclaimed since the last drain,
     /// one entry per closure.
-    pub fn take_gc_freed_closure_code_ids(&mut self) -> Vec<u32> {
+    pub fn take_gc_freed_closure_code_ids(&mut self) -> Vec<u64> {
         self.gc_freed_closure_code_ids
             .as_mut()
             .map(std::mem::take)
@@ -1238,11 +1239,11 @@ impl Heap {
 
     /// Allocate a VM closure on the heap.
     ///
-    /// `code_id` is a `u32` (the raw `CodeObjectId(u32)` value) to avoid
+    /// `code_id` is a `u64` (the raw `CodeObjectId(u64)` value) to avoid
     /// a direct crate dependency on `patina-vm`.
     pub fn alloc_vm_closure(
         &mut self,
-        code_id: u32,
+        code_id: u64,
         free_vars: Vec<TaggedValue>,
         globals: Rc<crate::environment::Environment>,
     ) -> TaggedValue {
@@ -1256,7 +1257,7 @@ impl Heap {
     /// Retrieve the `(code_id, free_vars)` pair from a VM closure pointer.
     ///
     /// Returns `None` if `val` is not a `VmClosure` object.
-    pub fn get_vm_closure(&self, val: TaggedValue) -> Option<(u32, Vec<TaggedValue>)> {
+    pub fn get_vm_closure(&self, val: TaggedValue) -> Option<(u64, Vec<TaggedValue>)> {
         if !val.is_object() {
             return None;
         }
@@ -1272,7 +1273,7 @@ impl Heap {
     /// free variables. This is the call-path accessor — `get_vm_closure`
     /// clones the whole `free_vars` vector, which callers that just need to
     /// dispatch the closure would immediately discard.
-    pub fn get_vm_closure_code_id(&self, val: TaggedValue) -> Option<u32> {
+    pub fn get_vm_closure_code_id(&self, val: TaggedValue) -> Option<u64> {
         if !val.is_object() {
             return None;
         }

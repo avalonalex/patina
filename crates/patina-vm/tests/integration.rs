@@ -9,6 +9,7 @@ use patina_core::scope::ScopeSet;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile;
 use patina_vm::runtime::{VmState, execute};
+use patina_vm::types::CodeObjectId;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -23,10 +24,8 @@ fn fresh_state() -> VmState {
 
 fn run(expr: CoreExpr) -> TaggedValue {
     let (top, nested) = compile(&expr).expect("compile error");
-    let top_id = top.id;
     let mut state = fresh_state();
-    state.load(top);
-    state.load_all(nested);
+    let top_id = state.load_unit(top, nested);
     execute(&mut state, top_id).expect("execution error")
 }
 
@@ -145,10 +144,8 @@ fn lambda_creates_closure() {
     // (lambda () 42) — should compile and return a closure object
     let expr = lambda(vec![], vec![lit(42)]);
     let (top, nested) = compile(&expr).expect("compile");
-    let top_id = top.id;
     let mut state = fresh_state();
-    state.load(top);
-    state.load_all(nested);
+    let top_id = state.load_unit(top, nested);
     let val = execute(&mut state, top_id).expect("execute");
     // Result should be a procedure (VM closure).
     assert!(val.is_object(), "expected closure object, got {:?}", val);
@@ -361,4 +358,72 @@ fn tail_recursive_countdown() {
     ]);
     let result = run(expr);
     assert_eq!(result.as_fixnum(), Some(100));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Code store slots (#352)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Load `expr` as a unit and run it, as the backend runs a top-level form.
+fn load_and_run(state: &mut VmState, expr: &CoreExpr) -> (CodeObjectId, TaggedValue) {
+    let (top, nested) = compile(expr).expect("compile error");
+    let id = state.load_unit(top, nested);
+    let value = execute(state, id).expect("execution error");
+    (id, value)
+}
+
+#[test]
+fn a_slot_let_go_is_given_to_the_next_code_loaded() {
+    let mut state = fresh_state();
+    let (first, _) = load_and_run(&mut state, &lit(1));
+    state.release_unit_if_unused(first);
+    let (second, value) = load_and_run(&mut state, &app(var("+"), vec![lit(20), lit(22)]));
+    assert_eq!(value.as_fixnum(), Some(42));
+    assert_eq!(second.index(), first.index());
+    assert_eq!(second.generation(), first.generation() + 1);
+}
+
+/// An id outliving its code finds nothing, not the code that took its slot.
+#[test]
+fn an_id_whose_code_has_gone_does_not_run_what_took_its_slot() {
+    let mut state = fresh_state();
+    let (gone, _) = load_and_run(&mut state, &lit(1));
+    state.release_unit_if_unused(gone);
+    assert!(
+        execute(&mut state, gone).is_err(),
+        "{gone:?} ran, though its code was let go"
+    );
+    let (current, _) = load_and_run(&mut state, &lit(2));
+    assert_eq!(current.index(), gone.index());
+    assert!(
+        execute(&mut state, gone).is_err(),
+        "{gone:?} ran, though its code was let go and {current:?} took its slot"
+    );
+    assert_eq!(execute(&mut state, current).unwrap().as_fixnum(), Some(2));
+}
+
+/// Loading gives a unit's code whichever slots are free, and a closure is
+/// made of the code its `MakeClosure` names once loading has replaced the
+/// label the compiler named it by.
+#[test]
+fn a_closure_made_by_code_in_reused_slots_runs_its_own_code() {
+    let mut state = fresh_state();
+    let loaded: Vec<CodeObjectId> = (0..4)
+        .map(|n| load_and_run(&mut state, &lit(n)).0)
+        .collect();
+    for &id in &loaded {
+        state.release_unit_if_unused(id);
+    }
+    // (define (add x) ((lambda (y) (+ x y)) 2)) (add 40)
+    let add = lambda(
+        vec!["x"],
+        vec![app(
+            lambda(vec!["y"], vec![app(var("+"), vec![var("x"), var("y")])]),
+            vec![lit(2)],
+        )],
+    );
+    let program = begin(vec![define("add", add), app(var("add"), vec![lit(40)])]);
+    let (id, value) = load_and_run(&mut state, &program);
+    assert_eq!(value.as_fixnum(), Some(42));
+    assert_eq!(id.generation(), 1, "{id:?} was not given a slot let go");
 }

@@ -1,8 +1,9 @@
 //! Pass 5 — Code Generation
 //!
 //! Walks `RegExpr` and emits `Instruction`s into `CodeObject`s. Nested lambdas
-//! are compiled recursively; each gets its own `CodeObjectId` and is referenced
-//! by a `MakeClosure` instruction in the parent.
+//! are compiled recursively; each is named by its own `CodeObjectId::label`,
+//! which a `MakeClosure` instruction in the parent refers to it by until
+//! `VmState::load_unit` gives it an id.
 //!
 //! Label patching: forward jumps (`JumpIf`, `JumpUnless`, `Jump`) are emitted
 //! with target `0` and patched after the target instruction is known.
@@ -121,13 +122,13 @@ impl Pass5Codegen {
     /// Compile the top-level `AllocatedExpr` into a `CodeObject`.
     ///
     /// Returns the primary `CodeObject` plus any nested ones (from lambdas).
-    /// The caller should load all of them into `VmState::code_store`.
+    /// The caller should load them together with `VmState::load_unit`.
     pub fn run(
         allocated: &AllocatedExpr,
         prim_calls: PrimitiveCallMap,
     ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
         let expr = &allocated.expr;
-        let id = CodeObjectId::fresh();
+        let id = CodeObjectId::label();
         let mut cg = Codegen::new(None, Rc::new(prim_calls));
         gen_expr(expr, &mut cg)?;
         // Top-level: emit a Return of the expression's result.
@@ -877,7 +878,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 
 /// Compile a nested lambda, emit `MakeClosure` into `cg`, result in `dst`.
 fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), CompileError> {
-    let child_id = CodeObjectId::fresh();
+    let child_id = CodeObjectId::label();
     let mut child_cg = Codegen::new(None, Rc::clone(&cg.prim_calls));
 
     // Prologue: wrap each boxed param register in a MutableCell.

@@ -131,8 +131,8 @@ fn compile_pipeline(
 
 /// Compile a `CoreExpr` into a `CodeObject` (plus any nested `CodeObject`s).
 ///
-/// Returns `(top_level_code, nested_codes)`. The caller should load all of
-/// them into `VmState::code_store` before executing. No environment is
+/// Returns `(top_level_code, nested_codes)`. The caller should load them
+/// together with `VmState::load_unit` before executing. No environment is
 /// available, so primitive calls stay on the generic `Call` path.
 pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
     compile_pipeline(expr, None)

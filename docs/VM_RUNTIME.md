@@ -62,8 +62,8 @@ pub struct VmState {
     /// Exception handler stack (with-exception-handler).
     pub exception_handlers: Vec<ExceptionHandler>,
 
-    /// Compiled code objects, indexed by the sequential CodeObjectId.
-    pub code_store: Vec<Option<Rc<CodeObject>>>,
+    /// Loaded code objects, indexed by the slot in their CodeObjectId.
+    pub code_store: Vec<Rc<CodeObject>>,
 
     /// Global environment.
     pub globals: Rc<Environment>,

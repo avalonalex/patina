@@ -8,27 +8,92 @@ use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
+use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// Uniquely identifies a `CodeObject`.
+/// Identifies a `CodeObject`: a slot in one `VmState`'s code store, and the
+/// generation of the code in it.
 ///
-/// Ids are minted by [`CodeObjectId::fresh`] from a process-wide sequential
-/// counter — dense and never reused — so id-indexed stores can be plain
-/// `Vec`s indexed by [`CodeObjectId::index`] (see `VmState::code_store`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CodeObjectId(pub u32);
+/// The VM gives code a slot when it loads it (`VmState::load_unit`), and a
+/// slot whose code has been let go is given to later code, with the next
+/// generation. The store therefore grows with the code loaded at once rather
+/// than with all the code ever compiled (#352), and an id naming code that
+/// has gone finds nothing rather than whatever took its slot: a lookup checks
+/// the generation. A slot that has used every generation is not given out
+/// again, so ids never repeat.
+///
+/// Before it is loaded, code is named by a [`CodeObjectId::label`], which
+/// `MakeClosure` in the code around it uses too; loading replaces both. A
+/// label is never in a store.
+///
+/// The slot is the low 32 bits and the generation the high 32, so a
+/// first-generation id is its slot. A heap `VmClosure` holds the id as a
+/// plain `u64`, and `patina_core::debug_format` prints it the way `Display`
+/// does here.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CodeObjectId(pub u64);
 
 impl CodeObjectId {
-    /// Mint the next process-wide id.
-    pub fn fresh() -> Self {
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        CodeObjectId(COUNTER.fetch_add(1, Ordering::Relaxed))
+    /// The generation labels are made in, which no loaded code has.
+    const LABEL_GENERATION: u32 = u32::MAX;
+
+    /// The id of generation `generation` of slot `slot`.
+    #[inline(always)]
+    pub fn new(slot: u32, generation: u32) -> Self {
+        CodeObjectId((u64::from(generation) << 32) | u64::from(slot))
     }
 
-    /// The dense index this id occupies in id-indexed stores.
+    /// A name for code the compiler has not handed to a VM yet, distinct from
+    /// every other label made in this compilation.
+    pub fn label() -> Self {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        // Wrapping is harmless: a label only has to differ from the others in
+        // its own compilation.
+        CodeObjectId::new(
+            COUNTER.fetch_add(1, Ordering::Relaxed),
+            Self::LABEL_GENERATION,
+        )
+    }
+
+    /// The slot this id names in its `VmState`'s code store.
     #[inline(always)]
     pub fn index(self) -> usize {
-        self.0 as usize
+        self.0 as u32 as usize
+    }
+
+    /// Which of the code objects its slot has held this one is.
+    #[inline(always)]
+    pub fn generation(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+
+    /// The id of the code its slot holds next, or `None` when the slot has
+    /// used every generation and must not be given out again.
+    pub fn next_generation(self) -> Option<Self> {
+        let generation = self.generation().checked_add(1)?;
+        (generation != Self::LABEL_GENERATION)
+            .then(|| CodeObjectId::new(self.index() as u32, generation))
+    }
+}
+
+/// `12` for the first code in slot 12, `12.3` for its fourth, and a label as
+/// its number.
+impl fmt::Display for CodeObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.generation() {
+            0 | Self::LABEL_GENERATION => write!(f, "{}", self.index()),
+            generation => write!(f, "{}.{}", self.index(), generation),
+        }
+    }
+}
+
+impl fmt::Debug for CodeObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.generation() == Self::LABEL_GENERATION {
+            write!(f, "CodeObjectId(label {self})")
+        } else {
+            write!(f, "CodeObjectId({self})")
+        }
     }
 }
 
@@ -60,7 +125,8 @@ impl Arity {
 /// closures that share the same code but different captured environments.
 #[derive(Debug, Clone)]
 pub struct CodeObject {
-    /// Process-unique id (see `CodeObjectId`).
+    /// Its slot and generation once loaded, a label before (see
+    /// `CodeObjectId`).
     pub id: CodeObjectId,
 
     /// Inferred or declared name (for stack traces and error messages).
@@ -169,5 +235,40 @@ impl CodeObject {
         } else {
             Some(&self.source_map[idx - 1].1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CodeObjectId;
+
+    #[test]
+    fn an_id_is_its_slot_and_generation() {
+        let id = CodeObjectId::new(7, 3);
+        assert_eq!((id.index(), id.generation()), (7, 3));
+        assert_eq!(CodeObjectId::new(7, 0).0, 7);
+        assert_eq!(id.to_string(), "7.3");
+        assert_eq!(CodeObjectId::new(7, 0).to_string(), "7");
+    }
+
+    #[test]
+    fn a_slot_is_given_out_until_its_generations_run_out() {
+        let id = CodeObjectId::new(7, 0);
+        assert_eq!(id.next_generation(), Some(CodeObjectId::new(7, 1)));
+        // The last generation before the one labels are made in.
+        let last = CodeObjectId::new(7, u32::MAX - 1);
+        assert_eq!(last.next_generation(), None);
+        assert_eq!(
+            CodeObjectId::new(7, u32::MAX - 2).next_generation(),
+            Some(last)
+        );
+    }
+
+    #[test]
+    fn labels_are_distinct_and_never_a_loaded_generation() {
+        let (a, b) = (CodeObjectId::label(), CodeObjectId::label());
+        assert_ne!(a, b);
+        assert_eq!(a.generation(), CodeObjectId::LABEL_GENERATION);
+        assert_eq!(a.next_generation(), None);
     }
 }

@@ -44,7 +44,7 @@ pub enum TraceEvent {
     Instr {
         step: StepId,
         depth: usize,
-        code_id: u32,
+        code_id: CodeObjectId,
         pc: usize,
         text: String,
         base: usize,
@@ -65,7 +65,7 @@ pub enum TraceEvent {
     FramePush {
         step: StepId,
         depth: usize,
-        code_id: u32,
+        code_id: CodeObjectId,
         base: usize,
         num_regs: u16,
         return_reg: u16,
@@ -75,7 +75,7 @@ pub enum TraceEvent {
     FramePop {
         step: StepId,
         depth: usize,
-        code_id: u32,
+        code_id: CodeObjectId,
         result: String,
         return_reg: u16,
     },
@@ -116,7 +116,7 @@ pub enum TraceEvent {
         abs_idx: usize,
         old_val: String,
         new_val: String,
-        code_id: u32,
+        code_id: CodeObjectId,
         pc: usize,
     },
 
@@ -227,7 +227,7 @@ impl TraceEvent {
 #[derive(Debug, Clone, Default)]
 pub struct TraceFilter {
     /// Only record events for these code object IDs. Empty = all.
-    pub code_ids: HashSet<u32>,
+    pub code_ids: HashSet<CodeObjectId>,
     /// Only record RegWrite events for these absolute register indices.
     pub watch_regs: HashSet<usize>,
     /// Absolute register indices to monitor. Triggers Watchpoint events
@@ -240,7 +240,7 @@ pub struct TraceFilter {
 }
 
 impl TraceFilter {
-    fn accepts_code(&self, code_id: u32) -> bool {
+    fn accepts_code(&self, code_id: CodeObjectId) -> bool {
         self.code_ids.is_empty() || self.code_ids.contains(&code_id)
     }
 
@@ -272,7 +272,7 @@ pub struct StepTracer {
     /// Full register array snapshot (for watchpoints).
     pre_all_regs: Vec<TaggedValue>,
     /// Code ID of the current instruction (for post-instruction).
-    pre_code_id: u32,
+    pre_code_id: CodeObjectId,
     /// PC of the current instruction.
     pre_pc: usize,
 }
@@ -296,7 +296,7 @@ impl StepTracer {
             step: 0,
             pre_regs: Vec::new(),
             pre_all_regs: Vec::new(),
-            pre_code_id: 0,
+            pre_code_id: CodeObjectId(0),
             pre_pc: 0,
         }
     }
@@ -339,7 +339,7 @@ impl StepTracer {
     ) {
         self.step += 1;
 
-        self.pre_code_id = code_id.0;
+        self.pre_code_id = code_id;
         self.pre_pc = pc;
 
         // Snapshot current frame's registers
@@ -357,13 +357,13 @@ impl StepTracer {
         }
 
         // Emit Instr event
-        if self.filter.accepts_code(code_id.0) && self.filter.accepts_kind(TraceEventKind::Instr) {
+        if self.filter.accepts_code(code_id) && self.filter.accepts_kind(TraceEventKind::Instr) {
             let mut dummy = Vec::new();
             let text = crate::disasm::format_instruction(instr, &mut dummy);
             let event = TraceEvent::Instr {
                 step: self.step,
                 depth,
-                code_id: code_id.0,
+                code_id,
                 pc,
                 text,
                 base,
@@ -490,7 +490,7 @@ impl StepTracer {
     }
 
     /// All events within a specific code object.
-    pub fn events_for_code(&self, code_id: u32) -> Vec<&TraceEvent> {
+    pub fn events_for_code(&self, code_id: CodeObjectId) -> Vec<&TraceEvent> {
         self.events
             .iter()
             .filter(|e| match e {
@@ -581,7 +581,7 @@ pub fn format_value(tv: TaggedValue, heap: &SharedHeap) -> String {
             }
             patina_core::heap::HeapObjectType::VmClosure => {
                 if let Some((code_id, fv)) = h.get_vm_closure(tv) {
-                    format!("VmClosure(#{}, {}cap)", code_id, fv.len())
+                    format!("VmClosure(#{}, {}cap)", CodeObjectId(code_id), fv.len())
                 } else {
                     "VmClosure(?)".to_string()
                 }
@@ -753,7 +753,7 @@ fn format_event_json(e: &TraceEvent) -> String {
                 r#"{{"type":"instr","step":{},"depth":{},"code":{},"pc":{},"text":"{}"}}"#,
                 step,
                 depth,
-                code_id,
+                code_id.0,
                 pc,
                 text.replace('\\', "\\\\").replace('"', "\\\"")
             )
@@ -789,7 +789,7 @@ fn format_event_json(e: &TraceEvent) -> String {
         } => {
             format!(
                 r#"{{"type":"frame_push","step":{},"depth":{},"code":{},"base":{},"regs":{},"ret":{}}}"#,
-                step, depth, code_id, base, num_regs, return_reg
+                step, depth, code_id.0, base, num_regs, return_reg
             )
         }
 
@@ -802,7 +802,7 @@ fn format_event_json(e: &TraceEvent) -> String {
         } => {
             format!(
                 r#"{{"type":"frame_pop","step":{},"depth":{},"code":{},"result":"{}","ret":{}}}"#,
-                step, depth, code_id, result, return_reg
+                step, depth, code_id.0, result, return_reg
             )
         }
 
@@ -816,7 +816,7 @@ fn format_event_json(e: &TraceEvent) -> String {
         } => {
             format!(
                 r#"{{"type":"watchpoint","step":{},"abs":{},"old":"{}","new":"{}","code":{},"pc":{}}}"#,
-                step, abs_idx, old_val, new_val, code_id, pc
+                step, abs_idx, old_val, new_val, code_id.0, pc
             )
         }
 

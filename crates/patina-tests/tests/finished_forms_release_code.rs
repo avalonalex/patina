@@ -60,6 +60,10 @@ fn loaded(interp: &Interpreter<VmBackend>) -> usize {
     interp.backend().loaded_code_objects()
 }
 
+fn slots(interp: &Interpreter<VmBackend>) -> usize {
+    interp.backend().code_store_slots()
+}
+
 #[test]
 fn a_form_that_leaves_nothing_behind_lets_its_code_go() {
     let interp = interpreter();
@@ -71,6 +75,47 @@ fn a_form_that_leaves_nothing_behind_lets_its_code_go() {
     assert!(
         after <= before + 1,
         "{before} code objects before 2,000 forms and {after} after"
+    );
+}
+
+/// The slot a form's code let go of is given to the next form's, so the store
+/// grows with the code in use rather than with every form run (#352).
+#[test]
+fn forms_run_one_after_another_reuse_the_store_s_slots() {
+    let interp = interpreter();
+    let before = slots(&interp);
+    for _ in 0..2_000 {
+        interp.eval_program("(+ 1 2)").unwrap();
+    }
+    let after = slots(&interp);
+    assert!(
+        after <= before + 1,
+        "{before} store slots before 2,000 forms and {after} after"
+    );
+}
+
+/// Code held until a collection gives its slots back then: rounds of forms
+/// making closures, each ended by a collection, need the slots of one round.
+#[test]
+fn code_let_go_at_a_collection_gives_its_slots_to_later_forms() {
+    const FORMS: usize = 200;
+    let interp = interpreter();
+    collect(&interp);
+    let before = slots(&interp);
+    for _ in 0..4 {
+        for _ in 0..FORMS {
+            interp
+                .eval_program("(car (map (lambda (x) (+ x 1)) (list 1 2 3)))")
+                .unwrap();
+        }
+        collect(&interp);
+    }
+    let after = slots(&interp);
+    // Two code objects a form, so one round needs at most 2 * FORMS slots
+    // and four without reuse would take 8 * FORMS.
+    assert!(
+        after <= before + 3 * FORMS,
+        "{before} store slots before four rounds of {FORMS} forms making closures, and {after} after"
     );
 }
 

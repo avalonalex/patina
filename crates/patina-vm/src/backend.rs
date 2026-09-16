@@ -113,7 +113,20 @@ impl VmBackend {
     /// see the code of finished forms let go (#338). Not an interface.
     #[doc(hidden)]
     pub fn loaded_code_objects(&self) -> usize {
-        self.state.borrow().code_store.iter().flatten().count()
+        let state = self.state.borrow();
+        state
+            .code_store
+            .iter()
+            .filter(|code| !Rc::ptr_eq(code, &state.empty_code))
+            .count()
+    }
+
+    /// How many slots the VM's code store has, holding code or not: what a
+    /// test checks to see slots given to later code rather than added (#352).
+    /// Not an interface.
+    #[doc(hidden)]
+    pub fn code_store_slots(&self) -> usize {
+        self.state.borrow().code_store.len()
     }
 
     /// Create a new VM backend with a fresh environment and primitive registry.
