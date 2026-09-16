@@ -888,7 +888,7 @@ fn release_unit(
 #[inline(never)]
 fn missing_code_object(id: CodeObjectId) -> VmError {
     VmError::Runtime {
-        message: format!("missing CodeObject #{id}"),
+        message: format!("missing CodeObject {id:?}"),
     }
 }
 
@@ -2357,4 +2357,50 @@ pub(crate) fn import_define(
 ) {
     mark_if_shadowing_primitive(state, env, &name, value);
     env.define(name, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Code that returns register 0, compiled by no one.
+    fn code() -> CodeObject {
+        let instructions = vec![Instruction::Return { val: 0 }];
+        CodeObject {
+            id: CodeObjectId::label(),
+            name: None,
+            global_cache: GlobalCacheEntry::table(&instructions),
+            instructions,
+            constants: Vec::new(),
+            num_regs: 1,
+            arity: Arity::Fixed(0),
+            source_map: Vec::new(),
+            live_closures: Cell::new(0),
+        }
+    }
+
+    /// A slot that has used every generation stays empty, and the next code
+    /// loaded takes a new slot, so no id is ever given out twice (#352).
+    #[test]
+    fn a_slot_whose_generations_have_run_out_is_not_given_out_again() {
+        let mut state = VmState::new(Rc::new(Environment::new()));
+        let first = state.load_unit(code(), Vec::new());
+        state.release_unit_if_unused(first);
+        assert_eq!(state.free_code_ids, vec![CodeObjectId::new(0, 1)]);
+
+        // As if slot 0 had been given out every generation but its last.
+        state.free_code_ids = vec![CodeObjectId::new(0, u32::MAX - 1)];
+        let last = state.load_unit(code(), Vec::new());
+        assert_eq!(last, CodeObjectId::new(0, u32::MAX - 1));
+        state.release_unit_if_unused(last);
+        assert!(
+            state.free_code_ids.is_empty(),
+            "slot 0 went back on the free list with {:?}",
+            state.free_code_ids
+        );
+
+        let next = state.load_unit(code(), Vec::new());
+        assert_eq!(next, CodeObjectId::new(1, 0));
+        assert!(state.code_object(last).is_err());
+    }
 }

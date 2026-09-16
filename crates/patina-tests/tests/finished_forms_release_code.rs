@@ -8,6 +8,10 @@
 //! object and lets a form's code go when no frame, continuation or closure
 //! needs any of it.
 //!
+//! The slots in the store that held that code are given to later code (#352),
+//! so the store grows with the code loaded at once rather than with the number
+//! of forms run; two tests count the slots.
+//!
 //! Freeing code something can still run is the failure that matters, so most
 //! of these hold on to a form's code in one of the ways it can be reached,
 //! run many forms and a collection past it, and then run it.
