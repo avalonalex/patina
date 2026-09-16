@@ -15,7 +15,6 @@
 //! ```
 
 pub mod cond_expand;
-pub mod datum_scan;
 pub mod desugarer;
 pub mod dialect;
 pub mod error;
@@ -25,13 +24,13 @@ pub mod library_support;
 pub mod macro_expander;
 pub mod parser;
 pub mod quasiquote_lower;
+pub mod reader;
 // The source map is shared with the backends, which is why it lives in
 // patina-core; it is still reached through here, where the parser fills it.
 pub use patina_core::source_map;
 
 // Re-export main types
 pub use cond_expand::evaluate_feature_requirement_tagged;
-pub use datum_scan::DatumScan;
 pub use desugarer::{DesugarError, Desugarer};
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, ReaderState, Spanned, Token};
@@ -39,4 +38,5 @@ pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
 pub use library_support::{SchemeLibraryLoader, is_define_library_form};
 pub use parser::{ParseError, Parser};
 pub use quasiquote_lower::{ConstructorResolver, QuasiquoteError, lower_quasiquotes};
+pub use reader::Reader;
 pub use source_map::{SourceMap, prune_freed_locations};

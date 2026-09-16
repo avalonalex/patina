@@ -97,7 +97,7 @@ fn describe_char(ch: char) -> String {
 ///
 /// A reader that stops and later carries on — a program read as it arrives,
 /// which cannot parse a form until the lines holding it are in — resumes from
-/// one of these with [`Lexer::resuming`], so positions stay the source's own
+/// one of these with [`Lexer::resume_at`], so positions stay the source's own
 /// and a directive read earlier still holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderState {
@@ -126,6 +126,10 @@ pub struct Spanned {
     pub column: u32,
     /// Where the token begins, with the reader state there.
     pub start: ReaderState,
+    /// Where the text after the token begins, with the reader state there, so
+    /// a reader replaying tokens can say how much text they consumed without
+    /// the lexer that produced them.
+    pub end: ReaderState,
 }
 
 pub struct Lexer {
@@ -159,6 +163,102 @@ pub struct Lexer {
     /// nothing and reaches the parser as a plain `)`, which is what the REPL
     /// needs while a form is still being typed.
     open_delimiters: Vec<char>,
+    /// Whether more text may still arrive ([`Lexer::feed`]), which makes a
+    /// token that runs to the end of what is here provisional. See
+    /// [`Lexer::next_fed_token`].
+    more_may_come: bool,
+    /// Whether nothing has been read yet from the start of a source, so the
+    /// first text fed may begin with a byte order mark to drop. A lexer
+    /// resuming part-way through a source ([`Lexer::resume_at`]) is not at one,
+    /// and U+FEFF there is the character it is.
+    at_source_start: bool,
+    /// Where the token being read begins: before the whitespace and comments
+    /// it follows have been skipped, and again after. A token the text runs
+    /// out inside is read again from here, so the whitespace before it is read
+    /// once ([`Lexer::next_fed_token`]).
+    token_start: ReaderState,
+    /// The token the text ran out inside, when it is one that may span lines.
+    /// See [`Partial`].
+    partial: Option<Partial>,
+}
+
+impl LexError {
+    /// Whether the text ran out part-way through a token, as opposed to text
+    /// that stays wrong however much more follows.
+    ///
+    /// A string, a `|symbol|` and a block comment may each span lines, so an
+    /// unterminated one at the end of what has arrived says only that it is
+    /// not finished yet. `#\bogus` is wrong whatever follows it.
+    pub fn is_incomplete(&self) -> bool {
+        Looking::of(self).is_some()
+    }
+}
+
+/// A token the text ran out inside, and how far the scan for its end has got.
+///
+/// A string, a `|symbol|` and a block comment may each span any number of
+/// lines. Reading such a token again whenever a line arrives costs time
+/// proportional to the square of its length, so the lexer scans on for its end
+/// instead, carrying on from where the scan stopped. When the end is here the
+/// token is read once, from its start (#341).
+#[derive(Debug, Clone, Copy)]
+struct Partial {
+    /// Where the token begins, so it is read with its own position.
+    start: ReaderState,
+    looking_for: Looking,
+    /// How far the scan has got.
+    scanned_to: usize,
+}
+
+/// What the end of an unfinished token looks like, and what the scan carries
+/// for it.
+#[derive(Debug, Clone, Copy)]
+enum Looking {
+    /// The `"` ending a string or the `|` ending a `|symbol|`, with whether
+    /// the scan stopped just after a backslash, which escapes what follows.
+    Closer { closer: char, escaped: bool },
+    /// The `|#` ending a block comment, and how deep it is, since they nest.
+    BlockComment { depth: usize },
+    /// The line ending that closes a `;` comment. There is no error for one
+    /// that runs to the end of the text, so the skip below builds this itself.
+    LineComment,
+}
+
+impl Looking {
+    /// What the scanner was reading, from the error it gave when the text ran
+    /// out inside it. Every other error is one more text cannot finish.
+    fn of(error: &LexError) -> Option<Looking> {
+        match error {
+            LexError::UnterminatedString => Some(Looking::Closer {
+                closer: '"',
+                escaped: false,
+            }),
+            LexError::UnterminatedVerticalBarIdentifier => Some(Looking::Closer {
+                closer: '|',
+                escaped: false,
+            }),
+            LexError::UnterminatedBlockComment => Some(Looking::BlockComment { depth: 1 }),
+            _ => None,
+        }
+    }
+
+    /// How many characters open it: `"`, `|`, `#|`.
+    fn opener(self) -> usize {
+        match self {
+            Looking::BlockComment { .. } => 2,
+            Looking::Closer { .. } | Looking::LineComment => 1,
+        }
+    }
+}
+
+/// Where a lexer stood, for undoing a trial read. See [`Lexer::mark`].
+pub struct LexerMark {
+    at: ReaderState,
+    prev_token_end: ReaderState,
+    open_delimiters: Vec<char>,
+    more_may_come: bool,
+    token_start: ReaderState,
+    partial: Option<Partial>,
 }
 
 /// Drop a leading U+FEFF.
@@ -191,26 +291,267 @@ impl Lexer {
             bom_offset: usize::from(input.starts_with('\u{feff}')),
             allow_r6rs: crate::dialect::allow_r6rs(),
             open_delimiters: Vec::new(),
+            more_may_come: false,
+            at_source_start: input.is_empty(),
+            token_start: ReaderState::START,
+            partial: None,
         }
     }
 
-    /// Read `input` from `at`, a point an earlier reader of the same source
-    /// stopped at, rather than from its start: positions carry on from `at`,
-    /// and so does `#!fold-case`.
+    /// A lexer with no text yet, fed with [`Lexer::feed`] as it arrives: a
+    /// program on standard input, a `read` from a line-oriented port, a
+    /// session deciding whether to take another line.
     ///
-    /// `input` is taken as it is. Only [`Lexer::new`], reading a source from
-    /// its start, drops a byte order mark; anywhere else U+FEFF is a character.
-    pub fn resuming(input: &str, at: ReaderState) -> Self {
+    /// `r6rs` is the dialect, resolved once by the caller rather than once per
+    /// lexer, as [`Lexer::reading_r6rs`] takes it.
+    pub fn feedable(r6rs: bool) -> Self {
         Lexer {
-            input: input.chars().collect(),
-            position: at.offset,
-            fold_case: at.fold_case,
-            line: at.line,
-            column: at.column,
-            prev_token_end: at,
-            bom_offset: 0,
-            allow_r6rs: crate::dialect::allow_r6rs(),
-            open_delimiters: Vec::new(),
+            more_may_come: true,
+            ..Lexer::new("").reading_r6rs(r6rs)
+        }
+    }
+
+    /// Add `text` to the end of what this lexer reads.
+    ///
+    /// A byte order mark is dropped only from the first text of a source, as
+    /// [`Lexer::new`] drops it; anywhere else U+FEFF is a character.
+    pub fn feed(&mut self, text: &str) {
+        // Empty text is not the start being read: a `read` feeds a port's
+        // pushback first, which is usually empty, and the mark is in the line
+        // that follows it.
+        if self.at_source_start && !text.is_empty() {
+            self.bom_offset = usize::from(text.starts_with('\u{feff}'));
+            self.input.extend(strip_byte_order_mark(text));
+            self.at_source_start = false;
+        } else {
+            self.input.extend(text.chars());
+        }
+    }
+
+    /// No more text is coming, so a token reaching the end of what is here is
+    /// finished rather than provisional.
+    pub fn no_more_text(&mut self) {
+        self.more_may_come = false;
+    }
+
+    /// The next token, or `None` when the text that has arrived ends inside
+    /// one and more may still come.
+    ///
+    /// A token that runs to the end of that text is provisional, because what
+    /// arrives next could continue it: `foo` may become `foobar`, `,` may
+    /// become `,@`, and `#t` may become `#true`. The lexer rewinds to where
+    /// such a token began and waits for more.
+    ///
+    /// That is also the answer to "can a datum have finished yet", with no
+    /// second reading of the lexical rules: until a token is finished, no
+    /// datum containing it has. Only the text running out stops the lexer —
+    /// a mistake in text that is all here is still an error, reported where
+    /// it is.
+    pub fn next_fed_token(&mut self) -> Result<Option<Spanned>, LexError> {
+        let delimiters = (
+            self.open_delimiters.len(),
+            self.open_delimiters.last().copied(),
+        );
+        if self.partial.is_some() {
+            match self.finish_partial() {
+                // The end of the token is here: read it from its start, in one
+                // pass.
+                Some(start) => self.rewind_to(start, delimiters),
+                None => return Ok(None),
+            }
+        }
+        // After that rewind, not before it: a token whose end has just arrived
+        // is read from its start, and rewinding it to where the lexer stood
+        // before would step over the token altogether.
+        let resume = self.raw_state();
+        let token = self.next_token();
+        if self.more_may_come && self.is_at_end() {
+            if let Err(error) = &token
+                && let Some(looking_for) = Looking::of(error)
+            {
+                // A token that may span any number of lines. Rather than
+                // reading it again whenever a line arrives, scan on for its
+                // end as the text comes (`Partial`).
+                self.partial = Some(Partial {
+                    start: self.token_start,
+                    looking_for,
+                    scanned_to: self.token_start.offset + looking_for.opener(),
+                });
+                return Ok(None);
+            }
+            // Either a token that ran to the end of the text, or the error of
+            // one the text ran out inside: a `#\` with nothing after it, an
+            // identifier the next text may continue.
+            //
+            // Back to where the token began, which is past the whitespace and
+            // comments before it: those are finished, and reading them again
+            // on every line that arrives is what made a form spanning many of
+            // them cost time proportional to its square.
+            let back_to = if self.token_start.offset > resume.offset {
+                self.token_start
+            } else {
+                resume
+            };
+            self.rewind_to(back_to, delimiters);
+            return Ok(None);
+        }
+        token.map(Some)
+    }
+
+    /// Carry on from `at`, a point an earlier lexer of the same source stopped
+    /// at, before any text has been fed: positions continue from there, and so
+    /// does `#!fold-case`.
+    pub fn resume_at(&mut self, at: ReaderState) {
+        self.at_source_start = false;
+        self.position = 0;
+        self.line = at.line;
+        self.column = at.column;
+        self.fold_case = at.fold_case;
+        self.prev_token_end = ReaderState { offset: 0, ..at };
+        self.token_start = ReaderState::START;
+    }
+
+    /// Drop the text already read, so what a fed lexer holds follows what it
+    /// is still reading rather than everything that has arrived (#333).
+    ///
+    /// Offsets start again from it: only a caller that has finished with the
+    /// text behind the lexer calls this, and the line and column carry on, so
+    /// what a diagnostic reports is unaffected.
+    pub fn forget_read_text(&mut self, up_to: usize) {
+        debug_assert!(
+            self.partial.is_none(),
+            "dropping text under a token being scanned would leave its offsets behind",
+        );
+        let up_to = up_to.min(self.position);
+        self.input.drain(..up_to);
+        self.position -= up_to;
+        self.token_start = ReaderState {
+            offset: self.token_start.offset.saturating_sub(up_to),
+            ..self.token_start
+        };
+        self.prev_token_end = ReaderState {
+            offset: self.prev_token_end.offset.saturating_sub(up_to),
+            ..self.prev_token_end
+        };
+        self.bom_offset = 0;
+    }
+
+    /// Where the lexer stands, for a trial read that is to be undone
+    /// ([`Lexer::restore`]).
+    pub fn mark(&self) -> LexerMark {
+        LexerMark {
+            at: self.raw_state(),
+            prev_token_end: self.prev_token_end,
+            open_delimiters: self.open_delimiters.clone(),
+            more_may_come: self.more_may_come,
+            token_start: self.token_start,
+            partial: self.partial,
+        }
+    }
+
+    /// Put the lexer back where `mark` was taken, undoing a trial read. The
+    /// text itself is kept: only where the lexer stands in it is restored.
+    pub fn restore(&mut self, mark: LexerMark) {
+        self.position = mark.at.offset;
+        self.line = mark.at.line;
+        self.column = mark.at.column;
+        self.fold_case = mark.at.fold_case;
+        self.prev_token_end = mark.prev_token_end;
+        self.open_delimiters = mark.open_delimiters;
+        self.more_may_come = mark.more_may_come;
+        self.token_start = mark.token_start;
+        self.partial = mark.partial;
+    }
+
+    /// Look for the end of the token the text ran out inside, carrying on from
+    /// where the last scan stopped: `Some` with where that token begins once
+    /// its end is here, and `None` while it is not.
+    ///
+    /// Nothing more is coming, so the token is read as it stands and reported
+    /// unterminated.
+    fn finish_partial(&mut self) -> Option<ReaderState> {
+        let mut partial = self.partial?;
+        if !self.more_may_come {
+            self.partial = None;
+            return Some(partial.start);
+        }
+        let mut at = partial.scanned_to;
+        while at < self.input.len() {
+            let ch = self.input[at];
+            match &mut partial.looking_for {
+                Looking::Closer { closer, escaped } => {
+                    if *escaped {
+                        *escaped = false;
+                    } else if ch == '\\' {
+                        *escaped = true;
+                    } else if ch == *closer {
+                        self.partial = None;
+                        return Some(partial.start);
+                    }
+                    at += 1;
+                }
+                Looking::LineComment => {
+                    if ch == '\n' {
+                        self.partial = None;
+                        return Some(partial.start);
+                    }
+                    at += 1;
+                }
+                Looking::BlockComment { depth } => {
+                    let next = self.input.get(at + 1).copied();
+                    if matches!(ch, '#' | '|') && next.is_none() {
+                        // The pair may be split between what has arrived and
+                        // what has not.
+                        break;
+                    }
+                    match (ch, next) {
+                        ('#', Some('|')) => {
+                            *depth += 1;
+                            at += 2;
+                        }
+                        ('|', Some('#')) => {
+                            *depth -= 1;
+                            at += 2;
+                            if *depth == 0 {
+                                self.partial = None;
+                                return Some(partial.start);
+                            }
+                        }
+                        _ => at += 1,
+                    }
+                }
+            }
+        }
+        partial.scanned_to = at;
+        self.partial = Some(partial);
+        None
+    }
+
+    /// Whether the text so far ends inside a token that may span lines, whose
+    /// text the lexer is therefore still holding.
+    pub fn inside_token(&self) -> bool {
+        self.partial.is_some()
+    }
+
+    /// Put the lexer back where it stood before the token just read, so that
+    /// token is read again once more text has arrived.
+    ///
+    /// `#!fold-case` travels in the state. The open-delimiter stack is put
+    /// back by hand, since the token may have pushed one (`(`) or popped one
+    /// (`)`).
+    fn rewind_to(&mut self, at: ReaderState, delimiters: (usize, Option<char>)) {
+        self.position = at.offset;
+        self.line = at.line;
+        self.column = at.column;
+        self.fold_case = at.fold_case;
+        self.prev_token_end = at;
+        let (depth, innermost) = delimiters;
+        if self.open_delimiters.len() > depth {
+            self.open_delimiters.truncate(depth);
+        } else if self.open_delimiters.len() < depth
+            && let Some(closer) = innermost
+        {
+            self.open_delimiters.push(closer);
         }
     }
 
@@ -250,15 +591,21 @@ impl Lexer {
         // returned token — record it before skipping whitespace so callers
         // can tell how much input the previous tokens consumed
         self.prev_token_end = self.raw_state();
+        // Where what is being read begins: the comment or whitespace first,
+        // since running out inside one of those is also running out inside
+        // something, and then the token itself. See `next_fed_token`.
+        self.token_start = self.raw_state();
         self.skip_whitespace_and_comments()?;
 
         let start = self.state();
+        self.token_start = self.raw_state();
         let token = self.lex_token()?;
         Ok(Spanned {
             token,
             line: start.line,
             column: start.column,
             start,
+            end: self.state(),
         })
     }
 
@@ -438,13 +785,31 @@ impl Lexer {
 
     fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
         while !self.is_at_end() {
+            // Where what is being skipped begins, so a block comment the text
+            // runs out inside is scanned from its own start rather than from
+            // the end of the last token. See [`Lexer::next_fed_token`].
+            self.token_start = self.raw_state();
             match self.current_char() {
                 // Exactly R7RS 7.1.1's <whitespace>, deliberately *not*
                 // `char::is_whitespace`: widening it here would silently turn
                 // a stray U+00A0 into a space, where `is_identifier_start`
                 // keeps it a visible error. See that function.
                 ' ' | '\t' | '\n' | '\r' | '\x0C' => self.advance(),
-                ';' => self.skip_to_line_ending(),
+                ';' => {
+                    let start = self.raw_state();
+                    self.skip_to_line_ending();
+                    if self.more_may_come && self.is_at_end() {
+                        // No line ending yet, so the text that follows is
+                        // still comment. Scan on for one rather than treating
+                        // the comment as read (`Partial`).
+                        self.partial = Some(Partial {
+                            start,
+                            looking_for: Looking::LineComment,
+                            scanned_to: self.position,
+                        });
+                        return Ok(());
+                    }
+                }
                 '#' if self.peek_char() == Some('|') => {
                     // Block comment: skip nested block comment
                     self.skip_block_comment()?;
@@ -1086,6 +1451,132 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The token kinds a fed lexer produces, once it has them.
+    fn fed(pieces: &[&str]) -> Vec<Token> {
+        let mut lexer = Lexer::feedable(false);
+        let mut tokens = Vec::new();
+        for piece in pieces {
+            lexer.feed(piece);
+            while let Some(spanned) = lexer.next_fed_token().expect("lexes") {
+                tokens.push(spanned.token);
+            }
+        }
+        tokens
+    }
+
+    /// A token running to the end of the text that has arrived may be
+    /// continued by the text that has not, so the lexer waits for it rather
+    /// than splitting it in two.
+    #[test]
+    fn a_fed_lexer_waits_at_the_end_of_the_text() {
+        assert_eq!(fed(&["foo"]), vec![], "foo may still become foobar");
+        assert_eq!(
+            fed(&["foo", "bar "]),
+            vec![Token::Identifier("foobar".into())]
+        );
+        assert_eq!(
+            fed(&[",", "@x "]),
+            vec![Token::UnquoteSplicing, Token::Identifier("x".into())]
+        );
+        assert_eq!(fed(&["#t", "rue "]), vec![Token::Boolean(true)]);
+        assert_eq!(fed(&["\"ab", "cd\" "]), vec![Token::String("abcd".into())]);
+        assert_eq!(
+            fed(&["#| a ", "|# x "]),
+            vec![Token::Identifier("x".into())]
+        );
+        assert_eq!(
+            fed(&["(display ", "1)\n"]),
+            vec![
+                Token::LeftParen,
+                Token::Identifier("display".into()),
+                Token::Number("1".into()),
+                Token::RightParen
+            ],
+            "a form finished before the end of its line is read at once"
+        );
+    }
+
+    /// A token that may span any number of lines is scanned on for its end as
+    /// the text arrives, and read once when the end is here — including when
+    /// what marks the end is split between one piece of text and the next.
+    #[test]
+    fn a_token_that_spans_the_text_is_scanned_on_for_its_end() {
+        assert_eq!(
+            fed(&["\"a", "b", "c\" "]),
+            vec![Token::String("abc".into())],
+            "a string over three pieces"
+        );
+        assert_eq!(
+            fed(&["\"a\\", "\" b\" "]),
+            vec![Token::String("a\" b".into())],
+            "an escape split from the quote it escapes"
+        );
+        assert_eq!(
+            fed(&["|a", "b| "]),
+            vec![Token::Identifier("ab".into())],
+            "a |symbol| over two pieces"
+        );
+        assert_eq!(
+            fed(&["#| x |", "# y "]),
+            vec![Token::Identifier("y".into())],
+            "a block comment whose closing pair is split"
+        );
+        assert_eq!(
+            fed(&["#| a #", "| b |", "# c |# d "]),
+            vec![Token::Identifier("d".into())],
+            "a nested block comment, both pairs split"
+        );
+    }
+
+    /// Nothing more is coming, so the last token is finished where the text
+    /// is.
+    #[test]
+    fn the_end_of_the_text_finishes_the_last_token() {
+        let mut lexer = Lexer::feedable(false);
+        lexer.feed("foo");
+        assert!(lexer.next_fed_token().unwrap().is_none());
+        lexer.no_more_text();
+        assert_eq!(
+            lexer.next_fed_token().unwrap().map(|s| s.token),
+            Some(Token::Identifier("foo".into()))
+        );
+        assert_eq!(
+            lexer.next_fed_token().unwrap().map(|s| s.token),
+            Some(Token::Eof)
+        );
+    }
+
+    /// A rewound token puts back what reading it changed: `#!fold-case` for
+    /// the text that follows, and the stack a closer is checked against.
+    #[test]
+    fn rewinding_a_token_puts_back_what_it_changed() {
+        assert_eq!(
+            fed(&["#!fold-case ABC", " "]),
+            vec![Token::Identifier("abc".into())],
+            "the directive applies to the identifier it was rewound with"
+        );
+
+        let mut lexer = Lexer::feedable(true);
+        lexer.feed("(a]");
+        assert_eq!(
+            lexer.next_fed_token().unwrap().map(|s| s.token),
+            Some(Token::LeftParen)
+        );
+        assert_eq!(
+            lexer.next_fed_token().unwrap().map(|s| s.token),
+            Some(Token::Identifier("a".into()))
+        );
+        assert!(
+            lexer.next_fed_token().unwrap().is_none(),
+            "] may not be its end"
+        );
+        lexer.feed(" ");
+        assert!(
+            lexer.next_fed_token().is_err(),
+            "the ] still closes the ( it was rewound over"
+        );
+    }
 
     /// `is_special_float_literal` decides whether `+`/`-` starts a number or
     /// an identifier. It had no test of its own, which is how it kept a
