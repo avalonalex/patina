@@ -180,4 +180,10 @@ pub struct VmContinuation {
     /// process with this status instead of restoring a machine, since there is
     /// none to restore — every frame, extent, prompt and handler is empty.
     pub exit_status: Option<i32>,
+
+    /// `true` for the landing an abort travels to when it has an extent to
+    /// leave (`abort_to_prompt`). Every step of that travel is a transfer,
+    /// not only the first, and `ResumeWindJump` reads this to park each one as
+    /// such (`VmState::pending_transfer`, #342).
+    pub abort_landing: bool,
 }
