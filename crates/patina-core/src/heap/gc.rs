@@ -828,7 +828,7 @@ fn sweep_arena<T>(
     marks: &mut BitSet,
     write_tombstone: bool,
     tombstone: impl Fn() -> T,
-    mut record_freed: impl FnMut(HeapIndex),
+    mut record_freed: impl FnMut(HeapIndex, &T),
 ) -> usize {
     for &idx in free_list.iter() {
         marks.set(idx as usize);
@@ -836,11 +836,12 @@ fn sweep_arena<T>(
     let mut swept = 0;
     for (i, slot) in arena.iter_mut().enumerate() {
         if !marks.get(i) {
+            // Before the tombstone, so a consumer can see what died.
+            record_freed(i as HeapIndex, slot);
             if write_tombstone {
                 *slot = tombstone();
             }
             free_list.push(i as HeapIndex);
-            record_freed(i as HeapIndex);
             swept += 1;
         }
     }
@@ -889,6 +890,7 @@ impl Heap {
         // the arenas themselves are mutably borrowed.
         let mut freed = self.gc_freed_bits.take();
         let mut overflow = self.gc_freed_overflow;
+        let mut freed_closures = self.gc_freed_closure_code_ids.take();
         let swept = ArenaCounts {
             pairs: sweep_arena(
                 &mut self.pairs,
@@ -896,7 +898,7 @@ impl Heap {
                 &mut marks.pairs,
                 cfg!(debug_assertions),
                 || (TaggedValue::GC_POISON, TaggedValue::GC_POISON),
-                |i| record_freed_bits(&mut freed, &mut overflow, TaggedValue::pair(i)),
+                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::pair(i)),
             ),
             vectors: sweep_arena(
                 &mut self.vectors,
@@ -904,7 +906,7 @@ impl Heap {
                 &mut marks.vectors,
                 true,
                 Vec::new,
-                |i| record_freed_bits(&mut freed, &mut overflow, TaggedValue::vector(i)),
+                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::vector(i)),
             ),
             strings: sweep_arena(
                 &mut self.strings,
@@ -912,7 +914,7 @@ impl Heap {
                 &mut marks.strings,
                 true,
                 Vec::new,
-                |i| record_freed_bits(&mut freed, &mut overflow, TaggedValue::string(i)),
+                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::string(i)),
             ),
             objects: sweep_arena(
                 &mut self.objects,
@@ -920,11 +922,19 @@ impl Heap {
                 &mut marks.objects,
                 true,
                 || HeapObjectData::Free,
-                |i| record_freed_bits(&mut freed, &mut overflow, TaggedValue::object(i)),
+                |i, old| {
+                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::object(i));
+                    if let (Some(ids), HeapObjectData::VmClosure { code_id, .. }) =
+                        (freed_closures.as_mut(), old)
+                    {
+                        ids.push(*code_id);
+                    }
+                },
             ),
         };
         self.gc_freed_bits = freed;
         self.gc_freed_overflow = overflow;
+        self.gc_freed_closure_code_ids = freed_closures;
         self.allocs_since_gc = 0;
         self.gc_pending.set(false);
         self.gc_collections += 1;

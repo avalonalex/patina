@@ -89,6 +89,14 @@ pub struct CodeObject {
     /// or empty when the code has no global-access instructions at all.
     /// See [`GlobalCacheEntry`] for the soundness argument.
     pub global_cache: Vec<Cell<GlobalCacheEntry>>,
+
+    /// How many live VM closures run this code (#338). A frame holds its code
+    /// itself, so the `Rc` count says whether a frame needs it; a closure names
+    /// its code by id, so this is what says a closure does. Counted up where
+    /// `MakeClosure` makes one and down when the collector frees one. It
+    /// changes through a shared code object, as `global_cache` does, and like
+    /// that it has no bearing on what the code does.
+    pub live_closures: Cell<u32>,
 }
 
 /// One `LoadGlobal`/`StoreGlobal` site's resolved binding, and the canonical

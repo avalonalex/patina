@@ -58,9 +58,12 @@ impl GcRoots for VmState {
 
         trace_frames(&self.frames, visitor);
 
-        // Code objects are never evicted, so their constants are effectively
-        // immortal roots. Tracing the store covers every frame's `code` too,
-        // since frames only ever hold objects taken from it.
+        // The constants of every code object still loaded. A form's code stays
+        // in the store only while a frame, a captured continuation or a live
+        // closure can still run it (#338), so this follows the code in use
+        // rather than everything ever compiled. It covers every frame's
+        // `code` too: a frame holding a code object is itself what keeps that
+        // object in the store.
         for code in self.code_store.iter().flatten() {
             visitor.visit_slice(&code.constants);
         }

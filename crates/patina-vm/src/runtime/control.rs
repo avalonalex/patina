@@ -1504,6 +1504,7 @@ fn runtime_stub(
         id,
         name: Some(Rc::from(name)),
         global_cache: GlobalCacheEntry::table(&instructions),
+        live_closures: std::cell::Cell::new(0),
         instructions,
         constants: Vec::new(),
         num_regs,

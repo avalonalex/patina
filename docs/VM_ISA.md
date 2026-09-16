@@ -72,6 +72,15 @@ pub enum Arity {
 Code objects are stored in `VmState::code_store` (a dense `Vec<Option<Rc<CodeObject>>>`
 indexed by the sequential `CodeObjectId`) and looked up by ID at runtime.
 
+What one compilation produces — a top-level form's code and the code of the
+lambdas in it — is loaded as a unit and released as one, once no frame, captured
+continuation or live closure can run any of it again (#338). A frame and a
+continuation hold the code itself, so its `Rc` count says whether they need it; a
+closure names its code by id, so the VM counts the closures naming each code
+object, up where `MakeClosure` makes one and down when the collector frees one.
+A unit is kept whole because code that has finished running can still make a
+closure of a lambda nested in it.
+
 ### 2.4 Flat Closures
 
 ```rust
