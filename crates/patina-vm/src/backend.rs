@@ -109,6 +109,13 @@ pub struct VmBackend {
 }
 
 impl VmBackend {
+    /// How many compiled code objects the VM is holding: what a test checks to
+    /// see the code of finished forms let go (#338). Not an interface.
+    #[doc(hidden)]
+    pub fn loaded_code_objects(&self) -> usize {
+        self.state.borrow().code_store.iter().flatten().count()
+    }
+
     /// Create a new VM backend with a fresh environment and primitive registry.
     pub fn new() -> Self {
         Self::with_fs(std::sync::Arc::new(patina_core::NativeFs))
@@ -231,14 +238,14 @@ impl VmBackend {
         let (top, nested) =
             compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
 
-        let top_id = top.id;
         let mut state = self.state.borrow_mut();
-        state.load(top);
-        state.load_all(nested);
+        let top_id = state.load_unit(top, nested);
 
-        // Execute.
-        let result = execute(&mut state, top_id)?;
-        Ok(result)
+        // Execute, then let go of the form's code unless something it left
+        // behind can run it again (#338).
+        let result = execute(&mut state, top_id);
+        state.release_unit_if_unused(top_id);
+        Ok(result?)
     }
 
     /// Initialize library loaders (Rust internal libs + Scheme .sld loader).
@@ -588,11 +595,11 @@ impl VmBackend {
                         message: format!("compile error: {}", e),
                     })?;
 
-                    let top_id = top.id;
-                    state.load(top);
-                    state.load_all(nested);
+                    let top_id = state.load_unit(top, nested);
+                    let result = execute(&mut state, top_id);
+                    state.release_unit_if_unused(top_id);
 
-                    execute(&mut state, top_id).map_err(|e| LibraryError::ParseError {
+                    result.map_err(|e| LibraryError::ParseError {
                         file: parsed
                             .source
                             .as_ref()

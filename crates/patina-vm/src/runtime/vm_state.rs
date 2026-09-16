@@ -89,6 +89,11 @@ pub struct VmState {
     /// are process-wide sequential — see `CodeObjectId::fresh`). Slots for
     /// ids loaded into other `VmState`s stay `None`.
     pub(crate) code_store: Vec<Option<Rc<CodeObject>>>,
+    /// The code each compilation loaded together, keyed by the id it runs
+    /// from: a top-level form's code, with the code of the lambdas in it. A
+    /// unit is kept or let go whole, since code that is not running can still
+    /// make a closure of a lambda nested in it.
+    pub(crate) code_units: FxHashMap<CodeObjectId, Vec<CodeObjectId>>,
     /// Id of the one-instruction stub each step of a continuation jump runs
     /// in (`wind_jump_stub`). Built on the first jump that has a wind thunk
     /// to run; most states never build one. The id, not the `Rc` — the code
@@ -176,6 +181,7 @@ impl VmState {
         let gc = GcController::from_env();
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let gc_pending = heap.borrow().gc_pending_handle();
+        heap.borrow_mut().enable_gc_freed_closure_tracking();
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
@@ -185,6 +191,7 @@ impl VmState {
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
             code_store: Vec::new(),
+            code_units: FxHashMap::default(),
             wind_jump_code: None,
             value_wind_code: None,
             abort_handler_code: None,
@@ -263,12 +270,96 @@ impl VmState {
         }
     }
 
+    /// Load what one compilation produced — `top`, and the code nested in it —
+    /// as a unit, and return the id to run it from.
+    ///
+    /// Once it has run, [`VmState::release_unit_if_unused`] lets it go if
+    /// nothing it left behind can run it again (#338).
+    pub fn load_unit(&mut self, top: CodeObject, nested: Vec<CodeObject>) -> CodeObjectId {
+        let top_id = top.id;
+        let members = nested.iter().map(|code| code.id).collect();
+        self.load(top);
+        self.load_all(nested);
+        self.code_units.insert(top_id, members);
+        top_id
+    }
+
+    /// Let go of the unit loaded to run from `top`, if nothing can run any of
+    /// its code again: no frame and no captured continuation holds it — they
+    /// hold the code itself, so the store's is then its only reference — and
+    /// no live closure names it.
+    ///
+    /// Without this the VM kept the code and constants of every form it had
+    /// run, about 600 bytes each, for as long as it lived (#338).
+    pub fn release_unit_if_unused(&mut self, top: CodeObjectId) {
+        let Some(nested) = self.code_units.get(&top) else {
+            return;
+        };
+        if unit_in_use(&self.code_store, top, nested) {
+            return;
+        }
+        let nested = self.code_units.remove(&top).unwrap_or_default();
+        release_unit(&mut self.code_store, top, &nested);
+    }
+
+    #[inline(always)]
+    fn loaded_code(&self, id: CodeObjectId) -> Option<&Rc<CodeObject>> {
+        loaded(&self.code_store, id)
+    }
+
+    /// A closure was made of the code `id`.
+    fn note_closure_made(&self, id: CodeObjectId) {
+        let code = self.loaded_code(id);
+        // The code making the closure is running, and a unit is let go only
+        // whole, so the closure's own code is loaded; a count missed here
+        // would free code this closure can still run.
+        debug_assert!(
+            code.is_some(),
+            "a closure made of {id:?}, which is not loaded"
+        );
+        if let Some(code) = code {
+            code.live_closures.set(code.live_closures.get() + 1);
+        }
+    }
+
+    /// After a collection: count down the closures it freed, and let go of
+    /// every unit nothing can run any longer.
+    ///
+    /// Every unit, not only those whose closures died: a collection also
+    /// prunes continuations nothing reaches, and their frames may have been
+    /// the last thing holding a unit's code. A count kept too high only keeps
+    /// code a collection longer; one too low would free code a closure can
+    /// still run, which is why it only goes down for a closure the collector
+    /// has freed.
+    fn after_collection(&mut self) {
+        let freed = self.heap.borrow_mut().take_gc_freed_closure_code_ids();
+        for id in freed {
+            let code = self.loaded_code(CodeObjectId(id));
+            // Counted when it was made, and its code kept while it lived.
+            debug_assert!(
+                code.is_some_and(|code| code.live_closures.get() > 0),
+                "a freed closure of {id}, whose code counts no live closure"
+            );
+            if let Some(code) = code {
+                code.live_closures
+                    .set(code.live_closures.get().saturating_sub(1));
+            }
+        }
+        let store = &mut self.code_store;
+        self.code_units.retain(|&top, nested| {
+            let in_use = unit_in_use(store, top, nested);
+            if !in_use {
+                release_unit(store, top, nested);
+            }
+            in_use
+        });
+    }
+
     /// Fetch a loaded `CodeObject` by id.
     #[inline(always)]
     pub(super) fn code_object(&self, id: CodeObjectId) -> Result<Rc<CodeObject>, VmError> {
-        self.code_store
-            .get(id.index())
-            .and_then(Option::clone)
+        self.loaded_code(id)
+            .cloned()
             .ok_or_else(|| missing_code_object(id))
     }
 
@@ -533,11 +624,11 @@ fn vm_evaluate_parsed_library(
                 message: format!("compile error: {}", e),
             })?;
 
-            let top_id = top.id;
-            state.load(top);
-            state.load_all(nested);
+            let top_id = state.load_unit(top, nested);
+            let result = execute_nested(state, top_id);
+            state.release_unit_if_unused(top_id);
 
-            execute_nested(state, top_id).map_err(|e| LibraryError::ParseError {
+            result.map_err(|e| LibraryError::ParseError {
                 file: parsed
                     .source
                     .as_ref()
@@ -668,11 +759,10 @@ pub(super) fn vm_eval_expr(
     let saved_globals = state.globals.clone();
     state.globals = env.clone();
 
-    let top_id = top.id;
-    state.load(top);
-    state.load_all(nested);
+    let top_id = state.load_unit(top, nested);
 
     let result = execute_nested(state, top_id);
+    state.release_unit_if_unused(top_id);
 
     // Always restore globals, even on error
     state.globals = saved_globals;
@@ -683,6 +773,36 @@ pub(super) fn vm_eval_expr(
 // ─────────────────────────────────────────────────────────────────────────────
 // Execution loop
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// The code loaded for `id`, if any.
+#[inline(always)]
+fn loaded(store: &[Option<Rc<CodeObject>>], id: CodeObjectId) -> Option<&Rc<CodeObject>> {
+    store.get(id.index()).and_then(Option::as_ref)
+}
+
+/// Whether a frame, a captured continuation or a live closure still needs any
+/// of the unit that runs from `top`. A frame and a continuation hold the code
+/// itself, so the store's `Rc` is then not the only one; a closure names it by
+/// id, and is counted.
+fn unit_in_use(
+    store: &[Option<Rc<CodeObject>>],
+    top: CodeObjectId,
+    nested: &[CodeObjectId],
+) -> bool {
+    std::iter::once(&top).chain(nested).any(|&id| {
+        loaded(store, id)
+            .is_some_and(|code| code.live_closures.get() > 0 || Rc::strong_count(code) > 1)
+    })
+}
+
+/// Drop a unit's code from the store.
+fn release_unit(store: &mut [Option<Rc<CodeObject>>], top: CodeObjectId, nested: &[CodeObjectId]) {
+    for &id in std::iter::once(&top).chain(nested) {
+        if let Some(slot) = store.get_mut(id.index()) {
+            *slot = None;
+        }
+    }
+}
 
 /// Outlined error constructor for a `code_object` miss — `#[cold]` keeps the
 /// formatting machinery out of the callers that inline the lookup.
@@ -861,7 +981,16 @@ pub(super) fn run_loop_until_outcome(
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
+        // A collection happened if one was pending and sweep has cleared the
+        // flag since: a nested loop never collects, and leaves it set. Two
+        // `Cell` reads, where following every pending safe point would borrow
+        // the heap on each instruction of a callback that crossed the
+        // threshold.
+        let pending = state.gc_pending.get();
         maybe_collect(state, is_outermost);
+        if pending && !state.gc_pending.get() {
+            state.after_collection();
+        }
 
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
@@ -1203,6 +1332,7 @@ fn dispatch_one_instruction(
                 .heap
                 .borrow_mut()
                 .alloc_vm_closure(child_id.0, captured, globals);
+            state.note_closure_made(child_id);
             state.set_reg_at(base, dst, closure_val);
         }
 

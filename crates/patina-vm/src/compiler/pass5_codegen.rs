@@ -138,6 +138,7 @@ impl Pass5Codegen {
             id,
             name: cg.name,
             global_cache,
+            live_closures: std::cell::Cell::new(0),
             instructions: cg.instructions,
             constants: cg.constants,
             // Use the Pass 4 high-water mark so all temps are covered.
@@ -924,6 +925,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         id: child_id,
         name: None,
         global_cache,
+        live_closures: std::cell::Cell::new(0),
         instructions: child_cg.instructions,
         constants: child_cg.constants,
         num_regs: lam.num_regs,

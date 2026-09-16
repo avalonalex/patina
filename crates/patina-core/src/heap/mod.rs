@@ -383,6 +383,13 @@ pub struct Heap {
     /// then treat *every* entry as possibly stale.
     gc_freed_overflow: bool,
 
+    /// The code id of each VM closure sweep reclaimed, for a VM that counts
+    /// the closures naming each code object so it can drop the code of forms
+    /// that nothing can run again (#338). A closure holds its code by id
+    /// alone, so this is the only way its death reaches that count. `None`
+    /// (the default) means nobody consumes them and sweep records nothing.
+    gc_freed_closure_code_ids: Option<Vec<u32>>,
+
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
@@ -504,6 +511,7 @@ impl Heap {
             gc_pending: Rc::new(Cell::new(false)),
             gc_freed_bits: None,
             gc_freed_overflow: false,
+            gc_freed_closure_code_ids: None,
             gc_defer_depth: 0,
             gc_collections: 0,
             gc_last_swept: 0,
@@ -576,6 +584,25 @@ impl Heap {
         if self.gc_freed_bits.is_none() {
             self.gc_freed_bits = Some(Vec::new());
         }
+    }
+
+    /// Start recording the code id of each VM closure sweep reclaims.
+    /// Idempotent. The consumer drains with
+    /// [`Heap::take_gc_freed_closure_code_ids`] after collecting; the buffer
+    /// holds one entry per closure freed since the last drain.
+    pub fn enable_gc_freed_closure_tracking(&mut self) {
+        if self.gc_freed_closure_code_ids.is_none() {
+            self.gc_freed_closure_code_ids = Some(Vec::new());
+        }
+    }
+
+    /// Drain the code ids of the VM closures reclaimed since the last drain,
+    /// one entry per closure.
+    pub fn take_gc_freed_closure_code_ids(&mut self) -> Vec<u32> {
+        self.gc_freed_closure_code_ids
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Drain the slots reclaimed since the last drain. Entries in a

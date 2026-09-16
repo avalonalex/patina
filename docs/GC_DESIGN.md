@@ -351,7 +351,7 @@ which makes `impl GcRoots for VmState` natural:
 | `value_buffer` | **yes** | Multi-value side channel |
 | `scratch_args` | yes | Empty at safe points (`mem::take`n during primitive calls), but rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
-| `code_store[*].constants` | **yes** | Effectively immortal (code objects are never evicted); candidate for a mark-once immortal set later |
+| `code_store[*].constants` | **yes** | Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
 | `globals` | **yes** | `visit_env` |
 | `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef(u64)` is opaque; only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
@@ -658,12 +658,18 @@ depth-30 timing guard beside it continues to check shared-tail dedup.
 
 ### 9.5 Root sets that grow without bound (measured)
 
-Two roots scale with *everything ever created* rather than with live data, so
-the pause grows monotonically in a long-running process. Both are stage 5
-work; recorded here because they are invisible until a session runs long.
+Two roots scaled with *everything ever created* rather than with live data, so
+the pause grew monotonically in a long-running process. They were recorded
+here because they are invisible until a session runs long; the first no longer
+does.
 
-**`code_store` constants.** Code objects are never evicted, so every compiled
-top-level form adds roots permanently. Instrumented over one 130 ms chibi run
+**`code_store` constants.** Code objects were never evicted, so every compiled
+top-level form added roots permanently. Since #338 a form's code is released,
+constants and all, once no frame, captured continuation or live closure can run
+it — a closure names its code by id, so the VM counts the closures naming each
+code object — and the store follows the code still in use. What follows is the
+measurement from before that change; the flat-vector or immortal-bitmap idea
+still applies to a program that keeps a great many closures alive. Instrumented over one 130 ms chibi run
 (17 collections), `code_store` grew **356 → 4,660 code objects** and the scan
 grew **8.8 µs → 107–151 µs per collection** — by the last collection, **57% of
 the entire root-tracing phase** and ~19% of the pause. The cost is the hash-map
