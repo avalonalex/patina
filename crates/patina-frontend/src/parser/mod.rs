@@ -72,20 +72,67 @@ impl ParseError {
     /// and a block comment may both span lines, so an unterminated one at the
     /// end of the buffer says only that the datum is not finished yet.
     pub fn is_incomplete(&self) -> bool {
-        matches!(
-            self,
-            ParseError::IncompleteDatum { .. }
-                | ParseError::LexError(
-                    LexError::UnterminatedString
-                        | LexError::UnterminatedVerticalBarIdentifier
-                        | LexError::UnterminatedBlockComment
-                )
-        )
+        match self {
+            ParseError::IncompleteDatum { .. } => true,
+            ParseError::LexError(error) => error.is_incomplete(),
+            _ => false,
+        }
+    }
+}
+
+/// Where a parser takes its tokens from.
+///
+/// A parser over text lexes as it goes. A [`crate::reader::Reader`], fed text
+/// in pieces, has lexed its tokens already and kept them, and reads a datum by
+/// replaying that datum's own tokens — so text is lexed once however many
+/// times the reader was asked whether a datum had finished (#341).
+enum TokenSource {
+    Lexing(Lexer),
+    Replay {
+        tokens: std::vec::IntoIter<Spanned>,
+        /// Where the token before the one last returned ended: what a lexer
+        /// reports, since it records that as it starts reading a token.
+        prev_end: ReaderState,
+        /// Where the token last returned ended.
+        last_end: ReaderState,
+    },
+}
+
+impl TokenSource {
+    fn next_token(&mut self) -> Result<Spanned, LexError> {
+        match self {
+            TokenSource::Lexing(lexer) => lexer.next_token(),
+            TokenSource::Replay {
+                tokens,
+                prev_end,
+                last_end,
+            } => {
+                *prev_end = *last_end;
+                // Running out of tokens is the end of what this parser was
+                // given, which is the end of its input.
+                let spanned = tokens.next().unwrap_or(Spanned {
+                    token: Token::Eof,
+                    line: last_end.line,
+                    column: last_end.column,
+                    start: *last_end,
+                    end: *last_end,
+                });
+                *last_end = spanned.end;
+                Ok(spanned)
+            }
+        }
+    }
+
+    fn prev_token_end(&self) -> usize {
+        match self {
+            TokenSource::Lexing(lexer) => lexer.prev_token_end(),
+            TokenSource::Replay { prev_end, .. } => prev_end.offset,
+        }
     }
 }
 
 pub struct Parser {
-    lexer: Lexer,
+    source: TokenSource,
     current_token: Token,
     /// Line of the current token (1-based)
     current_token_line: u32,
@@ -109,15 +156,11 @@ pub struct Parser {
     /// Where the outermost datum being read began, so that running out of
     /// input however deep inside it reports that position.
     datum_start: (u32, u32),
-    /// The same point with the reader state there, for resuming the read once
-    /// more input has arrived (see [`Parser::unfinished_start`]).
-    datum_start_state: ReaderState,
     /// How many lists, vectors and bytevectors the datum being read is inside.
     nesting: usize,
     /// A lexical error met in the token after a finished outermost datum,
-    /// with where that datum ended, kept for the next read (see
-    /// `advance_past_datum`).
-    deferred: Option<(ParseError, ReaderState)>,
+    /// kept for the next read (see `advance_past_datum`).
+    deferred: Option<ParseError>,
 }
 
 impl Parser {
@@ -127,16 +170,37 @@ impl Parser {
         Self::from_lexer(Lexer::new(input), heap)
     }
 
-    fn from_lexer(mut lexer: Lexer, heap: SharedHeap) -> Result<Self, ParseError> {
-        let spanned = lexer.next_token()?;
+    fn from_lexer(lexer: Lexer, heap: SharedHeap) -> Result<Self, ParseError> {
+        Self::from_source(TokenSource::Lexing(lexer), heap)
+    }
+
+    /// A parser over `tokens`, already lexed, the first of them beginning at
+    /// `at`: how a [`crate::reader::Reader`] reads a datum whose tokens it
+    /// holds. See [`TokenSource`].
+    pub fn from_tokens(
+        tokens: Vec<Spanned>,
+        heap: SharedHeap,
+        at: ReaderState,
+    ) -> Result<Self, ParseError> {
+        Self::from_source(
+            TokenSource::Replay {
+                tokens: tokens.into_iter(),
+                prev_end: at,
+                last_end: at,
+            },
+            heap,
+        )
+    }
+
+    fn from_source(mut source: TokenSource, heap: SharedHeap) -> Result<Self, ParseError> {
+        let spanned = source.next_token()?;
         Ok(Parser {
-            lexer,
+            source,
             current_token: spanned.token,
             current_token_line: spanned.line,
             current_token_column: spanned.column,
             current_token_start: spanned.start,
             datum_start: (spanned.line, spanned.column),
-            datum_start_state: spanned.start,
             heap,
             labels: HashMap::new(),
             pending_refs: Vec::new(),
@@ -183,23 +247,6 @@ impl Parser {
         parser.source_map = Some(source_map);
         parser.source_name = source_name;
         Ok(parser)
-    }
-
-    /// A parser for `text` from `at`, a point where an earlier parser of the
-    /// same source stopped — for a program read as it arrives, which is parsed
-    /// again from where an unfinished datum began once more of it is in.
-    ///
-    /// Positions carry on from `at`, so they stay the source's own, and so
-    /// does `#!fold-case`. `text` is taken as it is, with no byte order mark
-    /// dropped. `r6rs` is the dialect, resolved once by the caller rather than
-    /// once per parser.
-    pub fn resuming(
-        text: &str,
-        at: ReaderState,
-        heap: SharedHeap,
-        r6rs: bool,
-    ) -> Result<Self, ParseError> {
-        Self::from_lexer(Lexer::resuming(text, at).reading_r6rs(r6rs), heap)
     }
 
     /// Record the positions of what this parser reads into `source_map` under
@@ -249,27 +296,7 @@ impl Parser {
     /// before the lookahead token) is unconsumed input. Used by `read` to
     /// preserve the remainder for subsequent input operations.
     pub fn consumed_end(&self) -> usize {
-        self.lexer.prev_token_end()
-    }
-
-    /// Where the text after the datum `parse` or `parse_next` last returned
-    /// begins, with the reader state there: the point to resume from once
-    /// that datum has been dealt with. See [`Parser::consumed_end`].
-    pub fn consumed_state(&self) -> ReaderState {
-        self.lexer.prev_token_end_state()
-    }
-
-    /// Where the reader stands once `parse_next` has returned `Ok(None)`: the
-    /// end of the text, with any directive among its trailing comments applied.
-    pub fn end_state(&self) -> ReaderState {
-        self.lexer.state()
-    }
-
-    /// Where the datum that ran out of input began, once `parse_next` has
-    /// failed with an error for which [`ParseError::is_incomplete`] holds:
-    /// the point to read it again from when more of it has arrived.
-    pub fn unfinished_start(&self) -> ReaderState {
-        self.datum_start_state
+        self.source.prev_token_end()
     }
 
     /// Record a source location for a TaggedValue in the source map (if present)
@@ -281,7 +308,7 @@ impl Parser {
     }
 
     fn advance(&mut self) -> Result<(), ParseError> {
-        let spanned = self.lexer.next_token()?;
+        let spanned = self.source.next_token()?;
         self.set_current(spanned);
         Ok(())
     }
@@ -304,13 +331,13 @@ impl Parser {
     /// read a line at a time, which parses the form before the next line
     /// arrives, ran it.
     fn advance_past_datum(&mut self) -> Result<(), ParseError> {
-        match self.lexer.next_token() {
+        match self.source.next_token() {
             Ok(spanned) => {
                 self.set_current(spanned);
                 Ok(())
             }
             Err(error) if self.nesting == 0 => {
-                self.deferred = Some((error.into(), self.lexer.prev_token_end_state()));
+                self.deferred = Some(error.into());
                 self.current_token = Token::Eof;
                 Ok(())
             }
@@ -339,13 +366,11 @@ impl Parser {
     /// run — `#; #;` — is one construct, and like an unfinished nested list
     /// is reported against where that construct starts.
     fn at_datum(&mut self) -> Result<bool, ParseError> {
-        if let Some((error, at)) = self.deferred.take() {
-            self.datum_start_state = at;
+        if let Some(error) = self.deferred.take() {
             return Err(error);
         }
         loop {
             self.datum_start = (self.current_token_line, self.current_token_column);
-            self.datum_start_state = self.current_token_start;
             if self.current_token != Token::DatumComment {
                 return Ok(self.current_token != Token::Eof);
             }
@@ -1722,90 +1747,16 @@ mod tests {
         }
     }
 
-    /// A parser resumed part-way through a program reports the program's
-    /// positions — for what it reads, where it stops, and a datum the input
-    /// ends inside — not positions counted from the start of its text.
+    /// A parser reading a source from its start drops a byte order mark.
+    /// A reader carrying on part-way through one does not; `reader.rs` has
+    /// that half.
     #[test]
-    fn a_resumed_parser_reports_the_program_s_positions() {
+    fn the_start_of_a_source_drops_a_byte_order_mark() {
         let heap = patina_core::new_shared_heap();
-        let sm = Rc::new(RefCell::new(SourceMap::new()));
-        let at = ReaderState {
-            offset: 0,
-            line: 7,
-            column: 5,
-            fold_case: false,
-        };
-        let mut parser = Parser::resuming("(a b)\n  (c\n", at, heap, false)
-            .unwrap()
-            .recording_into(Rc::from("<stdin>"), sm.clone());
-        let first = parser.parse_next().unwrap().unwrap();
-        let (line, column) = {
-            let map = sm.borrow();
-            let loc = map.get(first).expect("a list records its position");
-            (loc.line, loc.column)
-        };
-        assert_eq!((line, column), (7, 5));
-        assert_eq!(
-            parser.consumed_state(),
-            ReaderState {
-                offset: 5,
-                line: 7,
-                column: 10,
-                fold_case: false
-            }
-        );
-        let err = parser.parse_next().unwrap_err();
-        assert!(
-            matches!(err, ParseError::IncompleteDatum { line: 8, column: 3 }),
-            "{err}"
-        );
-        assert_eq!(
-            parser.unfinished_start(),
-            ReaderState {
-                offset: 8,
-                line: 8,
-                column: 3,
-                fold_case: false
-            }
-        );
-    }
-
-    /// Only a parser reading a source from its start drops a byte order
-    /// mark; resumed anywhere, U+FEFF is the character it is there.
-    #[test]
-    fn only_the_start_of_a_source_drops_a_byte_order_mark() {
-        let heap = patina_core::new_shared_heap();
-        let from_start = Parser::new_with_heap("\u{feff}42", heap.clone())
+        let from_start = Parser::new_with_heap("\u{feff}42", heap)
             .unwrap()
             .parse_next();
         assert!(matches!(from_start, Ok(Some(v)) if v.as_fixnum() == Some(42)));
-        let resumed = Parser::resuming("\u{feff}42", ReaderState::START, heap, false)
-            .and_then(|mut parser| parser.parse_next());
-        assert!(!matches!(resumed, Ok(Some(v)) if v.as_fixnum() == Some(42)));
-    }
-
-    /// `#!fold-case` is part of where a reader stands: the state after the
-    /// directive carries it, and a parser resumed from that state folds.
-    #[test]
-    fn fold_case_is_carried_in_the_reader_state() {
-        let heap = patina_core::new_shared_heap();
-        let mut first =
-            Parser::resuming("#!fold-case\n", ReaderState::START, heap.clone(), false).unwrap();
-        assert!(first.parse_next().unwrap().is_none());
-        let at = first.end_state();
-        assert!(at.fold_case, "the directive is in effect after it");
-        let mut second = Parser::resuming(
-            "HELLO\n",
-            ReaderState { offset: 0, ..at },
-            heap.clone(),
-            false,
-        )
-        .unwrap();
-        let symbol = second.parse_next().unwrap().unwrap();
-        assert_eq!(
-            patina_core::debug_format::format_tagged(symbol, &heap.borrow()),
-            "hello"
-        );
     }
 
     /// A lexical error in the token after a complete datum belongs to what
@@ -1826,12 +1777,10 @@ mod tests {
         }
         // Inside a datum the error is the datum's own.
         assert!(Parser::new("(a #\\bogus)").unwrap().parse_next().is_err());
-        // A string cut short after a datum is still input that ran out, and
-        // reading it again starts where the datum before it ended.
+        // A string cut short after a datum is still input that ran out.
         let mut parser = Parser::new("(a) \"abc").unwrap();
         parser.parse_next().unwrap();
         assert!(parser.parse_next().unwrap_err().is_incomplete());
-        assert_eq!(parser.unfinished_start().offset, 3);
     }
 
     #[test]

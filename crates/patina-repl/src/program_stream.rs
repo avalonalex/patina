@@ -5,6 +5,10 @@
 //! the program's output makes progress, and what the reader holds follows the
 //! largest form rather than the whole stream (#333).
 //!
+//! Each line is fed to one [`Reader`], which says when a datum has finished
+//! and reads it from the tokens it has already lexed, so a form is read once
+//! however many lines it spans (#341).
+//!
 //! Text read and not yet run stays in the input port's unread text, which the
 //! program's own reads take from as well. A read inside the program therefore
 //! continues right after the form being run, as it does in chibi and Gauche,
@@ -16,10 +20,9 @@
 //! are forgotten, so what the reader holds stays bounded.
 
 use patina_core::{SharedHeap, TaggedValue};
-use patina_frontend::{DatumScan, ReaderState, dialect};
+use patina_frontend::{Reader, ReaderState, dialect};
 use patina_interpreter::{
-    ParseError, Parser, ProgramOutcome, SourceMap, format_parse_error_with_source,
-    prune_freed_locations,
+    ParseError, ProgramOutcome, SourceMap, format_parse_error_with_source, prune_freed_locations,
 };
 use patina_runtime::Port;
 use std::cell::RefCell;
@@ -56,10 +59,9 @@ where
         eval_errors: 0,
         source_map: Rc::new(RefCell::new(SourceMap::new())),
         r6rs,
+        reader: Reader::new(r6rs),
         at: ReaderState::START,
         lines: 0,
-        scan: DatumScan::new(r6rs),
-        asked_at: 0,
     };
     loop {
         match input.pull_line() {
@@ -85,22 +87,12 @@ struct Run<'a, E> {
     source_map: Rc<RefCell<SourceMap>>,
     /// The dialect, resolved once for the run.
     r6rs: bool,
+    /// The reader of the program, fed each line as it arrives.
+    reader: Reader,
     /// Where the input's unread text begins in the program.
     at: ReaderState,
     /// Lines of the program the reader has seen.
     lines: u32,
-    /// A scan of the unread text.
-    scan: DatumScan,
-    /// How long the unread text was when the parser last found nothing
-    /// finished in it, or zero.
-    asked_at: usize,
-}
-
-/// How much of a parser's text has been consumed from the input.
-#[derive(Default)]
-struct Consumed {
-    bytes: usize,
-    chars: usize,
 }
 
 impl<E> Run<'_, E>
@@ -125,109 +117,73 @@ where
             map.push_source_line(self.lines, line);
             map.forget_old_source_lines(SOURCE_TEXT_KEPT, self.at.line);
         }
-        self.scan.feed(line);
-        if self.scan.nothing_finished() {
-            // Asking the parser reads everything since the unfinished datum
-            // began, so while the scan shows nothing can have finished it is
-            // asked again only once that text has doubled. That keeps the
-            // total time linear, and bounds how long a mistake inside a form
-            // that is still open waits to be reported.
-            let unread = self.input.unread_len();
-            if self.asked_at == 0 {
-                self.asked_at = unread;
-                return None;
-            }
-            if unread < 2 * self.asked_at {
-                return None;
-            }
-        }
-        self.run_unread(false)
+        self.reader.feed(line);
+        self.run_finished_forms()
     }
 
-    /// Read and run the forms the unread text holds. At the end of the input
-    /// a form still unfinished is reported rather than waited for.
-    fn run_unread(&mut self, at_end: bool) -> Option<ProgramOutcome> {
-        'text: loop {
-            let text = self.input.unread_text();
-            let at = ReaderState {
-                offset: 0,
-                ..self.at
-            };
-            let mut parser = match Parser::resuming(&text, at, self.heap.clone(), self.r6rs) {
-                Ok(parser) => {
-                    parser.recording_into(self.source_name.clone(), self.source_map.clone())
-                }
-                Err(error) if error.is_incomplete() && !at_end => {
-                    self.wait(&text);
-                    return None;
-                }
+    /// Run every form the text so far has finished, and say whether the run is
+    /// over. `None` means the reader wants more text.
+    fn run_finished_forms(&mut self) -> Option<ProgramOutcome> {
+        loop {
+            // Drop SourceMap entries for slots the previous form's evaluation
+            // freed, before this form's parse can reuse them (§9.1).
+            prune_freed_locations(self.heap, &self.source_map);
+            let source_name = self.source_name.clone();
+            let source_map = self.source_map.clone();
+            let datum = self.reader.next_datum(self.heap, move |parser| {
+                parser.recording_into(source_name.clone(), source_map.clone())
+            })?;
+            let datum = match datum {
+                Ok(datum) => datum,
                 Err(error) => return Some(self.read_failed(&error)),
             };
-            let mut consumed = Consumed::default();
-            loop {
-                // Drop SourceMap entries for slots the previous form's
-                // evaluation freed, before this iteration's parse can reuse
-                // them (§9.1).
-                prune_freed_locations(self.heap, &self.source_map);
-                match parser.parse_next() {
-                    Ok(Some(datum)) => {
-                        self.consume_to(&text, &mut consumed, parser.consumed_state());
-                        let version = self.input.unread_version();
-                        if let Err(message) = (self.eval_form)(datum, &self.source_map) {
-                            eprintln!("Error: {}", message);
-                            self.eval_errors += 1;
-                            patina_runtime::exit_status::note_error_reported();
-                            // An error that interrupted an `exit` stops even
-                            // `-k`; the caller ends the process.
-                            if !self.keep_going || patina_runtime::exit_status::exit_interrupted() {
-                                return Some(self.outcome(false));
-                            }
-                        }
-                        if self.input.unread_version() != version {
-                            self.resync(&text[consumed.bytes..]);
-                            continue 'text;
-                        }
-                    }
-                    Ok(None) => {
-                        self.consume_to(&text, &mut consumed, parser.end_state());
-                        self.wait("");
-                        return None;
-                    }
-                    Err(error) if error.is_incomplete() && !at_end => {
-                        self.consume_to(&text, &mut consumed, parser.unfinished_start());
-                        self.wait(&text[consumed.bytes..]);
-                        return None;
-                    }
-                    Err(error) => return Some(self.read_failed(&error)),
+            self.consume_what_was_read();
+
+            // What the port has unread as the form starts, so that a read the
+            // form makes for itself can be told from the reader's own
+            // progress.
+            let unread = self.input.unread_text();
+            let version = self.input.unread_version();
+            if let Err(message) = (self.eval_form)(datum, &self.source_map) {
+                eprintln!("Error: {}", message);
+                self.eval_errors += 1;
+                patina_runtime::exit_status::note_error_reported();
+                // An error that interrupted an `exit` stops even `-k`; the
+                // caller ends the process.
+                if !self.keep_going || patina_runtime::exit_status::exit_interrupted() {
+                    return Some(self.outcome(false));
                 }
+            }
+            if self.input.unread_version() != version {
+                self.resync(&unread);
             }
         }
     }
 
-    /// Consume the unread text up to `to`, a point `text`'s parser reached,
-    /// and carry on from there.
-    fn consume_to(&mut self, text: &str, consumed: &mut Consumed, to: ReaderState) {
-        debug_assert!(to.offset >= consumed.chars);
-        let rest = &text[consumed.bytes..];
-        let bytes = rest
-            .char_indices()
-            .nth(to.offset - consumed.chars)
-            .map_or(rest.len(), |(index, _)| index);
-        self.input.consume_unread(bytes);
-        consumed.bytes += bytes;
-        consumed.chars = to.offset;
-        self.at = to;
-    }
-
-    /// Wait for more input, with `unread` still to run.
-    fn wait(&mut self, unread: &str) {
-        self.scan = DatumScan::new(self.r6rs);
-        self.scan.feed(unread);
-        self.asked_at = unread.len();
+    /// Consume from the port the text the form just read used, and note where
+    /// the reader now stands in the program.
+    fn consume_what_was_read(&mut self) {
+        let chars = self.reader.take_consumed();
+        if chars > 0 {
+            let text = self.input.unread_text();
+            let bytes = text
+                .char_indices()
+                .nth(chars)
+                .map_or(text.len(), |(index, _)| index);
+            self.input.consume_unread(bytes);
+        }
+        self.at = ReaderState {
+            offset: 0,
+            ..self.reader.position()
+        };
     }
 
     /// The program read from its input while a form ran, taking text the
     /// reader had read but not yet run: `before` is what was unread then.
+    ///
+    /// The reader's own copy of the text is stale, so it is built again from
+    /// what the port has left, carrying on from the position that text now
+    /// has.
     fn resync(&mut self, before: &str) {
         let after = self.input.unread_text();
         match before.strip_suffix(after.as_str()) {
@@ -251,10 +207,14 @@ where
                 }
             }
         }
+        self.reader = Reader::resuming(self.r6rs, self.at);
+        self.reader.feed(&after);
     }
 
     fn finish(&mut self) -> ProgramOutcome {
-        self.run_unread(true).unwrap_or_else(|| self.outcome(true))
+        self.reader.no_more_text();
+        self.run_finished_forms()
+            .unwrap_or_else(|| self.outcome(true))
     }
 
     fn read_failed(&self, error: &ParseError) -> ProgramOutcome {

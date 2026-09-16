@@ -5,7 +5,7 @@
 
 use super::ports::get_input_port_tagged;
 use patina_core::TaggedValue;
-use patina_frontend::Parser;
+use patina_frontend::{Parser, Reader};
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 use patina_runtime::{Port, PortData};
@@ -102,53 +102,47 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 
 /// Read one datum from a line-oriented source (stdin or a file port).
 ///
-/// Lines are accumulated until they form a complete datum. Any text after
-/// the datum is stored in the port's pushback buffer so the next textual
-/// read — `read`, `read-char`, `read-line`, ... — continues from it instead
-/// of it being lost with the local buffer.
+/// Lines are read until they hold a complete datum, each fed to a [`Reader`]
+/// as it arrives: the datum is read once, rather than the text being read
+/// again after every line, which cost time proportional to the square of a
+/// datum's length (#341).
+///
+/// Any text after the datum is stored in the port's pushback buffer so the
+/// next textual read — `read`, `read-char`, `read-line`, ... — continues from
+/// it instead of it being lost with the local buffer.
 fn read_buffered(
     port: &Rc<Port>,
     heap: &SharedHeap,
     mut next_line: impl FnMut() -> Result<Option<String>, EvalError>,
 ) -> Result<TaggedValue, EvalError> {
-    let mut buffer = port.take_pushback();
+    let mut text = port.take_pushback();
+    let mut reader = Reader::new(patina_frontend::dialect::allow_r6rs());
+    reader.feed(&text);
 
     loop {
-        if !buffer.trim().is_empty() {
-            // Constructor failure means the first token is incomplete
-            // (e.g. an unterminated string) — fall through for more input
-            if let Ok(mut parser) = Parser::new_with_heap(&buffer, heap.clone()) {
-                match parser.parse_next() {
-                    Ok(Some(tv)) => {
-                        port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
-                        return Ok(tv);
-                    }
-                    Ok(None) => {} // Only whitespace and comments so far
-                    Err(e) if e.is_incomplete() => {} // Datum unfinished — read on
-                    Err(e) => {
-                        return Err(read_error(&e));
-                    }
-                }
-            }
+        if let Some(datum) = reader.next_datum(heap, |parser| parser) {
+            let value = datum.map_err(|e| read_error(&e))?;
+            port.set_pushback(remainder_after(&text, reader.take_consumed()));
+            return Ok(value);
         }
 
         match next_line()? {
-            Some(line) => buffer.push_str(&line),
+            Some(line) => {
+                reader.feed(&line);
+                text.push_str(&line);
+            }
             None => {
-                // EOF on the underlying source: parse what is left so a
-                // trailing datum (or error) is surfaced
-                if buffer.trim().is_empty() {
-                    return Ok(TaggedValue::EOF);
-                }
-                let mut parser = Parser::new_with_heap(&buffer, heap.clone())
-                    .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
-                return match parser.parse_next() {
-                    Ok(Some(tv)) => {
-                        port.set_pushback(remainder_after(&buffer, parser.consumed_end()));
-                        Ok(tv)
+                // Nothing more is coming, so what is left is read as it
+                // stands: a trailing datum is returned, and one that is
+                // unfinished is reported rather than waited for.
+                reader.no_more_text();
+                return match reader.next_datum(heap, |parser| parser) {
+                    Some(Ok(value)) => {
+                        port.set_pushback(remainder_after(&text, reader.take_consumed()));
+                        Ok(value)
                     }
-                    Ok(None) => Ok(TaggedValue::EOF),
-                    Err(e) => Err(read_error(&e)),
+                    Some(Err(e)) => Err(read_error(&e)),
+                    None => Ok(TaggedValue::EOF),
                 };
             }
         }

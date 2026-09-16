@@ -1,4 +1,4 @@
-use patina_frontend::Parser;
+use patina_frontend::{Reader, dialect};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use std::cell::RefCell;
 
@@ -8,6 +8,13 @@ pub struct SchemeValidator {
     /// The editor throws a partly-typed form away when its input ends, so
     /// this is the only record a session has of one to report.
     pending: RefCell<Option<String>>,
+    /// The reader of the form being typed, and the text it has been given.
+    ///
+    /// The editor asks after every change to the line, and over a pipe after
+    /// every line, so the reader reads on from where it stopped rather than
+    /// reading the form again each time: a line added to a form costs that
+    /// line (#341).
+    reading: RefCell<Option<(String, Reader)>>,
 }
 
 impl SchemeValidator {
@@ -33,9 +40,30 @@ impl SchemeValidator {
         }
     }
 
+    /// Whether `input` stops part-way through a datum, read on from the text
+    /// it extends rather than from its start.
+    fn unfinished(&self, input: &str) -> bool {
+        let mut reading = self.reading.borrow_mut();
+        let (mut read_already, mut reader) = match reading.take() {
+            // The editor adds to the buffer as the form is typed, so the
+            // reader of what was there carries on with what is new.
+            Some((text, reader)) if input.starts_with(&text) => (text, reader),
+            // Anything else is a line edited or a form abandoned: start again.
+            _ => (String::new(), Reader::new(dialect::allow_r6rs())),
+        };
+        // Only what is new, and appended rather than copied: a line added to a
+        // form should cost that line rather than the form (#341).
+        let new = &input[read_already.len()..];
+        reader.feed(new);
+        read_already.push_str(new);
+        let unfinished = reader.inside_datum();
+        *reading = Some((read_already, reader));
+        unfinished
+    }
+
     /// Decide whether `input` is finished, remembering it when it is not.
     fn judge(&self, input: &str) -> ValidationResult {
-        if needs_more_input(input) {
+        if self.unfinished(input) {
             *self.pending.borrow_mut() = Some(input.to_string());
             ValidationResult::Incomplete
         } else {
@@ -58,18 +86,9 @@ impl SchemeValidator {
 /// wrong: a stray `)` is a mistake to report now, not a reason to sit and
 /// wait for input that cannot fix it.
 pub fn needs_more_input(input: &str) -> bool {
-    match Parser::new(input) {
-        // A constructor failure is the first token failing to lex, which for
-        // an unterminated string or block comment means the same thing.
-        Err(e) => e.is_incomplete(),
-        Ok(mut parser) => loop {
-            match parser.parse_next() {
-                Ok(Some(_)) => continue,
-                Ok(None) => return false,
-                Err(e) => return e.is_incomplete(),
-            }
-        },
-    }
+    let mut reader = Reader::new(dialect::allow_r6rs());
+    reader.feed(input);
+    reader.inside_datum()
 }
 
 impl Validator for SchemeValidator {
