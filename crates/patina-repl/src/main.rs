@@ -4,7 +4,7 @@ use patina_interpreter::{
     format_backend_error_with_source, format_error_with_source,
 };
 use patina_repl::repl::needs_more_input;
-use patina_repl::{Repl, make_editor, run_program_stream, run_repl_loop};
+use patina_repl::{Repl, run_program_stream, run_repl_loop, session_lines};
 use patina_vm::VmBackend;
 use patina_vm::tracer::StepTracer;
 use std::cell::RefCell;
@@ -483,7 +483,7 @@ fn run_repl_vm(opts: &CliOptions) {
     println!("  Ctrl+C to cancel current input");
     println!();
 
-    let mut editor = match make_editor() {
+    let mut lines = match session_lines() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Failed to initialize editor: {}", e);
@@ -491,7 +491,7 @@ fn run_repl_vm(opts: &CliOptions) {
         }
     };
 
-    let clean = run_repl_loop(&mut editor, "patina> ", |line| {
+    let clean = run_repl_loop(&mut lines, "patina> ", |line| {
         // Special form: (vm-compile <expr>) -- compile and disassemble without executing.
         // Only finished input takes it: a session cut off part-way through one
         // is reported as the unfinished form it is.

@@ -62,7 +62,7 @@ impl SchemeValidator {
     }
 
     /// Decide whether `input` is finished, remembering it when it is not.
-    fn judge(&self, input: &str) -> ValidationResult {
+    pub(crate) fn judge(&self, input: &str) -> ValidationResult {
         if self.unfinished(input) {
             *self.pending.borrow_mut() = Some(input.to_string());
             ValidationResult::Incomplete

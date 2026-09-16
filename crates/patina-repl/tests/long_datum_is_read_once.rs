@@ -9,9 +9,10 @@
 //! ten-second deadline, which a reader of that shape cannot meet; reading each
 //! line once, they take about two hundredths of a second.
 //!
-//! A session over a pipe is not here. Its cost is rustyline's own — the
-//! non-terminal read loop walks the whole accumulated buffer on every line —
-//! and no reader under it can fix that (#348).
+//! A session reading a pipe is here too, since #348: rustyline's own path for
+//! input that is not a terminal walked the whole form again for every line
+//! added to it, which took 11.4 seconds for the 40,000-line form below where
+//! chibi, Gauche and Chez are flat.
 
 mod common;
 
@@ -79,4 +80,29 @@ fn a_long_datum_read_from_a_file_port() {
     each_backend_prints(program, &LINES.to_string(), |dir| {
         std::fs::write(dir.join("big.scm"), long_list()).unwrap();
     });
+}
+
+/// A session reading a pipe — an editor's inferior-Scheme buffer, or a program
+/// driving Patina — is given a form of 40,000 lines.
+///
+/// It is the reading that is timed here: the form is behind `#;` for the
+/// reason the program case gives, and what the session prints afterwards shows
+/// it got past it.
+#[test]
+fn a_long_datum_in_a_session_reading_a_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = format!(
+        "(import (scheme base) (scheme write))\n#;{}(display 'read-it-all)\n",
+        long_list()
+    );
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("-i");
+        let (stdout, stderr, ok) = run_with_deadline(dir.path(), &args, Some(&program));
+        assert!(ok, "{backend:?}: {stderr}");
+        assert!(
+            stdout.contains("read-it-all"),
+            "{backend:?}: {stdout} {stderr}"
+        );
+    }
 }

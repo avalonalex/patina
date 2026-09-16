@@ -640,6 +640,7 @@ dependencies = [
  "rustyline",
  "tempfile",
  "thiserror",
+ "unicode-segmentation",
 ]
 
 [[package]]
