@@ -29,9 +29,9 @@
 ;;; The `char-set:*` class constants come from `char-set-unicode-ranges`, a
 ;;; Rust primitive in `(patina internal chars)`. Deriving them here would mean
 ;;; a predicate call per scalar value — 1.1M of them per class, measured at
-;;; 0.1s on the VM and 1.8s on the tree-walker, times eleven classes, on every
-;;; import. The primitive also gives the classes `(scheme char)`'s predicates
-;;; are built from, so `char-set:letter` and `char-alphabetic?` cannot
+;;; 0.1s on the VM and 1.8s on the tree-walker, times the ten classes, on
+;;; every import. The primitive also gives the classes `(scheme char)`'s
+;;; predicates are built from, so `char-set:letter` and `char-alphabetic?` cannot
 ;;; disagree; see that primitive's comment for the two Unicode sources and the
 ;;; test that holds them at one version.
 ;;;
@@ -145,11 +145,16 @@
 (define (%sort-ranges ranges)
   ;; Merge sort: the inputs here are range lists up to ~850 long, and a
   ;; quadratic insertion sort on `char-set:graphic` is measurable.
+  ;; Tail-recursive, accumulating reversed: the list length here is the
+  ;; caller's input size — `(string->char-set s)` merges one range per
+  ;; character — so a non-tail merge would recurse as deep as the string is
+  ;; long.
   (define (merge a b)
-    (cond ((null? a) b)
-          ((null? b) a)
-          ((<= (caar a) (caar b)) (cons (car a) (merge (cdr a) b)))
-          (else (cons (car b) (merge a (cdr b))))))
+    (let loop ((a a) (b b) (acc '()))
+      (cond ((null? a) (%reverse-onto acc b))
+            ((null? b) (%reverse-onto acc a))
+            ((<= (caar a) (caar b)) (loop (cdr a) b (cons (car a) acc)))
+            (else (loop a (cdr b) (cons (car b) acc))))))
   (define (split lst)
     (let loop ((slow lst) (fast (if (null? lst) '() (cdr lst))) (acc '()))
       (if (or (null? fast) (null? (cdr fast)))
@@ -315,17 +320,25 @@
 
 ;;; SRFI 14's `ucs-range->char-set` takes an *exclusive* upper bound, and
 ;;; signals when asked for characters the implementation does not have, if
-;;; ERROR? is true. Every code point below #x110000 is available here except
-;;; the surrogates, which are not characters in any implementation, so the
-;;; only request that can be refused is one that runs off the end of Unicode.
+;;; ERROR? is true. Two requests can be refused: one that runs off the end of
+;;; Unicode, and one that reaches into the surrogate block — those 2048 code
+;;; points are not characters here. Both are refused rather than clipped in
+;;; silence, because silent clipping is the defect this file was written to
+;;; fix; with ERROR? false they are clipped, as the SRFI allows.
 (define (%ucs-range->ranges lower upper error? proc)
   (if (not (and (integer? lower) (exact? lower) (<= 0 lower)))
       (error "Invalid lower bound" proc lower))
   (if (not (and (integer? upper) (exact? upper) (<= lower upper)))
       (error "Invalid upper bound" proc upper))
-  (if (and error? (> upper %code-point-limit))
-      (error "Requested UCS range contains unavailable characters"
-             proc lower upper))
+  (if error?
+      (begin
+        (if (> upper %code-point-limit)
+            (error "Requested UCS range runs past the end of Unicode"
+                   proc lower upper))
+        ;; The half-open [lower, upper) meets the surrogate block.
+        (if (and (< lower (+ %surrogate-hi 1)) (> upper %surrogate-lo))
+            (error "Requested UCS range contains surrogates, which are not characters"
+                   proc lower upper))))
   (%clip-range lower (- (min upper %code-point-limit) 1)))
 
 (define (ucs-range->char-set lower upper . rest)
@@ -441,12 +454,17 @@
 ;;; and the cost is per range rather than per member — `char-set:graphic`
 ;;; hashes in 741 steps instead of 159612.
 (define (char-set-hash cs . maybe-bound)
-  (let* ((bound (if (pair? maybe-bound) (car maybe-bound) 4194304))
-         (bound (if (and (integer? bound) (exact? bound) (> bound 0))
-                    bound
-                    4194304))
-         (ranges (%check-char-set cs 'char-set-hash)))
-    (let loop ((rs ranges) (acc 0))
+  (let ((bound (if (pair? maybe-bound) (car maybe-bound) 4194304))
+        (ranges (%check-char-set cs 'char-set-hash)))
+    (if (not (and (integer? bound) (exact? bound) (> bound 0)))
+        ;; Signalling rather than quietly substituting the default: a caller
+        ;; that computed its bound wrongly would otherwise index a table with
+        ;; a hash from a range it never asked for.
+        (error "Bound must be an exact positive integer" 'char-set-hash bound))
+    ;; The seed is non-zero so that the number of ranges reaches the result:
+    ;; with a zero seed the empty set and {U+0000} both hash to 0, since the
+    ;; one range (0 . 0) contributes nothing.
+    (let loop ((rs ranges) (acc 5381))
       (if (null? rs)
           (modulo acc bound)
           (loop (cdr rs)
@@ -455,27 +473,33 @@
                         ;; into a bignum on a large set.
                         4294967296))))))
 
+;;; Both of these ascend, like `char-set-fold` and the cursors — see
+;;; `%range-for-each-ascending` for why that direction. It matters here and
+;;; not there: `char-set-any` returns the *predicate's own value*, so the
+;;; direction picks which member's value is returned. chibi answers #\a for
+;;; `(char-set-any values (char-set #\a #\b #\c))`, and so does this.
+
 (define (char-set-every pred cs)
   (%check-procedure pred 'char-set-every)
   (let loop ((rs (%check-char-set cs 'char-set-every)))
     (or (null? rs)
-        (let ((lo (caar rs)))
-          (let inner ((cp (cdar rs)))
-            (cond ((< cp lo) (loop (cdr rs)))
-                  ((pred (integer->char cp)) (inner (- cp 1)))
+        (let ((hi (cdar rs)))
+          (let inner ((cp (caar rs)))
+            (cond ((> cp hi) (loop (cdr rs)))
+                  ((pred (integer->char cp)) (inner (+ cp 1)))
                   (else #f)))))))
 
 (define (char-set-any pred cs)
   (%check-procedure pred 'char-set-any)
   (let loop ((rs (%check-char-set cs 'char-set-any)))
     (and (pair? rs)
-         (let ((lo (caar rs)))
-           (let inner ((cp (cdar rs)))
-             (if (< cp lo)
+         (let ((hi (cdar rs)))
+           (let inner ((cp (caar rs)))
+             (if (> cp hi)
                  (loop (cdr rs))
                  ;; SRFI 14: the predicate's own value is the result, not #t.
                  (let ((v (pred (integer->char cp))))
-                   (or v (inner (- cp 1))))))))))
+                   (or v (inner (+ cp 1))))))))))
 
 ;;; Cursors
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -491,9 +515,15 @@
 (define (end-of-char-set? cursor) (< cursor 0))
 
 (define (char-set-ref cs cursor)
-  (if (end-of-char-set? cursor)
-      (error "Cursor is past the end of the char-set" 'char-set-ref cursor)
-      (integer->char cursor)))
+  (cond ((end-of-char-set? cursor)
+         (error "Cursor is past the end of the char-set" 'char-set-ref cursor))
+        ;; A cursor is only meaningful for the set it came from. Checking it
+        ;; here turns a cursor crossed between two sets — which otherwise
+        ;; hands back a character the set does not contain — into an error.
+        ((not (%range-contains? (%check-char-set cs 'char-set-ref) cursor))
+         (error "Cursor does not refer to a member of this char-set"
+                'char-set-ref cursor))
+        (else (integer->char cursor))))
 
 (define (char-set-cursor-next cs cursor)
   (if (end-of-char-set? cursor)
@@ -652,10 +682,22 @@
          (rest (%fold-sets %range-union
                            (%check-char-set cs2 'char-set-diff+intersection!)
                            csets
-                           'char-set-diff+intersection!)))
-    (%set-ranges! cs1 (%range-difference a rest))
-    (%set-ranges! cs2 (%range-intersection a rest))
-    (values cs1 cs2)))
+                           'char-set-diff+intersection!))
+         (diff (%range-difference a rest))
+         (int (%range-intersection a rest)))
+    ;; Both range lists are computed before either is stored, so the writes
+    ;; cannot feed each other. `cs1` and `cs2` may still be the *same box* —
+    ;; `(char-set-diff+intersection! x x)` — and then storing into it twice
+    ;; would leave both returned values holding the intersection, which is
+    ;; neither of the two sets the caller asked for. So the second result gets
+    ;; a fresh box whenever it would otherwise be the first. SRFI 14 permits
+    ;; reusing an argument, not returning a set that is neither answer; chibi
+    ;; and Gauche both answer with two distinct sets here.
+    (%set-ranges! cs1 diff)
+    (if (eq? cs1 cs2)
+        (values cs1 (%make-char-set int))
+        (begin (%set-ranges! cs2 int)
+               (values cs1 cs2)))))
 
 ;;; The standard character sets
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -664,12 +706,16 @@
 ;;; into a range list. Surrogates are already excluded there, so no clipping
 ;;; is needed.
 
+;;; No `%normalize` here: the primitive already returns ranges that are
+;;; ascending, disjoint and non-adjacent — its own
+;;; `ranges_are_ascending_disjoint_and_non_adjacent` test asserts exactly
+;;; that — so a pass over ~850 ranges per class could never change anything.
 (define (%class name)
   (let* ((v (char-set-unicode-ranges name))
          (n (vector-length v)))
     (let loop ((i 0) (acc '()))
       (if (>= i n)
-          (%normalize (reverse acc))
+          (reverse acc)
           (loop (+ i 2)
                 (cons (cons (vector-ref v i) (vector-ref v (+ i 1))) acc))))))
 
@@ -708,15 +754,13 @@
 
 (define char-set:ascii (%make-char-set (list (cons 0 127))))
 
-;;; SRFI 14's `char-set:blank` is the horizontal whitespace: Zs plus tab.
+;;; SRFI 14's `char-set:blank` is the horizontal whitespace: the whitespace
+;;; that is not vertical. Tab needs no special case — it is whitespace and it
+;;; is not vertical, so the difference already keeps it.
 (define char-set:blank
-  (char-set-intersection
-   char-set:whitespace
-   (char-set-union (%make-char-set (list (cons 9 9)))       ; tab
-                   (char-set-difference char-set:whitespace
-                                        ;; the vertical whitespace
-                                        (%make-char-set
-                                         (%normalize
-                                          (list (cons 10 13)   ; LF..CR
-                                                (cons #x85 #x85)
-                                                (cons #x2028 #x2029))))))))
+  (char-set-difference char-set:whitespace
+                       (%make-char-set
+                        (%normalize
+                         (list (cons 10 13)      ; LF..CR
+                               (cons #x85 #x85)  ; NEL
+                               (cons #x2028 #x2029))))))

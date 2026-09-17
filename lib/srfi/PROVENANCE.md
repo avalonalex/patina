@@ -214,7 +214,7 @@ What the change is measured by: upstream's own `(srfi 14 test)` still passes
 72 of 72 (`upstream_srfi_suites.rs`), Larceny's `charset` suite went from 91 to
 **93 of 93 on both backends**, and
 `crates/patina-tests/tests/scheme/srfi/char-sets.scm` is this tree's own
-80-assertion suite for the Unicode property neither of those reaches. The
+87-assertion suite for the Unicode property neither of those reaches. The
 superseded local fix — upstream's `ucs-range->char-set` handing its extracted
 base char-set to a `%default-base` that expects the *rest list*, so the base
 silently defaulted to empty — is written up in

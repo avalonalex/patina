@@ -67,7 +67,7 @@ not characters, `integer->char` rejects them, so nothing can ask about one.
 
 **The classes come from Rust, and that was a measurement, not a preference.** Deriving
 `char-set:letter` in Scheme means a predicate call per scalar value: 1.1M calls, measured at 0.10s
-on the VM and **1.8s on the tree-walker** — for one class, of eleven, on every import. So
+on the VM and **1.8s on the tree-walker** — for one class, of ten, on every import. So
 `char-set-unicode-ranges` is a new primitive in `(patina internal chars)` that scans once per class
 and returns alternating inclusive bounds. It reads two sources, deliberately held at one Unicode
 version:
@@ -103,7 +103,7 @@ to 24 of 33 suites and 8516 of 8534 assertions. Upstream's own `(srfi 14 test)` 
 touching that library, because it uses exactly two names from this one.
 
 **Family 45's "Ours" line was empty; it is now**
-`crates/patina-tests/tests/scheme/srfi/char-sets.scm`, 80 assertions organised around the two
+`crates/patina-tests/tests/scheme/srfi/char-sets.scm`, 87 assertions organised around the two
 failure shapes rather than around the API. One deliberate omission worth knowing: **no row asserts
 the size of a Unicode class.** The implementations ship different UCD versions and disagree on every
 one of them — chibi reports 2544 lower-case characters and Gauche 2155, measured 2026-09-17 — so a
@@ -125,6 +125,24 @@ the identical `expected a state #<unspecified>`, because the other half of that 
 vendored `(chibi char-set)` builds **iset**-backed sets, a different record type from `(srfi 14)`'s,
 so the embedded boundary sets satisfy no arm of `->rx`'s `cond`. Either that library takes our
 char-sets or `->rx` learns the iset type.
+
+**What review of the rewrite found**, all fixed in the same change and worth
+recording because the 80-row suite could not see any of them: `char-set-every`
+and `char-set-any` still walked *descending*, contradicting the ascending
+decision above (the suite asserted only booleans, so the order was invisible);
+`ucs-range->char-set` dropped the 2048 surrogates silently even with `error?`
+true, which is the very shape this defect is about; `char-set-hash` substituted
+its default for any invalid bound rather than signalling, and seeded its
+accumulator at 0, so `char-set:empty` and `{U+0000}` hashed alike;
+`char-set-ref` ignored its set argument, so a cursor from another set yielded a
+non-member; and `char-set-diff+intersection!` given one set as both arguments
+stored into the same box twice, returning the intersection as both values —
+neither of the two answers asked for, where chibi and Gauche both return two
+distinct sets. The Rust scan also gained a per-class cache: it is 1.1M
+predicate calls whose answer cannot change within a process, and 200 repeated
+asks went from about 2s to 5ms (cold start unchanged, each class still scanned
+once). The suite is 87 rows now, and the seven added rows are portable — Gauche
+answers all 87, chibi all but the three registered divergences.
 
 **Bookkeeping.** `lib/srfi/14.*` left `bundled_provenance.rs`'s pinned set, since it is no longer
 claimed byte-identical to anything, and `lib/srfi/PROVENANCE.md` records what it replaced, the

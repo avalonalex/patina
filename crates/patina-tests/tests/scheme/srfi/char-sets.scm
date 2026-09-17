@@ -177,6 +177,17 @@
              (char-set-intersection char-set:iso-control
                                     char-set:graphic)))
 
+;; `char-set:blank` is the horizontal whitespace, so it is whitespace that
+;; holds tab and holds no line terminator. Stated as relations rather than a
+;; cardinality, like the rows above.
+(test-assert "blank is a subset of whitespace"
+  (char-set<= char-set:blank char-set:whitespace))
+(test-assert "blank holds tab"
+  (char-set-contains? char-set:blank #\tab))
+(test-assert "blank holds no line terminator"
+  (not (or (char-set-contains? char-set:blank #\newline)
+           (char-set-contains? char-set:blank (integer->char 13)))))
+
 ;; ---------------------------------------------------------------------------
 ;; Set algebra across the whole range
 ;; ---------------------------------------------------------------------------
@@ -231,6 +242,17 @@
       (and (char-set= d (char-set #\a high-b))
            (char-set= i (char-set high-a))))))
 
+;; The linear-update form may reuse its arguments, so passing one set as both
+;; means one box has to hold two answers. It must still return the difference
+;; and the intersection — empty and the whole set — rather than the same box
+;; twice, which is neither. Both references answer with two distinct sets.
+(test-assert "diff+intersection! given one set twice still answers both"
+  (let ((x (char-set #\a high-a)))
+    (call-with-values (lambda () (char-set-diff+intersection! x x))
+      (lambda (d i)
+        (and (char-set= d char-set:empty)
+             (char-set= i (char-set #\a high-a)))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Iteration reaches characters above U+00FF
 ;; ---------------------------------------------------------------------------
@@ -257,6 +279,23 @@
 (test-assert "any is false on a set with no such member"
   (not (char-set-any (lambda (c) (> (char->integer c) #xFF))
                      (->char-set "abc"))))
+
+;; `char-set-any` and `char-set-every` must walk the same direction as
+;; `char-set-fold` and the cursors. It is visible through `char-set-any`,
+;; whose result SRFI 14 defines as the predicate's own value, so the
+;; direction decides *which* member's value comes back. The order is asserted
+;; through a side effect rather than that value, because Gauche returns #t
+;; there rather than the predicate's result — the order is what is portable.
+(test-equal "any visits members in the same order as fold"
+  (char-set-fold cons '() (->char-set "cab"))
+  (let ((seen '()))
+    (char-set-any (lambda (c) (set! seen (cons c seen)) #f) (->char-set "cab"))
+    seen))
+(test-equal "every visits members in the same order as fold"
+  (char-set-fold cons '() (->char-set "cab"))
+  (let ((seen '()))
+    (char-set-every (lambda (c) (set! seen (cons c seen)) #t) (->char-set "cab"))
+    seen))
 
 ;; A cursor walk must reach every member, including those above U+00FF. The
 ;; order SRFI 14 leaves unspecified; both references walk ascending, and
@@ -298,6 +337,12 @@
 (test-assert "equal sets hash alike"
   (= (char-set-hash (char-set #\a high-a high-b))
      (char-set-hash (char-set high-b high-a #\a))))
+;; The empty set and {U+0000} are the degenerate pair for a range-fold hash:
+;; the one range (0 . 0) contributes lo + k*hi = 0, so a zero-seeded
+;; accumulator cannot tell them apart. Both references distinguish them.
+(test-assert "the empty set and {U+0000} hash differently"
+  (not (= (char-set-hash char-set:empty)
+          (char-set-hash (char-set (integer->char 0))))))
 (test-assert "a hash respects its bound"
   (let ((h (char-set-hash char-set:letter 100)))
     (and (<= 0 h) (< h 100))))

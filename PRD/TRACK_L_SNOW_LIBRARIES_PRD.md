@@ -1491,7 +1491,7 @@ and `char-set:full` is two pairs rather than 1112064 members. The `char-set:*`
 classes come from `char-set-unicode-ranges`, a new primitive in `(patina
 internal chars)`, because deriving them in Scheme is a predicate call per
 scalar value — 0.1s on the VM and **1.8s on the tree-walker** for one class,
-times eleven, on every import. The primitive reads `std`'s `char::is_*` for
+times ten, on every import. The primitive reads `std`'s `char::is_*` for
 the properties backing `(scheme char)`'s predicates, so `char-set:letter` and
 `char-alphabetic?` cannot disagree, and the `unicode-properties` crate for the
 general categories `std` has no table for (it cannot tell an unassigned code
@@ -1507,7 +1507,7 @@ still hash alike while the universe hashes in two steps.
 **Measured.** `charset` goes 91 → **93 of 93 on both backends**, and the
 Larceny VM lane 23 → 24 of 33 suites. Upstream's own `(srfi 14 test)` still
 passes 72 of 72. A new
-`crates/patina-tests/tests/scheme/srfi/char-sets.scm` carries 80 assertions —
+`crates/patina-tests/tests/scheme/srfi/char-sets.scm` carries 87 assertions —
 family 45's "Ours" line, which was empty. chibi 1226/1226 on both backends.
 Two chibi 0.12 defects turned up while checking that file under the oracles,
 both registered in `DIVERGENCES.tsv`: the `char-set:full` omission above, and

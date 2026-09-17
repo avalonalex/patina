@@ -9,6 +9,8 @@
 use patina_core::TaggedValue;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 // ========== TaggedValue Extraction Helpers ==========
 
@@ -688,7 +690,7 @@ fn unicode_digit_value(c: char) -> Option<u32> {
 // `(srfi 14)` needs whole Unicode classes as sets, not one membership test at
 // a time. Deriving them in Scheme costs a predicate call per scalar value:
 // 1.1M calls per class, measured at 0.10s on the VM and 1.8s on the
-// tree-walker for one class, and SRFI 14 has eleven of them. So each class is
+// tree-walker for one class, and SRFI 14 has ten of them. So each class is
 // scanned here once and handed to Scheme as ranges — every class is under 900
 // of them, covering 1112064 code points.
 //
@@ -700,60 +702,91 @@ fn unicode_digit_value(c: char) -> Option<u32> {
 // a version whose UCD matches the toolchain's; `unicode_versions_agree` below
 // is the test that keeps that true across a bump.
 
-/// The Unicode classes `char-set-unicode-ranges` can be asked for, each
-/// named as SRFI 14 names the constant it backs.
-fn class_predicate(name: &str) -> Option<fn(char) -> bool> {
+/// The Unicode classes `char-set-unicode-ranges` can be asked for, each named
+/// as SRFI 14 names the constant it backs.
+///
+/// One table rather than a `match`, so the set of classes can be enumerated:
+/// `class_predicate` looks up here, and the tests iterate the same slice. A
+/// class added to this table is therefore covered by them automatically, and
+/// one cannot be added anywhere else.
+#[allow(clippy::type_complexity)]
+const CLASSES: &[(&str, fn(char) -> bool)] = &[
+    // From std, so these agree with (scheme char)'s predicates exactly.
+    ("alphabetic", |c| c.is_alphabetic()),
+    ("lower-case", |c| c.is_lowercase()),
+    ("upper-case", |c| c.is_uppercase()),
+    ("whitespace", |c| c.is_whitespace()),
+    ("iso-control", |c| c.is_control()),
+    // Nd, shared with char-numeric? and digit-value so all three agree.
+    ("numeric", |c| unicode_digit_value(c).is_some()),
+    // General categories, which std has no table for.
+    ("title-case", is_title_case),
+    ("punctuation", is_punctuation),
+    ("symbol", is_symbol),
+    // SRFI 14's graphic is "a character that would put ink on paper":
+    // everything except the separators and the non-printing categories.
+    // Unassigned code points are not graphic, which is the distinction std
+    // cannot make.
+    ("graphic", is_graphic),
+];
+
+/// Unicode general category Lt.
+fn is_title_case(c: char) -> bool {
     use unicode_properties::GeneralCategory as G;
     use unicode_properties::UnicodeGeneralCategory;
+    c.general_category() == G::TitlecaseLetter
+}
 
-    Some(match name {
-        // From std, so these agree with (scheme char)'s predicates exactly.
-        "alphabetic" => |c: char| c.is_alphabetic(),
-        "lower-case" => |c: char| c.is_lowercase(),
-        "upper-case" => |c: char| c.is_uppercase(),
-        "whitespace" => |c: char| c.is_whitespace(),
-        "iso-control" => |c: char| c.is_control(),
-        // Nd, shared with char-numeric? and digit-value so all three agree.
-        "numeric" => |c: char| unicode_digit_value(c).is_some(),
-        // General categories, which std has no table for.
-        "title-case" => |c: char| c.general_category() == G::TitlecaseLetter,
-        "punctuation" => |c: char| {
-            matches!(
-                c.general_category(),
-                G::ConnectorPunctuation
-                    | G::DashPunctuation
-                    | G::OpenPunctuation
-                    | G::ClosePunctuation
-                    | G::InitialPunctuation
-                    | G::FinalPunctuation
-                    | G::OtherPunctuation
-            )
-        },
-        "symbol" => |c: char| {
-            matches!(
-                c.general_category(),
-                G::MathSymbol | G::CurrencySymbol | G::ModifierSymbol | G::OtherSymbol
-            )
-        },
-        // SRFI 14's graphic is "a character that would put ink on paper":
-        // everything except the separators and the non-printing categories.
-        // Unassigned code points are not graphic, which is the distinction
-        // std cannot make.
-        "graphic" => |c: char| {
-            !matches!(
-                c.general_category(),
-                G::Control
-                    | G::Format
-                    | G::Surrogate
-                    | G::PrivateUse
-                    | G::Unassigned
-                    | G::SpaceSeparator
-                    | G::LineSeparator
-                    | G::ParagraphSeparator
-            )
-        },
-        _ => return None,
-    })
+/// Unicode general categories P* — connector, dash, open, close, initial,
+/// final and other punctuation.
+fn is_punctuation(c: char) -> bool {
+    use unicode_properties::GeneralCategory as G;
+    use unicode_properties::UnicodeGeneralCategory;
+    matches!(
+        c.general_category(),
+        G::ConnectorPunctuation
+            | G::DashPunctuation
+            | G::OpenPunctuation
+            | G::ClosePunctuation
+            | G::InitialPunctuation
+            | G::FinalPunctuation
+            | G::OtherPunctuation
+    )
+}
+
+/// Unicode general categories S* — math, currency, modifier and other symbols.
+fn is_symbol(c: char) -> bool {
+    use unicode_properties::GeneralCategory as G;
+    use unicode_properties::UnicodeGeneralCategory;
+    matches!(
+        c.general_category(),
+        G::MathSymbol | G::CurrencySymbol | G::ModifierSymbol | G::OtherSymbol
+    )
+}
+
+/// A character that would put ink on paper: not a separator, and not one of
+/// the non-printing categories.
+fn is_graphic(c: char) -> bool {
+    use unicode_properties::GeneralCategory as G;
+    use unicode_properties::UnicodeGeneralCategory;
+    !matches!(
+        c.general_category(),
+        G::Control
+            | G::Format
+            | G::Surrogate
+            | G::PrivateUse
+            | G::Unassigned
+            | G::SpaceSeparator
+            | G::LineSeparator
+            | G::ParagraphSeparator
+    )
+}
+
+fn class_predicate(name: &str) -> Option<fn(char) -> bool> {
+    CLASSES
+        .iter()
+        .find(|(class, _)| *class == name)
+        .map(|(_, pred)| *pred)
 }
 
 /// (char-set-unicode-ranges class) - the code-point ranges of a Unicode class
@@ -799,9 +832,9 @@ pub(super) fn char_set_unicode_ranges(
         ))
     })?;
 
-    let bounds: Vec<TaggedValue> = unicode_class_ranges(pred)
-        .into_iter()
-        .flat_map(|(lo, hi)| {
+    let bounds: Vec<TaggedValue> = cached_class_ranges(&class, pred)
+        .iter()
+        .flat_map(|&(lo, hi)| {
             [
                 TaggedValue::fixnum(lo as i64),
                 TaggedValue::fixnum(hi as i64),
@@ -810,6 +843,32 @@ pub(super) fn char_set_unicode_ranges(
         .collect();
 
     Ok(heap.borrow_mut().alloc_vector(bounds))
+}
+
+/// One class's coalesced ranges, shared between every ask for that class.
+type ClassRanges = Arc<Vec<(u32, u32)>>;
+
+/// The scan is 1.1M predicate calls, and the answer never changes for a given
+/// class within a process, so each class is scanned at most once. `(srfi 14)`
+/// asks for ten classes at import, and a REPL session or a test binary that
+/// imports it more than once would otherwise pay for every one again.
+fn cached_class_ranges(class: &str, pred: fn(char) -> bool) -> ClassRanges {
+    static CACHE: OnceLock<Mutex<HashMap<String, ClassRanges>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Scoped so the lock is not held across the scan: a poisoned lock here
+    // would take the whole library down, and the scan is the slow part.
+    if let Ok(map) = cache.lock()
+        && let Some(hit) = map.get(class)
+    {
+        return Arc::clone(hit);
+    }
+
+    let ranges = Arc::new(unicode_class_ranges(pred));
+    if let Ok(mut map) = cache.lock() {
+        map.insert(class.to_string(), Arc::clone(&ranges));
+    }
+    ranges
 }
 
 /// Scans the scalar values once, coalescing `pred`'s members into ascending
@@ -1052,19 +1111,7 @@ mod tests {
 
     #[test]
     fn ranges_are_ascending_disjoint_and_non_adjacent() {
-        for class in [
-            "alphabetic",
-            "lower-case",
-            "upper-case",
-            "title-case",
-            "numeric",
-            "whitespace",
-            "iso-control",
-            "punctuation",
-            "symbol",
-            "graphic",
-        ] {
-            let pred = class_predicate(class).expect("class is known");
+        for &(class, pred) in CLASSES {
             let ranges = unicode_class_ranges(pred);
             assert!(!ranges.is_empty(), "{class} is empty");
             for (i, &(lo, hi)) in ranges.iter().enumerate() {
@@ -1089,6 +1136,10 @@ mod tests {
     /// the ranges are the class, exactly.
     #[test]
     fn ranges_hold_exactly_the_class() {
+        // A subset by name rather than all of `CLASSES`: this check walks
+        // every member and then rescans the whole scalar range, so the big
+        // classes would make it minutes rather than seconds. The cheap
+        // invariants above cover all ten.
         for class in ["title-case", "whitespace", "iso-control", "numeric"] {
             let pred = class_predicate(class).expect("class is known");
             let ranges = unicode_class_ranges(pred);
@@ -1111,21 +1162,57 @@ mod tests {
         }
     }
 
-    /// Surrogates are not characters, so no class contains one.
+    /// Surrogates are not characters, so no class contains one. This is the
+    /// invariant `(srfi 14)`'s `%class` relies on to skip its clipping step,
+    /// so every class is checked, not just one.
     #[test]
     fn surrogates_are_never_members() {
-        let pred = class_predicate("graphic").expect("class is known");
-        for &(lo, hi) in &unicode_class_ranges(pred) {
-            assert!(
-                hi < 0xD800 || lo > 0xDFFF,
-                "a range spans the surrogates: U+{lo:04X}..U+{hi:04X}"
-            );
+        for &(class, pred) in CLASSES {
+            for &(lo, hi) in &unicode_class_ranges(pred) {
+                assert!(
+                    hi < 0xD800 || lo > 0xDFFF,
+                    "{class}: a range spans the surrogates: U+{lo:04X}..U+{hi:04X}"
+                );
+            }
         }
     }
 
     #[test]
     fn unknown_class_is_rejected() {
         assert!(class_predicate("no-such-class").is_none());
+    }
+
+    /// `CLASSES` is the only place a class is defined, so the tests above
+    /// cover every one by construction. What is left to check is that
+    /// `class_predicate` reaches all of them — a duplicate name would shadow
+    /// the later entry and leave it unreachable — and that the count is what
+    /// `lib/srfi/14.scm` asks for and the cost argument above quotes.
+    #[test]
+    fn every_class_is_reachable_and_named_once() {
+        assert_eq!(CLASSES.len(), 10, "the comments quote ten classes");
+        let mut names: Vec<&str> = CLASSES.iter().map(|(class, _)| *class).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "a class is named twice in CLASSES");
+        for (class, _) in CLASSES {
+            assert!(
+                class_predicate(class).is_some(),
+                "{class} is in CLASSES but class_predicate cannot reach it"
+            );
+        }
+    }
+
+    /// The cache must answer with the same ranges the scan does, and the
+    /// second ask must not rescan — which is only observable as the same
+    /// allocation coming back.
+    #[test]
+    fn the_cache_answers_with_the_scan() {
+        let pred = class_predicate("title-case").expect("class is known");
+        let first = cached_class_ranges("title-case", pred);
+        let second = cached_class_ranges("title-case", pred);
+        assert_eq!(*first, unicode_class_ranges(pred));
+        assert!(Arc::ptr_eq(&first, &second), "the second ask rescanned");
     }
 
     /// Lt has 31 members in Unicode 17.0, which is what chibi and Gauche both
