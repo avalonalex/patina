@@ -683,6 +683,160 @@ fn unicode_digit_value(c: char) -> Option<u32> {
     None
 }
 
+// ========== Unicode Character Classes as Ranges ==========
+
+// `(srfi 14)` needs whole Unicode classes as sets, not one membership test at
+// a time. Deriving them in Scheme costs a predicate call per scalar value:
+// 1.1M calls per class, measured at 0.10s on the VM and 1.8s on the
+// tree-walker for one class, and SRFI 14 has eleven of them. So each class is
+// scanned here once and handed to Scheme as ranges — every class is under 900
+// of them, covering 1112064 code points.
+//
+// Two sources, deliberately at the same Unicode version. The properties `std`
+// exposes (Alphabetic, Lowercase, Uppercase, White_Space, Cc) come from the
+// same `char::is_*` methods that back `(scheme char)`'s predicates, so a
+// char-set constant and its matching predicate cannot disagree. The general
+// categories `std` has no table for come from `unicode-properties`, pinned to
+// a version whose UCD matches the toolchain's; `unicode_versions_agree` below
+// is the test that keeps that true across a bump.
+
+/// The Unicode classes `char-set-unicode-ranges` can be asked for, each
+/// named as SRFI 14 names the constant it backs.
+fn class_predicate(name: &str) -> Option<fn(char) -> bool> {
+    use unicode_properties::GeneralCategory as G;
+    use unicode_properties::UnicodeGeneralCategory;
+
+    Some(match name {
+        // From std, so these agree with (scheme char)'s predicates exactly.
+        "alphabetic" => |c: char| c.is_alphabetic(),
+        "lower-case" => |c: char| c.is_lowercase(),
+        "upper-case" => |c: char| c.is_uppercase(),
+        "whitespace" => |c: char| c.is_whitespace(),
+        "iso-control" => |c: char| c.is_control(),
+        // Nd, shared with char-numeric? and digit-value so all three agree.
+        "numeric" => |c: char| unicode_digit_value(c).is_some(),
+        // General categories, which std has no table for.
+        "title-case" => |c: char| c.general_category() == G::TitlecaseLetter,
+        "punctuation" => |c: char| {
+            matches!(
+                c.general_category(),
+                G::ConnectorPunctuation
+                    | G::DashPunctuation
+                    | G::OpenPunctuation
+                    | G::ClosePunctuation
+                    | G::InitialPunctuation
+                    | G::FinalPunctuation
+                    | G::OtherPunctuation
+            )
+        },
+        "symbol" => |c: char| {
+            matches!(
+                c.general_category(),
+                G::MathSymbol | G::CurrencySymbol | G::ModifierSymbol | G::OtherSymbol
+            )
+        },
+        // SRFI 14's graphic is "a character that would put ink on paper":
+        // everything except the separators and the non-printing categories.
+        // Unassigned code points are not graphic, which is the distinction
+        // std cannot make.
+        "graphic" => |c: char| {
+            !matches!(
+                c.general_category(),
+                G::Control
+                    | G::Format
+                    | G::Surrogate
+                    | G::PrivateUse
+                    | G::Unassigned
+                    | G::SpaceSeparator
+                    | G::LineSeparator
+                    | G::ParagraphSeparator
+            )
+        },
+        _ => return None,
+    })
+}
+
+/// (char-set-unicode-ranges class) - the code-point ranges of a Unicode class
+///
+/// `class` is a symbol naming one of the classes in `class_predicate`.
+/// Returns a vector of alternating inclusive bounds — `#(lo hi lo hi ...)`,
+/// ascending and disjoint — covering every scalar value in the class.
+/// Surrogates are never members: they are not characters, `integer->char`
+/// rejects them, and so a char-set can never be asked about one.
+///
+/// A vector rather than a list of pairs, because the largest class is 761
+/// ranges and `(srfi 14)` reads the result exactly once, to build its own
+/// representation from it.
+pub(super) fn char_set_unicode_ranges(
+    heap: &SharedHeap,
+    args: &[TaggedValue],
+) -> Result<TaggedValue, EvalError> {
+    if args.len() != 1 {
+        return Err(EvalError::WrongArity {
+            expected: "1".to_string(),
+            actual: args.len(),
+        });
+    }
+
+    // Scoped so the shared borrow ends before the allocation below takes a
+    // mutable one.
+    let class = {
+        let heap_ref = heap.borrow();
+        match heap_ref.get_symbol_name(args[0]) {
+            Some(name) => name.to_string(),
+            None => {
+                return Err(EvalError::TypeError(
+                    "char-set-unicode-ranges: requires a symbol naming a Unicode class".to_string(),
+                ));
+            }
+        }
+    };
+
+    let pred = class_predicate(&class).ok_or_else(|| {
+        EvalError::TypeError(format!(
+            "char-set-unicode-ranges: unknown Unicode class `{}`",
+            class
+        ))
+    })?;
+
+    let bounds: Vec<TaggedValue> = unicode_class_ranges(pred)
+        .into_iter()
+        .flat_map(|(lo, hi)| {
+            [
+                TaggedValue::fixnum(lo as i64),
+                TaggedValue::fixnum(hi as i64),
+            ]
+        })
+        .collect();
+
+    Ok(heap.borrow_mut().alloc_vector(bounds))
+}
+
+/// Scans the scalar values once, coalescing `pred`'s members into ascending
+/// inclusive ranges. A surrogate breaks a range: it is not a character, so it
+/// cannot be a member.
+fn unicode_class_ranges(pred: fn(char) -> bool) -> Vec<(u32, u32)> {
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    let mut open: Option<(u32, u32)> = None;
+
+    for cp in 0..=0x10FFFFu32 {
+        let member = char::from_u32(cp).is_some_and(pred);
+        match (member, open) {
+            (true, None) => open = Some((cp, cp)),
+            (true, Some((lo, _))) => open = Some((lo, cp)),
+            (false, Some(range)) => {
+                ranges.push(range);
+                open = None;
+            }
+            (false, None) => {}
+        }
+    }
+    if let Some(range) = open {
+        ranges.push(range);
+    }
+    ranges
+}
+
 // ========== Registration ==========
 
 /// Register all character primitives with the registry
@@ -863,4 +1017,127 @@ pub(super) fn register(registry: &mut crate::registry::PrimitiveRegistry) {
         "Returns the numeric value of a digit character, or #f.",
         digit_value,
     ));
+
+    // Unicode character classes, for (srfi 14)'s constants
+    registry.register(PrimitiveFn::new_heap(
+        "scheme.char",
+        "char-set-unicode-ranges",
+        Arity::Exact(1),
+        "Returns a vector of alternating inclusive code-point bounds for a named Unicode class.",
+        char_set_unicode_ranges,
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two Unicode sources this module reads must describe the same
+    /// Unicode, or `char-set:letter` (std, through `char-alphabetic?`) and
+    /// `char-set:punctuation` (the category table) would disagree about
+    /// characters one version added and the other has not.
+    ///
+    /// If a toolchain bump trips this, bump `unicode-properties` to the
+    /// version with the matching UCD in the same change.
+    #[test]
+    fn unicode_versions_agree() {
+        let (sa, sb, sc) = char::UNICODE_VERSION;
+        let (ca, cb, cc) = unicode_properties::UNICODE_VERSION;
+        assert_eq!(
+            (sa as u64, sb as u64, sc as u64),
+            (ca, cb, cc),
+            "std and unicode-properties disagree on the Unicode version"
+        );
+    }
+
+    #[test]
+    fn ranges_are_ascending_disjoint_and_non_adjacent() {
+        for class in [
+            "alphabetic",
+            "lower-case",
+            "upper-case",
+            "title-case",
+            "numeric",
+            "whitespace",
+            "iso-control",
+            "punctuation",
+            "symbol",
+            "graphic",
+        ] {
+            let pred = class_predicate(class).expect("class is known");
+            let ranges = unicode_class_ranges(pred);
+            assert!(!ranges.is_empty(), "{class} is empty");
+            for (i, &(lo, hi)) in ranges.iter().enumerate() {
+                assert!(lo <= hi, "{class} range {i} is inverted");
+                assert!(hi <= 0x10FFFF, "{class} range {i} is out of range");
+                if i > 0 {
+                    let prev_hi = ranges[i - 1].1;
+                    // Strictly greater than prev_hi + 1: adjacent ranges
+                    // would mean the scan failed to coalesce.
+                    assert!(
+                        lo > prev_hi + 1,
+                        "{class} ranges {} and {i} are adjacent or overlap",
+                        i - 1
+                    );
+                }
+            }
+        }
+    }
+
+    /// Every range member satisfies the class predicate, and no code point
+    /// between two ranges does. This is the property `(srfi 14)` relies on:
+    /// the ranges are the class, exactly.
+    #[test]
+    fn ranges_hold_exactly_the_class() {
+        for class in ["title-case", "whitespace", "iso-control", "numeric"] {
+            let pred = class_predicate(class).expect("class is known");
+            let ranges = unicode_class_ranges(pred);
+            let mut in_ranges = 0u32;
+            for &(lo, hi) in &ranges {
+                for cp in lo..=hi {
+                    if let Some(c) = char::from_u32(cp) {
+                        assert!(
+                            pred(c),
+                            "{class}: U+{cp:04X} is in a range but not in the class"
+                        );
+                        in_ranges += 1;
+                    }
+                }
+            }
+            let scanned = (0..=0x10FFFFu32)
+                .filter(|&cp| char::from_u32(cp).is_some_and(pred))
+                .count() as u32;
+            assert_eq!(in_ranges, scanned, "{class}: ranges miss members");
+        }
+    }
+
+    /// Surrogates are not characters, so no class contains one.
+    #[test]
+    fn surrogates_are_never_members() {
+        let pred = class_predicate("graphic").expect("class is known");
+        for &(lo, hi) in &unicode_class_ranges(pred) {
+            assert!(
+                hi < 0xD800 || lo > 0xDFFF,
+                "a range spans the surrogates: U+{lo:04X}..U+{hi:04X}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_class_is_rejected() {
+        assert!(class_predicate("no-such-class").is_none());
+    }
+
+    /// Lt has 31 members in Unicode 17.0, which is what chibi and Gauche both
+    /// report for `char-set:title-case`. The reference implementation this
+    /// replaced had it empty.
+    #[test]
+    fn title_case_matches_the_references() {
+        let pred = class_predicate("title-case").expect("class is known");
+        let members: u32 = unicode_class_ranges(pred)
+            .iter()
+            .map(|(lo, hi)| hi - lo + 1)
+            .sum();
+        assert_eq!(members, 31);
+    }
 }

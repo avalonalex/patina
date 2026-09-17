@@ -1,9 +1,9 @@
 (define-library
   (srfi 14)
   (import (scheme base)
-          (scheme char)
-          (scheme write)
-          (srfi 60))
+          ;; `char-set-unicode-ranges` supplies the char-set:* classes; see
+          ;; 14.scm's header for why they are not derived here.
+          (only (patina internal chars) char-set-unicode-ranges))
   (export char-set?
           char-set=
           char-set<=
@@ -70,6 +70,4 @@
           char-set:ascii
           char-set:empty
           char-set:full)
-  (cond-expand
-    (mosh (import (srfi :14 char-sets)))
-    (else (include "14.scm"))))
+  (include "14.scm"))

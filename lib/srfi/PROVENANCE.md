@@ -8,7 +8,6 @@ its own record. One home per tree.
 
 | Package | Version | Files | Upstream | Tarball sha256 |
 |---|---|---|---|---|
-| `(srfi 14)` | 0.1.0 | `14.sld`, `14.scm` | snow-fort, Retropikzel's R7RS port of Olin Shivers' char-set reference implementation (MIT-Scheme-old) | `de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e` |
 | `(srfi 125)` | chibi 0.12.0 | `125/hash.scm` | chibi-scheme's `lib/srfi/125/hash.scm` (Alex Shinn, BSD 3-Clause) | file sha256 `d469201d00fa0b955ba23a01e02707034dad5ba2ef1a29cd7b12b880e76f1053` |
 | SRFI 162 | — | `128/162-impl.scm` | the SRFI's own sample implementation, `https://srfi.schemers.org/srfi-162/srfi/128/162-impl.scm` (John Cowan, MIT) | file sha256 `973b7a5e6557ecfaa5e218a2d51e63077572235973f27c3db484ab5bac9513f2` |
 | `(srfi 64)` | 0.2.1 | `64.sld`, `64.scm` | snow-fort `http://snow-fort.org/s/iki.fi/retropikzel/srfi/64/0.2.1/srfi-64-0.2.1.tgz`, Retropikzel's R7RS packaging of the SRFI 64 reference implementation (Per Bothner, MIT) | `f3ec28b4ce2b6f2fe432d81ac9afbf96c0359cbc6e0f2f3b935793994329f887` |
@@ -184,13 +183,43 @@ Patina's own, because upstream's imports `(chibi ast)` and relies on chibi's
 C-backed SRFI 69; the resulting deviations are documented in its header,
 which is where this tree records deviation.
 
-`(srfi 14)`'s `14.scm` carries **one marked local fix** (2026-08-19, `PATINA
-LOCAL EDIT` at the site, pinned post-edit): upstream's `ucs-range->char-set`
-passed its extracted base char-set to `%default-base`, which expects the
-maybe-base *rest list* — its `pair?` test read the record as "no base given"
-and silently defaulted it to empty. Caught by chibi's `(srfi 14 test)` (72
-assertions, `scheme_tests/upstream/`) the day that suite was restored; the
-write-up is in `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`.
+`(srfi 14)` is **no longer third-party, as of #372 (2026-09-17)**, and is
+absent from the table above for that reason. It was Retropikzel's R7RS port of
+Olin Shivers' reference implementation (snow-fort 0.1.0, MIT-Scheme-old,
+tarball sha256
+`de94f90d7b032ea554ed51b4cbce942b22df6fefe68497d661b9c26e3c7e690e`), pinned
+post-edit over one marked local fix. It is now Patina-authored.
+
+**Why it was replaced rather than edited.** That implementation stores a
+char-set as a 256-character string indexed by code point — its own header says
+it "is Latin-1 specific. Would certainly have to be rewritten for Unicode."
+The representation is the defect: a character above U+00FF indexed past the
+end of the string and raised, and `ucs-range->char-set` clipped a range to the
+first 256 code points without a word, so `char-set:full` had 256 members and a
+Hangul range was empty. Every one of its ~60 procedures was written against
+that string, so there was no edit site smaller than the file. Larceny triage
+family 45 and issue #372 carry the measurements.
+
+The replacement keeps a char-set as a normalized list of inclusive code-point
+ranges; `14.scm`'s header documents the invariant and why the `char-set:*`
+class constants come from a Rust primitive rather than a Scheme scan. Two
+behaviours changed that the SRFI leaves open, both recorded here because they
+are choices rather than consequences: iteration and the cursors now walk
+**ascending** rather than descending (both references do, and Larceny's suite
+pins the accumulation), and `char-set-hash` folds over ranges rather than over
+256 string indices, so hashing `char-set:full` is two steps instead of
+1112064.
+
+What the change is measured by: upstream's own `(srfi 14 test)` still passes
+72 of 72 (`upstream_srfi_suites.rs`), Larceny's `charset` suite went from 91 to
+**93 of 93 on both backends**, and
+`crates/patina-tests/tests/scheme/srfi/char-sets.scm` is this tree's own
+80-assertion suite for the Unicode property neither of those reaches. The
+superseded local fix — upstream's `ucs-range->char-set` handing its extracted
+base char-set to a `%default-base` that expects the *rest list*, so the base
+silently defaulted to empty — is written up in
+`PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`; the rewrite has no such shape, since
+its `%default-base` is reached only from a rest list.
 
 `(srfi 69)` is **not** byte-identical and is deliberately absent from the table
 above: `69/srfi-69-impl.scm` carries three marked local fixes, each `PATINA
@@ -343,10 +372,13 @@ the alias makes Larceny's suite overflow the stack, because the suite imports
 
 ## Licences
 
-`(srfi 14)` needs nothing added here: `14.scm` carries its own attribution
-chain (MIT Scheme → Brian D. Carlstrom → Olin Shivers → Retropikzel) *and* the
-full MIT Scheme 1988–1995 licence text at the end of the file, exactly as
-upstream ships it.
+`(srfi 14)` needed nothing added here while it was upstream's: `14.scm`
+carried its own attribution chain (MIT Scheme → Brian D. Carlstrom → Olin
+Shivers → Retropikzel) *and* the full MIT Scheme 1988–1995 licence text at the
+end of the file, exactly as upstream shipped it. Since #372 replaced that file
+outright (§ above), no third-party text remains in it and there is nothing
+left to carry: the SRFI's *interface* is what the rewrite implements, and an
+API is not the licensed artifact.
 
 `(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
 mostly do not — upstream's own state, not something removed here. Two things
@@ -436,7 +468,10 @@ by the inlined `make-char-predicate`, and `lib/srfi/130.sld` now imports
 `(srfi 14)` itself rather than inheriting it. That is a thin use of a large
 library, but the alternative was a hand-maintained subset, and SRFI 14 was
 already an L1 bundling target on its own in-degree — so it stays bundled
-either way; only the reason moved.
+either way; only the reason moved. Those two names are also why #372's rewrite
+fixed `(srfi 130)`'s `string-index` and `string-skip` — which raised on a
+char-set predicate that met a character above U+00FF — without touching
+`(srfi 130)` at all.
 
 The package ships no test suite; conformance is covered by
 `crates/patina-tests/tests/scheme/stdlib/random.scm` (both backends must

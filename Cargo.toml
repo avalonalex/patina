@@ -48,6 +48,21 @@ num-rational = "0.4"
 num-traits = "0.2"
 num-complex = "0.4"
 
+# Unicode general categories, for SRFI 14's character-class constants.
+#
+# `std`'s char predicates cover Alphabetic, Lowercase, Uppercase, White_Space
+# and Cc, but there is no general-category table in std: it cannot tell an
+# unassigned code point from a currency symbol, which char-set:punctuation,
+# char-set:symbol and char-set:graphic need. This crate supplies the category.
+#
+# Pinned to a version whose UCD matches the toolchain's: 0.1.4 and the `std` of
+# rust-toolchain.toml's 1.97.1 are both Unicode 17.0, so char-set:letter (from
+# std, via char-alphabetic?) and char-set:punctuation (from here) describe the
+# same Unicode. A toolchain bump should check both versions still agree —
+# `char::UNICODE_VERSION` against `unicode_properties::UNICODE_VERSION`, which
+# a unit test in patina-primitives asserts.
+unicode-properties = { version = "0.1.4", features = ["general-category"] }
+
 # Error handling
 thiserror = "2"
 
