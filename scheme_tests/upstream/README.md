@@ -45,10 +45,41 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/27/test.sld` | 224 | 0 | verbatim |
 | `srfi/135/test.sld` | 1030 | 0 | verbatim |
 | `srfi/101/test.sld` | 56 | 0 | verbatim |
+| `srfi/115/test.sld` | 85 | 0 | verbatim |
+| `srfi/146/test.sld` | 97 | 0 | verbatim — reports through `(srfi 64)`, so its row uses `SRFI_64_BODY` |
+| `srfi/146/hash-test.sld` | 77 | 0 | verbatim — as above |
+| `srfi/159/test.sld` | 316 | 0 | imports lifted into the wrapper |
+| `srfi/160/test.sld` | 110 | 0 | wrapper shadows `test-exit`; body verbatim — see below |
+| `srfi/165/test.sld` | 43 | 0 | verbatim — reports through `(srfi 64)`, so its row uses `SRFI_64_BODY` |
+| `srfi/231/test.sld` | 579 | 2 | verbatim — both failures are upstream's, not ours; see `upstream_srfi_suites.rs` |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
 | `chibi/term/ansi-test.sld` | 234 | 0 | framework shim |
+
+**`srfi/160/test.sld` shadows `test-exit`, and the reason is worth keeping.**
+`shared-tests.scm` — verbatim upstream, and it stays that way — ends with
+`(test-exit)`, which calls `exit`. These suites run *in-process*, so that call
+terminated the whole `cargo test` process: roughly fifteen tests scheduled
+after it never ran, libtest printed no summary, and **cargo still exited 0**,
+so the lane reported success while skipping its own self-checks. The two
+harness self-checks that exist to prove the lane can count were among the
+tests erased, and #397 — SRFI 165's row registered against the wrong
+framework, failing on both backends — sat undetected in that gap from the day
+it landed.
+
+The fix is in the wrapper, which is ours: `test-exit` is excluded from the
+`(chibi test)` import and shadowed by a no-op, so the body's last line returns
+instead of exiting. Nothing is lost — `test-exit` is only ever a suite's last
+act, its value is unused, and the harness reads the failure count from the
+framework afterwards, which is how it always decided whether a suite passed.
+
+`the_lane_reports_a_summary_for_every_test_it_starts` keeps it from coming
+back, and it re-runs the test binary as a **subprocess** deliberately: the
+first version of that guard was an ordinary `#[test]`, and reintroducing the
+defect showed it passed by not running. A process that calls `exit` cannot be
+caught from inside it. Any new suite that calls `exit` needs the same shadow,
+and that test says so when it fails.
 
 **The chibi rows exist because of a hole the 2026-08-19 audit found.** Each
 snowball ships its suite, and while the packages were vendored in

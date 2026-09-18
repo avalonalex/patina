@@ -272,7 +272,16 @@ suite_tests! {
     (srfi_115_regexp, "srfi 115", "(srfi 115 test)", 0, 85),
     // Verbatim, and it needed no adaptation: (srfi 146) became available in
     // #375, which is what made this one possible at all.
-    (srfi_165_computations, "srfi 165", "(srfi 165 test)", 0, 43),
+    //
+    // It reports through `(srfi 64)`, not `(chibi test)` — its own imports say
+    // so — so it needs `SRFI_64_BODY` for the same reason SRFI 146's two rows
+    // above do. Registered without it in #394, this counted 0 assertions
+    // against its floor of 43 and would have failed on both backends; #396
+    // exited the process before it ever ran, so nothing reported it. The
+    // floor was always right. See #397.
+    (srfi_165_computations, "srfi 165", "(srfi 165 test)", 0, 43,
+     "(srfi 165 test) (srfi 64)",
+     SRFI_64_BODY),
     // chibi's own suite for its own implementation, verbatim. Two expected
     // failures, neither ours, and both recorded because a bare "2" would be
     // unreadable later.
@@ -848,5 +857,79 @@ fn chibi_string_is_supplied_not_bundled() {
     assert_eq!(
         common::eval_program(r#"(import (scheme base) (chibi string)) (string-count "aab" #\a)"#),
         "2"
+    );
+}
+
+/// Proves this binary reports a summary for every test it starts — from
+/// *outside* the process, because that is the only place the check survives.
+///
+/// #396: `shared-tests.scm` ends with `(test-exit)`, and these suites run
+/// in-process, so that call took the whole `cargo test` process with it. About
+/// fifteen tests never ran, libtest printed no summary, and **cargo exited 0**.
+/// #397 sat in that gap from the day it landed.
+///
+/// The first attempt at this guard was an ordinary `#[test]`, and reintroducing
+/// the defect showed why that cannot work: the guard was itself one of the
+/// tests erased, so it passed by not running. A process that calls `exit`
+/// cannot be caught from inside it. So this re-runs this same test binary as a
+/// subprocess and holds it to libtest's own accounting — `running N tests`
+/// followed by a summary line that accounts for all N.
+///
+/// `PATINA_SUITE_SUBPROCESS` stops the recursion.
+#[test]
+fn the_lane_reports_a_summary_for_every_test_it_starts() {
+    if std::env::var_os("PATINA_SUITE_SUBPROCESS").is_some() {
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary path"))
+        .env("PATINA_SUITE_SUBPROCESS", "1")
+        // One thread, so a process-killing exit truncates deterministically at
+        // the offending test rather than wherever the scheduler happened to be.
+        .args(["--test-threads=1"])
+        .output()
+        .expect("re-run this test binary");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let started: usize = text
+        .split_once("running ")
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no `running N tests` line:\n{text}"));
+    let summary = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("test result:"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the lane started {started} tests and printed no summary: a suite called \
+                 `exit` and killed the process. Find the `(test-exit)` and shadow it in that \
+                 suite's wrapper `.sld`, as scheme_tests/upstream/srfi/160/test.sld does \
+                 (#396).\n{text}"
+            )
+        });
+    // `test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
+    // out; finished in 22s` — sum only the outcome fields. `measured`,
+    // `filtered out` and the duration are not outcomes, and including them is
+    // how the first version of this check failed against a passing lane.
+    let counted: usize = ["passed", "failed", "ignored"]
+        .iter()
+        .map(|field| {
+            summary
+                .split(';')
+                .find(|part| part.trim_end().ends_with(field))
+                .and_then(|part| part.split_whitespace().rev().nth(1))
+                .and_then(|n| n.parse::<usize>().ok())
+                .unwrap_or_else(|| panic!("no `{field}` count in summary: {summary:?}"))
+        })
+        .sum();
+    assert_eq!(
+        counted, started,
+        "the lane started {started} tests but its summary accounts for {counted}:\n{summary}"
+    );
+    assert!(
+        output.status.success(),
+        "the lane failed in the subprocess:\n{text}"
     );
 }
