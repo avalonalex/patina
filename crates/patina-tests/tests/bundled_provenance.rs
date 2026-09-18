@@ -113,10 +113,32 @@ const PINNED: &[(&str, u64)] = &[
     // other adapted ports one directory over; lib/srfi/PROVENANCE.md records
     // what it replaced and why.
     //
+    // SRFI 159, byte-identical to the tarball recorded in
+    // lib/srfi/PROVENANCE.md. Ten of its files carry no licence notice — see
+    // that record for how the licence was established rather than inferred,
+    // which is the reason this one is bundled where (srfi 4) was not.
+    ("lib/srfi/159.sld", 0xa407641c8392965d),
+    ("lib/srfi/159/base.sld", 0xc40c95006bfcdd38),
+    ("lib/srfi/159/color.scm", 0x2d416b074fba45c1),
+    ("lib/srfi/159/color.sld", 0xde7958442e34010e),
+    ("lib/srfi/159/column.scm", 0x8aff7d4b1ea624af),
+    ("lib/srfi/159/columnar.sld", 0x6b6f5909f72cb73d),
+    ("lib/srfi/159/internal/base.scm", 0x6b5adfcf3c39c12c),
+    ("lib/srfi/159/internal/base.sld", 0x0038f928b33d28ce),
+    ("lib/srfi/159/internal/compat.sld", 0x10b3a8832d418d2b),
+    ("lib/srfi/159/internal/monad.scm", 0xb1a9aef4f5eac55b),
+    ("lib/srfi/159/internal/pretty.scm", 0xd8289ecce8696a96),
+    ("lib/srfi/159/internal/pretty.sld", 0x588585eb814777bc),
+    ("lib/srfi/159/internal/util.scm", 0x918ae187a947aa83),
+    ("lib/srfi/159/internal/util.sld", 0x44666082df285bdf),
+    ("lib/srfi/159/internal/write.scm", 0xb875b9d52bacc6cb),
+    ("lib/srfi/159/unicode.scm", 0xda5fa29d72ac51dd),
+    ("lib/srfi/159/unicode.sld", 0x505181e5fcf138d6),
     // SRFI 115, byte-identical to the tarball recorded in
-    // lib/srfi/PROVENANCE.md. Unlike its two neighbours here, nothing about
-    // its licence had to be established: every file carries an explicit SPDX
-    // identifier.
+    // lib/srfi/PROVENANCE.md. Unlike its neighbours here — SRFI 159 above,
+    // whose licence took three checks to establish, and SRFI 160 below, whose
+    // (srfi 4) layer had none at all — nothing about its licence had to be
+    // established: every file carries an explicit SPDX identifier.
     ("lib/srfi/115.sld", 0x57df407358c44250),
     ("lib/srfi/115.scm", 0xf0378e3a7f03501f),
     ("lib/srfi/115/boundary.sld", 0xaeba3a21ab466dd8),
@@ -272,6 +294,17 @@ const PINNED_TREES: &[&str] = &[
     "lib/srfi/134",
     "lib/srfi/135",
     "lib/srfi/144",
+    // SRFI 159's two directories. Without both named here the hash list is
+    // the only guard on this tree, and it cannot see an *added* file: a
+    // seventeenth file dropped under `159/internal` would be unpinned and
+    // unnoticed, which is the hole this guard exists to close.
+    // Added with SRFI 159, and `lib/srfi/115` with it: #388 pinned that tree's
+    // files without listing the tree, so an added file went unguarded there
+    // too. Every Scheme file in both is vendored, which is what qualifies
+    // them.
+    "lib/srfi/115",
+    "lib/srfi/159",
+    "lib/srfi/159/internal",
     // SRFI 160's two directories. This is the strongest case in the list for
     // the tree guard rather than the hash list alone: every file in them is
     // `atexpander.sh` output, so a *thirteenth* type dropped in by a re-run of

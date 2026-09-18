@@ -17,6 +17,7 @@ its own record. One home per tree.
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
+| `(srfi 159)` | — | `159.sld` and the sixteen files under `159/` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-159/srfi-159.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, established as recorded below) | tarball sha256 `7cbb770787d2c437d21e853918adf74d5e3777c28b416d8eed226abc813368c1` |
 | `(srfi 115)` | — | `115.sld`, `115.scm`, `115/boundary.sld`, `115/boundary.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-115/srfi-115.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, the boundary data CC0-1.0) | tarball sha256 `e8e7294adfb695518ef5ac6d59989048e2143dafbb3d87588458ab76bfe715c2` |
 | `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
 | `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
@@ -270,6 +271,56 @@ not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
 
+**SRFI 159's licence was established rather than inferred, which is why it is
+bundled where `(srfi 4)` was not.**
+
+`lib/srfi/159.sld` and the seventeen files under `159/` are
+`contrib/duy-nguyen/` from the SRFI's own distribution, unedited. Upstream's
+own suite passes **316 of 316 on both backends**, with no adaptation.
+
+It came close to the `(srfi 4)` treatment, and the difference is worth
+recording because the surface facts looked the same. **Ten of its files carry
+no licence notice at all**, and the seven that do cite one *by URL* —
+"Copyright (c) 2006-2019 Alex Shinn. All rights reserved. BSD-style license:
+http://synthcode.com/license.txt" — so the terms do not travel with the code,
+which is what a redistribution condition asks for. The distribution has no
+`LICENSES/` directory, and its `README.org` carries only the editor's MIT over
+the repository.
+
+Three things settled it, each checked rather than assumed:
+
+- **The URL resolves, and to text already in this file.** Fetched 2026-09-18,
+  `http://synthcode.com/license.txt` is a standard three-clause BSD licence
+  under "Copyright (c) 2000-2015 Alex Shinn". Compared character by character
+  against the BSD-3-Clause text reproduced below for `(srfi 125)`: all 1,323
+  characters of licence body are identical, the two differing only in the
+  copyright year range above it (2000-2015 in the fetched licence, 2009-2021
+  in chibi's `COPYING`, which is where the copy below came from). So the licence is not merely *probably* BSD — it
+  is the same text this tree already carries, and the § Licences note below
+  relies on that rather than re-quoting it.
+- **The unmarked files are not the implementation.** Nine of the ten are
+  `.sld` wrappers of 4 to 47 lines — imports and exports, with the one
+  exception of `internal/compat.sld`, whose 47 lines define the two
+  portability shims (`let-optionals*`, `negative?*`) the other
+  implementations import instead. The tenth, `internal/monad.scm`, is 155
+  lines. Of 2,144 implementation lines, 1,989
+  carry Shinn's notice explicitly. In `(srfi 4)`'s case all four unmarked
+  files *were* the implementation, which is the distinction that pointed the
+  two decisions in opposite directions.
+- **chibi corroborates the remainder.** The same library ships there as
+  `(chibi show)` — SRFI 159 is where it came from — and chibi's `AUTHORS`
+  opens "Alex Shinn wrote the initial version of chibi-scheme and all
+  distributed modules" over a `COPYING` that is this same BSD text. That is
+  exactly the argument this file already makes for `(srfi 125)`'s notice-less
+  file.
+
+**What was *not* the deciding factor**, since it would have been the wrong
+reason: reimplementing would have meant 2,144 lines of monadic formatter,
+five times `(srfi 4)`'s and not mechanical. Cost is why the question was worth
+asking carefully; it is not why the answer came out this way. Had the URL
+failed to resolve, or resolved to something other than a permissive licence,
+the size would not have made bundling acceptable.
+
 **SRFI 115 is byte-identical, and is the clean case the two beside it are
 not.**
 
@@ -283,8 +334,9 @@ ships. Upstream's suite passes **85 of 85 on both backends**.
 the implementation, CC0-1.0 for `boundary.*`, which is generated Unicode
 word-boundary data — and the distribution ships a `LICENSES/` directory with
 both texts. That is worth stating plainly next to its two neighbours in this
-file: SRFI 4 had no notice on any file and was reimplemented, and SRFI 159 (not
-bundled) has none on ten of seventeen. Here nothing is inferred.
+file: SRFI 4 had no notice on any file and was reimplemented, and SRFI 159 has
+none on ten of seventeen and was bundled only after the § above established
+its licence by three separate checks. Here nothing is inferred.
 
 **One dependency is worth recording**, because it is the reverse of the usual
 direction: SRFI 115 needs `(srfi 14)`, and it is viable here only since #372
@@ -533,6 +585,16 @@ that the notice travel with the software, and since each file carries its own,
 bundling them verbatim satisfies it without anything being reproduced here.
 This is also the second reason not to rename those two namespaces: an edited
 file is one whose notice someone has to re-establish.
+
+`(srfi 159)` is covered by the same BSD-3-Clause text reproduced below for
+`(srfi 125)`, and the § above records how that was established: the URL its
+seven marked files cite resolves to that text character for character, the ten
+unmarked files are `.sld` wrappers plus one 155-line body, and chibi's
+blanket `AUTHORS`/`COPYING` statement covers the same library shipped there as
+`(chibi show)`. The copyright line those files carry is "Copyright (c)
+2006-2019 Alex Shinn"; the licence's own is "Copyright (c) 2000-2015 Alex
+Shinn". One copy of the text per tree, as elsewhere in this file, so it is
+cited rather than repeated a third time.
 
 `(srfi 115)`'s four files carry an SPDX *identifier* but not the licence text,
 which BSD-3-Clause's first condition asks to be retained. The condition is met
