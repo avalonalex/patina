@@ -2,26 +2,25 @@
 
 **127 of 161 packages pass.**
 
-**127 of 135 in scope** — 26 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**127 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
 | pass | 127 | 127 |
-| missing-library | 9 | 5 |
-| parse-error | 12 | 1 |
+| missing-library | 7 | 4 |
+| parse-error | 13 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
 | wrong-result | 2 | 1 |
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
-| out-of-scope | 8 | 0 |
+| out-of-scope | 9 | 0 |
 
 ## Missing libraries — the bundling work queue
 
 | Library | In-scope packages |
 |---|---|
 | (srfi 114 comparators) | 2 |
-| (srfi 160 base) | 1 |
 | (srfi 165) | 1 |
 | (srfi 231) | 1 |
 
@@ -49,7 +48,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-net-dns | out-of-scope | needs (chibi net), which is C-backed upstream |
 | chibi-net-smtp | out-of-scope | needs (chibi net), which is C-backed upstream |
 | chibi-ssl | out-of-scope | chibi/ssl.sld:14 (include-shared "ssl") — bindings to OpenSSL |
-| chibi-xgboost | missing-library | chibi/xgboost.sld:5 (include-shared "xgboost/xgboost"); reports (srfi 160 base) because its test library's import fails before (chibi xgboost) is reached, so the FFI need is real but shadowed |
+| chibi-xgboost | out-of-scope | chibi/xgboost.sld:5 (include-shared "xgboost/xgboost") — bindings to libxgboost, reported directly since #383 bundled the (srfi 160 base) that used to shadow it |
 | chibi-xlib | out-of-scope | chibi/xlib.sld:45 (include-shared "xlib") — bindings to Xlib |
 | independentresearch-xattr | out-of-scope | independentresearch/xattr.sld:9 (include-shared "xattr") — POSIX extended attributes |
 | srfi-106 | out-of-scope | srfi/106.sld:6 imports (foreign c), chibi's FFI interface library |
@@ -62,7 +61,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | rebottled-cl-pdf | missing-library | needs (rebottled pregexp); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 | retropikzel-pstk | missing-library | needs (retropikzel named-pipes); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 
-### Upstream source defect (11)
+### Upstream source defect (12)
 
 | Package | Status | Why |
 |---|---|---|
@@ -77,6 +76,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-snow-commands | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | edn | parse-error | (chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do |
 | postgresql | parse-error | via (chibi bytevector) — see chibi-bytevector |
+| srfi-179 | parse-error | srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8 |
 
 ### Upstream test defect (4)
 
@@ -132,7 +132,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-term-edit-line | probe | pass | in scope |
 | chibi-uri | test | pass | in scope |
 | chibi-voting | test | wrong-result | upstream-test-defect |
-| chibi-xgboost | test | missing-library | ffi |
+| chibi-xgboost | test | out-of-scope | ffi |
 | chibi-xlib | probe | out-of-scope | ffi |
 | chrisoei-cint | test | pass | in scope |
 | chrisoei-test | probe | pass | in scope |
@@ -230,7 +230,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-166 | probe | missing-library | in scope |
 | srfi-170 | probe | out-of-scope | ffi |
 | srfi-175 | test | pass | in scope |
-| srfi-179 | test | missing-library | in scope |
+| srfi-179 | test | parse-error | upstream-source-defect |
 | srfi-180 | probe | pass | in scope |
 | srfi-19 | probe | pass | in scope |
 | srfi-197 | test | runtime-error | upstream-test-defect |

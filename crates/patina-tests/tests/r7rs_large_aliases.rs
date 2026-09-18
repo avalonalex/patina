@@ -56,6 +56,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("vector f64", "160 f64"),   // Tangerine
     ("vector c64", "160 c64"),   // Tangerine
     ("vector c128", "160 c128"), // Tangerine
+    ("regex", "115"),            // Tangerine
     ("rlist", "101"),            // Red — renames, see RENAMING_ALIASES
 ];
 

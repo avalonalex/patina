@@ -247,8 +247,34 @@ in-scope requester is srfi-179, whose *library itself* imports `(chibi assert)` 
 implementation-specific, external by policy — so it cannot pass whatever is bundled.
 The other requester, chibi-xgboost, is already excluded as FFI.
 
-**Remaining L1 candidates:** SRFI 115 regex and SRFI 159 show, neither with measured
-demand, and the re-export shims `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 39)`.
+**SRFI 115 shipped 2026-09-18** (#386) as `(scheme regex)`, **completing the
+Tangerine edition at 8 of 8**. No adaptation: 85 of 85 on its own suite, both
+backends, and every file carries an explicit SPDX identifier, so unlike SRFI 4 there
+was no licence to establish. Worth recording the dependency direction, which is the
+reverse of the usual one: SRFI 115 needs `(srfi 14)`, and it is viable here only
+because #372 gave char-sets the whole Unicode range — the Latin-1 implementation that
+replaced is what the chibi-regexp corpus failure still runs aground on. So Patina now
+ships the standard-track regex library while the chibi one it descends from cannot
+load, for a reason recorded in `compat/EXCLUSIONS.scm`.
+
+**Bundling SRFI 160 moved two corpus packages, both away from a shadow.** Neither
+is a pass, and both are now excluded, but the reasons are worth keeping. chibi-xgboost
+had reported `(srfi 160 base)` missing; its exclusion note already said "the FFI need
+is real but shadowed", and with 160 bundled it proves that need directly — the entry's
+expected status moves `missing-library` → `out-of-scope`, which is the drift check
+doing its job. srfi-179 got past the missing library and failed on `u1vector-ref`:
+it builds a `u1-storage-class` out of one-bit-vector procedures that **nothing
+defines**. They are not SRFI 160's — neither our copy nor the SRFI's own reference
+implementation has a `u1` type, which starts at u8 — they are a chibi extension
+written in C (`lib/srfi/160/uvprims.c`). So the package needs its host to supply a
+type outside the SRFI it names as a dependency. Excluded as an upstream source
+defect; the in-scope denominator moves 135 → 134.
+
+**Remaining L1 candidates:** SRFI 159 show — which works, but whose licence does not
+travel with its code (ten of seventeen files carry no notice, the rest cite Shinn's
+by URL), so [#387](https://github.com/avalonalex/patina/issues/387) decides between
+establishing it and reimplementing — and the re-export shims `(srfi 6)`, `(srfi 9)`,
+`(srfi 11)`, `(srfi 39)`.
 The stored corpus also names `(srfi 114 comparators)`,
 `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all

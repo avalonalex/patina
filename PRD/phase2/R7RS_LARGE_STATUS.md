@@ -8,7 +8,7 @@ API (SRFI 64), and #193's Phase 0 then shipped it: `lib/srfi/64.{sld,scm}` exist
 bookkeeping: the header had read 2026-08-08 while the tables
 underneath were kept current through the 2026-08-24…26 bundling wave; they now agree. Reconciled
 against `lib/` on this date: **Red 16 of 17 shipped** (17 counting SRFI 158 for the superseded
-121), **Tangerine 7 of 8** (SRFI 146 and 160 bundled 2026-09-18); the measured priority order below is
+121), **Tangerine 8 of 8** (SRFI 146, 160 and 115 bundled 2026-09-18); the measured priority order below is
 spent and marked as history.
 
 This document is **the bundling policy and edition tracker for Track L** — the answer to "does
@@ -77,7 +77,7 @@ Two of those did not arrive by bundling Scheme. SRFI 124 is implemented in Rust,
 
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
-| SRFI 115 | `(scheme regex)` | Regular expressions | ❌ | ❌ |
+| SRFI 115 | `(scheme regex)` | Regular expressions | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 115)`, 2026-09-18) |
 | SRFI 143 | `(scheme fixnum)` | Fixnums | ✅ shipped | ✅ shipped |
 | SRFI 144 | `(scheme flonum)` | Flonums | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 144)`, 2026-08-26) |
 | SRFI 146 | `(scheme mapping)` | Mappings | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 146)`, 2026-09-18) |
@@ -88,7 +88,9 @@ Two of those did not arrive by bundling Scheme. SRFI 124 is implemented in Rust,
 | SRFI 160 | `(scheme vector @)` | Numeric vectors (u8, s8, f64, etc.) | ✅ shipped | ✅ shipped (aliases over the bundled `(srfi 160 …)`, 2026-09-18) |
 | R6RS | `(scheme bytevector)` | Bytevectors (R6RS compatible) | 🚧 Partial | ❌ |
 
-**Tangerine status: 7 of 8 shipped**, reachable under both names. (SRFI 144 was missing from this table until it was bundled, which is why the denominator moves too.) SRFI 146 supplies two of the eight rows from one bundle, and needed no adaptation: both of its own suites passed on the first run, 97 of 97 and 77 of 77 on both backends. SRFI 160 followed on 2026-09-18 (#383) with `(srfi 4)` under it. **That entry used to say SRFI 160 was "blocked on `(srfi 4)` homogeneous vectors — plausibly Rust work rather than a port". That was wrong**: Patina already shipped `(r6rs bytevectors)` with every primitive SRFI 4 needs, so SRFI 4 is ~400 lines of Scheme over it. `(srfi 4)` is nonetheless **Patina-authored rather than bundled**: Cowan's own port was measured working first (240 of 240 on its suite, both backends) and then set aside on a licence question, which `lib/srfi/PROVENANCE.md` records. SRFI 160 is bundled with no adaptation, and its registered `s16` suite passes 110 of 110 on both backends. SRFI 160 is the one bundled library whose files are *generated*, by its own `atexpander.sh`; `lib/srfi/PROVENANCE.md` records that departure. Neither moves the corpus: `(scheme vector @)`'s in-scope requester, srfi-179, imports `(chibi assert)` in its own library, so it cannot pass whatever is bundled. What is left is **SRFI 115** (regex) and **SRFI 159** (show), neither with measured demand.
+**Tangerine status: 8 of 8 shipped — the edition is complete**, reachable under both names. (SRFI 144 was missing from this table until it was bundled, which is why the denominator moves too.) SRFI 146 supplies two of the eight rows from one bundle, and needed no adaptation: both of its own suites passed on the first run, 97 of 97 and 77 of 77 on both backends. SRFI 160 followed on 2026-09-18 (#383) with `(srfi 4)` under it. **That entry used to say SRFI 160 was "blocked on `(srfi 4)` homogeneous vectors — plausibly Rust work rather than a port". That was wrong**: Patina already shipped `(r6rs bytevectors)` with every primitive SRFI 4 needs, so SRFI 4 is ~400 lines of Scheme over it. `(srfi 4)` is nonetheless **Patina-authored rather than bundled**: Cowan's own port was measured working first (240 of 240 on its suite, both backends) and then set aside on a licence question, which `lib/srfi/PROVENANCE.md` records. SRFI 160 is bundled with no adaptation, and its registered `s16` suite passes 110 of 110 on both backends. SRFI 160 is the one bundled library whose files are *generated*, by its own `atexpander.sh`; `lib/srfi/PROVENANCE.md` records that departure. Neither moves the corpus: `(scheme vector @)`'s in-scope requester, srfi-179, imports `(chibi assert)` in its own library, so it cannot pass whatever is bundled. **SRFI 115 followed on 2026-09-18 (#386), completing the edition**, and needed no adaptation: its own suite passes 85 of 85 on both backends, and every one of its four files carries an explicit SPDX identifier, so nothing about its licence had to be established. It is viable here only because of #372: it needs `(srfi 14)`, and the Latin-1 implementation that one replaced is what the chibi-regexp corpus failure still runs aground on — so Patina ships the standard-track regex library while the chibi one it descends from cannot load.
+
+**SRFI 159** (show) is the one Tangerine library still unshipped, and deliberately: it works, measured, but ten of its seventeen files carry no licence notice and the seven that do cite Alex Shinn's licence by URL rather than inline, so the text does not travel with the code. That is the shape that made SRFI 4 a reimplementation, and at 17 files it is a larger one; it has its own issue and its own decision.
 
 **Numeric Tower Requirements:**
 - Unbounded exact integers ✅ (BigInt support)

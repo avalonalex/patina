@@ -17,6 +17,7 @@ its own record. One home per tree.
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
+| `(srfi 115)` | — | `115.sld`, `115.scm`, `115/boundary.sld`, `115/boundary.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-115/srfi-115.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, the boundary data CC0-1.0) | tarball sha256 `e8e7294adfb695518ef5ac6d59989048e2143dafbb3d87588458ab76bfe715c2` |
 | `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
 | `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
 | `(srfi 135)` | — | `135.sld`, `135.body.scm`, `135/kernel8.sld`, `135/kernel8.body.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-135/srfi-135.tgz` (William D Clinger, MIT) | tarball sha256 `f8e9cbcdfcd757ed5dc5835e152bedd621e0933dfed16c5cb815253900fb2735` |
@@ -269,6 +270,29 @@ not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
 
+**SRFI 115 is byte-identical, and is the clean case the two beside it are
+not.**
+
+`lib/srfi/115.*` and `lib/srfi/115/boundary.*` are `contrib/duy-nguyen/` from
+the SRFI's own distribution, unedited. It needed no adaptation at all: its own
+`cond-expand` already reaches for `(chibi test)` on anything that is not
+Larceny, and its non-chibi branch asks only for libraries Patina already
+ships. Upstream's suite passes **85 of 85 on both backends**.
+
+**Every file carries an explicit `SPDX-License-Identifier`** — BSD-3-Clause for
+the implementation, CC0-1.0 for `boundary.*`, which is generated Unicode
+word-boundary data — and the distribution ships a `LICENSES/` directory with
+both texts. That is worth stating plainly next to its two neighbours in this
+file: SRFI 4 had no notice on any file and was reimplemented, and SRFI 159 (not
+bundled) has none on ten of seventeen. Here nothing is inferred.
+
+**One dependency is worth recording**, because it is the reverse of the usual
+direction: SRFI 115 needs `(srfi 14)`, and it is viable here only since #372
+gave char-sets the whole Unicode range. The Latin-1 implementation it replaced
+is exactly what the chibi-regexp corpus failure runs aground on — so Patina
+ships the standard-track regex library while the chibi one it is descended from
+still cannot load, for a reason recorded in `compat/EXCLUSIONS.scm`.
+
 **SRFI 4 is Patina's own, and the reason is a licence question rather than a
 technical one.**
 
@@ -509,6 +533,17 @@ that the notice travel with the software, and since each file carries its own,
 bundling them verbatim satisfies it without anything being reproduced here.
 This is also the second reason not to rename those two namespaces: an edited
 file is one whose notice someone has to re-establish.
+
+`(srfi 115)`'s four files carry an SPDX *identifier* but not the licence text,
+which BSD-3-Clause's first condition asks to be retained. The condition is met
+the way `(srfi 125)`'s is below — by reproducing the text here, one copy per
+tree — and the notice each file does carry supplies the `<year> <owner>` the
+distribution's own `LICENSES/BSD-3-Clause.txt` leaves as placeholders:
+"Copyright (c) 2013 - 2016 Alex Shinn" for `115.sld` and `115.scm`, and
+"Copyright (c) 2015 Alex Shinn" for `115/boundary.*`, which is additionally
+CC0-1.0 and so carries no condition at all. The BSD-3-Clause text is the one
+already reproduced below for `(srfi 125)`; it is the standard three-clause
+text, identical in both distributions, so it is not repeated a second time.
 
 `(srfi 4)` needs nothing here: it is Patina-authored (§ above), so there is no
 third-party text in it to carry. The audit that led to that decision is worth
