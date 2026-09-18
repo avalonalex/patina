@@ -41,8 +41,8 @@
 # and passes, exit 0. Verified it is not passing vacuously by corrupting one
 # assertion, which prints "Error: test failed:" and is caught.
 diff -ruN a/in-progress/hash/tables-test.sps b/in-progress/hash/tables-test.sps
---- a/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
-+++ b/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
+--- a/in-progress/hash/tables-test.sps
++++ b/in-progress/hash/tables-test.sps
 @@ -28,7 +28,7 @@
          (scheme char)
          (scheme write)
@@ -115,8 +115,8 @@ diff -ruN a/in-progress/hash/tables-test.sps b/in-progress/hash/tables-test.sps
  (define bim-squares2 (bimap-copy bim-squares))
  
 diff -ruN a/in-progress/hash/tables.body.scm b/in-progress/hash/tables.body.scm
---- a/in-progress/hash/tables.body.scm	2026-09-18 08:29:14
-+++ b/in-progress/hash/tables.body.scm	2026-09-18 08:29:14
+--- a/in-progress/hash/tables.body.scm
++++ b/in-progress/hash/tables.body.scm
 @@ -53,7 +53,7 @@
  ;;; by the comparator's type test.
  
@@ -127,8 +127,8 @@ diff -ruN a/in-progress/hash/tables.body.scm b/in-progress/hash/tables.body.scm
      (if %enforce-comparator-type-tests
          (lambda (x . rest)
 diff -ruN a/in-progress/hash/tables.sld b/in-progress/hash/tables.sld
---- a/in-progress/hash/tables.sld	2026-09-18 08:29:14
-+++ b/in-progress/hash/tables.sld	2026-09-18 08:29:14
+--- a/in-progress/hash/tables.sld
++++ b/in-progress/hash/tables.sld
 @@ -64,7 +64,7 @@
  
    (import (scheme base)

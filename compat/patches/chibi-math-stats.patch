@@ -1,0 +1,43 @@
+# chibi-math-stats: use the file's own seq-every, not SRFI 1's every
+#
+# `spearman-rank-correlation` calls `map-rank`, which returns a sequence of the
+# same kind it was given -- a vector here -- and then applies SRFI 1's `every`
+# to it. `every` is list-only, so this is a defect in `stats.scm` rather than a
+# strictness difference between implementations. Patina raises "null-list?:
+# argument out of domain", which is not a message we invented: it comes from
+# the SRFI's own reference implementation, where `null-list?` is *specified* to
+# raise on anything neither pair nor null. Gauche raises too. See #376.
+#
+# **This is a slip, not a design choice, which is what makes it patchable.**
+# `stats.scm` defines a whole `seq-*` family under the comment "Sequence
+# utilities - all procedures handle both lists and vectors", including
+# `seq-every` -- and uses `(seq-every exact-integer? ...)` for this exact check
+# in three other places (lines 284, 289, 353). Line 812 is the one site that
+# reaches for the bare SRFI 1 name. The rewrite is the file's own generic,
+# spelled the way its author spells it everywhere else.
+#
+# **It also fixes a live wrong answer, not just a raise.** chibi accepts the
+# vector and returns `#t` -- measured, it returns `#t` even for
+# `(every exact-integer? (vector 1 'x 3))`, never inspecting the elements. That
+# `every` pair is the guard choosing between the no-ties shortcut and
+# `pearson-correlation`, so on chibi the tie branch is dead and a *tied*
+# distribution silently gets the wrong coefficient. `seq-every` answers
+# correctly: `#t` with no ties, `#f` when averaged ranks make them inexact.
+#
+# Measured after: 117 of 117 assertions pass, up from 116. The suite's own data
+# has no ties, so the assertion that was failing is not the one this protects --
+# which is why the bug has gone unnoticed upstream.
+diff -ruN a/chibi/math/stats.scm b/chibi/math/stats.scm
+--- a/chibi/math/stats.scm
++++ b/chibi/math/stats.scm
+@@ -809,8 +809,8 @@
+           (not (distribution-pure? dist2)))
+   (let ((r1 (map-rank dist1 <))
+         (r2 (map-rank dist2 <)))
+-    (if (and (every exact-integer? r1)
+-             (every exact-integer? r2))
++    (if (and (seq-every exact-integer? r1)
++             (seq-every exact-integer? r2))
+         ;; shortcut when there are no ties
+         (let ((len (size dist1)))
+           (- 1 (/ (* 6 (square-sum (seq-map - r1 r2)))
