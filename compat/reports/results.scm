@@ -3,7 +3,7 @@
  (version 1)
  (backend "vm")
  (results
-  ((slug "arvyy-interface") (mode test) (status parse-error) (errors "Body must contain at least one expression (not just define-syntax)"))
+  ((slug "arvyy-interface") (mode test) (status pass))
   ((slug "arvyy-mustache") (mode test) (status pass))
   ((slug "chibi-app") (mode test) (status parse-error) (errors "Macro expansion failed: Invalid syntax: No matching pattern for macro case"))
   ((slug "chibi-assert") (mode test) (status missing-library) (missing "chibi"))

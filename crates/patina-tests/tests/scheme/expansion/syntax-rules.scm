@@ -303,9 +303,11 @@
 ;; `(42 #<unspecified>)` for `(list (maybe-begin 42) (maybe-begin))`. `(begin)`
 ;; with no expressions is not an R7RS expression, so that value is Patina's
 ;; choice alone: the unspecified value, as `(if #f #f)` gives. Kept as an
-;; argument to `list`, as the original had it: as the whole of a body, which
-;; is what `test-equal`'s thunk would make of a bare `(maybe-begin)`, Patina
-;; refuses an empty body instead.
+;; argument to `list`, as the original had it — though the reason has since
+;; changed: Patina used to refuse a body whose only form expands to an empty
+;; `begin`, and no longer does. `expansion/let-syntax.scm` covers that shape
+;; directly now; this row stays as written because it is about expression
+;; position, which is what it was always testing.
 (cond-expand (patina) (else (test-skip 1)))
 (test-equal "an empty begin in expression position is the unspecified value"
   (list 42 (if #f #f))

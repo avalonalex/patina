@@ -1521,11 +1521,19 @@ impl Desugarer {
             } else {
                 let desugared = current_desugarer.desugar_tagged(*tv, shared_heap)?;
 
-                // Filter out Literal(Unspecified) from macro definitions
-                if !matches!(&desugared.kind, CoreExprKind::Literal(v) if *v == TaggedValue::UNSPECIFIED)
-                {
-                    body_exprs.push(desugared);
-                }
+                // Every expression is kept, including one that desugars to
+                // `Literal(Unspecified)`.
+                //
+                // This used to drop those, to discard the placeholder a
+                // `define-syntax` leaves behind — but that arm is the `if let`
+                // above, which never reaches here, so the filter only ever hit
+                // *real* expressions that happen to evaluate to unspecified. A
+                // bare `(begin)` is one, and dropping it was wrong twice over:
+                // as a body's only form it produced "Body must contain at least
+                // one expression", and as a body's *last* form it silently
+                // handed the body the previous expression's value, where R7RS
+                // 4.1.4 says a body's value is its last expression's.
+                body_exprs.push(desugared);
             }
         }
 
