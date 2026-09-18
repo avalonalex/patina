@@ -137,9 +137,23 @@ fn stamp_expansion_source(
 /// The aliases one expansion's relinking installs, keyed by spelling, and
 /// the scope that says which occurrences they apply to.
 struct Renames<'a> {
-    aliases: &'a HashMap<Rc<str>, TaggedValue>,
+    aliases: &'a HashMap<Rc<str>, Aliases>,
     /// The expansion's own scope — see `MacroExpansion::scope`.
     expansion_scope: ScopeId,
+}
+
+/// The aliases made for one spelling.
+enum Aliases {
+    /// The macro mentions the spelling under one identity, so every
+    /// occurrence the expansion introduced is that mention. All a written
+    /// macro has, and the usual case for a generated one.
+    Sole(TaggedValue),
+    /// The macro mentions it under several, which only a generated macro can
+    /// (`CompiledMacro::inherited_identifiers`), and they need not mean one
+    /// binding. Each identity that was aliased, as the scopes the mention
+    /// carries in the template — an occurrence in the expansion carries those
+    /// and the expansion's scope — with its own alias.
+    PerIdentity(Vec<(ScopeSet, TaggedValue)>),
 }
 
 /// Monotonic counter for the unique names given to definition-environment
@@ -801,19 +815,35 @@ impl Desugarer {
     /// it. Where both resolve to the same value — the common case, since most
     /// template references are to primitives copied into both — nothing is
     /// rewritten.
+    ///
+    /// The names considered are the ones the macro's templates mention, in
+    /// either of the two forms a mention takes: a symbol written in the
+    /// template (`template_symbols`), or an identifier an enclosing expansion
+    /// put there (`inherited_identifiers`), which is all a macro *generated*
+    /// by another macro has. Considering only the first left such a macro,
+    /// once exported, unable to reach the library that defined it — and,
+    /// where the importing program bound the same name, reaching that instead
+    /// (issue #402, triage family 47).
+    ///
+    /// A written macro mentions a name under one identity, its definition
+    /// scopes. A generated one can mention it under several, so the decision
+    /// and the alias are per identity ([`Aliases`]).
     fn link_definition_env_refs(
         &self,
         expanded: TaggedValue,
         expansion_scope: ScopeId,
-        definition_env: Option<&Rc<Environment>>,
-        definition_scopes: &ScopeSet,
-        template_symbols: &HashSet<Rc<str>>,
+        compiled_macro: &patina_core::CompiledMacro,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
-        let Some(def_env) = definition_env else {
+        let Some(def_env) = compiled_macro.definition_env.as_ref() else {
             return expanded;
         };
-        if def_env.env_id() == self.env.env_id() || template_symbols.is_empty() {
+        let definition_scopes = &compiled_macro.definition_scopes;
+        let template_symbols = &compiled_macro.template_symbols;
+        let inherited_identifiers = &compiled_macro.inherited_identifiers;
+        if def_env.env_id() == self.env.env_id()
+            || (template_symbols.is_empty() && inherited_identifiers.is_empty())
+        {
             return expanded;
         }
 
@@ -828,61 +858,107 @@ impl Desugarer {
         // `let-syntax` or internal-define body and dropped when desugaring
         // ends, so walk to the root of the chain.
         let target_env = self.env.root();
-        let mut renames: HashMap<Rc<str>, TaggedValue> = HashMap::new();
-        for name in template_symbols {
+        let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
+        // Each name once: the written ones, then those only an enclosing
+        // expansion put here. A name can be both.
+        let names = template_symbols.iter().chain(
+            inherited_identifiers
+                .keys()
+                .filter(|name| !template_symbols.contains(*name)),
+        );
+        for name in names {
             let Some(def_value) = def_env.get(name) else {
                 continue;
             };
+            // The cheap test first: it settles nearly every name — `list`,
+            // `if` and the rest mean one thing on both sides — and the
+            // per-mention question below walks the scoped tables, once for
+            // each identity a generated macro mentions the name under.
+            if self.env.get(name) == Some(def_value) {
+                continue;
+            }
+
+            // Every identity the macro mentions this name under: the macro's
+            // definition scopes for a symbol written in the template, its own
+            // scopes for an identifier an enclosing expansion put there.
+            let mut identities: Vec<&ScopeSet> = Vec::new();
+            if template_symbols.contains(name) {
+                identities.push(definition_scopes);
+            }
+            for scopes in inherited_identifiers.get(name).into_iter().flatten() {
+                if !identities.contains(&scopes) {
+                    identities.push(scopes);
+                }
+            }
+            let one_identity = identities.len() == 1;
+
             // A name the definition site bound *lexically* is not free, and
             // aliasing it would defeat the binding it actually names.
             //
             // `get` is the name-only view of the environment and deliberately
             // skips local variables, so it cannot tell `(let ((f …)) …)` around
             // this macro from a global `f` somewhere above — it answers with the
-            // global either way. Asking again with the macro's own scopes is
-            // what distinguishes them: a different answer means something
-            // lexical shadows the by-name view here, and ordinary set-of-scopes
+            // global either way. Asking again with the mention's own scopes is
+            // what distinguishes them: a different binding means something
+            // shadows the by-name view here, and ordinary set-of-scopes
             // resolution is what should decide the reference. Without this, a
             // `let-syntax` transformer's `(f x)` inside `(let ((f …)) …)` was
             // aliased to whatever `f` the enclosing program happened to define
             // — Larceny's `base` measured it as `number->string`.
-            // Skipped when the macro has no definition scopes of its own — the
-            // top-level and library case, and the common one. `get_with_scopes`
-            // returns `get` unchanged for an empty scope set, so the comparison
-            // could only ever be with itself, at the cost of a second walk of
-            // the environment chain per template symbol per expansion.
+            //
+            // An empty scope set *is* the name-only view, so the top-level
+            // and library case — the common one — answers without a walk.
             //
             // An ambiguous answer is also a disagreement: it has not
             // identified a binding, so there is none to alias to.
             //
-            // Provenance assumption, made explicit since the family-36 fix:
-            // `def_value` came from `get` — the *name-only* view — while the
-            // comparison asks `get_with_scopes`, whose fallback now refuses
-            // the name-only view of a binding those scopes reject. If the
-            // by-name answer is such a rejected scoped definition, the two
-            // views disagree and this symbol is (correctly) not aliased —
-            // scoped resolution at the use site decides it instead, which for
-            // a cross-expansion definition means the refusal family 40 pins.
-            // No in-program shape reaches this today (measured 2026-08-31:
-            // shared global chains agree either way, and the cross-library
-            // generated-getter shape dies earlier at the Template::Literal
-            // skip); re-audit this comparison if internal defines' scoped
-            // bindings ever become relink targets.
-            if !definition_scopes.is_empty()
-                && !matches!(
-                    def_env.get_with_scopes(name, definition_scopes),
-                    Ok(Some(found)) if found == def_value
-                )
-            {
-                continue;
+            // The question is asked of the *binding*, not of its value
+            // (`Environment::name_reaches_binding_of`). It compared values
+            // until an inherited identifier could reach here (#402), and for
+            // those that is not good enough: such an identifier carries its
+            // generator's expansion scope, which is exactly what selects a
+            // definition the same expansion introduced over another of the
+            // same spelling — a plain one beside it, or the one a second run
+            // of the generator introduced — and two such definitions
+            // routinely start out equal (`(define count 0)`). Compared by
+            // value they read as one binding, so both generated macros were
+            // aliased onto whichever the name alone reaches and bumped a
+            // single counter from outside the library; and once the values
+            // diverged the same use was refused, so what a program answered
+            // depended on what it had already run. The alias below can only
+            // point at what the name alone reaches, so a mention that means
+            // another binding is left to scoped resolution rather than
+            // answered with the wrong one — the refusal family 40 pins, here
+            // across a library (pinned in `hygiene_matrix.rs`). Re-audit if
+            // internal defines' scoped bindings ever become relink targets.
+            //
+            // Decided per identity, and each identity that passes gets an
+            // alias of its own, because a generated macro can mention one
+            // spelling as two different things: `(let ((tmp 'local)) (list
+            // tmp arg))` with the library's own `tmp` arriving through `arg`
+            // holds a `tmp` the generator introduced, which the template
+            // binds, and a `tmp` with no scopes, which is free. One alias for
+            // the spelling renamed both alike and the `let` captured the free
+            // one — `(local local)` where chibi and Gauche answer `(local
+            // lib)`. A written macro cannot do that (everything written in it
+            // shares its definition scopes), which is why one alias per name
+            // was enough before #402.
+            let mut made: Vec<(ScopeSet, TaggedValue)> = Vec::new();
+            for identity in identities {
+                if !matches!(def_env.name_reaches_binding_of(name, identity), Ok(true)) {
+                    continue;
+                }
+                let alias = alias_name(name);
+                let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
+                target_env.define_alias(alias, def_env.clone(), name.clone());
+                made.push((identity.clone(), symbol));
             }
-            if self.env.get(name) == Some(def_value) {
-                continue;
-            }
-            let alias = alias_name(name);
-            let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
-            target_env.define_alias(alias, def_env.clone(), name.clone());
-            renames.insert(name.clone(), symbol);
+            let aliases = match made.as_slice() {
+                [] => continue,
+                [(_, symbol)] if one_identity => Aliases::Sole(*symbol),
+                _ => Aliases::PerIdentity(made),
+            };
+            renames.insert(name.clone(), aliases);
         }
         if renames.is_empty() {
             return expanded;
@@ -919,7 +995,19 @@ impl Desugarer {
         if !scopes.contains(&renames.expansion_scope) {
             return None;
         }
-        renames.aliases.get(&**name).copied()
+        match renames.aliases.get(&**name)? {
+            Aliases::Sole(alias) => Some(*alias),
+            // Which mention this occurrence is: the output flip added the
+            // expansion's scope to what the template held, and nothing else
+            // has touched it yet.
+            Aliases::PerIdentity(aliases) => {
+                let identity = scopes.without_scope(renames.expansion_scope);
+                aliases
+                    .iter()
+                    .find(|(mention, _)| *mention == identity)
+                    .map(|(_, alias)| *alias)
+            }
+        }
     }
 
     /// Does this list head *resolve* to `quote`?
@@ -1305,9 +1393,7 @@ impl Desugarer {
             let expanded_tagged = self.link_definition_env_refs(
                 expanded_tagged,
                 expansion_scope,
-                compiled_macro.definition_env.as_ref(),
-                &compiled_macro.definition_scopes,
-                &compiled_macro.template_symbols,
+                &compiled_macro,
                 shared_heap,
             );
 

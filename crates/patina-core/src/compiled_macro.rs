@@ -487,6 +487,29 @@ pub struct CompiledMacro {
     /// separable from the arguments.
     pub template_symbols: HashSet<Rc<str>>,
 
+    /// Identifiers an enclosing expansion put into this macro's templates,
+    /// by name, each with the scope sets it was seen carrying.
+    ///
+    /// A macro *generated* by another macro has no text of its own: what its
+    /// template mentions reaches the compiler as identifiers the generator's
+    /// expansion produced, which compile to `Template::Literal` so they keep
+    /// that identity, and so never enter `template_symbols`. They are this
+    /// macro's references all the same — written, by way of the generator,
+    /// where this macro was defined — and relinking has to carry them back
+    /// to `definition_env` like any other. Without this a generated macro
+    /// exported from a library reached none of the library's own bindings
+    /// (issue #402, triage family 47).
+    ///
+    /// The scope sets are kept because such an identifier, unlike a symbol
+    /// written here, can carry an expansion scope that *selects* a binding,
+    /// and because one spelling can arrive under several and mean a different
+    /// binding under each — the generator's `tmp`, which the template binds,
+    /// beside a caller's `tmp`, which is free. The relinker aliases by name,
+    /// so it decides each of these separately: a mention is aliased only
+    /// where it resolves to the binding the name alone reaches, and each
+    /// mention that is gets an alias of its own.
+    pub inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
+
     /// The environment this macro was defined in, when one was available.
     ///
     /// A template's free identifiers denote whatever they were bound to *here*,

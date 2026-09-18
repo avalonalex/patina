@@ -20,7 +20,7 @@
 
 | Identifier | In-scope packages |
 |---|---|
-| `read-padded-string` | 1 |
+| `user-name` | 1 |
 
 ## Excluded from the score
 

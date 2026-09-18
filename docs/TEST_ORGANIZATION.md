@@ -594,8 +594,11 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 `grep -c '^#\[test\]'` the file; for the suite files, `SUITE` in
 `scheme_suite.rs` carries a floor per file and a test keeps it honest.
 
-- `hygiene_matrix.rs` — macro hygiene as a *scoreboard*: 28 shapes against
-  chibi and Racket, read as a table when a fix moves a row. Stays Rust.
+- `hygiene_matrix.rs` — macro hygiene as a *scoreboard*: 28 use-site-binder
+  shapes against chibi and Racket, and 45 generated / library-imported macro
+  shapes against chibi and Gauche, read as a table when a fix moves a row.
+  Its ignored `dump_programs` writes every program out for re-measuring.
+  Stays Rust.
   `hygiene.rs` is gone, migrated into `tests/scheme/expansion/`
   (`hygiene.scm`, `syntax-rules-literals.scm`, `let-syntax.scm`,
   `ellipsis.scm`); add a portable hygiene row there
