@@ -52,8 +52,16 @@ fn upstream_root() -> PathBuf {
 /// `#f` is what makes `(chibi test)`'s count the default rather than a
 /// competing answer.
 fn harness_program(imports: &str, body: &str) -> String {
+    // A row whose imports already name the framework explicitly — the SRFI 64
+    // rows, via `SRFI_64_FRAMEWORK` — must not also get the bare
+    // `(chibi test)`, or the collision this avoids comes back.
+    let framework = if imports.contains("(except (chibi test)") {
+        ""
+    } else {
+        "(chibi test) "
+    };
     format!(
-        "(import (scheme base) (chibi test) {imports}) \
+        "(import (scheme base) {framework}{imports}) \
          (define assertions-run 0) \
          (define failures #f) \
          (current-test-reporter \
@@ -218,6 +226,15 @@ macro_rules! suite_tests {
 /// and `patina-compat` classifies one as a wrong result — so counting only
 /// `fail` here would make this file the one place in the repo that disagrees.
 ///
+/// **Each of these rows excludes five names from `(chibi test)`**:
+/// `test-begin`, `test-end`, `test-assert`, `test-equal` and `test-eqv`, which
+/// both frameworks export. Without that, which framework's macro a suite gets
+/// is decided by import order — R7RS 5.6.1 makes a duplicate import an error,
+/// and chibi and Larceny diagnose it, though Patina accepts it. The counts are
+/// the same either way; the exclusion states the intent instead of inferring
+/// it from position, and this doc comment used to name the collision as a
+/// hazard while the rows relied on it.
+///
 /// `assertions-run` is likewise `pass + fail + xpass + xfail`, matching
 /// `scheme_suite.rs`'s `Counts::ran()`: everything that executed, with skips
 /// excluded deliberately, so the floor measures the same thing in both places.
@@ -280,7 +297,8 @@ suite_tests! {
     // exited the process before it ever ran, so nothing reported it. The
     // floor was always right. See #397.
     (srfi_165_computations, "srfi 165", "(srfi 165 test)", 0, 43,
-     "(srfi 165 test) (srfi 64)",
+     "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
+      (srfi 165 test) (srfi 64)",
      SRFI_64_BODY),
     // chibi's own suite for its own implementation, verbatim. Two expected
     // failures, neither ours, and both recorded because a bare "2" would be
@@ -339,10 +357,12 @@ suite_tests! {
     // suite from writing a log into the crate root, as the driver for
     // `tests/scheme/` does for the same reason.
     (srfi_146_mapping, "srfi 146", "(srfi 146 test)", 0, 97,
-     "(srfi 146 test) (srfi 64)",
+     "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
+      (srfi 146 test) (srfi 64)",
      SRFI_64_BODY),
     (srfi_146_hashmap, "srfi 146 hash", "(srfi 146 hash test)", 0, 77,
-     "(srfi 146 hash test) (srfi 64)",
+     "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
+      (srfi 146 hash test) (srfi 64)",
      SRFI_64_BODY),
     // The other adapted suite: imports adapted, test bodies untouched. Why,
     // in scheme_tests/upstream/README.md.
@@ -611,7 +631,7 @@ const NO_SUITE: &[(&str, &str)] = &[
     ),
     (
         "srfi 135 kernel8",
-        "SRFI 135's text representation, not a library anyone imports: `(srfi 135)` selects it and upstream ships no suite for it separately. `srfi/135/test.sld` exercises it through the whole of `(srfi 135)`, 1030 assertions",
+        "SRFI 135's text representation, not a library anyone imports: `(srfi 135)` selects it and upstream ships no suite for it separately. `srfi/135/test.sld` exercises it through the whole of `(srfi 135)`, 1071 assertions",
     ),
     (
         "srfi 144",
@@ -731,7 +751,13 @@ fn srfi_64_body_reports_failures_and_counts() {
                        (test-expect-fail 1) (test-equal 7 7) \
                        (test-skip 1) (test-equal 8 9) \
                        (test-end))";
-        let program = harness_program("(srfi 64)", &format!("{suite} {SRFI_64_BODY}"));
+        // The same explicit exclusion the SRFI 64 rows use: this self-check
+        // validates their path, so it must not validate a different one.
+        let program = harness_program(
+            "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
+             (srfi 64)",
+            &format!("{suite} {SRFI_64_BODY}"),
+        );
         assert_eq!(
             counts_on(interp, label, &program),
             (2, 5),
@@ -860,13 +886,26 @@ fn chibi_string_is_supplied_not_bundled() {
     );
 }
 
+/// Environment variable that marks the re-exec, so the guard below does not
+/// recurse. Documented in `scheme_tests/upstream/README.md`: setting it in a
+/// shell or a CI step turns that guard into a no-op that still reports as
+/// passed, which is the one way to defeat it.
+const SUBPROCESS_VAR: &str = "PATINA_SUITE_SUBPROCESS";
+
+/// A floor on how many tests the re-exec must start, so the guard cannot pass
+/// by running nothing. Deliberately loose — it exists to catch zero, not to
+/// track the table — so adding a suite never needs to touch it.
+const LEAST_TESTS_EXPECTED: usize = 25;
+
 /// Proves this binary reports a summary for every test it starts — from
 /// *outside* the process, because that is the only place the check survives.
 ///
 /// #396: `shared-tests.scm` ends with `(test-exit)`, and these suites run
-/// in-process, so that call took the whole `cargo test` process with it. About
-/// fifteen tests never ran, libtest printed no summary, and **cargo exited 0**.
-/// #397 sat in that gap from the day it landed.
+/// in-process, so that call took the whole `cargo test` process with it.
+/// Measured: 7 of this binary's tests never ran, and 36 across
+/// `cargo test --all` — 1354 passing where 1318 had passed — while libtest
+/// printed no summary and **cargo exited 0**. #397 sat in that gap from the
+/// day it landed.
 ///
 /// The first attempt at this guard was an ordinary `#[test]`, and reintroducing
 /// the defect showed why that cannot work: the guard was itself one of the
@@ -875,17 +914,30 @@ fn chibi_string_is_supplied_not_bundled() {
 /// subprocess and holds it to libtest's own accounting — `running N tests`
 /// followed by a summary line that accounts for all N.
 ///
-/// `PATINA_SUITE_SUBPROCESS` stops the recursion.
+/// `SUBPROCESS_VAR` stops the recursion — and is therefore a way to defeat
+/// this guard from the environment, which `scheme_tests/upstream/README.md`
+/// records along with the other two limits: it protects the *whole-lane* run,
+/// not a filtered one (`cargo test --test upstream_srfi_suites srfi_160` runs
+/// the exiting suite without running this), and it skips the two slowest
+/// suites in the re-exec because neither bears on libtest's accounting.
 #[test]
 fn the_lane_reports_a_summary_for_every_test_it_starts() {
-    if std::env::var_os("PATINA_SUITE_SUBPROCESS").is_some() {
+    if std::env::var_os(SUBPROCESS_VAR).is_some() {
         return;
     }
     let output = std::process::Command::new(std::env::current_exe().expect("test binary path"))
-        .env("PATINA_SUITE_SUBPROCESS", "1")
+        .env(SUBPROCESS_VAR, "1")
         // One thread, so a process-killing exit truncates deterministically at
         // the offending test rather than wherever the scheduler happened to be.
         .args(["--test-threads=1"])
+        // The suites that cost the most wall time prove nothing extra here:
+        // what is being checked is libtest's accounting, and `running N` and
+        // the summary both reflect the post-filter count. SRFI 27 draws
+        // random numbers for ~27s and SRFI 135 runs 1071 assertions; skipping
+        // them keeps this guard off the lane's critical path. The suite that
+        // actually calls `test-exit` — SRFI 160 — is *not* skipped, which is
+        // the whole point.
+        .args(["--skip", "srfi_27_random", "--skip", "srfi_135_text"])
         .output()
         .expect("re-run this test binary");
     let text = format!(
@@ -893,14 +945,23 @@ fn the_lane_reports_a_summary_for_every_test_it_starts() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    // Anchor both parses to the start of a line. stdout and stderr are
+    // concatenated and unordered relative to each other, and the suites here
+    // print freely — a suite writing "running 5 checks" would otherwise be
+    // read as the test count, and a nested framework printing its own
+    // "test result:" line would be read as libtest's summary.
     let started: usize = text
-        .split_once("running ")
-        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .lines()
+        .find_map(|line| line.strip_prefix("running "))
+        .and_then(|rest| rest.split_whitespace().next())
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| panic!("no `running N tests` line:\n{text}"));
+    // libtest prints its summary last, so take the last match rather than the
+    // first: a suite reporting through a framework that happens to use the
+    // same prefix would otherwise win.
     let summary = text
         .lines()
-        .find(|line| line.trim_start().starts_with("test result:"))
+        .rfind(|line| line.starts_with("test result:"))
         .unwrap_or_else(|| {
             panic!(
                 "the lane started {started} tests and printed no summary: a suite called \
@@ -909,6 +970,15 @@ fn the_lane_reports_a_summary_for_every_test_it_starts() {
                  (#396).\n{text}"
             )
         });
+    // A subprocess that ran nothing would satisfy `counted == started` at
+    // zero, which is the vacuous pass this whole test exists to reject.
+    assert!(
+        started >= LEAST_TESTS_EXPECTED,
+        "the subprocess started only {started} tests, expected at least {least} — \
+         a stale binary from `current_exe()`, or an inherited libtest filter, \
+         would do this, and a guard that runs nothing proves nothing:\n{text}",
+        least = LEAST_TESTS_EXPECTED
+    );
     // `test result: ok. 38 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
     // out; finished in 22s` — sum only the outcome fields. `measured`,
     // `filtered out` and the duration are not outcomes, and including them is
@@ -928,8 +998,10 @@ fn the_lane_reports_a_summary_for_every_test_it_starts() {
         counted, started,
         "the lane started {started} tests but its summary accounts for {counted}:\n{summary}"
     );
-    assert!(
-        output.status.success(),
-        "the lane failed in the subprocess:\n{text}"
-    );
+    // Deliberately *not* asserting the subprocess exited zero. This test owns
+    // one property — that every started test is accounted for — and a real
+    // failure in any other suite is already reported by that suite, in the
+    // parent run. Asserting it here turned one broken suite into two
+    // failures, the second a red herring, with the subprocess log reprinted
+    // underneath it.
 }

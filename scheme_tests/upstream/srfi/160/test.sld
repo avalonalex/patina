@@ -17,18 +17,26 @@
 ;; here run *in-process*, so that call terminated the whole `cargo test`
 ;; process: every test scheduled after this one silently never ran, libtest
 ;; printed no summary, and cargo still exited 0 — the lane looked green while
-;; skipping about fifteen tests, including the harness's own self-checks.
-;; See #396.
+;; skipping tests. Measured: 7 of this binary's tests were erased, and 36
+;; across `cargo test --all`, whose 1354 passing tests had been 1318. The
+;; harness's own two self-checks were among them. See #396.
 ;;
-;; `test-exit` is excluded from the `(chibi test)` import and shadowed by a
-;; no-op below, so the body's last line reports and returns instead of
-;; exiting. The suite body itself stays verbatim, which is the point: the
-;; shadow lives in this wrapper, which is ours.
+;; `test-exit` is excluded from the `(chibi test)` import and shadowed below,
+;; so the body's last line reports and returns instead of exiting. The suite
+;; body itself stays verbatim, which is the point: the shadow lives in this
+;; wrapper, which is ours.
 ;;
 ;; `test-exit` is only ever the *last* thing a suite does, and its return
-;; value is unused, so a no-op loses nothing. The harness reads the failure
-;; count from the framework afterwards, which is how it has always decided
-;; whether the suite passed — `(exit)`'s status was never consulted.
+;; value is unused, so dropping the `(exit)` loses nothing: the harness reads
+;; the failure count from the framework afterwards, which is how it has always
+;; decided whether the suite passed — `(exit)`'s status was never consulted.
+;;
+;; What the shadow does keep is the *other* half of chibi's `test-exit`, which
+;; warns when it is reached with a test group still open. That matters because
+;; this body is re-vendored verbatim, and a dropped or misnested `test-end`
+;; would leave assertions untallied while the assertion floor — which only
+;; catches a shortfall — could still be met. `warning` is not exported, so
+;; this raises instead, which is the stronger answer for a test lane.
 (define-library (srfi 160 test)
   (import (scheme base)
           (scheme write)
@@ -38,6 +46,9 @@
   (export run-tests)
   (begin
     (define (sub1 x) (- x 1))
-    (define (test-exit) #f)
+    (define (test-exit)
+      (if (current-test-group)
+          (error "test-exit reached with an unfinished test group"
+                 (test-group-name (current-test-group)))))
     (define (run-tests)
       (include "shared-tests.scm"))))
