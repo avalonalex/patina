@@ -1,26 +1,20 @@
 # Patina third-party compatibility (vm backend)
 
-**132 of 161 packages pass.**
+**133 of 161 packages pass.**
 
-**132 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**133 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 132 | 132 |
+| pass | 133 | 133 |
 | missing-library | 3 | 0 |
-| parse-error | 13 | 1 |
+| parse-error | 12 | 0 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
 | wrong-result | 1 | 0 |
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
 | out-of-scope | 9 | 0 |
-
-## Parse errors
-
-| Error | In-scope packages |
-|---|---|
-| `Body must contain at least one expression (not just define-syntax)` | 1 |
 
 ## Unbound identifiers
 
@@ -83,7 +77,7 @@ These packages still run on every pass — exclusion decides whether a result co
 
 | Package | Mode | Status | Scope |
 |---|---|---|---|
-| arvyy-interface | test | parse-error | in scope |
+| arvyy-interface | test | pass | in scope |
 | arvyy-mustache | test | pass | in scope |
 | chibi-app | test | parse-error | upstream-source-defect |
 | chibi-assert | test | missing-library | upstream-test-defect |

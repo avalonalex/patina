@@ -1487,6 +1487,7 @@ impl Desugarer {
         let env = initial_desugarer.env.clone();
 
         let mut body_exprs = Vec::new();
+        let mut saw_expression = false;
         let mut current_env = env.clone();
         let mut current_desugarer = initial_desugarer.with_new_env(env, body_scopes.clone());
 
@@ -1521,7 +1522,15 @@ impl Desugarer {
             } else {
                 let desugared = current_desugarer.desugar_tagged(*tv, shared_heap)?;
 
-                // Filter out Literal(Unspecified) from macro definitions
+                // Filter out Literal(Unspecified) from macro definitions.
+                //
+                // This drops the placeholder a `define-syntax` leaves behind,
+                // which is the point — but it cannot tell that from a real
+                // expression that happens to desugar to unspecified, and a
+                // bare `(begin)` is exactly that. `saw_expression` therefore
+                // records that a form *was* an expression, separately from
+                // whether its value survived the filter.
+                saw_expression = true;
                 if !matches!(&desugared.kind, CoreExprKind::Literal(v) if *v == TaggedValue::UNSPECIFIED)
                 {
                     body_exprs.push(desugared);
@@ -1530,6 +1539,18 @@ impl Desugarer {
         }
 
         if body_exprs.is_empty() {
+            if saw_expression {
+                // The body had expressions; the filter above took all of them,
+                // which means each evaluated to unspecified. `(let-syntax ((m
+                // ...)) (m))` where `m` expands to `(begin)` is the shape that
+                // reaches here, and R7RS allows it: `(begin)` is a valid
+                // expression, and Patina evaluates it to unspecified in every
+                // other position. Give the body that value rather than
+                // rejecting it — chibi and Gauche both accept this.
+                return Ok(vec![CoreExpr::new(CoreExprKind::Literal(
+                    TaggedValue::UNSPECIFIED,
+                ))]);
+            }
             return Err(DesugarError::InvalidSyntax(
                 "Body must contain at least one expression (not just define-syntax)".to_string(),
             ));

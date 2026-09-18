@@ -442,4 +442,31 @@
             (y 'inner-y))
         (m)))))
 
+;; A body whose forms all evaluate to unspecified is still a body.
+;;
+;; `(begin)` is a valid expression -- Patina, chibi and Gauche all evaluate it
+;; to unspecified in every other position -- so a body consisting only of one
+;; is valid too, and its value is that unspecified. The desugarer used to
+;; reject this: it filters `Literal(Unspecified)` out of a body to drop the
+;; placeholder a `define-syntax` leaves behind, and could not tell that from a
+;; real expression that happens to evaluate to unspecified. The body came back
+;; empty and raised "Body must contain at least one expression".
+;;
+;; Reached from real code through two layers of macro: arvyy-interface's
+;; `validate-signature` expands to `(let-syntax ((test ...)) (test name))`,
+;; and `test` bottoms out in `validate-args-count`'s `((_ name () ()) (begin))`
+;; -- so the whole let-syntax body is one macro use that expands to `(begin)`.
+;; chibi and Gauche both accept it.
+(test-assert "a let-syntax body that expands to an empty begin is accepted"
+  (let ((r (let-syntax ((m (syntax-rules () ((m) (begin)))))
+             (m))))
+    ;; The value is unspecified; what matters is that it compiled at all.
+    (or (eq? r r) #t)))
+
+(test-assert "so is a lambda body that expands to one"
+  (procedure?
+   (lambda ()
+     (let-syntax ((m (syntax-rules () ((m) (begin)))))
+       (m)))))
+
 (test-end)
