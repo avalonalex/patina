@@ -1,13 +1,13 @@
 # Patina third-party compatibility (vm backend)
 
-**127 of 161 packages pass.**
+**128 of 161 packages pass.**
 
-**127 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**128 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 127 | 127 |
-| missing-library | 7 | 4 |
+| pass | 128 | 128 |
+| missing-library | 6 | 3 |
 | parse-error | 13 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
@@ -21,7 +21,6 @@
 | Library | In-scope packages |
 |---|---|
 | (srfi 114 comparators) | 2 |
-| (srfi 165) | 1 |
 | (srfi 231) | 1 |
 
 ## Parse errors
@@ -227,7 +226,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-145 | probe | pass | in scope |
 | srfi-156 | test | pass | in scope |
 | srfi-16 | probe | pass | in scope |
-| srfi-166 | probe | missing-library | in scope |
+| srfi-166 | probe | pass | in scope |
 | srfi-170 | probe | out-of-scope | ffi |
 | srfi-175 | test | pass | in scope |
 | srfi-179 | test | parse-error | upstream-source-defect |

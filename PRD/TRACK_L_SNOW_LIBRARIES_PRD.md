@@ -304,15 +304,42 @@ each pinned in `reexport_shims.rs` beside `(srfi 16)`, `(srfi 23)` and `(srfi 98
 No corpus package asks for any of them; they ship so a program written against the
 pre-R7RS name loads rather than failing over functionality present under another.
 
-**What the corpus still names as missing is not all bundling work.**
-`(srfi 114 comparators)` ×2 is the clearest case: the SRFI states its procedures are
-in `(srfi 114)`, its sample implementation names the library `(comparators)` — which
-the corpus already vendors — and the two packages import a three-element name
-**nothing defines**. Bundling SRFI 114 under either real name would resolve neither,
-and SRFI 114 is superseded by the SRFI 128 already shipped, so this wants an
-exclusion with the diagnosis recorded rather than a library. `(srfi 165)` (wanted by
-srfi-166) and `(srfi 231)` (chibi-math-linalg) are unverified and get their own
-look.
+**SRFI 165 shipped 2026-09-18** (#390's successor), and it is the first bundle in
+this run to move the corpus number: 127 of 134 → **128 of 134**. srfi-166 had been
+failing for want of `(srfi 165)` alone. It needed no adaptation (43 of 43 on its own
+suite, both backends) and no licence work (full MIT inline, same author as SRFI 146),
+and it was reachable only because `(srfi 146)` landed in #375. It ships under its
+SRFI name alone: SRFI 165 is in no approved edition, so no `(scheme …)` alias is
+owed.
+
+**Of the two entries left in the missing queue, neither is a plain bundling job, and
+both were measured rather than assumed.**
+
+`(srfi 114 comparators)` ×2 — [#393](https://github.com/avalonalex/patina/issues/393),
+and it turns on a corpus-policy question rather than on a library. The name is *legal*
+(R7RS 5.6.1 allows any sequence of identifiers and unsigned integers; 36 vendored
+libraries use three parts, and we ship `(srfi 146 hash)` ourselves) — it is simply a
+name nothing defines, not the corpus, not Patina, not chibi or Gauche. The SRFI text
+says `(srfi 114)`; its sample implementation says `(comparators)`, which the corpus
+already vendors. **Measured: bundling SRFI 114 under the SRFI's own name and rewriting
+that one import makes both packages load** — in-progress-hash-tables directly, and
+in-progress-hash-bimaps transitively, since the bad name appears only in its
+`package.scm` metadata. That would read 130 of 134.
+
+It was not done, because `compat/vendor/README.md` says those are "unmodified upstream
+copies kept for testing" whose purpose is "to run them and find out what Patina gets
+wrong", and patching a package so it passes changes what the harness measures — a
+precedent that would apply to several current exclusions too. #393 holds the finding
+and the three options.
+
+`(srfi 231)` — [#392](https://github.com/avalonalex/patina/issues/392), and much closer
+than first thought. The SRFI's own implementation is Gambit-only, but chibi's 1,424-line
+one is portable and works, and **neither of its apparent blockers is real**:
+`(chibi assert)` is replaceable by `(rename (srfi 145) (assume assert))`, verified
+identical down to still refusing a bad interval — which holds only because #383 bundled
+SRFI 145's *reporting* sample rather than the one that discards the check. What remains
+is `u1vector-*`, a chibi C extension that six lines of Scheme stand in for; a real
+bit-packed version would also unblock srfi-179.
 The stored corpus also names `(srfi 114 comparators)`,
 `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all

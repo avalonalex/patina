@@ -270,6 +270,9 @@ suite_tests! {
     // reaches for `(chibi test)` on anything that is not Larceny, which is
     // the framework this harness supplies.
     (srfi_115_regexp, "srfi 115", "(srfi 115 test)", 0, 85),
+    // Verbatim, and it needed no adaptation: (srfi 146) became available in
+    // #375, which is what made this one possible at all.
+    (srfi_165_computations, "srfi 165", "(srfi 165 test)", 0, 43),
     // Upstream's own suite, with its imports lifted into the wrapper `.sld`
     // and nothing else changed; see that file. It exercises the whole
     // `(srfi 159)` surface, which is why the sub-libraries below are excused
