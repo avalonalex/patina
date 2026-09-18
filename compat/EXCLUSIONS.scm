@@ -103,6 +103,38 @@
    (note "via (chibi monad environment) — see chibi-monad-environment"))
   ((slug "edn") (reason upstream-source-defect) (expect parse-error)
    (note "(chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do"))
+  ;; Two upstream libraries both call their type a "char-set" and mean
+  ;; different things, and `regexp.sld` imports one of each. Its `char-set?`
+  ;; comes from `(srfi 14)` (regexp.sld:35) while `(chibi char-set boundary)`
+  ;; (regexp.sld:63) resolves its own cond-expand to `(chibi char-set)`, whose
+  ;; sets are iset-backed — a different record type. So the grapheme SRE's
+  ;; embedded boundary sets satisfy no arm of `->rx`'s cond (regexp.scm:761),
+  ;; it falls off the end returning #<unspecified>, and upstream's own guard
+  ;; raises "expected a state" at the file's last form,
+  ;; `(define re:grapheme (regexp 'grapheme))`. MEASURED 2026-09-18:
+  ;; `(char-set? char-set:hangul-l)` is #f under the harness's roots.
+  ;;
+  ;; chibi is homogeneous the other way — its regexp.sld cond-expand takes
+  ;; `(chibi)`, so its char-set? is the chibi one. Gauche is homogeneous by
+  ;; accident: its cond-expand `(library ...)` test answers #f for anything on
+  ;; the -I path (measured with a two-line library of our own: #f from
+  ;; cond-expand, yet `import` of the same library works), so the boundary
+  ;; library takes its `else` branch and every set is a real SRFI 14 one.
+  ;; Patina resolves like chibi and imports char-set? like Gauche, which is
+  ;; the only combination that mixes. Every step of that is R7RS-correct on
+  ;; our side; Gauche's is the conformance gap, and not one to copy.
+  ;;
+  ;; Won't fix. The only repair on our side is a `(chibi char-set)` in
+  ;; `test-lib/` reimplemented over our `(srfi 14)` — which is maintaining a
+  ;; third-party library's API, not the `(chibi filesystem)` precedent (that
+  ;; is upstream's own file plus one marked cond-expand branch). #372 already
+  ;; removed the *other* half of this, the Latin-1 clipping that made those
+  ;; boundary sets load empty; the type mismatch was underneath it and is not
+  ;; ours. Its two dependents are excluded here already, for FFI and for an
+  ;; unrelated upstream defect, so this entry costs one package.
+  ((slug "chibi-regexp") (reason upstream-source-defect) (expect parse-error)
+   (note "regexp.scm:1180 — (regexp 'grapheme) feeds #<unspecified> into make-state, because regexp.sld imports char-set? from (srfi 14) while its (chibi char-set boundary) dependency resolves to iset-backed (chibi char-set). chibi and Gauche each end up with one char-set type and load it; see the comment above for how each gets there"))
+
   ((slug "chibi-app") (reason upstream-source-defect) (expect parse-error)
    (note "app.scm:467 — an else clause mid-case, followed by ((1) ...); R7RS puts else last and Gauche rejects it. Patina still owes a better message than \"No matching pattern for macro case\" with no location — that part is ours, tracked in PRD §6"))
 

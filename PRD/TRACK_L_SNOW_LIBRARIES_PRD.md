@@ -1398,8 +1398,8 @@ suite passes 139/139 on both backends. The former open label here was stale;
 the L5.3 table and triage family already recorded the fix.
 
 **chibi-regexp: `(regexp 'grapheme)` feeds `#<unspecified>` into the NFA
-builder** — ❌ **open**, and the root is architectural. Gauche loads the
-library clean; Patina dies at the last form of `regexp.scm`
+builder** — 🚫 **won't fix (2026-09-18)**, excluded in `compat/EXCLUSIONS.scm`
+as `upstream-source-defect`. Patina dies at the last form of `regexp.scm`
 (`(define re:grapheme (regexp 'grapheme))`) with upstream's own guard,
 `(error "expected a state" #<unspecified>)`.
 
@@ -1407,28 +1407,43 @@ Diagnosis (2026-08-19, by truncation bisection): the grapheme SRE embeds
 char-set *objects* from `(chibi char-set boundary)`. That library's
 cond-expand prefers `(chibi char-set)` when it resolves — which it does under
 the harness, from the vendored corpus — and the vendored `(chibi char-set)`
-builds **iset-backed** sets. Patina's `(srfi 14)` char-sets are a different
-record type, so in `->rx` (`regexp.scm:761`) the embedded boundary sets
-satisfy neither `char-set?` nor any other arm, the `cond` falls off the end,
-and `#<unspecified>` flows into `make-state`. Gauche survives because its
-`(srfi 14)` is the built-in full-Unicode type and the same fallback keeps
-every set homogeneous. Patina cannot take that path today: our `(srfi 14)`
-is the Latin-1 reference port, and the boundary data is full-Unicode (hangul
-at `#xAC00`, regional indicators at `#x1F1E6`), which the port silently clips:
-the boundary library builds its sets with two-argument `ucs-range->char-set`,
-which drops every code point above U+00FF, so on that path its sets load
-empty, and a character above U+00FF handed to them then raises (the next
-entry, measured 2026-09-14).
-**No longer blocked on a full-Unicode char-set story** — #372 gave SRFI 14 a
-full-range representation on 2026-09-17 (see that entry below), so
-`ucs-range->char-set` no longer loads the boundary library's sets empty. That
-was this entry's stated blocker, and it is the *clipping* half of the problem.
-What remains is the other half it named: the vendored `(chibi char-set)`
-builds **iset**-backed sets, a different record type from `(srfi 14)`'s, so
-the embedded boundary sets still satisfy no arm of `->rx`'s `cond` and
-`#<unspecified>` still reaches `make-state`. Either the boundary library takes
-our char-sets or `->rx` learns the iset type. Needs re-measuring against the
-current corpus; still not a macro defect.
+builds **iset-backed** sets. But `regexp.sld` imports its `char-set?` from
+`(srfi 14)` (line 35) while importing the boundary library beside it (line
+63), so in `->rx` (`regexp.scm:761`) the embedded boundary sets satisfy
+neither `char-set?` nor any other arm, the `cond` falls off the end, and
+`#<unspecified>` flows into `make-state`. Two libraries that both say
+"char-set" and mean different record types, meeting in one `cond`.
+
+**Why the references load it, corrected 2026-09-18.** This entry said Gauche
+survives "because its `(srfi 14)` is the built-in full-Unicode type". The
+conclusion was right and the reason was wrong. Each reference is homogeneous,
+by a different route, and neither reconciles two types:
+
+- *chibi* takes its `regexp.sld` `cond-expand`'s `(chibi)` branch, so its
+  `char-set?` is the chibi one — the same type the boundary library builds.
+- *Gauche* never sees `(chibi char-set)` at all. Its `cond-expand`
+  `(library …)` test answers `#f` for anything on the `-I` path, so the
+  boundary library takes its `else` branch and builds genuine `(srfi 14)`
+  sets. Measured 2026-09-18 with a two-line library of our own: `cond-expand`
+  says no, and `import` of that same library works. Patina and chibi both
+  answer yes, which R7RS 4.2.1 supports — a library on the search path is
+  available. **Gauche's is the conformance gap, and not one to copy.**
+
+Patina resolves like chibi and imports `char-set?` like Gauche, and that is
+the only combination that mixes. Every step of it is correct on our side.
+
+**Why won't-fix rather than open.** #372 removed the half that *was* ours —
+the Latin-1 `ucs-range->char-set` that made those boundary sets load empty —
+and re-measuring after it showed the identical failure, so the type mismatch
+was underneath the clipping, not caused by it. The only repair left on our
+side is a `(chibi char-set)` in `test-lib/` reimplemented over our
+`(srfi 14)`, which is maintaining a third-party library's API rather than
+supplying one: not the `(chibi filesystem)` precedent, which is upstream's own
+file plus one marked `cond-expand` branch for a missing `else`. Editing
+`compat/vendor/` defeats the corpus being pinned upstream source. And the
+payoff is one package: both dependents, chibi-net-smtp and chibi-snow-commands,
+are already excluded for FFI and for an unrelated upstream defect. The
+in-scope denominator moves 136 → 135.
 Two cosmetic defects rode along. The first — the raised error displaying as
 `#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
 an error object, and now names its message and irritants. The second — the message
