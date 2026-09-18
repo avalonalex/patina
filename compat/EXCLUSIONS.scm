@@ -166,6 +166,13 @@
   ((slug "chibi-app") (reason upstream-source-defect) (expect parse-error)
    (note "app.scm:467 — an else clause mid-case, followed by ((1) ...); R7RS puts else last and Gauche rejects it. Patina still owes a better message than \"No matching pattern for macro case\" with no location — that part is ours, tracked in PRD §6"))
 
+  ;; chibi-math-stats sat here for one commit, for calling SRFI 1's `every` on
+  ;; a vector at stats.scm:812. It now passes: the file defines its own
+  ;; `seq-every` for exactly that check and uses it in three other places, so
+  ;; `compat/patches/chibi-math-stats.patch` spells line 812 the way its author
+  ;; spells the rest. That header carries the argument, including why chibi's
+  ;; `#t` is a wrong answer rather than leniency.
+
   ;;; -------------------------------------------------- upstream-test-defect
   ;;; The library third parties import works on Patina; only the package's
   ;;; own test program fails, and for reasons that are not about us.

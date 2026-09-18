@@ -17,8 +17,8 @@
 # `every_patch_applies_to_its_package` will fail for whichever one is missed,
 # which is the intended safety net rather than an accident.
 diff -ruN a/in-progress/hash/tables-test.sps b/in-progress/hash/tables-test.sps
---- a/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
-+++ b/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
+--- a/in-progress/hash/tables-test.sps
++++ b/in-progress/hash/tables-test.sps
 @@ -28,7 +28,7 @@
          (scheme char)
          (scheme write)

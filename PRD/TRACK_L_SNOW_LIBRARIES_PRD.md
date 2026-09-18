@@ -203,12 +203,31 @@ track to be worth recording. It brought three shims with it — `(srfi 145)` `as
 `(scheme mapping)` leaves the corpus's missing-library queue, and its one requester,
 chibi-math-stats, advances from `missing-library` to `wrong-result`: the library now
 loads and its suite runs, which exposes a failure the missing dependency had been
-hiding. It is **116 of 117 assertions**, and the one failure is
+hiding. It was **116 of 117 assertions**, the one failure being
 `spearman-rank-correlation` handing a vector to SRFI 1's `every`, which reaches
-`null-list?`. Whether that is our `every` being stricter than chibi's or upstream
-calling a list-only procedure on a vector is not settled —
-[#376](https://github.com/avalonalex/patina/issues/376) carries the repro and the
-way to settle it. In scope, and counted as a failure rather than excused.
+`null-list?`. **Settled 2026-09-18 as upstream's, and patched** (#376): it is
+now **117 of 117** and the package passes in scope.
+
+The defect is upstream's on the evidence: `every` is list-only, Patina's
+message is the SRFI's *own* reference `null-list?`
+(`lib/srfi/1/srfi-1-reference.scm:386`), and Gauche raises as we do. chibi
+answers `#t` — a wrong answer rather than a lenient one, since measured it
+says `#t` for `(every exact-integer? (vector 1 'x 3))` without ever inspecting
+the elements.
+
+**What made it patchable rather than excludable** is that `stats.scm` already
+has the right procedure. It defines a `seq-*` family under the comment
+"all procedures handle both lists and vectors", including `seq-every`, and
+calls `(seq-every exact-integer? ...)` for this same check in three other
+places. Line 812 is the single site reaching for the bare SRFI 1 name — a slip,
+not a design choice, so the rewrite is the file's own generic spelled the way
+its author spells it everywhere else.
+
+It also fixes a live defect rather than only a raise: that `every` pair guards
+the choice between the no-ties shortcut and `pearson-correlation`, so chibi's
+vacuous `#t` leaves the tie branch dead and gives a *tied* distribution the
+wrong coefficient. `seq-every` answers correctly. The suite's own data has no
+ties, which is why it has gone unnoticed upstream.
 
 **SRFI 4 and SRFI 160 shipped 2026-09-18** (#383), as the `(scheme vector @)`
 family — thirteen libraries, taking Tangerine to 7 of 8. The entry that used to sit
@@ -347,8 +366,9 @@ dependency is unsatisfiable in snow's own ecosystem, which is consistent with wh
 packages are: `in-progress-…`, William D Clinger, version 0.0.3 — published
 mid-development against a library name that never existed.
 
-**Both packages pass as of 2026-09-18** (#393), and the corpus reads **131 of 134 in
-scope**. They were excluded for a day as `upstream-source-defect` while the policy
+**Both packages pass as of 2026-09-18** (#393), and the corpus read **131 of 134 in
+scope** when they landed (132 of 134 since #376 patched chibi-math-stats).
+They were excluded for a day as `upstream-source-defect` while the policy
 question was open; what resolved it was a fourth option the issue had not considered.
 
 **The fix is a patch applied to a copy, not an edit to the corpus.** `compat/vendor/`
@@ -377,9 +397,10 @@ SRFI that dropped the bare constants this code needs.*
 
 **SRFI 231 shipped 2026-09-18** (#392) as `(srfi 231)`, and with it **no
 in-scope package is waiting on a library** — chibi-math-linalg passes and the
-corpus reads **131 of 134 in scope** (129 of 132 when it shipped; the two
-in-progress-hash-* packages joined the denominator and passed a day later, via
-#393's patch mechanism). That completes L1's measured bundling work.
+corpus reads **132 of 134 in scope** (129 of 132 when it shipped; the two
+in-progress-hash-* packages joined the denominator and passed a day later via
+#393's patch mechanism, and #376 patched chibi-math-stats into a pass). That
+completes L1's measured bundling work.
 
 Three `missing-library` rows remain, and all three are excluded, so none
 scores: `chibi-assert` wants `(chibi)`, which stays out by policy whatever the

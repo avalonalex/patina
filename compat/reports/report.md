@@ -1,17 +1,17 @@
 # Patina third-party compatibility (vm backend)
 
-**131 of 161 packages pass.**
+**132 of 161 packages pass.**
 
-**131 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**132 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 131 | 131 |
+| pass | 132 | 132 |
 | missing-library | 3 | 0 |
 | parse-error | 13 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
-| wrong-result | 2 | 1 |
+| wrong-result | 1 | 0 |
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
 | out-of-scope | 9 | 0 |
@@ -104,7 +104,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-match | test | pass | in scope |
 | chibi-math-linalg | test | pass | in scope |
 | chibi-math-prime | test | pass | in scope |
-| chibi-math-stats | test | wrong-result | in scope |
+| chibi-math-stats | test | pass | in scope |
 | chibi-mecab | test | out-of-scope | ffi |
 | chibi-mime | test | pass | in scope |
 | chibi-monad-environment | probe | parse-error | upstream-source-defect |
