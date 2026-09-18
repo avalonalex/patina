@@ -326,11 +326,36 @@ that one import makes both packages load** — in-progress-hash-tables directly,
 in-progress-hash-bimaps transitively, since the bad name appears only in its
 `package.scm` metadata. That would read 130 of 134.
 
-It was not done, because `compat/vendor/README.md` says those are "unmodified upstream
-copies kept for testing" whose purpose is "to run them and find out what Patina gets
-wrong", and patching a package so it passes changes what the harness measures — a
-precedent that would apply to several current exclusions too. #393 holds the finding
-and the three options.
+**The oracles settle whose defect this is.** Measured 2026-09-18, running each
+package unmodified: chibi 0.12 fails on the identical import with the identical
+diagnosis (`couldn't find import: (srfi 114 comparators)`), and it ships no SRFI 114
+at all. Gauche 0.9.15 *does* ship `(srfi 114)` and still cannot load the package,
+because the import asks for the three-element name — it fails a step earlier on
+`(r6rs hashtables)`, which Patina provides, so Patina already gets further into this
+package than Gauche does. **No implementation in the field can load these two**, which
+makes them broken as published rather than merely unportable, and puts them in the
+same bucket as chibi-app and edn.
+
+**Snow cannot resolve the name either**, which is what settles it, since snow-fort is
+chibi's own package manager. `library-name->path` (chibi's
+`lib/chibi/snow/package.scm:327`) joins a name's parts with `/` and does nothing else,
+so `(srfi 114 comparators)` means exactly `srfi/114/comparators.sld` — no alias table,
+no dependency rewriting. No package in the index ships that path, and `comparators`
+installs as `comparators.sld`. chibi's `alias-for` cannot bridge it, being a
+declaration *inside* a library file that would need that path to exist first. So the
+dependency is unsatisfiable in snow's own ecosystem, which is consistent with what the
+packages are: `in-progress-…`, William D Clinger, version 0.0.3 — published
+mid-development against a library name that never existed.
+
+**Both packages are excluded as of 2026-09-18** as `upstream-source-defect`, the same
+label srfi-179 carries for the same shape (valid Scheme naming something nothing
+defines). The in-scope denominator moves 134 → 132 and the queue is down to one entry.
+The edit that *would* fix them was staged and verified and then dropped, because
+`compat/vendor/README.md` calls those "unmodified upstream copies kept for testing"
+whose purpose is "to run them and find out what Patina gets wrong" — patching a package
+so it passes changes what the harness measures, a precedent that would reach several
+other exclusions. #393 holds that decision; the entries retire if it goes the other
+way.
 
 `(srfi 231)` — [#392](https://github.com/avalonalex/patina/issues/392), and much closer
 than first thought. The SRFI's own implementation is Gambit-only, but chibi's 1,424-line
