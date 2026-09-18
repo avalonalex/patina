@@ -19,16 +19,23 @@
 
 (define (%check-index v i who)
   (let ((len (u1vector-length v)))
-    (if (not (and (exact? i) (integer? i) (>= i 0) (< i len)))
+    (if (not (and (exact-integer? i) (>= i 0) (< i len)))
         (error "index out of range" who i len))))
 
 ;;; An element is a bit: 0 or 1. SRFI 231's `u1?` is the storage class's
 ;;; element check, so it decides what may be stored.
+;;;
+;;; `exact-integer?` rather than `(and (exact? x) (integer? x))`: it says the
+;;; same thing in one predicate, is what `(srfi 160)`'s own element checks use
+;;; here (`160/base/valid.scm`), and does not depend on `exact?` tolerating a
+;;; non-number. Patina, chibi and Gauche all answer #f rather than raising for
+;;; `(exact? 'one)`, so both spellings behave alike -- this one just does not
+;;; rely on it.
 (define (u1? x)
-  (and (exact? x) (integer? x) (or (= x 0) (= x 1))))
+  (and (exact-integer? x) (or (= x 0) (= x 1))))
 
 (define (make-u1vector n . fill)
-  (if (not (and (exact? n) (integer? n) (>= n 0)))
+  (if (not (and (exact-integer? n) (>= n 0)))
       (error "length must be an exact non-negative integer" 'make-u1vector n))
   (let ((bit (if (pair? fill) (car fill) 0)))
     (if (not (u1? bit))
@@ -65,11 +72,19 @@
         acc
         (loop (- i 1) (cons (u1vector-ref v i) acc)))))
 
+;;; One traversal, and an improper list is refused rather than truncated.
+;;; Terminating on `(pair? rest)` would silently drop the tail of
+;;; `'(1 0 . 1)`; `length` used to refuse it first, but only as a side effect
+;;; of a second pass, so the check is made explicit here instead.
 (define (list->u1vector bits)
-  (let* ((n (length bits))
-         (v (make-u1vector n)))
+  (let ((v (make-u1vector (%bit-list-length bits))))
     (let loop ((i 0) (rest bits))
-      (if (pair? rest)
-          (begin (u1vector-set! v i (car rest))
-                 (loop (+ i 1) (cdr rest)))))
-    v))
+      (cond ((null? rest) v)
+            (else (u1vector-set! v i (car rest))
+                  (loop (+ i 1) (cdr rest)))))))
+
+(define (%bit-list-length bits)
+  (let loop ((rest bits) (n 0))
+    (cond ((null? rest) n)
+          ((pair? rest) (loop (cdr rest) (+ n 1)))
+          (else (error "not a proper list" 'list->u1vector bits)))))

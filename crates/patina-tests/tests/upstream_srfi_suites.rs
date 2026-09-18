@@ -277,13 +277,16 @@ suite_tests! {
     // failures, neither ours, and both recorded because a bare "2" would be
     // unreadable later.
     //
-    // 1. `(test-error (array-set! A3 1. 7))` on a *frozen* array
-    //    (test.sld:2203). `array-freeze!` works — a frozen array refuses
-    //    `array-set!` here exactly as under chibi. What differs is the
-    //    backing store: `231/base.sld`'s own cond-expand makes
-    //    `make-immutable!` a no-op stub `#f` on every host but chibi, so the
-    //    storage stays mutable and this row, which reaches it directly, does
-    //    not raise. Upstream's design, not our defect.
+    // 1. `(test-error (array-set! A3 1. 7))` (test.sld:2203). `array-freeze!`
+    //    works: the array it is *applied to* refuses `array-set!` here
+    //    exactly as under chibi, and the row above this one shows it. `A3` is
+    //    not that array — it is a curried sub-array, `(array-ref (array-curry
+    //    A 1) 3)`, built before the freeze, so it is a separate record still
+    //    holding its own live setter closure. Only the backing store is
+    //    shared, and `231/base.sld`'s own cond-expand stubs `make-immutable!`
+    //    to `#f` on every host but chibi, so the store stays mutable too.
+    //    Refusing here needs immutability enforced at the storage level,
+    //    which off chibi nothing does. Upstream's design, not our defect.
     //
     // 2. `(test (list->array …) (vector*->array 2 …))` (test.sld:2650)
     //    compares two arrays with `equal?`. Their contents agree —
@@ -293,9 +296,12 @@ suite_tests! {
     //    leniency on its side. Isolated: two records each holding their own
     //    `(lambda (x) x)` compare #f here and #t under chibi.
     //
-    // The floor is 577, the count that *passes*, so a regression in the
-    // other 577 still trips it.
-    (srfi_231_arrays, "srfi 231", "(srfi 231 test)", 2, 577),
+    // The floor is 579, every assertion the suite runs. `assertions_run`
+    // counts each non-SKIP report including the two failures above, so it is
+    // the total and not the pass count: a floor of 577 would still be met
+    // after two assertions silently stopped running, which is the vacuous
+    // pass this floor exists to catch.
+    (srfi_231_arrays, "srfi 231", "(srfi 231 test)", 2, 579),
     // Upstream's own suite, with its imports lifted into the wrapper `.sld`
     // and nothing else changed; see that file. It exercises the whole
     // `(srfi 159)` surface, which is why the sub-libraries below are excused

@@ -357,9 +357,20 @@ so it passes changes what the harness measures, a precedent that would reach sev
 other exclusions. #393 holds that decision; the entries retire if it goes the other
 way.
 
-**SRFI 231 shipped 2026-09-18** (#392) as `(srfi 231)`, and with it **the
-missing-library queue is empty** — chibi-math-linalg passes and the corpus reads
-**129 of 132 in scope**. That completes L1's measured bundling work.
+**SRFI 231 shipped 2026-09-18** (#392) as `(srfi 231)`, and with it **no
+in-scope package is waiting on a library** — chibi-math-linalg passes and the
+corpus reads **129 of 132 in scope**. That completes L1's measured bundling
+work.
+
+Five `missing-library` rows remain, and all five are excluded, so none scores:
+`chibi-assert` wants `(chibi)`, which stays out by policy whatever the demand;
+`rebottled-cl-pdf` and `retropikzel-pstk` want another package's library rather
+than a SRFI; and **`in-progress-hash-bimaps` and `in-progress-hash-tables`
+still want `(srfi 114 comparators)`**, which #395 excluded as unsatisfiable —
+snow's own `library-name->path` joins the name with `/`, nothing in the
+ecosystem ships `srfi/114/comparators.sld`, and `alias-for` cannot bridge it.
+That last pair is the only one a future change could move, and only by snow
+fixing the name.
 
 It is chibi's implementation, not the SRFI's, and the reason is decisive rather than a
 preference: the SRFI's own `generic-arrays.scm` has 20 `define-macro` uses (Gambit's
@@ -370,8 +381,14 @@ only portable implementation that exists, and its licence was established the wa
 modules *and* enumerates the SRFIs that use someone else's reference implementation —
 231 is not among them.
 
-**No chibi library is bundled**, which was the constraint. Three marked local edits:
-the two unconditional `(chibi assert)` imports become
+**No chibi library is imported on the path Patina takes**, which was the
+constraint. Two substitutions, marked in place four times over — the first in
+each of the two files it touches. The two `(chibi)` references that remain sit
+in `cond-expand` branches Patina never satisfies, and `lib/srfi/PROVENANCE.md`
+records both, along with what upstream's `else` branch costs: `f8-storage-class`
+and `f16-storage-class` are aliased to `f32-storage-class` there, so an 8-bit
+range is a promise nothing enforces. The two unconditional `(chibi assert)`
+imports become
 `(rename (srfi 145) (assume assert))` — exact, because #383 bundled SRFI 145's
 *reporting* sample, so `assume` raises where `assert` would; had the other been taken
 this would have silently disabled 55 domain checks — and `u1vector-*` comes from

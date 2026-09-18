@@ -2,9 +2,9 @@
 ;;
 ;; Patina's own, written for `(srfi 231)`'s `u1-storage-class`, which SRFI 231
 ;; exports publicly and builds from six `u1vector-*` procedures it expects the
-;; host to supply. Those are not SRFI 160's — its twelve types begin at u8 —
-;; they are a chibi C extension, so an implementation bundling SRFI 231 has to
-;; provide them itself. See `lib/patina/bitvector.sld` for why the name is not
+;; host to supply. SRFI 160 defines none of them — its twelve types begin at
+;; u8 — so an implementation bundling SRFI 231 has to provide them itself.
+;; chibi's are its own extension, three from C and three in Scheme. See `lib/patina/bitvector.sld` for why the name is not
 ;; published as `(srfi 160 u1)`.
 ;;
 ;; The rows below are about the *packing*, because that is the part a
@@ -92,7 +92,10 @@
 ;; Refusals
 ;; ---------------------------------------------------------------------------
 
-(define (refuses? thunk) (guard (e (#t #t)) (thunk) #f))
+;; `error-object?` rather than a bare `#t`: a catch-all would also pass if the
+;; implementation raised something that is not a condition, which is the
+;; failure this is meant to distinguish from a refusal.
+(define (refuses? thunk) (guard (e ((error-object? e) #t)) (thunk) #f))
 
 (test-assert "an index at the length is refused"
   (refuses? (lambda () (u1vector-ref (make-u1vector 8 0) 8))))
@@ -110,6 +113,15 @@
   (refuses? (lambda () (make-u1vector -1))))
 (test-assert "a fill that is not a bit is refused"
   (refuses? (lambda () (make-u1vector 3 7))))
+
+;; An improper list must be refused, not silently truncated at the first
+;; non-pair -- the tail is data the caller meant to store.
+(test-assert "an improper list is refused"
+  (refuses? (lambda () (list->u1vector '(1 0 . 1)))))
+(test-assert "a non-list is refused"
+  (refuses? (lambda () (list->u1vector 7))))
+(test-equal "the empty list makes an empty bit vector" '()
+  (u1vector->list (list->u1vector '())))
 
 ;; ---------------------------------------------------------------------------
 ;; At a size where packing matters

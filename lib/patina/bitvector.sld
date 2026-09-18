@@ -1,10 +1,14 @@
 ;; Bit vectors, one bit per element, for `(srfi 231)`'s `u1-storage-class`.
 ;;
 ;; Patina-authored. SRFI 231 exports a `u1-storage-class` and builds it from
-;; six `u1vector-*` procedures, which it expects the host to supply. Those are
-;; **not part of SRFI 160**, whose twelve homogeneous vector types begin at u8
-;; — they are a chibi extension implemented in C (`lib/srfi/160/uvprims.c`).
-;; So an implementation bundling SRFI 231 has to provide them itself.
+;; six `u1vector-*` procedures, which it expects the host to supply. **SRFI 160
+;; defines none of them** — its twelve homogeneous vector types begin at u8 —
+;; so an implementation bundling SRFI 231 has to provide them itself. chibi
+;; does, as an extension: three of the six (`u1vector?`, `u1vector-ref`,
+;; `u1vector-set!`) come from C, re-exported by its `lib/srfi/160/prims.sld`
+;; from `uvprims.stub`, and the other three are ordinary Scheme in its
+;; `lib/srfi/160/base.sld`. The bit-packed `ref`/`set!`/`?` are therefore the
+;; part that actually had to be written here.
 ;;
 ;; Why this namespace, and not `(srfi 160 u1)` — which is what chibi calls it.
 ;; Publishing a `u1` under SRFI 160's namespace would put a name the SRFI does

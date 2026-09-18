@@ -31,11 +31,13 @@
 (define-storage-class s64-storage-class
   s64vector-ref s64vector-set! s64? s64vector? make-s64vector s64vector-length 0)
 
-;; PATINA LOCAL EDIT: `u1vector-*` are a chibi extension implemented in C
-;; (chibi's lib/srfi/160/uvprims.c), not part of SRFI 160 — whose twelve types
-;; begin at u8. They come from `(patina bitvector)` here, imported by the
-;; enclosing `.sld`; the definition is unchanged. See that library's header
-;; for why the name is not published as `(srfi 160 u1)`.
+;; PATINA LOCAL EDIT: SRFI 160 defines no `u1vector-*` — its twelve types begin
+;; at u8 — so these are chibi's own extension: `u1vector?`, `u1vector-ref` and
+;; `u1vector-set!` from C (its lib/srfi/160/prims.sld re-exports uvprims.stub),
+;; the rest Scheme in its lib/srfi/160/base.sld. They come from
+;; `(patina bitvector)` here, imported by the enclosing `.sld`; the definition
+;; below is unchanged. See that library's header for why the name is not
+;; published as `(srfi 160 u1)`.
 (define-storage-class u1-storage-class
   u1vector-ref u1vector-set! u1? u1vector? make-u1vector u1vector-length 0)
 

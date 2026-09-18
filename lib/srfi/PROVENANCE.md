@@ -18,7 +18,7 @@ its own record. One home per tree.
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
 | `(srfi 159)` | — | `159.sld` and the sixteen files under `159/` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-159/srfi-159.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, established as recorded below) | tarball sha256 `7cbb770787d2c437d21e853918adf74d5e3777c28b416d8eed226abc813368c1` |
-| `(srfi 231)` | chibi 0.12 | `231.sld`, `231/base.sld`, `231/base.scm`, `231/transforms.scm` | chibi-scheme's own implementation (Alex Shinn, BSD 3-Clause via chibi's `COPYING`), pinned post-edit — three marked local edits, below | source `~/Project/reference/chibi-scheme/lib/srfi/231/` |
+| `(srfi 231)` | chibi 0.12 | `231.sld`, `231/base.sld`, `231/base.scm`, `231/transforms.scm` | chibi-scheme's own implementation (Alex Shinn, BSD 3-Clause via chibi's `COPYING`), pinned post-edit — two local substitutions, four markers, below | source `~/Project/reference/chibi-scheme/lib/srfi/231/` |
 | `(srfi 165)` | — | `165.sld`, `165.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-165/srfi-165.tgz` (Marc Nieper-Wißkirchen, MIT, full text inline in both files) | tarball sha256 `e3bd69078fa4946e623b4e1ff554195d5dd200ab20a234663a436f735488c5fa` |
 | `(srfi 115)` | — | `115.sld`, `115.scm`, `115/boundary.sld`, `115/boundary.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-115/srfi-115.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, the boundary data CC0-1.0) | tarball sha256 `e8e7294adfb695518ef5ac6d59989048e2143dafbb3d87588458ab76bfe715c2` |
 | `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
@@ -296,7 +296,9 @@ file already makes for `(srfi 125)`'s notice-less file, and it is what makes
 this *unlike* `(srfi 4)`, where no blanket statement existed and a sibling file
 contradicted the repository header.
 
-**Three marked local edits, all in service of bundling no chibi library.**
+**Two substitutions, carrying four `PATINA LOCAL EDIT` markers** — the first
+is marked in each of the two files it touches. Both exist so that no chibi
+library is imported on the path Patina actually takes.
 
 - `231.sld` and `231/base.sld` imported `(chibi assert)` unconditionally,
   which needs `(chibi)`. Replaced by `(rename (srfi 145) (assume assert))`.
@@ -308,18 +310,42 @@ contradicted the repository header.
   have silently disabled 55 domain checks. Verified to keep them, including
   that a bad interval is still refused.
 - `231/transforms.scm`'s `u1-storage-class` is built from six `u1vector-*`
-  procedures that are a chibi **C** extension, not part of SRFI 160 — whose
-  twelve types begin at u8. They come from `(patina bitvector)`, ours, bit
-  packed; the storage-class definition itself is untouched. That library's
-  header records why the name is not published as `(srfi 160 u1)`.
+  procedures, none of which SRFI 160 defines — its twelve types begin at u8.
+  Three of the six (`u1vector?`, `u1vector-ref`, `u1vector-set!`) are a chibi
+  **C** extension, re-exported by its `lib/srfi/160/prims.sld` from
+  `uvprims.stub`; the other three are ordinary Scheme in its
+  `lib/srfi/160/base.sld`. So the irreducible part of writing our own was the
+  bit-packed `ref`/`set!`/`?`, not all six. They come from `(patina
+  bitvector)`, ours, bit packed; the storage-class definition itself is
+  untouched. That library's header records why the name is not published as
+  `(srfi 160 u1)`.
+
+**Two `(chibi)` references survive, both behind a `cond-expand` Patina does
+not satisfy, and both left as upstream wrote them.** Editing dead branches
+would enlarge the diff against chibi for no behavioural gain, so they are
+recorded here instead.
+
+- `231/base.sld`'s `(chibi ...)` branch does `(import (only (chibi)
+  make-immutable!))`. Patina reports no `chibi` feature, so the branch is
+  never taken and the `else` stub defines `make-immutable!` as `#f`. That stub
+  is the direct cause of the first suite failure below.
+- `231.sld` guards its real `f8-storage-class` and `f16-storage-class` on
+  `(and chibi (library (srfi 160 mini)))`. Off chibi the `else` branch
+  **aliases both to `f32-storage-class`** — upstream's own fallback, not
+  something introduced here. The consequence is worth stating plainly: an
+  `f8-storage-class` array is backed by 32-bit floats and its checker accepts
+  any inexact real, so the 8-bit range is a promise nothing enforces.
+  Upstream's suite never touches either name, so no row covers it; a caller
+  wanting narrow float storage does not get it, and `(eq? f8-storage-class
+  f32-storage-class)` is `#t` here.
 
 **Two suite rows fail, neither ours**, and both are recorded in
-`upstream_srfi_suites.rs` rather than as a bare count: a frozen array's
-*backing store* stays mutable because `231/base.sld`'s own cond-expand stubs
-`make-immutable!` to `#f` off chibi, and one row compares two arrays with
-`equal?` where the arrays are records holding distinct closures — R7RS 6.1
-makes `equal?` on procedures `eqv?`, so our `#f` is right and chibi's `#t` is
-leniency.
+`upstream_srfi_suites.rs` rather than as a bare count: one sets through a
+*curried sub-array* built before its parent was frozen, which keeps its own
+setter and shares only a store that `make-immutable!`'s stub leaves mutable,
+and one compares two arrays with `equal?` where the arrays are records holding
+distinct closures — R7RS 6.1 makes `equal?` on procedures `eqv?`, so our `#f`
+is right and chibi's `#t` is leniency.
 
 **SRFI 165 is the first bundle in this run that moved the corpus number**, and
 it became possible only because of an earlier one.
