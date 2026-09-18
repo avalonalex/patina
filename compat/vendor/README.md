@@ -17,7 +17,10 @@ the whole relationship.
   mechanical — dependency in-degree and a licence check — with no review of the code itself.
 - **Not a fork or a redistribution channel.** These are unmodified upstream copies kept for testing.
   Anyone wanting to *use* these libraries should get them from upstream, not from here, where they
-  will be stale the moment upstream moves.
+  will be stale the moment upstream moves. That "unmodified" is enforced, not just intended: where a
+  package needs a change to run, the change lives in `compat/patches/<slug>.patch` and is applied to
+  a throwaway *copy* at run time. Nothing here is ever written to, and a test fails the build if a
+  patch stops applying.
 - **Not vetted.** The code has not been audited. Some of it is decades old, some targets other Scheme
   implementations, some will not run under Patina at all — which is precisely the point.
 

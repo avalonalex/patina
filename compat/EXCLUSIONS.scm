@@ -153,47 +153,11 @@
   ;; outside the SRFI it names as its dependency, which no conforming
   ;; implementation of that SRFI supplies.
   ;;
-  ;; Both in-progress-hash-* packages depend on `(srfi 114 comparators)`, a
-  ;; library name **nothing provides** — not this corpus, not Patina, not
-  ;; chibi, not Gauche. The name itself is legal: R7RS 5.6.1 admits any
-  ;; sequence of identifiers and unsigned integers, 36 vendored libraries use
-  ;; three parts, and defining that exact name and importing it works under
-  ;; all three implementations (measured 2026-09-18). It is simply a name the
-  ;; author expected to exist.
-  ;;
-  ;; SRFI 114's own text says its procedures are in `(srfi 114)`; its sample
-  ;; implementation names the library `(comparators)`, which this corpus
-  ;; vendors as the `comparators` package. Neither is the three-element name.
-  ;;
-  ;; **Snow cannot resolve it either**, which is the part that settles this,
-  ;; since snow-fort is chibi's own package manager. `library-name->path`
-  ;; (chibi's `lib/chibi/snow/package.scm:327`) joins a name's parts with `/`
-  ;; and nothing else — so `(srfi 114 comparators)` means exactly
-  ;; `srfi/114/comparators.sld`, no alias table and no dependency rewriting.
-  ;; No package in the index ships that path; `comparators` installs as
-  ;; `comparators.sld`. chibi's `alias-for` cannot bridge it, because it is a
-  ;; declaration *inside* a library file and would need that path to exist
-  ;; first. So the dependency is unsatisfiable in snow's own ecosystem.
-  ;;
-  ;; Measured on the unmodified packages: chibi 0.12 fails on the identical
-  ;; import with the identical diagnosis, and ships no SRFI 114 at all; Gauche
-  ;; 0.9.15 *does* ship `(srfi 114)` and still cannot load them, failing a step
-  ;; earlier on `(r6rs hashtables)` — which Patina provides, so Patina already
-  ;; gets further into these packages than Gauche does.
-  ;;
-  ;; What would fix them, and why it is not done: bundling SRFI 114 under the
-  ;; name the SRFI specifies and rewriting that one import makes both load —
-  ;; tables directly, bimaps transitively, since the bad name appears only in
-  ;; *its* `package.scm` metadata. That was staged and verified, then dropped:
-  ;; `compat/vendor/README.md` calls these "unmodified upstream copies kept for
-  ;; testing" whose purpose is "to run them and find out what Patina gets
-  ;; wrong", and patching a package so it passes changes what is measured.
-  ;; Issue #393 holds that decision; these entries retire if it goes the other
-  ;; way.
-  ((slug "in-progress-hash-tables") (reason upstream-source-defect) (expect missing-library)
-   (note "in-progress/hash/tables.sld:67 imports (srfi 114 comparators), a name nothing provides: SRFI 114 says (srfi 114), its sample implementation says (comparators), and snow resolves the name only as the path srfi/114/comparators.sld, which no package ships. chibi fails identically; Gauche has (srfi 114) and still cannot load it"))
-  ((slug "in-progress-hash-bimaps") (reason upstream-source-defect) (expect missing-library)
-   (note "via (in-progress hash tables) — see in-progress-hash-tables. Its own .sld is clean; the bad name appears only in its package.scm metadata"))
+  ;; The two in-progress-hash-* packages used to sit here, for importing
+  ;; `(srfi 114 comparators)` — a name nothing provides. They now pass, moved
+  ;; to SRFI 128 by `compat/patches/in-progress-hash-tables.patch`, whose
+  ;; header carries the argument (SRFI 114 is withdrawn; snow cannot resolve
+  ;; the three-part name either) and why each rename is faithful.
 
   ;; Reached only since #383 bundled `(srfi 160 base)`; before that it stopped
   ;; at the missing library and this was invisible.

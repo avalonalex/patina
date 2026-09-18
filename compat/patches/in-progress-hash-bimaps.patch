@@ -1,0 +1,92 @@
+# in-progress-hash-bimaps: SRFI 114 -> SRFI 128
+#
+# The same substitution as its sibling in-progress-hash-tables, for the same
+# reason -- see compat/patches/in-progress-hash-tables.patch for the full
+# argument: `(srfi 114 comparators)` is a name nothing defines, and SRFI 114
+# itself is withdrawn in favour of SRFI 128, which Patina ships.
+#
+# This package's own `.sld` is clean. Only its test program imports the bad
+# name, and it reaches the library through `(in-progress hash tables)`, so it
+# needs its sibling's patch as well as this one.
+#
+# **Keep these two in lockstep.** The two packages ship *byte-identical* copies
+# of `in-progress/hash/tables-test.sps`, so the hunks below are a verbatim
+# duplicate of the ones in in-progress-hash-tables.patch. One patch file per
+# package is the naming scheme, so they cannot be shared. If a re-vendor shifts
+# that script, both patches need the same update -- and
+# `every_patch_applies_to_its_package` will fail for whichever one is missed,
+# which is the intended safety net rather than an accident.
+diff -ruN a/in-progress/hash/tables-test.sps b/in-progress/hash/tables-test.sps
+--- a/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
++++ b/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
+@@ -28,7 +28,7 @@
+         (scheme char)
+         (scheme write)
+         (scheme process-context) ; for exit
+-        (srfi 114 comparators)
++        (srfi 128)
+         (r6rs sorting)
+         (in-progress hash tables)
+         (in-progress hash bimaps))
+@@ -102,7 +102,7 @@
+   (hash-table default-comparator 'foo 'bar 101.3 "fever" '(x y z) '#()))
+ 
+ (define ht-fixnum2
+-  (hash-table-tabulate number-comparator
++  (hash-table-tabulate real-comparator
+                        10
+                        (lambda (i) (values (* i i) i))))
+ 
+@@ -588,13 +588,13 @@
+ 
+ ;;; Copying and conversion.
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum))
+       #t)
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum #f))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum #f))
+       #t)
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum #t))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum #t))
+       #t)
+ 
+ (test (hash-table-mutable? (hash-table-copy ht-fixnum))
+@@ -710,7 +710,7 @@
+ (test (begin (hash-table-intersection!
+               ht-fixnum
+               (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                                 number-comparator))
++                                 real-comparator))
+              (list-sort (lambda (x y) (< (car x) (car y)))
+                         (hash-table->alist ht-fixnum)))
+       '((4 . 2)
+@@ -720,7 +720,7 @@
+         (hash-table-difference!
+          ht
+          (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                            number-comparator))
++                            real-comparator))
+         (list-sort (lambda (x y) (< (car x) (car y)))
+                    (hash-table->alist ht)))
+       '((0 . 0)
+@@ -736,7 +736,7 @@
+         (hash-table-xor!
+          ht
+          (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                            number-comparator))
++                            real-comparator))
+         (list-sort (lambda (x y) (< (car x) (car y)))
+                    (hash-table->alist ht)))
+       '((-1 . -1)
+@@ -763,7 +763,7 @@
+ 
+ (define bim-squares
+   (make-bimap (hash-table-copy ht-fixnum2 #t)
+-              number-comparator))
++              real-comparator))
+ 
+ (define bim-squares2 (bimap-copy bim-squares))
+ 
