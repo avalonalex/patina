@@ -297,8 +297,22 @@ rather than "imports and exports, no code" — that last one matters most, since
 unmarked files are not the implementation" is one of the three checks the bundling
 decision rests on.
 
-**Remaining L1 candidates:** the re-export shims `(srfi 6)`, `(srfi 9)`,
-`(srfi 11)`, `(srfi 39)`, and whatever the next corpus re-measure names.
+**The four re-export shims shipped 2026-09-18** (#390), which empties the named L1
+list: `(srfi 6)` string ports, `(srfi 9)` `define-record-type`, `(srfi 11)`
+`let-values`, `(srfi 39)` parameter objects — each a few lines over `(scheme base)`,
+each pinned in `reexport_shims.rs` beside `(srfi 16)`, `(srfi 23)` and `(srfi 98)`.
+No corpus package asks for any of them; they ship so a program written against the
+pre-R7RS name loads rather than failing over functionality present under another.
+
+**What the corpus still names as missing is not all bundling work.**
+`(srfi 114 comparators)` ×2 is the clearest case: the SRFI states its procedures are
+in `(srfi 114)`, its sample implementation names the library `(comparators)` — which
+the corpus already vendors — and the two packages import a three-element name
+**nothing defines**. Bundling SRFI 114 under either real name would resolve neither,
+and SRFI 114 is superseded by the SRFI 128 already shipped, so this wants an
+exclusion with the diagnosis recorded rather than a library. `(srfi 165)` (wanted by
+srfi-166) and `(srfi 231)` (chibi-math-linalg) are unverified and get their own
+look.
 The stored corpus also names `(srfi 114 comparators)`,
 `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all

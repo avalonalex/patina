@@ -271,6 +271,26 @@ not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
 
+**The re-export shims are Patina's own, and there is nothing third-party in
+them.** `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 16)`, `(srfi 23)`,
+`(srfi 39)` and `(srfi 98)` each name functionality R7RS-small already
+provides, so each is a few lines re-exporting `(scheme base)` rather than an
+implementation — no upstream file, no licence to establish, and absent from the
+table above for that reason. `crates/patina-tests/tests/reexport_shims.rs`
+pins that each loads and that a binding reached through it works.
+
+Two of the seven carry a note worth keeping, because in both cases the shim is
+*not* simply the SRFI's own surface:
+
+- `(srfi 9)`'s `define-record-type` is R7RS 5.5's, which is a **superset**: the
+  SRFI requires an accessor for every field, and R7RS additionally allows a
+  modifier. A program written to the SRFI is accepted unchanged, and one
+  written to R7RS also works through this library. Both shapes are pinned,
+  since a shim reaching a narrower macro would still pass the first.
+- `(srfi 16)`'s `case-lambda` is the other direction: `lib/scheme/case-lambda.sld`
+  *is* SRFI 16's own reference implementation, so the shim re-exports the
+  library that already holds the SRFI's code rather than the other way round.
+
 **SRFI 159's licence was established rather than inferred, which is why it is
 bundled where `(srfi 4)` was not.**
 

@@ -468,6 +468,28 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    // The four re-export shims of #390. Each names functionality R7RS-small
+    // already provides, so what there is to test is that the shim loads and
+    // that a binding reached through it works — which is behavioural, not
+    // conformance, and is pinned in reexport_shims.rs beside (srfi 16),
+    // (srfi 23) and (srfi 98). Running a SRFI's own suite against the R7RS
+    // procedure would be testing (scheme base) under another name.
+    (
+        "srfi 6",
+        "re-export shim over (scheme base)'s string ports, which are R7RS 6.13 verbatim; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 9",
+        "re-export shim over (scheme base)'s define-record-type, which is R7RS 5.5 and a superset of the SRFI's form; reexport_shims.rs pins both shapes",
+    ),
+    (
+        "srfi 11",
+        "re-export shim over (scheme base)'s let-values and let*-values, which are R7RS 4.2.2; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 39",
+        "re-export shim over (scheme base)'s parameter objects, which are R7RS 4.2.6; reexport_shims.rs pins that parameterize restores after the body",
+    ),
     // SRFI 159's sub-libraries. Upstream ships one suite, for `(srfi 159)`,
     // and it drives all of them: the 316 assertions registered above cover
     // the base combinators, the columnar and pretty-printing layers, the
