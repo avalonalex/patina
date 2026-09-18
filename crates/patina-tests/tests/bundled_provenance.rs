@@ -113,6 +113,14 @@ const PINNED: &[(&str, u64)] = &[
     // other adapted ports one directory over; lib/srfi/PROVENANCE.md records
     // what it replaced and why.
     //
+    // SRFI 115, byte-identical to the tarball recorded in
+    // lib/srfi/PROVENANCE.md. Unlike its two neighbours here, nothing about
+    // its licence had to be established: every file carries an explicit SPDX
+    // identifier.
+    ("lib/srfi/115.sld", 0x57df407358c44250),
+    ("lib/srfi/115.scm", 0xf0378e3a7f03501f),
+    ("lib/srfi/115/boundary.sld", 0xaeba3a21ab466dd8),
+    ("lib/srfi/115/boundary.scm", 0xa5f518ae15abaf21),
     // SRFI 160, from the tarball recorded in lib/srfi/PROVENANCE.md.
     // `(srfi 4)` is deliberately absent: it is Patina-authored, not
     // third-party, because the SRFI's own contrib port carries no licence

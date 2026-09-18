@@ -253,6 +253,10 @@ suite_tests! {
     // tests/scheme/srfi/string-cursors.scm asserts the specified behavior.
     (srfi_130_string, "srfi 130", "(srfi 130 test)", 1, 219),
     (srfi_158_generator, "srfi 158", "(srfi 158 test)", 0, 76),
+    // Verbatim, and it needed no adaptation: its own cond-expand already
+    // reaches for `(chibi test)` on anything that is not Larceny, which is
+    // the framework this harness supplies.
+    (srfi_115_regexp, "srfi 115", "(srfi 115 test)", 0, 85),
     // Upstream tests s16 alone, and says why: "if one vector type works, they
     // all work" — the twelve `(srfi 160 <type>)` libraries are sed-expanded
     // from one template, so a template defect shows in all of them. The other
@@ -440,6 +444,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    (
+        "srfi 115 boundary",
+        "generated Unicode word-boundary tables for (srfi 115), exercised by its suite above; upstream ships no suite for the data alone",
+    ),
     // SRFI 4's own suite exists but cannot be registered here: it is a
     // print-only harness that displays "OK" or "FAIL" per assertion and exits
     // 0 either way, with no counter and no status a driver can read, so a row

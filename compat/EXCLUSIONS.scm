@@ -55,8 +55,14 @@
    (note "chibi/xlib.sld:45 (include-shared \"xlib\") — bindings to Xlib"))
   ((slug "independentresearch-xattr") (reason ffi) (expect out-of-scope)
    (note "independentresearch/xattr.sld:9 (include-shared \"xattr\") — POSIX extended attributes"))
-  ((slug "chibi-xgboost") (reason ffi) (expect missing-library)
-   (note "chibi/xgboost.sld:5 (include-shared \"xgboost/xgboost\"); reports (srfi 160 base) because its test library's import fails before (chibi xgboost) is reached, so the FFI need is real but shadowed"))
+  ;; Retired its own prediction: the note below used to end "the FFI need is
+  ;; real but shadowed", because the package reported (srfi 160 base) missing
+  ;; before it could reach its own include-shared. #383 bundled SRFI 160, the
+  ;; shadow lifted, and it now proves the FFI need directly — so the expected
+  ;; status moves from missing-library to out-of-scope, which is what the
+  ;; drift check asked for.
+  ((slug "chibi-xgboost") (reason ffi) (expect out-of-scope)
+   (note "chibi/xgboost.sld:5 (include-shared \"xgboost/xgboost\") — bindings to libxgboost, reported directly since #383 bundled the (srfi 160 base) that used to shadow it"))
   ((slug "chibi-net-dns") (reason ffi) (expect out-of-scope)
    (note "needs (chibi net), which is C-backed upstream"))
   ((slug "chibi-net-smtp") (reason ffi) (expect out-of-scope)
@@ -135,6 +141,22 @@
   ((slug "chibi-regexp") (reason upstream-source-defect) (expect parse-error)
    (note "regexp.scm:1180 — (regexp 'grapheme) feeds #<unspecified> into make-state, because regexp.sld imports char-set? from (srfi 14) while its (chibi char-set boundary) dependency resolves to iset-backed (chibi char-set). chibi and Gauche each end up with one char-set type and load it; see the comment above for how each gets there"))
 
+  ;; srfi-179 builds a `u1-storage-class` — a one-bit vector — out of
+  ;; `u1vector-ref`, `u1vector-set!`, `make-u1vector`, `u1vector-length` and
+  ;; `u1?` (`srfi/179/transforms.scm:34`), and exports it from `srfi/179.sld`.
+  ;; Nothing in the package defines any of them. They are not SRFI 160's
+  ;; either: neither our bundled `(srfi 160 base)` nor the SRFI's own
+  ;; reference implementation has a `u1` type, and the twelve the SRFI
+  ;; specifies start at u8. They are a **chibi extension, implemented in C** —
+  ;; `lib/srfi/160/uvprims.c` in the chibi tree defines `u1vector_ref` and
+  ;; `u1vector_set`. So the package depends on its host providing a type
+  ;; outside the SRFI it names as its dependency, which no conforming
+  ;; implementation of that SRFI supplies.
+  ;;
+  ;; Reached only since #383 bundled `(srfi 160 base)`; before that it stopped
+  ;; at the missing library and this was invisible.
+  ((slug "srfi-179") (reason upstream-source-defect) (expect parse-error)
+   (note "srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8"))
   ((slug "chibi-app") (reason upstream-source-defect) (expect parse-error)
    (note "app.scm:467 — an else clause mid-case, followed by ((1) ...); R7RS puts else last and Gauche rejects it. Patina still owes a better message than \"No matching pattern for macro case\" with no location — that part is ours, tracked in PRD §6"))
 
