@@ -397,3 +397,30 @@ fn a_malformed_let_syntax_is_rejected_before_the_program_runs() {
         assert_program_eval_error_at(code, ErrorClass::BeforeRun, ErrorClass::BeforeRun, message);
     }
 }
+
+/// A body of *only* `define-syntax` is rejected before the program runs.
+///
+/// The other half of the fix that made `(let-syntax ((m ...)) (m))` legal when
+/// `m` expands to `(begin)`. The desugarer used to delete any body expression
+/// that desugared to `Literal(Unspecified)`, meaning to discard the placeholder
+/// a `define-syntax` leaves behind — but that arm never reaches the filter, so
+/// it only ever hit real expressions. Now nothing is deleted, and this error
+/// fires only when a body genuinely holds no expression at all.
+///
+/// Pinned by stage *and* message rather than with the bare
+/// `assert_program_eval_error`: a helper that accepts any error would pass if
+/// the program were rejected for an unrelated reason, which is most of the
+/// value of this row. Verified it fails when the check is relaxed away.
+///
+/// The accepting half is `tests/scheme/expansion/let-syntax.scm`, which runs on
+/// both backends; a desugar error cannot live there, since it fails the whole
+/// file rather than one assertion.
+#[test]
+fn a_body_of_only_define_syntax_is_rejected_before_the_program_runs() {
+    assert_program_eval_error_at(
+        "(define f (lambda () (define-syntax m (syntax-rules () ((m) 1)))))",
+        ErrorClass::BeforeRun,
+        ErrorClass::BeforeRun,
+        "Body must contain at least one expression",
+    );
+}

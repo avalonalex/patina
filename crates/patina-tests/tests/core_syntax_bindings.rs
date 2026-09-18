@@ -68,27 +68,6 @@ fn test_auxiliary_syntax_in_head_position_is_an_error() {
     assert_program_eval_error("(import (scheme base)) (=> 1 2)");
 }
 
-/// A body of *only* `define-syntax` is still rejected.
-///
-/// The desugarer filters `Literal(Unspecified)` out of a body to drop the
-/// placeholder a `define-syntax` leaves behind, then errors when nothing is
-/// left. That filter could not tell the placeholder from a real expression
-/// that happens to evaluate to unspecified, so `(let-syntax ((m ...)) (m))`
-/// where `m` expands to `(begin)` was rejected too — reached from real code by
-/// arvyy-interface, and accepted by both chibi and Gauche. The fix tracks
-/// whether an expression was *seen* rather than whether its value survived.
-///
-/// This is the other half of that: the original error must still fire. The
-/// accepting half is in `tests/scheme/expansion/let-syntax.scm`, which runs on
-/// both backends; this one cannot live there, because a desugar error fails
-/// the whole file rather than one assertion.
-#[test]
-fn test_a_body_of_only_define_syntax_is_rejected() {
-    assert_program_eval_error(
-        "(import (scheme base)) (define f (lambda () (define-syntax m (syntax-rules () ((m) 1)))))",
-    );
-}
-
 // That `else` and `=>` still do their real job — matching as `syntax-rules`
 // literals inside `cond` and `case` — is already covered on both backends by
 // `tests/scheme/expansion/derived-forms.scm` ("cond falls through to else",

@@ -457,16 +457,33 @@
 ;; and `test` bottoms out in `validate-args-count`'s `((_ name () ()) (begin))`
 ;; -- so the whole let-syntax body is one macro use that expands to `(begin)`.
 ;; chibi and Gauche both accept it.
-(test-assert "a let-syntax body that expands to an empty begin is accepted"
-  (let ((r (let-syntax ((m (syntax-rules () ((m) (begin)))))
-             (m))))
-    ;; The value is unspecified; what matters is that it compiled at all.
-    (or (eq? r r) #t)))
+;; Asserted against `(if #f #f)`, the unspecified value, rather than against
+;; "it compiled": a row that only proves the program loads would still pass if
+;; the body came back with the wrong value, which is the other half of this
+;; defect.
+(test-assert "a let-syntax body that expands to an empty begin is unspecified"
+  (eq? (if #f #f)
+       (let-syntax ((m (syntax-rules () ((m) (begin)))))
+         (m))))
 
-(test-assert "so is a lambda body that expands to one"
-  (procedure?
-   (lambda ()
-     (let-syntax ((m (syntax-rules () ((m) (begin)))))
-       (m)))))
+;; The same, with an expression *before* the dropped one. This is the shape the
+;; first fix got wrong: the filter deleted the trailing `(begin)` and left the
+;; body's value as `(list 1)`, where R7RS 4.1.4 makes a body's value that of
+;; its **last** expression.
+(test-assert "a body's value is its last expression's, even when that is empty"
+  (eq? (if #f #f)
+       ((lambda ()
+          (list 1)
+          (let-syntax ((m (syntax-rules () ((m) (begin)))))
+            (m))))))
+
+(test-assert "and directly, without a macro in the way"
+  (eq? (if #f #f) ((lambda () (list 1) (begin)))))
+
+;; `letrec-syntax` takes the same path.
+(test-assert "letrec-syntax behaves the same"
+  (eq? (if #f #f)
+       (letrec-syntax ((m (syntax-rules () ((m) (begin)))))
+         (m))))
 
 (test-end)
