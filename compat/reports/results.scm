@@ -139,7 +139,7 @@
   ((slug "srfi-145") (mode probe) (status pass))
   ((slug "srfi-156") (mode test) (status pass))
   ((slug "srfi-16") (mode probe) (status pass))
-  ((slug "srfi-166") (mode probe) (status missing-library) (missing "srfi 165"))
+  ((slug "srfi-166") (mode probe) (status pass))
   ((slug "srfi-170") (mode probe) (status out-of-scope) (needs "foreign c"))
   ((slug "srfi-175") (mode test) (status pass))
   ((slug "srfi-179") (mode test) (status parse-error) (errors "unbound variable: `u1vector-ref`"))

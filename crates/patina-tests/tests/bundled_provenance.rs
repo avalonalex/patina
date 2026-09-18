@@ -134,6 +134,11 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/159/internal/write.scm", 0xb875b9d52bacc6cb),
     ("lib/srfi/159/unicode.scm", 0xda5fa29d72ac51dd),
     ("lib/srfi/159/unicode.sld", 0x505181e5fcf138d6),
+    // SRFI 165, byte-identical to the tarball recorded in
+    // lib/srfi/PROVENANCE.md. Both files carry the full MIT text inline, so
+    // nothing about its licence had to be established.
+    ("lib/srfi/165.sld", 0x68089aac5cdd7be9),
+    ("lib/srfi/165.scm", 0x18c17bf9dedb0cd3),
     // SRFI 115, byte-identical to the tarball recorded in
     // lib/srfi/PROVENANCE.md. Unlike its neighbours here — SRFI 159 above,
     // whose licence took three checks to establish, and SRFI 160 below, whose

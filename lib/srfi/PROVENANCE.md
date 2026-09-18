@@ -18,6 +18,7 @@ its own record. One home per tree.
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
 | `(srfi 159)` | — | `159.sld` and the sixteen files under `159/` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-159/srfi-159.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, established as recorded below) | tarball sha256 `7cbb770787d2c437d21e853918adf74d5e3777c28b416d8eed226abc813368c1` |
+| `(srfi 165)` | — | `165.sld`, `165.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-165/srfi-165.tgz` (Marc Nieper-Wißkirchen, MIT, full text inline in both files) | tarball sha256 `e3bd69078fa4946e623b4e1ff554195d5dd200ab20a234663a436f735488c5fa` |
 | `(srfi 115)` | — | `115.sld`, `115.scm`, `115/boundary.sld`, `115/boundary.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-115/srfi-115.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, the boundary data CC0-1.0) | tarball sha256 `e8e7294adfb695518ef5ac6d59989048e2143dafbb3d87588458ab76bfe715c2` |
 | `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
 | `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
@@ -270,6 +271,25 @@ and `ideque=` in particular is covered by both. Different assertion counts do
 not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
+
+**SRFI 165 is the first bundle in this run that moved the corpus number**, and
+it became possible only because of an earlier one.
+
+`lib/srfi/165.*` is the SRFI's own distribution, unedited, and needed no
+adaptation: upstream's suite passes 43 of 43 on both backends. Its licence
+needed nothing established — both files carry Marc Nieper-Wißkirchen's
+copyright and the full MIT text inline, the same author and the same shape as
+`(srfi 146)`.
+
+Its dependencies are `(srfi 1)`, `(srfi 111)`, `(srfi 125)`, `(srfi 128)` and
+**`(srfi 146)`** — that last one bundled in #375, which is what made this
+library reachable at all. srfi-166 in the stored corpus had been failing for
+want of `(srfi 165)` alone, and now passes, taking the score from 127 of 134
+to 128.
+
+It ships under its SRFI name only. SRFI 165 belongs to no approved R7RS-large
+edition, so no `(scheme …)` alias is owed; it is eligible under the policy's
+plain "being a SRFI is sufficient" clause rather than as an edition member.
 
 **The re-export shims are Patina's own, and there is nothing third-party in
 them.** `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 16)`, `(srfi 23)`,
