@@ -253,6 +253,12 @@ suite_tests! {
     // tests/scheme/srfi/string-cursors.scm asserts the specified behavior.
     (srfi_130_string, "srfi 130", "(srfi 130 test)", 1, 219),
     (srfi_158_generator, "srfi 158", "(srfi 158 test)", 0, 76),
+    // Upstream tests s16 alone, and says why: "if one vector type works, they
+    // all work" — the twelve `(srfi 160 <type>)` libraries are sed-expanded
+    // from one template, so a template defect shows in all of them. The other
+    // eleven, and `(srfi 160 base)`, are exercised by
+    // tests/scheme/srfi/homogeneous-vectors.scm.
+    (srfi_160_s16vector, "srfi 160 s16", "(srfi 160 test)", 0, 110),
     // Both verbatim from the SRFI's own distribution, and both passed on the
     // first run with no adaptation — unusual enough in this table to be worth
     // recording. `(srfi 146)` is the red-black tree implementation and
@@ -402,6 +408,20 @@ const NO_SUITE_TREES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Shared by the SRFI 160 rows below: upstream registers a suite for `s16`
+/// only, so the rest are covered by our own file rather than by nothing.
+const SRFI_160_REASON: &str = "sed-expanded from the template whose s16 expansion the registered (srfi 160 test) row runs; tests/scheme/srfi/homogeneous-vectors.scm covers the per-type parameters";
+
+/// `(srfi 160 base)`, `(srfi 160 c64)` and `(srfi 160 c128)` need their own
+/// reason: the template argument does not reach them at all. `base` is a
+/// hand-written library rather than an expansion, and the two complex types
+/// are the expansion's only ones with no SRFI 4 layer underneath — they wrap
+/// an `f32vector`/`f64vector` instead. Upstream does ship a `base` suite, and
+/// it is not vendored: like SRFI 4's, it is print-only, with its own
+/// `test-assert`/`test-not` macros displaying "OK" or "FAIL" and reporting
+/// nothing a driver can read, so a row for it would be vacuously green.
+const SRFI_160_COMPLEX_REASON: &str = "upstream's (srfi 160 base) suite is print-only and never reports, the same failure mode SRFI_64_BODY exists to prevent; tests/scheme/srfi/homogeneous-vectors.scm covers the base layer and the two complex types";
+
 /// Every library Patina provides from a tree not excused above either has its
 /// upstream suite in the table above or a recorded reason here for not
 /// having one. Before this guard, "add a suite when Patina bundles the
@@ -420,6 +440,36 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    // SRFI 4's own suite exists but cannot be registered here: it is a
+    // print-only harness that displays "OK" or "FAIL" per assertion and exits
+    // 0 either way, with no counter and no status a driver can read, so a row
+    // for it would be vacuously green — the failure mode SRFI_64_BODY exists
+    // to prevent. tests/scheme/srfi/homogeneous-vectors.scm covers it under a
+    // framework that reports.
+    (
+        "srfi 4",
+        "upstream's suite prints results and never reports them; tests/scheme/srfi/homogeneous-vectors.scm covers it",
+    ),
+    // The nine per-type SRFI 160 libraries upstream's suite does not reach.
+    // It tests s16 alone — registered above — on its own stated grounds, that
+    // the twelve are sed-expanded from one template so a template defect
+    // shows in all of them. What that argument does not cover is the per-type
+    // parameters the expansion substitutes, which is what
+    // tests/scheme/srfi/homogeneous-vectors.scm exercises, importing each of
+    // these nine.
+    ("srfi 160 u8", SRFI_160_REASON),
+    ("srfi 160 s8", SRFI_160_REASON),
+    ("srfi 160 u16", SRFI_160_REASON),
+    ("srfi 160 u32", SRFI_160_REASON),
+    ("srfi 160 s32", SRFI_160_REASON),
+    ("srfi 160 u64", SRFI_160_REASON),
+    ("srfi 160 s64", SRFI_160_REASON),
+    ("srfi 160 f32", SRFI_160_REASON),
+    ("srfi 160 f64", SRFI_160_REASON),
+    // And the three the template argument does not reach: see the constant.
+    ("srfi 160 base", SRFI_160_COMPLEX_REASON),
+    ("srfi 160 c64", SRFI_160_COMPLEX_REASON),
+    ("srfi 160 c128", SRFI_160_COMPLEX_REASON),
     // The three shims (srfi 146) needed. Each is one macro or a re-export,
     // and each is exercised by the two SRFI 146 suites above, which do not
     // load without them.

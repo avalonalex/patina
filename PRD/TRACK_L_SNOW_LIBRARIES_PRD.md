@@ -210,10 +210,46 @@ calling a list-only procedure on a vector is not settled —
 [#376](https://github.com/avalonalex/patina/issues/376) carries the repro and the
 way to settle it. In scope, and counted as a failure rather than excused.
 
-**Remaining L1 candidates:** SRFI 115 regex, the rest of the Tangerine set (159 show,
-and 160 numeric vectors — blocked on `(srfi 4)` homogeneous vectors, plausibly Rust
-work rather than a port), and the re-export shims `(srfi 6)`, `(srfi 9)`,
-`(srfi 11)`, `(srfi 39)`. The stored corpus also names `(srfi 114 comparators)`,
+**SRFI 4 and SRFI 160 shipped 2026-09-18** (#383), as the `(scheme vector @)`
+family — thirteen libraries, taking Tangerine to 7 of 8. The entry that used to sit
+here called SRFI 160 "blocked on `(srfi 4)` homogeneous vectors, plausibly Rust work
+rather than a port"; **that was wrong**, and the correction is the useful part of this
+row. Patina already shipped `(r6rs bytevectors)` with every primitive SRFI 4 needs,
+so SRFI 4 is ~400 lines of Scheme over it.
+
+Two things worth carrying forward. SRFI 4 is **Patina-authored rather than bundled**:
+the SRFI's own `contrib/cowan/` port works (240 of 240 on its suite, measured first),
+but none of its four files carries a licence notice and a sibling in the same
+directory is under Clinger's terms rather than the distribution's MIT — so the
+repository header could not be taken to cover it, and implementing the interface
+removed the question instead of documenting an inference. And SRFI 160 is **the one
+bundled library whose files are generated**, by its own `atexpander.sh`; that
+departure from the byte-identical rule is recorded in `lib/srfi/PROVENANCE.md`.
+
+**Review of #383 found three runtime defects the suites could not see**, and they
+are worth recording because two are upstream's and one was mine. Mine: the ten
+types disagreed about an out-of-range store — `bytevector-u8-set!` range-checks
+while the wider `-native-set!` variants truncate, so `(u8vector-set! v 0 300)`
+raised while `(s8vector-set! v 0 200)` silently stored -56. Either answer conforms;
+both inside one library does not, and a program retargeted from u8 to s8 lost its
+error. Every type validates now, and the suite pins the *uniformity* rather than
+the choice. Upstream's two are [#384](https://github.com/avalonalex/patina/issues/384):
+`write-@vector` reads past the end of an empty vector after writing `#u8(` to the
+port, and `@vector-hash` raises on an infinity or a NaN — so `f64vector-comparator`
+fails on exactly the values an f64vector exists to hold. Both are quarantined with
+`test-expect-fail` so they retire themselves if upstream moves. Neither is reachable
+from the only registered upstream suite, which tests `s16`: an s16 element can be
+neither an infinity nor a NaN, which is precisely the per-type gap
+`homogeneous-vectors.scm` exists to fill.
+
+Neither moves the corpus, which is recorded rather than glossed: `(srfi 160 base)`'s
+in-scope requester is srfi-179, whose *library itself* imports `(chibi assert)` —
+implementation-specific, external by policy — so it cannot pass whatever is bundled.
+The other requester, chibi-xgboost, is already excluded as FFI.
+
+**Remaining L1 candidates:** SRFI 115 regex and SRFI 159 show, neither with measured
+demand, and the re-export shims `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 39)`.
+The stored corpus also names `(srfi 114 comparators)`,
 `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all
 SRFIs immediately. Runtime/FFI work may defer an eligible SRFI; implementation-specific `(chibi)`

@@ -40,7 +40,23 @@ const ALIASES: &[(&str, &str)] = &[
     ("ephemeron", "124"),         // Red
     ("mapping", "146"),           // Tangerine
     ("mapping hash", "146 hash"), // Tangerine
-    ("rlist", "101"),             // Red — renames, see RENAMING_ALIASES
+    // SRFI 160 gives R7RS-large thirteen libraries from one SRFI: a shared
+    // `base` plus one per element type. Each is its own row, since each is a
+    // separate `.sld` that could drift on its own.
+    ("vector base", "160 base"), // Tangerine
+    ("vector u8", "160 u8"),     // Tangerine
+    ("vector s8", "160 s8"),     // Tangerine
+    ("vector u16", "160 u16"),   // Tangerine
+    ("vector s16", "160 s16"),   // Tangerine
+    ("vector u32", "160 u32"),   // Tangerine
+    ("vector s32", "160 s32"),   // Tangerine
+    ("vector u64", "160 u64"),   // Tangerine
+    ("vector s64", "160 s64"),   // Tangerine
+    ("vector f32", "160 f32"),   // Tangerine
+    ("vector f64", "160 f64"),   // Tangerine
+    ("vector c64", "160 c64"),   // Tangerine
+    ("vector c128", "160 c128"), // Tangerine
+    ("rlist", "101"),            // Red — renames, see RENAMING_ALIASES
 ];
 
 /// `"mapping hash"` → `["scheme", "mapping", "hash"]`, the shape
