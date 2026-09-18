@@ -369,3 +369,53 @@ fn test_underscore_as_literal() {
         _ => panic!("Expected list"),
     }
 }
+
+/// A generated macro's template is made of identifiers an outer expansion
+/// produced, and each one the compiler keeps verbatim is also *recorded* —
+/// name and scopes — so the relinker can carry it back to the definition
+/// site (#402). A pattern variable is not a mention, and a symbol written in
+/// the template is `template_symbols`' business, not this list's.
+#[test]
+fn test_identifiers_from_an_outer_expansion_are_recorded() {
+    use patina_runtime::{ScopeId, ScopeSet};
+
+    let heap = test_heap();
+    let outer = ScopeSet::new().with_scope(ScopeId::fresh());
+    let ident = |name: &str| {
+        heap.borrow_mut()
+            .alloc_identifier(name.into(), outer.clone())
+    };
+
+    // As `(define-syntax m (syntax-rules () ((m v) (helper v written))))`
+    // looks once an outer expansion has produced it: `helper` and `v` are
+    // identifiers carrying that expansion's scope, `written` a plain symbol.
+    let v = ident("v");
+    let pattern = list(&heap, vec![sym(&heap, "m"), v]);
+    let template = list(&heap, vec![ident("helper"), v, sym(&heap, "written")]);
+
+    let mut compiler = Compiler::new(vec![], None, heap.clone());
+    let compiled = compiler
+        .compile_macro("m".into(), vec![(pattern, template)])
+        .unwrap();
+
+    assert_eq!(
+        compiled.inherited_identifiers.get("helper"),
+        Some(&vec![outer.clone()]),
+        "the outer expansion's `helper` is a mention, under its own scopes"
+    );
+    assert!(
+        !compiled.inherited_identifiers.contains_key("v"),
+        "a pattern variable is substituted, not mentioned"
+    );
+    assert!(!compiled.inherited_identifiers.contains_key("written"));
+    assert!(compiled.template_symbols.contains("written"));
+    assert!(!compiled.template_symbols.contains("helper"));
+
+    // A second macro from the same compiler starts clean.
+    let pattern = list(&heap, vec![sym(&heap, "n")]);
+    let template = list(&heap, vec![sym(&heap, "written")]);
+    let second = compiler
+        .compile_macro("n".into(), vec![(pattern, template)])
+        .unwrap();
+    assert!(second.inherited_identifiers.is_empty());
+}

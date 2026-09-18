@@ -706,7 +706,9 @@ branch — measured on the tree-walker's hot path, interleaved, at no detectable
 cost.
 
 The paired instrument is `crates/patina-tests/tests/hygiene_matrix.rs`, which
-enumerates hygiene *shapes* and scores both backends against chibi and Racket.
+enumerates hygiene *shapes* and scores both backends against two reference
+implementations — chibi and Racket for its table of use-site binders, chibi
+and Gauche for its table of generated and library-imported macros.
 The trace explains a row; the matrix says which rows exist.
 
 ---

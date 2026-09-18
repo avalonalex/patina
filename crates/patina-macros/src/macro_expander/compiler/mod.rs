@@ -105,6 +105,11 @@ pub struct Compiler {
     /// `(quote datum)` is only special at zero (`compile_template`).
     pub(super) quasiquote_depth: u32,
 
+    /// Identifiers an enclosing expansion put into the templates compiled so
+    /// far, which become [`CompiledMacro::inherited_identifiers`]. Across all
+    /// rules, unlike the per-rule context above.
+    pub(super) inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
+
     /// Shared heap for converting Value literals to TaggedValue at compile time
     pub(super) heap: SharedHeap,
 }
@@ -139,6 +144,7 @@ impl Compiler {
             pvar_count: 0,
             max_level: 0,
             quasiquote_depth: 0,
+            inherited_identifiers: HashMap::new(),
             heap,
         }
     }
@@ -167,6 +173,7 @@ impl Compiler {
             pvar_count: 0,
             max_level: 0,
             quasiquote_depth: 0,
+            inherited_identifiers: HashMap::new(),
             heap,
         }
     }
@@ -199,6 +206,7 @@ impl Compiler {
             pvar_count: 0,
             max_level: 0,
             quasiquote_depth: 0,
+            inherited_identifiers: HashMap::new(),
             heap,
         }
     }
@@ -273,6 +281,7 @@ impl Compiler {
         Ok(CompiledMacro {
             name,
             template_symbols,
+            inherited_identifiers: std::mem::take(&mut self.inherited_identifiers),
             rules: compiled_rules,
             max_pvars,
             definition_scopes: self.definition_scopes.clone(),

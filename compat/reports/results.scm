@@ -39,7 +39,7 @@
   ((slug "chibi-snow-commands") (mode probe) (status parse-error) (errors "syntax-rules literals must be symbols"))
   ((slug "chibi-ssl") (mode test) (status out-of-scope) (needs "ssl"))
   ((slug "chibi-sxml") (mode probe) (status pass))
-  ((slug "chibi-tar") (mode test) (status unbound-identifier) (unbound "`read-padded-string`"))
+  ((slug "chibi-tar") (mode test) (status unbound-identifier) (unbound "`user-name`"))
   ((slug "chibi-temp-file") (mode probe) (status pass))
   ((slug "chibi-term-edit-line") (mode probe) (status pass))
   ((slug "chibi-uri") (mode test) (status pass))

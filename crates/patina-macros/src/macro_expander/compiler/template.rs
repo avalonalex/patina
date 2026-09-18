@@ -88,6 +88,15 @@ impl Compiler {
                     let scopes = self.definition_scopes.clone();
                     return Ok(Template::Symbol(Identifier::with_scopes(s, scopes)));
                 }
+                // Verbatim, but not forgotten: it is still a reference this
+                // macro makes, and the relinker has to hear of it to carry
+                // it back to the definition site — a `Template::Literal` is
+                // otherwise invisible to it, which left a generated macro
+                // unable to reach its own library from outside (#402).
+                let seen = self.inherited_identifiers.entry(s).or_default();
+                if !seen.contains(&key.scopes) {
+                    seen.push(key.scopes);
+                }
                 return Ok(self.make_literal_template(form));
             }
 

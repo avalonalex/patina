@@ -801,19 +801,31 @@ impl Desugarer {
     /// it. Where both resolve to the same value — the common case, since most
     /// template references are to primitives copied into both — nothing is
     /// rewritten.
+    ///
+    /// The names considered are the ones the macro's templates mention, in
+    /// either of the two forms a mention takes: a symbol written in the
+    /// template (`template_symbols`), or an identifier an enclosing expansion
+    /// put there (`inherited_identifiers`), which is all a macro *generated*
+    /// by another macro has. Considering only the first left such a macro,
+    /// once exported, unable to reach the library that defined it — and,
+    /// where the importing program bound the same name, reaching that instead
+    /// (issue #402, triage family 47).
     fn link_definition_env_refs(
         &self,
         expanded: TaggedValue,
         expansion_scope: ScopeId,
-        definition_env: Option<&Rc<Environment>>,
-        definition_scopes: &ScopeSet,
-        template_symbols: &HashSet<Rc<str>>,
+        compiled_macro: &patina_core::CompiledMacro,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
-        let Some(def_env) = definition_env else {
+        let Some(def_env) = compiled_macro.definition_env.as_ref() else {
             return expanded;
         };
-        if def_env.env_id() == self.env.env_id() || template_symbols.is_empty() {
+        let definition_scopes = &compiled_macro.definition_scopes;
+        let template_symbols = &compiled_macro.template_symbols;
+        let inherited_identifiers = &compiled_macro.inherited_identifiers;
+        if def_env.env_id() == self.env.env_id()
+            || (template_symbols.is_empty() && inherited_identifiers.is_empty())
+        {
             return expanded;
         }
 
@@ -829,7 +841,21 @@ impl Desugarer {
         // ends, so walk to the root of the chain.
         let target_env = self.env.root();
         let mut renames: HashMap<Rc<str>, TaggedValue> = HashMap::new();
-        for name in template_symbols {
+        // Each name once, with every scope set a mention of it stands in: the
+        // macro's definition scopes for a written symbol, its own for an
+        // inherited identifier. A name can be both.
+        let no_scopes: &[ScopeSet] = &[];
+        let written = template_symbols.iter().map(|name| {
+            let inherited = inherited_identifiers
+                .get(name)
+                .map_or(no_scopes, Vec::as_slice);
+            (name, Some(definition_scopes), inherited)
+        });
+        let inherited_only = inherited_identifiers
+            .iter()
+            .filter(|(name, _)| !template_symbols.contains(*name))
+            .map(|(name, scopes)| (name, None, scopes.as_slice()));
+        for (name, written_scopes, inherited_scopes) in written.chain(inherited_only) {
             let Some(def_value) = def_env.get(name) else {
                 continue;
             };
@@ -863,17 +889,34 @@ impl Desugarer {
             // views disagree and this symbol is (correctly) not aliased —
             // scoped resolution at the use site decides it instead, which for
             // a cross-expansion definition means the refusal family 40 pins.
-            // No in-program shape reaches this today (measured 2026-08-31:
-            // shared global chains agree either way, and the cross-library
-            // generated-getter shape dies earlier at the Template::Literal
-            // skip); re-audit this comparison if internal defines' scoped
-            // bindings ever become relink targets.
-            if !definition_scopes.is_empty()
-                && !matches!(
-                    def_env.get_with_scopes(name, definition_scopes),
-                    Ok(Some(found)) if found == def_value
-                )
-            {
+            // No in-program shape reaches this (measured 2026-08-31: shared
+            // global chains agree either way). The cross-library
+            // generated-getter shape, which used to die earlier at the
+            // `Template::Literal` skip, does reach it since #402 — through
+            // the inherited identifier's own scopes below, and it is refused
+            // there as described (re-audited 2026-09-18; pinned in
+            // `hygiene_matrix.rs`). Re-audit again if internal defines'
+            // scoped bindings ever become relink targets.
+            //
+            // An inherited identifier is asked about with *its own* scopes,
+            // and those are never empty for one a generator introduced: it
+            // carries that expansion's scope, which is exactly what selects a
+            // definition the same expansion introduced beside it over a plain
+            // one of the same spelling. The alias below can only point at
+            // what the name alone reaches, so a mention that means the other
+            // binding is left to scoped resolution rather than answered with
+            // the wrong one.
+            let lexical = written_scopes
+                .into_iter()
+                .chain(inherited_scopes)
+                .filter(|scopes| !scopes.is_empty())
+                .any(|scopes| {
+                    !matches!(
+                        def_env.get_with_scopes(name, scopes),
+                        Ok(Some(found)) if found == def_value
+                    )
+                });
+            if lexical {
                 continue;
             }
             if self.env.get(name) == Some(def_value) {
@@ -1305,9 +1348,7 @@ impl Desugarer {
             let expanded_tagged = self.link_definition_env_refs(
                 expanded_tagged,
                 expansion_scope,
-                compiled_macro.definition_env.as_ref(),
-                &compiled_macro.definition_scopes,
-                &compiled_macro.template_symbols,
+                &compiled_macro,
                 shared_heap,
             );
 
