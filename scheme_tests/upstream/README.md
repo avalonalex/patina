@@ -43,12 +43,74 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/116/test.sld` | 196 | 0 | verbatim |
 | `srfi/134/test.sld` | 119 | 0 | imports — see below |
 | `srfi/27/test.sld` | 224 | 0 | verbatim |
-| `srfi/135/test.sld` | 1030 | 0 | verbatim |
+| `srfi/135/test.sld` | 1071 | 0 | verbatim |
 | `srfi/101/test.sld` | 56 | 0 | verbatim |
+| `srfi/115/test.sld` | 85 | 0 | verbatim |
+| `srfi/146/test.sld` | 97 | 0 | verbatim — reports through `(srfi 64)`, so its row uses `SRFI_64_BODY` |
+| `srfi/146/hash-test.sld` | 77 | 0 | verbatim — as above |
+| `srfi/159/test.sld` | 316 | 0 | imports lifted into the wrapper |
+| `srfi/160/test.sld` | 110 | 0 | wrapper shadows `test-exit`; body verbatim — see below |
+| `srfi/165/test.sld` | 43 | 0 | verbatim — reports through `(srfi 64)`, so its row uses `SRFI_64_BODY` |
+| `srfi/231/test.sld` | 579 | 2 | verbatim — both failures are upstream's, not ours; see `upstream_srfi_suites.rs` |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
 | `chibi/term/ansi-test.sld` | 234 | 0 | framework shim |
+
+**`srfi/160/test.sld` shadows `test-exit`, and the reason is worth keeping.**
+`shared-tests.scm` — verbatim upstream, and it stays that way — ends with
+`(test-exit)`, which calls `exit`. These suites run *in-process*, so that call
+terminated the whole `cargo test` process: every test scheduled after it
+never ran, libtest printed no summary, and **cargo still exited 0**, so the
+lane reported success while skipping its own self-checks. Measured: 7 of this
+binary's tests were erased, and 36 across `cargo test --all`, which passes
+1354 tests now and passed 1318 then. The two
+harness self-checks that exist to prove the lane can count were among the
+tests erased, and #397 — SRFI 165's row registered against the wrong
+framework, failing on both backends — sat undetected in that gap from the day
+it landed.
+
+The fix is in the wrapper, which is ours: `test-exit` is excluded from the
+`(chibi test)` import and shadowed, so the body's last line returns instead of
+exiting. The shadow keeps the other half of chibi's `test-exit` — the check
+for a test group left open, which a re-vendored body could reintroduce by
+dropping a `test-end` — and raises on it, since `warning` is not exported. Nothing is lost — `test-exit` is only ever a suite's last
+act, its value is unused, and the harness reads the failure count from the
+framework afterwards, which is how it always decided whether a suite passed.
+
+`the_lane_reports_a_summary_for_every_test_it_starts` keeps it from coming
+back, and it re-runs the test binary as a **subprocess** deliberately: the
+first version of that guard was an ordinary `#[test]`, and reintroducing the
+defect showed it passed by not running. A process that calls `exit` cannot be
+caught from inside it. Any new suite that calls `exit` needs the same shadow,
+and that test says so when it fails.
+
+Three things about that guard are worth knowing before relying on it.
+
+- It sets **`PATINA_SUITE_SUBPROCESS`** on the re-exec to stop the recursion,
+  and returns early when it sees it. The check is for *presence*, so anything
+  that exports that name — a shell, a CI step — turns the guard into a no-op
+  that still reports as passed. Nothing else in the repo uses the name.
+- It guards the **whole-lane** run. A filtered invocation such as
+  `cargo test --test upstream_srfi_suites srfi_160` runs the exiting suite
+  without running the guard, so the process dies and cargo exits 0 exactly as
+  before. That is the most likely command for anyone editing this very file,
+  so prefer the unfiltered lane before pushing.
+- It skips SRFI 27 and SRFI 135 in the re-exec. Neither adds anything to the
+  property being checked — libtest's accounting is what matters, and `running
+  N` and the summary both reflect the post-filter count — and together they
+  were most of its wall time. SRFI 160, the suite that actually calls
+  `test-exit`, is never skipped.
+
+Why the shadow is per-wrapper rather than one fix in the harness: `exit` is
+intercepted by *name* inside each backend's dispatch, in Rust
+(`patina-vm`'s control primitives and the tree-walker's `apply_exit`), because
+R7RS 6.14 requires it to run outstanding `dynamic-wind` after-thunks. A
+Scheme-level redefinition in a wrapper cannot reach it either, since
+`(chibi test)` imports `exit` from `(scheme process-context)` into its own
+library scope. Overriding it for tests would mean a test-only hook in both
+interpreters' dispatch paths — a production change for a test concern — so the
+shadow stays where the suite is.
 
 **The chibi rows exist because of a hole the 2026-08-19 audit found.** Each
 snowball ships its suite, and while the packages were vendored in
