@@ -73,8 +73,8 @@
 ;; `expansion/ellipsis.scm`, and the capture and macro-generating-macro rows in
 ;; `expansion/hygiene.scm`. That file is deleted and the integration-binary
 ;; count went 73 to 72 with it. `hygiene_matrix.rs` is not part of
-;; this — it is a 28-shape scoreboard against chibi and Racket, read as a table,
-;; and stays Rust.
+;; this — it is a scoreboard, two tables of shapes scored against reference
+;; implementations and read as a table, and stays Rust.
 
 (import (scheme base)
         (rename (scheme base) (else alt) (=> arrow))

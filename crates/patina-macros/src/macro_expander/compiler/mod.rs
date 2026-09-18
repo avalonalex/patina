@@ -236,6 +236,10 @@ impl Compiler {
     ) -> Result<CompiledMacro, MacroError> {
         let mut compiled_rules = Vec::new();
         let mut max_pvars = 0;
+        // Cleared here as well as taken at the end: a rule that fails to
+        // compile returns early, and what its templates had recorded by then
+        // would otherwise become the next macro's.
+        self.inherited_identifiers.clear();
 
         for (pat_form, tmpl_form) in rules {
             // Reset per-rule context

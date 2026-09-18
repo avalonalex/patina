@@ -501,9 +501,13 @@ pub struct CompiledMacro {
     /// (issue #402, triage family 47).
     ///
     /// The scope sets are kept because such an identifier, unlike a symbol
-    /// written here, can carry an expansion scope that *selects* a binding:
-    /// the relinker aliases by name, and may only do so where every one of
-    /// these resolves to what the name alone reaches.
+    /// written here, can carry an expansion scope that *selects* a binding,
+    /// and because one spelling can arrive under several and mean a different
+    /// binding under each — the generator's `tmp`, which the template binds,
+    /// beside a caller's `tmp`, which is free. The relinker aliases by name,
+    /// so it decides each of these separately: a mention is aliased only
+    /// where it resolves to the binding the name alone reaches, and each
+    /// mention that is gets an alias of its own.
     pub inherited_identifiers: HashMap<Rc<str>, Vec<ScopeSet>>,
 
     /// The environment this macro was defined in, when one was available.

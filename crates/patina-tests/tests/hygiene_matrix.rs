@@ -93,8 +93,9 @@
 //! with. That last axis crossed with [`MADE`]'s library boundary is already
 //! known to be wrong, and is pinned by
 //! [`an_introduced_definition_beside_a_generated_macro_is_refused_not_misanswered`]
-//! until it exists. Each is a new `Site`, `Binder`, `Maker` or the like, not a
-//! new file.
+//! and [`equal_valued_definitions_are_not_mistaken_for_one_binding`] until it
+//! exists. Each is a new `Site`, `Binder`, `Maker` or the like, not a new
+//! file.
 //!
 //! **An axis must move one thing.** `Site::Inside` originally placed the
 //! macro definition wherever the binder's body went, which for `do` is the
@@ -793,7 +794,7 @@ fn shapes_score_as_recorded() {
     assert!(
         moved.is_empty(),
         "{} hygiene shape(s) no longer answer what the matrix records.\n\n{}\n\n\
-         Update the row(s) in MATRIX and the count in \
+         Update the row(s) in MATRIX or MADE and the count in \
          `the_defect_count_is_what_the_roadmap_says`, then say which family \
          moved in {TRIAGE}.",
         moved.len(),
@@ -896,6 +897,14 @@ fn a_do_result_clause_is_not_a_definition_context() {
 /// silent wrong answer where there had been a loud one, which is the trade
 /// PR #133 and PR #138 were closed for making. When the axis is fixed
 /// properly this turns red, and should then assert `introduced`.
+///
+/// The refusal is only loud where the importing program has no `X` of its
+/// own, which is the program below. Give it a `(define X 'use)` and the
+/// unlinked reference lands there — `use`, on both backends, before and after
+/// #402 (measured 2026-09-18) — as [`MADE`]'s `global` rows did while the
+/// whole family was open. That face belongs to the same open axis and closes
+/// with it; it is recorded here so the word "refused" is not read as more
+/// than it is.
 #[test]
 fn an_introduced_definition_beside_a_generated_macro_is_refused_not_misanswered() {
     let code = "(define-library (hm sibling)\n  (import (scheme base))\n  (export m)\n  (begin\n    \
@@ -914,5 +923,94 @@ fn an_introduced_definition_beside_a_generated_macro_is_refused_not_misanswered(
              aliased by name past the introduced `X`; `introduced` means the \
              axis is fixed, and this pin should become that answer"
         );
+    }
+}
+
+/// The same refusal where the two definitions hold **equal values**, which is
+/// how they usually start (`(define count 0)`), and which a relinker that
+/// compares the two views' *values* reads as agreement.
+///
+/// Two programs. In the first the introduced `X` sits beside a plain `X`, as
+/// in the test above but both `0`; in the second a definer is run twice, so
+/// each generated macro has a `count` of its own and the name alone reaches
+/// only the later one. chibi 0.12 and Gauche 0.9.15 answer `(1 0)` and
+/// `(1 1)`, measured 2026-09-18. Compared by value, both backends answered
+/// `(1 1)` and `(1 2)` — the library macro's `set!` landed on the plain `X`,
+/// and `tick` and `tock` bumped one counter — and, since the values differ
+/// after the first bump, a *later* use of the same macro was refused (run
+/// `tock` first and `tick` is `unbound`): what a program answered depended on
+/// what it had already run. The relinker asks about the binding now
+/// (`Environment::name_reaches_binding_of`), so both are the loud refusal
+/// they were before #402. When family 40's axis is fixed across a library
+/// these turn red, and should then assert the oracles' answers.
+#[test]
+fn equal_valued_definitions_are_not_mistaken_for_one_binding() {
+    let sibling = "(define-library (hm sibling)\n  (import (scheme base))\n  (export bump! plain-X)\n  (begin\n    \
+                   (define X 0)\n    (define (plain-X) X)\n    \
+                   (define-syntax def-bump\n      (syntax-rules ()\n        ((def-bump name)\n         \
+                   (begin\n           (define X 0)\n           \
+                   (define-syntax name\n             (syntax-rules () ((name) (begin (set! X (+ X 1)) X))))))))\n    \
+                   (def-bump bump!)))\n\
+                   (import (scheme base) (hm sibling))\n\
+                   (define r (bump!))\n\
+                   (list r (plain-X))";
+    let twice = "(define-library (hm counter)\n  (import (scheme base))\n  (export tick tock)\n  (begin\n    \
+                 (define-syntax define-counter\n      (syntax-rules ()\n        ((define-counter name)\n         \
+                 (begin\n           (define count 0)\n           \
+                 (define-syntax name\n             (syntax-rules () ((name) (begin (set! count (+ count 1)) count))))))))\n    \
+                 (define-counter tick)\n    (define-counter tock)))\n\
+                 (import (scheme base) (hm counter))\n\
+                 (define r (tick))\n\
+                 (list r (tock))";
+    for (code, name, shared, fixed) in [
+        (sibling, "X", "(1 1)", "(1 0)"),
+        (twice, "count", "(1 2)", "(1 1)"),
+    ] {
+        for vm in [true, false] {
+            let got = answer(code, vm);
+            assert!(
+                got.starts_with(ERROR) && got.contains(name),
+                "expected `{name}` to be refused, got {got} — `{shared}` means the \
+                 relinker took two bindings holding equal values for one; `{fixed}` \
+                 means the axis is fixed, and this pin should become that answer"
+            );
+        }
+    }
+}
+
+/// A generated macro can mention one spelling as **two different things**,
+/// which a written one cannot: here `tmp` the generator introduced, which the
+/// generated template binds, and the library's own `tmp`, which the caller of
+/// `def-m` passed in. chibi 0.12 and Gauche 0.9.15 both answer `(local lib)`,
+/// measured 2026-09-18, and so does Patina within one program.
+///
+/// Across a library the relinker has to carry the second back to the
+/// definition site, and one alias for the spelling renamed both mentions
+/// alike — the `let` then captured the library's `tmp`: `(local local)` on
+/// both backends, silently, where there had been `unbound variable: tmp`
+/// before #402. Each identity a macro mentions a name under gets its own
+/// alias now. The second program is the same shape with the routes swapped:
+/// the binder arrives through the pattern variable and the free reference is
+/// the generator's.
+#[test]
+fn one_spelling_mentioned_as_two_bindings_is_relinked_as_two() {
+    let library = |template: &str| {
+        format!(
+            "(define-library (hm two)\n  (import (scheme base))\n  (export m)\n  (begin\n    \
+             (define tmp 'lib)\n    \
+             (define-syntax def-m\n      (syntax-rules ()\n        ((def-m name arg)\n         \
+             (define-syntax name (syntax-rules () ((name) {template}))))))\n    \
+             (def-m m tmp)))\n\
+             (import (scheme base) (hm two))\n\
+             (m)"
+        )
+    };
+    for template in [
+        "(let ((tmp 'local)) (list tmp arg))",
+        "(let ((arg 'local)) (list arg tmp))",
+    ] {
+        let code = library(template);
+        assert_eq!(eval_program_vm(&code), "(local lib)", "{code}");
+        assert_eq!(eval_program_tree_walker(&code), "(local lib)", "{code}");
     }
 }

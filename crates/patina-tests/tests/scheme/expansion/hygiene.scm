@@ -25,9 +25,10 @@
 ;; expected failures, the family's refusal rows. Both external oracles pass
 ;; all 44; the tree-walker does too.
 ;;
-;; `hygiene_matrix.rs` is not part of that and stays Rust: 28 shapes scored
-;; against chibi and Racket, read as a table when a hygiene fix moves a row,
-;; which is a different instrument from a suite.
+;; `hygiene_matrix.rs` is not part of that and stays Rust: two tables of shapes
+;; scored against reference implementations (its header says which, and how
+;; many), read as a table when a hygiene fix moves a row, which is a different
+;; instrument from a suite.
 ;;
 ;; **Closing that gap was measured, not assumed.** Before the first slice, the
 ;; 46 programs held by `hygiene.rs`'s 44 hand-built-interpreter tests were run

@@ -418,4 +418,20 @@ fn test_identifiers_from_an_outer_expansion_are_recorded() {
         .compile_macro("n".into(), vec![(pattern, template)])
         .unwrap();
     assert!(second.inherited_identifiers.is_empty());
+
+    // So does one that follows a macro that failed to compile, after its
+    // template had already recorded something: `(helper (written ...))` has
+    // an ellipsis over no pattern variable.
+    let dots = sym(&heap, "...");
+    let bad_tail = list(&heap, vec![sym(&heap, "written"), dots]);
+    let bad = list(&heap, vec![ident("helper"), bad_tail]);
+    assert!(
+        compiler
+            .compile_macro("bad".into(), vec![(pattern, bad)])
+            .is_err()
+    );
+    let third = compiler
+        .compile_macro("n".into(), vec![(pattern, template)])
+        .unwrap();
+    assert!(third.inherited_identifiers.is_empty());
 }

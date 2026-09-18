@@ -1220,6 +1220,82 @@ impl Environment {
         Ok(chosen.map(|index| candidates.swap_remove(index).0))
     }
 
+    /// Whether the name-only view of `name` — what [`get`] answers, and so
+    /// what an alias to `name` in this environment forwards to — is the
+    /// *binding* a reference at `scopes` denotes.
+    ///
+    /// The definition-environment relinker's question. It aliases by name, so
+    /// it may only alias a mention whose own resolution lands where the name
+    /// alone does. Comparing the two views' *values* — what it did first —
+    /// cannot answer that: two bindings of one spelling that happen to hold
+    /// equal values read as one, and the alias is then installed onto the
+    /// wrong one. A definer macro used twice in a library, each expansion
+    /// introducing its own `(define count 0)` beside a generated macro that
+    /// bumps it, had both generated macros bumping a single counter from
+    /// outside the library; and since the values stop being equal after the
+    /// first bump, whether a later use was aliased or refused depended on
+    /// what the program had run so far.
+    ///
+    /// Walks as [`get`] does and stops at the first frame that answers the
+    /// name. A plain binding or an alias there is what the reference reaches
+    /// exactly when no scoped binding claimed it, since
+    /// [`get_scoped_fallback`] takes the same walk. A name-visible scoped
+    /// definition is, when it is the one resolution chose. The one alias that
+    /// can *be* a chosen scoped binding is the VM's bare-name alias for an
+    /// introduced global it renamed, recognised by the identity recorded
+    /// beside it ([`define_introduced_global`]).
+    ///
+    /// `Err` as [`scoped_binding_of`] gives it: an ambiguous reference
+    /// denotes no binding.
+    ///
+    /// [`get`]: Self::get
+    /// [`get_scoped_fallback`]: Self::get_scoped_fallback
+    /// [`define_introduced_global`]: Self::define_introduced_global
+    /// [`scoped_binding_of`]: Self::scoped_binding_of
+    pub fn name_reaches_binding_of(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<bool, Box<AmbiguousReference>> {
+        if scopes.is_empty() {
+            // The reference *is* the name-only view.
+            return Ok(true);
+        }
+        let chosen = self.scoped_binding_of(name, scopes)?;
+        let mut env = self;
+        loop {
+            if env.bindings.borrow().get(name).is_some() {
+                return Ok(chosen.is_none());
+            }
+            if env.has_aliases.get()
+                && let Some((target_env, target_name)) = env.alias_target(name)
+            {
+                let Some(chosen) = chosen else {
+                    return Ok(true);
+                };
+                let renamed = env
+                    .introduced_global_names
+                    .borrow()
+                    .get(name)
+                    .and_then(|identities| identities.get(&chosen).cloned());
+                return Ok(target_env.is_none() && renamed.is_some_and(|r| r == target_name));
+            }
+            if let Some(i) = env.visible_scoped_index(name) {
+                let table = env.scoped_bindings.borrow();
+                let visible = table.get(name).and_then(|bindings| bindings.get(i));
+                return Ok(match (visible, &chosen) {
+                    (Some(binding), Some(chosen)) => binding.scopes == *chosen,
+                    _ => false,
+                });
+            }
+            match env.parent.as_deref() {
+                Some(parent) => env = parent,
+                // Unbound by name: nothing for an alias to reach.
+                None => return Ok(false),
+            }
+        }
+    }
+
     /// Every scoped binding of `name` on this chain that is a candidate for a
     /// reference at `ref_scopes`: latest first within a frame, innermost frame
     /// first — the order `resolve_scoped` documents — and, at the root, the
@@ -1864,6 +1940,82 @@ mod introduced_global_tests {
         let child = Environment::with_parent(Rc::clone(&parent));
         assert!(recorded(&child, "x").is_empty());
         assert_eq!(recorded(&parent, "x").len(), 1);
+    }
+}
+
+/// `name_reaches_binding_of` answers by *binding*. Every case here holds the
+/// same value in both bindings on purpose: comparing values is what the
+/// relinker did first, and it called these one binding.
+#[cfg(test)]
+mod name_view_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    /// One value for every binding, so nothing here can be told apart by it.
+    fn zero() -> TaggedValue {
+        TaggedValue::fixnum(0)
+    }
+
+    fn reaches(env: &Environment, name: &str, ids: &[usize]) -> bool {
+        env.name_reaches_binding_of(name, &scopes(ids))
+            .expect("not ambiguous")
+    }
+
+    /// The tree-walker's shape: a definer macro run twice files two
+    /// name-visible definitions, and the name means the most recent.
+    #[test]
+    fn the_name_reaches_only_the_latest_of_two_introduced_definitions() {
+        let env = Environment::new();
+        env.define_scoped_definition("count", scopes(&[1]), zero());
+        env.define_scoped_definition("count", scopes(&[2]), zero());
+        assert!(!reaches(&env, "count", &[1]));
+        assert!(reaches(&env, "count", &[2]));
+    }
+
+    /// A plain definition beside an introduced one takes the name, so the
+    /// name reaches what an unscoped mention means and not what a mention
+    /// carrying the introducing expansion's scope means.
+    #[test]
+    fn a_plain_sibling_takes_the_name_from_an_introduced_definition() {
+        let env = Environment::new();
+        env.define("x", zero());
+        env.define_scoped_definition("x", scopes(&[1]), zero());
+        assert!(!reaches(&env, "x", &[1]));
+        assert!(reaches(&env, "x", &[]));
+        // Scopes no binding claims fall back to the plain one, as a read does.
+        assert!(reaches(&env, "x", &[7]));
+    }
+
+    /// The VM's shape: each introduced global is renamed and its identity
+    /// recorded, and the bare name is an alias to the most recent.
+    #[test]
+    fn a_bare_alias_is_the_introduced_global_it_was_installed_for() {
+        let env = Rc::new(Environment::new());
+        for (id, renamed) in [(1, "count #1"), (2, "count #2")] {
+            env.define(renamed, zero());
+            env.define_introduced_global("count".into(), scopes(&[id]), renamed.into());
+            env.define_alias("count", Rc::clone(&env), renamed.into());
+        }
+        assert!(!reaches(&env, "count", &[1]));
+        assert!(reaches(&env, "count", &[2]));
+    }
+
+    /// A child frame that binds nothing of the name defers to its parent.
+    #[test]
+    fn the_walk_continues_into_the_parent() {
+        let parent = Rc::new(Environment::new());
+        parent.define("x", zero());
+        parent.define_scoped_definition("x", scopes(&[1]), zero());
+        let child = Environment::with_parent(parent);
+        assert!(!reaches(&child, "x", &[1]));
+        assert!(reaches(&child, "x", &[2]));
     }
 }
 
