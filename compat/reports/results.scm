@@ -24,7 +24,7 @@
   ((slug "chibi-match") (mode test) (status pass))
   ((slug "chibi-math-linalg") (mode test) (status missing-library) (missing "srfi 231"))
   ((slug "chibi-math-prime") (mode test) (status pass))
-  ((slug "chibi-math-stats") (mode test) (status missing-library) (missing "scheme mapping"))
+  ((slug "chibi-math-stats") (mode test) (status wrong-result))
   ((slug "chibi-mecab") (mode test) (status out-of-scope) (needs "mecab"))
   ((slug "chibi-mime") (mode test) (status pass))
   ((slug "chibi-monad-environment") (mode probe) (status parse-error) (errors "syntax-rules literals must be symbols"))

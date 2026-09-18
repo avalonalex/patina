@@ -8,7 +8,8 @@ API (SRFI 64), and #193's Phase 0 then shipped it: `lib/srfi/64.{sld,scm}` exist
 bookkeeping: the header had read 2026-08-08 while the tables
 underneath were kept current through the 2026-08-24…26 bundling wave; they now agree. Reconciled
 against `lib/` on this date: **Red 16 of 17 shipped** (17 counting SRFI 158 for the superseded
-121), **Tangerine 4 of 8**; the measured priority order below is spent and marked as history.
+121), **Tangerine 6 of 8** (SRFI 146 bundled 2026-09-18); the measured priority order below is
+spent and marked as history.
 
 This document is **the bundling policy and edition tracker for Track L** — the answer to "does
 Patina ship this library, and why (not)". Track L's L1 defers to it for scope; the corpus
@@ -38,7 +39,7 @@ R7RS-large is being developed incrementally through "editions," each focusing on
 | SRFI | Library Name | Description | `(srfi n)` | `(scheme …)` alias |
 |------|-------------|-------------|------------|--------------------|
 | SRFI 1 | `(scheme list)` | List library | ✅ shipped | ✅ shipped |
-| SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped — **Latin-1 only**: raises on a character above U+00FF, and silently clips ranges and predefined sets at U+00FF (Track L §6, 2026-09-14) | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
+| SRFI 14 | `(scheme charset)` | Character sets | ✅ shipped — full Unicode since #372 (2026-09-17); it was Latin-1 only until then | ✅ shipped (alias over the bundled `(srfi 14)`, 2026-08-24) |
 | SRFI 41 | `(scheme stream)` | Streams (lazy lists) | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 41)`, 2026-08-25) |
 | SRFI 101 | `(scheme rlist)` | Random-access lists | ✅ shipped | ✅ shipped (r-prefixed alias, 2026-08-26) |
 | SRFI 111 | `(scheme box)` | Boxes (single-value containers) | ✅ shipped | ✅ shipped |
@@ -79,15 +80,15 @@ Two of those did not arrive by bundling Scheme. SRFI 124 is implemented in Rust,
 | SRFI 115 | `(scheme regex)` | Regular expressions | ❌ | ❌ |
 | SRFI 143 | `(scheme fixnum)` | Fixnums | ✅ shipped | ✅ shipped |
 | SRFI 144 | `(scheme flonum)` | Flonums | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 144)`, 2026-08-26) |
-| SRFI 146 | `(scheme mapping)` | Mappings | ❌ | ❌ |
-| SRFI 146 | `(scheme mapping hash)` | Hash mappings | ❌ | ❌ |
+| SRFI 146 | `(scheme mapping)` | Mappings | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 146)`, 2026-09-18) |
+| SRFI 146 | `(scheme mapping hash)` | Hash mappings | ✅ shipped | ✅ shipped (alias over the bundled `(srfi 146 hash)`, 2026-09-18) |
 | SRFI 151 | `(scheme bitwise)` | Bitwise operations | ✅ shipped | ✅ shipped |
 | SRFI 158 | `(scheme generator)` | Generators (supersedes SRFI 121) | ✅ shipped | ✅ shipped |
 | SRFI 159 | `(scheme show)` | Formatting/show | ❌ | ❌ |
 | SRFI 160 | `(scheme vector @)` | Numeric vectors (u8, s8, f64, etc.) | ❌ | ❌ |
 | R6RS | `(scheme bytevector)` | Bytevectors (R6RS compatible) | 🚧 Partial | ❌ |
 
-**Tangerine status: 4 of 8 shipped**, reachable under both names. (SRFI 144 was missing from this table until it was bundled, which is why the denominator moves too.)
+**Tangerine status: 6 of 8 shipped**, reachable under both names. (SRFI 144 was missing from this table until it was bundled, which is why the denominator moves too.) SRFI 146 supplies two of the eight rows from one bundle, and needed no adaptation: both of its own suites passed on the first run, 97 of 97 and 77 of 77 on both backends. What is left is **SRFI 115** (regex) and **SRFI 159** (show), neither with measured demand, and **SRFI 160** (numeric vectors), which is blocked on `(srfi 4)` homogeneous vectors — plausibly Rust work rather than a port, and a decision in its own right.
 
 **Numeric Tower Requirements:**
 - Unbounded exact integers ✅ (BigInt support)

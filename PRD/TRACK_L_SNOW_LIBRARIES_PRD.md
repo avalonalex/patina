@@ -193,9 +193,28 @@ ephemeron's defining property is what the collector does), 127 `lseq`, 134 `ideq
 and — for the `(chibi …)` libraries supplied rather than bundled since
 #196/#197 — `test-lib/chibi/PROVENANCE.md`.
 
-**Remaining L1 candidates:** SRFI 115 regex, the Tangerine trio 146/159/160, and the
-re-export shims `(srfi 6)`, `(srfi 9)`, `(srfi 11)`, `(srfi 39)`. The stored corpus also names
-`(srfi 114 comparators)`, `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
+**SRFI 146 shipped 2026-09-18** (#375), as `(scheme mapping)` and
+`(scheme mapping hash)` — two Tangerine rows from one bundle, taking that edition
+to 6 of 8. It needed no adaptation at all: both of the SRFI's own suites passed on
+the first run, 97 of 97 and 77 of 77 on both backends, which is rare enough in this
+track to be worth recording. It brought three shims with it — `(srfi 145)` `assume`,
+`(srfi 2)` `and-let*` and `(srfi 16)` `case-lambda`, the last a re-export of
+`(scheme case-lambda)`, which already *is* SRFI 16's reference implementation.
+`(scheme mapping)` leaves the corpus's missing-library queue, and its one requester,
+chibi-math-stats, advances from `missing-library` to `wrong-result`: the library now
+loads and its suite runs, which exposes a failure the missing dependency had been
+hiding. It is **116 of 117 assertions**, and the one failure is
+`spearman-rank-correlation` handing a vector to SRFI 1's `every`, which reaches
+`null-list?`. Whether that is our `every` being stricter than chibi's or upstream
+calling a list-only procedure on a vector is not settled —
+[#376](https://github.com/avalonalex/patina/issues/376) carries the repro and the
+way to settle it. In scope, and counted as a failure rather than excused.
+
+**Remaining L1 candidates:** SRFI 115 regex, the rest of the Tangerine set (159 show,
+and 160 numeric vectors — blocked on `(srfi 4)` homogeneous vectors, plausibly Rust
+work rather than a port), and the re-export shims `(srfi 6)`, `(srfi 9)`,
+`(srfi 11)`, `(srfi 39)`. The stored corpus also names `(srfi 114 comparators)`,
+`(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all
 SRFIs immediately. Runtime/FFI work may defer an eligible SRFI; implementation-specific `(chibi)`
 remains outside the bundle regardless of demand.

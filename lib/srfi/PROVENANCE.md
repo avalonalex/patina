@@ -17,6 +17,7 @@ its own record. One home per tree.
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
+| `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
 | `(srfi 135)` | — | `135.sld`, `135.body.scm`, `135/kernel8.sld`, `135/kernel8.body.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-135/srfi-135.tgz` (William D Clinger, MIT) | tarball sha256 `f8e9cbcdfcd757ed5dc5835e152bedd621e0933dfed16c5cb815253900fb2735` |
 | `(srfi 101)` | — | `101.sld`, `101.scm` | chibi-scheme's R7RS adaptation (Alex Shinn, 2018) of the SRFI's own reference implementation (David Van Horn, MIT), byte-identical | source `~/Project/reference/chibi-scheme/lib/srfi/101.{sld,scm}` |
 | `(srfi 41)`'s `stream-match` | chibi 0.12-134-gf2660362 | `41-match.scm` | chibi-scheme's **own** `lib/srfi/41.scm` — not the file of that name here (Alex Shinn, BSD 3-Clause) | file sha256 `01d33bc8f17a6b9bea94e73f6534bcaa474a6f21eff42687f726cc9f7c5d6c12` |
@@ -267,6 +268,47 @@ not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
 
+**SRFI 146 is byte-identical and brings two namespaces with it.**
+
+Every file is upstream's, unedited: `146.{sld,scm}` and `146/hash.{sld,scm}`
+from the tarball above, plus the supporting libraries it ships —
+`(nieper rbtree)`, the red-black tree `(srfi 146)` is built on, and Arthur A.
+Gleckler's `(gleckler hamt)`, `(gleckler hamt-map)`, `(gleckler hamt-misc)`
+and `(gleckler vector-edit)`, the HAMT under `(srfi 146 hash)`.
+
+**Those two namespaces are bundled under their own names rather than renamed**,
+which is a deliberate choice and the only one here worth arguing about. Moving
+them under `(patina …)` or `(srfi 146 …)` would make every file a local edit
+and put them outside the byte-identical rule that `bundled_provenance.rs`
+enforces, to hide two directories nobody imports: nothing outside `(srfi 146)`
+and `(srfi 146 hash)` refers to them, and `upstream_srfi_suites.rs`'s
+`NO_SUITE_TREES` records that they are covered by those two libraries' own
+suites. Keeping them verbatim is what lets the pin mean something.
+
+**It needed no adaptation at all**, which is rare enough in this file to note:
+both the SRFI's own suites pass on the first run, 97 of 97 for `(srfi 146)` and
+77 of 77 for `(srfi 146 hash)`, on both backends. Compare `(srfi 125)` and
+`(srfi 130)`, whose suites needed their import lists adapted.
+
+**Three shims were bundled for it**, each because SRFI 146's dependency closure
+reaches a library R7RS or Patina had made redundant:
+
+- `(srfi 145)` — `assume`, used by `146.scm` and `(nieper rbtree)`. It is the
+  SRFI's own first sample implementation with its `cond-expand` resolved: the
+  document offers a reporting version and one whose whole body is
+  `((assume obj . _) obj)`, which discards the check. The reporting one is
+  taken, since a library that silently drops its assertions is worse than no
+  library. chibi takes the other, which is a registered divergence rather than
+  a defect in either direction.
+- `(srfi 2)` — `and-let*`, used by `(nieper rbtree)`. Patina-authored, because
+  the SRFI has no portable reference implementation to bundle: Oleg Kiselyov's
+  original is a low-level macro and the document carries no `syntax-rules`
+  version. `crates/patina-tests/tests/scheme/srfi/and-let.scm` checks each
+  clause form against the SRFI's text.
+- `(srfi 16)` — `case-lambda`, used by the Gleckler libraries. A re-export of
+  `(scheme case-lambda)`, which is *already* SRFI 16's reference
+  implementation, so a second copy would be two definitions to keep in step.
+
 **SRFI 144 carries two marked local edits, and no others.**
 
 `144.sld` is upstream's own library declaration — export list, imports,
@@ -379,6 +421,17 @@ end of the file, exactly as upstream shipped it. Since #372 replaced that file
 outright (§ above), no third-party text remains in it and there is nothing
 left to carry: the SRFI's *interface* is what the rewrite implements, and an
 API is not the licensed artifact.
+
+`(srfi 146)` needs nothing added here, and that was checked file by file
+rather than inferred from the tarball: all fourteen bundled files carry an
+explicit `SPDX-License-Identifier: MIT` header *and* the full MIT permission
+text inline — the four `(srfi 146)` files and `(nieper rbtree)` under
+Marc Nieper-Wißkirchen's copyright (2016, 2018), and the four Gleckler
+libraries under Arthur A. Gleckler's (2004, 2015, 2021). MIT's condition is
+that the notice travel with the software, and since each file carries its own,
+bundling them verbatim satisfies it without anything being reproduced here.
+This is also the second reason not to rename those two namespaces: an edited
+file is one whose notice someone has to re-establish.
 
 `(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
 mostly do not — upstream's own state, not something removed here. Two things
