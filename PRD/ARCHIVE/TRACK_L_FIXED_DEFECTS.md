@@ -123,8 +123,11 @@ its blocker, and that blocker is gone — `ucs-range->char-set` no longer loads
 `(chibi char-set boundary)`'s sets empty. Re-measured after the fix, chibi-regexp still fails with
 the identical `expected a state #<unspecified>`, because the other half of that entry stands: the
 vendored `(chibi char-set)` builds **iset**-backed sets, a different record type from `(srfi 14)`'s,
-so the embedded boundary sets satisfy no arm of `->rx`'s `cond`. Either that library takes our
-char-sets or `->rx` learns the iset type.
+so the embedded boundary sets satisfy no arm of `->rx`'s `cond`. That half was **closed as won't-fix
+on 2026-09-18** and excluded from the corpus score: the only repair on our side would be
+reimplementing a third-party library's API in `test-lib/`, and the payoff is one package. §6 carries
+the reasoning, including a correction to what this entry and that one both said about how Gauche
+loads the library.
 
 **What review of the rewrite found**, all fixed in the same change and worth
 recording because the 80-row suite could not see any of them: `char-set-every`

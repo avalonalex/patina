@@ -2,13 +2,13 @@
 
 **127 of 161 packages pass.**
 
-**127 of 136 in scope** — 25 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**127 of 135 in scope** — 26 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
 | pass | 127 | 127 |
 | missing-library | 10 | 6 |
-| parse-error | 12 | 2 |
+| parse-error | 12 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
 | wrong-result | 1 | 0 |
@@ -31,7 +31,6 @@
 | Error | In-scope packages |
 |---|---|
 | `Body must contain at least one expression (not just define-syntax)` | 1 |
-| `unhandled exception: #<error-object: expected a state #<unspecified>>` | 1 |
 
 ## Unbound identifiers
 
@@ -64,7 +63,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | rebottled-cl-pdf | missing-library | needs (rebottled pregexp); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 | retropikzel-pstk | missing-library | needs (retropikzel named-pipes); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 
-### Upstream source defect (10)
+### Upstream source defect (11)
 
 | Package | Status | Why |
 |---|---|---|
@@ -74,6 +73,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-crypto-rsa | parse-error | via (chibi bytevector) — see chibi-bytevector |
 | chibi-crypto-sha2 | parse-error | via (chibi bytevector) — see chibi-bytevector; its own include-shared is behind a chibi-only branch and is not the blocker |
 | chibi-monad-environment | parse-error | environment.sld:6 — (syntax-rules ((_ x) 'x)) has no literals list; Gauche: "literal list contains non-symbol" |
+| chibi-regexp | parse-error | regexp.scm:1180 — (regexp 'grapheme) feeds #<unspecified> into make-state, because regexp.sld imports char-set? from (srfi 14) while its (chibi char-set boundary) dependency resolves to iset-backed (chibi char-set). chibi and Gauche each end up with one char-set type and load it; see the comment above for how each gets there |
 | chibi-show | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | chibi-snow-commands | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | edn | parse-error | (chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do |
@@ -122,7 +122,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-parse | test | pass | in scope |
 | chibi-pathname | test | pass | in scope |
 | chibi-quoted-printable | test | pass | in scope |
-| chibi-regexp | test | parse-error | in scope |
+| chibi-regexp | test | parse-error | upstream-source-defect |
 | chibi-scribble | test | pass | in scope |
 | chibi-show | test | parse-error | upstream-source-defect |
 | chibi-snow-commands | probe | parse-error | upstream-source-defect |
