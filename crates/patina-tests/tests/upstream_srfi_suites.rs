@@ -46,10 +46,16 @@ fn upstream_root() -> PathBuf {
 /// Both numbers are the framework's own: the failure count is its global
 /// parameter, and the assertion count is taken by wrapping the reporter it
 /// calls once per non-skipped assertion.
+///
+/// A suite reporting through a *different* framework sets `failures` from its
+/// own counter, which then takes precedence — see `SRFI_64_BODY`. Leaving it
+/// `#f` is what makes `(chibi test)`'s count the default rather than a
+/// competing answer.
 fn harness_program(imports: &str, body: &str) -> String {
     format!(
         "(import (scheme base) (chibi test) {imports}) \
          (define assertions-run 0) \
+         (define failures #f) \
          (current-test-reporter \
            (let ((default (current-test-reporter))) \
              (lambda (status info) \
@@ -57,7 +63,7 @@ fn harness_program(imports: &str, body: &str) -> String {
                  (set! assertions-run (+ assertions-run 1))) \
                (default status info)))) \
          {body} \
-         (string-append (number->string (test-failure-count)) \
+         (string-append (number->string (or failures (test-failure-count))) \
                         \" \" \
                         (number->string assertions-run))"
     )
@@ -193,6 +199,41 @@ macro_rules! suite_tests {
 // failure entry records a defect in our port or an explicitly documented
 // upstream expectation, rather than hiding it. The assertion floor is the
 // count the suite ran when the expectation was recorded (2026-08-12; chibi rows and SRFI 14, 2026-08-19).
+/// The body for a suite that reports through `(srfi 64)` rather than
+/// `(chibi test)`.
+///
+/// The default body reads `(chibi test)`'s `test-failure-count` and counts
+/// assertions by wrapping its `current-test-reporter`. A SRFI 64 suite touches
+/// neither, so the default would report *zero assertions and zero failures* —
+/// vacuously green. This reads SRFI 64's own counters instead, which keeps the
+/// rule the default follows: the numbers are always the framework's, never
+/// re-derived here. `failures` is picked up by the harness's
+/// `(test-failure-count)` call, which this shadows for the same reason.
+///
+/// **An `xpass` counts as a failure**, which is not obvious and is the whole
+/// point of the expectations table: a `test-expect-fail` row that starts
+/// passing is a stale quarantine, and making it *fail* is what retires it.
+/// SRFI 64's own `test-exit` gates on `(and (zero? xpass) (zero? fail))`
+/// (`lib/srfi/64.scm`), `scheme_suite.rs` holds `xpass` to zero separately,
+/// and `patina-compat` classifies one as a wrong result — so counting only
+/// `fail` here would make this file the one place in the repo that disagrees.
+///
+/// `assertions-run` is likewise `pass + fail + xpass + xfail`, matching
+/// `scheme_suite.rs`'s `Counts::ran()`: everything that executed, with skips
+/// excluded deliberately, so the floor measures the same thing in both places.
+///
+/// `test-runner-null` stops the suite writing a `.log` into the crate root,
+/// the way `scheme_suite.rs`'s driver does.
+const SRFI_64_BODY: &str = "(test-runner-current (test-runner-null)) \
+     (run-tests) \
+     (let ((r (test-runner-get))) \
+       (set! assertions-run (+ (test-runner-pass-count r) \
+                               (test-runner-fail-count r) \
+                               (test-runner-xpass-count r) \
+                               (test-runner-xfail-count r))) \
+       (set! failures (+ (test-runner-fail-count r) \
+                         (test-runner-xpass-count r))))";
+
 suite_tests! {
     (srfi_151_bitwise, "srfi 151", "(srfi 151 test)", 0, 145),
     (srfi_143_fixnum, "srfi 143", "(srfi 143 test)", 0, 141),
@@ -212,6 +253,26 @@ suite_tests! {
     // tests/scheme/srfi/string-cursors.scm asserts the specified behavior.
     (srfi_130_string, "srfi 130", "(srfi 130 test)", 1, 219),
     (srfi_158_generator, "srfi 158", "(srfi 158 test)", 0, 76),
+    // Both verbatim from the SRFI's own distribution, and both passed on the
+    // first run with no adaptation — unusual enough in this table to be worth
+    // recording. `(srfi 146)` is the red-black tree implementation and
+    // `(srfi 146 hash)` the HAMT one; they are separate libraries with
+    // separate suites, so both are registered.
+    //
+    // These two are the first rows here whose suite reports through
+    // `(srfi 64)` rather than `(chibi test)`, so the default body's
+    // `current-test-reporter` wrapper never sees their assertions and would
+    // count zero. The override runs the suite and then reads SRFI 64's own
+    // counters instead, which is the same principle the default uses: the
+    // framework's numbers, never a re-derivation. `test-runner-null` keeps the
+    // suite from writing a log into the crate root, as the driver for
+    // `tests/scheme/` does for the same reason.
+    (srfi_146_mapping, "srfi 146", "(srfi 146 test)", 0, 97,
+     "(srfi 146 test) (srfi 64)",
+     SRFI_64_BODY),
+    (srfi_146_hashmap, "srfi 146 hash", "(srfi 146 hash test)", 0, 77,
+     "(srfi 146 hash test) (srfi 64)",
+     SRFI_64_BODY),
     // The other adapted suite: imports adapted, test bodies untouched. Why,
     // in scheme_tests/upstream/README.md.
     (srfi_125_hash_table, "srfi 125", "(srfi 125 test)", 0, 74),
@@ -323,6 +384,22 @@ const NO_SUITE_TREES: &[(&str, &str)] = &[
         "rnrs",
         "one-line shims over lib/r6rs, checked by r6rs_rnrs_shims.rs",
     ),
+    // SRFI 146 ships its own supporting libraries under their authors' names,
+    // and they are bundled verbatim beside it rather than renamed. Neither is
+    // a public API — nothing outside `(srfi 146)` and `(srfi 146 hash)`
+    // imports them, and the two suites registered above exercise them through
+    // those, since they *are* the implementations. Upstream ships suites for
+    // the Gleckler libraries; they are not vendored, because a HAMT suite
+    // that passes while `(srfi 146 hash)` fails would tell us nothing we do
+    // not already learn from the 77 rows that matter.
+    (
+        "nieper",
+        "the red-black tree under (srfi 146); exercised by that library's own suite",
+    ),
+    (
+        "gleckler",
+        "the HAMT under (srfi 146 hash); exercised by that library's own suite",
+    ),
 ];
 
 /// Every library Patina provides from a tree not excused above either has its
@@ -343,6 +420,21 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    // The three shims (srfi 146) needed. Each is one macro or a re-export,
+    // and each is exercised by the two SRFI 146 suites above, which do not
+    // load without them.
+    (
+        "srfi 2",
+        "and-let*: one macro, no portable upstream suite (the SRFI predates syntax-rules); tests/scheme/srfi/and-let.scm checks each clause form against the SRFI's text",
+    ),
+    (
+        "srfi 16",
+        "re-export shim over (scheme case-lambda), which is already SRFI 16's own reference implementation; reexport_shims.rs pins it",
+    ),
+    (
+        "srfi 145",
+        "assume: one macro, and the SRFI ships no suite; tests/scheme/srfi/and-let.scm covers it beside SRFI 2",
+    ),
     (
         "srfi 23",
         "re-export shim over (scheme base)'s error; reexport_shims.rs pins it",
@@ -443,6 +535,50 @@ fn every_provided_library_has_a_suite_or_a_recorded_reason() {
             "NO_SUITE_TREES names ({tree}), which holds no provided libraries — delete the entry"
         );
     }
+}
+
+/// The same proof for the SRFI 64 path, which has its own counters and so its
+/// own way of being vacuously green.
+///
+/// `SRFI_64_BODY`'s documented failure mode is reporting zero failures and
+/// zero assertions — a mistyped accessor, or `(chibi test)` winning the
+/// import-order race for the five macro names both frameworks export, would
+/// do it silently. So this runs a suite with one of each outcome and checks
+/// the two numbers exactly.
+///
+/// The `xpass` row is the one that matters: it is a `test-expect-fail` that
+/// passed, and it must land in `failures`. Reverting that term makes this
+/// test report `(1, 5)` against the expected `(2, 5)` — checked, not assumed.
+///
+/// Six rows: 2 pass, 1 fail, 1 xfail, 1 xpass, 1 skip. Five executed
+/// (the skip is excluded, as `scheme_suite.rs` excludes it), and two count as
+/// failures (the plain fail and the xpass).
+#[test]
+fn srfi_64_body_reports_failures_and_counts() {
+    fn expect<B: Backend>(interp: &Interpreter<B>, label: &str) {
+        let suite = "(define (run-tests) \
+                       (test-begin \"srfi-64 self-check\") \
+                       (test-equal 1 1) \
+                       (test-equal 2 2) \
+                       (test-equal 3 4) \
+                       (test-expect-fail 1) (test-equal 5 6) \
+                       (test-expect-fail 1) (test-equal 7 7) \
+                       (test-skip 1) (test-equal 8 9) \
+                       (test-end))";
+        let program = harness_program("(srfi 64)", &format!("{suite} {SRFI_64_BODY}"));
+        assert_eq!(
+            counts_on(interp, label, &program),
+            (2, 5),
+            "the SRFI 64 path must count the xpass as a failure and the skip \
+             as not run, or the two SRFI 146 rows' numbers mean nothing"
+        );
+    }
+
+    let tw = common::tree_walker_interpreter();
+    expect(&tw, "srfi-64 self-check on tree-walker");
+
+    let vm = common::vm_interpreter();
+    expect(&vm, "srfi-64 self-check on vm");
 }
 
 /// Proves the harness can actually report a failure — and actually counts.

@@ -7,11 +7,11 @@
 | Status | Packages | In scope |
 |---|---|---|
 | pass | 127 | 127 |
-| missing-library | 10 | 6 |
+| missing-library | 9 | 5 |
 | parse-error | 12 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
-| wrong-result | 1 | 0 |
+| wrong-result | 2 | 1 |
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
 | out-of-scope | 8 | 0 |
@@ -21,7 +21,6 @@
 | Library | In-scope packages |
 |---|---|
 | (srfi 114 comparators) | 2 |
-| (scheme mapping) | 1 |
 | (srfi 160 base) | 1 |
 | (srfi 165) | 1 |
 | (srfi 231) | 1 |
@@ -113,7 +112,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-match | test | pass | in scope |
 | chibi-math-linalg | test | missing-library | in scope |
 | chibi-math-prime | test | pass | in scope |
-| chibi-math-stats | test | missing-library | in scope |
+| chibi-math-stats | test | wrong-result | in scope |
 | chibi-mecab | test | out-of-scope | ffi |
 | chibi-mime | test | pass | in scope |
 | chibi-monad-environment | probe | parse-error | upstream-source-defect |

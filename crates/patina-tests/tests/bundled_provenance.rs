@@ -112,6 +112,26 @@ const PINNED: &[(&str, u64)] = &[
     // The Patina-authored implementation is out of this list's scope, like the
     // other adapted ports one directory over; lib/srfi/PROVENANCE.md records
     // what it replaced and why.
+    //
+    // SRFI 146, byte-identical to the tarball recorded in
+    // lib/srfi/PROVENANCE.md, together with the supporting libraries it ships
+    // under their authors' namespaces. Those two trees are bundled verbatim
+    // rather than renamed, which is what makes pinning them meaningful — see
+    // that file's "SRFI 146 is byte-identical" section for why.
+    ("lib/srfi/146.sld", 0x8dca2df9ac8a48ed),
+    ("lib/srfi/146.scm", 0xcc5511f53cb6a593),
+    ("lib/srfi/146/hash.sld", 0x180632406d7db918),
+    ("lib/srfi/146/hash.scm", 0x7001bc958ed65227),
+    ("lib/nieper/rbtree.sld", 0x4592f90b650c5f68),
+    ("lib/nieper/rbtree.scm", 0x52e234d5e8937cd9),
+    ("lib/gleckler/hamt.sld", 0xbe7042d760c5ba50),
+    ("lib/gleckler/hamt.scm", 0x3411ac21a79786e9),
+    ("lib/gleckler/hamt-map.sld", 0x01e5f57c38a482f2),
+    ("lib/gleckler/hamt-map.scm", 0x13f965bd90370d93),
+    ("lib/gleckler/hamt-misc.sld", 0xf799bd0755a5b164),
+    ("lib/gleckler/hamt-misc.scm", 0xec9f93e907a79960),
+    ("lib/gleckler/vector-edit.sld", 0x9c1a797340415414),
+    ("lib/gleckler/vector-edit.scm", 0x25cdcce938f81ab0),
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),
     // 130.scm is pinned at its *post-edit* hash, like 132.sld below: it is

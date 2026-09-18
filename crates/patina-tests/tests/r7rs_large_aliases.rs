@@ -12,33 +12,50 @@ use patina_runtime::Backend;
 use patina_tree_walker::Evaluator;
 use patina_vm::VmBackend;
 
-/// (alias library, backing SRFI) pairs, per PRD/phase2/R7RS_LARGE_STATUS.md.
-const ALIASES: &[(&str, u32)] = &[
-    ("list", 1),         // Red
-    ("box", 111),        // Red
-    ("set", 113),        // Red
-    ("comparator", 128), // Red
-    ("sort", 132),       // Red
-    ("vector", 133),     // Red
-    ("generator", 158),  // Tangerine
-    ("hash-table", 125), // Red
-    ("charset", 14),     // Red
-    ("stream", 41),      // Red
-    ("list-queue", 117), // Red
-    ("lseq", 127),       // Red
-    ("ilist", 116),      // Red
-    ("ideque", 134),     // Red
-    ("flonum", 144),     // Tangerine
-    ("text", 135),       // Red
-    ("ephemeron", 124),  // Red
-    ("rlist", 101),      // Red — renames, see RENAMING_ALIASES
+/// (alias tail, backing SRFI tail) pairs, per PRD/phase2/R7RS_LARGE_STATUS.md.
+///
+/// Each entry is the part of the library name *after* the head — so `("list",
+/// "1")` is `(scheme list)` over `(srfi 1)`. Most are a single word and a
+/// number, but R7RS-large gives SRFI 146 two libraries and each has a
+/// multi-part name on both sides: `(scheme mapping hash)` over
+/// `(srfi 146 hash)`. Spelling the tails rather than a `u32` is what lets
+/// those be rows here instead of a second table.
+const ALIASES: &[(&str, &str)] = &[
+    ("list", "1"),                // Red
+    ("box", "111"),               // Red
+    ("set", "113"),               // Red
+    ("comparator", "128"),        // Red
+    ("sort", "132"),              // Red
+    ("vector", "133"),            // Red
+    ("generator", "158"),         // Tangerine
+    ("hash-table", "125"),        // Red
+    ("charset", "14"),            // Red
+    ("stream", "41"),             // Red
+    ("list-queue", "117"),        // Red
+    ("lseq", "127"),              // Red
+    ("ilist", "116"),             // Red
+    ("ideque", "134"),            // Red
+    ("flonum", "144"),            // Tangerine
+    ("text", "135"),              // Red
+    ("ephemeron", "124"),         // Red
+    ("mapping", "146"),           // Tangerine
+    ("mapping hash", "146 hash"), // Tangerine
+    ("rlist", "101"),             // Red — renames, see RENAMING_ALIASES
 ];
+
+/// `"mapping hash"` → `["scheme", "mapping", "hash"]`, the shape
+/// `load_library` takes.
+fn library_name(head: &str, tail: &str) -> Vec<String> {
+    std::iter::once(head.to_string())
+        .chain(tail.split_whitespace().map(str::to_string))
+        .collect()
+}
 
 #[test]
 fn test_all_alias_libraries_load() {
     let eval = Evaluator::new();
     for (name, srfi) in ALIASES {
-        let lib_name = vec!["scheme".to_string(), name.to_string()];
+        let lib_name = library_name("scheme", name);
         let lib = eval
             .load_library(&lib_name)
             .unwrap_or_else(|e| panic!("failed to load (scheme {name}) [SRFI {srfi}]: {e}"));
@@ -64,10 +81,10 @@ fn test_alias_exports_match_backing_srfi() {
     let eval = Evaluator::new();
     for (name, srfi) in ALIASES {
         let alias = eval
-            .load_library(&["scheme".to_string(), name.to_string()])
+            .load_library(&library_name("scheme", name))
             .unwrap_or_else(|e| panic!("(scheme {name}): {e}"));
         let source = eval
-            .load_library(&["srfi".to_string(), srfi.to_string()])
+            .load_library(&library_name("srfi", srfi))
             .unwrap_or_else(|e| panic!("(srfi {srfi}): {e}"));
 
         let mut a: Vec<_> = alias.exports.keys().cloned().collect();
@@ -254,6 +271,28 @@ fn test_alias_bindings_are_usable() {
              (list (fl+ 1.0 2.0) (flfloor 2.7) (fl/ -0.0) (fl/ -1.0 -0.0) \
                    (flnumerator +inf.0) (fldenominator -inf.0) (flsign-bit -1.0))",
             "(3.0 2.0 -inf.0 +inf.0 +inf.0 1.0 1)",
+        ),
+        // The two SRFI 146 aliases. Both are immutable, so the interesting
+        // part is that `mapping-set` leaves its argument alone and returns a
+        // new map — a re-implementation backed by a mutable table would
+        // answer 2 for the original's size. `(scheme mapping hash)` is the
+        // only three-word alias, so this is also what pins that its name
+        // resolves at all.
+        (
+            "(import (scheme mapping) (scheme comparator) (scheme base)) \
+             (define m (mapping (make-default-comparator) 'a 1)) \
+             (define m2 (mapping-set m 'b 2)) \
+             (list (mapping-size m) (mapping-size m2) (mapping-ref m2 'b) \
+                   (mapping-ref/default m 'b 'none))",
+            "(1 2 2 none)",
+        ),
+        (
+            "(import (scheme mapping hash) (scheme comparator) (scheme base)) \
+             (define h (hashmap (make-default-comparator) 'a 1)) \
+             (define h2 (hashmap-set h 'b 2)) \
+             (list (hashmap-size h) (hashmap-size h2) (hashmap-ref h2 'b) \
+                   (hashmap-ref/default h 'b 'none))",
+            "(1 2 2 none)",
         ),
         // A text is not a string, so the conversions are the interesting part
         // — and `textual-` procedures accept both, which is the distinction
