@@ -210,6 +210,7 @@ fn run_package(
         &scratch,
         mode == "test",
         &config.supplied_lib_root,
+        patched_root.as_deref(),
     );
 
     let mut cmd = Command::new(&config.patina);
@@ -269,12 +270,8 @@ fn search_roots(
     scratch: &Path,
     is_test_run: bool,
     supplied_lib_root: &Path,
+    subject_patched_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    // Staging is idempotent: `stage_patched_copy` writes to a per-slug
-    // directory and re-applies the patch to a fresh copy, so the subject
-    // package -- already staged by `run_package` for its script -- and any
-    // patched *dependency* in the closure both resolve to the same tree.
-
     let mut closure = vec![package];
     let mut seen = vec![false; all.len()];
     let mut queue: Vec<&str> = package.depends.iter().map(String::as_str).collect();
@@ -313,7 +310,19 @@ fn search_roots(
         // A patched copy leads its own pristine root: the patch is the thing
         // being measured when one exists, and the vendored tree behind it is
         // never edited.
-        roots.extend(stage_patched_copy(scratch, pkg));
+        //
+        // The subject is never re-staged. `run_package` staged it already and
+        // computed the test script's path *inside* that directory, and
+        // `stage_patched_copy` begins by clearing it -- so staging it a second
+        // time would delete the script out from under the path about to be
+        // run. When that second copy failed for any reason the package scored
+        // `runtime-error`, blaming the package for the harness's own churn;
+        // measured by making the second call fail.
+        if pkg.slug == package.slug {
+            roots.extend(subject_patched_root.map(Path::to_path_buf));
+        } else {
+            roots.extend(stage_patched_copy(scratch, pkg));
+        }
         roots.extend(stage_off_path_libraries(scratch, pkg));
         roots.push(pkg.root.clone());
     }
@@ -332,17 +341,39 @@ fn redirect_into(path: &Path, from: &Path, into: Option<&Path>) -> PathBuf {
     };
     match path.strip_prefix(from) {
         Ok(rest) => into.join(rest),
-        Err(_) => path.to_path_buf(),
+        // The script lives outside the package root, so there is no patched
+        // copy of it. Running it pristine against a patched library measures
+        // neither tree, which is precisely what this function exists to
+        // prevent -- so say so rather than doing it quietly.
+        Err(_) => {
+            eprintln!(
+                "warning: test script {} is outside the package root {}; \
+                 running it unpatched against a patched library",
+                path.display(),
+                from.display()
+            );
+            path.to_path_buf()
+        }
     }
 }
 
 /// Where a package's patch lives, when it has one: `compat/patches/<slug>.patch`.
 ///
 /// Returns `None` for the overwhelming majority of packages, which have none.
+///
+/// The path is derived as a *sibling of the corpus directory*
+/// (`<corpus>/../patches`) rather than from a repo root, so `--vendor` keeps
+/// working: point it elsewhere and the patches for that corpus are looked up
+/// beside it. The sibling is only consulted when the package actually sits
+/// one level inside a directory, which the `self_check` package -- rooted at
+/// the supplied lib root -- deliberately does not rely on.
 pub fn patch_for(package: &Package) -> Option<PathBuf> {
-    // `compat/vendor/<slug>` -> `compat/patches/<slug>.patch`
-    let patches = package.root.parent()?.parent()?.join("patches");
-    let path = patches.join(format!("{}.patch", package.slug));
+    // `<corpus>/<slug>` -> `<corpus>/../patches/<slug>.patch`
+    let corpus = package.root.parent()?;
+    let path = corpus
+        .parent()?
+        .join("patches")
+        .join(format!("{}.patch", package.slug));
     path.is_file().then_some(path)
 }
 
@@ -364,6 +395,10 @@ pub fn patch_for(package: &Package) -> Option<PathBuf> {
 fn stage_patched_copy(scratch: &Path, package: &Package) -> Option<PathBuf> {
     let patch = patch_for(package)?;
     let stage = scratch.join("patched").join(&package.slug);
+    // The copy sits one level *inside* `stage`, and that nesting is required
+    // rather than decorative: the patches are `-p1`, so patch(1) strips one
+    // leading component and resolves the rest against this directory. Flatten
+    // it and every patched package fails to apply at once.
     let dest = stage.join(&package.slug);
     // Clear first. `copy_tree` merges into whatever is already there, and this
     // path is reached twice for the same package whenever one patched package
@@ -412,13 +447,20 @@ fn stage_patched_copy(scratch: &Path, package: &Package) -> Option<PathBuf> {
             None
         }
         Err(e) => {
-            eprintln!(
-                "warning: {}: could not run patch(1) for {}: {}",
+            // patch(1) is not a declared build dependency, and without it
+            // every patched package silently regresses to the failure its
+            // patch removes -- which reads as a Patina regression rather than
+            // a missing tool. A corpus scored without the patches is not the
+            // corpus this repo reports, so stop rather than publish a number
+            // that means something else.
+            panic!(
+                "{}: cannot run patch(1) for {}: {e}\n\
+                 patch(1) is required whenever compat/patches/ is non-empty: \
+                 scoring a patched package without it reports the failure the \
+                 patch exists to remove, which reads as a Patina regression.",
                 package.slug,
-                patch.display(),
-                e
+                patch.display()
             );
-            None
         }
     }
 }
@@ -886,22 +928,36 @@ mod tests {
             .and_then(Path::parent)
             .expect("repo root");
         let patches = repo.join("compat").join("patches");
-        if !patches.is_dir() {
-            return;
-        }
-        let temp = std::env::temp_dir().join(format!("patina-patch-check-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
+        let vendor = repo.join("compat").join("vendor");
+        // Not an early return: a missing directory is the one condition under
+        // which the `checked > 0` assertion below cannot fire, so it would
+        // turn this into a test that passes by looking at nothing.
+        assert!(
+            patches.is_dir() && vendor.is_dir(),
+            "expected {} and {} — if the corpus moved, this guard stopped \
+             checking anything and patch_for in the runner needs the same fix",
+            patches.display(),
+            vendor.display()
+        );
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let temp = temp.path();
         let mut checked = 0;
         for entry in std::fs::read_dir(&patches).expect("read compat/patches") {
             let patch = entry.expect("dir entry").path();
             if patch.extension().and_then(|e| e.to_str()) != Some("patch") {
                 continue;
             }
+            // Strip exactly the `.patch` suffix. `file_stem` splits on the
+            // *last* dot, so a slug containing one (`srfi-179.0.1`) would map
+            // to the wrong directory — and the runner builds the name the
+            // other way, as `format!("{slug}.patch")`, so the two must be
+            // inverses or a patch could exist that only one of them sees.
             let slug = patch
-                .file_stem()
+                .file_name()
                 .and_then(|s| s.to_str())
-                .expect("patch file stem");
-            let source = repo.join("compat").join("vendor").join(slug);
+                .and_then(|s| s.strip_suffix(".patch"))
+                .expect("patch file name");
+            let source = vendor.join(slug);
             assert!(
                 source.is_dir(),
                 "{}: names no vendored package at {}",
@@ -909,16 +965,13 @@ mod tests {
                 source.display()
             );
             let dest = temp.join(slug);
+            let _ = std::fs::remove_dir_all(&dest);
             copy_tree(&source, &dest).expect("stage package for patch check");
             let out = Command::new("patch")
-                .args([
-                    "-p1",
-                    "--silent",
-                    "--fuzz=0",
-                    "--forward",
-                    "--batch",
-                    "--input",
-                ])
+                // No `--silent` here, unlike the runner: when a patch goes
+                // stale this message is the whole diagnosis, and patch(1)'s
+                // per-hunk commentary is what says *which* hunk drifted.
+                .args(["-p1", "--fuzz=0", "--forward", "--batch", "--input"])
                 .arg(&patch)
                 .current_dir(&dest)
                 .stdin(Stdio::null())
@@ -926,26 +979,38 @@ mod tests {
                 .expect("run patch(1)");
             assert!(
                 out.status.success(),
-                "{} does not apply to compat/vendor/{}:\n{}",
+                "{} does not apply to compat/vendor/{}:\n{}{}",
                 patch.display(),
                 slug,
+                String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
             );
-            let differs = Command::new("diff")
-                .arg("-r")
-                .arg(&source)
-                .arg(&dest)
-                .stdin(Stdio::null())
-                .output()
-                .expect("run diff(1)");
+            // Compare only the files the patch names. A bare `diff -r` would
+            // also see patch(1)'s own `.rej`/`.orig` artifacts and read them
+            // as evidence the patch did something, which is the opposite of
+            // what this checks.
+            let text = std::fs::read_to_string(&patch).expect("read patch");
+            let touched: Vec<String> = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("+++ b/"))
+                .map(|rest| rest.split('\t').next().unwrap_or(rest).trim().to_string())
+                .collect();
             assert!(
-                !differs.status.success(),
-                "{} applies but changes nothing",
+                !touched.is_empty(),
+                "{} names no files (no `+++ b/` lines)",
                 patch.display()
+            );
+            let changed = touched.iter().any(|rel| {
+                std::fs::read(source.join(rel)).ok() != std::fs::read(dest.join(rel)).ok()
+            });
+            assert!(
+                changed,
+                "{} applies but changes none of the files it names: {:?}",
+                patch.display(),
+                touched
             );
             checked += 1;
         }
-        let _ = std::fs::remove_dir_all(&temp);
         assert!(
             checked > 0,
             "compat/patches/ exists but holds no .patch files — this check would pass vacuously"
@@ -1030,7 +1095,15 @@ mod tests {
         let universe = vec![];
         let providers = corpus::providers(&universe);
 
-        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
+        let roots = search_roots(
+            &subject,
+            &universe,
+            &providers,
+            &scratch,
+            false,
+            supplied(),
+            None,
+        );
         assert_eq!(roots.first().map(PathBuf::as_path), Some(supplied()));
         assert!(roots.contains(&subject.root));
     }
@@ -1048,11 +1121,27 @@ mod tests {
 
         let universe = vec![framework];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, true, supplied());
+        let roots = search_roots(
+            &subject,
+            &universe,
+            &providers,
+            &scratch,
+            true,
+            supplied(),
+            None,
+        );
         assert!(roots.contains(&framework_root));
 
         // With no test program to run, they are irrelevant and stay off.
-        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
+        let roots = search_roots(
+            &subject,
+            &universe,
+            &providers,
+            &scratch,
+            false,
+            supplied(),
+            None,
+        );
         assert!(!roots.contains(&framework_root));
     }
 
@@ -1069,7 +1158,15 @@ mod tests {
 
         let universe = vec![dependency];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, false, supplied());
+        let roots = search_roots(
+            &subject,
+            &universe,
+            &providers,
+            &scratch,
+            false,
+            supplied(),
+            None,
+        );
 
         assert!(
             roots.iter().any(|r| r.join("chibi/irregex.sld").is_file()),
@@ -1095,7 +1192,15 @@ mod tests {
 
         let universe = vec![library, framework];
         let providers = corpus::providers(&universe);
-        let roots = search_roots(&subject, &universe, &providers, &scratch, true, supplied());
+        let roots = search_roots(
+            &subject,
+            &universe,
+            &providers,
+            &scratch,
+            true,
+            supplied(),
+            None,
+        );
         assert!(roots.contains(&library_root));
         assert!(!roots.contains(&framework_root));
     }
@@ -1504,6 +1609,7 @@ mod tests {
             &temp.path().join("scratch"),
             false,
             &config.supplied_lib_root,
+            None,
         );
         assert!(
             !roots.is_empty() && roots.iter().all(|r| *r == config.supplied_lib_root),

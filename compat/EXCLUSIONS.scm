@@ -153,27 +153,11 @@
   ;; outside the SRFI it names as its dependency, which no conforming
   ;; implementation of that SRFI supplies.
   ;;
-  ;; The two in-progress-hash-* packages used to sit here, excluded because
-  ;; they import `(srfi 114 comparators)` — a name **nothing provides**. They
-  ;; now pass, via `compat/patches/`, and the reasoning is kept because it is
-  ;; what the patch rests on.
-  ;;
-  ;; The name is legal (R7RS 5.6.1 admits any sequence of identifiers, and 36
-  ;; vendored libraries use three parts) and simply invented: SRFI 114's own
-  ;; text says `(srfi 114)`, its sample implementation says `(comparators)`.
-  ;; **Snow cannot resolve it either**, which is what settles it, since
-  ;; snow-fort is chibi's own package manager: `library-name->path` (chibi's
-  ;; `lib/chibi/snow/package.scm:327`) joins the parts with `/` and nothing
-  ;; else, so the name means exactly `srfi/114/comparators.sld`, which no
-  ;; package ships.
-  ;;
-  ;; Correcting the name to `(srfi 114)` would not have helped: **SRFI 114 is
-  ;; withdrawn**, superseded by SRFI 128 on 2017-08-10. Bundling a withdrawn
-  ;; SRFI for one package is what the policy in
-  ;; `PRD/phase2/R7RS_LARGE_STATUS.md` exists to prevent. So the patch moves
-  ;; them to SRFI 128 — which Patina ships — as their author would today.
-  ;; `compat/patches/in-progress-hash-tables.patch` records the three renames
-  ;; and why each is faithful.
+  ;; The two in-progress-hash-* packages used to sit here, for importing
+  ;; `(srfi 114 comparators)` — a name nothing provides. They now pass, moved
+  ;; to SRFI 128 by `compat/patches/in-progress-hash-tables.patch`, whose
+  ;; header carries the argument (SRFI 114 is withdrawn; snow cannot resolve
+  ;; the three-part name either) and why each rename is faithful.
 
   ;; Reached only since #383 bundled `(srfi 160 base)`; before that it stopped
   ;; at the missing library and this was invisible.

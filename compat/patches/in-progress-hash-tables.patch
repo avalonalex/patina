@@ -22,11 +22,20 @@
 # `comparator-type-test-procedure` is a pure rename: SRFI 128 calls the same
 # accessor `-predicate`.
 #
-# `number-comparator` is the one substitution worth justifying. SRFI 128 has no
-# general number comparator; SRFI 162, which Patina ships alongside it, has
-# `real-comparator`. Every use here is on integer keys (`hash-table-tabulate`,
-# `ht-fixnum`), which reals cover -- verified directly: `real-comparator`'s
-# type test, equality predicate and hash function all accept 42.
+# `number-comparator` is the one substitution worth justifying, and it narrows
+# the accepted type. SRFI 128 has no general number comparator; SRFI 162, which
+# Patina ships alongside it, has `real-comparator`. Every use of the name in
+# this package is on integer keys (`hash-table-tabulate`, `ht-fixnum`,
+# `alist->hash-table` over integer pairs), which reals cover -- verified
+# directly that `real-comparator`'s type test, equality predicate and hash
+# function all accept 42.
+#
+# What bounds the risk is not that enumeration but the enforcement behind it:
+# `tables.body.scm` sets `%enforce-comparator-type-tests` to `#t`, so
+# `%comparator-hash-function` applies the comparator's own type test to every
+# key. A complex or non-real key reaching this comparator therefore *raises*
+# rather than being silently mishashed, and the package's 176 assertions all
+# run through that path. The narrowing is visible if it ever matters.
 #
 # Measured after this patch: the package's own 176-assertion test suite runs
 # and passes, exit 0. Verified it is not passing vacuously by corrupting one
