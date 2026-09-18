@@ -357,19 +357,35 @@ so it passes changes what the harness measures, a precedent that would reach sev
 other exclusions. #393 holds that decision; the entries retire if it goes the other
 way.
 
-`(srfi 231)` — [#392](https://github.com/avalonalex/patina/issues/392), and much closer
-than first thought. The SRFI's own implementation is Gambit-only, but chibi's 1,424-line
-one is portable and works, and **neither of its apparent blockers is real**:
-`(chibi assert)` is replaceable by `(rename (srfi 145) (assume assert))`, verified
-identical down to still refusing a bad interval — which holds only because #383 bundled
-SRFI 145's *reporting* sample rather than the one that discards the check. What remains
-is `u1vector-*`, a chibi C extension that six lines of Scheme stand in for; a real
-bit-packed version would also unblock srfi-179.
-The stored corpus also names `(srfi 114 comparators)`,
-`(srfi 165)` and `(srfi 231)` as missing dependencies. These are
-candidates to verify and prioritize, not an exhaustive list or a commitment to implement all
-SRFIs immediately. Runtime/FFI work may defer an eligible SRFI; implementation-specific `(chibi)`
-remains outside the bundle regardless of demand.
+**SRFI 231 shipped 2026-09-18** (#392) as `(srfi 231)`, and with it **the
+missing-library queue is empty** — chibi-math-linalg passes and the corpus reads
+**129 of 132 in scope**. That completes L1's measured bundling work.
+
+It is chibi's implementation, not the SRFI's, and the reason is decisive rather than a
+preference: the SRFI's own `generic-arrays.scm` has 20 `define-macro` uses (Gambit's
+non-standard macro form), `macro-` internals and 51 `fx+` calls with no portable
+`cond-expand` branch, so 5,252 lines of it is a rewrite. chibi's 1,424 lines are the
+only portable implementation that exists, and its licence was established the way
+`(srfi 125)`'s was: chibi's `AUTHORS` names Shinn as the author of all distributed
+modules *and* enumerates the SRFIs that use someone else's reference implementation —
+231 is not among them.
+
+**No chibi library is bundled**, which was the constraint. Three marked local edits:
+the two unconditional `(chibi assert)` imports become
+`(rename (srfi 145) (assume assert))` — exact, because #383 bundled SRFI 145's
+*reporting* sample, so `assume` raises where `assert` would; had the other been taken
+this would have silently disabled 55 domain checks — and `u1vector-*` comes from
+`(patina bitvector)`, ours, bit-packed eight to a byte. That name is deliberately not
+published as `(srfi 160 u1)`: SRFI 160 defines no `u1` type, and putting one in its
+namespace is what the bundling policy keeps out. 28 rows in
+`tests/scheme/srfi/bitvector.scm` cover the packing, which is where a plausible
+implementation goes wrong — a write that disturbs its seven neighbours.
+
+Two of chibi's 579 suite rows fail, neither ours, both recorded rather than counted:
+a frozen array's backing store stays mutable because `231/base.sld`'s own
+`cond-expand` stubs `make-immutable!` to `#f` off chibi, and one row compares two
+arrays with `equal?` where they are records holding distinct closures — R7RS 6.1 makes
+`equal?` on procedures `eqv?`, so our `#f` is right and chibi's `#t` is leniency.
 
 Three lessons this queue recorded, kept because each corrected a filed premise:
 - *SRFI 125 needed no runtime support* — `equal-hash` was a Rust primitive all along and the

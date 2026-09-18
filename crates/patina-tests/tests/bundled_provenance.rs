@@ -134,6 +134,14 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/159/internal/write.scm", 0xb875b9d52bacc6cb),
     ("lib/srfi/159/unicode.scm", 0xda5fa29d72ac51dd),
     ("lib/srfi/159/unicode.sld", 0x505181e5fcf138d6),
+    // SRFI 231, chibi's own implementation, pinned *post-edit*: three marked
+    // PATINA LOCAL EDITs replace its two (chibi assert) imports and source
+    // u1vector from (patina bitvector). Pinning the result is what keeps the
+    // other ~1,400 lines guarded, as for 130.scm and 117's impl.
+    ("lib/srfi/231.sld", 0xbd4d43f814e8e83b),
+    ("lib/srfi/231/base.scm", 0xbb236265def20906),
+    ("lib/srfi/231/base.sld", 0x38e27820c5d4ec8e),
+    ("lib/srfi/231/transforms.scm", 0xeb005851f44ccb9f),
     // SRFI 165, byte-identical to the tarball recorded in
     // lib/srfi/PROVENANCE.md. Both files carry the full MIT text inline, so
     // nothing about its licence had to be established.
