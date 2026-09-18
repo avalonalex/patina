@@ -1,0 +1,28 @@
+;; (scheme vector u32) - R7RS-large Tangerine Edition
+;;
+;; The full vector API over u32 elements.
+;;
+;; R7RS-large names this library `(scheme vector u32)`; it is SRFI 160's
+;; `(srfi 160 u32)` under its standard-track name. This is a pure re-export
+;; -- the implementation lives there, and the two are the same bindings.
+
+(define-library (scheme vector u32)
+  (import (srfi 160 u32))
+  (export
+    make-u32vector u32vector u32vector-unfold u32vector-unfold-right
+    u32vector-copy u32vector-reverse-copy u32vector-append
+    u32vector-concatenate u32vector-append-subvectors u32? u32vector?
+    u32vector-empty? u32vector= u32vector-ref u32vector-length
+    u32vector-take u32vector-take-right u32vector-drop
+    u32vector-drop-right u32vector-segment u32vector-fold
+    u32vector-fold-right u32vector-map u32vector-map! u32vector-for-each
+    u32vector-count u32vector-cumulate u32vector-take-while
+    u32vector-take-while-right u32vector-drop-while
+    u32vector-drop-while-right u32vector-index u32vector-index-right
+    u32vector-skip u32vector-skip-right u32vector-any u32vector-every
+    u32vector-partition u32vector-filter u32vector-remove u32vector-set!
+    u32vector-swap! u32vector-fill! u32vector-reverse! u32vector-copy!
+    u32vector-reverse-copy! u32vector-unfold! u32vector-unfold-right!
+    u32vector->list list->u32vector reverse-u32vector->list
+    reverse-list->u32vector u32vector->vector vector->u32vector
+    make-u32vector-generator u32vector-comparator write-u32vector))

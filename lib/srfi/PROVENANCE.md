@@ -17,6 +17,7 @@ its own record. One home per tree.
 | `(srfi 127)` | — | `127/lseqs-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-127/srfi-127.tgz` (John Cowan, MIT) | tarball sha256 `edff4ba12bcc5d4e11d48189a2db4bdbb86b8f424f3bdadbb0350eee095e3828` |
 | `(srfi 134)` | — | `134/ideque-stream-impl.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-134/srfi-134.tgz` (Shiro Kawai and Wolfgang Corcoran-Mathe, MIT) | tarball sha256 `424f71e3ae9681e20c1c18a19985bd3a98f1c6bf7b34983ed8c611ebc0026c6b` |
 | `(srfi 144)` | — | `144.sld`, `144/144.constants.scm`, `144/144.body0.scm`, `144/144.r6rs.scm`, `144/144.body.scm`, `144/144.special.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-144/srfi-144.tgz` (William D Clinger, MIT) | tarball sha256 `cb37d320088588aaf6a96c3c25addf6bec0db56a2ea10a907d8e43e16c950be1` |
+| `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
 | `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
 | `(srfi 135)` | — | `135.sld`, `135.body.scm`, `135/kernel8.sld`, `135/kernel8.body.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-135/srfi-135.tgz` (William D Clinger, MIT) | tarball sha256 `f8e9cbcdfcd757ed5dc5835e152bedd621e0933dfed16c5cb815253900fb2735` |
 | `(srfi 101)` | — | `101.sld`, `101.scm` | chibi-scheme's R7RS adaptation (Alex Shinn, 2018) of the SRFI's own reference implementation (David Van Horn, MIT), byte-identical | source `~/Project/reference/chibi-scheme/lib/srfi/101.{sld,scm}` |
@@ -268,6 +269,82 @@ not imply different reach. The second suite is worth having because it *runs*
 in CI, where the Larceny lane does not, and because the bundling guard requires
 an upstream suite per bundled library — not because it tests more.
 
+**SRFI 4 is Patina's own, and the reason is a licence question rather than a
+technical one.**
+
+`lib/srfi/4.*` is not in the table above because it is not third-party. The
+SRFI's own distribution carries John Cowan's portable R7RS port in
+`contrib/cowan/`, and it was measured working here first — 240 of 240 on its
+own suite, both backends, no adaptation — before being set aside.
+
+**What the audit found.** None of the four files that port consists of
+carries a licence notice of any kind. That alone would follow the `(srfi 125)`
+precedent below: establish the licence from the surrounding distribution and
+reproduce the text here. What stops that reasoning is a sibling: the same
+`contrib/cowan/` directory contains `r6rs/bytevectors-impl.scm` under
+*William D Clinger's* terms — "Permission to copy this software … subject to
+the restriction that all copies made of this software must include this
+copyright and permission notice in full" — which is not the MIT the
+distribution's `README.org` carries. So that directory is demonstrably **not**
+covered uniformly by the repository header, and inferring MIT for the
+unmarked files from it would be inferring from a premise a neighbouring file
+disproves.
+
+Compare SRFI 160 and SRFI 146, where every single file carries an explicit
+SPDX header. Cowan marks his work when he intends to.
+
+**So the interface was implemented instead.** That is the same move the SRFI
+14 rewrite made and for the same reason, stated in § Licences below: the
+SRFI's *interface* is what an implementation implements, and an API is not the
+licensed artifact. `4.scm` is about 400 lines over `(r6rs bytevectors)`, which
+Patina already shipped — `R7RS_LARGE_STATUS.md` used to call SRFI 4
+"plausibly Rust work rather than a port", which #383 corrected; the primitives
+were all already there.
+
+It is held to `crates/patina-tests/tests/scheme/srfi/homogeneous-vectors.scm`
+(46 rows) and, more searchingly, to SRFI 160's registered `s16` suite, which
+drives these types from the layer above: 110 of 110, on both backends. The
+complex vectors are the sharpest case, since `(srfi 160 base)` builds a
+c64vector by wrapping an `f32vector` and driving it through `make-f32vector`,
+`f32vector-set!` and `f32vector-length`; `homogeneous-vectors.scm` is where
+that is asserted, because SRFI 160's own `base` suite is print-only (see
+below) and so cannot be registered.
+
+**SRFI 160 is the one bundled library whose files are generated.**
+
+Upstream ships *templates*, not sources. `atexpander.sh` runs
+`sed "s/@/$at/g"` over three files — `srfi/160/at.sld`, `at-impl.scm` and
+`base/at-vector2list.scm` — once per type, for twelve types: the ten SRFI 4
+has plus `c64` and `c128`, which `(srfi 160 base)` exports and SRFI 4 has no
+equivalent of. What is bundled here is that script's output, run unmodified
+against the pinned tarball.
+
+**So the pinned artifact is the generator's output rather than the tarball's
+content**, which is a real departure from the rule the rest of this file
+states, and is recorded rather than hidden. The alternative — running the
+expander at build time — would put a shell script on the critical path of
+every build to save committing 36 files that change only when the tarball
+does. Regenerating is one command against the recorded sha256, and
+`bundled_provenance.rs` pins every generated file, so an edit to one is still
+a deliberate act.
+
+SRFI 160's `s16` suite passes with no adaptation, 110 of 110 on both
+backends, and is registered. Upstream tests `s16` alone and says why — "if one
+vector type works, they all work", since the twelve are one template — and the
+per-type parameters that argument does not cover are in
+`homogeneous-vectors.scm`. Upstream's *other* suite, for `(srfi 160 base)`,
+is **not** registered and is not vendored: like SRFI 4's, it is a print-only
+harness whose own `test-assert`/`test-not` macros `display` "OK" or "FAIL" and
+report nothing a driver can read, so a row for it would be vacuously green.
+`homogeneous-vectors.scm` covers that layer instead.
+
+**What neither closes.** `(scheme vector @)`'s in-scope corpus requester is
+srfi-179, whose *library itself* imports `(chibi assert)`, which needs
+`(chibi)` — implementation-specific, and external by policy. So srfi-179
+cannot pass whatever is bundled here, and the corpus number does not move.
+These two ship on eligibility and edition completeness, which the bundling
+policy makes sufficient.
+
 **SRFI 146 is byte-identical and brings two namespaces with it.**
 
 Every file is upstream's, unedited: `146.{sld,scm}` and `146/hash.{sld,scm}`
@@ -432,6 +509,38 @@ that the notice travel with the software, and since each file carries its own,
 bundling them verbatim satisfies it without anything being reproduced here.
 This is also the second reason not to rename those two namespaces: an edited
 file is one whose notice someone has to re-establish.
+
+`(srfi 4)` needs nothing here: it is Patina-authored (§ above), so there is no
+third-party text in it to carry. The audit that led to that decision is worth
+keeping, because it is the one case in this tree where the usual reasoning
+failed: the SRFI's `contrib/cowan/` port has no notice on any of its four
+files, and a sibling in the same directory
+(`r6rs/bytevectors-impl.scm`) is under William D Clinger's terms rather than
+the distribution's MIT — so the repository header could not be taken to cover
+the unmarked files, and the licence would have been inferred rather than
+established. Reimplementing removed the question instead of documenting it.
+
+`(srfi 160)` needs nothing added either: all 40 of its bundled files carry an
+explicit `SPDX-License-Identifier: MIT` over John Cowan's 2018 copyright,
+including the generated ones, since `atexpander.sh` copies the template's
+header into each expansion.
+
+**It also corrupts the address while copying it, in 36 of the 40.** The
+expander is a global `sed "s/@/$at/g"`, and the template's
+`SPDX-FileCopyrightText: 2018 John Cowan <cowan@ccil.org>` contains an `@`, so
+each expansion carries `<cowanu8ccil.org>`, `<cowans16ccil.org>`,
+`<cowanc128ccil.org>` and so on. Only `base.sld`, `base/complex.scm`,
+`base/r7rec.scm` and `base/valid.scm` — the four files the expander does not
+touch — keep the real address.
+
+This is upstream's own behaviour, reproduced here deliberately: re-running
+`atexpander.sh` against the tarball whose sha256 is recorded above yields
+bytes identical to what is bundled, mangled address included, and changing it
+would make 36 files diverge from the generator for a cosmetic repair. The
+licence grant is unaffected — the identifier, the year and the name are
+intact, and only the contact address is damaged — but a REUSE or SPDX linter
+reads `SPDX-FileCopyrightText` and will flag those 36, which is worth knowing
+before someone treats it as our error.
 
 `(srfi 125)`'s `hash.scm` carries no in-file notice, as chibi's own files
 mostly do not — upstream's own state, not something removed here. Two things
