@@ -270,11 +270,35 @@ written in C (`lib/srfi/160/uvprims.c`). So the package needs its host to supply
 type outside the SRFI it names as a dependency. Excluded as an upstream source
 defect; the in-scope denominator moves 135 → 134.
 
-**Remaining L1 candidates:** SRFI 159 show — which works, but whose licence does not
-travel with its code (ten of seventeen files carry no notice, the rest cite Shinn's
-by URL), so [#387](https://github.com/avalonalex/patina/issues/387) decides between
-establishing it and reimplementing — and the re-export shims `(srfi 6)`, `(srfi 9)`,
-`(srfi 11)`, `(srfi 39)`.
+**SRFI 159 shipped 2026-09-18** (#387) as `(scheme show)`, so **every library of
+both approved editions now ships**. Upstream's suite passes 316 of 316 on both
+backends, with no adaptation. Its licence was the whole question — ten of its files
+carry no notice and the rest cite Shinn's by URL, which is the shape that made SRFI 4
+a reimplementation — and it went the other way on three checks, each recorded in
+`lib/srfi/PROVENANCE.md`: the URL resolves to the same BSD-3-Clause text this tree
+already carries, compared character by character; the unmarked files are `.sld`
+wrappers rather than the implementation, where SRFI 4's unmarked files *were* the
+implementation; and chibi's blanket authorship statement covers the same library
+shipped there as `(chibi show)`. Reimplementing would have been 2,144 lines, but cost
+is why the question deserved care, not why the answer came out this way.
+
+**Review of #387 found two guard gaps and four wrong figures**, worth recording
+because both gaps were the same shape. `bundled_provenance.rs` pins files *and*
+declares trees whose every file must be pinned; SRFI 159 (and SRFI 115 before it,
+from #386) was given the per-file hashes without the tree, so a file *added* to a
+tree documented as byte-identical passed every test — demonstrated by planting one.
+Both trees are listed now. Separately, the vendored suite writes a temp file by
+relative path and deletes it on the last line of a `let*`, so any earlier failure
+left it untracked in the crate root; the suite row now deletes it unconditionally.
+The four figures were mine and all in claims meant to be checkable: the licence
+comparison is 1,323 characters and I had written 887, `159/` holds sixteen files and
+I had written seventeen, and `internal/compat.sld` is 47 lines of portability shims
+rather than "imports and exports, no code" — that last one matters most, since "the
+unmarked files are not the implementation" is one of the three checks the bundling
+decision rests on.
+
+**Remaining L1 candidates:** the re-export shims `(srfi 6)`, `(srfi 9)`,
+`(srfi 11)`, `(srfi 39)`, and whatever the next corpus re-measure names.
 The stored corpus also names `(srfi 114 comparators)`,
 `(srfi 165)` and `(srfi 231)` as missing dependencies. These are
 candidates to verify and prioritize, not an exhaustive list or a commitment to implement all

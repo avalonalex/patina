@@ -234,6 +234,19 @@ const SRFI_64_BODY: &str = "(test-runner-current (test-runner-null)) \
        (set! failures (+ (test-runner-fail-count r) \
                          (test-runner-xpass-count r))))";
 
+/// The body for SRFI 159's suite, which writes a scratch file to run
+/// `from-file` against.
+///
+/// Upstream's `from-file` group creates `chibi-show-test-0123456789` by
+/// *relative* path — so, under `cargo test`, in the crate root — and deletes
+/// it on the last line of the group. That delete does not run if an assertion
+/// before it raises, which leaves an untracked file behind in the tree. This
+/// deletes it unconditionally after the run, for the same reason
+/// `SRFI_64_BODY` passes `test-runner-null`: a suite must not leave anything
+/// in the crate root on its way out.
+const SRFI_159_BODY: &str = "(run-tests) \
+     (guard (e (#t #f)) (delete-file \"chibi-show-test-0123456789\"))";
+
 suite_tests! {
     (srfi_151_bitwise, "srfi 151", "(srfi 151 test)", 0, 145),
     (srfi_143_fixnum, "srfi 143", "(srfi 143 test)", 0, 141),
@@ -257,6 +270,13 @@ suite_tests! {
     // reaches for `(chibi test)` on anything that is not Larceny, which is
     // the framework this harness supplies.
     (srfi_115_regexp, "srfi 115", "(srfi 115 test)", 0, 85),
+    // Upstream's own suite, with its imports lifted into the wrapper `.sld`
+    // and nothing else changed; see that file. It exercises the whole
+    // `(srfi 159)` surface, which is why the sub-libraries below are excused
+    // rather than given rows of their own.
+    (srfi_159_show, "srfi 159", "(srfi 159 test)", 0, 316,
+     "(srfi 159 test) (scheme file)",
+     SRFI_159_BODY),
     // Upstream tests s16 alone, and says why: "if one vector type works, they
     // all work" — the twelve `(srfi 160 <type>)` libraries are sed-expanded
     // from one template, so a template defect shows in all of them. The other
@@ -412,6 +432,10 @@ const NO_SUITE_TREES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Shared by the SRFI 159 rows below: upstream ships one suite, for
+/// `(srfi 159)` itself, and the registered row above runs it.
+const SRFI_159_REASON: &str = "a sub-library of (srfi 159), whose single upstream suite — registered above, 316 assertions — drives all of them; upstream ships no per-library suites";
+
 /// Shared by the SRFI 160 rows below: upstream registers a suite for `s16`
 /// only, so the rest are covered by our own file rather than by nothing.
 const SRFI_160_REASON: &str = "sed-expanded from the template whose s16 expansion the registered (srfi 160 test) row runs; tests/scheme/srfi/homogeneous-vectors.scm covers the per-type parameters";
@@ -444,6 +468,19 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    // SRFI 159's sub-libraries. Upstream ships one suite, for `(srfi 159)`,
+    // and it drives all of them: the 316 assertions registered above cover
+    // the base combinators, the columnar and pretty-printing layers, the
+    // colour escapes and the Unicode width tables. Splitting them into
+    // per-library rows would need suites upstream does not have.
+    ("srfi 159 base", SRFI_159_REASON),
+    ("srfi 159 color", SRFI_159_REASON),
+    ("srfi 159 columnar", SRFI_159_REASON),
+    ("srfi 159 unicode", SRFI_159_REASON),
+    ("srfi 159 internal base", SRFI_159_REASON),
+    ("srfi 159 internal compat", SRFI_159_REASON),
+    ("srfi 159 internal pretty", SRFI_159_REASON),
+    ("srfi 159 internal util", SRFI_159_REASON),
     (
         "srfi 115 boundary",
         "generated Unicode word-boundary tables for (srfi 115), exercised by its suite above; upstream ships no suite for the data alone",
@@ -666,6 +703,39 @@ fn test_harness_reports_failures_and_counts() {
 
     let vm = common::vm_interpreter();
     expect_one_failure_of_three(&vm, "self-check on vm");
+}
+
+/// `(scheme show)` and `(srfi 159)` must resolve with **only `lib/` on the
+/// search path**.
+///
+/// Worth its own row for the same reason `(srfi 130)`'s is below: the suite
+/// row above runs under `check_suite`, which supplies `test-lib/`, so it
+/// would pass unchanged if any link in this chain leaked into a supplied
+/// root. SRFI 159's chain is the longest of any bundled library here — eight
+/// libraries of its own over `(srfi 1)`, `(srfi 69)`, `(srfi 117)`,
+/// `(srfi 130)` and `(srfi 151)` — and `internal/base.sld` picks its hash
+/// tables with `(library (srfi 69))`, so a shipping tree missing that one
+/// would silently take the `(srfi 125)` branch and fail on SRFI 69's calling
+/// convention rather than on the import.
+#[test]
+fn srfi_159_chain_resolves_from_the_shipped_tree_alone() {
+    use common::eval_program_shipped_only as shipped;
+    assert_eq!(
+        shipped("(import (scheme base) (srfi 159)) (show #f (numeric/comma 1234567))"),
+        "\"1,234,567\""
+    );
+    // The alias, and the columnar layer under it — the deepest sub-library,
+    // and the one whose imports reach furthest outside the tree, to
+    // `(srfi 117)` and `(srfi 130)`. Its width comes from the `width`
+    // parameter's default rather than the terminal, so asserting the padded
+    // column is stable; what this pins is that the chain loads at all.
+    assert_eq!(
+        shipped(
+            "(import (scheme base) (scheme show)) \
+             (show #f (columnar (each \"ab\" nl) (each \"1\" nl)))"
+        ),
+        "\"ab                                     1\\n\""
+    );
 }
 
 // ─── Where (srfi 130) resolves from ──────────────────────────────────────────
