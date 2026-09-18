@@ -347,30 +347,46 @@ dependency is unsatisfiable in snow's own ecosystem, which is consistent with wh
 packages are: `in-progress-…`, William D Clinger, version 0.0.3 — published
 mid-development against a library name that never existed.
 
-**Both packages are excluded as of 2026-09-18** as `upstream-source-defect`, the same
-label srfi-179 carries for the same shape (valid Scheme naming something nothing
-defines). The in-scope denominator moves 134 → 132 and the queue is down to one entry.
-The edit that *would* fix them was staged and verified and then dropped, because
-`compat/vendor/README.md` calls those "unmodified upstream copies kept for testing"
-whose purpose is "to run them and find out what Patina gets wrong" — patching a package
-so it passes changes what the harness measures, a precedent that would reach several
-other exclusions. #393 holds that decision; the entries retire if it goes the other
-way.
+**Both packages pass as of 2026-09-18** (#393), and the corpus reads **131 of 134 in
+scope**. They were excluded for a day as `upstream-source-defect` while the policy
+question was open; what resolved it was a fourth option the issue had not considered.
+
+**The fix is a patch applied to a copy, not an edit to the corpus.** `compat/vendor/`
+stays byte-identical to upstream — which is what `compat/vendor/README.md` promises and
+what made the direct edit unacceptable — and the change lives in
+`compat/patches/<slug>.patch`, applied at run time to a throwaway copy. The patch file
+is the reviewable record, `compat/patches/README.md` states when one is justified, and
+`every_patch_applies_to_its_package` fails the build if a patch goes stale rather than
+letting it surface as the package's own regression during a corpus run.
+
+**What the patch rewrites, and why it is not just a name fix.** Correcting
+`(srfi 114 comparators)` to `(srfi 114)` — the name the SRFI specifies — would not have
+helped: **SRFI 114 is withdrawn**, superseded by SRFI 128 on 2017-08-10. Bundling a
+withdrawn SRFI to satisfy one package is what the policy in
+`PRD/phase2/R7RS_LARGE_STATUS.md` exists to prevent. So the patch moves the packages to
+SRFI 128, which Patina already ships, as their author would today: three renames —
+`(srfi 114 comparators)` → `(srfi 128)`, `number-comparator` → `real-comparator` (SRFI
+162's, shipped alongside 128; every use here is on integer keys, which reals cover), and
+`comparator-type-test-procedure` → `comparator-type-test-predicate` (a pure rename in
+SRFI 128). Measured after: the package's own 176-assertion suite runs and passes, and
+corrupting one assertion proves it is not passing vacuously.
+
+*Pointing the import at the corpus's own `comparators` package would have been wrong,
+and nearly was: its `package.scm` says "SRFI 128: Comparators (reduced)" — a different
+SRFI that dropped the bare constants this code needs.*
 
 **SRFI 231 shipped 2026-09-18** (#392) as `(srfi 231)`, and with it **no
 in-scope package is waiting on a library** — chibi-math-linalg passes and the
-corpus reads **129 of 132 in scope**. That completes L1's measured bundling
-work.
+corpus reads **131 of 134 in scope** (129 of 132 when it shipped; the two
+in-progress-hash-* packages joined the denominator and passed a day later, via
+#393's patch mechanism). That completes L1's measured bundling work.
 
-Five `missing-library` rows remain, and all five are excluded, so none scores:
-`chibi-assert` wants `(chibi)`, which stays out by policy whatever the demand;
-`rebottled-cl-pdf` and `retropikzel-pstk` want another package's library rather
-than a SRFI; and **`in-progress-hash-bimaps` and `in-progress-hash-tables`
-still want `(srfi 114 comparators)`**, which #395 excluded as unsatisfiable —
-snow's own `library-name->path` joins the name with `/`, nothing in the
-ecosystem ships `srfi/114/comparators.sld`, and `alias-for` cannot bridge it.
-That last pair is the only one a future change could move, and only by snow
-fixing the name.
+Three `missing-library` rows remain, and all three are excluded, so none
+scores: `chibi-assert` wants `(chibi)`, which stays out by policy whatever the
+demand, and `rebottled-cl-pdf` and `retropikzel-pstk` each want another
+package's library rather than a SRFI, held back by our own corpus licence
+policy. **No in-scope package waits on a library, and none of the three is
+moved by bundling anything.**
 
 It is chibi's implementation, not the SRFI's, and the reason is decisive rather than a
 preference: the SRFI's own `generic-arrays.scm` has 20 `define-macro` uses (Gambit's

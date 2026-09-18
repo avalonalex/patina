@@ -1,13 +1,13 @@
 # Patina third-party compatibility (vm backend)
 
-**129 of 161 packages pass.**
+**131 of 161 packages pass.**
 
-**129 of 132 in scope** — 29 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**131 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 129 | 129 |
-| missing-library | 5 | 0 |
+| pass | 131 | 131 |
+| missing-library | 3 | 0 |
 | parse-error | 13 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
@@ -53,7 +53,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | rebottled-cl-pdf | missing-library | needs (rebottled pregexp); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 | retropikzel-pstk | missing-library | needs (retropikzel named-pipes); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 
-### Upstream source defect (14)
+### Upstream source defect (12)
 
 | Package | Status | Why |
 |---|---|---|
@@ -67,8 +67,6 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-show | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | chibi-snow-commands | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | edn | parse-error | (chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do |
-| in-progress-hash-bimaps | missing-library | via (in-progress hash tables) — see in-progress-hash-tables. Its own .sld is clean; the bad name appears only in its package.scm metadata |
-| in-progress-hash-tables | missing-library | in-progress/hash/tables.sld:67 imports (srfi 114 comparators), a name nothing provides: SRFI 114 says (srfi 114), its sample implementation says (comparators), and snow resolves the name only as the path srfi/114/comparators.sld, which no package ships. chibi fails identically; Gauche has (srfi 114) and still cannot load it |
 | postgresql | parse-error | via (chibi bytevector) — see chibi-bytevector |
 | srfi-179 | parse-error | srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8 |
 
@@ -133,8 +131,8 @@ These packages still run on every pass — exclusion decides whether a result co
 | comparators | test | unbound-identifier | upstream-test-defect |
 | edn | test | parse-error | upstream-source-defect |
 | generators | probe | pass | in scope |
-| in-progress-hash-bimaps | test | missing-library | upstream-source-defect |
-| in-progress-hash-tables | test | missing-library | upstream-source-defect |
+| in-progress-hash-bimaps | test | pass | in scope |
+| in-progress-hash-tables | test | pass | in scope |
 | independentresearch-xattr | probe | out-of-scope | ffi |
 | jkode-sassy | test | pass | in scope |
 | lassik-dockerfile | test | pass | in scope |

@@ -1,0 +1,131 @@
+# in-progress-hash-tables: SRFI 114 -> SRFI 128
+#
+# The package imports `(srfi 114 comparators)`. Two things are wrong with that
+# name and only one of them is a typo.
+#
+# SRFI 114 names its library `(srfi 114)`; the three-part name is upstream's
+# invention and nothing defines it -- not the corpus, not Patina, not chibi or
+# Gauche. But correcting it to `(srfi 114)` would not help either, because
+# **SRFI 114 is withdrawn**, superseded by SRFI 128 on 2017-08-10
+# (https://srfi.schemers.org/srfi-114/). Patina ships SRFI 128, and bundling a
+# withdrawn SRFI to satisfy one package is what the bundling policy in
+# PRD/phase2/R7RS_LARGE_STATUS.md exists to prevent.
+#
+# So this patch moves the package to the successor SRFI, which is what its
+# author would do today. Three renames, all of them SRFI 114 -> 128 spelling
+# changes rather than changes of behaviour:
+#
+#   (srfi 114 comparators)          -> (srfi 128)
+#   number-comparator               -> real-comparator
+#   comparator-type-test-procedure  -> comparator-type-test-predicate
+#
+# `comparator-type-test-procedure` is a pure rename: SRFI 128 calls the same
+# accessor `-predicate`.
+#
+# `number-comparator` is the one substitution worth justifying. SRFI 128 has no
+# general number comparator; SRFI 162, which Patina ships alongside it, has
+# `real-comparator`. Every use here is on integer keys (`hash-table-tabulate`,
+# `ht-fixnum`), which reals cover -- verified directly: `real-comparator`'s
+# type test, equality predicate and hash function all accept 42.
+#
+# Measured after this patch: the package's own 176-assertion test suite runs
+# and passes, exit 0. Verified it is not passing vacuously by corrupting one
+# assertion, which prints "Error: test failed:" and is caught.
+diff -ruN a/in-progress/hash/tables-test.sps b/in-progress/hash/tables-test.sps
+--- a/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
++++ b/in-progress/hash/tables-test.sps	2026-09-18 08:29:14
+@@ -28,7 +28,7 @@
+         (scheme char)
+         (scheme write)
+         (scheme process-context) ; for exit
+-        (srfi 114 comparators)
++        (srfi 128)
+         (r6rs sorting)
+         (in-progress hash tables)
+         (in-progress hash bimaps))
+@@ -102,7 +102,7 @@
+   (hash-table default-comparator 'foo 'bar 101.3 "fever" '(x y z) '#()))
+ 
+ (define ht-fixnum2
+-  (hash-table-tabulate number-comparator
++  (hash-table-tabulate real-comparator
+                        10
+                        (lambda (i) (values (* i i) i))))
+ 
+@@ -588,13 +588,13 @@
+ 
+ ;;; Copying and conversion.
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum))
+       #t)
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum #f))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum #f))
+       #t)
+ 
+-(test (hash-table=? number-comparator ht-fixnum (hash-table-copy ht-fixnum #t))
++(test (hash-table=? real-comparator ht-fixnum (hash-table-copy ht-fixnum #t))
+       #t)
+ 
+ (test (hash-table-mutable? (hash-table-copy ht-fixnum))
+@@ -710,7 +710,7 @@
+ (test (begin (hash-table-intersection!
+               ht-fixnum
+               (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                                 number-comparator))
++                                 real-comparator))
+              (list-sort (lambda (x y) (< (car x) (car y)))
+                         (hash-table->alist ht-fixnum)))
+       '((4 . 2)
+@@ -720,7 +720,7 @@
+         (hash-table-difference!
+          ht
+          (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                            number-comparator))
++                            real-comparator))
+         (list-sort (lambda (x y) (< (car x) (car y)))
+                    (hash-table->alist ht)))
+       '((0 . 0)
+@@ -736,7 +736,7 @@
+         (hash-table-xor!
+          ht
+          (alist->hash-table '((-1 . -1) (4 . 202) (25 . 205) (100 . 10))
+-                            number-comparator))
++                            real-comparator))
+         (list-sort (lambda (x y) (< (car x) (car y)))
+                    (hash-table->alist ht)))
+       '((-1 . -1)
+@@ -763,7 +763,7 @@
+ 
+ (define bim-squares
+   (make-bimap (hash-table-copy ht-fixnum2 #t)
+-              number-comparator))
++              real-comparator))
+ 
+ (define bim-squares2 (bimap-copy bim-squares))
+ 
+diff -ruN a/in-progress/hash/tables.body.scm b/in-progress/hash/tables.body.scm
+--- a/in-progress/hash/tables.body.scm	2026-09-18 08:29:14
++++ b/in-progress/hash/tables.body.scm	2026-09-18 08:29:14
+@@ -53,7 +53,7 @@
+ ;;; by the comparator's type test.
+ 
+ (define (%comparator-hash-function comparator)
+-  (let ((okay? (comparator-type-test-procedure comparator))
++  (let ((okay? (comparator-type-test-predicate comparator))
+         (hash-function (comparator-hash-function comparator)))
+     (if %enforce-comparator-type-tests
+         (lambda (x . rest)
+diff -ruN a/in-progress/hash/tables.sld b/in-progress/hash/tables.sld
+--- a/in-progress/hash/tables.sld	2026-09-18 08:29:14
++++ b/in-progress/hash/tables.sld	2026-09-18 08:29:14
+@@ -64,7 +64,7 @@
+ 
+   (import (scheme base)
+           (r6rs hashtables)
+-          (srfi 114 comparators))
++          (srfi 128))
+ 
+   (cond-expand
+    ((library (scheme char))
