@@ -1144,7 +1144,7 @@ now live, and a test checks that those pointers still resolve.
 | `write` spells the symbol `@` as `\|@\|` — consistent with reading it bare, but the suite expects `@`. The references split: Gauche writes `\|@\|` and chibi `@` (2026-09-14) | write (3) | both |
 | ✅ R6RS lane: `(make-bytevector 10 -1)` (a signed fill byte); enum `(color black)` — *both fixed 2026-09-13*, triage family 13. Neither was the emulation library's: the fill byte was the shared primitive, and the enum a template-compilation defect in core R7RS | r6rs bytevectors (4), enums (3); base (2) | both |
 | ✅ `set-xor!` and `bag-xor!` dropped what only their second argument had — *fixed 2026-09-14*, triage family 44. Both pass their first argument to `sob-xor!` as the result too, and the reference implementation copied the entries only the second argument has into that result before scanning the first argument, a scan that then zeroed them. The lane never reaches the suite's four assertions for it: the suite stops earlier, at upstream's `set-map` argument-order slip | set (4, unreached) | both |
-| `(scheme charset)` stops at U+00FF. The bundled `(srfi 14)` is the Latin-1 reference implementation, a char-set being a 256-character string indexed by code point: `char-set-contains?`, `char-set` and `string->char-set` raise on a character above U+00FF, and so do the bundled `(srfi 130)`'s `string-index` and `string-skip` given a char-set that meets one, while `ucs-range->char-set` and `char-set:full` silently stop at U+00FF. Open, triage family 45; §6 has the repro | charset (1) | both |
+| ✅ `(scheme charset)` stopped at U+00FF — *fixed 2026-09-17*, #372 / triage family 45. The bundled `(srfi 14)` was the Latin-1 reference implementation, a char-set being a 256-character string indexed by code point, so `char-set-contains?`, `char-set` and `string->char-set` raised on a character above U+00FF (and with them `(srfi 130)`'s `string-index` and `string-skip`), while `ucs-range->char-set` and `char-set:full` silently stopped there. The representation is now a normalized range list and the Unicode classes come from a Rust primitive. `charset` goes 91 → **93 of 93 on both backends**, the second row being the cursor order that had been filed as not ours | charset (1) | both |
 
 **Not ours**, recorded so nobody re-diagnoses them: `set-map`, `bag-map`,
 `set-unfold` and `bag-unfold` — the suite passes the comparator after the
@@ -1419,8 +1419,16 @@ the boundary library builds its sets with two-argument `ucs-range->char-set`,
 which drops every code point above U+00FF, so on that path its sets load
 empty, and a character above U+00FF handed to them then raises (the next
 entry, measured 2026-09-14).
-**Blocked on a full-Unicode char-set story** (SRFI 14
-beyond Latin-1, or an iset-compatible representation); not a macro defect.
+**No longer blocked on a full-Unicode char-set story** — #372 gave SRFI 14 a
+full-range representation on 2026-09-17 (see that entry below), so
+`ucs-range->char-set` no longer loads the boundary library's sets empty. That
+was this entry's stated blocker, and it is the *clipping* half of the problem.
+What remains is the other half it named: the vendored `(chibi char-set)`
+builds **iset**-backed sets, a different record type from `(srfi 14)`'s, so
+the embedded boundary sets still satisfy no arm of `->rx`'s `cond` and
+`#<unspecified>` still reaches `make-state`. Either the boundary library takes
+our char-sets or `->rx` learns the iset type. Needs re-measuring against the
+current corpus; still not a macro defect.
 Two cosmetic defects rode along. The first — the raised error displaying as
 `#<unknown>` — is fixed (issue #181): the datum writer had no rendering for
 an error object, and now names its message and irritants. The second — the message
@@ -1445,37 +1453,73 @@ doubles the prefix on the tree-walker and not on the VM. Not yet pinned as a
 divergence row; it belongs in `tests/scheme/` with a `DIVERGENCES.tsv` entry
 once the correct answer is fixed (the VM's).
 
-**`(scheme charset)` stops at U+00FF: a character above it raises, a range above it is clipped** — ❌ **open**,
-both backends. Larceny triage family 45; found 2026-09-14 while re-reading
-why the `charset` suite's size assertion had been filed as not ours.
+**`(scheme charset)` stopped at U+00FF: a character above it raised, a range
+above it was clipped** — ✅ **fixed 2026-09-17**, both backends, by
+[#372](https://github.com/avalonalex/patina/issues/372). Larceny triage family
+45; found 2026-09-14 while re-reading why the `charset` suite's size assertion
+had been filed as not ours. Full write-up in
+`PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`.
 
-```scheme
-(import (scheme base) (scheme write) (scheme charset))
-(write (char-set-contains? char-set:letter (integer->char #x3BB)))   ; λ
-;; Patina, both backends => raises: string-ref index 955 out of bounds
-;;                          for string of length 256
-;; chibi, Gauche         => #t
-```
+**What it was.** The bundled `(srfi 14)` was Olin Shivers' reference
+implementation, whose own header calls it Latin-1 specific: a char-set is a
+256-character string indexed by code point. The symptoms split two ways, and
+the second is the one a suite catches late. Handed a character above U+00FF,
+`char-set-contains?`, `char-set` and `string->char-set` indexed past the
+string's end and raised, and so did `(srfi 130)`'s `string-index` and
+`string-skip` when their predicate was a char-set that met such a character.
+Handed a range, `ucs-range->char-set` clipped it without a word:
+`(ucs-range->char-set #xAC00 #xAC10)` was empty, `char-set:full` had 256
+members, and `char-set:title-case` was `char-set:empty` outright.
 
-The bundled `(srfi 14)` is Olin Shivers' reference implementation, whose own
-header calls it Latin-1 specific: a char-set is a 256-character string
-indexed by code point. The operations measured split two ways. Handed a
-character above U+00FF, `char-set-contains?`, `char-set` and
-`string->char-set` index past the string's end and raise, and so do the
-bundled `(srfi 130)`'s `string-index` and `string-skip` when their predicate
-is a char-set that meets such a character; a character or procedure
-predicate is unaffected. Handed a range, `ucs-range->char-set` clips it to
-the first 256 code points without a word unless asked to signal:
-`(ucs-range->char-set #xAC00 #xAC10)` is empty, and `char-set:full` has 256
-members, which is all the Larceny suite asserts. So the defect is far wider
-than that assertion, and half of it answers wrongly rather than raising. The
-direction is a full-Unicode representation, which the chibi-regexp entry
-above is blocked on as well. The candidate is chibi's own `(srfi 14)`:
-`(chibi char-set)` over `(chibi iset)`, with the Unicode classes as iset
-literals in `(chibi char-set full)` (`full.scm`, about 52 KB). The corpus
-vendors `chibi-char-set` and `chibi-iset` but not `full` or `ascii`, which
-would have to come from chibi's own tree, and those two libraries import
-`(chibi)`, so they need adapting too.
+**The rewrite, and why not the candidate this entry named.** The entry had
+proposed adopting chibi's `(chibi char-set)` over `(chibi iset)` with the
+classes as iset literals in `(chibi char-set full)`. That was not taken, for
+three reasons measured while doing it: chibi's char-set library is *minimal*
+and lacks about 35 of SRFI 14's procedures (`char-set=`, `<=`, `hash`, the
+cursors, `count`, `every`/`any`, `filter`, `xor`, `diff+intersection`, `map`,
+`unfold`, most of the `!` variants and most `char-set:*` constants), so it
+would have been a substrate plus a library rather than a drop-in; `full.scm`
+and `ascii.scm` are not in the corpus and import `(chibi)`, so both would need
+adapting; and chibi's `char-set:full` omits U+10FFFE and U+10FFFF, which is
+why chibi fails the very Larceny assertion this family is measured by.
+
+What landed instead: `lib/srfi/14.scm` is Patina-authored, holding a char-set
+as a normalized list of inclusive code-point ranges — ascending, disjoint,
+non-adjacent. That invariant is what makes the rest cheap: `char-set=` is
+`equal?` on the lists, each operation is one merge down two ascending lists,
+and `char-set:full` is two pairs rather than 1112064 members. The `char-set:*`
+classes come from `char-set-unicode-ranges`, a new primitive in `(patina
+internal chars)`, because deriving them in Scheme is a predicate call per
+scalar value — 0.1s on the VM and **1.8s on the tree-walker** for one class,
+times ten, on every import. The primitive reads `std`'s `char::is_*` for
+the properties backing `(scheme char)`'s predicates, so `char-set:letter` and
+`char-alphabetic?` cannot disagree, and the `unicode-properties` crate for the
+general categories `std` has no table for (it cannot tell an unassigned code
+point from a currency symbol). Both are Unicode 17.0 on the pinned toolchain,
+and a unit test asserts they stay level across a bump.
+
+**Two open questions the SRFI leaves were decided in passing**, recorded
+because they are choices: iteration and the cursors walk **ascending** now,
+which both references do and which retires the cursor-order row that had been
+filed under "not ours"; and `char-set-hash` folds over ranges, so equal sets
+still hash alike while the universe hashes in two steps.
+
+**Measured.** `charset` goes 91 → **93 of 93 on both backends**, and the
+Larceny VM lane 23 → 24 of 33 suites. Upstream's own `(srfi 14 test)` still
+passes 72 of 72. A new
+`crates/patina-tests/tests/scheme/srfi/char-sets.scm` carries 87 assertions —
+family 45's "Ours" line, which was empty. chibi 1226/1226 on both backends.
+Two chibi 0.12 defects turned up while checking that file under the oracles,
+both registered in `DIVERGENCES.tsv`: the `char-set:full` omission above, and
+a `char-set-hash` that is not order-invariant once a set holds a character
+above U+00FF.
+
+**This unblocks the chibi-regexp entry's stated blocker** — "a full-Unicode
+char-set story" — but does not by itself fix that failure: its `(chibi
+char-set boundary)` builds *iset*-backed sets, a different record type from
+ours, so `->rx` still falls off the end of its `cond`. What changed is that
+`ucs-range->char-set` no longer loads those sets empty. That entry needs
+re-measuring.
 
 **An imported variable is a stale copy of its binding** — ❌ **open**. Found
 2026-08-19 while writing an R6RS library test.
@@ -2174,6 +2218,7 @@ where there was one, and the guard test that retires it.
 
 | Defect | Fixed |
 |---|---|
+| `(scheme charset)` stopped at U+00FF: a character above it raised, a range above it was clipped (#372, family 45) | 2026-09-17 |
 | Hygiene was not applied inside a quasiquoted vector (captured in both directions) | 2026-08-26, verified 2026-09-01 |
 | The relinker captured pattern-variable material spelled like a template symbol | 2026-08-26 (family 35) |
 | Tree-walker: SRFI 1's n-ary procedures raised a wrong-arity error (`zip`) | 2026-08-25 |

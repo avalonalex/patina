@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-14 13:55:19\
+**Generated:** 2026-09-17 15:06:08\
 **Backend:** VM\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 23 of 33 |
-| Assertions passed | 8514 of 8534 (99.8%) |
+| Suites fully passing | 24 of 33 |
+| Assertions passed | 8516 of 8534 (99.8%) |
 | Suites cut short by a top-level error | 1 |
 | Suites not reaching a tally | 0 |
 
@@ -24,7 +24,7 @@ A top-level form of the suite's run program raised, and the program carried on t
 |---|---|---|
 | set | 16 of 16 passed | `Error: runtime error: Type error: %record-ref: expected record, got procedure` |
 
-## Assertion failures (20 in 9 suites)
+## Assertion failures (18 in 8 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -32,11 +32,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 - [base.sld:2301](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2301) — `vector-copy!`
 - (not located) — `a`
-
-### charset — 2 of 93 failed
-
-- [charset.sld:108](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L108) — `>=` `char-set-size`
-- [charset.sld:136](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/charset.sld#L136) — `cs` `char-set`
 
 ### complex — 1 of 69 failed
 
@@ -83,7 +78,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | pass | 139 | 139 |
-| charset | fail | 91 | 93 |
+| charset | pass | 93 | 93 |
 | comparator | pass | 158 | 158 |
 | complex | fail | 68 | 69 |
 | cxr | pass | 28 | 28 |

@@ -44,6 +44,11 @@ pub fn build_internal_chars(_name: Vec<String>, env: Rc<Environment>) -> Vec<Str
         ("char-foldcase", Arity::Exact(1)),
         // Digit value (scheme char)
         ("digit-value", Arity::Exact(1)),
+        // Unicode character classes as code-point ranges, for (srfi 14)'s
+        // char-set:* constants. Not an R7RS procedure — SRFI 14 needs whole
+        // classes, and deriving them by a predicate call per scalar value
+        // costs seconds on the tree-walker.
+        ("char-set-unicode-ranges", Arity::Exact(1)),
     ];
 
     let mut exports = Vec::new();

@@ -105,10 +105,13 @@ const PINNED: &[(&str, u64)] = &[
     // testing-API clause of the bundling policy, added 2026-09-06.
     ("lib/srfi/64.sld", 0x26141d34dea29f09),
     ("lib/srfi/64.scm", 0x02cc208e43562e3c),
-    // Pinned post-edit: one PATINA LOCAL EDIT (ucs-range->char-set's base
-    // set), recorded in lib/srfi/PROVENANCE.md.
-    ("lib/srfi/14.scm", 0xb971a3e4e5280a08),
-    ("lib/srfi/14.sld", 0xa30fdc16bb8de140),
+    // `lib/srfi/14.*` was pinned here until #372. It is no longer third-party:
+    // Olin Shivers' reference implementation is Latin-1 by construction — a
+    // char-set is a 256-character string indexed by code point — so making a
+    // char-set hold any character meant replacing it rather than editing it.
+    // The Patina-authored implementation is out of this list's scope, like the
+    // other adapted ports one directory over; lib/srfi/PROVENANCE.md records
+    // what it replaced and why.
     ("lib/srfi/27.scm", 0xf12c3dd28221b826),
     ("lib/srfi/27.sld", 0xa55b16b061696cdf),
     // 130.scm is pinned at its *post-edit* hash, like 132.sld below: it is
