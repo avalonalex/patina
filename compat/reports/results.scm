@@ -22,7 +22,7 @@
   ((slug "chibi-iset") (mode test) (status pass))
   ((slug "chibi-locale") (mode test) (status pass))
   ((slug "chibi-match") (mode test) (status pass))
-  ((slug "chibi-math-linalg") (mode test) (status missing-library) (missing "srfi 231"))
+  ((slug "chibi-math-linalg") (mode test) (status pass))
   ((slug "chibi-math-prime") (mode test) (status pass))
   ((slug "chibi-math-stats") (mode test) (status wrong-result))
   ((slug "chibi-mecab") (mode test) (status out-of-scope) (needs "mecab"))

@@ -273,6 +273,35 @@ suite_tests! {
     // Verbatim, and it needed no adaptation: (srfi 146) became available in
     // #375, which is what made this one possible at all.
     (srfi_165_computations, "srfi 165", "(srfi 165 test)", 0, 43),
+    // chibi's own suite for its own implementation, verbatim. Two expected
+    // failures, neither ours, and both recorded because a bare "2" would be
+    // unreadable later.
+    //
+    // 1. `(test-error (array-set! A3 1. 7))` (test.sld:2203). `array-freeze!`
+    //    works: the array it is *applied to* refuses `array-set!` here
+    //    exactly as under chibi, and the row above this one shows it. `A3` is
+    //    not that array — it is a curried sub-array, `(array-ref (array-curry
+    //    A 1) 3)`, built before the freeze, so it is a separate record still
+    //    holding its own live setter closure. Only the backing store is
+    //    shared, and `231/base.sld`'s own cond-expand stubs `make-immutable!`
+    //    to `#f` on every host but chibi, so the store stays mutable too.
+    //    Refusing here needs immutability enforced at the storage level,
+    //    which off chibi nothing does. Upstream's design, not our defect.
+    //
+    // 2. `(test (list->array …) (vector*->array 2 …))` (test.sld:2650)
+    //    compares two arrays with `equal?`. Their contents agree —
+    //    `array-every equal?` is #t on both implementations — but the arrays
+    //    are records holding distinct closures, and R7RS 6.1 makes `equal?`
+    //    on procedures `eqv?`. Patina answers #f; chibi answers #t, which is
+    //    leniency on its side. Isolated: two records each holding their own
+    //    `(lambda (x) x)` compare #f here and #t under chibi.
+    //
+    // The floor is 579, every assertion the suite runs. `assertions_run`
+    // counts each non-SKIP report including the two failures above, so it is
+    // the total and not the pass count: a floor of 577 would still be met
+    // after two assertions silently stopped running, which is the vacuous
+    // pass this floor exists to catch.
+    (srfi_231_arrays, "srfi 231", "(srfi 231 test)", 2, 579),
     // Upstream's own suite, with its imports lifted into the wrapper `.sld`
     // and nothing else changed; see that file. It exercises the whole
     // `(srfi 159)` surface, which is why the sub-libraries below are excused
@@ -471,6 +500,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "upstream suite imports (chibi), chibi's implementation core",
     ),
     ("srfi 8", "no upstream suite exists (receive: one macro)"),
+    (
+        "patina bitvector",
+        "Patina's own, written for (srfi 231)'s u1-storage-class; there is no upstream to have a suite. tests/scheme/srfi/bitvector.scm covers the packing, which is what a plausible implementation gets wrong",
+    ),
     // The four re-export shims of #390. Each names functionality R7RS-small
     // already provides, so what there is to test is that the shim loads and
     // that a binding reached through it works — which is behavioural, not
@@ -506,6 +539,10 @@ const NO_SUITE: &[(&str, &str)] = &[
     ("srfi 159 internal compat", SRFI_159_REASON),
     ("srfi 159 internal pretty", SRFI_159_REASON),
     ("srfi 159 internal util", SRFI_159_REASON),
+    (
+        "srfi 231 base",
+        "the internal base layer of (srfi 231), exercised through it by the suite above; chibi ships no suite for the sub-library alone, and everything it exports reaches the tested surface",
+    ),
     (
         "srfi 115 boundary",
         "generated Unicode word-boundary tables for (srfi 115), exercised by its suite above; upstream ships no suite for the data alone",

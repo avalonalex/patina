@@ -1,13 +1,13 @@
 # Patina third-party compatibility (vm backend)
 
-**128 of 161 packages pass.**
+**129 of 161 packages pass.**
 
-**128 of 132 in scope** — 29 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**129 of 132 in scope** — 29 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 128 | 128 |
-| missing-library | 6 | 1 |
+| pass | 129 | 129 |
+| missing-library | 5 | 0 |
 | parse-error | 13 | 1 |
 | load-error | 0 | 0 |
 | unbound-identifier | 2 | 1 |
@@ -15,12 +15,6 @@
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
 | out-of-scope | 9 | 0 |
-
-## Missing libraries — the bundling work queue
-
-| Library | In-scope packages |
-|---|---|
-| (srfi 231) | 1 |
 
 ## Parse errors
 
@@ -110,7 +104,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-iset | test | pass | in scope |
 | chibi-locale | test | pass | in scope |
 | chibi-match | test | pass | in scope |
-| chibi-math-linalg | test | missing-library | in scope |
+| chibi-math-linalg | test | pass | in scope |
 | chibi-math-prime | test | pass | in scope |
 | chibi-math-stats | test | wrong-result | in scope |
 | chibi-mecab | test | out-of-scope | ffi |
