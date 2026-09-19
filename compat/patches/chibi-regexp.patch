@@ -1,0 +1,50 @@
+# chibi-regexp: a test group that opens a data file the package does not ship
+#
+# With `chibi-char-set-boundary.patch` letting the library load, the suite
+# runs: 86 assertions pass, and then its last group does
+#
+#     (test-group "pcre"
+#       (let ((in (open-input-file "tests/re-tests.txt"))) ...))
+#
+# and the snowball contains no `tests/re-tests.txt`. It is in chibi's source
+# tree, not in what snow-fort distributes. So the package as published cannot
+# pass on any implementation, chibi included, unless run from a chibi checkout.
+#
+# The patch guards the group on the file:
+#
+#     (if (file-exists? "tests/re-tests.txt") ...)
+#
+# `(scheme file)` is already imported. **Nothing is deleted and no expectation
+# changes**: the group runs wherever its data exists, exactly as written, and is
+# empty where it does not. This is the README's fourth admitted shape, and its
+# limit is stated there - a guard on an input the package does not ship, never
+# a guard on an assertion that fails.
+#
+# The alternative was to leave 86 assertions about a regular-expression engine
+# unrun because of a 87th group that could never have run. That engine is the
+# one Patina ships as `(srfi 115)`, which is the argument for caring.
+#
+# Measured after, both backends: **86 of 86.** The package had not run an
+# assertion before.
+diff -ruN a/chibi/regexp-test.sld b/chibi/regexp-test.sld
+--- a/chibi/regexp-test.sld
++++ b/chibi/regexp-test.sld
+@@ -314,11 +314,12 @@
+              (error "invalid regex test line" line))))
+ 
+         (test-group "pcre"
+-          (let ((in (open-input-file "tests/re-tests.txt")))
+-            (let lp ()
+-              (let ((line (read-line in)))
+-                (unless (eof-object? line)
+-                  (test-pcre line)
+-                  (lp)))))))
++          (if (file-exists? "tests/re-tests.txt")
++              (let ((in (open-input-file "tests/re-tests.txt")))
++                (let lp ()
++                  (let ((line (read-line in)))
++                    (unless (eof-object? line)
++                      (test-pcre line)
++                      (lp))))))))
+ 
+       (test-end))))

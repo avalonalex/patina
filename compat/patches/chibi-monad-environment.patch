@@ -1,0 +1,34 @@
+# chibi-monad-environment: a `syntax-rules` with no literals list
+#
+# `chibi/monad/environment.sld:6`, in the `cond-expand` branch every
+# implementation but chibi takes:
+#
+#     (else (begin (define-syntax syntax-quote (syntax-rules ((_ x) 'x)))))
+#
+# `syntax-rules` takes its literals first, so `((_ x) 'x)` is read as the
+# literals list and there are no rules. Gauche: "literal list contains
+# non-symbol". The rewrite adds the `()` that was left out:
+#
+#     (syntax-rules () ((_ x) 'x))
+#
+# chibi never compiles this branch - it imports `syntax-quote` from `(chibi)`
+# instead - which is how a library that cannot load anywhere else ships.
+# Upstream still has it at `bb9b3215` (2026-09-09).
+#
+# It is the `else` a portable author intended, not one invented here: the
+# patch does not decide what `syntax-quote` means off chibi, it lets the
+# author's own definition parse.
+#
+# Measured after, both backends: the library loads, and chibi-show, which was
+# excluded only "via (chibi monad environment)", reaches its suite - see
+# `chibi-show.patch` for what stopped it next.
+diff -ruN a/chibi/monad/environment.sld b/chibi/monad/environment.sld
+--- a/chibi/monad/environment.sld
++++ b/chibi/monad/environment.sld
+@@ -4,5 +4,5 @@
+   (import (scheme base))
+   (cond-expand
+    (chibi (import (only (chibi) syntax-quote)))
+-   (else (begin (define-syntax syntax-quote (syntax-rules ((_ x) 'x))))))
++   (else (begin (define-syntax syntax-quote (syntax-rules () ((_ x) 'x))))))
+   (include "environment.scm"))

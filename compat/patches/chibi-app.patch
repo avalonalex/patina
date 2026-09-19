@@ -1,0 +1,77 @@
+# chibi-app: two-argument `substring`, and a `case` clause after `else`
+#
+# **1. `substring` with two arguments**, six sites in `chibi/app.scm`. The same
+# chibi extension `chibi-show.patch` has the measurement for: R7RS makes the end
+# mandatory, chibi makes it optional, and Gauche raises as Patina does. R7RS's
+# spelling of the same operation is `(string-copy s start)`, so each site is a
+# rename. It accounted for all 5 of the suite's errors (1 of 6).
+#
+# **2. `print-help`'s `case` has a clause after its `else`** (line 467):
+#
+#     (case (length commands)
+#       ((0) (newline out))
+#       (else ...)
+#       ((1) (print-command-help (car commands) out)))
+#
+# R7RS puts `else` last, and Gauche rejects this as Patina does. On chibi the
+# `((1) ...)` clause can never run: `else` takes every length but 0.
+#
+# The patch **removes the dead clause** rather than moving `else` below it.
+# Moving it is surely what the author meant - and it would change what the
+# program prints for a single command, on an implementation where today it
+# prints something else. Removing it changes nothing: it is the program chibi
+# runs, written so that other implementations accept it. A patch here measures
+# upstream's code, not an improvement on it.
+#
+# Measured after, both backends: **6 of 6.**
+diff -ruN a/chibi/app.scm b/chibi/app.scm
+--- a/chibi/app.scm
++++ b/chibi/app.scm
+@@ -242,7 +242,7 @@
+         ;; check for 'no' prefix on boolean
+         (if (not (string-prefix? "no" str))
+             (fail prefix conf-spec (car fail-args) fail-args "unknown option")
+-            (let ((res (parse-long-option (substring str 2) args (lambda args #f))))
++            (let ((res (parse-long-option (string-copy str 2) args (lambda args #f))))
+               (cond
+                ((not res)
+                 (fail prefix conf-spec (car fail-args) fail-args
+@@ -276,14 +276,14 @@
+         (cons (cons (append prefix (list (car (cadr x)))) #f)
+               (if (= 1 (string-length str))
+                   args
+-                  (cons (string-append "-" (substring str 1)) args))))
++                  (cons (string-append "-" (string-copy str 1)) args))))
+        ((eq? 'boolean (cadr x))
+         (cons (cons (append prefix (list (car x))) #t)
+               (if (= 1 (string-length str))
+                   args
+-                  (cons (string-append "-" (substring str 1)) args))))
++                  (cons (string-append "-" (string-copy str 1)) args))))
+        ((> (string-length str) 1)
+-        (let ((val+err (parse-value (cadr x) (substring str 1))))
++        (let ((val+err (parse-value (cadr x) (string-copy str 1))))
+           (if (cadr val+err)
+               (fail prefix conf-spec (car args) args (cadr val+err))
+               (cons (cons (append prefix (list (car x))) (car val+err))
+@@ -294,8 +294,8 @@
+        (else
+         (cons (cons (append prefix (list (car x))) (car args)) (cdr args))))))
+   (if (eqv? #\- (string-ref (car args) 1))
+-      (parse-long-option (substring (car args) 2) (cdr args) fail)
+-      (parse-short-option (substring (car args) 1) (cdr args) fail)))
++      (parse-long-option (string-copy (car args) 2) (cdr args) fail)
++      (parse-short-option (string-copy (car args) 1) (cdr args) fail)))
+ 
+ ;;> Parse a list of command-line arguments into a config object.
+ ;;> Returns a list whose head is the resulting config object, and tail
+@@ -468,8 +468,7 @@
+       ((0) (newline out))
+       (else
+        (display " <command>\nCommands:\n" out)
+-       (for-each (lambda (c) (print-command-help c out)) commands))
+-      ((1) (print-command-help (car commands) out)))
++       (for-each (lambda (c) (print-command-help c out)) commands)))
+     (if (pair? options) (display "Options:\n" out))
+     (for-each (lambda (o) (print-option-help o out)) options)))
+ 

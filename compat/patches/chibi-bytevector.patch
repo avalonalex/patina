@@ -1,0 +1,40 @@
+# chibi-bytevector: a syntax-rules rule with four elements
+#
+# `chibi/ieee-754.scm:16`, in `bytes-u8-set-all!`:
+#
+#     ((_) bv off i)
+#
+# is a rule of four elements where a rule has two, a pattern and a template.
+# Patina rejects it, Gauche rejects it ("malformed macro") and Chez rejects
+# it; chibi reads the pattern `(_)` and the template `bv` and ignores the
+# rest. It is a parenthesisation slip for the macro's base case - no bytes
+# left, nothing to set - which the two rules below it show the shape of:
+#
+#     ((_ bv off i) #f)
+#
+# **It changes nothing that runs.** Every use of the macro supplies at least
+# one byte, so the recursion ends at the second rule and neither spelling of
+# the first is ever reached - which is why chibi has never noticed. Upstream
+# still has the slip at `bb9b3215` (2026-09-09), so this cannot be quoted from
+# there; it is worth reporting.
+#
+# **One token, five packages.** A dependency's patch is staged for everything
+# that depends on it, so this also unblocks chibi-crypto-md5, -rsa and -sha2,
+# which were excluded only "via (chibi bytevector)". The fifth, postgresql,
+# gets past it and turns out to need `(foreign c)` - FFI, and re-filed as such.
+#
+# Measured after, both backends: chibi-bytevector 3 of 3, chibi-crypto-md5
+# 3 of 3, chibi-crypto-rsa 46 of 46, chibi-crypto-sha2 38 of 38. None of the
+# four had run an assertion before.
+diff -ruN a/chibi/ieee-754.scm b/chibi/ieee-754.scm
+--- a/chibi/ieee-754.scm
++++ b/chibi/ieee-754.scm
+@@ -14,7 +14,7 @@
+ 
+ (define-syntax bytes-u8-set-all!
+   (syntax-rules ()
+-    ((_) bv off i)
++    ((_ bv off i) #f)
+     ((_ bv off i b1) (bytevector-u8-set! bv (+ off i) b1))
+     ((_ bv off i b1 b2 b3 ...)
+      (begin

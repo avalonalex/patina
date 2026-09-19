@@ -26,6 +26,29 @@ implementation, moved over — `chibi-tar.patch` copies the package's own
 CHICKEN definitions. It stops qualifying the moment the new branch has to
 invent behaviour the suite then measures.
 
+Two more shapes qualify, both about a package's *test program* rather than
+its library, and both admitted because the alternative is that assertions which
+could run never do (#428). Each has a limit, and the limit is the point:
+
+- **A test header written for another implementation's module system.**
+  `comparators` opens with CHICKEN's `(use test) (use srfi-128)` and a `load`;
+  the assertions under it are `test-group` / `test` code that `(chibi test)`
+  runs unchanged. The patch may replace how the program *finds* its framework
+  and its subject. It may not touch an assertion or an expected value, and if
+  the body needed rewriting too it would be a port, which belongs upstream.
+- **A test group that opens an input the package does not ship.**
+  `chibi-regexp`'s last group reads `tests/re-tests.txt`, which is in chibi's
+  source tree and not in the snowball. The patch may guard the group on that
+  file's presence, so it runs wherever its data exists and is empty elsewhere.
+  It may not guard a group because it *fails*: a guard is for an input that is
+  missing, never for an answer that is wrong.
+
+Removing dead code is the same test applied honestly. `chibi-app` has a `case`
+clause after its `else`, which chibi never reaches and other implementations
+reject; the patch deletes the clause rather than moving `else` below it,
+because moving it would change what the program does. A patch measures
+upstream's code, not an improvement on it.
+
 What a patch is *not* for is a difference in Patina. `chibi-tar` had one of
 those too — text written to a binary port, which chibi and Gauche allow and
 Patina refused — and that was changed in Patina (#404). Six rewritten call

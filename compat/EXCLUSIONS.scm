@@ -71,6 +71,20 @@
    (note "srfi/106.sld:6 imports (foreign c), chibi's FFI interface library"))
   ((slug "srfi-170") (reason ffi) (expect out-of-scope)
    (note "srfi/170.sld:8 imports (foreign c); a POSIX API over chibi's FFI"))
+  ;; Two that sat under upstream-source-defect until #428's patches removed
+  ;; the defect in front of them, and what was behind it turned out to be FFI.
+  ((slug "postgresql") (reason ffi) (expect out-of-scope)
+   (note "imports (foreign c); reported directly since compat/patches/chibi-bytevector.patch removed the (chibi bytevector) typo that used to stop it first"))
+  ;; Imprecise on purpose, as chibi-xgboost's entry once was. Its real ceiling
+  ;; is (chibi net http), C-backed like the rest of (chibi net), and (srfi 18)
+  ;; threads. What it *reports* today is ours: Patina's bundled (srfi 115)
+  ;; fails to load when a (chibi char-set) is on the search path (#431), and
+  ;; this package's closure puts one there. The VM files that as parse-error
+  ;; and the tree-walker as load-error, which is #382's debt. When #431 is
+  ;; fixed the status drifts to missing-library and this entry asks to be
+  ;; re-measured, which is what it is for.
+  ((slug "chibi-snow-commands") (reason ffi) (expect parse-error)
+   (note "needs (chibi net http), C-backed upstream, and (srfi 18); stops earlier today on #431, a Patina defect in bundled (srfi 115), reached through (chibi snow package)"))
 
   ;;; ------------------------------------------- dependency-not-vendored
   ;;; build_corpus.py vendors only packages whose licence it can establish.
@@ -90,56 +104,28 @@
   ;;; is the first thing ever to execute it; Gauche rejects all of them
   ;;; exactly as Patina does. Accepting them would mean widening the
   ;;; language to match one reader's leniency.
+  ;;;
+  ;;; Nine packages left this section on 2026-09-19 (#428). Every entry here
+  ;;; was written before compat/patches/ existed, so none had been asked
+  ;;; whether a patch would do. For these it did: chibi-bytevector (and with
+  ;;; it chibi-crypto-md5, -rsa and -sha2, which one token had been holding
+  ;;; back), chibi-monad-environment, chibi-show, chibi-app and chibi-regexp
+  ;;; now pass, each patch header carrying its argument. postgresql and
+  ;;; chibi-snow-commands moved to `ffi`, which is what was behind the defect.
+  ;;; What stays is what no faithful patch reaches.
 
-  ((slug "chibi-bytevector") (reason upstream-source-defect) (expect parse-error)
-   (note "ieee-754.scm:16 — bytes-u8-set-all! has a 4-element syntax-rules rule ((_) bv off i), a parenthesization typo; Gauche: \"malformed macro\""))
-  ((slug "chibi-crypto-md5") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi bytevector) — see chibi-bytevector"))
-  ((slug "chibi-crypto-rsa") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi bytevector) — see chibi-bytevector"))
-  ((slug "chibi-crypto-sha2") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi bytevector) — see chibi-bytevector; its own include-shared is behind a chibi-only branch and is not the blocker"))
-  ((slug "postgresql") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi bytevector) — see chibi-bytevector"))
-  ((slug "chibi-monad-environment") (reason upstream-source-defect) (expect parse-error)
-   (note "environment.sld:6 — (syntax-rules ((_ x) 'x)) has no literals list; Gauche: \"literal list contains non-symbol\""))
-  ((slug "chibi-show") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi monad environment) — see chibi-monad-environment"))
-  ((slug "chibi-snow-commands") (reason upstream-source-defect) (expect parse-error)
-   (note "via (chibi monad environment) — see chibi-monad-environment"))
   ((slug "edn") (reason upstream-source-defect) (expect parse-error)
    (note "(chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do"))
-  ;; Two upstream libraries both call their type a "char-set" and mean
-  ;; different things, and `regexp.sld` imports one of each. Its `char-set?`
-  ;; comes from `(srfi 14)` (regexp.sld:35) while `(chibi char-set boundary)`
-  ;; (regexp.sld:63) resolves its own cond-expand to `(chibi char-set)`, whose
-  ;; sets are iset-backed — a different record type. So the grapheme SRE's
-  ;; embedded boundary sets satisfy no arm of `->rx`'s cond (regexp.scm:761),
-  ;; it falls off the end returning #<unspecified>, and upstream's own guard
-  ;; raises "expected a state" at the file's last form,
-  ;; `(define re:grapheme (regexp 'grapheme))`. MEASURED 2026-09-18:
-  ;; `(char-set? char-set:hangul-l)` is #f under the harness's roots.
-  ;;
-  ;; chibi is homogeneous the other way — its regexp.sld cond-expand takes
-  ;; `(chibi)`, so its char-set? is the chibi one. Gauche is homogeneous by
-  ;; accident: its cond-expand `(library ...)` test answers #f for anything on
-  ;; the -I path (measured with a two-line library of our own: #f from
-  ;; cond-expand, yet `import` of the same library works), so the boundary
-  ;; library takes its `else` branch and every set is a real SRFI 14 one.
-  ;; Patina resolves like chibi and imports char-set? like Gauche, which is
-  ;; the only combination that mixes. Every step of that is R7RS-correct on
-  ;; our side; Gauche's is the conformance gap, and not one to copy.
-  ;;
-  ;; Won't fix. The only repair on our side is a `(chibi char-set)` in
-  ;; `test-lib/` reimplemented over our `(srfi 14)` — which is maintaining a
-  ;; third-party library's API, not the `(chibi filesystem)` precedent (that
-  ;; is upstream's own file plus one marked cond-expand branch). #372 already
-  ;; removed the *other* half of this, the Latin-1 clipping that made those
-  ;; boundary sets load empty; the type mismatch was underneath it and is not
-  ;; ours. Its two dependents are excluded here already, for FFI and for an
-  ;; unrelated upstream defect, so this entry costs one package.
-  ((slug "chibi-regexp") (reason upstream-source-defect) (expect parse-error)
-   (note "regexp.scm:1180 — (regexp 'grapheme) feeds #<unspecified> into make-state, because regexp.sld imports char-set? from (srfi 14) while its (chibi char-set boundary) dependency resolves to iset-backed (chibi char-set). chibi and Gauche each end up with one char-set type and load it; see the comment above for how each gets there"))
+  ;; chibi-regexp sat here as won't-fix: two upstream libraries both call
+  ;; their type a "char-set" and mean different record types, and regexp.sld
+  ;; ends up with one of each whenever a (chibi char-set) is reachable. The
+  ;; conclusion then was that the only repair was reimplementing (chibi
+  ;; char-set) over SRFI 14. It is one line:
+  ;; `compat/patches/chibi-char-set-boundary.patch` makes the boundary library
+  ;; choose by the `chibi` feature, as regexp.sld beside it does, and
+  ;; `chibi-regexp.patch` guards the one test group whose data file the
+  ;; snowball does not ship. 86 of 86 on both backends. Patina's own bundled
+  ;; (srfi 115) has the same line and the same exposure: #431.
 
   ;; srfi-179 builds a `u1-storage-class` — a one-bit vector — out of
   ;; `u1vector-ref`, `u1vector-set!`, `make-u1vector`, `u1vector-length` and
@@ -163,8 +149,12 @@
   ;; at the missing library and this was invisible.
   ((slug "srfi-179") (reason upstream-source-defect) (expect parse-error)
    (note "srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8"))
-  ((slug "chibi-app") (reason upstream-source-defect) (expect parse-error)
-   (note "app.scm:467 — an else clause mid-case, followed by ((1) ...); R7RS puts else last and Gauche rejects it. Patina still owes a better message than \"No matching pattern for macro case\" with no location — that part is ours, tracked in PRD §6"))
+
+  ;; chibi-app sat here for an `else` clause mid-`case` (app.scm:467). It now
+  ;; passes, 6 of 6: `compat/patches/chibi-app.patch` removes the clause after
+  ;; `else`, which chibi never reaches, rather than moving `else` below it,
+  ;; which would change what the program does. The poor message Patina gives
+  ;; for that shape, which this entry used to carry, is #432.
 
   ;; chibi-math-stats sat here for one commit, for calling SRFI 1's `every` on
   ;; a vector at stats.scm:812. It now passes: the file defines its own
@@ -178,9 +168,12 @@
   ;;; own test program fails, and for reasons that are not about us.
 
   ((slug "chibi-assert") (reason upstream-test-defect) (expect missing-library)
-   (note "(chibi assert) itself loads and runs on Patina — its cond-expand else branch is portable — but chibi/assert-test.sld:2 imports (chibi), chibi's implementation core, for protect and exception-irritants"))
-  ((slug "comparators") (reason upstream-test-defect) (expect unbound-identifier)
-   (note "srfi-128/comparators/comparators-test.scm opens with (use test) (use srfi-128) — CHICKEN syntax, not R7RS"))
+   (note "(chibi assert) itself loads and runs on Patina — its cond-expand else branch is portable — but chibi/assert-test.sld:2 imports (chibi), chibi's implementation core, for protect and exception-irritants. Not patched, measured 2026-09-19: with those rewritten to guard and error-object-irritants it is 3 of 4, and the fourth cannot pass off chibi — the portable branch reports the datum inside 'three as a free variable and raises unbound variable, on Gauche exactly as on Patina"))
+  ;; comparators sat here for a test program written as a CHICKEN script. It
+  ;; now passes, 286 of 286: `compat/patches/comparators.patch` replaces the
+  ;; three header lines with an R7RS import - the README's third admitted
+  ;; shape, and the one that stretches furthest - and adds three imports the
+  ;; *library* used and never declared, which an import probe could not see.
   ((slug "chibi-voting") (reason upstream-test-defect) (expect wrong-result)
    (note "instant-runoff-rank's expectation depends on hash-table iteration order, which no standard specifies; chibi, Gauche and Patina each produce a different ranking and Gauche fails the suite as we do"))
   ((slug "srfi-197") (reason upstream-test-defect) (expect runtime-error)

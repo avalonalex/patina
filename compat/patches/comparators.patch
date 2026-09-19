@@ -1,0 +1,55 @@
+# comparators: three imports the library never declares, and a CHICKEN test header
+#
+# Two edits, and they are not equally clear-cut.
+#
+# **1. `comparators.sld` imports `(scheme base)` and `(scheme case-lambda)`
+# and its body uses more.** `char-foldcase` and `string-foldcase` are
+# `(scheme char)`'s, `nan?` is `(scheme inexact)`'s, and the complex
+# comparator uses `(scheme complex)`. An implementation that enforces a
+# library's import set - Patina does, R7RS 5.6 - finds them unbound the first
+# time a comparator that needs one is built. A plain defect, and the package
+# *passed* as an import probe while carrying it, because a probe calls
+# nothing. The patch adds the three imports.
+#
+# **2. The test program is a CHICKEN script**:
+#
+#     (use test)
+#     (use srfi-128)
+#     (load "../comparators/r7rs-shim.scm")
+#
+# `use` is CHICKEN's, and the `load` reaches for a file beside a CHICKEN egg's
+# layout. The body underneath is ordinary `test-group` / `test` / `test-assert`
+# code, which is the API `(chibi test)` shares with CHICKEN's `test` egg - so
+# the patch replaces those three lines with one R7RS `import` and leaves every
+# assertion as written.
+#
+# **This second edit is the one that stretches the README's rule**, which is
+# why it is called out: it ports a test's header rather than correcting a slip
+# in it. It is admitted as the README's third shape because it touches only how
+# the test *finds* its framework and its subject - no assertion, no expected
+# value - and because without it 286 assertions about a SRFI 128 implementation
+# never run anywhere.
+#
+# Measured after, both backends: **286 of 286**, across nine groups.
+diff -ruN a/comparators.sld b/comparators.sld
+--- a/comparators.sld
++++ b/comparators.sld
+@@ -1,6 +1,7 @@
+ (define-library (comparators)
+   (import (scheme base))
+   (import (scheme case-lambda))
++  (import (scheme char) (scheme inexact) (scheme complex))
+   (export comparator? comparator-ordered? comparator-hashable?)
+   (export make-comparator
+           make-pair-comparator make-list-comparator make-vector-comparator
+diff -ruN a/srfi-128/comparators/comparators-test.scm b/srfi-128/comparators/comparators-test.scm
+--- a/srfi-128/comparators/comparators-test.scm
++++ b/srfi-128/comparators/comparators-test.scm
+@@ -1,6 +1,4 @@
+-(use test)
+-(use srfi-128)
+-(load "../comparators/r7rs-shim.scm")
++(import (scheme base) (scheme write) (chibi test) (comparators))
+ 
+ (define (print x) (display x) (newline))
+ 
