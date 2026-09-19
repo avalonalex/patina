@@ -155,8 +155,8 @@ issues and the archive before filing**, for the same reason.
 - `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope
   algorithm), and the two instruments for hygiene work: `PATINA_SCOPE_TRACE`
   (what scopes a binding actually gets, and how a reference resolved) and
-  `crates/patina-tests/tests/hygiene_matrix.rs` (91 shapes in two tables — 28
-  use-site binders scored against chibi and Racket, 63 generated and
+  `crates/patina-tests/tests/hygiene_matrix.rs` (131 shapes in two tables — 28
+  use-site binders scored against chibi and Racket, 103 generated and
   library-imported macros scored against chibi and Gauche — the scoreboard a
   hygiene fix is measured by)
 - `docs/TEST_ORGANIZATION.md` — test structure and categories

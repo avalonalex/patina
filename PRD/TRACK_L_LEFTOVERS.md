@@ -49,7 +49,6 @@ empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
 - #438 — a library macro's reference follows the program's variable once the program defines over the import it named. What #407 left: the relinker's skip is right when it is made and invalidated by the later `define`.
-- #408 — a generated macro cannot reach a definition its generator introduced, across a library.
 - #269 — a definition a template introduces in a body is reachable by its bare name.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
 

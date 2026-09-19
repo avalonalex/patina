@@ -264,8 +264,15 @@ related.
    `visible_by_name` for source-written parameters and internal defines, and
    the fallbacks' refusal arms that guard them. Removing those is
    resolve-once's work, not this.
-2. **Relink an identifier to a binding.** Needed for the exported getter, and
-   for nothing else measured. `template_symbols` becomes the template's free
+2. **Relink an identifier to a binding.** *(Landed in two parts: #402 /
+   #405 on 2026-09-18 made a scoped identifier in `Template::Literal` a
+   mention at all — `CompiledMacro::inherited_identifiers` — and #408 on
+   2026-09-19 made the alias name the binding. The note after this item says
+   how the question it ends on was settled. Step 1 has **not** landed, so the
+   by-name views are still there; nothing in step 2 as built leans on them —
+   the relinker finds an introduced definition by its identity and falls back
+   to the name only where the mention's scopes select what the name reaches.)*
+   Needed for the exported getter, and for nothing else measured. `template_symbols` becomes the template's free
    *identifiers*, `(name, scopes)`, taken from `Template::Symbol` and from
    scoped identifiers in `Template::Literal`. Each resolves in the definition
    environment at its own scopes — `get_with_scopes` on the tree-walker's
@@ -286,6 +293,21 @@ related.
    the generated macro's environment, such an identifier finds nothing, or a
    different binding of the same spelling. It has to carry the environment
    that gave it its identity, or the step has to show the two cannot differ.
+   *Settled 2026-09-19 (#408), by measurement.* The binding a definer
+   introduces lives where the definer was **run**, and that is the generated
+   macro's definition environment, whichever library wrote the definer: a
+   definer owned by one library and run in a second puts `(define total 0)`
+   in the second, and the macro it generates there is defined there too. So
+   resolving the mention in the generated macro's environment, at the
+   mention's own scopes, finds it (`Environment::introduced_definition`). What
+   the *writing* library contributes to such a template is its own private
+   names — `step` beside `total` in `expansion/template-references.scm`'s
+   three-library row — and those are plain bindings the outer expansion's
+   relinking had already aliased by the time the inner macro was compiled.
+   chibi 0.12 and Gauche 0.9.15 agree with both backends on that row and on a
+   three-level generation. As built, only a definition held by the *root* of
+   the definition environment's chain is aliased; a scoped binding in a child
+   frame is lexical and stays with scoped resolution.
 3. **V4, separately:** bind a `define-syntax` at its name's scopes. #269's
    keyword half, and independent of both.
 

@@ -328,6 +328,24 @@ before the walk took both, the two backends' desugarers saw different bindings
 for one reference: the VM matched a macro-introduced `else` as `cond`'s
 literal, and refused a macro-introduced `when` as syntax.
 
+The identity has a third reader since #408: **definition-environment
+relinking across a library.** A generated macro's template can mention a
+definition its own generator introduced — `(begin (define count 0)
+(define-syntax name … count …))`, the ordinary shape of a definer with
+private state. Used from outside the library, that mention needs an alias, and
+the bare name is the wrong thing to alias to whenever something else in the
+library has the spelling: a plain definition, or the definition a second run
+of the definer introduced. The mention's own scopes select the right one, so
+the relinker asks `Environment::introduced_definition` which top-level
+definition they select and aliases to *that* — the renamed global on the VM,
+and on the tree-walker the scope set the definition is filed under, read and
+written through an alias that carries it (`define_scoped_alias`). A scoped
+binding in a child frame is lexical and is never aliased. The name-only view
+still serves the case where the two agree. `hygiene_matrix.rs`'s `Introducing`
+makers score this. The identities have to be *all* there for it to work: the
+VM records them a form at a time, and until #408 kept one per spelling per
+form, which lost the first of two definitions one form introduced.
+
 The identity is needed because `alpha_rename` runs once per top-level form and
 builds its candidate frames from that form alone. A reference in a later form
 carrying an earlier expansion's scopes therefore has no candidate, and before

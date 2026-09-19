@@ -7,7 +7,9 @@
 ;; that a suite file can hold: what remains there is family 40, which is a
 ;; genuine backend divergence. Three more came with #407, which is the same
 ;; claim from the side nobody had looked at: the program's variable and the
-;; library's holding *equal values*.
+;; library's holding *equal values*. Four more came with #408: what the
+;; template means is a definition its own generator *introduced*, which the
+;; bare name does not identify.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -15,7 +17,7 @@
 ;; see, or on the program meaning something different by a name the template
 ;; also uses. Neither can be staged without a second library: a `let-syntax` in
 ;; the same program shares the program's bindings, which is the very thing
-;; being distinguished. So the file defines six `(probe …)` libraries inline.
+;; being distinguished. So the file defines nine `(probe …)` libraries inline.
 ;;
 ;; **chibi 0.12 cannot run this file at all.** It does not support
 ;; `define-library` in a script — measured 2026-09-09, the body's `define`
@@ -26,8 +28,9 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; eight of the nine rows. The three #407 rows were also run under chibi with
-;; the library as a file (2026-09-19), and it answers as Gauche does.
+;; twelve of the thirteen rows. The three #407 rows and the four #408 rows
+;; were also run under chibi with the libraries as files (2026-09-19), and it
+;; answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -75,7 +78,8 @@
 ;;   Gauche                    5 pass, 1 skip
 ;;   chibi                     does not complete — registered
 ;;
-;; and 9 / 8 + 1 skip since the #407 rows, measured 2026-09-19.
+;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, both
+;; measured 2026-09-19.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -143,6 +147,60 @@
     (define-syntax bump-Y! (syntax-rules () ((_) (set! Y (+ Y 1)))))
     (define-syntax bump-count! (syntax-rules () ((_) (set! count (+ count 1)))))))
 
+;; Definers with private state, for the introduced-definition rows. Each
+;; generated macro mentions a definition *its own generator introduced*:
+;; `define-reacher`'s beside a plain `state` the library also has, and
+;; `define-counter`'s beside the one a second run of it introduced.
+(define-library (probe introduced)
+  (import (scheme base))
+  (export reach read-reached tick tock)
+  (begin
+    (define state 'plain)
+    (define-syntax define-reacher
+      (syntax-rules ()
+        ((_ name reader)
+         (begin
+           (define state 'introduced)
+           (define (reader) state)
+           (define-syntax name
+             (syntax-rules ()
+               ((_) state)
+               ((_ v) (begin (set! state v) state))))))))
+    (define-reacher reach read-reached)
+    (define-syntax define-counter
+      (syntax-rules ()
+        ((_ name)
+         (begin
+           (define count 0)
+           (define-syntax name
+             (syntax-rules () ((_) (begin (set! count (+ count 1)) count))))))))
+    (define-counter tick)
+    (define-counter tock)))
+
+;; The definer owned by one library and run in another. The generated macro's
+;; template mentions two things: `total`, which the definer introduced where
+;; it was *run*, and `step`, which is private to the library that *wrote* it.
+(define-library (probe owner)
+  (import (scheme base))
+  (export define-stepper)
+  (begin
+    (define step 10)
+    (define-syntax define-stepper
+      (syntax-rules ()
+        ((_ name)
+         (begin
+           (define total 0)
+           (define-syntax name
+             (syntax-rules () ((_) (begin (set! total (+ total step)) total))))))))))
+
+(define-library (probe runner)
+  (import (scheme base) (probe owner))
+  (export step-a step-b)
+  (begin
+    (define total 'runner-plain)
+    (define-stepper step-a)
+    (define-stepper step-b)))
+
 (import (scheme eval) (scheme repl)
         (except (scheme base)
           quote car cdr caar cadr cdar cddr cons pair? null?
@@ -151,7 +209,8 @@
         (prefix (scheme base) r7:)
         (srfi 101)
         (srfi 64)
-        (probe lit) (probe both) (probe qq) (probe wq) (probe esc) (probe same))
+        (probe lit) (probe both) (probe qq) (probe wq) (probe esc) (probe same)
+        (probe introduced) (probe runner))
 
 (test-begin "template-references")
 
@@ -273,6 +332,52 @@
   2
   count)
 
+;; ── A definition the macro's own generator introduced ───────────────────────
+;;
+;; **#408.** Relinking gave a template's reference an alias *by name*: to
+;; whatever the bare spelling reaches in the library. That is the wrong thing
+;; to ask for when the template was generated by a definer that also
+;; introduced the definition — `(begin (define state …) (define-syntax name
+;; … state …))`, the ordinary shape of private state — and something else in
+;; the library has the spelling: a plain definition, or the definition a second
+;; run of the definer introduced. The generated template's `state` carries its
+;; generator's expansion scope, which selects the right one; the name alone
+;; reaches another. #402 made that a refusal rather than a silent `plain` — and
+;; a refusal only where the program had no `state` of its own; where it had
+;; one, the reference landed there. The alias names the *binding* now: the
+;; global the VM renamed the definition to, or the scopes the tree-walker
+;; filed it under. `hygiene_matrix.rs`'s `introducing` rows are the same axis
+;; across use sites.
+;;
+;; The program has a `state` of its own, so that both wrong answers are
+;; wrong here: `plain` and `program`.
+(define state 'program)
+
+(test-equal "a generated macro reaches the definition its generator introduced"
+  (r7:list 'introduced 'program)
+  (r7:list (reach) state))
+
+(test-equal "and assigns it, past the library's and the program's of that name"
+  (r7:list 'assigned 'assigned 'program)
+  (let* ((returned (reach 'assigned)))
+    (r7:list returned (read-reached) state)))
+
+;; Run twice is how a definer is used. `let*` because the order matters and
+;; operand order is not specified.
+(test-equal "a definer run twice gives each generated macro state of its own"
+  (r7:list 1 2 1)
+  (let* ((a (tick)) (b (tick)) (c (tock)))
+    (r7:list a b c)))
+
+;; Written in one library, run in another, used from here. `total` is where
+;; the definer ran — beside a plain `total` there — and `step` where it was
+;; written; the first needs the binding named, the second is ordinary
+;; relinking, and one expansion needs both.
+(test-equal "a definer from one library, run in a second, used from a third"
+  (r7:list 10 20 10)
+  (let* ((a (step-a)) (b (step-a)) (c (step-b)))
+    (r7:list a b c)))
+
 ;; ── An object embedded in evaluated code is not copied ──────────────────────
 ;;
 ;; A vector reached through `(eval (list 'outer-mut vec) …)` is the object the
@@ -287,7 +392,7 @@
 ;; chibi refuses the mutation outright ("vector-set!: immutable vector"). A
 ;; **reported skip** rather than a bare `cond-expand`, so the row cannot vanish
 ;; quietly — and it is what keeps Gauche able to run the file, since the
-;; unbound variable would otherwise take the whole thing down and cost the eight
+;; unbound variable would otherwise take the whole thing down and cost the twelve
 ;; rows above their only oracle.
 ;; `vector-set!` and `vector` unprefixed: SRFI 101 does not export either, so
 ;; these are `(scheme base)`'s without help. That matters for `inner`, whose
