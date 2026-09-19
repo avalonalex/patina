@@ -30,7 +30,10 @@ its date (#381), and the archive's status line went stale twice.
 - **Corpus:** 143 of 161 packages pass, which is **143 of 143 in scope**; 18 are
   excluded by `compat/EXCLUSIONS.scm` with a reason apiece (11 FFI, 2 licence,
   5 upstream defects no faithful patch reaches). Nine came back in under
-  `compat/patches/` on 2026-09-19. `cargo run --release -p patina-compat -- run`.
+  `compat/patches/` on 2026-09-19. That is the VM's reading; the tree-walker
+  passes the same 143 and reads 143 of 144, because one excluded package files
+  its failure in a different bucket there (#382).
+  `cargo run --release -p patina-compat -- run`.
 - **What that does not say:** 106 of the 143 are *probe-mode* — imported, never
   called. 37 run a suite. The headline means "loads", not "works" (#429).
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
@@ -64,7 +67,6 @@ empty, archive this page.
 
 **The corpus and its harness**
 - #429 — most passes are import-only; how to make the number mean more.
-- #431 — bundled `(srfi 115)` fails to load when a `(chibi char-set)` is on the search path. Ours, and in something Patina ships.
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #381 — the snapshot records no measurement date.
 - #384 — two upstream SRFI 160 defects, quarantined.

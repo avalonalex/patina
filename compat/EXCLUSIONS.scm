@@ -75,16 +75,14 @@
   ;; the defect in front of them, and what was behind it turned out to be FFI.
   ((slug "postgresql") (reason ffi) (expect out-of-scope)
    (note "imports (foreign c); reported directly since compat/patches/chibi-bytevector.patch removed the (chibi bytevector) typo that used to stop it first"))
-  ;; Imprecise on purpose, as chibi-xgboost's entry once was. Its real ceiling
-  ;; is (chibi net http), C-backed like the rest of (chibi net), and (srfi 18)
-  ;; threads. What it *reports* today is ours: Patina's bundled (srfi 115)
-  ;; fails to load when a (chibi char-set) is on the search path (#431), and
-  ;; this package's closure puts one there. The VM files that as parse-error
-  ;; and the tree-walker as load-error, which is #382's debt. When #431 is
-  ;; fixed the status drifts to missing-library and this entry asks to be
-  ;; re-measured, which is what it is for.
-  ((slug "chibi-snow-commands") (reason ffi) (expect parse-error)
-   (note "needs (chibi net http), C-backed upstream, and (srfi 18); stops earlier today on #431, a Patina defect in bundled (srfi 115), reached through (chibi snow package)"))
+  ;; Behind the literals-list typo was Patina's own #431 - the bundled
+  ;; (srfi 115) failing to load with a (chibi char-set) on the path, which this
+  ;; package's closure puts there - and that was *ours*, so it was fixed in the
+  ;; change that re-filed this entry rather than excluded around. Behind that
+  ;; is what is left: (chibi net http), C-backed like the rest of (chibi net).
+  ;; Both backends report it alike, which the defect in front of it did not.
+  ((slug "chibi-snow-commands") (reason ffi) (expect missing-library)
+   (note "needs (chibi net http), C-backed upstream like the rest of (chibi net); (srfi 18) threads is wanted behind it"))
 
   ;;; ------------------------------------------- dependency-not-vendored
   ;;; build_corpus.py vendors only packages whose licence it can establish.
@@ -105,14 +103,16 @@
   ;;; exactly as Patina does. Accepting them would mean widening the
   ;;; language to match one reader's leniency.
   ;;;
-  ;;; Nine packages left this section on 2026-09-19 (#428). Every entry here
-  ;;; was written before compat/patches/ existed, so none had been asked
-  ;;; whether a patch would do. For these it did: chibi-bytevector (and with
-  ;;; it chibi-crypto-md5, -rsa and -sha2, which one token had been holding
-  ;;; back), chibi-monad-environment, chibi-show, chibi-app and chibi-regexp
-  ;;; now pass, each patch header carrying its argument. postgresql and
-  ;;; chibi-snow-commands moved to `ffi`, which is what was behind the defect.
-  ;;; What stays is what no faithful patch reaches.
+  ;;; Ten packages left this section on 2026-09-19 (#428), of the twelve it
+  ;;; held. Every entry here was written before compat/patches/ existed, so
+  ;;; none had been asked whether a patch would do. Eight now pass, each patch
+  ;;; header carrying its argument: chibi-bytevector (and with it
+  ;;; chibi-crypto-md5, -rsa and -sha2, which one token had been holding
+  ;;; back), chibi-monad-environment, chibi-show, chibi-app and chibi-regexp.
+  ;;; Two moved to `ffi`, which is what was behind the defect in front of
+  ;;; them: postgresql and chibi-snow-commands. (A ninth pass, comparators,
+  ;;; came out of upstream-test-defect below.) What stays is what no faithful
+  ;;; patch reaches.
 
   ((slug "edn") (reason upstream-source-defect) (expect parse-error)
    (note "(chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do"))
@@ -170,10 +170,10 @@
   ((slug "chibi-assert") (reason upstream-test-defect) (expect missing-library)
    (note "(chibi assert) itself loads and runs on Patina — its cond-expand else branch is portable — but chibi/assert-test.sld:2 imports (chibi), chibi's implementation core, for protect and exception-irritants. Not patched, measured 2026-09-19: with those rewritten to guard and error-object-irritants it is 3 of 4, and the fourth cannot pass off chibi — the portable branch reports the datum inside 'three as a free variable and raises unbound variable, on Gauche exactly as on Patina"))
   ;; comparators sat here for a test program written as a CHICKEN script. It
-  ;; now passes, 286 of 286: `compat/patches/comparators.patch` replaces the
+  ;; now passes, 144 of 144: `compat/patches/comparators.patch` replaces the
   ;; three header lines with an R7RS import - the README's third admitted
   ;; shape, and the one that stretches furthest - and adds three imports the
-  ;; *library* used and never declared, which an import probe could not see.
+  ;; *library* used and never declared.
   ((slug "chibi-voting") (reason upstream-test-defect) (expect wrong-result)
    (note "instant-runoff-rank's expectation depends on hash-table iteration order, which no standard specifies; chibi, Gauche and Patina each produce a different ranking and Gauche fails the suite as we do"))
   ((slug "srfi-197") (reason upstream-test-defect) (expect runtime-error)

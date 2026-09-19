@@ -25,8 +25,9 @@
 # The archived Track L PRD recorded chibi-regexp's failure as won't-fix, on the
 # reasoning that the only repair was reimplementing `(chibi char-set)` over
 # SRFI 14. That was written before this patch mechanism existed; the mismatch
-# is one line. **Patina's own bundled `(srfi 115)` has the same line and the
-# same exposure** - #431 - and gets the same fix there, as a marked deviation.
+# is one line. **Patina's own bundled `(srfi 115)` had the same line and the
+# same exposure** - #431 - and got the same fix in the same change, as a marked
+# `PATINA DEVIATION` in `lib/srfi/115/boundary.sld`.
 #
 # Measured after, both backends: this package still passes its import probe,
 # and chibi-regexp's library loads - see `chibi-regexp.patch`.

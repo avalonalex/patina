@@ -19,8 +19,9 @@
 # **2. The test's `(cond-expand (complex ...))` has no `else`.** `complex` is
 # chibi's own feature name - R7RS's is `exact-complex` - and an unfulfilled
 # expression-level `cond-expand` is unspecified: chibi evaluates it to nothing,
-# Gauche and Patina raise. The patch adds `(else #f)`, the README's second
-# admitted shape, so the three complex-number rows are skipped where the
+# Gauche and Patina raise. The patch adds `(else #f)` - a `cond-expand`
+# unportable by omission, which the README admits - so the three
+# complex-number rows are skipped where the
 # feature is not advertised rather than stopping the file. They are *not* run:
 # Patina has exact complex numbers but does not claim `complex`, and claiming
 # another implementation's feature name to pass a test is the wrong fix.

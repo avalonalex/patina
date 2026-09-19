@@ -7,8 +7,8 @@
 | Status | Packages | In scope |
 |---|---|---|
 | pass | 143 | 143 |
-| missing-library | 3 | 0 |
-| parse-error | 3 | 0 |
+| missing-library | 4 | 0 |
+| parse-error | 2 | 0 |
 | load-error | 0 | 0 |
 | unbound-identifier | 0 | 0 |
 | wrong-result | 1 | 0 |
@@ -27,7 +27,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-mecab | out-of-scope | chibi/mecab.sld:38 (include-shared "mecab") — bindings to libmecab |
 | chibi-net-dns | out-of-scope | needs (chibi net), which is C-backed upstream |
 | chibi-net-smtp | out-of-scope | needs (chibi net), which is C-backed upstream |
-| chibi-snow-commands | parse-error | needs (chibi net http), C-backed upstream, and (srfi 18); stops earlier today on #431, a Patina defect in bundled (srfi 115), reached through (chibi snow package) |
+| chibi-snow-commands | missing-library | needs (chibi net http), C-backed upstream like the rest of (chibi net); (srfi 18) threads is wanted behind it |
 | chibi-ssl | out-of-scope | chibi/ssl.sld:14 (include-shared "ssl") — bindings to OpenSSL |
 | chibi-xgboost | out-of-scope | chibi/xgboost.sld:5 (include-shared "xgboost/xgboost") — bindings to libxgboost, reported directly since #383 bundled the (srfi 160 base) that used to shadow it |
 | chibi-xlib | out-of-scope | chibi/xlib.sld:45 (include-shared "xlib") — bindings to Xlib |
@@ -95,7 +95,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-regexp | test | pass | in scope |
 | chibi-scribble | test | pass | in scope |
 | chibi-show | test | pass | in scope |
-| chibi-snow-commands | probe | parse-error | ffi |
+| chibi-snow-commands | probe | missing-library | ffi |
 | chibi-ssl | test | out-of-scope | ffi |
 | chibi-sxml | probe | pass | in scope |
 | chibi-tar | test | pass | in scope |

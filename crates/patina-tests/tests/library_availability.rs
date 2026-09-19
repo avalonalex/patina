@@ -186,6 +186,46 @@ fn availability_uses_the_interpreters_filesystem_and_is_not_cached() {
     assert_eq!(run(&other_tw, EXTERNAL), "#f");
 }
 
+/// #431: what a *bundled* library is must not depend on what else happens to
+/// be reachable.
+///
+/// `lib/srfi/115/boundary.sld` chose its char-set library by availability —
+/// `((library (chibi char-set)) (import (chibi char-set)))` — while
+/// `115.sld` beside it chooses by the `chibi` feature and takes `(srfi 14)`.
+/// So with any `(chibi char-set)` on the search path the boundary sets came
+/// from one library and the regexp compiler's `char-set?` from the other, and
+/// `(srfi 115)` failed to load: "expected a state #<unspecified>". Nothing in
+/// the program asks for `(chibi char-set)`; having one *installed* was enough
+/// to take `(scheme regex)` away.
+///
+/// The stand-in here is not a char-set library at all, which is the point:
+/// it only has to exist for the old `cond-expand` to reach for it.
+#[test]
+fn a_bundled_library_is_not_changed_by_a_foreign_library_being_reachable() {
+    let root = tempfile::TempDir::new().unwrap();
+    let dir = root.path().join("chibi");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("char-set.sld"),
+        "(define-library (chibi char-set) (import (scheme base))
+           (export stand-in) (begin (define stand-in 'not-a-char-set-library)))",
+    )
+    .unwrap();
+    const PROGRAM: &str = "(import (scheme base) (srfi 115))
+         (list (if (regexp-matches? '(+ alphabetic) \"hello\") #t #f)
+               (if (regexp-search '(: bow \"b\") \"a b\") #t #f))";
+
+    let vm = common::vm_interpreter();
+    vm.backend()
+        .add_library_search_path(root.path().to_path_buf());
+    assert_eq!(run(&vm, PROGRAM), "(#t #t)");
+
+    let tw = common::tree_walker_interpreter();
+    tw.backend()
+        .add_library_search_path(root.path().to_path_buf());
+    assert_eq!(run(&tw, PROGRAM), "(#t #t)");
+}
+
 #[test]
 fn standalone_pipeline_uses_its_evaluators_catalogue() {
     use patina_interpreter::{Pipeline, StandardPipeline};

@@ -23,9 +23,9 @@
 # which were excluded only "via (chibi bytevector)". The fifth, postgresql,
 # gets past it and turns out to need `(foreign c)` - FFI, and re-filed as such.
 #
-# Measured after, both backends: chibi-bytevector 3 of 3, chibi-crypto-md5
-# 3 of 3, chibi-crypto-rsa 46 of 46, chibi-crypto-sha2 38 of 38. None of the
-# four had run an assertion before.
+# Measured after, both backends, assertions: chibi-bytevector 69 of 69,
+# chibi-crypto-md5 3 of 3, chibi-crypto-rsa 46 of 46, chibi-crypto-sha2 38 of
+# 38. None of the four had run an assertion before.
 diff -ruN a/chibi/ieee-754.scm b/chibi/ieee-754.scm
 --- a/chibi/ieee-754.scm
 +++ b/chibi/ieee-754.scm

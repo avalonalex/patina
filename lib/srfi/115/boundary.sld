@@ -14,8 +14,15 @@
   (cond-expand
    (chibi (import (chibi)))
    (else (import (scheme base))))
+  ;; PATINA DEVIATION (#431): upstream tests `(library (chibi char-set))` here.
+  ;; `115.sld`, the only client of these sets, chooses by the `chibi` *feature*
+  ;; and off chibi takes `(srfi 14)`; choosing by *availability* here meant
+  ;; that with any `(chibi char-set)` on the search path the sets below were
+  ;; one library's records and the regexp compiler's `char-set?` another's, and
+  ;; `(srfi 115)` failed to load. Asking the question its client asks changes
+  ;; nothing on chibi, where the feature is set and the library exists.
   (cond-expand
-   ((library (chibi char-set)) (import (chibi char-set)))
+   (chibi (import (chibi char-set)))
    (else
     (import (srfi 14))
     (begin (define (immutable-char-set cs) cs))))

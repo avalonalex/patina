@@ -16,9 +16,9 @@
 #
 # `(scheme file)` is already imported. **Nothing is deleted and no expectation
 # changes**: the group runs wherever its data exists, exactly as written, and is
-# empty where it does not. This is the README's fourth admitted shape, and its
-# limit is stated there - a guard on an input the package does not ship, never
-# a guard on an assertion that fails.
+# empty where it does not. The README admits this shape and states its limit -
+# a guard on an input the package does not ship, never a guard on an assertion
+# that fails.
 #
 # The alternative was to leave 86 assertions about a regular-expression engine
 # unrun because of a 87th group that could never have run. That engine is the

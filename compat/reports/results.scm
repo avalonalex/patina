@@ -36,7 +36,7 @@
   ((slug "chibi-regexp") (mode test) (status pass))
   ((slug "chibi-scribble") (mode test) (status pass))
   ((slug "chibi-show") (mode test) (status pass))
-  ((slug "chibi-snow-commands") (mode probe) (status parse-error) (errors "unhandled exception: #<error-object: expected a state #<unspecified>>"))
+  ((slug "chibi-snow-commands") (mode probe) (status missing-library) (missing "chibi net http"))
   ((slug "chibi-ssl") (mode test) (status out-of-scope) (needs "ssl"))
   ((slug "chibi-sxml") (mode probe) (status pass))
   ((slug "chibi-tar") (mode test) (status pass))
