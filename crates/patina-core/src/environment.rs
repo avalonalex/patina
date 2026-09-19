@@ -65,14 +65,74 @@ impl std::ops::DerefMut for ScopedTable {
 }
 
 /// Where a macro-expansion alias points: the environment holding the real
-/// binding, and the name it has there.
-/// `None` for the environment holding the alias.
+/// binding, the name it has there, and — for a definition reachable only
+/// under its scopes — the scope set that is its identity.
 ///
-/// Not an optimisation: an `Rc<Environment>` pointing at the environment that
-/// owns the table is a cycle refcounting can never break, so a self-alias
-/// would pin that environment — and its heap — for the process. It also saves
-/// an `Rc` clone and drop on every alias hit.
-type AliasTarget = (Option<Rc<Environment>>, Rc<str>);
+/// `env` is `None` for the environment holding the alias. Not an
+/// optimisation: an `Rc<Environment>` pointing at the environment that owns
+/// the table is a cycle refcounting can never break, so a self-alias would
+/// pin that environment — and its heap — for the process. It also saves an
+/// `Rc` clone and drop on every alias hit.
+///
+/// `scopes` is what lets an alias name a *binding* rather than a spelling
+/// (#408). A definition a macro introduced is stored by the tree-walker under
+/// the scopes it was introduced at, and the bare name reaches at most one of
+/// a spelling's definitions — the latest, or none where a plain definition
+/// has the name. A generated macro used outside its library has to reach the
+/// one its own generator introduced, so its alias carries that definition's
+/// scopes and is read and written with them. The VM renames such a
+/// definition to a global of its own, so there the alias is a plain one to
+/// the renamed name and this stays `None`.
+///
+/// Every walk reads, writes and locates a target through the three methods
+/// below, so that what an alias means is stated once.
+#[derive(Debug, Clone)]
+struct AliasTarget {
+    env: Option<Rc<Environment>>,
+    name: Rc<str>,
+    scopes: Option<ScopeSet>,
+}
+
+impl AliasTarget {
+    /// The environment the target is in, given the one `holder` holding the
+    /// alias.
+    fn env<'a>(&'a self, holder: &'a Environment) -> &'a Environment {
+        self.env.as_deref().unwrap_or(holder)
+    }
+
+    // The scopes are a definition's *identity*, which resolution chose when
+    // the alias was made, so all three match them exactly in the target's own
+    // table and cannot disagree on the cell. Resolving them again as a
+    // *reference* (`get_with_scopes`) would answer the same while the
+    // definition is there, at a candidate list per read — and would fall back
+    // by name if it ever were not, reading and writing a plain binding of the
+    // spelling where a dangling plain alias answers nothing.
+
+    fn get(&self, holder: &Environment) -> Option<TaggedValue> {
+        let env = self.env(holder);
+        match &self.scopes {
+            None => env.get(&self.name),
+            Some(scopes) => env.scoped_definition_value(&self.name, scopes),
+        }
+    }
+
+    /// `Err` carries the name, as [`Environment::set`]'s does.
+    fn set(&self, holder: &Environment, value: TaggedValue) -> Result<(), String> {
+        let env = self.env(holder);
+        match &self.scopes {
+            None => env.set(&self.name, value),
+            Some(scopes) => env.set_scoped_definition(&self.name, scopes, value),
+        }
+    }
+
+    fn location(&self, holder: &Environment) -> Option<BindingLocation> {
+        let env = self.env(holder);
+        match &self.scopes {
+            None => env.binding_location(&self.name),
+            Some(scopes) => env.scoped_definition_location(&self.name, scopes),
+        }
+    }
+}
 
 /// Alias name -> the binding it forwards to.
 type AliasBindings = FxHashMap<Rc<str>, AliasTarget>;
@@ -304,6 +364,16 @@ pub enum BindingLocation {
     /// holding it, its spelling there, and its place among that spelling's
     /// scoped bindings.
     Scoped(u64, Rc<str>, usize),
+}
+
+/// How a top-level definition a macro introduced is held, which is what an
+/// alias to it has to say — see [`Environment::introduced_definition`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntroducedDefinition {
+    /// The VM's: renamed to this global, a plain binding of the root.
+    Renamed(Rc<str>),
+    /// The tree-walker's: filed under this scope set, its identity.
+    Scoped(ScopeSet),
 }
 
 /// The tables that only a global or a library environment ever fills, kept
@@ -773,11 +843,8 @@ impl Environment {
         // Assign through a macro-expansion alias, so a template that mutates a
         // binding private to its defining library works. Reads follow aliases
         // in `get`; writes have to as well or the two disagree.
-        if let Some((target_env, target_name)) = self.alias_target(name) {
-            return match target_env {
-                Some(env) => env.set(&target_name, value),
-                None => self.set(&target_name, value),
-            };
+        if let Some(target) = self.alias_target(name) {
+            return target.set(self, value);
         }
         // The write side of the same fallback `get` takes, and it has to be
         // here for the reason `alias_bindings` gives for its own pair: a name
@@ -815,12 +882,9 @@ impl Environment {
             // wins, and before the parent so the alias is not shadowed by an
             // unrelated outer binding of the same (unique) name.
             if env.has_aliases.get()
-                && let Some((target_env, target_name)) = env.alias_target(name)
+                && let Some(target) = env.alias_target(name)
             {
-                return match target_env {
-                    Some(target) => target.get(&target_name),
-                    None => env.get(&target_name),
-                };
+                return target.get(env);
             }
             // A macro-introduced definition lives under its scopes; this is the
             // name-only view of it. Checked after real bindings and aliases, so a
@@ -855,12 +919,9 @@ impl Environment {
                 });
             }
             if env.has_aliases.get()
-                && let Some((target_env, target_name)) = env.alias_target(name)
+                && let Some(target) = env.alias_target(name)
             {
-                return match target_env {
-                    Some(target) => target.binding_location(&target_name),
-                    None => env.binding_location(&target_name),
-                };
+                return target.location(env);
             }
             if let Some(i) = env.visible_scoped_index(name) {
                 let table = env.scoped_bindings.borrow();
@@ -873,6 +934,133 @@ impl Environment {
             }
             env = env.parent.as_deref()?;
         }
+    }
+
+    /// The location of the scoped definition of `name` whose identity is
+    /// exactly `scopes`, in this environment's own table.
+    fn scoped_definition_location(&self, name: &str, scopes: &ScopeSet) -> Option<BindingLocation> {
+        let table = self.scoped_bindings.borrow();
+        let (spelling, bindings) = table.get_key_value(name)?;
+        let index = bindings.iter().position(|b| b.scopes == *scopes)?;
+        Some(BindingLocation::Scoped(
+            self.env_id(),
+            Rc::clone(spelling),
+            index,
+        ))
+    }
+
+    /// What that definition holds — [`scoped_definition_location`]'s read.
+    ///
+    /// [`scoped_definition_location`]: Self::scoped_definition_location
+    fn scoped_definition_value(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
+        let table = self.scoped_bindings.borrow();
+        let binding = table.get(name)?.iter().find(|b| b.scopes == *scopes)?;
+        Some(binding.tagged_value)
+    }
+
+    /// Assign that definition — [`scoped_definition_location`]'s write. `Err`
+    /// carries the name, as [`set`]'s does.
+    ///
+    /// [`scoped_definition_location`]: Self::scoped_definition_location
+    /// [`set`]: Self::set
+    fn set_scoped_definition(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+        value: TaggedValue,
+    ) -> Result<(), String> {
+        let mut table = self.scoped_bindings.borrow_mut();
+        let binding = table
+            .get_mut(name)
+            .and_then(|bindings| bindings.iter_mut().find(|b| b.scopes == *scopes));
+        match binding {
+            Some(binding) => {
+                binding.tagged_value = value;
+                Ok(())
+            }
+            None => Err(name.to_string()),
+        }
+    }
+
+    /// Whether the root of this chain holds *any* top-level definition of
+    /// `name` that a macro introduced — the cheap question that lets a caller
+    /// skip [`introduced_definition`] for the names it cannot answer, which
+    /// is nearly all of them (`list`, `if`, `+`).
+    ///
+    /// [`introduced_definition`]: Self::introduced_definition
+    pub fn has_introduced_definition(&self, name: &str) -> bool {
+        // Walked by reference: `root` clones an `Rc` per frame, and this is
+        // asked for every name a generated macro mentions.
+        let mut root = self;
+        while let Some(parent) = root.parent.as_deref() {
+            root = parent;
+        }
+        let renamed = root.rare.get().is_some_and(|rare| {
+            rare.introduced_global_names
+                .borrow()
+                .get(name)
+                .is_some_and(|identities| !identities.is_empty())
+        });
+        renamed
+            || root
+                .scoped_bindings
+                .borrow()
+                .get(name)
+                .is_some_and(|bindings| !bindings.is_empty())
+    }
+
+    /// The *top-level* definition a macro introduced that `scopes` selects
+    /// for `name`, as something an alias can point at — or `None` when
+    /// `scopes` selects anything else: nothing, a plain binding, or a lexical
+    /// one.
+    ///
+    /// For relinking a generated macro's mention of a definition its own
+    /// generator introduced (#408). The bare name does not identify such a
+    /// definition: it reaches the latest of that spelling, or a plain
+    /// definition that has the name. The mention's scopes do, by the same
+    /// rule every scoped reference resolves with.
+    ///
+    /// Only a definition held by the **root** of this chain qualifies. A
+    /// scoped binding in a child frame is a lexical variable — a `let`'s, a
+    /// parameter's, an internal define's — which lives in a run-time frame the
+    /// use site cannot be given a name for, and which ordinary set-of-scopes
+    /// resolution is already the right judge of.
+    ///
+    /// The two backends store such a definition differently, and the answer
+    /// says which: the VM renames it to a global of its own and records the
+    /// identity ([`define_introduced_global`]); the tree-walker files it under
+    /// its scopes.
+    ///
+    /// [`define_introduced_global`]: Self::define_introduced_global
+    pub fn introduced_definition(
+        self: &Rc<Self>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<(Rc<Environment>, IntroducedDefinition)> {
+        let chosen = self.scoped_binding_of(name, scopes).ok()??;
+        let root = self.root();
+        if let Some(renamed) = root.introduced_global(name, &chosen) {
+            return Some((root, IntroducedDefinition::Renamed(renamed)));
+        }
+        root.scoped_definition_location(name, &chosen)
+            .is_some()
+            .then(|| (root, IntroducedDefinition::Scoped(chosen)))
+    }
+
+    /// The global the macro-introduced top-level definition of `name` at
+    /// exactly `scopes` was renamed to, if this environment recorded one
+    /// ([`define_introduced_global`]). A keyed lookup: the table is keyed by
+    /// the scope set so that nothing has to scan a spelling's identities.
+    ///
+    /// [`define_introduced_global`]: Self::define_introduced_global
+    fn introduced_global(&self, name: &str, scopes: &ScopeSet) -> Option<Rc<str>> {
+        self.rare
+            .get()?
+            .introduced_global_names
+            .borrow()
+            .get(name)?
+            .get(scopes)
+            .cloned()
     }
 
     /// Resolve a macro-expansion alias installed here, if any.
@@ -1013,13 +1201,59 @@ impl Environment {
         target_env: Rc<Environment>,
         target_name: Rc<str>,
     ) {
+        self.install_alias(alias.into(), target_env, target_name, None);
+    }
+
+    /// [`define_alias`] to the definition [`introduced_definition`] found:
+    /// `found`, of `name`, held by `home`. How the backend holds it decides
+    /// what kind of alias that is, and deciding it here is what keeps the
+    /// relinker from having to know.
+    ///
+    /// [`define_alias`]: Self::define_alias
+    /// [`introduced_definition`]: Self::introduced_definition
+    pub fn define_alias_to_introduced(
+        &self,
+        alias: impl Into<Rc<str>>,
+        home: Rc<Environment>,
+        name: Rc<str>,
+        found: IntroducedDefinition,
+    ) {
+        match found {
+            IntroducedDefinition::Renamed(renamed) => self.define_alias(alias, home, renamed),
+            IntroducedDefinition::Scoped(scopes) => {
+                self.define_scoped_alias(alias, home, name, scopes)
+            }
+        }
+    }
+
+    /// [`define_alias`] to a definition reachable only under `scopes` — see
+    /// [`AliasTarget`] for why an alias can need them.
+    ///
+    /// [`define_alias`]: Self::define_alias
+    pub fn define_scoped_alias(
+        &self,
+        alias: impl Into<Rc<str>>,
+        target_env: Rc<Environment>,
+        target_name: Rc<str>,
+        scopes: ScopeSet,
+    ) {
+        self.install_alias(alias.into(), target_env, target_name, Some(scopes));
+    }
+
+    fn install_alias(
+        &self,
+        alias: Rc<str>,
+        target_env: Rc<Environment>,
+        name: Rc<str>,
+        scopes: Option<ScopeSet>,
+    ) {
         // A target that is this environment is stored as `None`: see
         // `AliasTarget`.
-        let target_env = (target_env.env_id() != self.env_id()).then_some(target_env);
+        let env = (target_env.env_id() != self.env_id()).then_some(target_env);
         self.has_aliases.set(true);
         self.alias_bindings
             .borrow_mut()
-            .insert(alias.into(), (target_env, target_name));
+            .insert(alias, AliasTarget { env, name, scopes });
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)
@@ -1313,12 +1547,9 @@ impl Environment {
             return Ok(());
         }
         if self.has_aliases.get()
-            && let Some((target_env, target_name)) = self.alias_target(name)
+            && let Some(target) = self.alias_target(name)
         {
-            return match target_env {
-                Some(env) => env.set(&target_name, value),
-                None => self.set(&target_name, value),
-            };
+            return target.set(self, value);
         }
         if self.has_visible_scoped.get()
             && let Some(i) = self.visible_scoped_index(name)
@@ -1491,12 +1722,9 @@ impl Environment {
             return Some(tv);
         }
         if self.has_aliases.get()
-            && let Some((target_env, target_name)) = self.alias_target(name)
+            && let Some(target) = self.alias_target(name)
         {
-            return match target_env {
-                Some(env) => env.get(&target_name),
-                None => self.get(&target_name),
-            };
+            return target.get(self);
         }
         if self.has_visible_scoped.get()
             && let Some(i) = self.visible_scoped_index(name)
@@ -1617,18 +1845,15 @@ impl Environment {
                 return Ok(chosen.is_none());
             }
             if env.has_aliases.get()
-                && let Some((target_env, target_name)) = env.alias_target(name)
+                && let Some(target) = env.alias_target(name)
             {
                 let Some(chosen) = chosen else {
                     return Ok(true);
                 };
-                let renamed = env.rare.get().and_then(|rare| {
-                    rare.introduced_global_names
-                        .borrow()
-                        .get(name)
-                        .and_then(|identities| identities.get(&chosen).cloned())
-                });
-                return Ok(target_env.is_none() && renamed.is_some_and(|r| r == target_name));
+                let renamed = env.introduced_global(name, &chosen);
+                return Ok(target.env.is_none()
+                    && target.scopes.is_none()
+                    && renamed.is_some_and(|r| r == target.name));
             }
             if let Some(i) = env.visible_scoped_index(name) {
                 let table = env.scoped_bindings.borrow();
@@ -1865,10 +2090,10 @@ impl Environment {
     /// is an `Rc<Environment>` in a side table rather than a `TaggedValue` in a
     /// slot, so `for_each_local_value` cannot see it.
     pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Rc<Environment>)) {
-        for (env, _) in self.alias_bindings.borrow().values() {
+        for target in self.alias_bindings.borrow().values() {
             // A `None` target is this environment, which the caller is already
             // tracing.
-            if let Some(env) = env {
+            if let Some(env) = &target.env {
                 f(env);
             }
         }
@@ -2699,6 +2924,138 @@ mod binding_location_tests {
             env.binding_location("X"),
             Some(BindingLocation::Slot(..))
         ));
+    }
+}
+
+/// An alias can name a *binding* a macro introduced, not only a spelling
+/// (#408). `hygiene_matrix.rs`'s `introducing` rows say it from Scheme; these
+/// pin how each backend's storage is found and what is refused.
+#[cfg(test)]
+mod introduced_definition_tests {
+    use super::*;
+
+    fn scopes(ids: &[usize]) -> ScopeSet {
+        let mut set = ScopeSet::new();
+        for id in ids {
+            set.add_scope(crate::scope::ScopeId(*id));
+        }
+        set
+    }
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// A library as the tree-walker leaves it after a definer ran twice beside
+    /// a plain definition of the same spelling.
+    fn tree_walker_library() -> Rc<Environment> {
+        let library = Rc::new(Environment::new());
+        library.define("count", n(100));
+        library.define_scoped_definition("count", scopes(&[1]), n(10));
+        library.define_scoped_definition("count", scopes(&[2]), n(20));
+        library
+    }
+
+    #[test]
+    fn a_mentions_scopes_select_its_own_generators_definition() {
+        let library = tree_walker_library();
+        // A use of the generated macro adds its own expansion scope.
+        for (mention, run) in [(scopes(&[1, 7]), 1), (scopes(&[2, 8]), 2)] {
+            let (home, found) = library.introduced_definition("count", &mention).unwrap();
+            assert!(Rc::ptr_eq(&home, &library));
+            assert_eq!(found, IntroducedDefinition::Scoped(scopes(&[run])));
+        }
+        // No scopes select the plain one, which is not an introduced
+        // definition; nor is a spelling the library does not have.
+        assert!(
+            library
+                .introduced_definition("count", &scopes(&[9]))
+                .is_none()
+        );
+        assert!(
+            library
+                .introduced_definition("other", &scopes(&[1]))
+                .is_none()
+        );
+        assert!(library.has_introduced_definition("count"));
+        assert!(!library.has_introduced_definition("other"));
+    }
+
+    #[test]
+    fn a_scoped_alias_reads_writes_and_locates_that_definition() {
+        let library = tree_walker_library();
+        let program = Rc::new(Environment::with_heap(library.heap().clone()));
+        program.define("count", n(-1));
+        program.define_scoped_alias("count.1", Rc::clone(&library), "count".into(), scopes(&[1]));
+        program.define_scoped_alias("count.2", Rc::clone(&library), "count".into(), scopes(&[2]));
+
+        assert_eq!(program.get("count.1"), Some(n(10)));
+        assert_eq!(program.get("count.2"), Some(n(20)));
+
+        program.set("count.1", n(11)).unwrap();
+        assert_eq!(program.get("count.1"), Some(n(11)));
+        // Nothing else of the spelling moved: not the second run's, not the
+        // library's plain one, not the program's.
+        assert_eq!(program.get("count.2"), Some(n(20)));
+        assert_eq!(library.get("count"), Some(n(100)));
+        assert_eq!(program.get("count"), Some(n(-1)));
+
+        let first = program.binding_location("count.1");
+        assert!(matches!(first, Some(BindingLocation::Scoped(..))));
+        assert_ne!(first, program.binding_location("count.2"));
+        assert_ne!(first, library.binding_location("count"));
+    }
+
+    #[test]
+    fn a_scoped_alias_never_falls_back_to_the_spelling() {
+        // The scopes are an identity, matched exactly. Resolved as a
+        // *reference* instead, an identity the library does not hold would
+        // fall back by name and read — and assign — the plain `count`.
+        let library = tree_walker_library();
+        let program = Rc::new(Environment::with_heap(library.heap().clone()));
+        program.define_scoped_alias("count.9", Rc::clone(&library), "count".into(), scopes(&[9]));
+
+        assert_eq!(program.get("count.9"), None);
+        assert_eq!(program.binding_location("count.9"), None);
+        // Refused with the name, as `set` refuses a dangling plain alias.
+        assert_eq!(program.set("count.9", n(1)), Err("count".to_string()));
+        assert_eq!(library.get("count"), Some(n(100)));
+    }
+
+    #[test]
+    fn the_vms_renamed_global_is_found_by_the_same_question() {
+        // The VM renames an introduced definition to a global of its own and
+        // records the identity; the bare name is an alias to the latest.
+        let library = Rc::new(Environment::new());
+        for (run, renamed, value) in [(1, "count.g1", 10), (2, "count.g2", 20)] {
+            library.define(renamed, n(value));
+            library.define_introduced_global("count".into(), scopes(&[run]), renamed.into());
+            library.define_alias("count", Rc::clone(&library), renamed.into());
+        }
+        let (home, found) = library
+            .introduced_definition("count", &scopes(&[1, 7]))
+            .unwrap();
+        assert!(Rc::ptr_eq(&home, &library));
+        assert_eq!(found, IntroducedDefinition::Renamed("count.g1".into()));
+        assert!(library.has_introduced_definition("count"));
+    }
+
+    #[test]
+    fn a_lexical_binding_is_not_an_introduced_definition() {
+        // A `let`-bound variable around the macro's definition is a scoped
+        // binding in a *child* frame. It is not something an alias can name —
+        // it lives in a run-time frame — so it is left to scoped resolution.
+        let library = Rc::new(Environment::new());
+        let body = Rc::new(Environment::with_parent(Rc::clone(&library)));
+        body.define_with_scopes("f", scopes(&[3]), n(1));
+        assert!(body.introduced_definition("f", &scopes(&[3, 7])).is_none());
+        assert!(!body.has_introduced_definition("f"));
+
+        // From inside a body, the root's definitions are still found, and the
+        // home is the root.
+        library.define_scoped_definition("g", scopes(&[4]), n(2));
+        let (home, _) = body.introduced_definition("g", &scopes(&[4, 7])).unwrap();
+        assert!(Rc::ptr_eq(&home, &library));
     }
 }
 

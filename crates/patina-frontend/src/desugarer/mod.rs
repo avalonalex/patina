@@ -894,10 +894,20 @@ impl Desugarer {
             // does asking cost more than comparing did: 12,000 expansions of
             // a library macro, a 16-library start-up and chibi's suite all
             // time within half a percent of `main`, on both backends.
-            let Some(def_location) = def_env.binding_location(name) else {
-                continue;
-            };
-            if self.env.binding_location(name) == Some(def_location) {
+            //
+            // The test is about the *name*, so it settles a name only when
+            // every mention of it is the name. A generated macro can also
+            // mention it under scopes that select another definition of the
+            // spelling — one its generator introduced (#408, below) — and
+            // those are decided one by one. That takes the library to *have*
+            // an introduced definition of the spelling, which for `list`,
+            // `if` and the rest it does not, so they still stop here.
+            let def_location = def_env.binding_location(name);
+            let same_by_name =
+                def_location.is_some() && self.env.binding_location(name) == def_location;
+            let may_mean_another =
+                inherited_identifiers.contains_key(name) && def_env.has_introduced_definition(name);
+            if !may_mean_another && (def_location.is_none() || same_by_name) {
                 continue;
             }
 
@@ -948,12 +958,13 @@ impl Desugarer {
             // aliased onto whichever the name alone reaches and bumped a
             // single counter from outside the library; and once the values
             // diverged the same use was refused, so what a program answered
-            // depended on what it had already run. The alias below can only
-            // point at what the name alone reaches, so a mention that means
-            // another binding is left to scoped resolution rather than
-            // answered with the wrong one — the refusal family 40 pins, here
-            // across a library (pinned in `hygiene_matrix.rs`). Re-audit if
-            // internal defines' scoped bindings ever become relink targets.
+            // depended on what it had already run. An alias *by name* can
+            // only point at what the name alone reaches, so a mention that
+            // means another binding never gets one: it gets an alias to the
+            // binding itself where the last paragraph below can name it, and
+            // is otherwise left to scoped resolution rather than answered
+            // with the wrong one. Re-audit if internal defines' scoped
+            // bindings ever become relink targets.
             //
             // Decided per identity, and each identity that passes gets an
             // alias of its own, because a generated macro can mention one
@@ -966,14 +977,44 @@ impl Desugarer {
             // lib)`. A written macro cannot do that (everything written in it
             // shares its definition scopes), which is why one alias per name
             // was enough before #402.
+            //
+            // **A mention that means another binding gets an alias to *that*
+            // binding, where it is a top-level definition a macro introduced**
+            // (#408). Leaving it to scoped resolution was the right refusal
+            // and not an answer: the use site is another library or a
+            // program, whose scoped tables cannot see into this one, so the
+            // reference was unbound — or, where the importer had the
+            // spelling, the importer's. The shapes are the ordinary ones for
+            // a definer with private state: a plain definition of the
+            // spelling beside the introduced one, or the definer simply run
+            // twice. `Environment::introduced_definition` says which
+            // definition the mention's scopes select and how the backend
+            // holds it; a lexical binding is still left alone, for the
+            // reason above.
             let mut made: Vec<(ScopeSet, TaggedValue)> = Vec::new();
             for identity in identities {
-                if !matches!(def_env.name_reaches_binding_of(name, identity), Ok(true)) {
-                    continue;
-                }
+                let alias_to = match def_env.name_reaches_binding_of(name, identity) {
+                    // The name is the binding. Nothing to do where the use
+                    // site's is the same one, or where it reaches nothing.
+                    Ok(true) if def_location.is_none() || same_by_name => continue,
+                    Ok(true) => None,
+                    Ok(false) => match def_env.introduced_definition(name, identity) {
+                        // Inside the library that holds it, scoped resolution
+                        // already sees it.
+                        Some((home, _)) if Rc::ptr_eq(&home, &target_env) => continue,
+                        Some(found) => Some(found),
+                        None => continue,
+                    },
+                    Err(_) => continue,
+                };
                 let alias = alias_name(name);
                 let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
-                target_env.define_alias(alias, def_env.clone(), name.clone());
+                match alias_to {
+                    None => target_env.define_alias(alias, def_env.clone(), name.clone()),
+                    Some((home, found)) => {
+                        target_env.define_alias_to_introduced(alias, home, name.clone(), found)
+                    }
+                }
                 made.push((identity.clone(), symbol));
             }
             let aliases = match made.as_slice() {

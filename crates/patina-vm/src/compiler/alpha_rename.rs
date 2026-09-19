@@ -22,7 +22,6 @@ use patina_core::environment::Environment;
 use patina_core::scope::ScopeSet;
 use patina_core::scope_resolve::AmbiguousReference;
 use patina_core::scope_trace;
-use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -56,15 +55,22 @@ pub(crate) struct RenamedGlobal {
 struct RenameEnv {
     frames: Vec<Vec<Binding>>,
     counter: u32,
-    /// `bare name -> renamed global` for each macro-introduced top-level
-    /// definition that was renamed. See `Renamed::global_aliases`.
+    /// `(bare name, renamed global)` for each macro-introduced top-level
+    /// definition that was renamed, in the order met. See
+    /// `Renamed::global_aliases`.
     ///
-    /// A map, not a list: installing the *alias* is a keyed insert, so a
-    /// repeated bare name would install and immediately overwrite. Last write
-    /// wins here for the same reason it wins there — and note that the
-    /// binding identities the caller also records are keyed by scope set, so
-    /// they do not collapse the way this does.
-    global_aliases: FxHashMap<Symbol, RenamedGlobal>,
+    /// A list, not a map keyed by the bare name, and it was a map until
+    /// #408. One form can introduce a spelling twice — a macro expanding to
+    /// two definer calls does — and each entry is also the record of a
+    /// binding *identity*, which the caller files by `(name, scopes)`. Keyed
+    /// by name here, the earlier one was overwritten before the caller ever
+    /// saw it, so its identity was never recorded, a later form's reference
+    /// to it found no candidate and fell back to the name, and the name is
+    /// the *later* definition: the first run's macro read and assigned the
+    /// second run's state, silently. For the alias nothing changes — the
+    /// caller installs these in order, and a keyed insert there lets the
+    /// last of a spelling win the bare name, as it always did.
+    global_aliases: Vec<(Symbol, RenamedGlobal)>,
     /// Whether definitions seen right now become globals.
     ///
     /// True until a lambda body is entered, and false inside it — including
@@ -110,7 +116,7 @@ impl RenameEnv {
         Self {
             frames: vec![],
             counter: 0,
-            global_aliases: FxHashMap::default(),
+            global_aliases: Vec::new(),
             at_top_level: true,
             ambiguous: RefCell::new(None),
             global_env,
@@ -274,19 +280,22 @@ pub(crate) struct Renamed {
     /// than copying, so a later `set!` is visible. Returned rather than
     /// installed here so this pass stays a pure transformation.
     ///
-    /// The alias table is keyed by the bare name, so when two forms introduce
-    /// the same spelling the later one wins — even though `scoped_global_name`
-    /// has just given them distinct globals. That is the one place hygiene
-    /// identity collapses back to a name, kept because the relinking that
-    /// consumes this resolves by name. `define_alias` records the rule.
+    /// The environment's alias table is keyed by the bare name, so when two
+    /// definitions introduce the same spelling — in two forms or in one — the
+    /// later one wins it, even though `scoped_global_name` has just given
+    /// them distinct globals. That is the one place hygiene identity collapses
+    /// back to a name, kept because the relinking that consumes it resolves
+    /// by name where the name is what a mention means. `define_alias` records
+    /// the rule.
     ///
     /// Each entry carries the scope set as well, so the caller can record the
     /// binding *identity* alongside the alias — see
     /// `Environment::define_introduced_global`. That record is keyed by
-    /// `(name, scopes)` and so keeps the two definitions the alias collapses
-    /// distinct, which is what lets a later top-level form resolve to the
-    /// right one.
-    pub(crate) global_aliases: FxHashMap<Symbol, RenamedGlobal>,
+    /// `(name, scopes)` and so keeps the definitions the alias collapses
+    /// distinct, which is what lets a later top-level form, or a relinked
+    /// reference from another library, resolve to the right one. It is why
+    /// this is a list with an entry per definition and not a map by name.
+    pub(crate) global_aliases: Vec<(Symbol, RenamedGlobal)>,
 }
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
@@ -442,13 +451,13 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
                 // A global: the bare name is answered by an environment alias
                 // the caller installs, so a user's own global of that name
                 // still wins and a `set!` is not frozen into a copy.
-                env.global_aliases.insert(
+                env.global_aliases.push((
                     name,
                     RenamedGlobal {
                         scopes,
                         name: new_name,
                     },
-                );
+                ));
             } else {
                 // A local: nothing outside this body resolves it, so the bare
                 // name can simply be bound here too.
