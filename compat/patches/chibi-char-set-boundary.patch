@@ -1,0 +1,45 @@
+# chibi-char-set-boundary: choose the char-set library the way its only client does
+#
+# `chibi/char-set/boundary.sld:12`:
+#
+#     (cond-expand
+#      ((library (chibi char-set)) (import (chibi char-set)))
+#      (else (import (srfi 14)) ...))
+#
+# chooses by **availability**. `(chibi regexp)`, which exists to consume these
+# sets, chooses by the `chibi` **feature** and everywhere else takes
+# `(srfi 14)`. On chibi the two are one library. Anywhere else they agree only
+# if no `(chibi char-set)` happens to be reachable - and in this corpus one is,
+# as a vendored package. Then the boundary sets are iset-backed records,
+# `regexp.scm`'s `char-set?` is SRFI 14's, `->rx` matches no arm of its `cond`,
+# and `#<unspecified>` reaches `make-state`: "expected a state".
+#
+# The rewrite makes this library ask the question its client asks:
+#
+#     (chibi (import (chibi char-set)))
+#
+# Nothing changes on chibi, where the feature is set and the library exists.
+# Elsewhere the two libraries now agree by construction rather than by what
+# else is installed.
+#
+# The archived Track L PRD recorded chibi-regexp's failure as won't-fix, on the
+# reasoning that the only repair was reimplementing `(chibi char-set)` over
+# SRFI 14. That was written before this patch mechanism existed; the mismatch
+# is one line. **Patina's own bundled `(srfi 115)` had the same line and the
+# same exposure** - #431 - and got the same fix in the same change, as a marked
+# `PATINA DEVIATION` in `lib/srfi/115/boundary.sld`.
+#
+# Measured after, both backends: this package still passes its import probe,
+# and chibi-regexp's library loads - see `chibi-regexp.patch`.
+diff -ruN a/chibi/char-set/boundary.sld b/chibi/char-set/boundary.sld
+--- a/chibi/char-set/boundary.sld
++++ b/chibi/char-set/boundary.sld
+@@ -11,7 +11,7 @@
+    (chibi (import (chibi)))
+    (else (import (scheme base))))
+   (cond-expand
+-   ((library (chibi char-set)) (import (chibi char-set)))
++   (chibi (import (chibi char-set)))
+    (else
+     (import (srfi 14))
+     (begin (define (immutable-char-set cs) cs))))

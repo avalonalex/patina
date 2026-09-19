@@ -1,36 +1,38 @@
 # Patina third-party compatibility (vm backend)
 
-**134 of 161 packages pass.**
+**143 of 161 packages pass.**
 
-**134 of 134 in scope** — 27 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
+**143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
 | Status | Packages | In scope |
 |---|---|---|
-| pass | 134 | 134 |
-| missing-library | 3 | 0 |
-| parse-error | 12 | 0 |
+| pass | 143 | 143 |
+| missing-library | 4 | 0 |
+| parse-error | 2 | 0 |
 | load-error | 0 | 0 |
-| unbound-identifier | 1 | 0 |
+| unbound-identifier | 0 | 0 |
 | wrong-result | 1 | 0 |
 | runtime-error | 1 | 0 |
 | timeout | 0 | 0 |
-| out-of-scope | 9 | 0 |
+| out-of-scope | 10 | 0 |
 
 ## Excluded from the score
 
 These packages still run on every pass — exclusion decides whether a result counts, never whether it is measured, and `results.scm` records them exactly as it records everything else.
 
-### Needs a foreign-function interface (9)
+### Needs a foreign-function interface (11)
 
 | Package | Status | Why |
 |---|---|---|
 | chibi-mecab | out-of-scope | chibi/mecab.sld:38 (include-shared "mecab") — bindings to libmecab |
 | chibi-net-dns | out-of-scope | needs (chibi net), which is C-backed upstream |
 | chibi-net-smtp | out-of-scope | needs (chibi net), which is C-backed upstream |
+| chibi-snow-commands | missing-library | needs (chibi net http), C-backed upstream like the rest of (chibi net); (srfi 18) threads is wanted behind it |
 | chibi-ssl | out-of-scope | chibi/ssl.sld:14 (include-shared "ssl") — bindings to OpenSSL |
 | chibi-xgboost | out-of-scope | chibi/xgboost.sld:5 (include-shared "xgboost/xgboost") — bindings to libxgboost, reported directly since #383 bundled the (srfi 160 base) that used to shadow it |
 | chibi-xlib | out-of-scope | chibi/xlib.sld:45 (include-shared "xlib") — bindings to Xlib |
 | independentresearch-xattr | out-of-scope | independentresearch/xattr.sld:9 (include-shared "xattr") — POSIX extended attributes |
+| postgresql | out-of-scope | imports (foreign c); reported directly since compat/patches/chibi-bytevector.patch removed the (chibi bytevector) typo that used to stop it first |
 | srfi-106 | out-of-scope | srfi/106.sld:6 imports (foreign c), chibi's FFI interface library |
 | srfi-170 | out-of-scope | srfi/170.sld:8 imports (foreign c); a POSIX API over chibi's FFI |
 
@@ -41,30 +43,19 @@ These packages still run on every pass — exclusion decides whether a result co
 | rebottled-cl-pdf | missing-library | needs (rebottled pregexp); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 | retropikzel-pstk | missing-library | needs (retropikzel named-pipes); REVIEW-QUEUE.json has it under UNKNOWN licence, so it is not vendored |
 
-### Upstream source defect (12)
+### Upstream source defect (2)
 
 | Package | Status | Why |
 |---|---|---|
-| chibi-app | parse-error | app.scm:467 — an else clause mid-case, followed by ((1) ...); R7RS puts else last and Gauche rejects it. Patina still owes a better message than "No matching pattern for macro case" with no location — that part is ours, tracked in PRD §6 |
-| chibi-bytevector | parse-error | ieee-754.scm:16 — bytes-u8-set-all! has a 4-element syntax-rules rule ((_) bv off i), a parenthesization typo; Gauche: "malformed macro" |
-| chibi-crypto-md5 | parse-error | via (chibi bytevector) — see chibi-bytevector |
-| chibi-crypto-rsa | parse-error | via (chibi bytevector) — see chibi-bytevector |
-| chibi-crypto-sha2 | parse-error | via (chibi bytevector) — see chibi-bytevector; its own include-shared is behind a chibi-only branch and is not the blocker |
-| chibi-monad-environment | parse-error | environment.sld:6 — (syntax-rules ((_ x) 'x)) has no literals list; Gauche: "literal list contains non-symbol" |
-| chibi-regexp | parse-error | regexp.scm:1180 — (regexp 'grapheme) feeds #<unspecified> into make-state, because regexp.sld imports char-set? from (srfi 14) while its (chibi char-set boundary) dependency resolves to iset-backed (chibi char-set). chibi and Gauche each end up with one char-set type and load it; see the comment above for how each gets there |
-| chibi-show | parse-error | via (chibi monad environment) — see chibi-monad-environment |
-| chibi-snow-commands | parse-error | via (chibi monad environment) — see chibi-monad-environment |
 | edn | parse-error | (chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do |
-| postgresql | parse-error | via (chibi bytevector) — see chibi-bytevector |
 | srfi-179 | parse-error | srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8 |
 
-### Upstream test defect (4)
+### Upstream test defect (3)
 
 | Package | Status | Why |
 |---|---|---|
-| chibi-assert | missing-library | (chibi assert) itself loads and runs on Patina — its cond-expand else branch is portable — but chibi/assert-test.sld:2 imports (chibi), chibi's implementation core, for protect and exception-irritants |
+| chibi-assert | missing-library | (chibi assert) itself loads and runs on Patina — its cond-expand else branch is portable — but chibi/assert-test.sld:2 imports (chibi), chibi's implementation core, for protect and exception-irritants. Not patched, measured 2026-09-19: with those rewritten to guard and error-object-irritants it is 3 of 4, and the fourth cannot pass off chibi — the portable branch reports the datum inside 'three as a free variable and raises unbound variable, on Gauche exactly as on Patina |
 | chibi-voting | wrong-result | instant-runoff-rank's expectation depends on hash-table iteration order, which no standard specifies; chibi, Gauche and Patina each produce a different ranking and Gauche fails the suite as we do |
-| comparators | unbound-identifier | srfi-128/comparators/comparators-test.scm opens with (use test) (use srfi-128) — CHICKEN syntax, not R7RS |
 | srfi-197 | runtime-error | its test program (include "./test.scm")s a file the package does not ship |
 
 ## Per-package matrix
@@ -73,17 +64,17 @@ These packages still run on every pass — exclusion decides whether a result co
 |---|---|---|---|
 | arvyy-interface | test | pass | in scope |
 | arvyy-mustache | test | pass | in scope |
-| chibi-app | test | parse-error | upstream-source-defect |
+| chibi-app | test | pass | in scope |
 | chibi-assert | test | missing-library | upstream-test-defect |
 | chibi-base64 | test | pass | in scope |
 | chibi-binary-record | probe | pass | in scope |
-| chibi-bytevector | test | parse-error | upstream-source-defect |
+| chibi-bytevector | test | pass | in scope |
 | chibi-char-set | probe | pass | in scope |
 | chibi-char-set-boundary | probe | pass | in scope |
 | chibi-config | probe | pass | in scope |
-| chibi-crypto-md5 | test | parse-error | upstream-source-defect |
-| chibi-crypto-rsa | test | parse-error | upstream-source-defect |
-| chibi-crypto-sha2 | test | parse-error | upstream-source-defect |
+| chibi-crypto-md5 | test | pass | in scope |
+| chibi-crypto-rsa | test | pass | in scope |
+| chibi-crypto-sha2 | test | pass | in scope |
 | chibi-edit-distance | test | pass | in scope |
 | chibi-html-parser | probe | pass | in scope |
 | chibi-irregex | probe | pass | in scope |
@@ -95,16 +86,16 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-math-stats | test | pass | in scope |
 | chibi-mecab | test | out-of-scope | ffi |
 | chibi-mime | test | pass | in scope |
-| chibi-monad-environment | probe | parse-error | upstream-source-defect |
+| chibi-monad-environment | probe | pass | in scope |
 | chibi-net-dns | test | out-of-scope | ffi |
 | chibi-net-smtp | test | out-of-scope | ffi |
 | chibi-parse | test | pass | in scope |
 | chibi-pathname | test | pass | in scope |
 | chibi-quoted-printable | test | pass | in scope |
-| chibi-regexp | test | parse-error | upstream-source-defect |
+| chibi-regexp | test | pass | in scope |
 | chibi-scribble | test | pass | in scope |
-| chibi-show | test | parse-error | upstream-source-defect |
-| chibi-snow-commands | probe | parse-error | upstream-source-defect |
+| chibi-show | test | pass | in scope |
+| chibi-snow-commands | probe | missing-library | ffi |
 | chibi-ssl | test | out-of-scope | ffi |
 | chibi-sxml | probe | pass | in scope |
 | chibi-tar | test | pass | in scope |
@@ -116,7 +107,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-xlib | probe | out-of-scope | ffi |
 | chrisoei-cint | test | pass | in scope |
 | chrisoei-test | probe | pass | in scope |
-| comparators | test | unbound-identifier | upstream-test-defect |
+| comparators | test | pass | in scope |
 | edn | test | parse-error | upstream-source-defect |
 | generators | probe | pass | in scope |
 | in-progress-hash-bimaps | test | pass | in scope |
@@ -147,7 +138,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | pfds-sequence | probe | pass | in scope |
 | pfds-set | probe | pass | in scope |
 | pfds-vector | probe | pass | in scope |
-| postgresql | probe | parse-error | upstream-source-defect |
+| postgresql | probe | out-of-scope | ffi |
 | rebottled-cl-pdf | probe | missing-library | dependency-not-vendored |
 | rebottled-pstk | probe | pass | in scope |
 | retropikzel-pstk | probe | missing-library | dependency-not-vendored |

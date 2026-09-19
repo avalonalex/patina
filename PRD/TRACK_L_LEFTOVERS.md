@@ -27,11 +27,15 @@ a GitHub issue**, and the reasoning behind a past decision is in the archive.
 Measured 2026-09-19. **Re-measure rather than quote** — a corpus number carries
 its date (#381), and the archive's status line went stale twice.
 
-- **Corpus:** 134 of 161 packages pass, which is **134 of 134 in scope**; 27 are
-  excluded by `compat/EXCLUSIONS.scm` with a reason apiece (9 FFI, 2 licence,
-  16 upstream defects). `cargo run --release -p patina-compat -- run`.
-- **What that does not say:** 105 of the 134 are *probe-mode* — imported, never
-  called. 29 run a suite. The headline means "loads", not "works" (#429).
+- **Corpus:** 143 of 161 packages pass, which is **143 of 143 in scope**; 18 are
+  excluded by `compat/EXCLUSIONS.scm` with a reason apiece (11 FFI, 2 licence,
+  5 upstream defects no faithful patch reaches). Nine came back in under
+  `compat/patches/` on 2026-09-19. That is the VM's reading; the tree-walker
+  passes the same 143 and reads 143 of 144, because one excluded package files
+  its failure in a different bucket there (#382).
+  `cargo run --release -p patina-compat -- run`.
+- **What that does not say:** 106 of the 143 are *probe-mode* — imported, never
+  called. 37 run a suite. The headline means "loads", not "works" (#429).
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
   backends. Of the 22 failures, 17 are not ours or are by decision, 3 wait on
   #422 and 2 are ours (#418, #423). `./scripts/run_larceny_tests.sh`.
@@ -62,14 +66,14 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #428 — eight excluded packages can be brought under test with patches (measured).
-- #429 — 105 of 134 passes are import-only; how to make the number mean more.
+- #429 — most passes are import-only; how to make the number mean more.
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #381 — the snapshot records no measurement date.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
 **Small**
 - #419 — `(features)` does not advertise `exact-complex`.
+- #432 — an `else` before a `case`'s last clause is reported as "No matching pattern", with no location.
 
 One recorded debt has no issue because it has no known symptom: on the VM,
 `vm_raise_value`, the two prompt paths and the value-form arm still locate wind

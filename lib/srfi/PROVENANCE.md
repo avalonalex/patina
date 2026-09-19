@@ -436,11 +436,24 @@ asking carefully; it is not why the answer came out this way. Had the URL
 failed to resolve, or resolved to something other than a permissive licence,
 the size would not have made bundling acceptable.
 
-**SRFI 115 is byte-identical, and is the clean case the two beside it are
-not.**
+**SRFI 115 is byte-identical but for one marked line, and is the clean case
+the two beside it are not.**
 
 `lib/srfi/115.*` and `lib/srfi/115/boundary.*` are `contrib/duy-nguyen/` from
-the SRFI's own distribution, unedited. It needed no adaptation at all: its own
+the SRFI's own distribution. Three of the four files are unedited.
+`115/boundary.sld` carries one `PATINA DEVIATION` (#431, 2026-09-19): upstream
+chooses its char-set library with `(library (chibi char-set))`, by
+*availability*, while `115.sld` — the only client of the sets it defines —
+chooses by the `chibi` *feature* and off chibi takes `(srfi 14)`. With any
+`(chibi char-set)` on the search path the two disagreed, the boundary sets
+satisfied no arm of the regexp compiler's `cond`, and `(srfi 115)` failed to
+load for a user who had merely installed another library. The line now tests
+the `chibi` feature, as its client does; nothing changes on chibi. Pinned by
+`a_bundled_library_is_not_changed_by_a_foreign_library_being_reachable` in
+`crates/patina-tests/tests/library_availability.rs`, since the library's own
+suite never has such a library on its path and could not see it.
+
+As first bundled it needed no adaptation at all: its own
 `cond-expand` already reaches for `(chibi test)` on anything that is not
 Larceny, and its non-chibi branch asks only for libraries Patina already
 ships. Upstream's suite passes **85 of 85 on both backends**.
@@ -455,10 +468,12 @@ its licence by three separate checks. Here nothing is inferred.
 
 **One dependency is worth recording**, because it is the reverse of the usual
 direction: SRFI 115 needs `(srfi 14)`, and it is viable here only since #372
-gave char-sets the whole Unicode range. The Latin-1 implementation it replaced
-is exactly what the chibi-regexp corpus failure runs aground on — so Patina
-ships the standard-track regex library while the chibi one it is descended from
-still cannot load, for a reason recorded in `compat/EXCLUSIONS.scm`.
+gave char-sets the whole Unicode range, replacing a Latin-1 implementation.
+(This paragraph used to end by saying the chibi-regexp corpus package it
+descends from "still cannot load, for a reason recorded in
+`compat/EXCLUSIONS.scm`". That stopped being true on 2026-09-19: the cause was
+the availability test described above, not Latin-1, and with the same line
+patched under `compat/patches/` that package passes 86 of 86.)
 
 **SRFI 4 is Patina's own, and the reason is a licence question rather than a
 technical one.**

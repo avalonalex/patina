@@ -2,3 +2,9 @@
 # Marking it vendored keeps it out of GitHub's language stats and collapses it in diffs.
 compat/vendor/** linguist-vendored
 compat/vendor/**/*.html linguist-documentation
+
+# Unified diffs spell a blank context line as a single space, and end on one
+# when the hunk does, so `git diff --check` flags every patch for whitespace
+# that is part of the format. Exempt them, so the check stays readable for
+# everything else in the same diff.
+compat/patches/*.patch -whitespace

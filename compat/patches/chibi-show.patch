@@ -1,0 +1,67 @@
+# chibi-show: two things chibi allows and R7RS does not
+#
+# With `chibi-monad-environment.patch` letting it load, the suite ran and
+# stopped twice.
+#
+# **1. `substring` with two arguments** - `show/show.scm:188` and
+# `show/write.scm:176`. R7RS gives `substring` three, the end being mandatory;
+# chibi makes it optional. Measured: chibi answers "llo" for
+# `(substring "hello" 2)`, and **Gauche raises, as Patina does.** So this is
+# the package relying on a chibi extension, not a Patina difference, and the
+# README's bar on papering over one of those does not apply. R7RS spells the
+# same operation `(string-copy s start)`, same semantics, so the rewrite is a
+# rename:
+#
+#     (substring s i)  ->  (string-copy s i)
+#
+# It accounted for all 14 of the suite's errors (139 of 153).
+#
+# **2. The test's `(cond-expand (complex ...))` has no `else`.** `complex` is
+# chibi's own feature name - R7RS's is `exact-complex` - and an unfulfilled
+# expression-level `cond-expand` is unspecified: chibi evaluates it to nothing,
+# Gauche and Patina raise. The patch adds `(else #f)` - a `cond-expand`
+# unportable by omission, which the README admits - so the three
+# complex-number rows are skipped where the
+# feature is not advertised rather than stopping the file. They are *not* run:
+# Patina has exact complex numbers but does not claim `complex`, and claiming
+# another implementation's feature name to pass a test is the wrong fix.
+#
+# Measured after, both backends: **153 of 153.** The package had not run an
+# assertion before.
+diff -ruN a/chibi/show-test.sld b/chibi/show-test.sld
+--- a/chibi/show-test.sld
++++ b/chibi/show-test.sld
+@@ -131,7 +131,8 @@
+         (test "1.00+2.00i"
+             (show #f (with ((precision 2)) (string->number "1+2i"))))
+         (test "3.14+2.00i"
+-            (show #f (with ((precision 2)) (string->number "3.14159+2i"))))))
++            (show #f (with ((precision 2)) (string->number "3.14159+2i")))))
++       (else #f))
+ 
+       ;; padding/trimming
+ 
+diff -ruN a/chibi/show/show.scm b/chibi/show/show.scm
+--- a/chibi/show/show.scm
++++ b/chibi/show/show.scm
+@@ -185,7 +185,7 @@
+          (each ell
+                (if (negative? diff)
+                    nothing
+-                   (substring str diff))))))))
++                   (string-copy str diff))))))))
+ 
+ ;;> As \scheme{trimmed} but removes equally from both the left and the
+ ;;> right, removing extra odd characters from the right, and inserting
+diff -ruN a/chibi/show/write.scm b/chibi/show/write.scm
+--- a/chibi/show/write.scm
++++ b/chibi/show/write.scm
+@@ -173,7 +173,7 @@
+       (define (insert-commas str)
+         (let* ((dec-pos (string-find str dec-sep))
+                (left (substring str 0 dec-pos))
+-               (right (substring str dec-pos))
++               (right (string-copy str dec-pos))
+                (sep (cond ((char? comma-sep) (string comma-sep))
+                           ((string? comma-sep) comma-sep)
+                           ((eqv? #\, dec-sep) ".")
