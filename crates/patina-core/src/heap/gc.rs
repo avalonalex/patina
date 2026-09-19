@@ -548,6 +548,9 @@ impl<'h> GcVisitor<'h> {
             // as separate roots rather than following the chain.
             let mut alias_targets: Vec<Rc<Environment>> = Vec::new();
             e.for_each_alias_target(&mut |target| alias_targets.push(Rc::clone(target)));
+            // The owners of imported bindings leave the parent tree the same
+            // way, and hold the values those bindings read.
+            e.for_each_shared_owner(&mut |owner| alias_targets.push(Rc::clone(owner)));
             for target in &alias_targets {
                 self.visit_env(target);
             }

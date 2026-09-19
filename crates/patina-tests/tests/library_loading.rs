@@ -146,24 +146,24 @@ fn test_library_value_type() {
     // but the predicate is registered and works
 }
 
-/// **Open defect, pinned.** An imported variable is a copy of its value at
-/// import time, not the exporting library's binding, so a mutation the library
-/// makes afterwards is invisible to the importer.
+/// An imported variable is the exporting library's binding, so a mutation the
+/// library makes afterwards is one the importer sees (R7RS §5.2; #406).
 ///
-/// The library's own view is live — `peek` reads 2 — which locates the fault
-/// in what `import` installs rather than in how `set!` runs. Gauche and chibi
-/// both report 2 for `count` on the same program.
+/// This was pinned as `(0 2)` from 2026-08-18 until #406: `import` installed a
+/// copy of the value the variable held at import time. The library's own view
+/// was always live — `peek` read 2 — which located the fault in what `import`
+/// installs rather than in how `set!` runs. Both backends did it, and the
+/// chibi R7RS suite was 1226/1226 across it, because nothing there mutates a
+/// variable another library imported; an R6RS library test found it, which is
+/// the kind of thing a second corpus is for.
 ///
-/// Both backends do this, and the chibi R7RS suite is 1226/1226 across it,
-/// because nothing there mutates a variable another library imported. Found
-/// 2026-08-18 while writing an R6RS library test, which is the kind of thing
-/// a second corpus is for.
-///
-/// Asserted as-is rather than as a divergence, because both backends agree
-/// and neither fails: they return a plausible wrong answer. **When this
-/// converges on 2, delete the `count` assertion and keep the `peek` one.**
+/// The rows that say what an import *is* — renamed and re-exported names,
+/// every kind of import set, an importer's own `set!` and `define` — live in
+/// `tests/scheme/stdlib/library-bindings.scm`, where Gauche arbitrates them.
+/// This one stays because it comes in through the embedding API rather than
+/// the command line.
 #[test]
-fn an_imported_variable_is_a_stale_copy_of_its_binding() {
+fn an_imported_variable_is_the_librarys_binding() {
     let program = "(define-library (pinned counter)
                      (export bump count peek)
                      (import (scheme base))
@@ -176,11 +176,6 @@ fn an_imported_variable_is_a_stale_copy_of_its_binding() {
                    (bump)
                    (list count (peek))";
 
-    // `eval_program` runs both backends and asserts they agree, so this pins
-    // the shared wrong answer *and* that it stays shared.
-    assert_eq!(
-        common::eval_program(program),
-        "(0 2)",
-        "expected the pinned wrong answer; if this is now (2 2) the defect is fixed"
-    );
+    // `eval_program` runs both backends and asserts they agree.
+    assert_eq!(common::eval_program(program), "(2 2)");
 }

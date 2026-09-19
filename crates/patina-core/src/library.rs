@@ -33,6 +33,16 @@ pub struct Library {
     /// Contains both exported and private bindings
     pub env: Rc<Environment>,
 
+    /// For an export the library renamed — `(export (rename count tally))` —
+    /// the name it has inside: `tally` → `count`. An export absent from here
+    /// goes by the same name in `env`.
+    ///
+    /// `exports` records what each export *held* when the library was built,
+    /// which cannot say where it lives. An import needs that: it is the
+    /// library's binding, not a copy of its value (#406), and for a renamed
+    /// export the location is under the other name.
+    internal_names: HashMap<String, String>,
+
     /// Optional source file path (for error messages and debugging)
     pub source: Option<PathBuf>,
 }
@@ -44,6 +54,7 @@ impl Library {
             name,
             exports: HashMap::new(),
             env: Rc::new(Environment::new()),
+            internal_names: HashMap::new(),
             source: None,
         }
     }
@@ -54,13 +65,55 @@ impl Library {
             name,
             exports: HashMap::new(),
             env,
+            internal_names: HashMap::new(),
             source: None,
         }
     }
 
     /// Add an exported binding
     pub fn export_tagged(&mut self, name: String, value: TaggedValue) {
+        self.internal_names.remove(&name);
         self.exports.insert(name, value);
+    }
+
+    /// Forget every export, for a caller about to rebuild the table. `exports`
+    /// is public and has been cleared directly, which would leave a renamed
+    /// export's internal name behind to misdirect a later plain export of
+    /// the same name.
+    pub fn clear_exports(&mut self) {
+        self.exports.clear();
+        self.internal_names.clear();
+    }
+
+    /// Add an exported binding that the library knows by another name:
+    /// `(export (rename internal external))`.
+    pub fn export_renamed(&mut self, internal: String, external: String, value: TaggedValue) {
+        self.exports.insert(external.clone(), value);
+        self.internal_names.insert(external, internal);
+    }
+
+    /// Import `export` into `env` as `name`: the same binding the library
+    /// has, so that what the library assigns afterwards the importer sees
+    /// (R7RS §5.2; #406). `false` when the library has no such export.
+    ///
+    /// Every import in both backends comes through here, so that "what an
+    /// import installs" is decided in one place. Falls back to the value the
+    /// export held when the library was built, for an export that is not a
+    /// plain binding in `env` — see `Environment::share_binding` for which
+    /// those are.
+    pub fn import_into(&self, env: &Environment, name: impl Into<Rc<str>>, export: &str) -> bool {
+        let Some(&value) = self.exports.get(export) else {
+            return false;
+        };
+        let name = name.into();
+        let internal = self
+            .internal_names
+            .get(export)
+            .map_or(export, String::as_str);
+        if !env.share_binding(Rc::clone(&name), &self.env, internal) {
+            env.define(name, value);
+        }
+        true
     }
 
     /// Set the source file path
@@ -127,6 +180,41 @@ mod tests {
         let mut names = lib.export_names();
         names.sort();
         assert_eq!(names, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn an_import_is_the_librarys_binding_under_either_of_its_names() {
+        let mut lib = Library::new(vec!["counter".to_string()]);
+        lib.env.define("count", TaggedValue::fixnum(0));
+        lib.export_tagged("count".to_string(), TaggedValue::fixnum(0));
+        lib.export_renamed(
+            "count".to_string(),
+            "tally".to_string(),
+            TaggedValue::fixnum(0),
+        );
+
+        let importer = Environment::with_heap(lib.env.heap().clone());
+        assert!(lib.import_into(&importer, "count", "count"));
+        assert!(lib.import_into(&importer, "c:tally", "tally"));
+        assert!(!lib.import_into(&importer, "nope", "nope"));
+
+        // The library assigns; the importer sees it under both names, because
+        // the renamed export was found under the name the library uses.
+        lib.env.set("count", TaggedValue::fixnum(2)).unwrap();
+        assert_eq!(importer.get("count"), Some(TaggedValue::fixnum(2)));
+        assert_eq!(importer.get("c:tally"), Some(TaggedValue::fixnum(2)));
+        assert_eq!(importer.get("nope"), None);
+    }
+
+    #[test]
+    fn an_export_with_no_binding_behind_it_is_imported_by_value() {
+        // A library assembled by hand, as the registry's own tests do: the
+        // export table is all there is, so its value is what gets installed.
+        let mut lib = Library::new(vec!["bare".to_string()]);
+        lib.export_tagged("v".to_string(), TaggedValue::fixnum(7));
+        let importer = Environment::with_heap(lib.env.heap().clone());
+        assert!(lib.import_into(&importer, "v", "v"));
+        assert_eq!(importer.get("v"), Some(TaggedValue::fixnum(7)));
     }
 
     #[test]

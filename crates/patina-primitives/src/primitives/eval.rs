@@ -50,11 +50,17 @@ fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), E
 
 /// Resolve one set from the library outward. This path is shared by both
 /// backends; loading stays behind ApplyContext. Transform the exported names,
-/// retaining the original values (including macro and core-syntax bindings).
+/// retaining which export each one is (including macro and core-syntax
+/// bindings) — the export and not its value, because what gets installed is
+/// the library's binding (#406): code evaluated in the environment must see
+/// what the library assigns after the environment was made.
+///
+/// Returns the library, and for each name the set brings in, the export it
+/// names.
 fn environment_imports(
     ctx: &dyn ApplyContext,
     set: &ImportSet,
-) -> Result<BTreeMap<String, TaggedValue>, EvalError> {
+) -> Result<(Rc<patina_core::Library>, BTreeMap<String, String>), EvalError> {
     let mut modifiers = Vec::new();
     let mut current = set;
     let library_name = loop {
@@ -72,9 +78,10 @@ fn environment_imports(
     let library = ctx
         .load_scheme_library(library_name)
         .map_err(|e| EvalError::InvalidSyntax(format!("environment: cannot load library: {e}")))?;
-    let mut bindings: BTreeMap<_, _> = library
-        .exports_iter_tagged()
-        .map(|(name, value)| (name.clone(), value))
+    let mut bindings: BTreeMap<String, String> = library
+        .export_names()
+        .into_iter()
+        .map(|name| (name.to_string(), name.to_string()))
         .collect();
     let missing = |name: &str| {
         EvalError::InvalidSyntax(format!(
@@ -88,7 +95,7 @@ fn environment_imports(
                 for name in identifiers {
                     selected.insert(
                         name.clone(),
-                        *bindings.get(name).ok_or_else(|| missing(name))?,
+                        bindings.get(name).ok_or_else(|| missing(name))?.clone(),
                     );
                 }
                 bindings = selected;
@@ -127,7 +134,7 @@ fn environment_imports(
             ImportSet::Library(_) => unreachable!("only modifiers are stacked"),
         }
     }
-    Ok(bindings)
+    Ok((library, bindings))
 }
 
 /// (environment import-set ...) → immutable environment-specifier
@@ -147,8 +154,9 @@ fn primitive_environment(
 
     let env = Rc::new(Environment::with_heap(heap.clone()));
     for set in &import_sets {
-        for (name, value) in environment_imports(ctx, set)? {
-            env.define(name, value);
+        let (library, bindings) = environment_imports(ctx, set)?;
+        for (name, export) in bindings {
+            library.import_into(&env, name, &export);
         }
     }
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
@@ -287,9 +295,8 @@ const R5RS_SYNTAX_NOT_IN_BASE: &[&str] = &["delay"];
 /// not null.
 fn install_r5rs_syntax(env: &Rc<Environment>, base_lib: &patina_core::Library) {
     for name in R5RS_SYNTAX {
-        if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(*name, tv);
-        } else {
+        // The library's binding, as any import installs (#406).
+        if !base_lib.import_into(env, *name, name) {
             debug_assert!(
                 R5RS_SYNTAX_NOT_IN_BASE.contains(name),
                 "(scheme base) stopped exporting the R5RS keyword '{name}'; \
@@ -604,9 +611,7 @@ fn primitive_scheme_report_environment(
 
     // Install procedures
     for name in R5RS_PROCEDURES {
-        if let Some(tv) = base_lib.get_export_tagged(name) {
-            env.define(*name, tv);
-        }
+        base_lib.import_into(&env, *name, name);
     }
 
     // Two optional libraries: absent is fine, but a *failure* is not the same
@@ -631,9 +636,7 @@ fn primitive_scheme_report_environment(
         for name in &[
             "sin", "cos", "tan", "asin", "acos", "atan", "exp", "log", "sqrt",
         ] {
-            if let Some(tv) = inexact_lib.get_export_tagged(name) {
-                env.define(*name, tv);
-            }
+            inexact_lib.import_into(&env, *name, name);
         }
     }
 
@@ -647,21 +650,15 @@ fn primitive_scheme_report_environment(
             "magnitude",
             "angle",
         ] {
-            if let Some(tv) = complex_lib.get_export_tagged(name) {
-                env.define(*name, tv);
-            }
+            complex_lib.import_into(&env, *name, name);
         }
     }
 
     // Add the R5RS-specific aliases
     // exact->inexact is an alias for inexact
-    if let Some(tv) = base_lib.get_export_tagged("inexact") {
-        env.define("exact->inexact", tv);
-    }
+    base_lib.import_into(&env, "exact->inexact", "inexact");
     // inexact->exact is an alias for exact
-    if let Some(tv) = base_lib.get_export_tagged("exact") {
-        env.define("inexact->exact", tv);
-    }
+    base_lib.import_into(&env, "inexact->exact", "exact");
 
     // Add null-environment and scheme-report-environment themselves
     let r5rs_lib = vec!["scheme".to_string(), "r5rs".to_string()];

@@ -48,8 +48,7 @@ Each line is an issue. When one closes, delete its line; when this list is
 empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
-- #406 — an import copies the value instead of sharing the binding. The root of the next one.
-- #407 — a library macro's reference lands on the importer's variable when the two hold equal values.
+- #407 — a library macro's reference lands on the importer's variable when the two hold equal values. Its root, #406, is fixed: an import is the library's location now, so the relinker has a binding to compare where it compared values.
 - #408 — a generated macro cannot reach a definition its generator introduced, across a library.
 - #269 — a definition a template introduces in a body is reachable by its bare name.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.

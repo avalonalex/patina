@@ -345,8 +345,8 @@ impl Evaluator {
             .borrow()
             .get(&["scheme".to_string(), "base".to_string()])
         {
-            for (name, tv) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), tv);
+            for name in lib.export_names() {
+                lib.import_into(&self.global_env, name, name);
             }
         }
 
@@ -360,8 +360,8 @@ impl Evaluator {
             .borrow()
             .get(&["patina".to_string(), "debug".to_string()])
         {
-            for (name, tv) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), tv);
+            for name in lib.export_names() {
+                lib.import_into(&self.global_env, name, name);
             }
         }
     }
@@ -441,8 +441,8 @@ impl Evaluator {
                 if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
                 {
                     // Add all (scheme base) exports to the evaluation environment
-                    for (export_name, tv) in scheme_base.exports_iter_tagged() {
-                        env.define(export_name.clone(), tv);
+                    for export_name in scheme_base.export_names() {
+                        scheme_base.import_into(&env, export_name, export_name);
                     }
                 }
             }
@@ -637,7 +637,7 @@ impl Evaluator {
                     let all_bindings = library.env.bindings();
 
                     // Clear and re-export everything
-                    library.exports.clear();
+                    library.clear_exports();
                     for (binding_name, value) in all_bindings {
                         library.export_tagged(binding_name, value);
                     }
@@ -802,9 +802,10 @@ impl Evaluator {
                 // Direct library import: import all exports
                 let imported_lib = self.load_library(lib_name)?;
 
-                // Import all exports into this library's environment
-                for (name, value) in imported_lib.exports_iter_tagged() {
-                    lib_env.define(name.clone(), value);
+                // Import all exports into this library's environment — the
+                // bindings themselves, not what they hold now (#406)
+                for name in imported_lib.export_names() {
+                    imported_lib.import_into(lib_env, name, name);
                 }
                 Ok(())
             }
@@ -821,14 +822,11 @@ impl Evaluator {
 
                 // Then import only the specified identifiers
                 for id in identifiers {
-                    match temp_env.get(id) {
-                        Some(value) => lib_env.define(id.clone(), value),
-                        None => {
-                            return Err(patina_runtime::LibraryError::parse(
-                                None,
-                                format!("Identifier '{}' not found in import set", id),
-                            ));
-                        }
+                    if !lib_env.copy_binding(id.as_str(), &temp_env, id) {
+                        return Err(patina_runtime::LibraryError::parse(
+                            None,
+                            format!("Identifier '{}' not found in import set", id),
+                        ));
                     }
                 }
                 Ok(())
@@ -846,9 +844,9 @@ impl Evaluator {
                 let exclude: HashSet<_> = identifiers.iter().collect();
 
                 // Import all bindings except the excluded ones
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     if !exclude.contains(&name) {
-                        lib_env.define(name, value);
+                        lib_env.copy_binding(name.as_str(), &temp_env, &name);
                     }
                 }
 
@@ -862,9 +860,9 @@ impl Evaluator {
                 self.process_import_set(import_set, &temp_env)?;
 
                 // Import all bindings with the prefix added
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     let prefixed_name = format!("{}{}", prefix, name);
-                    lib_env.define(prefixed_name, value);
+                    lib_env.copy_binding(prefixed_name, &temp_env, &name);
                 }
 
                 Ok(())
@@ -895,9 +893,9 @@ impl Evaluator {
                     }
                 }
                 let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     let final_name = rename_map.get(&name).unwrap_or(&name);
-                    lib_env.define(final_name.clone(), value);
+                    lib_env.copy_binding(final_name.as_str(), &temp_env, &name);
                 }
                 Ok(())
             }
@@ -925,9 +923,7 @@ impl Evaluator {
 
                 // Import all exports into the current environment
                 for export_name in lib.export_names() {
-                    if let Some(value) = lib.get_export_tagged(export_name) {
-                        env.define(export_name, value);
-                    }
+                    lib.import_into(env, export_name, export_name);
                 }
                 Ok(())
             }
@@ -943,9 +939,9 @@ impl Evaluator {
 
                 // Then import only the specified identifiers
                 let allowed: HashSet<_> = identifiers.iter().collect();
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     if allowed.contains(&name) {
-                        env.define(name, value);
+                        env.copy_binding(name.as_str(), &temp_env, &name);
                     }
                 }
                 Ok(())
@@ -962,9 +958,9 @@ impl Evaluator {
 
                 // Import all except specified identifiers
                 let excluded: HashSet<_> = identifiers.iter().collect();
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     if !excluded.contains(&name) {
-                        env.define(name, value);
+                        env.copy_binding(name.as_str(), &temp_env, &name);
                     }
                 }
                 Ok(())
@@ -977,9 +973,9 @@ impl Evaluator {
                 self.process_import_for_eval(import_set, &temp_env)?;
 
                 // Import all with prefix
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     let prefixed_name = format!("{}{}", prefix, name);
-                    env.define(prefixed_name, value);
+                    env.copy_binding(prefixed_name, &temp_env, &name);
                 }
                 Ok(())
             }
@@ -997,9 +993,9 @@ impl Evaluator {
                 let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
 
                 // Import with renaming
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     let final_name = rename_map.get(&name).unwrap_or(&name);
-                    env.define(final_name.clone(), value);
+                    env.copy_binding(final_name.as_str(), &temp_env, &name);
                 }
                 Ok(())
             }

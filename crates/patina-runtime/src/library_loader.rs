@@ -107,7 +107,7 @@ pub fn build_library(
                 // Renaming a keyword works like renaming anything else: the
                 // marker goes out under the new name, and the importer's
                 // desugarer dispatches on the form rather than the spelling.
-                Some(value) => library.export_tagged(external.clone(), value),
+                Some(value) => library.export_renamed(internal.clone(), external.clone(), value),
                 None => return Err(reject(internal, "not defined")),
             },
         }
