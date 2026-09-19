@@ -986,6 +986,54 @@ fn a_do_result_clause_is_not_a_definition_context() {
     assert_eq!(eval_program_tree_walker(code), "(5 global)");
 }
 
+/// **Open defect, pinned (#438).** A program that defines over an imported
+/// name *after* a library macro mentioning it was expanded captures the
+/// template's reference: one procedure, compiled once, bumps the library's
+/// `count` on its first call and the program's on its second.
+///
+/// chibi 0.12 and Gauche 0.9.15 both answer `(2 100)`. Patina answers
+/// `(1 101)` on both backends, before and after #407.
+///
+/// The relinker leaves a template's reference alone when the use site and the
+/// definition site reach one binding by the name, and here they truthfully
+/// do — the program's `count` *is* the import. Left alone it is a bare global
+/// name, resolved again at run time, and `define` over an import makes the
+/// program a binding of its own in the same slot. So the skip is right when
+/// it is made and invalidated afterwards. Defining first and expanding
+/// afterwards is already right, which the second assertion holds in place so
+/// that a fix for one order cannot cost the other.
+///
+/// Pinned rather than scored above because the axis it belongs to — the use
+/// site's `X` being *imported, then defined over* — is not in [`MADE`] yet;
+/// the issue says what the rows would be. When this turns red it should
+/// assert `(2 100)`.
+#[test]
+fn a_definition_over_an_import_captures_an_expanded_template() {
+    let library = "(define-library (hm shared)\n  (import (scheme base))\n  \
+                   (export count get-count bump-count!)\n  (begin\n    \
+                   (define count 0)\n    (define (get-count) count)\n    \
+                   (define-syntax bump-count!\n      \
+                   (syntax-rules () ((_) (set! count (+ count 1)))))))\n\
+                   (import (scheme base) (hm shared))\n";
+    let expanded_first = format!(
+        "{library}(define (bump) (bump-count!))\n(bump)\n(define count 100)\n(bump)\n\
+         (list (get-count) count)"
+    );
+    let defined_first = format!(
+        "{library}(define count 100)\n(define (bump) (bump-count!))\n(bump)\n\
+         (list (get-count) count)"
+    );
+    for vm in [true, false] {
+        assert_eq!(
+            answer(&expanded_first, vm),
+            "(1 101)",
+            "expected the pinned wrong answer; `(2 100)` means #438 is fixed and \
+             this pin should become that answer"
+        );
+        assert_eq!(answer(&defined_first, vm), "(1 100)");
+    }
+}
+
 /// A generated macro whose generator *also introduced the definition it
 /// mentions*, beside a plain definition of the same spelling, is refused
 /// across a library boundary — not answered with the plain one.
