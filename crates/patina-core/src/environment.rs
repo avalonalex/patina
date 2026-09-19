@@ -280,6 +280,32 @@ impl Bindings {
 /// including on a loop of nothing but primitive calls.
 type Owner = (Rc<Environment>, u32);
 
+/// Which location a name reaches by its by-name view — [`Environment::get`]'s
+/// answer as a place rather than as what the place holds.
+///
+/// Two environments mean one binding by a name exactly when these are equal,
+/// which a comparison of values cannot say: two variables that are both `0`
+/// are two bindings. Comparable across environments because an import is the
+/// exporting library's location ([`Owner`]): a name imported twice, by any
+/// routes and under any import sets, is one `Slot`.
+///
+/// The exception is the one [`Environment::share_binding`] names: an export
+/// that is not a plain definition — one a macro introduced under its scopes,
+/// or one reached through an alias — is still installed as a copy, so each
+/// importer has a `Slot` of its own for it and the library's is a third. The
+/// relinker then aliases such a mention to the library's, which is the
+/// binding the template meant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingLocation {
+    /// A plain binding: the id of the environment that owns the location, and
+    /// its slot there.
+    Slot(u64, u32),
+    /// The name-only view of a definition a macro introduced: the environment
+    /// holding it, its spelling there, and its place among that spelling's
+    /// scoped bindings.
+    Scoped(u64, Rc<str>, usize),
+}
+
 /// The tables that only a global or a library environment ever fills, kept
 /// out of line so that the environments which never do — and the tree-walker
 /// builds one per call and per `let`-bound temporary — do not carry them.
@@ -805,6 +831,45 @@ impl Environment {
                 return env.scoped_bindings.borrow()[name]
                     .get(i)
                     .map(|b| b.tagged_value);
+            }
+            env = env.parent.as_deref()?;
+        }
+    }
+
+    /// The location `get(name)` reads, or `None` where `get` finds nothing.
+    ///
+    /// The same walk as [`get`], step for step — a plain binding, then a
+    /// macro-expansion alias, then the name-only view of a scoped definition,
+    /// then the parent — because the two must agree on *which* binding the
+    /// name reaches, or this would name one and `get` read another. One
+    /// shared walk is Track Q's Q7.3; until then they mirror by hand.
+    ///
+    /// [`get`]: Self::get
+    pub fn binding_location(&self, name: &str) -> Option<BindingLocation> {
+        let mut env = self;
+        loop {
+            if let Some(slot) = env.local_slot(name) {
+                return Some(match env.owner_of(slot) {
+                    Some((owner, owner_slot)) => BindingLocation::Slot(owner.env_id(), owner_slot),
+                    None => BindingLocation::Slot(env.env_id(), slot),
+                });
+            }
+            if env.has_aliases.get()
+                && let Some((target_env, target_name)) = env.alias_target(name)
+            {
+                return match target_env {
+                    Some(target) => target.binding_location(&target_name),
+                    None => env.binding_location(&target_name),
+                };
+            }
+            if let Some(i) = env.visible_scoped_index(name) {
+                let table = env.scoped_bindings.borrow();
+                let (spelling, _) = table.get_key_value(name)?;
+                return Some(BindingLocation::Scoped(
+                    env.env_id(),
+                    Rc::clone(spelling),
+                    i,
+                ));
             }
             env = env.parent.as_deref()?;
         }
@@ -2530,6 +2595,110 @@ mod shared_binding_tests {
         let mut owners = 0;
         library.for_each_shared_owner(&mut |_| owners += 1);
         assert_eq!(owners, 0, "a self-reference would leak the environment");
+    }
+}
+
+/// `binding_location` answers "is this one binding?" across environments,
+/// which a comparison of values cannot (#407).
+#[cfg(test)]
+mod binding_location_tests {
+    use super::*;
+
+    fn zero() -> TaggedValue {
+        TaggedValue::fixnum(0)
+    }
+
+    #[test]
+    fn equal_values_in_two_environments_are_two_locations() {
+        let library = Rc::new(Environment::new());
+        library.define("X", zero());
+        let program = Rc::new(Environment::with_heap(library.heap().clone()));
+        program.define("X", zero());
+
+        assert_eq!(library.get("X"), program.get("X"));
+        assert_ne!(library.binding_location("X"), program.binding_location("X"));
+        assert_eq!(program.binding_location("missing"), None);
+    }
+
+    #[test]
+    fn an_import_is_its_librarys_location_by_any_route_and_any_name() {
+        let library = Rc::new(Environment::new());
+        library.define("X", zero());
+        let relay = Rc::new(Environment::with_heap(library.heap().clone()));
+        relay.share_binding("relayed", &library, "X");
+        let program = Rc::new(Environment::with_heap(library.heap().clone()));
+        program.share_binding("direct", &library, "X");
+        program.share_binding("through-relay", &relay, "relayed");
+
+        let home = library.binding_location("X");
+        assert!(home.is_some());
+        assert_eq!(program.binding_location("direct"), home);
+        assert_eq!(program.binding_location("through-relay"), home);
+        assert_eq!(relay.binding_location("relayed"), home);
+
+        // Defined over, it is the program's own again.
+        program.define("direct", zero());
+        assert_ne!(program.binding_location("direct"), home);
+    }
+
+    #[test]
+    fn the_walk_is_gets_walk() {
+        let root = Rc::new(Environment::new());
+        root.define("X", zero());
+        let child = Rc::new(Environment::with_parent(Rc::clone(&root)));
+        // Through the parent.
+        assert_eq!(child.binding_location("X"), root.binding_location("X"));
+
+        // Through a macro-expansion alias, into another environment.
+        let library = Rc::new(Environment::with_heap(root.heap().clone()));
+        library.define("helper", zero());
+        root.define_alias("helper.1", Rc::clone(&library), "helper".into());
+        assert_eq!(
+            child.binding_location("helper.1"),
+            library.binding_location("helper")
+        );
+
+        // Through an alias whose target is the environment holding it, which
+        // is stored without one: the walk restarts there, as `get`'s does.
+        root.define("renamed.7", zero());
+        root.define_alias("bare", Rc::clone(&root), "renamed.7".into());
+        assert_eq!(child.get("bare"), Some(zero()));
+        assert_eq!(
+            child.binding_location("bare"),
+            root.binding_location("renamed.7")
+        );
+        // A dangling alias is nothing, to both.
+        root.define_alias("dangling", Rc::clone(&root), "nowhere".into());
+        assert_eq!(child.get("dangling"), None);
+        assert_eq!(child.binding_location("dangling"), None);
+
+        // A plain binding wins over a parent's, as it does for `get`.
+        child.define("X", zero());
+        assert_ne!(child.binding_location("X"), root.binding_location("X"));
+    }
+
+    #[test]
+    fn a_macro_introduced_definition_has_a_location_of_its_own() {
+        let env = Rc::new(Environment::new());
+        let scopes = ScopeSet::from_iter([crate::scope::ScopeId(1)]);
+        env.define_scoped_definition("X", scopes, zero());
+        let other = Rc::new(Environment::with_heap(env.heap().clone()));
+        other.define("X", zero());
+
+        // `get` reaches it by name where nothing plain has the name, and then
+        // it is that definition, not whatever else holds an equal value.
+        assert_eq!(env.get("X"), Some(zero()));
+        let here = env.binding_location("X");
+        assert!(matches!(here, Some(BindingLocation::Scoped(..))));
+        assert_ne!(here, other.binding_location("X"));
+
+        // A plain binding of the name takes the by-name view, as it does for
+        // `get`.
+        env.define("X", zero());
+        assert!(matches!(
+            env.binding_location("X"),
+            Some(BindingLocation::Slot(..))
+        ));
     }
 }
 
