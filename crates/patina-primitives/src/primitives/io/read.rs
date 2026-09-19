@@ -29,6 +29,7 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     };
 
     // Determine what kind of port we have and get content if applicable
+    let mut undecodable_follows = false;
     let (remaining, is_stdin, is_file) = {
         let data = port.data.borrow();
         match &*data {
@@ -36,14 +37,25 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
                 // For string ports, copy the remaining content
                 (Some(s.content[s.position..].to_string()), false, false)
             }
+            // A bytevector port is read like a string port, over the text at
+            // its front: `read` is a textual read like `read-char` and
+            // `read-line`, which already decode UTF-8 from a binary port, and
+            // chibi and Gauche both read a datum from one (#404). Only the
+            // decodable prefix is parsed, because what follows the datum need
+            // not be text — a header, then a binary body — and the position
+            // advances by the datum's bytes alone, so `read-u8` continues
+            // from the byte after it.
+            PortData::Bytevector(b) => {
+                let bytes = &b.content[b.position..];
+                let text = patina_core::port::utf8_prefix(bytes);
+                undecodable_follows = text.len() < bytes.len();
+                (Some(text.to_string()), false, false)
+            }
             PortData::Stdio(patina_runtime::StdioKind::Stdin) => (None, true, false),
             PortData::Stdio(_) => {
                 return Err(EvalError::TypeError("not an input port".to_string()));
             }
             PortData::File(_) => (None, false, true),
-            PortData::Bytevector(_) => {
-                return Err(EvalError::TypeError("read: not a textual port".to_string()));
-            }
             PortData::Closed => {
                 return Err(EvalError::IOError("port is closed".to_string()));
             }
@@ -94,6 +106,14 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
             // Whitespace and completed comments have also been consumed.
             port.advance_position(remaining.len())
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
+            // No datum in the text, but the port is not at its end: what is
+            // left is bytes that do not decode. That is the error the other
+            // textual reads report there, not an end of file.
+            if undecodable_follows {
+                return Err(EvalError::IOError(
+                    "read: invalid UTF-8 in binary port".to_string(),
+                ));
+            }
             Ok(TaggedValue::EOF)
         }
         Err(e) => Err(read_error(&e)),

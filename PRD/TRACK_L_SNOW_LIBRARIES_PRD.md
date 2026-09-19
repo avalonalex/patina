@@ -28,8 +28,9 @@ carry lives in this file's git history; the shape of it: corpus vendored 2026-08
 2026-08-13 → Larceny lanes and their defect queue 2026-08-24 → all 33 suites loading 2026-08-26 →
 the hygiene queue closed 2026-08-31/09-01 (matrix 28 of 28 on both backends, families 33–39 fixed,
 family 40 quarantined).
-**Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**127 of 161** vendored
-packages pass, of which **127 of 136 are in scope** — the other 25 are excluded by
+**Status:** In execution — L0, L0.5, L0.75, L4 done; L3 harness live (**134 of 161** vendored
+packages pass, which is **134 of 134 in scope** as of 2026-09-18 — every in-scope package, the
+last being chibi-tar (#402's hygiene fix, then #404); the other 27 are excluded by
 `compat/EXCLUSIONS.scm` with a recorded reason apiece); L5's reader and libraries landed, its suite
 deferred; L5.3's lanes, refreshed 2026-09-14: VM **23 of 33** suites clean
 (8514/8534), tree-walker **23 of 33** (8514/8534), R6RS **15 of 16**

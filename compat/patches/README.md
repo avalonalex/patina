@@ -18,6 +18,20 @@ author would make today and changes no behaviour being measured. If a patch
 would paper over a real incompatibility, the package belongs in
 `compat/EXCLUSIONS.scm` with a reason, or should simply fail.
 
+One other shape qualifies, on the same test: a `cond-expand` with a branch
+for each implementation its author had and **no `else`**, so that the package
+is unportable by omission rather than by design. The patch adds the `else`,
+and what goes in it is the stand-in the author already wrote for another
+implementation, moved over — `chibi-tar.patch` copies the package's own
+CHICKEN definitions. It stops qualifying the moment the new branch has to
+invent behaviour the suite then measures.
+
+What a patch is *not* for is a difference in Patina. `chibi-tar` had one of
+those too — text written to a binary port, which chibi and Gauche allow and
+Patina refused — and that was changed in Patina (#404). Six rewritten call
+sites would have made the package pass and left the inconsistency where it
+was, with the next package to find it.
+
 Each patch begins with a `#` comment block — `patch(1)` skips it as leading
 garbage — stating what is rewritten, why the old name is wrong, why the new
 one is faithful, and what was measured afterwards. That block is the argument;

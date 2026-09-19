@@ -1,7 +1,9 @@
 ;; Two port widenings the compat corpus asked for: `read-line`'s optional
-;; max-chars argument (why: the note on `text_input::read_line`) and textual
-;; reads decoding UTF-8 from binary ports (why: `decode_utf8_at` in
-;; `port.rs`). Both mirror chibi; chibi-mime exercises both.
+;; max-chars argument (why: the note on `text_input::read_line`) and the
+;; textual operations working on binary ports, as UTF-8 — reads (why:
+;; `decode_utf8_at` in `port.rs`; chibi-mime exercises them) and, since #404,
+;; writes and `read` (chibi-binary-record writes its string fields to a
+;; bytevector port, which is what chibi-tar is built on). Both mirror chibi.
 ;;
 ;; Migrated from `crates/patina-tests/tests/binary_port_textual_reads.rs`
 ;; (#193), which is deleted. Two later sections came from files that keep
@@ -15,6 +17,10 @@
 ;; Patina's extensions, and only implementations that share them can
 ;; corroborate: the max-chars rows are scoped to Patina and chibi, whose
 ;; extension it is. Gauche's `read-line` takes a different second argument.
+;; The binary-port rows need no scoping: chibi and Gauche both answer them as
+;; written. The other direction — bytes on a *string* port — is where the two
+;; part ways (chibi refuses, Gauche allows), Patina refuses with chibi, and
+;; nothing here asserts it.
 ;;
 ;; Every row that reads more than once sequences its reads with `let*`. The
 ;; Rust originals wrote them as arguments to `list`, whose evaluation order is
@@ -107,6 +113,89 @@
          (b (read-line p 4096))
          (c (read-line p 4096)))
     (list a b c)))
+
+;; `read` is a textual read like the others. It takes the datum and nothing
+;; after it, so the delimiter is still there for whoever reads next.
+(test-equal "read on a binary port" '((1) x #t)
+  (let* ((p (open-input-bytevector (string->utf8 "(1) x ")))
+         (a (read p))
+         (b (read p))
+         (c (eof-object? (read p))))
+    (list a b c)))
+
+;; What follows the datum need not be text at all — a header, then a binary
+;; body — so `read` must not decode further than it reads: 255 is not UTF-8.
+(test-equal "read leaves the bytes after the datum to the binary operations"
+  '(x 32 255)
+  (let* ((p (open-input-bytevector (bytevector 120 32 255)))
+         (a (read p))
+         (b (read-u8 p))
+         (c (read-u8 p)))
+    (list a b c)))
+
+;; ─── Textual writes on a binary port ─────────────────────────────────────────
+;;
+;; The other half, and the half Patina lacked until #404: it read text from a
+;; binary port and refused to write it. Text goes out as the UTF-8 it came in
+;; as.
+
+(test-equal "write-string and write-char on a binary port"
+  (bytevector 102 111 111 33)
+  (let ((o (open-output-bytevector)))
+    (write-string "foo" o)
+    (write-char #\! o)
+    (get-output-bytevector o)))
+
+(test-equal "text is written as UTF-8" (bytevector 206 187 120)
+  (let ((o (open-output-bytevector)))
+    (write-char #\λ o)
+    (write-string "x" o)
+    (get-output-bytevector o)))
+
+;; The shape chibi-binary-record's field writers have: bytes, a padded string,
+;; bytes again, into one port.
+(test-equal "textual and binary writes share one position"
+  (bytevector 1 97 98 2)
+  (let ((o (open-output-bytevector)))
+    (write-u8 1 o)
+    (write-string "ab" o)
+    (write-u8 2 o)
+    (get-output-bytevector o)))
+
+(test-equal "write-string with a start and an end on a binary port"
+  (bytevector 101 108)
+  (let ((o (open-output-bytevector)))
+    (write-string "hello" o 1 3)
+    (get-output-bytevector o)))
+
+;; Every textual writer ends in the same place, so the datum writers and
+;; `newline` follow. Compared as text, since the bytes are only its encoding.
+(test-equal "write, display and newline on a binary port"
+  "(1 \"a\" #\\b)hi\n"
+  (let ((o (open-output-bytevector)))
+    (write '(1 "a" #\b) o)
+    (display "hi" o)
+    (newline o)
+    (utf8->string (get-output-bytevector o))))
+
+;; ─── Every port is textual ───────────────────────────────────────────────────
+;;
+;; `textual-port?` asks whether the textual operations work, and above they
+;; work on a binary port in both directions. R7RS §6.13.1 leaves whether the
+;; two port types are disjoint to the implementation; chibi and Gauche both
+;; answer `#t` here, and an implementation that answered `#f` while reading
+;; and writing text through the port would be contradicting itself. The
+;; file-port half of this is in `vfs_file_io.rs`, since a suite file has no
+;; way to make a file.
+(test-equal "a bytevector port is textual, and still binary" '(#t #t #t #t)
+  (let ((in (open-input-bytevector (bytevector 1)))
+        (out (open-output-bytevector)))
+    (list (textual-port? in) (textual-port? out)
+          (binary-port? in) (binary-port? out))))
+
+(test-equal "a string port is textual" '(#t #t)
+  (list (textual-port? (open-input-string "x"))
+        (textual-port? (open-output-string))))
 
 ;; ─── The standard ports are parameter objects (R7RS §6.13.1) ───────────────
 
