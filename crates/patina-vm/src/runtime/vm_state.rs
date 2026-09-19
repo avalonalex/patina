@@ -728,8 +728,8 @@ fn vm_process_import_set(
     match import_set {
         ImportSet::Library(lib_name) => {
             let imported_lib = vm_load_library(state, lib_name)?;
-            for (name, value) in imported_lib.exports_iter_tagged() {
-                import_define(state, lib_env, name.clone(), value);
+            for name in imported_lib.export_names() {
+                import_export(state, lib_env, name.to_string(), &imported_lib, name);
             }
             Ok(())
         }
@@ -740,15 +740,13 @@ fn vm_process_import_set(
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
             for id in identifiers {
-                match temp_env.get(id) {
-                    Some(value) => import_define(state, lib_env, id.clone(), value),
-                    None => {
-                        return Err(LibraryError::parse(
-                            None,
-                            format!("Identifier '{}' not found in import set", id),
-                        ));
-                    }
+                if temp_env.local_slot(id).is_none() {
+                    return Err(LibraryError::parse(
+                        None,
+                        format!("Identifier '{}' not found in import set", id),
+                    ));
                 }
+                import_staged(state, lib_env, id.clone(), &temp_env, id);
             }
             Ok(())
         }
@@ -759,9 +757,9 @@ fn vm_process_import_set(
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
             let exclude: std::collections::HashSet<_> = identifiers.iter().collect();
-            for (name, value) in temp_env.bindings() {
+            for name in temp_env.local_names() {
                 if !exclude.contains(&name) {
-                    import_define(state, lib_env, name, value);
+                    import_staged(state, lib_env, name.clone(), &temp_env, &name);
                 }
             }
             Ok(())
@@ -769,8 +767,14 @@ fn vm_process_import_set(
         ImportSet::Prefix { import_set, prefix } => {
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
-            for (name, value) in temp_env.bindings() {
-                import_define(state, lib_env, format!("{}{}", prefix, name), value);
+            for name in temp_env.local_names() {
+                import_staged(
+                    state,
+                    lib_env,
+                    format!("{}{}", prefix, name),
+                    &temp_env,
+                    &name,
+                );
             }
             Ok(())
         }
@@ -784,9 +788,9 @@ fn vm_process_import_set(
                 .iter()
                 .map(|(o, n)| (o.clone(), n.clone()))
                 .collect();
-            for (name, value) in temp_env.bindings() {
-                let exported_name = rename_map.get(&name).cloned().unwrap_or(name);
-                import_define(state, lib_env, exported_name, value);
+            for name in temp_env.local_names() {
+                let exported_name = rename_map.get(&name).unwrap_or(&name).clone();
+                import_staged(state, lib_env, exported_name, &temp_env, &name);
             }
             Ok(())
         }
@@ -2299,10 +2303,13 @@ fn dispatch_one_instruction(
 /// already-compiled callers would keep calling the old primitive.
 ///
 /// Every Rust-side writer that can overwrite a global binding must call this
-/// *before* replacing it: the `Define`/`StoreGlobal` handlers, and the import
-/// machinery in both this file and `backend.rs` (via `import_define` — PRD
-/// P8.1). Rebinding a name to the value it already has is a no-op and does
-/// not deoptimize, so re-importing a library never pays for this.
+/// *before* replacing it: the `Define`/`StoreGlobal` handlers. The import
+/// machinery in both this file and `backend.rs` does the same job through
+/// `import_export`/`import_staged` (PRD P8.1), which compare the value before
+/// with the value after, since what an import installs is a binding rather
+/// than a value they hold. Rebinding a name to the value it already has is a
+/// no-op and does not deoptimize, so re-importing a library never pays for
+/// this.
 pub(crate) fn mark_if_shadowing_primitive(
     state: &mut VmState,
     globals: &Rc<Environment>,
@@ -2342,21 +2349,57 @@ pub(crate) fn mark_if_shadowing_primitive_value(
     }
 }
 
-/// Import-path define: overwrite `name` in `env`, first marking the shadow
-/// bit when the write rebinds a primitive (see `mark_if_shadowing_primitive`).
-/// Both import-set resolvers (this file's and `backend.rs`'s) funnel every
-/// binding they install through here. Defines into fresh temp/library
-/// environments find no existing binding and mark nothing; over-marking is
-/// possible only when a library env genuinely rebinds a primitive name, which
-/// costs a deopt, never a wrong result.
-pub(crate) fn import_define(
+/// Import-path install: make `name` in `env` the library's binding of
+/// `export`, marking the shadow bit when that rebinds a primitive (see
+/// `mark_if_shadowing_primitive`). Both import-set resolvers (this file's and
+/// `backend.rs`'s) funnel every binding they install through here or through
+/// [`import_staged`]. Installs into fresh staging/library environments find
+/// no existing binding and mark nothing; over-marking is possible only when a
+/// library env genuinely rebinds a primitive name, which costs a deopt, never
+/// a wrong result.
+///
+/// What gets installed is `Library::import_into`'s business — the binding
+/// itself, not the value it held (#406) — so the value compared against is
+/// read back afterwards rather than assumed.
+pub(crate) fn import_export(
     state: &mut VmState,
     env: &Rc<Environment>,
     name: String,
-    value: TaggedValue,
+    library: &Library,
+    export: &str,
 ) {
-    mark_if_shadowing_primitive(state, env, &name, value);
-    env.define(name, value);
+    let old = env.get(&name);
+    library.import_into(env, name.as_str(), export);
+    mark_if_import_rebound(state, env, &name, old);
+}
+
+/// [`import_export`] for a binding being brought out of the staging
+/// environment an `only`/`except`/`prefix`/`rename` set was resolved into.
+pub(crate) fn import_staged(
+    state: &mut VmState,
+    env: &Rc<Environment>,
+    name: String,
+    staging: &Rc<Environment>,
+    staged_name: &str,
+) {
+    let old = env.get(&name);
+    env.copy_binding(name.as_str(), staging, staged_name);
+    mark_if_import_rebound(state, env, &name, old);
+}
+
+fn mark_if_import_rebound(
+    state: &mut VmState,
+    env: &Rc<Environment>,
+    name: &str,
+    old: Option<TaggedValue>,
+) {
+    // Nothing was bound before — every install into a fresh staging or
+    // library environment — so there is nothing to have shadowed, and no
+    // reason to look the name up a second time.
+    let Some(old) = old else { return };
+    if let Some(new) = env.get(name) {
+        mark_if_shadowing_primitive_value(state, old, new);
+    }
 }
 
 #[cfg(test)]

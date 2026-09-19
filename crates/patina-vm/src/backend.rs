@@ -12,7 +12,7 @@
 
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
-use crate::runtime::vm_state::import_define;
+use crate::runtime::vm_state::{import_export, import_staged};
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -374,15 +374,15 @@ impl VmBackend {
 
         // Import (scheme base) into global environment
         if let Ok(lib) = self.get_loaded_library(&["scheme".into(), "base".into()]) {
-            for (name, value) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), value);
+            for name in lib.export_names() {
+                lib.import_into(&self.global_env, name, name);
             }
         }
 
         // Import (patina debug) into global environment
         if let Ok(lib) = self.get_loaded_library(&["patina".into(), "debug".into()]) {
-            for (name, value) in lib.exports_iter_tagged() {
-                self.global_env.define(name.clone(), value);
+            for name in lib.export_names() {
+                lib.import_into(&self.global_env, name, name);
             }
         }
 
@@ -639,16 +639,17 @@ impl VmBackend {
         import_set: &ImportSet,
         lib_env: &Rc<Environment>,
     ) -> Result<(), LibraryError> {
-        // Every binding installed here goes through `import_define`, which
-        // marks the primitive-shadow bit before overwriting (PRD P8.1). The
+        // Every binding installed here goes through `import_export` or
+        // `import_staged`, which mark the primitive-shadow bit when the import
+        // rebinds a primitive (PRD P8.1). The
         // state borrow is taken after any recursive resolution/loading, so it
         // never spans a call that borrows state itself.
         match import_set {
             ImportSet::Library(lib_name) => {
                 let imported_lib = self.load_library(lib_name)?;
                 let mut state = self.state.borrow_mut();
-                for (name, value) in imported_lib.exports_iter_tagged() {
-                    import_define(&mut state, lib_env, name.clone(), value);
+                for name in imported_lib.export_names() {
+                    import_export(&mut state, lib_env, name.to_string(), &imported_lib, name);
                 }
                 Ok(())
             }
@@ -660,15 +661,13 @@ impl VmBackend {
                 self.process_import_set(import_set, &temp_env)?;
                 let mut state = self.state.borrow_mut();
                 for id in identifiers {
-                    match temp_env.get(id) {
-                        Some(value) => import_define(&mut state, lib_env, id.clone(), value),
-                        None => {
-                            return Err(LibraryError::parse(
-                                None,
-                                format!("Identifier '{}' not found in import set", id),
-                            ));
-                        }
+                    if temp_env.local_slot(id).is_none() {
+                        return Err(LibraryError::parse(
+                            None,
+                            format!("Identifier '{}' not found in import set", id),
+                        ));
                     }
+                    import_staged(&mut state, lib_env, id.clone(), &temp_env, id);
                 }
                 Ok(())
             }
@@ -680,9 +679,9 @@ impl VmBackend {
                 self.process_import_set(import_set, &temp_env)?;
                 let exclude: HashSet<_> = identifiers.iter().collect();
                 let mut state = self.state.borrow_mut();
-                for (name, value) in temp_env.bindings() {
+                for name in temp_env.local_names() {
                     if !exclude.contains(&name) {
-                        import_define(&mut state, lib_env, name, value);
+                        import_staged(&mut state, lib_env, name.clone(), &temp_env, &name);
                     }
                 }
                 Ok(())
@@ -691,8 +690,9 @@ impl VmBackend {
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
                 let mut state = self.state.borrow_mut();
-                for (name, value) in temp_env.bindings() {
-                    import_define(&mut state, lib_env, format!("{}{}", prefix, name), value);
+                for name in temp_env.local_names() {
+                    let prefixed = format!("{}{}", prefix, name);
+                    import_staged(&mut state, lib_env, prefixed, &temp_env, &name);
                 }
                 Ok(())
             }
@@ -707,9 +707,9 @@ impl VmBackend {
                     .map(|(o, n)| (o.clone(), n.clone()))
                     .collect();
                 let mut state = self.state.borrow_mut();
-                for (name, value) in temp_env.bindings() {
-                    let exported_name = rename_map.get(&name).cloned().unwrap_or(name);
-                    import_define(&mut state, lib_env, exported_name, value);
+                for name in temp_env.local_names() {
+                    let exported_name = rename_map.get(&name).unwrap_or(&name).clone();
+                    import_staged(&mut state, lib_env, exported_name, &temp_env, &name);
                 }
                 Ok(())
             }

@@ -178,6 +178,12 @@ pub struct CodeObject {
 /// - Only names that resolve in the queried environment's **own** table are
 ///   cached; parent-resolved names always take the full lookup, so a later
 ///   local (re)definition that would change resolution can never be masked.
+/// - An *imported* name is in that table too, and what its slot holds is a
+///   forward to the library that owns the binding (`Owner` in patina-core,
+///   #406). The cache needs to know nothing about that: `slot_value` and
+///   `set_slot_value` follow the forward on every access, and importing over
+///   a definition or defining over an import both rewrite the slot in place,
+///   so the slot a site cached stays the right one to ask.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalCacheEntry {
     /// `Environment::env_id` of the resolved environment; 0 = empty entry.

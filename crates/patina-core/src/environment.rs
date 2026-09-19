@@ -4,7 +4,7 @@ use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -184,6 +184,10 @@ impl Bindings {
         }
     }
 
+    /// What the slot holds, which for an imported binding is
+    /// `TaggedValue::FORWARDED` and not a value. Only `Environment`'s
+    /// resolving reads call this; there is deliberately no by-name `get`
+    /// here, so nothing can read around them.
     fn read_slot(&self, slot: u32) -> TaggedValue {
         self.slots[slot as usize].1
     }
@@ -192,20 +196,21 @@ impl Bindings {
         self.slots[slot as usize].1 = value;
     }
 
-    fn get(&self, name: &str) -> Option<TaggedValue> {
-        self.slot_of(name).map(|i| self.read_slot(i))
-    }
-
     /// Define semantics: overwrite the existing slot or append a new one.
-    fn insert(&mut self, name: Rc<str>, value: TaggedValue) {
+    ///
+    /// Returns the slot, and whether what it overwrote was an imported
+    /// binding's marker — in which case the caller has an [`Owner`] to drop.
+    /// Asked of the old value rather than of a side table, so the frames the
+    /// tree-walker builds by the million pay one compare and nothing else.
+    fn insert(&mut self, name: Rc<str>, value: TaggedValue) -> (u32, bool) {
         // A fresh frame is the common case on the tree-walker's hot path —
         // one is built per `let`-bound temporary and per call — and it has
         // nothing to search.
         if !self.slots.is_empty()
             && let Some(slot) = self.slot_of(&name)
         {
-            self.slots[slot as usize].1 = value;
-            return;
+            let old = std::mem::replace(&mut self.slots[slot as usize].1, value);
+            return (slot, old == TaggedValue::FORWARDED);
         }
         let slot = self.slots.len() as u32;
         match &mut self.index {
@@ -225,11 +230,12 @@ impl Bindings {
                     index.insert(Rc::clone(n), i as u32);
                 }
                 self.index = Some(Box::new(index));
-                return;
+                return (slot, false);
             }
             None => {}
         }
         self.slots.push((name, value));
+        (slot, false)
     }
 
     /// Every bound name, in slot order.
@@ -241,6 +247,86 @@ impl Bindings {
     fn values(&self) -> impl Iterator<Item = TaggedValue> + '_ {
         self.slots.iter().map(|&(_, v)| v)
     }
+}
+
+/// Where an imported binding lives: the environment that owns the location,
+/// and its slot there.
+///
+/// R7RS §5.2 has an import name a *binding*, so an importer and the library
+/// share one location: what the library assigns later, the importer sees.
+/// Installing the value the variable held at import time instead was #406 —
+/// every importer read a stale copy, silently, and no suite caught it because
+/// none assigns a variable another library imported.
+///
+/// **Every import shares, a primitive registered from Rust included.** A
+/// first version copied those, reasoning that nothing can assign them and
+/// that one program's `(set! car …)` should stay out of every other library.
+/// Both halves were wrong. A Scheme library can re-export a primitive and
+/// assign it later, and its importers then held exactly the stale copy this
+/// type exists to remove — before or after the import deciding which. And
+/// for a procedure they do not inline, chibi 0.12 and Gauche 0.9.15 agree
+/// that the location is one: a program's `(set! list-copy …)` is seen by a
+/// library that imported `list-copy`, and a library's by the program
+/// (measured 2026-09-19; both rows are in `stdlib/library-bindings.scm`).
+/// They differ from each other only where each inlines at compile time —
+/// `car` is an opcode in chibi, `length` is inlined by Gauche — and Patina's
+/// VM deoptimizes a `CallPrimitive` site when its primitive is rebound
+/// precisely so that inlining is never observable. R7RS calls assigning an
+/// imported binding "an error", so all of this is latitude; one location is
+/// the answer that does not depend on what happened first.
+///
+/// It is also free. Measured the same day, interleaved with `main`: copying
+/// primitives against sharing them made no difference on either backend,
+/// including on a loop of nothing but primitive calls.
+type Owner = (Rc<Environment>, u32);
+
+/// The tables that only a global or a library environment ever fills, kept
+/// out of line so that the environments which never do — and the tree-walker
+/// builds one per call and per `let`-bound temporary — do not carry them.
+/// `Environment::rare` has the measurement.
+#[derive(Debug, Default)]
+struct RareTables {
+    /// The identities of the macro-introduced top-level definitions compiled
+    /// so far: for each spelling, the scope sets it was introduced at and the
+    /// global each was renamed to.
+    ///
+    /// Read at *compile* time and never on a lookup path, which is what makes
+    /// a plain table acceptable here where `Environment`'s side tables carry a
+    /// `Cell<bool>` guard. The VM's `alpha_rename` runs once per top-level
+    /// form and its frames come from that form alone, so without this a
+    /// reference in a later form has no candidate to resolve against,
+    /// degrades to its bare spelling, and is answered by whatever the name
+    /// means at run time — a user's global of that spelling, or the bare-name
+    /// alias. That is Larceny triage family 40, and in the assignment
+    /// direction it silently wrote a macro's private state onto a user's
+    /// variable.
+    ///
+    /// Only a parentless global environment ever holds entries: they are
+    /// installed beside the aliases in the VM's `compile_pipeline`, which
+    /// asserts that. Lookups therefore do not walk parents.
+    introduced_global_names: RefCell<IntroducedGlobals>,
+    /// Per slot, the [`Owner`] of the binding when that is not this
+    /// environment; the slot itself then holds `TaggedValue::FORWARDED`.
+    /// Indexed by slot and grown on demand, so `None` — or a slot past the
+    /// end — is an ordinary binding, which nearly every slot of nearly every
+    /// environment is.
+    ///
+    /// Always the environment that *owns* the location, never another
+    /// importer: `share_binding` resolves through a source that is itself
+    /// forwarded, so a read is one hop however many libraries re-exported
+    /// the name.
+    ///
+    /// Reads never ask whether this table exists: a forwarded slot announces
+    /// itself by its marker, so the read path pays one compare, and so does
+    /// the one writer that must drop an entry — `define` over an import.
+    links: RefCell<Vec<Option<Owner>>>,
+    /// The distinct environments `links` points into, for the collector. An
+    /// importer of `(scheme base)` holds several hundred links into a dozen
+    /// environments, and a collection should look at the dozen. Only ever
+    /// added to: an owner whose last link was defined over stays listed,
+    /// which keeps a library's environment reachable for as long as one of
+    /// its importers is — and the registry does that anyway.
+    owners: RefCell<Vec<Rc<Environment>>>,
 }
 
 /// Mint a process-unique, never-reused environment id (0 is reserved as the
@@ -336,24 +422,19 @@ pub struct Environment {
     /// cost a borrow, never an answer.
     has_aliases: Cell<bool>,
     has_visible_scoped: Cell<bool>,
-    /// The identities of the macro-introduced top-level definitions compiled
-    /// so far: for each spelling, the scope sets it was introduced at and the
-    /// global each was renamed to.
+    /// The tables only a global or a library environment ever fills
+    /// ([`RareTables`]), absent until one of them is first written and one
+    /// pointer wide either way.
     ///
-    /// Read at *compile* time and never on a lookup path, which is what makes
-    /// a plain table acceptable here where its neighbours carry a `Cell<bool>`
-    /// guard. The VM's `alpha_rename` runs once per top-level form and its
-    /// frames come from that form alone, so without this a reference in a
-    /// later form has no candidate to resolve against, degrades to its bare
-    /// spelling, and is answered by whatever the name means at run time —
-    /// a user's global of that spelling, or the bare-name alias. That is
-    /// Larceny triage family 40, and in the assignment direction it silently
-    /// wrote a macro's private state onto a user's variable.
-    ///
-    /// Only a parentless global environment ever holds entries: they are
-    /// installed beside the aliases in the VM's `compile_pipeline`, which
-    /// asserts that. Lookups therefore do not walk parents.
-    introduced_global_names: RefCell<IntroducedGlobals>,
+    /// Out of line because of what this struct's size costs. The tree-walker
+    /// builds an environment per call and per `let`-bound temporary, and none
+    /// of those ever imports anything or records a macro-introduced global.
+    /// Measured 2026-09-19 on four loops, best of five, interleaved with
+    /// `main`: adding the link table inline took this struct from 256 bytes
+    /// to 264 and that backend 3–4% slower on every program, imports or no;
+    /// moving both tables here took it to 224 and 4–6% *faster* than `main`.
+    /// `environment_size_is_watched` holds the line.
+    rare: OnceCell<Box<RareTables>>,
     parent: Option<Rc<Environment>>,
 }
 
@@ -373,7 +454,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            introduced_global_names: RefCell::new(FxHashMap::default()),
+            rare: OnceCell::new(),
             parent: None,
         }
     }
@@ -388,7 +469,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            introduced_global_names: RefCell::new(FxHashMap::default()),
+            rare: OnceCell::new(),
             parent: Some(parent),
         }
     }
@@ -409,15 +490,106 @@ impl Environment {
     }
 
     /// Read the value in a slot previously obtained from `local_slot`.
+    ///
+    /// An imported binding is read from the library that owns it, so this is
+    /// the *binding's* current value, never a snapshot.
     #[inline]
     pub fn slot_value(&self, slot: u32) -> TaggedValue {
-        self.bindings.borrow().read_slot(slot)
+        let tv = self.bindings.borrow().read_slot(slot);
+        if tv == TaggedValue::FORWARDED {
+            return self.shared_value(slot);
+        }
+        tv
     }
 
     /// Overwrite the value in a slot previously obtained from `local_slot`.
+    ///
+    /// An imported binding is written where it lives: the library sees the
+    /// assignment, as it does under chibi and Gauche. R7RS §5.2 calls
+    /// assigning an imported binding "an error", so any answer conforms; this
+    /// is the one that keeps a location one location.
     #[inline]
     pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
-        self.bindings.borrow_mut().write_slot(slot, value);
+        let forwarded = {
+            let mut bindings = self.bindings.borrow_mut();
+            let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
+            if !forwarded {
+                bindings.write_slot(slot, value);
+            }
+            forwarded
+        };
+        if forwarded {
+            self.write_shared(slot, value);
+        }
+    }
+
+    /// The owner of a slot that holds the marker.
+    fn shared_target(&self, slot: u32) -> Owner {
+        // `forward` writes the marker and the link together and `define`
+        // drops them together, so a marker without a link is a bug here, not
+        // a state a program can reach.
+        self.owner_of(slot)
+            .unwrap_or_else(|| unreachable!("slot {slot} is forwarded but has no owner"))
+    }
+
+    /// Kept out of line: `slot_value` is inlined into the VM's `LoadGlobal`,
+    /// and most globals a program reads there are its own. Measured
+    /// 2026-09-19: a read that comes through here costs the VM about 2 ns
+    /// more than one that does not, and a loop calling `for-each` — imported,
+    /// and defined in Scheme — runs at parity with `main`.
+    ///
+    /// Reads the owner under this table's borrow rather than through
+    /// `shared_target`, which would clone the owner's `Rc` — a count up and
+    /// down on every read of an imported global. Nothing on a read path
+    /// borrows a link table mutably, so holding this one across the owner's
+    /// read is safe.
+    #[inline(never)]
+    fn shared_value(&self, slot: u32) -> TaggedValue {
+        let links = self.rare.get().map(|rare| rare.links.borrow());
+        match links.as_ref().and_then(|links| links.get(slot as usize)) {
+            Some(Some((owner, owner_slot))) => owner.slot_value(*owner_slot),
+            // As `shared_target` says: not a state a program can reach.
+            _ => unreachable!("slot {slot} is forwarded but has no owner"),
+        }
+    }
+
+    #[inline(never)]
+    fn write_shared(&self, slot: u32, value: TaggedValue) {
+        let (owner, owner_slot) = self.shared_target(slot);
+        owner.set_slot_value(owner_slot, value);
+    }
+
+    /// The owner of `slot`'s binding, when that is not this environment.
+    fn owner_of(&self, slot: u32) -> Option<Owner> {
+        self.rare
+            .get()
+            .and_then(|rare| rare.links.borrow().get(slot as usize).cloned())
+            .flatten()
+    }
+
+    fn set_owner(&self, slot: u32, owner: Owner) {
+        let rare = self.rare.get_or_init(Default::default);
+        {
+            let mut owners = rare.owners.borrow_mut();
+            if !owners.iter().any(|known| Rc::ptr_eq(known, &owner.0)) {
+                owners.push(Rc::clone(&owner.0));
+            }
+        }
+        let mut links = rare.links.borrow_mut();
+        let slot = slot as usize;
+        if links.len() <= slot {
+            links.resize(slot + 1, None);
+        }
+        links[slot] = Some(owner);
+    }
+
+    /// The slot is this environment's own from now on.
+    fn drop_owner(&self, slot: u32) {
+        if let Some(rare) = self.rare.get()
+            && let Some(link) = rare.links.borrow_mut().get_mut(slot as usize)
+        {
+            *link = None;
+        }
     }
 
     /// Get the shared heap
@@ -430,11 +602,118 @@ impl Environment {
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
     pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
-        let name = name.into();
+        let (slot, was_forwarded) = self.define_slot(name.into(), value);
+        // A definition is a new binding of this environment's own, whatever
+        // the name was before — so an importer that defines a name it
+        // imported shadows it here and leaves the library's alone, which is
+        // what chibi and Gauche do.
+        if was_forwarded {
+            self.drop_owner(slot);
+        }
+    }
+
+    /// Make `name` here the same binding as `source_name` in `source` — what
+    /// an import does. `false`, having done nothing, when `source` has no
+    /// plain binding of that name for this to be: the caller then installs
+    /// the value it has, which is what every import used to do.
+    ///
+    /// That fallback is reached by an export that is not a plain definition —
+    /// one a macro introduced under its scopes, or one reached through a
+    /// macro-expansion alias. Those stay a copy (#406 leaves them as they
+    /// were).
+    ///
+    /// See [`Owner`] for why every import shares, primitives included.
+    pub fn share_binding(
+        &self,
+        name: impl Into<Rc<str>>,
+        source: &Rc<Environment>,
+        source_name: &str,
+    ) -> bool {
+        self.take_binding(name.into(), source, source_name, true)
+    }
+
+    /// Bring a binding out of a *staging* environment — the scratch one an
+    /// `only`, `except`, `prefix` or `rename` import set is resolved into
+    /// before its names are filtered or changed.
+    ///
+    /// The difference from [`share_binding`] is who may own a location. A
+    /// library owns what it defined; a staging environment owns nothing, it
+    /// only carries bindings through. So a forwarded slot arrives as the same
+    /// forward, and a plain value — the fallback copy described on
+    /// `share_binding` — as that value, rather than as a forward into an
+    /// environment about to be dropped.
+    ///
+    /// [`share_binding`]: Self::share_binding
+    pub fn copy_binding(
+        &self,
+        name: impl Into<Rc<str>>,
+        staging: &Rc<Environment>,
+        staged_name: &str,
+    ) -> bool {
+        self.take_binding(name.into(), staging, staged_name, false)
+    }
+
+    fn take_binding(
+        &self,
+        name: Rc<str>,
+        source: &Rc<Environment>,
+        source_name: &str,
+        source_owns: bool,
+    ) -> bool {
+        let Some(slot) = source.local_slot(source_name) else {
+            return false;
+        };
+        let owner = match source.owner_of(slot) {
+            Some(owner) => owner,
+            None if source_owns => (Rc::clone(source), slot),
+            None => {
+                self.define(name, source.slot_value(slot));
+                return true;
+            }
+        };
+        self.forward(name, owner);
+        true
+    }
+
+    /// `define` without its bookkeeping: writes the slot, and reports it and
+    /// whether an imported binding was there before.
+    #[inline]
+    fn define_slot(&self, name: Rc<str>, value: TaggedValue) -> (u32, bool) {
         // A plain binding is reachable by name and by nothing else, so
         // `byname=true` here is a property of the table, not a decision.
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
-        self.bindings.borrow_mut().insert(name, value);
+        self.bindings.borrow_mut().insert(name, value)
+    }
+
+    fn forward(&self, name: Rc<str>, owner: Owner) {
+        // An environment cannot hold an `Rc` to itself without leaking, and
+        // has no need to: a name that would forward to this environment is a
+        // second name for a value already here.
+        if std::ptr::eq(Rc::as_ptr(&owner.0), self) {
+            if self.local_slot(&name) != Some(owner.1) {
+                self.define(name, self.slot_value(owner.1));
+            }
+            return;
+        }
+        let (slot, _) = self.define_slot(name, TaggedValue::FORWARDED);
+        self.set_owner(slot, owner);
+    }
+
+    /// The value of a binding in this environment's own table, read through
+    /// to its owner when it was imported. Every by-name read of the table
+    /// goes through here; `Bindings` has no `get` of its own, so none can
+    /// hand out the marker.
+    #[inline(always)]
+    fn local_value(&self, name: &str) -> Option<TaggedValue> {
+        let (slot, tv) = {
+            let bindings = self.bindings.borrow();
+            let slot = bindings.slot_of(name)?;
+            (slot, bindings.read_slot(slot))
+        };
+        if tv == TaggedValue::FORWARDED {
+            return Some(self.shared_value(slot));
+        }
+        Some(tv)
     }
 
     /// Define a primitive procedure in this environment.
@@ -502,7 +781,7 @@ impl Environment {
         // is the hottest loop in the backend.
         let mut env = self;
         loop {
-            if let Some(tv) = env.bindings.borrow().get(name) {
+            if let Some(tv) = env.local_value(name) {
                 return Some(tv);
             }
             // Follow a macro-expansion alias into the environment the macro was
@@ -569,7 +848,9 @@ impl Environment {
     ///
     /// [`define_alias`]: Self::define_alias
     pub fn define_introduced_global(&self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
-        self.introduced_global_names
+        self.rare
+            .get_or_init(Default::default)
+            .introduced_global_names
             .borrow_mut()
             .entry(name)
             .or_default()
@@ -605,7 +886,10 @@ impl Environment {
     ///
     /// [`define_introduced_global`]: Self::define_introduced_global
     pub fn for_each_introduced_global(&self, name: &str, mut f: impl FnMut(&ScopeSet, &Rc<str>)) {
-        if let Some(entries) = self.introduced_global_names.borrow().get(name) {
+        let Some(rare) = self.rare.get() else {
+            return;
+        };
+        if let Some(entries) = rare.introduced_global_names.borrow().get(name) {
             for (scopes, renamed_to) in entries {
                 f(scopes, renamed_to);
             }
@@ -1138,7 +1422,7 @@ impl Environment {
     ///
     /// [`get`]: Self::get
     fn get_scoped_fallback(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
-        if let Some(tv) = self.bindings.borrow().get(name) {
+        if let Some(tv) = self.local_value(name) {
             return Some(tv);
         }
         if self.has_aliases.get()
@@ -1264,7 +1548,7 @@ impl Environment {
         let chosen = self.scoped_binding_of(name, scopes)?;
         let mut env = self;
         loop {
-            if env.bindings.borrow().get(name).is_some() {
+            if env.bindings.borrow().slot_of(name).is_some() {
                 return Ok(chosen.is_none());
             }
             if env.has_aliases.get()
@@ -1273,11 +1557,12 @@ impl Environment {
                 let Some(chosen) = chosen else {
                     return Ok(true);
                 };
-                let renamed = env
-                    .introduced_global_names
-                    .borrow()
-                    .get(name)
-                    .and_then(|identities| identities.get(&chosen).cloned());
+                let renamed = env.rare.get().and_then(|rare| {
+                    rare.introduced_global_names
+                        .borrow()
+                        .get(name)
+                        .and_then(|identities| identities.get(&chosen).cloned())
+                });
                 return Ok(target_env.is_none() && renamed.is_some_and(|r| r == target_name));
             }
             if let Some(i) = env.visible_scoped_index(name) {
@@ -1368,7 +1653,11 @@ impl Environment {
     ) {
         // The tree-walker's case, on every scoped read: nothing recorded, so
         // return before `for_each_introduced_global` hashes the name.
-        if self.introduced_global_names.borrow().is_empty() {
+        if self
+            .rare
+            .get()
+            .is_none_or(|rare| rare.introduced_global_names.borrow().is_empty())
+        {
             return;
         }
         // Collected before any value is read, so no borrow of the identity
@@ -1380,7 +1669,7 @@ impl Environment {
             }
         });
         for (scopes, renamed_to) in found {
-            let value = self.bindings.borrow().get(&renamed_to);
+            let value = self.local_value(&renamed_to);
             if debug {
                 println!(
                     "[ENV]   Introduced global {} as {} ⊆ {} : {}",
@@ -1429,15 +1718,28 @@ impl Environment {
         names
     }
 
+    /// The names bound in this environment only, in slot order. What an
+    /// import set walks when it filters or renames: it moves bindings, so it
+    /// has no use for the values `bindings` would read.
+    pub fn local_names(&self) -> Vec<String> {
+        self.bindings
+            .borrow()
+            .names()
+            .map(|k| k.to_string())
+            .collect()
+    }
+
     /// Get all bindings in this environment only (not including parent)
     ///
     /// Returns a vector of (name, TaggedValue) pairs for all bindings defined locally.
     /// This is useful for library imports where we need to iterate over all exports.
     pub fn bindings(&self) -> Vec<(String, TaggedValue)> {
-        let b = self.bindings.borrow();
-        b.names()
+        // Names first and values after: an imported binding's value is read
+        // from its owner, and that read must not happen under this borrow.
+        self.local_names()
+            .into_iter()
             .enumerate()
-            .map(|(i, k)| (k.to_string(), b.read_slot(i as u32)))
+            .map(|(i, k)| (k, self.slot_value(i as u32)))
             .collect()
     }
 
@@ -1470,6 +1772,24 @@ impl Environment {
             for binding in scoped {
                 f(binding.tagged_value);
             }
+        }
+    }
+
+    /// Visit the environments that own the bindings this one imported.
+    ///
+    /// GC tracing hook, and the same shape as `for_each_alias_target` below
+    /// for the same reason: an imported binding's value is in its owner's
+    /// slot, so `for_each_local_value` sees only the marker here, and the edge
+    /// to the owner is an `Rc<Environment>` in a side table. A loaded library
+    /// is rooted by the registry as well, but an environment is not obliged
+    /// to be a registered library's to be imported from, and the collector
+    /// should not have to know which are.
+    pub fn for_each_shared_owner(&self, f: &mut dyn FnMut(&Rc<Environment>)) {
+        let Some(rare) = self.rare.get() else {
+            return;
+        };
+        for owner in rare.owners.borrow().iter() {
+            f(owner);
         }
     }
 
@@ -2022,3 +2342,212 @@ mod name_view_tests {
 #[cfg(test)]
 #[path = "hygiene_properties.rs"]
 mod hygiene_properties;
+
+/// What an import installs (#406): the library's location, not a copy of what
+/// it held. `tests/scheme/stdlib/library-bindings.scm` says the same from
+/// Scheme, with Gauche arbitrating; these pin the parts only Rust can see —
+/// which slots forward, which copy, and what retires a link.
+#[cfg(test)]
+mod shared_binding_tests {
+    use super::*;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// A library environment holding `count`, and an importer on its heap.
+    fn library_and_importer() -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::new());
+        library.define("count", n(0));
+        let importer = Rc::new(Environment::with_heap(library.heap().clone()));
+        (library, importer)
+    }
+
+    #[test]
+    fn a_shared_binding_reads_what_its_owner_holds_now() {
+        let (library, importer) = library_and_importer();
+        assert!(importer.share_binding("count", &library, "count"));
+        library.set("count", n(2)).unwrap();
+
+        assert_eq!(importer.get("count"), Some(n(2)));
+        // Every read, not only `get`: the VM reads by slot, a scoped reference
+        // falls back by name, and an import set enumerates.
+        let slot = importer.local_slot("count").unwrap();
+        assert_eq!(importer.slot_value(slot), n(2));
+        assert_eq!(
+            importer.get_with_scopes("count", &ScopeSet::new()).unwrap(),
+            Some(n(2))
+        );
+        assert_eq!(importer.bindings(), vec![("count".to_string(), n(2))]);
+    }
+
+    #[test]
+    fn a_write_to_a_shared_binding_lands_in_its_owner() {
+        let (library, importer) = library_and_importer();
+        importer.share_binding("count", &library, "count");
+
+        importer.set("count", n(10)).unwrap();
+        assert_eq!(library.get("count"), Some(n(10)));
+
+        let slot = importer.local_slot("count").unwrap();
+        importer.set_slot_value(slot, n(11));
+        assert_eq!(library.get("count"), Some(n(11)));
+        assert_eq!(importer.get("count"), Some(n(11)));
+    }
+
+    #[test]
+    fn a_definition_over_a_shared_binding_is_the_importers_own() {
+        let (library, importer) = library_and_importer();
+        importer.share_binding("count", &library, "count");
+        let slot = importer.local_slot("count").unwrap();
+
+        importer.define("count", n(99));
+        assert_eq!(importer.get("count"), Some(n(99)));
+        assert_eq!(library.get("count"), Some(n(0)));
+        // In place, which is what the VM's per-site global caches rest on.
+        assert_eq!(importer.local_slot("count"), Some(slot));
+
+        // And it stays the importer's: a later write goes no further.
+        importer.set("count", n(100)).unwrap();
+        assert_eq!(library.get("count"), Some(n(0)));
+    }
+
+    #[test]
+    fn sharing_over_a_definition_replaces_it_in_place() {
+        let (library, importer) = library_and_importer();
+        importer.define("count", n(7));
+        let slot = importer.local_slot("count").unwrap();
+
+        importer.share_binding("count", &library, "count");
+        assert_eq!(importer.local_slot("count"), Some(slot));
+        assert_eq!(importer.slot_value(slot), n(0));
+    }
+
+    #[test]
+    fn a_re_export_forwards_to_the_owner_and_not_to_the_library_between() {
+        let (library, relay) = library_and_importer();
+        relay.share_binding("relayed", &library, "count");
+        let importer = Rc::new(Environment::with_heap(library.heap().clone()));
+        importer.share_binding("again", &relay, "relayed");
+
+        library.set("count", n(3)).unwrap();
+        assert_eq!(importer.get("again"), Some(n(3)));
+
+        // One hop: the relay can go back to being its own binding without the
+        // importer noticing.
+        relay.define("relayed", n(-1));
+        library.set("count", n(4)).unwrap();
+        assert_eq!(importer.get("again"), Some(n(4)));
+
+        let mut owners = Vec::new();
+        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
+        assert_eq!(owners, vec![Rc::as_ptr(&library)]);
+    }
+
+    #[test]
+    fn a_staging_environment_carries_a_binding_without_owning_it() {
+        let (library, staging) = library_and_importer();
+        staging.share_binding("count", &library, "count");
+        // The fallback an import takes for an export that is not a plain
+        // binding: the staging environment is given the value outright.
+        staging.define("loose", n(5));
+
+        let importer = Rc::new(Environment::with_heap(library.heap().clone()));
+        assert!(importer.copy_binding("c:count", &staging, "count"));
+        assert!(importer.copy_binding("c:loose", &staging, "loose"));
+        assert!(!importer.copy_binding("c:absent", &staging, "absent"));
+        assert_eq!(importer.get("c:absent"), None);
+
+        library.set("count", n(2)).unwrap();
+        assert_eq!(importer.get("c:count"), Some(n(2)));
+
+        // A value, not a forward into an environment about to be dropped.
+        staging.set("loose", n(6)).unwrap();
+        assert_eq!(importer.get("c:loose"), Some(n(5)));
+        let mut owners = Vec::new();
+        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
+        assert_eq!(owners, vec![Rc::as_ptr(&library)]);
+    }
+
+    #[test]
+    fn a_re_exported_binding_is_one_location_whoever_assigns_and_whenever() {
+        // `primitives` stands for a library registered from Rust, `base` for
+        // the Scheme library that re-exports it. A first version copied such
+        // a binding down the chain, and an importer then saw a library's
+        // assignment only if the import happened to come after it.
+        let (primitives, base) = library_and_importer();
+        base.share_binding("count", &primitives, "count");
+        let early = Rc::new(Environment::with_heap(primitives.heap().clone()));
+        early.share_binding("count", &base, "count");
+
+        base.set("count", n(50)).unwrap();
+        let late = Rc::new(Environment::with_heap(primitives.heap().clone()));
+        late.share_binding("count", &base, "count");
+
+        for env in [&primitives, &base, &early, &late] {
+            assert_eq!(env.get("count"), Some(n(50)));
+        }
+        early.set("count", n(51)).unwrap();
+        for env in [&primitives, &base, &early, &late] {
+            assert_eq!(env.get("count"), Some(n(51)));
+        }
+    }
+
+    #[test]
+    fn the_collector_is_shown_each_owner_once() {
+        let (library, importer) = library_and_importer();
+        library.define("other", n(1));
+        let second = Rc::new(Environment::with_heap(library.heap().clone()));
+        second.define("third", n(2));
+        importer.share_binding("count", &library, "count");
+        importer.share_binding("third", &second, "third");
+        importer.share_binding("other", &library, "other");
+
+        let mut owners = Vec::new();
+        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
+        assert_eq!(owners, vec![Rc::as_ptr(&library), Rc::as_ptr(&second)]);
+    }
+
+    #[test]
+    fn a_name_the_source_does_not_bind_plainly_is_left_to_the_caller() {
+        let (library, importer) = library_and_importer();
+        assert!(!importer.share_binding("missing", &library, "missing"));
+        assert_eq!(importer.get("missing"), None);
+
+        // A parent's binding is not the source's own location to share.
+        let child = Rc::new(Environment::with_parent(Rc::clone(&library)));
+        assert!(!importer.share_binding("count", &child, "count"));
+    }
+
+    #[test]
+    fn an_environment_never_forwards_to_itself() {
+        let (library, _) = library_and_importer();
+        assert!(library.share_binding("count", &library, "count"));
+        assert!(library.share_binding("also", &library, "count"));
+        assert_eq!(library.get("count"), Some(n(0)));
+        assert_eq!(library.get("also"), Some(n(0)));
+
+        let mut owners = 0;
+        library.for_each_shared_owner(&mut |_| owners += 1);
+        assert_eq!(owners, 0, "a self-reference would leak the environment");
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    /// Not a style rule: this struct's size is a measured cost. The
+    /// tree-walker allocates one per call and per `let`-bound temporary, and
+    /// 8 bytes here — 256 to 264, past four cache lines — was 3–4% of that
+    /// backend's running time on programs that never touched what the bytes
+    /// were for (`Environment::rare` has the numbers). A table that only a
+    /// global or library environment fills belongs in `RareTables`.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn environment_size_is_watched() {
+        let size = std::mem::size_of::<super::Environment>();
+        assert!(
+            size <= 224,
+            "Environment grew to {size} bytes; measure the tree-walker before raising this"
+        );
+    }
+}

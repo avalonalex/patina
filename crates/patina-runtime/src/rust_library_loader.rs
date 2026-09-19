@@ -30,6 +30,31 @@ impl RustLibraryLoader {
         }
     }
 
+    /// Build the library `name` in `env` — what `load` and `load_with_heap`
+    /// both do, differing only in whose heap the environment is on.
+    fn build_in(&self, name: &[String], env: Rc<Environment>) -> Result<Library, LibraryError> {
+        // Look up the builder for this library
+        let builder = self
+            .builders
+            .get(name)
+            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+
+        // Call the builder to populate the environment
+        let exports = builder(name.to_vec(), env.clone());
+
+        // Create the library
+        let mut lib = Library::with_env(name.to_vec(), env);
+
+        // Populate exports
+        for export_name in exports {
+            if let Some(value) = lib.env.get(&export_name) {
+                lib.export_tagged(export_name, value);
+            }
+        }
+
+        Ok(lib)
+    }
+
     /// Register a library builder
     ///
     /// The builder function will be called when the library is loaded.
@@ -73,29 +98,8 @@ impl Default for RustLibraryLoader {
 
 impl LibraryLoader for RustLibraryLoader {
     fn load(&self, name: &[String], _search_paths: &[PathBuf]) -> Result<Library, LibraryError> {
-        // Look up the builder for this library
-        let builder = self
-            .builders
-            .get(name)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
-
         // Create a new environment for the library
-        let env = Rc::new(Environment::new());
-
-        // Call the builder to populate the environment
-        let exports = builder(name.to_vec(), env.clone());
-
-        // Create the library
-        let mut lib = Library::with_env(name.to_vec(), env);
-
-        // Populate exports
-        for export_name in exports {
-            if let Some(value) = lib.env.get(&export_name) {
-                lib.export_tagged(export_name, value);
-            }
-        }
-
-        Ok(lib)
+        self.build_in(name, Rc::new(Environment::new()))
     }
 
     fn load_with_heap(
@@ -104,30 +108,9 @@ impl LibraryLoader for RustLibraryLoader {
         _search_paths: &[PathBuf],
         heap: crate::heap::SharedHeap,
     ) -> Result<Library, LibraryError> {
-        // Look up the builder for this library
-        let builder = self
-            .builders
-            .get(name)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
-
         // Create a new environment that shares the provided heap
         // This ensures TaggedValues are allocated on the global heap
-        let env = Rc::new(Environment::with_heap(heap));
-
-        // Call the builder to populate the environment
-        let exports = builder(name.to_vec(), env.clone());
-
-        // Create the library
-        let mut lib = Library::with_env(name.to_vec(), env);
-
-        // Populate exports
-        for export_name in exports {
-            if let Some(value) = lib.env.get(&export_name) {
-                lib.export_tagged(export_name, value);
-            }
-        }
-
-        Ok(lib)
+        self.build_in(name, Rc::new(Environment::with_heap(heap)))
     }
 
     fn can_load(&self, name: &[String]) -> bool {

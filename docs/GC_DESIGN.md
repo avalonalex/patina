@@ -109,6 +109,16 @@ There is no traversal API today; the tracer needs a new
 `Environment::for_each_value(&self, f: &mut dyn FnMut(TaggedValue))` that walks
 `bindings` + `scoped_bindings` + the parent chain.
 
+*As built:* `for_each_local_value` walks one environment's values and
+`GcVisitor::visit_env` walks the parent chain. Two kinds of edge leave that
+chain, both an `Rc<Environment>` in a side table rather than a value in a
+slot, and `visit_env` follows each as a separate root:
+`for_each_alias_target` (a macro-expansion alias into the environment the
+macro was defined in) and `for_each_shared_owner` (an imported binding, whose
+slot here holds only a marker — the value is in the slot of the library that
+owns the location, #406). Anything that gives an environment another way to
+reach a value held elsewhere needs a third.
+
 ### 3.4 Why moving/compacting GC is off the table
 
 Raw indices escape `TaggedValue` into places a relocator cannot see or would

@@ -144,6 +144,7 @@ const SUITE: &[(&str, i64)] = &[
     ("stdlib/eval.scm", 44),
     ("stdlib/hash-tables.scm", 6),
     ("stdlib/lazy-evaluation.scm", 32),
+    ("stdlib/library-bindings.scm", 15),
     ("stdlib/list.scm", 6),
     ("stdlib/ports.scm", 48),
     ("stdlib/process-context.scm", 12),

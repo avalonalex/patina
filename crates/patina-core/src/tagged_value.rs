@@ -101,6 +101,13 @@ impl TaggedValue {
     /// (`heap/gc.rs`). Never produced by any constructor, so pair accessors
     /// can assert against it to turn use-after-free into an immediate panic.
     pub(crate) const GC_POISON: Self = Self(0xF8 | Self::TAG_SPECIAL);
+    /// What an environment slot holds when the binding lives in another
+    /// environment — an imported one, which is the exporting library's
+    /// location rather than a copy of what it held (`Owner` in
+    /// `environment.rs`). Never produced by any constructor and never handed
+    /// out: every read of a slot resolves it, so a program cannot see it and
+    /// cannot forge one.
+    pub(crate) const FORWARDED: Self = Self(0xF0 | Self::TAG_SPECIAL);
 
     // =========================================================================
     // Fixnum Constants and Operations

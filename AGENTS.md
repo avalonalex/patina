@@ -201,6 +201,8 @@ if let Some(v) = v { heap.borrow()... }
 
 **Library primitives** must be registered in both the primitive registry AND the library builder in `patina-runtime/src/stdlib/internal_<name>.rs`.
 
+**An import installs a binding, not a value** — the importer and the library share one location, so what the library assigns later the importer sees (R7RS §5.2, #406). Install with `Library::import_into`, and carry a binding out of an `only`/`except`/`prefix`/`rename` staging environment with `Environment::copy_binding`; never `env.define(name, export_value)`, which freezes a copy. Five resolvers do this (two per backend, and `environment`), so a new one has to as well. Primitives registered from Rust share like everything else: chibi and Gauche agree that a program's `(set! list-copy …)` reaches the libraries that imported it, and copying them left a re-exporting library's importers stale (`Owner` in `patina-core/src/environment.rs` has the measurement).
+
 **Error formatting** — use `format_interpreter_error(&e, &source_map.borrow())` (from `patina-interpreter`) rather than `e.to_string()` to get caret-style source context and macro expansion chain.
 
 ## When Adding Features

@@ -681,6 +681,10 @@ a backend divergence, not just a semantics waiver. Repro:
   has never deoptimizes), so re-imports and overlapping library exports stay
   free. Regression test: `vm_callprimitive.rs::import_rebind_deoptimizes`;
   VM and tree-walker verified to agree on the repro.
+  *Since #406* an import installs the library's binding rather than a value,
+  so `import_define` became `import_export`/`import_staged`, which compare
+  the name's value before the install with its value after. Same choke
+  point, same guard, same test.
 
 **P8.2 — Tail-position primitive sites lose proper tail calls on deopt.**
 Pass 5 lowers a tail-position resolved-primitive call to `<prim-op>; Return`,

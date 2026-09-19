@@ -192,7 +192,7 @@ fn target(frames: &[Frame], reference: u8) -> Result<Option<(usize, u8)>, ()> {
 fn snapshot(envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
     let mut result = Vec::new();
     for (i, env) in envs.iter().enumerate() {
-        if let Some(value) = env.bindings.borrow().get("x") {
+        if let Some(value) = env.local_value("x") {
             result.push((i, 0, value.as_fixnum().unwrap()));
         }
         if let Some(bindings) = env.scoped_bindings.borrow().get("x") {
@@ -202,9 +202,7 @@ fn snapshot(envs: &[Rc<Environment>]) -> Vec<(usize, u8, i64)> {
             }
         }
         assert_eq!(
-            env.bindings
-                .borrow()
-                .get("untouched")
+            env.local_value("untouched")
                 .and_then(|value| value.as_fixnum()),
             Some(17)
         );
