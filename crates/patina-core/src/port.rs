@@ -267,6 +267,167 @@ fn utf8_char_len(first: u8) -> usize {
     }
 }
 
+/// A file port's reader, which can show the whole of the next character
+/// without consuming any of it, wherever the chunks under it end.
+///
+/// `peek-char` has to look at a whole character without consuming any of it,
+/// and a `BufRead` cannot always show one: `fill_buf` refills only an empty
+/// buffer, so when a chunk ends inside a character the last thing in it is
+/// that character's first bytes, and nothing short of consuming them brings
+/// the rest. An ordinary text file over 8 KiB whose 8192nd byte falls inside a
+/// character was enough to make `peek-char` fail (#410).
+///
+/// So the straddling character is assembled *here*, in `carry`, by
+/// [`fill_char`](Self::fill_char): its buffered bytes are taken off the inner
+/// reader, the rest follow, and `carry` is served ahead of the inner reader by
+/// every method. That is what makes it sound. The bytes have moved, not gone,
+/// and every read — of characters or of bytes — goes through this reader and
+/// meets them in order. Parking the character in the port's text pushback
+/// instead would have answered `peek-char` and lost the bytes to `read-u8` and
+/// `read-bytevector`, which never look there: once per boundary, silently,
+/// where there had been a loud error.
+///
+/// Only `fill_char` assembles one, and only `peek-char` asks it to. `fill_buf`
+/// hands out what is buffered and waits for nothing more, as the inner reader
+/// would: `peek-u8`, `u8-ready?` and `read_until` have no use for a whole
+/// character, and waiting for one is a wait for bytes. On a file that costs
+/// nothing; on a pipe the bytes may not be sent until what has already arrived
+/// is answered, and the byte that was asked about is already there.
+///
+/// It is a concrete type in [`FileHandle::Input`], not one more boxed
+/// `ReadPort`, so that a file input port cannot be built without it and
+/// `peek-char` need not take it on trust.
+pub struct WholeCharReader {
+    inner: Box<dyn ReadPort>,
+    /// The one character that straddled a chunk, when there is one; at most
+    /// four bytes. Empty means every call goes to `inner`.
+    carry: Vec<u8>,
+    /// Bytes of `carry` already consumed.
+    carry_pos: usize,
+}
+
+impl WholeCharReader {
+    pub fn new(inner: Box<dyn ReadPort>) -> Self {
+        WholeCharReader {
+            inner,
+            carry: Vec::new(),
+            carry_pos: 0,
+        }
+    }
+
+    fn carried(&self) -> &[u8] {
+        &self.carry[self.carry_pos..]
+    }
+
+    /// The buffer, which begins with the whole of the next character unless
+    /// the source ends inside it. Like `fill_buf`, it consumes nothing.
+    ///
+    /// The check is on the *first* byte only, which is all a peek needs, and
+    /// it costs a table lookup and a comparison. Anything else passes straight
+    /// through, so the inner reader's buffer is still the buffer.
+    pub fn fill_char(&mut self) -> io::Result<&[u8]> {
+        if self.carried().is_empty() {
+            // How much is buffered, and how much the first character needs.
+            // Read out as numbers so the borrow ends here: the buffer itself
+            // is handed back by a second `fill_buf` below, which a non-empty
+            // buffer answers without touching the source.
+            let (buffered, needed) = {
+                let buf = self.inner.fill_buf()?;
+                (buf.len(), buf.first().map_or(0, |&b| utf8_char_len(b)))
+            };
+            if buffered >= needed {
+                return self.inner.fill_buf();
+            }
+        }
+        // The chunk ends inside its first character. Take what is there, then
+        // what completes it. If the source ends first, the carry is a
+        // truncated character, and decoding it is the error it should be.
+        //
+        // A carry nothing has been read from is completed whenever it is
+        // asked for, not only when it is begun: an error from the source
+        // leaves it part-built, with its bytes already off the inner reader,
+        // and the next peek must finish it rather than decode the part. One
+        // that bytes have been read from is no longer a character's start,
+        // and is served as it stands.
+        while self.carry_pos == 0 {
+            // An empty carry needs its lead byte before it can say how long
+            // the character is.
+            let needed = self.carry.first().map_or(1, |&b| utf8_char_len(b));
+            if self.carry.len() >= needed {
+                break;
+            }
+            let buf = match self.inner.fill_buf() {
+                Ok(buf) => buf,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            if buf.is_empty() {
+                break;
+            }
+            let take = (needed - self.carry.len()).min(buf.len());
+            self.carry.extend_from_slice(&buf[..take]);
+            self.inner.consume(take);
+        }
+        Ok(self.carried())
+    }
+}
+
+impl Read for WholeCharReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.carried().is_empty() {
+            return self.inner.read(buf);
+        }
+        // A short read, which `Read` allows: what is carried comes first, and
+        // the caller comes back for the rest.
+        let n = self.carried().len().min(buf.len());
+        buf[..n].copy_from_slice(&self.carried()[..n]);
+        self.consume(n);
+        Ok(n)
+    }
+}
+
+impl BufRead for WholeCharReader {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.carried().is_empty() {
+            return self.inner.fill_buf();
+        }
+        Ok(self.carried())
+    }
+
+    fn consume(&mut self, amt: usize) {
+        if self.carried().is_empty() {
+            self.inner.consume(amt);
+            return;
+        }
+        self.carry_pos = (self.carry_pos + amt).min(self.carry.len());
+        if self.carry_pos == self.carry.len() {
+            self.carry.clear();
+            self.carry_pos = 0;
+        }
+    }
+}
+
+/// Fill `target` from `reader`, stopping short only where the source ends.
+///
+/// `Read::read` may return fewer bytes than it was given room for without
+/// being at the end, and a buffered reader does: a request smaller than its
+/// capacity is answered from what is left of the current chunk. Taking that
+/// one count as final is what made `read-bytevector` return a short
+/// bytevector in the *middle* of a file, where R7RS §6.13.2 lets a short
+/// result mean only that the file ended (#414).
+fn read_until_full_or_eof(reader: &mut dyn Read, target: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < target.len() {
+        match reader.read(&mut target[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
 /// Data for a file-based port
 pub struct FilePortData {
     /// The file path (for display/debugging)
@@ -276,9 +437,10 @@ pub struct FilePortData {
 }
 
 /// File handle - either input or output.
-/// Uses trait objects so the underlying stream can come from any `FileSystem` impl.
+/// Uses trait objects so the underlying stream can come from any `FileSystem` impl;
+/// the input one sits inside a [`WholeCharReader`], which `peek-char` needs.
 pub enum FileHandle {
-    Input(Box<dyn ReadPort>),
+    Input(WholeCharReader),
     Output(Box<dyn WritePort>),
 }
 
@@ -385,7 +547,7 @@ impl Port {
             PortDirection::Input,
             PortData::File(FilePortData {
                 path: PathBuf::from(path),
-                handle: FileHandle::Input(reader),
+                handle: FileHandle::Input(WholeCharReader::new(reader)),
             }),
         ))
     }
@@ -418,7 +580,7 @@ impl Port {
             PortDirection::Input,
             PortData::File(FilePortData {
                 path: PathBuf::from(path),
-                handle: FileHandle::Input(reader),
+                handle: FileHandle::Input(WholeCharReader::new(reader)),
             }),
         ))
     }
@@ -873,14 +1035,14 @@ impl Port {
             )),
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
-                    let buf = reader.fill_buf()?;
-                    if buf.is_empty() {
-                        return Ok(None);
-                    }
-                    // Try to decode first UTF-8 char from buffer
-                    let s = std::str::from_utf8(buf)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                    Ok(s.chars().next())
+                    // The first character only. Validating the whole chunk
+                    // to return one character failed wherever a chunk ended
+                    // inside a character, or held a byte further along that
+                    // is not text at all (#410). `fill_char` sees to it that
+                    // the first character is all there unless the file ends
+                    // inside it.
+                    let buf = reader.fill_char()?;
+                    Ok(decode_utf8_at(buf, 0)?.map(|(ch, _)| ch))
                 } else {
                     Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -1132,13 +1294,12 @@ impl Port {
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
                     let mut buf = vec![0u8; k];
-                    match reader.read(&mut buf) {
-                        Ok(0) => Ok(None), // EOF
-                        Ok(n) => {
+                    match read_until_full_or_eof(reader, &mut buf)? {
+                        0 => Ok(None), // EOF
+                        n => {
                             buf.truncate(n);
                             Ok(Some(buf))
                         }
-                        Err(e) => Err(e),
                     }
                 } else {
                     Err(io::Error::new(
@@ -1207,10 +1368,9 @@ impl Port {
             )),
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
-                    match reader.read(target) {
-                        Ok(0) => Ok(None), // EOF
-                        Ok(n) => Ok(Some(n)),
-                        Err(e) => Err(e),
+                    match read_until_full_or_eof(reader, target)? {
+                        0 => Ok(None), // EOF
+                        n => Ok(Some(n)),
                     }
                 } else {
                     Err(io::Error::new(
@@ -1821,6 +1981,181 @@ mod tests {
         port.advance_position(1).unwrap();
         assert_eq!(port.read_u8().unwrap(), Some(b' '));
         assert_eq!(port.read_u8().unwrap(), Some(0xFF));
+    }
+
+    /// A `WholeCharReader` over `bytes`, whose inner reader hands out chunks
+    /// of at most `capacity` — so a chunk boundary can be put anywhere.
+    fn chunked(bytes: &[u8], capacity: usize) -> WholeCharReader {
+        let inner = io::BufReader::with_capacity(capacity, io::Cursor::new(bytes.to_vec()));
+        WholeCharReader::new(Box::new(inner))
+    }
+
+    #[test]
+    fn test_whole_char_reader_never_begins_a_buffer_inside_a_character() {
+        // One-, two-, three- and four-byte characters, and every chunk size
+        // that can split them. At each character boundary `fill_char` must
+        // begin with that whole character, whatever the chunking; consuming
+        // a character at a time must visit every character, in order.
+        let text = "aλ€𝄞bλλ€";
+        for capacity in 1..=9 {
+            let mut reader = chunked(text.as_bytes(), capacity);
+            let mut seen = String::new();
+            loop {
+                let buf = reader.fill_char().unwrap();
+                let Some((ch, len)) = decode_utf8_at(buf, 0).unwrap() else {
+                    break;
+                };
+                seen.push(ch);
+                reader.consume(len);
+            }
+            assert_eq!(seen, text, "chunks of {capacity}");
+        }
+    }
+
+    #[test]
+    fn test_whole_char_reader_hands_every_byte_to_every_kind_of_read() {
+        // The carried character's bytes have moved, not gone: whichever
+        // method reads next meets them first, in order. This is the property
+        // that parking the character in a *text* pushback would not have.
+        let bytes = "xλy".as_bytes(); // 78 CE BB 79
+        for capacity in 1..=4 {
+            // Byte by byte through `read`, peeking a character before each.
+            let mut reader = chunked(bytes, capacity);
+            let mut out = Vec::new();
+            loop {
+                let _ = reader.fill_char().unwrap();
+                let mut one = [0u8; 1];
+                if reader.read(&mut one).unwrap() == 0 {
+                    break;
+                }
+                out.push(one[0]);
+            }
+            assert_eq!(out, bytes, "read, chunks of {capacity}");
+
+            // All at once, after a peek has assembled a carry.
+            let mut reader = chunked(bytes, capacity);
+            assert_eq!(reader.fill_char().unwrap()[0], b'x');
+            reader.consume(1);
+            assert_eq!(reader.fill_char().unwrap()[..2], [0xCE, 0xBB]);
+            let mut rest = [0u8; 3];
+            assert_eq!(read_until_full_or_eof(&mut reader, &mut rest).unwrap(), 3);
+            assert_eq!(rest, [0xCE, 0xBB, b'y'], "block read, chunks of {capacity}");
+
+            // Through `read_until`, which is built on `fill_buf`/`consume`.
+            let mut reader = chunked(bytes, capacity);
+            let _ = reader.fill_char().unwrap();
+            let mut line = Vec::new();
+            reader.read_until(b'y', &mut line).unwrap();
+            assert_eq!(line, bytes, "read_until, chunks of {capacity}");
+        }
+    }
+
+    #[test]
+    fn test_whole_char_reader_consumes_a_carry_a_byte_at_a_time() {
+        let mut reader = chunked("λz".as_bytes(), 1);
+        assert_eq!(reader.fill_char().unwrap(), [0xCE, 0xBB]);
+        reader.consume(1);
+        // What is left of it is no character's start, and is not topped up
+        // as one: both views serve it as it stands.
+        assert_eq!(reader.fill_buf().unwrap(), [0xBB]);
+        assert_eq!(reader.fill_char().unwrap(), [0xBB]);
+        reader.consume(1);
+        assert_eq!(reader.fill_buf().unwrap(), [b'z']);
+        reader.consume(1);
+        assert!(reader.fill_buf().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_whole_char_reader_at_a_source_that_ends_inside_a_character() {
+        // Nothing can complete it, so what there is comes out — and decoding
+        // it is the error a truncated file deserves, not an end of file.
+        let mut reader = chunked(&[b'a', 0xCE], 1);
+        assert_eq!(reader.fill_char().unwrap(), [b'a']);
+        reader.consume(1);
+        assert_eq!(reader.fill_char().unwrap(), [0xCE]);
+        assert!(decode_utf8_at(reader.fill_char().unwrap(), 0).is_err());
+        reader.consume(1);
+        assert!(reader.fill_char().unwrap().is_empty());
+
+        // A byte that leads no character at all is not waited on forever
+        // either: it is topped up like a four-byte lead and then rejected.
+        let mut reader = chunked(&[0xFF, b'a', b'b'], 1);
+        assert_eq!(reader.fill_char().unwrap(), [0xFF, b'a', b'b']);
+        assert!(decode_utf8_at(reader.fill_char().unwrap(), 0).is_err());
+    }
+
+    /// A source that answers each `read` with the next step of a script: some
+    /// bytes, or an error. What a pipe looks like to its reader, where the
+    /// next bytes are not there yet — which a `Cursor` can never show.
+    struct Scripted(std::collections::VecDeque<io::Result<Vec<u8>>>);
+
+    impl Read for Scripted {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.pop_front() {
+                None => Ok(0),
+                Some(Err(e)) => Err(e),
+                Some(Ok(bytes)) => {
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+            }
+        }
+    }
+
+    fn scripted(steps: Vec<io::Result<Vec<u8>>>) -> WholeCharReader {
+        let inner = io::BufReader::with_capacity(8, Scripted(steps.into()));
+        WholeCharReader::new(Box::new(inner))
+    }
+
+    #[test]
+    fn test_whole_char_reader_waits_for_a_character_only_when_asked_for_one() {
+        // The first byte of a `λ` has arrived and the second has not. A byte
+        // peek is answered from what is there: going back to the source would
+        // be a wait, on a pipe, for bytes its writer may not send until this
+        // one is answered — and here it would be the error, which
+        // `fill_buf` must therefore never meet.
+        let would_block = || Err(io::ErrorKind::WouldBlock.into());
+        let mut reader = scripted(vec![Ok(vec![0xCE]), would_block(), Ok(vec![0xBB, b'z'])]);
+        assert_eq!(reader.fill_buf().unwrap(), [0xCE]);
+        assert_eq!(reader.fill_buf().unwrap(), [0xCE]);
+
+        // A character peek does go back for the rest, and meets the error
+        // with the first byte already carried. Nothing is lost by that: the
+        // byte is still next, and the next character peek finishes the
+        // character rather than decoding the half of it.
+        let error = reader.fill_char().unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(reader.fill_buf().unwrap(), [0xCE]);
+        assert_eq!(reader.fill_char().unwrap(), [0xCE, 0xBB]);
+        reader.consume(2);
+        assert_eq!(reader.fill_char().unwrap(), [b'z']);
+    }
+
+    #[test]
+    fn test_whole_char_reader_assembles_a_character_through_an_interrupted_read() {
+        let interrupted = || Err(io::ErrorKind::Interrupted.into());
+        let mut reader = scripted(vec![
+            Ok(vec![0xE2]),
+            interrupted(),
+            Ok(vec![0x82]),
+            interrupted(),
+            Ok(vec![0xAC]),
+        ]);
+        let buf = reader.fill_char().unwrap();
+        assert_eq!(decode_utf8_at(buf, 0).unwrap(), Some(('€', 3)));
+    }
+
+    #[test]
+    fn test_read_until_full_or_eof_outlasts_short_reads() {
+        // Chunks of three, a request for seven: three reads, one result.
+        let mut reader = chunked(&[1, 2, 3, 4, 5, 6, 7, 8], 3);
+        let mut target = [0u8; 7];
+        assert_eq!(read_until_full_or_eof(&mut reader, &mut target).unwrap(), 7);
+        assert_eq!(target, [1, 2, 3, 4, 5, 6, 7]);
+        // Short only at the end, and zero only when nothing is left.
+        let mut target = [0u8; 7];
+        assert_eq!(read_until_full_or_eof(&mut reader, &mut target).unwrap(), 1);
+        assert_eq!(read_until_full_or_eof(&mut reader, &mut target).unwrap(), 0);
     }
 
     #[test]

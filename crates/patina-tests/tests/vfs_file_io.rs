@@ -38,6 +38,203 @@ impl Drop for TempFile {
 }
 
 // =============================================================================
+// peek-char where the buffered bytes end inside a character (#410)
+// =============================================================================
+//
+// A file port reads through an 8 KiB buffer, and a character can straddle its
+// end. `peek-char` used to validate the *whole* buffered chunk to hand back
+// one character, so it failed wherever a chunk ended mid-character — on the
+// very first peek of an ordinary text file over 8 KiB, with nothing read yet.
+//
+// Every row uses one file: `a`, then 5000 `λ` — 1 + 10000 bytes, so byte 8192
+// is the first half of the 4096th `λ`. Rust writes it, so the bytes are what
+// the comment says whatever the port layer does. The expected values are what
+// chibi 0.12 and Gauche 0.9.15 both answer, measured 2026-09-19.
+
+/// A file holding `bytes`, and the Scheme prelude the buffer-boundary rows
+/// share: `path` names the file, `skip` takes `n` characters off a port, and
+/// `with` closes a port once `f` has had it.
+fn file_holding(name: &str, bytes: &[u8]) -> (TempFile, String) {
+    let f = TempFile::new(name);
+    std::fs::write(f.path(), bytes).unwrap();
+    let prelude = format!(
+        r#"
+        (import (scheme file))
+        (define path "{path}")
+        (define (skip p n) (do ((i 0 (+ i 1))) ((= i n)) (read-char p)))
+        (define (with p f) (let ((r (f p))) (close-port p) r))
+        "#,
+        path = f.path()
+    );
+    (f, prelude)
+}
+
+/// The file the rows below read.
+fn straddling_file(name: &str) -> (TempFile, String) {
+    let mut bytes = vec![b'a'];
+    for _ in 0..5000 {
+        bytes.extend_from_slice("λ".as_bytes());
+    }
+    file_holding(name, &bytes)
+}
+
+/// The face #410 was filed on: the first `peek-char`, nothing read yet. The
+/// first character is complete; it is byte 8192 that is not.
+#[test]
+fn test_peek_char_does_not_decode_past_the_character_it_returns() {
+    let (_f, prelude) = straddling_file("peek_first");
+    let code = format!("{prelude} (with (open-input-file path) peek-char)");
+    assert_program_eval_to(&code, r"#\a");
+}
+
+/// The face that makes it more than a one-line fix: 4096 characters in, the
+/// buffer holds *only* the first byte of the next one. Decoding just the first
+/// character is not enough — the rest of it has not been buffered — and the
+/// peek must not consume anything to get it.
+#[test]
+fn test_peek_char_completes_a_character_the_buffer_holds_half_of() {
+    let (_f, prelude) = straddling_file("peek_half");
+    let code = format!(
+        r#"{prelude}
+        (with (open-input-file path)
+          (lambda (p)
+            (skip p 4096)
+            (let* ((a (peek-char p)) (b (read-char p)) (c (read-char p)))
+              (map char->integer (list a b c)))))"#
+    );
+    assert_program_eval_to(&code, "(955 955 955)");
+}
+
+/// And the property that rules out the easy repair. Reading the character and
+/// parking it in the port's *text* pushback would satisfy the two rows above
+/// and lose its bytes to everything that reads bytes, since those never look
+/// there — once per boundary, silently. After a peek the byte operations must
+/// still see the character's own bytes: `peek-char` consumes nothing, here as
+/// anywhere.
+#[test]
+fn test_peek_char_at_a_buffer_boundary_leaves_the_bytes_for_the_byte_operations() {
+    let (_f, prelude) = straddling_file("peek_bytes");
+    let code = format!(
+        r#"{prelude}
+        (define (at-boundary f)
+          (with (open-binary-input-file path) (lambda (p) (skip p 4096) (f p))))
+        (list
+          (at-boundary (lambda (p) (let* ((a (peek-char p)) (b (read-u8 p)) (c (read-u8 p)))
+                                     (list (char->integer a) b c))))
+          (at-boundary (lambda (p) (let* ((a (peek-char p)) (b (peek-char p)) (c (peek-u8 p)))
+                                     (list (char->integer a) (char->integer b) c))))
+          (at-boundary (lambda (p) (let* ((a (peek-char p)) (b (read-bytevector 3 p)))
+                                     (list (char->integer a) b))))
+          (at-boundary (lambda (p) (let* ((a (peek-char p)) (b (read-line p)))
+                                     (list (char->integer a) (string-length b))))))"#
+    );
+    assert_program_eval_to(
+        &code,
+        "((955 206 187) (955 955 206) (955 #u8(206 187 206)) (955 905))",
+    );
+}
+
+/// The same defect from the other side: the first character is fine and a
+/// byte further along is not text at all.
+#[test]
+fn test_peek_char_on_a_binary_file_ignores_undecodable_bytes_it_does_not_reach() {
+    let f = TempFile::new("peek_binary");
+    std::fs::write(f.path(), [b'x', b' ', 0xFF]).unwrap();
+    let code = format!(
+        r#"
+        (import (scheme file))
+        (let* ((p (open-binary-input-file "{path}"))
+               (a (peek-char p)) (b (read-char p)) (c (read-char p)) (d (read-u8 p)))
+          (close-port p)
+          (list a b c d))
+        "#,
+        path = f.path()
+    );
+    assert_program_eval_to(&code, r"(#\x #\x #\space 255)");
+}
+
+// =============================================================================
+// read-bytevector across the end of the buffer (#414)
+// =============================================================================
+//
+// R7RS §6.13.2: `read-bytevector` reads "the next k bytes, or as many as are
+// available before the end of file". A short result therefore *means* end of
+// file. It used to mean only that the request ran past the port's 8 KiB
+// chunk: one `Read::read` call, its count taken as final, and a `BufReader`
+// answers a small request from whatever is left in the chunk it has.
+//
+// The file is 10000 bytes, byte `i` being `i mod 250`, so a row can check
+// *which* bytes came back as well as how many. Expected values are what chibi
+// 0.12 and Gauche 0.9.15 both answer, measured 2026-09-19.
+
+fn numbered_file(name: &str) -> (TempFile, String) {
+    let bytes: Vec<u8> = (0..10000).map(|i| (i % 250) as u8).collect();
+    file_holding(name, &bytes)
+}
+
+/// Two bytes short of the chunk's end, ask for ten. Bytes 8190..8199 are
+/// 190..199, since 8190 = 32 * 250 + 190.
+#[test]
+fn test_read_bytevector_is_not_cut_short_by_the_buffer_boundary() {
+    let (_f, prelude) = numbered_file("rbv_boundary");
+    let code = format!(
+        r#"{prelude}
+        (with (open-binary-input-file path)
+          (lambda (p) (read-bytevector 8190 p) (read-bytevector 10 p)))"#
+    );
+    assert_program_eval_to(&code, "#u8(190 191 192 193 194 195 196 197 198 199)");
+}
+
+#[test]
+fn test_read_bytevector_bang_is_not_cut_short_by_the_buffer_boundary() {
+    let (_f, prelude) = numbered_file("rbv_bang_boundary");
+    let code = format!(
+        r#"{prelude}
+        (with (open-binary-input-file path)
+          (lambda (p)
+            (read-bytevector 8190 p)
+            (let* ((bv (make-bytevector 10 0)) (n (read-bytevector! bv p)))
+              (list n bv))))"#
+    );
+    assert_program_eval_to(&code, "(10 #u8(190 191 192 193 194 195 196 197 198 199))");
+}
+
+/// What it did to a program: fixed-size records, and the 82nd came back 92
+/// bytes long with nothing to say the file had not ended, so every record
+/// after it was misframed. A short record is the last one, and only that.
+#[test]
+fn test_fixed_size_records_stay_framed_across_the_buffer_boundary() {
+    let (_f, prelude) = numbered_file("rbv_records");
+    let code = format!(
+        r#"{prelude}
+        (with (open-binary-input-file path)
+          (lambda (p)
+            (let loop ((records 0) (short 0))
+              (let ((r (read-bytevector 100 p)))
+                (if (eof-object? r)
+                    (list records short)
+                    (loop (+ records 1)
+                          (if (< (bytevector-length r) 100) (+ short 1) short)))))))"#
+    );
+    assert_program_eval_to(&code, "(100 0)");
+}
+
+/// End of file is still a short read, then the end-of-file object.
+#[test]
+fn test_read_bytevector_at_the_end_of_a_file_is_still_short() {
+    let (_f, prelude) = numbered_file("rbv_eof");
+    let code = format!(
+        r#"{prelude}
+        (with (open-binary-input-file path)
+          (lambda (p)
+            (read-bytevector 9995 p)
+            (let* ((a (read-bytevector 10 p)) (b (read-bytevector 10 p)))
+              (list a (eof-object? b)))))"#
+    );
+    assert_program_eval_to(&code, "(#u8(245 246 247 248 249) #t)");
+}
+
+// =============================================================================
 // open-output-file / open-input-file round-trip
 // =============================================================================
 
