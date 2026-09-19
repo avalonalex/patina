@@ -51,14 +51,11 @@ impl Drop for TempFile {
 // the comment says whatever the port layer does. The expected values are what
 // chibi 0.12 and Gauche 0.9.15 both answer, measured 2026-09-19.
 
-/// The file the rows below read, and the Scheme prelude they share: `skip`
-/// takes `n` characters off a port.
-fn straddling_file(name: &str) -> (TempFile, String) {
+/// A file holding `bytes`, and the Scheme prelude the buffer-boundary rows
+/// share: `path` names the file, `skip` takes `n` characters off a port, and
+/// `with` closes a port once `f` has had it.
+fn file_holding(name: &str, bytes: &[u8]) -> (TempFile, String) {
     let f = TempFile::new(name);
-    let mut bytes = vec![b'a'];
-    for _ in 0..5000 {
-        bytes.extend_from_slice("λ".as_bytes());
-    }
     std::fs::write(f.path(), bytes).unwrap();
     let prelude = format!(
         r#"
@@ -70,6 +67,15 @@ fn straddling_file(name: &str) -> (TempFile, String) {
         path = f.path()
     );
     (f, prelude)
+}
+
+/// The file the rows below read.
+fn straddling_file(name: &str) -> (TempFile, String) {
+    let mut bytes = vec![b'a'];
+    for _ in 0..5000 {
+        bytes.extend_from_slice("λ".as_bytes());
+    }
+    file_holding(name, &bytes)
 }
 
 /// The face #410 was filed on: the first `peek-char`, nothing read yet. The
@@ -162,18 +168,8 @@ fn test_peek_char_on_a_binary_file_ignores_undecodable_bytes_it_does_not_reach()
 // 0.12 and Gauche 0.9.15 both answer, measured 2026-09-19.
 
 fn numbered_file(name: &str) -> (TempFile, String) {
-    let f = TempFile::new(name);
     let bytes: Vec<u8> = (0..10000).map(|i| (i % 250) as u8).collect();
-    std::fs::write(f.path(), bytes).unwrap();
-    let prelude = format!(
-        r#"
-        (import (scheme file))
-        (define path "{path}")
-        (define (with p f) (let ((r (f p))) (close-port p) r))
-        "#,
-        path = f.path()
-    );
-    (f, prelude)
+    file_holding(name, &bytes)
 }
 
 /// Two bytes short of the chunk's end, ask for ten. Bytes 8190..8199 are
