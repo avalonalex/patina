@@ -869,7 +869,7 @@ the authoritative scope.
 **The boundary:** the adapted ports elsewhere in this tree (SRFI 1, 69, 113,
 128, 133, 158, …) are *not* byte-identical to any upstream and are
 deliberately unpinned; their sources and known deviations are Track L
-territory (`PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`) until each is reconciled to
+territory (`PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`) until each is reconciled to
 this standard or recorded here.
 
 ## The rule (audit 2026-08-10, group E)

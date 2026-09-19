@@ -987,7 +987,7 @@
 ;; first. The fix took the *other* two down to `apply_error`'s behaviour
 ;; rather than the reverse: no raise path unwinds now, and the unwind comes
 ;; from `guard-k`, which is where R7RS puts it. See
-;; `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+;; `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 (test-equal "a guard clause runs after the unwind" '(before after handler)
   (let ((log '()))
     (guard (e (#t (set! log (cons 'handler log))))
@@ -1035,7 +1035,7 @@
 ;; so whether `guard` caught the error depended on where the variable sat.
 ;; chibi, Gauche and Chez catch every position here; the VM already did.
 ;; Enforced structurally by the `try_catchable!` macro in `step.rs`; history
-;; in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. One row per position, so a
+;; in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. One row per position, so a
 ;; regression names the arm.
 (test-equal "an unbound variable is catchable: bare reference" 'caught
   (guard (e (#t 'caught)) undefined-name))
@@ -1198,7 +1198,7 @@
 ;; `escape_from_primitive.rs` — they vanished as rows rather than failing.
 ;; Each trampoline now inherits its caller's stacks and knows which
 ;; continuations end in it (`cps_eval/types.rs`, `callback.rs`), and every row
-;; here is an ordinary both-backend assertion. `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+;; here is an ordinary both-backend assertion. `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
 ;; §6 has the history under "primitive's callback".
 
 ;; A `call/cc` retry loop inside a `call-with-port` callback. Two things are

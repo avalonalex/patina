@@ -9,7 +9,7 @@ that export resolution, `only`, `except`, `prefix` and `rename` reach them throu
 path, with no name list and no special case. Retires the three workarounds now in the tree and
 fixes six conformance defects, one of them a recorded backend divergence.
 
-Companion to `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, which surfaced the divergence, and to
+Companion to `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, which surfaced the divergence, and to
 `PRD/ARCHIVE/TRACK_L_FIXED_DEFECTS.md`, whose entry "A library could not re-export a core
 syntactic keyword" costed this work and left the note this document expands.
 

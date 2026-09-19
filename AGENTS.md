@@ -111,7 +111,24 @@ For measured build timings and stale `target/` troubleshooting, see
 create or restructure agent instruction files authorizes the files needed for that task.
 Prefer updating existing docs for other work.
 
+**PRDs are high level; work items are GitHub issues** (owner decision,
+2026-09-19). A PRD says what a track is for, where it stands and which rules it
+leaves behind. It does not hold the narrative of an individual defect: the
+repro, the measurement against the references, the diagnosis and the notes for
+a fix go in an issue, and the PRD carries one line linking to it. This is the
+written form of the issue-first habit — file the issue before the fix, and let
+the PR close it. `PRD/TRACK_L_LEFTOVERS.md` is the model: 96 lines where the
+record it replaced, now `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`, had grown
+past 2,500 and was carrying entries nobody could find — two defects were
+re-diagnosed from scratch in 2026-09 that it had already recorded. **Search the
+issues and the archive before filing**, for the same reason.
+
 **Active planning docs:**
+- `PRD/TRACK_L_LEFTOVERS.md` — **what is left of Track L** (third-party library
+  compatibility): where the track stopped, how to read the corpus and Larceny
+  numbers, and the open work as a list of GitHub issues, with the five
+  decisions that wait on the owner. The working record it replaced is
+  `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` — history, not to be updated.
 - `scheme_tests/reports/larceny_triage.md` — **the open defect queue.** Start here
   for macro/hygiene work: the hygiene queue (families 36 and 38) closed
   2026-08-31 with the matrix at 28 of 28, but the doc still records what each

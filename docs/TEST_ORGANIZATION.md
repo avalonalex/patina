@@ -268,7 +268,7 @@ Larceny's suites are LGPL and are not vendored — nothing from them is quoted
 anywhere in this repo. Every program is written from scratch to exhibit the
 same *family* of defect, which is what makes it MIT like the rest of the
 codebase, and the durable statement of that is
-`PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. It used to be the deleted file's
+`PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. It used to be the deleted file's
 header, which is why it is restated here: seventeen suite files still say
 "Moved from `larceny_families.rs`", and a licence claim must not depend on a
 file that no longer exists or on a triage doc marked for deletion.

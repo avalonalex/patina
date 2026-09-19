@@ -10,7 +10,7 @@ The repository uses one shared instruction source:
 AGENTS.md       Shared project rules, architecture constraints, and commands
 CLAUDE.md       Claude Code entry point; imports @AGENTS.md
 docs/           Detailed design and testing references, read when relevant
-PRD/            Planning and decision history
+PRD/            Planning and decision history, kept high level; work items are GitHub issues
 ```
 
 Edit [AGENTS.md](../AGENTS.md) when a rule should apply to both tools. Codex

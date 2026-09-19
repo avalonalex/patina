@@ -191,7 +191,7 @@ read off a signature rather than traced to a use, which is the same mistake a
 third time: it kept the fix filed as a Q2 item for three weeks, and the work
 turned out to be deleting the parameter.
 
-**Shared root cause with an open Track L defect.** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+**Shared root cause with an open Track L defect.** `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
 §6 records that Rust registry primitives ignore the import set at top level.
 That is the same disagreement seen from the other side: the compiler's
 name-special-casing and the primitive registry do not share one answer to "what

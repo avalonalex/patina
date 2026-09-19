@@ -3,7 +3,7 @@
 //! The happy path is covered in `vfs_file_io.rs`; this file is the exit paths,
 //! which is what changed when the two moved from Rust primitives to Scheme
 //! (`lib/scheme/file/redirect.scm`). A `call/cc` escape out of the thunk used
-//! to crash the VM outright. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+//! to crash the VM outright. History in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
 use common::{assert_program_eval_to, scratch_path as scratch};

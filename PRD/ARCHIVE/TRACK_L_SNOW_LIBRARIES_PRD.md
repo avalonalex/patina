@@ -1,5 +1,20 @@
 # Track L — Third-Party Library Compatibility PRD
 
+> **Archived 2026-09-19.** This is the track's working record from 2026-06-20 to
+> 2026-09-18, kept whole because its entries record wrong first diagnoses
+> beside the right ones. It is history: **do not update it, and do not read its
+> numbers as current.** What is left of the track is in
+> [`PRD/TRACK_L_LEFTOVERS.md`](../TRACK_L_LEFTOVERS.md), and the work items are
+> GitHub issues, listed there. Its companion is
+> [`TRACK_L_FIXED_DEFECTS.md`](TRACK_L_FIXED_DEFECTS.md).
+>
+> Three things in it were already stale when it was archived, so nobody
+> re-derives them: the status line's Larceny figures (they read 24 of 33 and
+> 8512 of 8534 on both backends by then); L5's heading "suite deferred" (L5.3
+> retargeted it to Larceny's lanes, which run); and §6's "newly recorded" face of
+> *Definition-env relinking rewrites by name*, which #405 fixed — its `jab` shape
+> answers 10 on both backends, and what remains of that axis is #408.
+
 **Created:** 2026-06-20
 **Updated:** 2026-09-14 — Larceny lanes re-run after the runner learned to call a suite that a
 top-level error cuts short *truncated* rather than clean (`set`; 23 of 33 on both R7RS backends
@@ -1234,7 +1249,7 @@ test lane, GC differential lanes and generated external H3 sweep were not run.
 **Macro progress is tracked separately from these suite totals.** The original
 28-shape matrix passes on both backends; families 40/41 and H2's environment
 properties exposed shapes beyond it. The current table in
-[`larceny_triage.md`](../scheme_tests/reports/larceny_triage.md#current-macro-status--audited-2026-09-13)
+[`larceny_triage.md`](../../scheme_tests/reports/larceny_triage.md#current-macro-status--audited-2026-09-13)
 separates the closed families from what is left: three VM-only family-40
 quarantines, with family 41 fixed by #318 and #321 and H2's three API findings
 closed by #316 on 2026-09-13.

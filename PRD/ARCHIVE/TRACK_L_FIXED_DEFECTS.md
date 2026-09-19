@@ -1,6 +1,6 @@
 # Track L — fixed defects, in full
 
-Moved out of `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 on 2026-08-15, when that document reached 1100
+Moved out of `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 on 2026-08-15, when that document reached 1100
 lines and the fixed narratives were two thirds of its largest section. Nothing is dropped: §6 keeps
 a one-line index of every entry, and each one is here in full.
 

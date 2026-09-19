@@ -1,6 +1,6 @@
 ;; `with-input-from-file` / `with-output-to-file`. Scheme rather than
 ;; primitives so an escape out of the thunk unwinds normally; see
-;; `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 for the VM crash that forced it.
+;; `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 for the VM crash that forced it.
 ;;
 ;; Two details are load-bearing, and the obvious first draft gets both wrong:
 ;;

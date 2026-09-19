@@ -14,7 +14,7 @@
 ;; `string-drop` calls `(substring str n)`, and R7RS 6.7 gives `substring`
 ;; exactly three arguments. The two-argument form is a chibi extension that
 ;; Gauche and Chez reject as we do, so this is upstream depending on its own
-;; reader rather than a gap in Patina — see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md
+;; reader rather than a gap in Patina — see PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md
 ;; section 6 for the same verdict applied to other chibi-only constructs.
 ;;
 ;; It is written against `(chibi string)`. Patina no longer ships that library
