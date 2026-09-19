@@ -37,7 +37,8 @@
 ;; than a fix. What the oracles then found is a different matter, and is in
 ;; `syntax-rules-literals.scm`'s header: a row that asserted only "did not
 ;; error", and one whose comment claimed Gauche agreed with it when Gauche
-;; never has (shirok/Gauche#1327).
+;; never had (shirok/Gauche#1327, fixed upstream since; the pinned 0.9.15
+;; still disagrees).
 ;;
 ;; **Three files hold claims adjacent to these, and a fourth copy is what
 ;; `core_syntax_bindings.rs`'s own comment warns against.** That file has the

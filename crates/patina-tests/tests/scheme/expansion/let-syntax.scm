@@ -42,6 +42,13 @@
 ;; do. So it has §4.3.1's rule and loses it under expansion, which is what
 ;; makes this a defect claim rather than a difference of reading — see the
 ;; register for the evidence as recorded.
+;;
+;; **Gauche agreed, and fixed it.** Filed as shirok/Gauche#1326; fixed in
+;; `2c392ea7f` (2026-09-14) and verified 2026-09-19 against master built from
+;; source, which answers `outer-b` for both rows. The lane still pins the
+;; 0.9.15 release, where they fail, and no release carries the fix yet — so
+;; "Gauche fails" below is true of the oracle this file is measured against,
+;; not of Gauche, and the two register rows retire at the pin bump.
 
 (import (scheme base) (srfi 64))
 

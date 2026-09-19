@@ -25,6 +25,10 @@
 ;; chibi and Chez 10.3.0 all answer `no-match`. Filed as shirok/Gauche#1327
 ;; after reproducing it on Gauche master (`f582cf69e`), so the row stays
 ;; unscoped — a difference in an answer is exactly what the register is for.
+;; **Fixed upstream** in `de3c3a478` (2026-09-13): master, built from source
+;; and measured 2026-09-19, answers `no-match`. The count above is still what
+;; the lane sees, because it pins the 0.9.15 release and no release carries
+;; the fix yet; the register row retires at the pin bump.
 ;;
 ;; **Two rows were worth more after the move than before, and both say why the
 ;; move was worth making.**
@@ -270,10 +274,12 @@
 ;; that `let` makes, while the literal `k` stands outside it and is unbound. One
 ;; bound and one not, so no match.
 ;;
-;; **Gauche answers `matched-k`** — registered, and filed as shirok/Gauche#1327
-;; after reproducing it on master. chibi and Chez 10.3.0 answer `no-match` with
-;; us. Left unscoped deliberately: the register is where a difference in an
-;; answer belongs, and scoping it away is how it would never have been found.
+;; **Gauche 0.9.15 answers `matched-k`** — registered, and filed as
+;; shirok/Gauche#1327 after reproducing it on master; fixed there since
+;; (`de3c3a478`), so this is the pinned release's answer and no longer
+;; Gauche's. chibi and Chez 10.3.0 answer `no-match` with us. Left unscoped
+;; deliberately: the register is where a difference in an answer belongs, and
+;; scoping it away is how it would never have been found.
 (test-equal "but not when the template binds it first" 'no-match
   (let-syntax ((m (syntax-rules ()
                     ((m ignored)
