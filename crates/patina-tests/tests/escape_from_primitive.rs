@@ -15,7 +15,7 @@
 //!
 //! **One shape is still wrong** — a primitive used as a `call-with-values`
 //! *consumer*, whose callback escapes; the frame-depth check structurally
-//! cannot see it. Diagnosis in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
+//! cannot see it. Diagnosis in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
 //! read this file as the class being closed.
 //!
 //! # The tree-walker's side, closed 2026-09-10

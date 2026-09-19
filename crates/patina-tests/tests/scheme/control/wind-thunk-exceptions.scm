@@ -52,7 +52,7 @@
 ;; trampoline with no handler stack"); it inherits the caller's now, so this
 ;; is a gap in coverage rather than a known defect.
 ;;
-;; Tracked in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, "An exception raised by a
+;; Tracked in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6, "An exception raised by a
 ;; `dynamic-wind` after-thunk does not behave like a `finally`".
 
 (import (scheme base) (srfi 64))

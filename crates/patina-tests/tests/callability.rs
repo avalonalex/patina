@@ -22,7 +22,7 @@
 //! That is the line #193 predicted the migration would fall on: what is about
 //! the *language* went to Scheme, what is about the *implementation* stayed.
 //!
-//! `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
+//! `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
 
 mod common;
 use common::{

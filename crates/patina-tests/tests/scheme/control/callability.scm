@@ -26,7 +26,7 @@
 ;; `cps_eval/application.rs` matched `return Err(…)` and missed three catchable
 ;; errors that reach Rust through `?`.
 ;;
-;; `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
+;; `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6 carries the history.
 
 (import (scheme base) (srfi 64))
 

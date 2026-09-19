@@ -243,7 +243,9 @@ const PINNED: &[(&str, u64)] = &[
     // directly. The header moved with it. `130.scm` below is untouched by that
     // work — its hash is the one it has had all along, which is the evidence
     // the inlining changed the library's *dependencies* and not its code.
-    ("lib/srfi/130.sld", 0x2377d56b49134388),
+    // Re-pinned 2026-09-19: one line of the header, a comment — its pointer to
+    // the Track L PRD followed that file into `PRD/ARCHIVE/`. No code moved.
+    ("lib/srfi/130.sld", 0x10f901e6f9ead527),
     // Unlike every other row, 132.sld is Patina-authored with no upstream to
     // match — the pin freezes the tree's provenance *record*, so editing the
     // header is a deliberate act like editing the files it describes.

@@ -6,7 +6,7 @@
 //! specific to registered primitives at the top level: libraries enforced
 //! their imports all along (`sld_file_loading.rs` covers that half), and so
 //! did the tree-walker — which is why these run on both backends: the point
-//! is that they now agree. History in `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+//! is that they now agree. History in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
 mod common;
 use common::{assert_program_eval_error, assert_program_eval_to, eval_program as eval};

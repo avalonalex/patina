@@ -10,7 +10,7 @@
 ;; below, rather than `(only ...)` plus `(rename ...)` over the same library.
 ;; That shape is valid R7RS and works on the VM, but the tree-walker drops the
 ;; rename set's pass-through names — see the note in
-;; PRD/TRACK_L_SNOW_LIBRARIES_PRD.md.
+;; PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md.
 
 (define-library (srfi 60)
   (import (scheme base) (srfi 151))

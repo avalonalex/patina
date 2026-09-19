@@ -6,7 +6,9 @@
 
 This is the **cross-track overview**. Per-item detail lives in the two track PRDs:
 - **Track P — VM performance (clarity-safe):** `PRD/TRACK_P_PERFORMANCE_PRD.md`
-- **Track L — Snow library compatibility:** `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md`
+- **Track L — Snow library compatibility:** `PRD/TRACK_L_LEFTOVERS.md` — the track's loop converged
+  2026-09-18; what is left is a list of GitHub issues there, and the working record is archived as
+  `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
 
 ---
 

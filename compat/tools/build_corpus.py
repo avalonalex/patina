@@ -17,7 +17,7 @@ versions, and folding that into an unrelated change is how the corpus drifts
 without anyone deciding to.
 
 Requires only Python 3.9+ and curl. This is corpus construction; running and
-scoring the corpus is a separate concern (see PRD/TRACK_L_SNOW_LIBRARIES_PRD.md,
+scoring the corpus is a separate concern (see PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md,
 work item L3).
 
 Three traps worth knowing, all previously hit and now guarded against:

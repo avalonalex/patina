@@ -153,7 +153,7 @@ impl VmBackend {
         // fast path is unaffected: library-bound primitives resolve their
         // registry index on first call via `resolve_index_cached`. Guarded by
         // `import_set_is_enforced.rs`; history in
-        // `PRD/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
+        // `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6.
 
         // Set up library loading infrastructure (Rc-shared with VmState)
         let mut lib_registry = LibraryRegistry::with_default_paths();
