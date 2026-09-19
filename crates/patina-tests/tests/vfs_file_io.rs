@@ -288,7 +288,11 @@ fn test_binary_port_predicates() {
     );
     // Need to create the file first
     std::fs::write(f.path(), b"data").unwrap();
-    assert_program_eval_to(&code, "(#t #t #f #t #f)");
+    // The last is `textual-port?`, and `#t`: the textual operations work on a
+    // binary port, so it is textual as well as binary, which is what chibi
+    // and Gauche answer for a binary file port too (#404; the bytevector
+    // half is in `tests/scheme/stdlib/ports.scm`).
+    assert_program_eval_to(&code, "(#t #t #f #t #t)");
 }
 
 /// R7RS 6.13.1: `input-port-open?` "returns #t if port is still open and

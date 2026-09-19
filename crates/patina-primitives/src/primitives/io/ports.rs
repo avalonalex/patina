@@ -174,7 +174,20 @@ pub(super) fn output_port_p(
     Ok(TaggedValue::boolean(result))
 }
 
-/// (textual-port? obj) - Returns #t if obj is a textual port
+/// (textual-port? obj) - Returns #t if obj is a port.
+///
+/// Every port is textual, because the textual operations work on every port:
+/// a binary port reads and writes text as UTF-8 (`decode_utf8_at` and
+/// `Port::write_string` in `patina-core`'s `port.rs`). R7RS §6.13.1 leaves
+/// whether the textual and binary port types are disjoint to the
+/// implementation, and an implementation that reads and writes text through
+/// a port cannot coherently call it non-textual. chibi 0.12 and Gauche 0.9.15
+/// both answer `#t` for bytevector ports and for binary file ports (#404).
+///
+/// `binary-port?` is *not* the mirror image. The byte operations are still
+/// refused on a port opened as textual, so it keeps answering from the kind.
+/// (For string ports chibi refuses them as we do and Gauche does not; for
+/// textual file ports both allow them and we do not, which is unaddressed.)
 pub(super) fn textual_port_p(
     heap: &SharedHeap,
     args: &[TaggedValue],
@@ -185,11 +198,7 @@ pub(super) fn textual_port_p(
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let result = get_port_tv(args[0], &heap_ref)
-        .map(|p| p.is_textual())
-        .unwrap_or(false);
-    Ok(TaggedValue::boolean(result))
+    port_p(heap, args)
 }
 
 /// (binary-port? obj) - Returns #t if obj is a binary port

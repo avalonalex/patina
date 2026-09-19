@@ -236,6 +236,21 @@ fn decode_utf8_at(bytes: &[u8], position: usize) -> io::Result<Option<(char, usi
     Ok(s.chars().next().map(|c| (c, c.len_utf8())))
 }
 
+/// The text at the front of `bytes`: its longest prefix that is valid UTF-8.
+///
+/// What `read` parses when its port is a binary one. A binary port need not
+/// hold text all the way down — a textual header, then a body of arbitrary
+/// bytes — and `read` takes one datum off the front, so it must not fail on
+/// bytes it was never going to reach. The caller tells a datum that ran into
+/// the undecodable part from one that ended before it.
+pub fn utf8_prefix(bytes: &[u8]) -> &str {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()])
+            .expect("valid_up_to bounds a valid prefix"),
+    }
+}
+
 /// The encoded length a UTF-8 lead byte announces. Invalid lead bytes
 /// (stray continuations, ≥ 0xF8) are deliberately lumped into 4 and left
 /// for `from_utf8` to reject — every caller validates the bytes it gathers.
@@ -484,7 +499,13 @@ impl Port {
         self.direction == PortDirection::Output
     }
 
-    /// Check if this is a textual port
+    /// Whether this port was *opened* as a textual one.
+    ///
+    /// Not what `textual-port?` answers: the textual operations work on a
+    /// binary port too, in both directions, so to Scheme every port is
+    /// textual (see `textual_port_p`). The kind still decides what
+    /// [`is_binary`](Self::is_binary) says, and so where the byte operations
+    /// are refused.
     pub fn is_textual(&self) -> bool {
         self.kind == PortKind::Textual
     }
@@ -964,10 +985,19 @@ impl Port {
                     ))
                 }
             }
-            PortData::Bytevector(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "write-string: not a textual port",
-            )),
+            // Text goes into a binary port as the UTF-8 it is read back out
+            // of one as (`decode_utf8_at`) — the same freedom, in the other
+            // direction, and both references take it too. Refusing here while
+            // the reads were allowed was half a decision: chibi-binary-record
+            // writes its string and character fields to a bytevector port
+            // with `write-string` and `write-char`, between `write-u8`s, and
+            // everything built on it (chibi-tar) stopped at this arm (#404).
+            // A binary *file* port never refused: the `File` arm above writes
+            // bytes whatever kind the port was opened as.
+            PortData::Bytevector(port_data) => {
+                port_data.content.extend_from_slice(s.as_bytes());
+                Ok(())
+            }
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
@@ -1369,8 +1399,10 @@ impl Port {
         }
     }
 
-    /// Advance the position in a string input port (after `read` consumes characters)
-    pub fn advance_position(&self, chars_consumed: usize) -> io::Result<()> {
+    /// Advance the position of an in-memory input port by `bytes_consumed`,
+    /// after `read` has parsed a datum out of the text ahead of it. Bytes, not
+    /// characters, on both kinds: a string port's position indexes its UTF-8.
+    pub fn advance_position(&self, bytes_consumed: usize) -> io::Result<()> {
         if self.direction != PortDirection::Input {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1381,12 +1413,16 @@ impl Port {
         let mut data = self.data.borrow_mut();
         match &mut *data {
             PortData::String(s) => {
-                s.position += chars_consumed;
+                s.position += bytes_consumed;
+                Ok(())
+            }
+            PortData::Bytevector(b) => {
+                b.position += bytes_consumed;
                 Ok(())
             }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "not a string port",
+                "not an in-memory port",
             )),
         }
     }
@@ -1740,6 +1776,51 @@ mod tests {
         // Invalid UTF-8 is an error, as on the file path.
         let port = Port::new_input_bytevector(vec![0xFF, 0xFE]);
         assert!(port.read_char().is_err());
+    }
+
+    #[test]
+    fn test_textual_writes_on_binary_port_encode_utf8() {
+        // The other half of the test above: text goes into a binary port as
+        // UTF-8, interleaved with bytes, at one position. Both references
+        // allow it and chibi-binary-record relies on it (#404).
+        let port = Port::new_output_bytevector();
+        port.write_u8(1).unwrap();
+        port.write_string("aλ").unwrap();
+        port.write_char('!').unwrap();
+        port.write_u8(2).unwrap();
+        assert_eq!(
+            port.get_output_bytevector().unwrap(),
+            vec![1, b'a', 0xCE, 0xBB, b'!', 2]
+        );
+
+        // Still an output port only, and still closable.
+        assert!(
+            Port::new_input_bytevector(vec![])
+                .write_string("x")
+                .is_err()
+        );
+        port.close();
+        assert!(port.write_string("x").is_err());
+    }
+
+    #[test]
+    fn test_utf8_prefix_stops_where_the_text_does() {
+        assert_eq!(utf8_prefix(b"all text"), "all text");
+        assert_eq!(utf8_prefix(&[b'x', b' ', 0xFF, b'y']), "x ");
+        assert_eq!(utf8_prefix(&[0xFF]), "");
+        assert_eq!(utf8_prefix(&[]), "");
+        // A character cut off by the end of the bytes is not text either.
+        assert_eq!(utf8_prefix(&[b'a', 0xCE]), "a");
+    }
+
+    #[test]
+    fn test_advance_position_moves_a_bytevector_port_by_bytes() {
+        // What `read` does after parsing a datum off the front: the binary
+        // operations continue from the byte after it.
+        let port = Port::new_input_bytevector(vec![b'x', b' ', 0xFF]);
+        port.advance_position(1).unwrap();
+        assert_eq!(port.read_u8().unwrap(), Some(b' '));
+        assert_eq!(port.read_u8().unwrap(), Some(0xFF));
     }
 
     #[test]

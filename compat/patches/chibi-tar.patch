@@ -1,0 +1,54 @@
+# chibi-tar: give `user-name` and `group-name` the portable branch they lack
+#
+# `chibi/tar.sld` gets four names from the host: `user-name`, `group-name`,
+# `user-information` and `group-information`. Its `cond-expand` has a `chibi`
+# branch, which imports them from `(chibi system)` -- C-backed upstream -- and
+# a `chicken` branch, which imports `posix` and defines stand-ins for the
+# first two. There is no `else`. On any other implementation the library
+# loads and `make-tar` then fails with `user-name` unbound. See #404.
+#
+# **The rewrite is the author's own, moved one branch over.** The two
+# `define`s below are the CHICKEN branch's, character for character. The only
+# text that is new is `user-information` and `group-information` answering
+# `#f`, "no such user", where CHICKEN's `posix` would consult the password
+# database Patina has no access to.
+#
+# **It changes nothing the suite measures.** The package already treats an
+# unknown user as ordinary: `file-owner-or-nobody` is
+# `(or (user-name (user-information uid)) "nobody")`, and the stand-in takes a
+# non-pair to `"nobody"` by itself. So every tar record Patina builds is owned
+# by "nobody", which is a value the format and the package both expect, and no
+# assertion reads a looked-up name -- the suite sets the owners it checks
+# (`"bob"`, `"john"`, `"smith"`) itself.
+#
+# **Why a patch and not a bundled `(chibi system)`.** Patina does not ship
+# chibi's libraries as a rule, and this one could not be honest if it did: a
+# `(chibi system)` without a user database is the same stand-in wearing the
+# real library's name. The import also sits under the `chibi` feature, which
+# Patina does not and should not claim, so the `cond-expand` would need
+# patching either way.
+#
+# This patch alone does not make the package pass. Behind `user-name`,
+# chibi-binary-record writes its string fields to a bytevector port with
+# `write-string`, which Patina refused until the same change that added this
+# file; that was a Patina inconsistency and was fixed in Patina, not patched
+# here.
+#
+# Measured after, with both: 15 of 15 assertions pass on both backends, where
+# the package had stopped before its first.
+diff -ruN a/chibi/tar.sld b/chibi/tar.sld
+--- a/chibi/tar.sld
++++ b/chibi/tar.sld
+@@ -14,6 +14,12 @@
+     (import posix)
+     (begin
+       (define (user-name x) (if (pair? x) (car x) "nobody"))
++      (define (group-name x) (if (pair? x) (car x) "nobody"))))
++   (else
++    (begin
++      (define (user-information x) #f)
++      (define (group-information x) #f)
++      (define (user-name x) (if (pair? x) (car x) "nobody"))
+       (define (group-name x) (if (pair? x) (car x) "nobody")))))
+   (export
+    ;; basic
