@@ -86,9 +86,13 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     }
 
     let remaining = remaining.unwrap();
-    // Parse directly into the evaluator's heap
-    let mut parser = Parser::new_with_heap(&remaining, heap.clone())
-        .map_err(|e| EvalError::InvalidSyntax(format!("read: {}", e)))?;
+    // Parse directly into the evaluator's heap. The parser reads its first
+    // token here, so a string cut short by the undecodable bytes is met here.
+    let mut parser = match Parser::new_with_heap(&remaining, heap.clone()) {
+        Ok(parser) => parser,
+        Err(e) if undecodable_follows && ran_out_of_text(&e) => return Err(undecodable_bytes()),
+        Err(e) => return Err(EvalError::InvalidSyntax(format!("read: {}", e))),
+    };
 
     match parser.parse_next() {
         Ok(Some(tv)) => {
@@ -98,6 +102,19 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
                 .take(parser.consumed_end())
                 .map(|c| c.len_utf8())
                 .sum();
+            // The datum's last token reached the end of the text, and the
+            // text ended because the bytes stopped decoding, not because the
+            // port did. A closer ends its datum whatever follows it, so
+            // `(header)` and `"header"` may sit against a binary body. Any
+            // other token is ended by a delimiter, and the byte after this
+            // one is not one: chibi and Gauche both read it into the token.
+            // Returning `x` for `x\xFF` would be inventing a delimiter.
+            if undecodable_follows
+                && consumed_bytes == remaining.len()
+                && !remaining.ends_with([')', ']', '"', '|'])
+            {
+                return Err(undecodable_bytes());
+            }
             port.advance_position(consumed_bytes)
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
             Ok(tv)
@@ -107,16 +124,44 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
             port.advance_position(remaining.len())
                 .map_err(|e| EvalError::IOError(e.to_string()))?;
             // No datum in the text, but the port is not at its end: what is
-            // left is bytes that do not decode. That is the error the other
-            // textual reads report there, not an end of file.
+            // left is bytes that do not decode. The other textual reads raise
+            // there too, rather than report an end of file.
             if undecodable_follows {
-                return Err(EvalError::IOError(
-                    "read: invalid UTF-8 in binary port".to_string(),
-                ));
+                return Err(undecodable_bytes());
             }
             Ok(TaggedValue::EOF)
         }
+        // The same again, inside a datum: the text ran out, the port did not.
+        // "Unexpected end of input" would send someone looking for a missing
+        // parenthesis in a port whose next byte is 0xFF.
+        Err(e) if undecodable_follows && ran_out_of_text(&e) => Err(undecodable_bytes()),
         Err(e) => Err(read_error(&e)),
+    }
+}
+
+/// What `read` reports when the text at the front of a binary port stops at
+/// bytes that do not decode, and the datum — or the search for one — reached
+/// them.
+///
+/// `InvalidSyntax`, as every other error `read` raises is, because that is
+/// what makes it a `read-error?` on both backends. As an `IOError` it was one
+/// on the VM alone: the VM classifies by the `read:` in the message, the
+/// tree-walker by the variant first.
+fn undecodable_bytes() -> EvalError {
+    EvalError::InvalidSyntax("read: invalid UTF-8 in binary port".to_string())
+}
+
+/// Whether `e` says the text ended before the datum did: inside a list, after
+/// a prefix, or inside a token that more text could finish. What a parser
+/// handed only the decodable prefix of a binary port reports when the datum
+/// runs on into the rest — and the only errors that prefix can be blamed for;
+/// `#\bogus` is wrong whatever follows it.
+fn ran_out_of_text(e: &patina_frontend::ParseError) -> bool {
+    use patina_frontend::ParseError;
+    match e {
+        ParseError::IncompleteDatum { .. } | ParseError::UnexpectedEof => true,
+        ParseError::LexError(lex) => lex.is_incomplete(),
+        _ => false,
     }
 }
 

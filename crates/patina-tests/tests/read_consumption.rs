@@ -9,6 +9,10 @@
 //! Only the file-port rows are here, because a suite file cannot make a file.
 //! The string-port rows, the control showing the rule is the port's and not
 //! the file's, moved to `tests/scheme/stdlib/ports.scm` (#193).
+//!
+//! At the foot are the bytevector-port rows that cannot be suite rows either,
+//! for a different reason: they are about bytes that do not decode, where no
+//! oracle can corroborate.
 
 mod common;
 
@@ -324,4 +328,95 @@ fn test_a_byte_order_mark_does_not_shift_what_read_consumes() {
         file.path()
     );
     assert_program_eval_to(&code, "((a) (b) 42 #t)");
+}
+
+// =============================================================================
+// Bytevector ports: where the text stops
+// =============================================================================
+//
+// `read` on a binary port parses the decodable text at its front (#404). The
+// rows where a delimiter ends the datum are suite rows, in
+// `tests/scheme/stdlib/ports.scm`. These are the rows where the datum, or the
+// search for one, reaches bytes that are not UTF-8. chibi reads such a byte
+// into the token raw and Gauche reads it as Latin-1, so neither can vouch for
+// an answer here, and a suite row would only be two register entries.
+
+/// A closer ends its datum whatever follows it, so a header may sit right
+/// against a binary body, and the body is still there for `read-u8`.
+#[test]
+fn test_binary_port_datum_ended_by_a_closer_leaves_the_undecodable_bytes() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (scheme read))
+        (define (datum-then-byte . bytes)
+          (let* ((p (open-input-bytevector (apply bytevector bytes)))
+                 (datum (read p))
+                 (byte (read-u8 p)))
+            (list datum byte)))
+        (list (datum-then-byte 40 49 41 255)     ; (1)
+              (datum-then-byte 34 97 34 255)     ; "a"
+              (datum-then-byte 124 97 124 255)   ; |a|
+              (datum-then-byte 120 32 255))      ; x, and then the space
+        "#,
+        r#"(((1) 255) ("a" 255) (a 255) (x 32))"#,
+    );
+}
+
+/// Anything else that reaches the undecodable bytes is reported as that, and
+/// as a read error on both backends. Not as the datum so far — `x` for
+/// `x\xFF` invents a delimiter, where chibi and Gauche read the byte into the
+/// token — not as an end of input, which the port has not reached, and not as
+/// an end of file.
+#[test]
+fn test_binary_port_datum_that_runs_into_undecodable_bytes_is_a_read_error() {
+    for bytes in [
+        "255",                      // nothing else
+        "32 255",                   // whitespace first
+        "59 255 10 120",            // inside a line comment
+        "120 255",                  // x
+        "39 120 255",               // 'x
+        "39 255",                   // '
+        "40 49 32 255",             // (1
+        "34 97 255 34",             // inside a string
+        "35 124 255 124 35 32 120", // inside a block comment
+        "120 206",                  // x, then half of a two-byte character
+    ] {
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme read))
+            (define (mentions? text word)
+              (let ((n (string-length text)) (m (string-length word)))
+                (let loop ((i 0))
+                  (and (<= (+ i m) n)
+                       (or (string=? (substring text i (+ i m)) word)
+                           (loop (+ i 1)))))))
+            (define p (open-input-bytevector (bytevector {bytes})))
+            (guard (e (#t (list (read-error? e)
+                                (mentions? (error-object-message e) "UTF-8"))))
+              (read p))
+            "#
+        );
+        assert_program_eval_to(&code, "(#t #t)");
+    }
+}
+
+/// An error that is there whatever follows it is still reported as itself.
+#[test]
+fn test_binary_port_syntax_error_before_undecodable_bytes_is_not_blamed_on_them() {
+    assert_program_eval_to(
+        r#"
+        (import (scheme base) (scheme read))
+        (define (mentions? text word)
+          (let ((n (string-length text)) (m (string-length word)))
+            (let loop ((i 0))
+              (and (<= (+ i m) n)
+                   (or (string=? (substring text i (+ i m)) word)
+                       (loop (+ i 1)))))))
+        (define p (open-input-bytevector (bytevector 41 32 255)))   ; a stray )
+        (guard (e (#t (list (read-error? e)
+                            (mentions? (error-object-message e) "UTF-8"))))
+          (read p))
+        "#,
+        "(#t #f)",
+    );
 }

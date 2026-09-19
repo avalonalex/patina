@@ -198,9 +198,7 @@ pub(super) fn textual_port_p(
             actual: args.len(),
         });
     }
-    let heap_ref = heap.borrow();
-    let result = get_port_tv(args[0], &heap_ref).is_some();
-    Ok(TaggedValue::boolean(result))
+    port_p(heap, args)
 }
 
 /// (binary-port? obj) - Returns #t if obj is a binary port
