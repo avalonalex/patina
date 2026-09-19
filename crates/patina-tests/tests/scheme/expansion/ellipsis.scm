@@ -48,7 +48,8 @@
 ;; this repo holds, and has not been re-measured — but it is why Gauche reads
 ;; as the outlier here rather than as one of two camps.) **Not reported
 ;; upstream**: nobody has checked Gauche's tracker for it. The two Gauche bugs
-;; filed from this suite, shirok/Gauche#1326 and #1327, are different rows.
+;; filed from this suite, shirok/Gauche#1326 and #1327, are different rows
+;; (and both were fixed upstream within days of being filed).
 ;;
 ;; They sit in a `cond-expand` clause Gauche does not select. `test-skip`
 ;; cannot do this job — Gauche refuses these programs while it **compiles**

@@ -482,7 +482,9 @@ That reasoning does **not** extend to a difference in an *answer*. Those stay
 unscoped and classified in `DIVERGENCES.tsv`, because there the oracle is
 telling you something about a claim your own rows make — and scoping them away
 is how you would never learn it. Two Gauche bugs (shirok/Gauche#1326, #1327)
-were filed because rows that disagreed were left to disagree in the open.
+were filed because rows that disagreed were left to disagree in the open, and
+both were fixed upstream within days (2026-09-13 and -14). Their register rows
+stay until the lane's pinned Gauche is a release that carries the fixes.
 
 The omission costs nothing on our side: the driver's floor for the file fails if
 a row stops running on Patina, which is the direction that matters, and the
