@@ -812,8 +812,8 @@ impl Desugarer {
     ///
     /// The definition binding wins whenever the two environments disagree
     /// (R7RS 4.3.2), so a use-site binding of the same name does not displace
-    /// it. Where both resolve to the same value — the common case, since most
-    /// template references are to primitives copied into both — nothing is
+    /// it. Where both reach the same binding — the common case, since most
+    /// template references are to names both sides imported — nothing is
     /// rewritten.
     ///
     /// The names considered are the ones the macro's templates mention, in
@@ -867,14 +867,37 @@ impl Desugarer {
                 .filter(|name| !template_symbols.contains(*name)),
         );
         for name in names {
-            let Some(def_value) = def_env.get(name) else {
-                continue;
-            };
             // The cheap test first: it settles nearly every name — `list`,
-            // `if` and the rest mean one thing on both sides — and the
+            // `if` and the rest are one binding on both sides — and the
             // per-mention question below walks the scoped tables, once for
             // each identity a generated macro mentions the name under.
-            if self.env.get(name) == Some(def_value) {
+            //
+            // It asks whether the two environments reach one *location* by
+            // this name, which they do for anything both imported, by any
+            // route: an import is the exporting library's location (#406).
+            // (An export `share_binding` cannot share — a macro-introduced
+            // definition — is still a copy, so it reads as two and is
+            // aliased to the library's; right, at the cost of the alias.)
+            // Until that was true there was nothing to ask but whether they
+            // held equal values, and two variables that are both `0`, `#f`
+            // or `'()` — which is what variables start as — read as one
+            // binding. A library macro's `(set! X (+ X 1))` over its private
+            // `(define X 0)` then bumped the importing program's
+            // `(define X 0)`, silently, and only while the two happened to be
+            // equal (#407; the `equal` rows of `hygiene_matrix.rs`).
+            //
+            // Measured 2026-09-19 over every suite file, the compat corpus
+            // and both Larceny lanes, some 34,000 decisions: none differs
+            // from what the value comparison decided, so this costs no
+            // expansion an alias it did not have. It decides differently only
+            // where two bindings hold equal values — which is the defect. Nor
+            // does asking cost more than comparing did: 12,000 expansions of
+            // a library macro, a 16-library start-up and chibi's suite all
+            // time within half a percent of `main`, on both backends.
+            let Some(def_location) = def_env.binding_location(name) else {
+                continue;
+            };
+            if self.env.binding_location(name) == Some(def_location) {
                 continue;
             }
 

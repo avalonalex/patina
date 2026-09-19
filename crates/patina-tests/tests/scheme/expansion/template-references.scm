@@ -5,7 +5,9 @@
 ;; **Moved from `crates/patina-tests/tests/larceny_families.rs`** (families 33
 ;; and 35, #193 Phase 1). Six rows, and the last of the Larceny macro block
 ;; that a suite file can hold: what remains there is family 40, which is a
-;; genuine backend divergence.
+;; genuine backend divergence. Three more came with #407, which is the same
+;; claim from the side nobody had looked at: the program's variable and the
+;; library's holding *equal values*.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -13,7 +15,7 @@
 ;; see, or on the program meaning something different by a name the template
 ;; also uses. Neither can be staged without a second library: a `let-syntax` in
 ;; the same program shares the program's bindings, which is the very thing
-;; being distinguished. So the file defines five `(probe …)` libraries inline.
+;; being distinguished. So the file defines six `(probe …)` libraries inline.
 ;;
 ;; **chibi 0.12 cannot run this file at all.** It does not support
 ;; `define-library` in a script — measured 2026-09-09, the body's `define`
@@ -24,7 +26,8 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; five of the six rows.
+;; eight of the nine rows. The three #407 rows were also run under chibi with
+;; the library as a file (2026-09-19), and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -71,6 +74,8 @@
 ;;   patina VM / tree-walker   6 pass
 ;;   Gauche                    5 pass, 1 skip
 ;;   chibi                     does not complete — registered
+;;
+;; and 9 / 8 + 1 skip since the #407 rows, measured 2026-09-19.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -124,6 +129,20 @@
       (syntax-rules ()
         ((_ name) (define-syntax name (... (syntax-rules () ((_ x ...) (tag x ...))))))))))
 
+;; Private state behind exported macros, for the equal-values rows. `count`
+;; is exported as well, because the claim has two directions.
+(define-library (probe same)
+  (import (scheme base))
+  (export peek-X bump-Y! get-Y count bump-count!)
+  (begin
+    (define X 0)
+    (define Y 0)
+    (define count 0)
+    (define (get-Y) Y)
+    (define-syntax peek-X (syntax-rules () ((_) X)))
+    (define-syntax bump-Y! (syntax-rules () ((_) (set! Y (+ Y 1)))))
+    (define-syntax bump-count! (syntax-rules () ((_) (set! count (+ count 1)))))))
+
 (import (scheme eval) (scheme repl)
         (except (scheme base)
           quote car cdr caar cadr cdar cddr cons pair? null?
@@ -132,7 +151,7 @@
         (prefix (scheme base) r7:)
         (srfi 101)
         (srfi 64)
-        (probe lit) (probe both) (probe qq) (probe wq) (probe esc))
+        (probe lit) (probe both) (probe qq) (probe wq) (probe esc) (probe same))
 
 (test-begin "template-references")
 
@@ -211,6 +230,49 @@
   (r7:list 5 (r7:list 'tagged 1 2))
   (r7:list (g) (t 1 2)))
 
+;; ── Two variables holding equal values are two bindings ─────────────────────
+;;
+;; **#407.** The relinker decides, per name a template mentions, whether the
+;; use site already means the definition site's binding by it — in which case
+;; the reference is left alone — and it used to decide by comparing what the
+;; two *held*. The program's `X` and the library's private `X` are both `0`
+;; here while `peek-X` is expanded, so they read as one binding, the reference
+;; was left as the bare name `X`, and it meant the program's from then on. `0`,
+;; `#f` and `'()` are what variables start as, so this was not a rare
+;; coincidence, and it went away the moment the two values differed — what a
+;; program answered depended on what it had already run. It asks about the
+;; location now, which it can since an import became one (#406).
+;;
+;; A read of two equal values cannot say which was read, so the macro is
+;; expanded inside a procedure while they are equal, and the program's `X` is
+;; changed before the procedure runs. `hygiene_matrix.rs` has the same axis
+;; across generated macros and `let`-bound use sites — its `equal` rows.
+(define X 0)
+(define (library-X) (peek-X))
+(set! X 5)
+
+(test-equal "a template reads the library's variable, not the program's equal one"
+  (r7:list 0 5)
+  (r7:list (library-X) X))
+
+(define Y 0)
+(bump-Y!)
+
+(test-equal "and assigns the library's" (r7:list 1 0) (r7:list (get-Y) Y))
+
+;; The other direction, which a fix must not lose: a name the program *did*
+;; import from the defining library is the same binding, and the template's
+;; reference to it needs no relinking to say so. Were it treated as a second
+;; binding the answer here would still be right — it would cost every such
+;; reference an alias — so this row guards the meaning, and the measurement in
+;; the relinker guards the cost.
+(bump-count!)
+(bump-count!)
+
+(test-equal "a name imported from the macro's library is the template's binding"
+  2
+  count)
+
 ;; ── An object embedded in evaluated code is not copied ──────────────────────
 ;;
 ;; A vector reached through `(eval (list 'outer-mut vec) …)` is the object the
@@ -225,7 +287,7 @@
 ;; chibi refuses the mutation outright ("vector-set!: immutable vector"). A
 ;; **reported skip** rather than a bare `cond-expand`, so the row cannot vanish
 ;; quietly — and it is what keeps Gauche able to run the file, since the
-;; unbound variable would otherwise take the whole thing down and cost the five
+;; unbound variable would otherwise take the whole thing down and cost the eight
 ;; rows above their only oracle.
 ;; `vector-set!` and `vector` unprefixed: SRFI 101 does not export either, so
 ;; these are `(scheme base)`'s without help. That matters for `inner`, whose

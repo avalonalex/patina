@@ -47,7 +47,7 @@ pub use continuation::{
 pub use core_expr::{CoreExpr, CoreExprKind, Formals, LambdaBody, ScopedParam, Symbol};
 pub use core_syntax::{ALL_CORE_FORMS, CoreForm};
 pub use cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
-pub use environment::{Environment, ScopedBinding, ScopedSetError};
+pub use environment::{BindingLocation, Environment, ScopedBinding, ScopedSetError};
 pub use error::{ErrorDetail, ErrorKind, ExceptionKind, ExceptionObject, SourceLocation};
 pub use heap::PromiseState;
 pub use library::Library;
