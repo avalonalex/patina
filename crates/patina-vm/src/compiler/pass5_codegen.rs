@@ -702,7 +702,8 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // This avoids run_thunk, making call/cc inside the producer safe.
             if args.len() == 2
                 && let RegExprKind::GlobalRef { name } = &func.kind
-                && name.as_ref() == "call-with-values"
+                // By spelling, and listed as such: `patina_core::by_spelling`.
+                && name.as_ref() == patina_core::by_spelling::CALL_WITH_VALUES
             {
                 // Evaluate producer and consumer into their temps.
                 gen_expr(&args[0], cg)?;
@@ -743,7 +744,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             // slot).
             if args.len() == 3
                 && let RegExprKind::GlobalRef { name } = &func.kind
-                && name.as_ref() == "dynamic-wind"
+                && name.as_ref() == patina_core::by_spelling::DYNAMIC_WIND
             {
                 gen_expr(&args[0], cg)?;
                 gen_expr(&args[1], cg)?;

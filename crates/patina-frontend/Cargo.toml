@@ -19,6 +19,9 @@ num-traits = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Per-form tables on the desugarer's reference path
+rustc-hash = { workspace = true }
+
 [lib]
 name = "patina_frontend"
 path = "src/lib.rs"

@@ -79,6 +79,7 @@ use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail_tagged;
 use patina_runtime::{Environment, ScopeId, ScopeSet};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -228,6 +229,34 @@ impl SyntaxRef {
     }
 }
 
+/// What early binding (#438, `Desugarer::early_bound`) has to remember across
+/// one top-level form. Shared, not cloned, with the child desugarers made for
+/// nested scopes, and emptied when the outermost `desugar_tagged` returns.
+/// What a name means to a macro's environment, where the root here imports
+/// that very location: the location, and the root's alias for it.
+type ImportOf = Option<(patina_core::BindingLocation, Rc<str>)>;
+
+#[derive(Default)]
+struct EarlyBinding {
+    /// The scope of each expansion, in this form, of a macro defined in
+    /// another program or library, with the environment it was defined in.
+    foreign: RefCell<FxHashMap<ScopeId, Rc<Environment>>>,
+    /// Alias → the spelling it was written with, for each reference bound
+    /// early in this form.
+    bound: RefCell<FxHashMap<Rc<str>, Rc<str>>>,
+    /// Per macro environment, then name: the location the name means there
+    /// and the root's alias for it, or `None` where it is not an import to
+    /// bind. Two levels so that a hit is looked up by `&str`, without minting
+    /// a key — this is asked once per reference a library macro makes, and
+    /// with the default hasher and a cloned key it was most of what early
+    /// binding cost.
+    imports: RefCell<FxHashMap<u64, FxHashMap<Rc<str>, ImportOf>>>,
+    /// The definitions this form's expansions introduced: name, and scopes.
+    introduced: RefCell<Vec<(Rc<str>, ScopeSet)>>,
+    /// How many `desugar_tagged` calls deep we are; the form ends at zero.
+    depth: std::cell::Cell<u32>,
+}
+
 pub struct Desugarer {
     /// The environment head symbols resolve in.
     ///
@@ -260,6 +289,9 @@ pub struct Desugarer {
     /// `let-syntax` body pushes and pops the same stack. Empty for a program
     /// that has no file (the REPL, `eval`), where the cwd is what is left.
     include_dirs: Rc<RefCell<Vec<std::path::PathBuf>>>,
+
+    /// See [`EarlyBinding`].
+    early: Rc<EarlyBinding>,
 }
 
 impl Desugarer {
@@ -293,6 +325,7 @@ impl Desugarer {
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
+            early: Rc::default(),
         }
     }
 
@@ -311,6 +344,7 @@ impl Desugarer {
             source_map: Some(source_map),
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
+            early: Rc::default(),
         }
     }
 
@@ -350,6 +384,7 @@ impl Desugarer {
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
+            early: Rc::default(),
         }
     }
 
@@ -372,6 +407,7 @@ impl Desugarer {
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
+            early: Rc::clone(&self.early),
         };
         (desugarer, scope)
     }
@@ -467,6 +503,7 @@ impl Desugarer {
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
+            early: Rc::clone(&self.early),
         }
     }
 
@@ -739,6 +776,21 @@ impl Desugarer {
     /// program's binding structure and it is settled by the time expansion
     /// reaches here, which is why it is reported now and not at runtime.
     fn resolve_syntax(&self, name: &str, scopes: &ScopeSet) -> Result<Option<SyntaxRef>> {
+        self.resolve_reference(name, scopes)
+            .map(|(syntax, _)| syntax)
+    }
+
+    /// [`resolve_syntax`], also saying whether the name was answered **by its
+    /// spelling** rather than by a binding whose scopes select it — which is
+    /// the first thing early binding asks of a reference (`early_bound`), and
+    /// which this one resolution already knows.
+    ///
+    /// [`resolve_syntax`]: Self::resolve_syntax
+    fn resolve_reference(
+        &self,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Result<(Option<SyntaxRef>, bool)> {
         // A reference written in source carries no scopes of its own, but it is
         // not therefore at top level: the scopes it stands in are the ones the
         // desugarer has accumulated on the way here. Passing those is what lets
@@ -750,18 +802,19 @@ impl Desugarer {
         } else {
             scopes
         };
-        let Some(tv) = self
+        let (value, selected) = self
             .env
-            .get_with_scopes(name, scopes)
-            .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?
-        else {
-            return Ok(None);
+            .resolve_with_scopes(name, scopes)
+            .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?;
+        let by_name = !selected;
+        let Some(tv) = value else {
+            return Ok((None, by_name));
         };
         let heap = self.env.heap().borrow();
         if let Some(form) = heap.get_core_syntax(tv) {
-            return Ok(Some(SyntaxRef::CoreSyntax(form)));
+            return Ok((Some(SyntaxRef::CoreSyntax(form)), by_name));
         }
-        Ok(heap.get_macro(tv).cloned().map(SyntaxRef::Macro))
+        Ok((heap.get_macro(tv).cloned().map(SyntaxRef::Macro), by_name))
     }
 
     /// Reject a reference to syntax where a value is expected.
@@ -778,9 +831,18 @@ impl Desugarer {
     /// do `syntax-rules` patterns and templates, which the macro expander
     /// handles.
     fn reject_syntax_as_value(&self, name: &str, scopes: &ScopeSet) -> Result<()> {
-        match self.resolve_syntax(name, scopes)? {
-            None => Ok(()),
-            Some(found) => Err(DesugarError::InvalidSyntax(format!(
+        self.checked_reference(name, scopes).map(|_| ())
+    }
+
+    /// [`reject_syntax_as_value`], handing back whether the reference was
+    /// answered by its spelling — the one resolution serving both that check
+    /// and early binding.
+    ///
+    /// [`reject_syntax_as_value`]: Self::reject_syntax_as_value
+    fn checked_reference(&self, name: &str, scopes: &ScopeSet) -> Result<bool> {
+        match self.resolve_reference(name, scopes)? {
+            (None, by_name) => Ok(by_name),
+            (Some(found), _) => Err(DesugarError::InvalidSyntax(format!(
                 "invalid use of syntax as a value: `{name}` is {}",
                 found.describe()
             ))),
@@ -798,6 +860,7 @@ impl Desugarer {
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
+            early: Rc::clone(&self.early),
         }
     }
 
@@ -838,6 +901,16 @@ impl Desugarer {
         let Some(def_env) = compiled_macro.definition_env.as_ref() else {
             return expanded;
         };
+        // Where a name needs no relinking — both sides reach one binding — the
+        // reference is still bound to that binding, but later, where it is
+        // known to *be* a reference (`early_bound`). That needs to know the
+        // expansion came from somewhere else, which only this function does.
+        if def_env.root_id() != self.env.root_id() {
+            self.early
+                .foreign
+                .borrow_mut()
+                .insert(expansion_scope, Rc::clone(def_env));
+        }
         let definition_scopes = &compiled_macro.definition_scopes;
         let template_symbols = &compiled_macro.template_symbols;
         let inherited_identifiers = &compiled_macro.inherited_identifiers;
@@ -1032,6 +1105,197 @@ impl Desugarer {
             expansion_scope,
         };
         self.rewrite_refs(expanded, &renames, 0, shared_heap)
+    }
+
+    /// The use site's own name for the *location* a template's variable
+    /// reference means, where the use site imported it — so that the reference
+    /// goes on meaning that location whatever the spelling later comes to
+    /// mean there (#438). `None` leaves the reference as it was written.
+    ///
+    /// When the use site and the definition site reach one binding by a name,
+    /// relinking has nothing to correct, and the template's reference used to
+    /// stay the bare name. That is right when it is decided and can be made
+    /// wrong afterwards: a global name is looked up when it *runs*, and a
+    /// program that then defines the spelling itself — `count`, or `car` —
+    /// gets a binding of its own under it (`Environment::define`), which the
+    /// template's reference then read and assigned. chibi and Gauche bind a
+    /// template's reference when it is expanded, and both keep it the
+    /// library's.
+    ///
+    /// **Called where a reference or an assignment is emitted, and nowhere
+    /// else.** A first version renamed the identifier in the expansion's
+    /// *syntax*, where relinking's other aliases are made, and review found
+    /// what that costs when it happens to every imported name rather than to
+    /// the rare one that needs relinking: whether a template's `car` is a
+    /// reference is not known until it is resolved. It was a `case` datum
+    /// (`((+) …)` stopped matching), a `let` binder (capturing another
+    /// expansion's alias), a `define` target, data handed to a quoting macro,
+    /// and `cond-expand`'s `not` — five silent wrong answers, none of which a
+    /// lane caught, all pinned now in `expansion/imported-names-in-templates.scm`.
+    /// Here the position is known: this *is* a variable reference.
+    ///
+    /// The conditions, each of which leaves the reference alone when it fails:
+    ///
+    /// - It carries the scope of an expansion of a macro from **another**
+    ///   program or library (`EarlyBinding::foreign`, which relinking fills).
+    ///   A macro of the use site's own is not bound early: chibi and Gauche
+    ///   *disagree* about it (chibi keeps the import, Gauche follows the
+    ///   definition), and what Patina already answers is Gauche's.
+    /// - No binding's scopes select it — it is not a local variable, nor a
+    ///   definition a macro introduced — so it is headed for the by-name view.
+    ///   (`by_name`: the resolution that refused syntax as a value already
+    ///   knows, and a second one per reference was a measurable cost.)
+    /// - By name it reaches, from here and from the root alike, the very
+    ///   location the macro's own environment reaches: an import of the use
+    ///   site's that is the binding the template meant.
+    /// - It is not one of the names `patina_core::by_spelling` lists, which
+    ///   the tree-walker's CPS transform and the VM's code generator recognise
+    ///   from the name on the `Var` this becomes.
+    ///
+    /// The alias is `Environment::import_alias`: an ordinary forwarded slot
+    /// for the same location, one per location rather than one per expansion.
+    /// The reference keeps its scopes, which is what lets
+    /// `settle_early_bindings` take a decision back.
+    ///
+    /// Cost, measured 2026-09-19 against `main`, best of 9 interleaved: 2–4% on
+    /// 12,000 expansions of templates that each call a dozen imported
+    /// procedures — the worst case, since this runs once per such reference —
+    /// 1–2% on a 16-library start-up and on chibi's suite, and nothing at run
+    /// time. It was 6–8% before the one resolution was shared with the
+    /// syntax-as-value check, the per-name part memoised under a fast hasher,
+    /// and internal recursion taken off the entry point's bookkeeping.
+    fn early_bound(&self, name: &Rc<str>, scopes: &ScopeSet, by_name: bool) -> Option<Rc<str>> {
+        if !by_name || scopes.is_empty() {
+            return None;
+        }
+        let def_env = {
+            let foreign = self.early.foreign.borrow();
+            if foreign.is_empty() {
+                return None;
+            }
+            // The expansion that put it here is the latest one it carries.
+            let latest = scopes
+                .iter()
+                .filter(|scope| foreign.contains_key(scope))
+                .max_by_key(|scope| scope.0)?;
+            Rc::clone(&foreign[latest])
+        };
+        // What the *name* means to the macro's environment and to the root
+        // here is the same for every reference in a form, so it is asked once
+        // per name. What is asked per reference is only whether a frame in
+        // between has the spelling — in which case it is somebody's variable.
+        let macro_env = def_env.env_id();
+        let known = self
+            .early
+            .imports
+            .borrow()
+            .get(&macro_env)
+            .and_then(|names| names.get(&**name).cloned());
+        let import = known.unwrap_or_else(|| {
+            let import = self.import_of(name, &def_env);
+            self.early
+                .imports
+                .borrow_mut()
+                .entry(macro_env)
+                .or_default()
+                .insert(Rc::clone(name), import.clone());
+            import
+        });
+        let (location, alias) = import?;
+        if self.env.binding_location(name).as_ref() != Some(&location) {
+            return None;
+        }
+        let mut bound = self.early.bound.borrow_mut();
+        if !bound.contains_key(&alias) {
+            bound.insert(Rc::clone(&alias), Rc::clone(name));
+        }
+        Some(alias)
+    }
+
+    /// The location `name` means to `def_env`, with the root's alias for it,
+    /// when the root here imports that very location and the name is not one
+    /// that is recognised by its spelling.
+    fn import_of(
+        &self,
+        name: &Rc<str>,
+        def_env: &Rc<Environment>,
+    ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
+        if patina_core::by_spelling::is_recognized(name) {
+            return None;
+        }
+        let target_env = self.env.root();
+        let location = def_env.binding_location(name)?;
+        if target_env.binding_location(name).as_ref() != Some(&location) {
+            return None;
+        }
+        let alias = target_env.import_alias(name, || Rc::from(alias_name(name)))?;
+        Some((location, alias))
+    }
+
+    /// A definition a macro introduced, for `settle_early_bindings`.
+    fn note_introduced_definition(&self, name: &Rc<str>, scopes: &ScopeSet) {
+        if !scopes.is_empty() {
+            self.early
+                .introduced
+                .borrow_mut()
+                .push((Rc::clone(name), scopes.clone()));
+        }
+    }
+
+    /// Take back the early bindings a finished top-level form proved wrong,
+    /// and forget the form.
+    ///
+    /// One shape is not knowable when a reference is emitted: the *same
+    /// expansion* also introducing a top-level definition of the name — a
+    /// definer whose private `count` happens to share a spelling with an
+    /// import of the use site's. That definition is in no environment until
+    /// it runs, so nothing's scopes select the reference yet, and it looks
+    /// headed for the import. It is known by the end of the form, since an
+    /// expansion's output lies within one form: every introduced definition
+    /// has been emitted, and a reference whose scopes one of them is a
+    /// candidate for goes back to the spelling it was written with.
+    ///
+    /// Nearly every form introduces no definition, or binds nothing early,
+    /// and is returned untouched without being walked.
+    fn settle_early_bindings(&self, expr: CoreExpr) -> CoreExpr {
+        let introduced = std::mem::take(&mut *self.early.introduced.borrow_mut());
+        let bound = std::mem::take(&mut *self.early.bound.borrow_mut());
+        self.early.foreign.borrow_mut().clear();
+        self.early.imports.borrow_mut().clear();
+        if introduced.is_empty() || bound.is_empty() {
+            return expr;
+        }
+        fn settle(
+            expr: &CoreExpr,
+            bound: &FxHashMap<Rc<str>, Rc<str>>,
+            introduced: &[(Rc<str>, ScopeSet)],
+        ) -> CoreExpr {
+            let written = |alias: &Rc<str>, scopes: &ScopeSet| {
+                let name = bound.get(alias)?;
+                introduced
+                    .iter()
+                    .any(|(defined, at)| {
+                        defined == name && patina_core::scope_resolve::is_candidate(at, scopes)
+                    })
+                    .then(|| Rc::clone(name))
+            };
+            let mut settled = expr.map_children(|child| settle(child, bound, introduced));
+            match &mut settled.kind {
+                CoreExprKind::Var { name, scopes } => {
+                    if let Some(original) = written(name, scopes) {
+                        *name = original;
+                    }
+                }
+                CoreExprKind::Set { var, scopes, .. } => {
+                    if let Some(original) = written(var, scopes) {
+                        *var = original;
+                    }
+                }
+                _ => {}
+            }
+            settled
+        }
+        settle(&expr, &bound, &introduced)
     }
 
     /// The alias for `tv`, if it is a reference *this expansion introduced*
@@ -1271,6 +1535,32 @@ impl Desugarer {
         tagged: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
+        // This is the entry point and also what every form recurses through,
+        // so the outermost call is what marks the end of a top-level form —
+        // where early bindings are settled (`settle_early_bindings`).
+        let depth = self.early.depth.get();
+        self.early.depth.set(depth + 1);
+        let result = self.desugar_form(tagged, shared_heap);
+        self.early.depth.set(depth);
+        if depth > 0 {
+            return result;
+        }
+        match result {
+            Ok(expr) => Ok(self.settle_early_bindings(expr)),
+            Err(e) => {
+                self.early.foreign.borrow_mut().clear();
+                self.early.bound.borrow_mut().clear();
+                self.early.introduced.borrow_mut().clear();
+                self.early.imports.borrow_mut().clear();
+                Err(e)
+            }
+        }
+    }
+
+    /// One form, and what every form recurses through. Internal recursion
+    /// comes here rather than through `desugar_tagged`, whose bookkeeping is
+    /// per top-level form and was a measurable cost per *node*.
+    fn desugar_form(&self, tagged: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
         let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Desugar);
         // Immediate values - no heap access needed
         if tagged.is_fixnum() {
@@ -1305,7 +1595,9 @@ impl Desugarer {
 
         // Identifier - variable reference with scopes (for hygiene)
         if let Some((name, scopes)) = utils::get_identifier_info(tagged, &heap) {
-            self.reject_syntax_as_value(&name, &scopes)?;
+            drop(heap);
+            let by_name = self.checked_reference(&name, &scopes)?;
+            let name = self.early_bound(&name, &scopes, by_name).unwrap_or(name);
             return Ok(CoreExpr::new(CoreExprKind::Var { name, scopes }));
         }
 
@@ -1469,7 +1761,7 @@ impl Desugarer {
             }
 
             // Result is already TaggedValue - continue desugaring
-            let mut expr = self.desugar_tagged(expanded_tagged, shared_heap)?;
+            let mut expr = self.desugar_form(expanded_tagged, shared_heap)?;
             // Use call-site source as fallback if the expanded form has no source
             if expr.source.is_none() {
                 expr.source = call_site_source;
@@ -1496,7 +1788,7 @@ impl Desugarer {
         // does.
         if let Some(sym) = &name
             && !is_shadowed
-            && sym.as_ref() == "apply"
+            && sym.as_ref() == patina_core::by_spelling::APPLY
         {
             return self.desugar_apply_tagged(list, cdr, shared_heap);
         }
@@ -1669,7 +1961,7 @@ impl Desugarer {
                 current_env = new_env.clone();
                 current_desugarer = current_desugarer.with_new_env(new_env, body_scopes.clone());
             } else {
-                let desugared = current_desugarer.desugar_tagged(*tv, shared_heap)?;
+                let desugared = current_desugarer.desugar_form(*tv, shared_heap)?;
 
                 // Every expression is kept, including one that desugars to
                 // `Literal(Unspecified)`.
@@ -1761,8 +2053,8 @@ impl Desugarer {
 
         match args_vec.len() {
             2 => {
-                let test = self.desugar_tagged(args_vec[0], shared_heap)?;
-                let then = self.desugar_tagged(args_vec[1], shared_heap)?;
+                let test = self.desugar_form(args_vec[0], shared_heap)?;
+                let then = self.desugar_form(args_vec[1], shared_heap)?;
                 Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
@@ -1770,9 +2062,9 @@ impl Desugarer {
                 }))
             }
             3 => {
-                let test = self.desugar_tagged(args_vec[0], shared_heap)?;
-                let then = self.desugar_tagged(args_vec[1], shared_heap)?;
-                let else_ = self.desugar_tagged(args_vec[2], shared_heap)?;
+                let test = self.desugar_form(args_vec[0], shared_heap)?;
+                let then = self.desugar_form(args_vec[1], shared_heap)?;
+                let else_ = self.desugar_form(args_vec[2], shared_heap)?;
                 Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
@@ -1822,9 +2114,10 @@ impl Desugarer {
         // same message it gives for `(list if)`; Gauche accepts it and then
         // breaks inside its own startup code. Without this, reading syntax was
         // an error while overwriting it silently succeeded.
-        self.reject_syntax_as_value(&name, &scopes)?;
+        let by_name = self.checked_reference(&name, &scopes)?;
+        let name = self.early_bound(&name, &scopes, by_name).unwrap_or(name);
 
-        let value = self.desugar_tagged(args_vec[1], shared_heap)?;
+        let value = self.desugar_form(args_vec[1], shared_heap)?;
 
         Ok(CoreExpr::new(CoreExprKind::Set {
             var: name,
@@ -1889,9 +2182,10 @@ impl Desugarer {
 
             let body: Vec<CoreExpr> = body_tvs
                 .iter()
-                .map(|tv| body_desugarer.desugar_tagged(*tv, shared_heap))
+                .map(|tv| body_desugarer.desugar_form(*tv, shared_heap))
                 .collect::<Result<Vec<_>>>()?;
 
+            self.note_introduced_definition(&name, &name_scopes);
             return Ok(CoreExpr::new(CoreExprKind::Define {
                 name,
                 scopes: name_scopes,
@@ -1922,8 +2216,9 @@ impl Desugarer {
         }
 
         let value_tv = args_vec[1];
-        let value = self.desugar_tagged(value_tv, shared_heap)?;
+        let value = self.desugar_form(value_tv, shared_heap)?;
 
+        self.note_introduced_definition(&name, &name_scopes);
         Ok(CoreExpr::new(CoreExprKind::Define {
             name,
             scopes: name_scopes,
@@ -1948,7 +2243,7 @@ impl Desugarer {
 
         let body: Vec<CoreExpr> = exprs
             .iter()
-            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .map(|tv| self.desugar_form(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::Begin(body)))
@@ -1970,10 +2265,10 @@ impl Desugarer {
             return self.desugar_app_tagged(list, shared_heap);
         }
 
-        let func = self.desugar_tagged(args_vec[0], shared_heap)?;
+        let func = self.desugar_form(args_vec[0], shared_heap)?;
         let operands: Vec<CoreExpr> = args_vec[1..]
             .iter()
-            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .map(|tv| self.desugar_form(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::Apply {
@@ -1990,10 +2285,10 @@ impl Desugarer {
             return Err(DesugarError::InvalidSyntax("Empty application".to_string()));
         }
 
-        let func = self.desugar_tagged(exprs[0], shared_heap)?;
+        let func = self.desugar_form(exprs[0], shared_heap)?;
         let operands: Vec<CoreExpr> = exprs[1..]
             .iter()
-            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .map(|tv| self.desugar_form(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::App {
@@ -2123,7 +2418,7 @@ impl Desugarer {
         }
 
         Ok(CoreExpr::new(CoreExprKind::Expand {
-            expr: Rc::new(self.desugar_tagged(args_vec[0], shared_heap)?),
+            expr: Rc::new(self.desugar_form(args_vec[0], shared_heap)?),
         }))
     }
 
@@ -2460,7 +2755,7 @@ impl Desugarer {
 
         let desugared: Vec<CoreExpr> = body
             .iter()
-            .map(|tv| self.desugar_tagged(*tv, shared_heap))
+            .map(|tv| self.desugar_form(*tv, shared_heap))
             .collect::<Result<_>>()?;
 
         if desugared.len() == 1 {
@@ -2626,7 +2921,7 @@ impl Desugarer {
             }
             let desugared: Result<Vec<CoreExpr>> = parsed_exprs
                 .into_iter()
-                .map(|expr_tv| self.desugar_tagged(expr_tv, shared_heap))
+                .map(|expr_tv| self.desugar_form(expr_tv, shared_heap))
                 .collect();
             if pushed.is_some() {
                 self.include_dirs.borrow_mut().pop();

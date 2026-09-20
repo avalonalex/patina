@@ -155,8 +155,8 @@ issues and the archive before filing**, for the same reason.
 - `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope
   algorithm), and the two instruments for hygiene work: `PATINA_SCOPE_TRACE`
   (what scopes a binding actually gets, and how a reference resolved) and
-  `crates/patina-tests/tests/hygiene_matrix.rs` (131 shapes in two tables — 28
-  use-site binders scored against chibi and Racket, 103 generated and
+  `crates/patina-tests/tests/hygiene_matrix.rs` (137 shapes in two tables — 28
+  use-site binders scored against chibi and Racket, 109 generated and
   library-imported macros scored against chibi and Gauche — the scoreboard a
   hygiene fix is measured by)
 - `docs/TEST_ORGANIZATION.md` — test structure and categories
@@ -202,6 +202,8 @@ if let Some(v) = v { heap.borrow()... }
 **Library primitives** must be registered in both the primitive registry AND the library builder in `patina-runtime/src/stdlib/internal_<name>.rs`.
 
 **An import installs a binding, not a value** — the importer and the library share one location, so what the library assigns later the importer sees (R7RS §5.2, #406). Install with `Library::import_into`, and carry a binding out of an `only`/`except`/`prefix`/`rename` staging environment with `Environment::copy_binding`; never `env.define(name, export_value)`, which freezes a copy. Five resolvers do this (two per backend, and `environment`), so a new one has to as well. Primitives registered from Rust share like everything else: chibi and Gauche agree that a program's `(set! list-copy …)` reaches the libraries that imported it, and copying them left a re-exporting library's importers stale (`Owner` in `patina-core/src/environment.rs` has the measurement).
+
+**Recognising a procedure by its spelling is listed, or it breaks relinking** — `patina_core::by_spelling` names the five procedures some part of Patina still decides on from the *name* a call was written with (`apply` in the desugarer; `call/cc` and `call-with-current-continuation` in the tree-walker's CPS transform; `call-with-values` and `dynamic-wind` in the VM's code generator). The desugarer renames a library macro's *references* to imported procedures where it emits them (#438, `Desugarer::early_bound`) and leaves exactly those alone, because renaming one changes what the program does (#441, #442, #443). A new recogniser uses a constant from that module rather than a string literal; one that learns to ask about the binding takes its name out.
 
 **Error formatting** — use `format_interpreter_error(&e, &source_map.borrow())` (from `patina-interpreter`) rather than `e.to_string()` to get caret-style source context and macro expansion chain.
 
