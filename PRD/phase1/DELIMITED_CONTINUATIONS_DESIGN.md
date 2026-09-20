@@ -101,6 +101,16 @@ An apply-time match sees the primitive whatever name reached it; a syntactic
 one only sees the call it was written in — which is why `call/cc` still does
 not work as a value (Track Q §1.2).
 
+The VM has a syntactic claim of its own that this table does not show: its
+code generator emits an instruction sequence for a call *spelled*
+`call-with-values` or `dynamic-wind`, ahead of `vm_control_primitive`, because
+the sequence is what keeps a continuation captured inside re-enterable. Every
+syntactic claim, on either backend, is listed in `patina_core::by_spelling`
+(#438): renaming a reference to one of those names changes what the program
+does, so the desugarer's early binding leaves them alone, and the next control
+primitive claimed by spelling has to be added there. #441 and #442 are the
+issues for making these claims follow the binding.
+
 **What is shared with `call/cc`**: the nested trampoline a Rust primitive's
 callback runs on used to start every stack empty, so an abort from inside such
 a callback to a prompt outside it reported no matching prompt — the

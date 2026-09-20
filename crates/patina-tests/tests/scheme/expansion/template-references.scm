@@ -9,7 +9,8 @@
 ;; claim from the side nobody had looked at: the program's variable and the
 ;; library's holding *equal values*. Four more came with #408: what the
 ;; template means is a definition its own generator *introduced*, which the
-;; bare name does not identify.
+;; bare name does not identify. And three with #438: a program defining a name
+;; it imported, after a template that mentions it was expanded.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -28,9 +29,9 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; twelve of the thirteen rows. The three #407 rows and the four #408 rows
-;; were also run under chibi with the libraries as files (2026-09-19), and it
-;; answers as Gauche does.
+;; fifteen of the sixteen rows. The three #407 rows, the four #408 rows and
+;; the three #438 rows were also run under chibi with the libraries as files
+;; (2026-09-19), and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -78,8 +79,8 @@
 ;;   Gauche                    5 pass, 1 skip
 ;;   chibi                     does not complete — registered
 ;;
-;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, both
-;; measured 2026-09-19.
+;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
+;; 15 + 1 skip since #438's, all measured 2026-09-19.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -137,7 +138,7 @@
 ;; is exported as well, because the claim has two directions.
 (define-library (probe same)
   (import (scheme base))
-  (export peek-X bump-Y! get-Y count bump-count!)
+  (export peek-X bump-Y! get-Y count bump-count! get-count size-of map-apply)
   (begin
     (define X 0)
     (define Y 0)
@@ -145,7 +146,13 @@
     (define (get-Y) Y)
     (define-syntax peek-X (syntax-rules () ((_) X)))
     (define-syntax bump-Y! (syntax-rules () ((_) (set! Y (+ Y 1)))))
-    (define-syntax bump-count! (syntax-rules () ((_) (set! count (+ count 1)))))))
+    (define (get-count) count)
+    (define-syntax bump-count! (syntax-rules () ((_) (set! count (+ count 1)))))
+    ;; A template whose only free reference is to a procedure of `(scheme base)`.
+    (define-syntax size-of (syntax-rules () ((_ v) (vector-length v))))
+    ;; `apply` in *value* position, which nothing recognises by its spelling.
+    (define-syntax map-apply
+      (syntax-rules () ((_ f l) (map apply (list f) (list l)))))))
 
 ;; Definers with private state, for the introduced-definition rows. Each
 ;; generated macro mentions a definition *its own generator introduced*:
@@ -332,6 +339,55 @@
   2
   count)
 
+;; ── A program's later definition does not capture an expanded template ──────
+;;
+;; **#438**, the other half of the row above. Where the program *did* import
+;; the name, the template's reference needs no relinking — and used to be left
+;; as the bare name, which is looked up when it runs. A program that defines
+;; the spelling itself afterwards gets a binding of its own under it (defining
+;; over an import leaves the library's alone, as it should), and the template's
+;; reference followed the name there: one procedure, compiled once, bumped the
+;; library's `count` before the definition and the program's after it. Such a
+;; reference is bound to the import's location now, which is what chibi and
+;; Gauche do with every reference a template makes.
+;;
+;; R7RS §5.6.1 makes redefining an import an error in a *program*, so any
+;; answer conforms here; at a REPL it is ordinary, and both references keep
+;; the template's meaning through it.
+(define (bump-through-the-template) (bump-count!))
+(bump-through-the-template)
+(define count 100)
+(bump-through-the-template)
+
+(test-equal "a definition over an import leaves an expanded template's reference alone"
+  (r7:list 4 100)
+  (r7:list (get-count) count))
+
+;; The same for a procedure of `(scheme base)`, which is what a program is most
+;; likely to define a namesake of. `measure` is not called until after the
+;; definition, so nothing about it had been resolved yet.
+(define (measure v) (size-of v))
+(define (vector-length v) 'mine)
+
+(test-equal "and a template's call to a base procedure stays the base procedure"
+  (r7:list 2 'mine)
+  (r7:list (measure (vector 1 2)) (vector-length (vector 1 2))))
+
+;; `apply` is one of five procedures some part of Patina recognises by
+;; spelling (`patina_core::by_spelling`), and four of them have to be left out
+;; of this, because the recogniser looks at the very reference that would be
+;; renamed. `apply`'s looks at the head of the *form*, so an `apply` that is
+;; passed as a value is bound like any other — it was excluded with the rest
+;; at first, "so that the rule stays one rule", and review measured the cost:
+;; this row answered `(mine)`. (What the program's *own* `(apply …)` means
+;; after this definition is another matter, and #443.)
+(define (sum-through-the-template l) (map-apply + l))
+(define (apply . _) 'mine)
+
+(test-equal "and an apply the template passes as a value stays the procedure"
+  (r7:list 3)
+  (sum-through-the-template (r7:list 1 2)))
+
 ;; ── A definition the macro's own generator introduced ───────────────────────
 ;;
 ;; **#408.** Relinking gave a template's reference an alias *by name*: to
@@ -392,7 +448,7 @@
 ;; chibi refuses the mutation outright ("vector-set!: immutable vector"). A
 ;; **reported skip** rather than a bare `cond-expand`, so the row cannot vanish
 ;; quietly — and it is what keeps Gauche able to run the file, since the
-;; unbound variable would otherwise take the whole thing down and cost the twelve
+;; unbound variable would otherwise take the whole thing down and cost the fifteen
 ;; rows above their only oracle.
 ;; `vector-set!` and `vector` unprefixed: SRFI 101 does not export either, so
 ;; these are `(scheme base)`'s without help. That matters for `inner`, whose

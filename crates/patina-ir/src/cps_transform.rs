@@ -369,9 +369,8 @@ impl CpsTransformer {
     /// Check if an expression is a call/cc reference
     fn is_callcc(&self, expr: &CoreExpr) -> bool {
         match &expr.kind {
-            CoreExprKind::Var { name, .. } => {
-                name.as_ref() == "call/cc" || name.as_ref() == "call-with-current-continuation"
-            }
+            // By spelling, and listed as such: `patina_core::by_spelling`.
+            CoreExprKind::Var { name, .. } => patina_core::by_spelling::is_call_cc(name),
             _ => false,
         }
     }

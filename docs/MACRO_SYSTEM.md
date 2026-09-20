@@ -346,6 +346,36 @@ makers score this. The identities have to be *all* there for it to work: the
 VM records them a form at a time, and until #408 kept one per spelling per
 form, which lost the first of two definitions one form introduced.
 
+**A template's reference to a name the use site imported is bound when it is
+expanded** (#438). Where the use site and the definition site reach one
+binding by a name, relinking has nothing to correct — but leaving the
+reference as the bare name leaves it to be looked up when it *runs*, and a
+program may by then have defined the spelling itself: `define` over an import
+gives the importer a binding of its own, and the template's `count`, or `car`,
+followed the name to it. So such a reference is given
+`Environment::import_alias` — a name of the use site's own for the import's
+*location*, an ordinary forwarded slot, minted once per imported name.
+
+**Where** matters more than it looks. Relinking only records that the
+expansion came from another program or library; the name is changed where the
+desugarer *emits a reference or an assignment* (`Desugarer::early_bound`), not
+in the expansion's syntax where relinking's other aliases are made. A first
+version did it in the syntax, and an identifier there is not yet known to be a
+reference: it was a `case` datum, a `let` binder, a `define` target, data
+handed to a quoting macro and `cond-expand`'s `not` — five silent wrong
+answers, pinned in `expansion/imported-names-in-templates.scm`. One decision
+cannot be made even at emission — the same expansion also introducing a
+definition of the name, which is in no environment until it runs — and is
+taken back at the end of the top-level form (`settle_early_bindings`).
+
+A macro of the use site's own is not bound early (chibi and Gauche disagree
+there), nor are four of the names `patina_core::by_spelling` lists — the ones
+recognised from the *reference* itself: renamed, a `call/cc` stops working on
+the tree-walker, and a `call-with-values` or `dynamic-wind` leaves the VM's
+instruction path (#441, #442). The fifth, `apply`, is recognised from the head
+of the form and so is bound like any other when it is passed as a value
+(#443 is what its recogniser still gets wrong).
+
 The identity is needed because `alpha_rename` runs once per top-level form and
 builds its candidate frames from that form alone. A reference in a later form
 carrying an earlier expansion's scopes therefore has no candidate, and before
