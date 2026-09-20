@@ -229,13 +229,13 @@ impl SyntaxRef {
     }
 }
 
-/// What early binding (#438, `Desugarer::early_bound`) has to remember across
-/// one top-level form. Shared, not cloned, with the child desugarers made for
-/// nested scopes, and emptied when the outermost `desugar_tagged` returns.
 /// What a name means to a macro's environment, where the root here imports
 /// that very location: the location, and the root's alias for it.
 type ImportOf = Option<(patina_core::BindingLocation, Rc<str>)>;
 
+/// What early binding (#438, `Desugarer::early_bound`) has to remember across
+/// one top-level form. Shared, not cloned, with the child desugarers made for
+/// nested scopes, and emptied when `desugar_tagged` returns.
 #[derive(Default)]
 struct EarlyBinding {
     /// The scope of each expansion, in this form, of a macro defined in
@@ -253,8 +253,30 @@ struct EarlyBinding {
     imports: RefCell<FxHashMap<u64, FxHashMap<Rc<str>, ImportOf>>>,
     /// The definitions this form's expansions introduced: name, and scopes.
     introduced: RefCell<Vec<(Rc<str>, ScopeSet)>>,
-    /// How many `desugar_tagged` calls deep we are; the form ends at zero.
-    depth: std::cell::Cell<u32>,
+}
+
+/// What `Desugarer::settle_early_bindings` reads of a finished form: the
+/// definitions it introduced, and alias → spelling for what it bound early.
+type FinishedForm = (Vec<(Rc<str>, ScopeSet)>, FxHashMap<Rc<str>, Rc<str>>);
+
+impl EarlyBinding {
+    /// Whether no form is in progress — what `desugar_tagged` finds on entry.
+    fn is_idle(&self) -> bool {
+        self.foreign.borrow().is_empty()
+            && self.bound.borrow().is_empty()
+            && self.imports.borrow().is_empty()
+            && self.introduced.borrow().is_empty()
+    }
+
+    /// Forget the form, handing back what settling it needs.
+    fn finish_form(&self) -> FinishedForm {
+        self.foreign.borrow_mut().clear();
+        self.imports.borrow_mut().clear();
+        (
+            std::mem::take(&mut *self.introduced.borrow_mut()),
+            std::mem::take(&mut *self.bound.borrow_mut()),
+        )
+    }
 }
 
 pub struct Desugarer {
@@ -1148,12 +1170,17 @@ impl Desugarer {
     /// - By name it reaches, from here and from the root alike, the very
     ///   location the macro's own environment reaches: an import of the use
     ///   site's that is the binding the template meant.
-    /// - It is not one of the names `patina_core::by_spelling` lists, which
-    ///   the tree-walker's CPS transform and the VM's code generator recognise
-    ///   from the name on the `Var` this becomes.
+    /// - It is not one of the four names
+    ///   `patina_core::by_spelling::is_recognized_from_a_reference` lists,
+    ///   which the tree-walker's CPS transform and the VM's code generator
+    ///   recognise from the name on the `Var` this becomes. (`apply`, which
+    ///   the desugarer recognises from the *form's* head, never gets here in
+    ///   that position, and in value position is bound like any other.)
     ///
     /// The alias is `Environment::import_alias`: an ordinary forwarded slot
-    /// for the same location, one per location rather than one per expansion.
+    /// for the same location, one per imported name rather than one per
+    /// expansion — and per name, not per location, because `bound` below is
+    /// how `settle_early_bindings` reads back what a reference was written as.
     /// The reference keeps its scopes, which is what lets
     /// `settle_early_bindings` take a decision back.
     ///
@@ -1220,7 +1247,7 @@ impl Desugarer {
         name: &Rc<str>,
         def_env: &Rc<Environment>,
     ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
-        if patina_core::by_spelling::is_recognized(name) {
+        if patina_core::by_spelling::is_recognized_from_a_reference(name) {
             return None;
         }
         let target_env = self.env.root();
@@ -1232,7 +1259,21 @@ impl Desugarer {
         Some((location, alias))
     }
 
-    /// A definition a macro introduced, for `settle_early_bindings`.
+    /// A definition whose name carries scopes, for `settle_early_bindings`.
+    ///
+    /// That is every definition a macro introduced — and also every internal
+    /// `define` a program wrote, since a body scopes the names it defines.
+    /// Those are recorded too, which is the conservative choice and not a
+    /// proven necessity: a recorded definition that is no reference's
+    /// candidate changes nothing, and costs a walk of the form only when the
+    /// form also bound something early. Recording just the ones that carry a
+    /// foreign expansion's scope would save that walk; review of #444 argued
+    /// it is unsafe, because a body's scope is added to names *by spelling*
+    /// and might reach a template's reference. In the plain case it does not
+    /// — a library template's `vector-length` inside a body that defines its
+    /// own keeps only its expansion's scope, and answers the library's, as
+    /// chibi and Gauche do — but the general claim was not settled either
+    /// way, so the filter was not taken.
     fn note_introduced_definition(&self, name: &Rc<str>, scopes: &ScopeSet) {
         if !scopes.is_empty() {
             self.early
@@ -1242,8 +1283,8 @@ impl Desugarer {
         }
     }
 
-    /// Take back the early bindings a finished top-level form proved wrong,
-    /// and forget the form.
+    /// Take back the early bindings a finished top-level form proved wrong.
+    /// (`EarlyBinding::finish_form` is what forgets the form.)
     ///
     /// One shape is not knowable when a reference is emitted: the *same
     /// expansion* also introducing a top-level definition of the name — a
@@ -1255,13 +1296,13 @@ impl Desugarer {
     /// has been emitted, and a reference whose scopes one of them is a
     /// candidate for goes back to the spelling it was written with.
     ///
-    /// Nearly every form introduces no definition, or binds nothing early,
-    /// and is returned untouched without being walked.
-    fn settle_early_bindings(&self, expr: CoreExpr) -> CoreExpr {
-        let introduced = std::mem::take(&mut *self.early.introduced.borrow_mut());
-        let bound = std::mem::take(&mut *self.early.bound.borrow_mut());
-        self.early.foreign.borrow_mut().clear();
-        self.early.imports.borrow_mut().clear();
+    /// A form that defines nothing under scopes, or binds nothing early, is
+    /// returned untouched without being walked, and that is nearly all of
+    /// them: 2 walks in chibi's suite's 3,980 forms, measured during review.
+    /// The rest — a form with an internal `define` *and* an early-bound
+    /// reference, which ordinary code does have — is rebuilt node by node,
+    /// once.
+    fn settle_early_bindings(expr: CoreExpr, (introduced, bound): FinishedForm) -> CoreExpr {
         if introduced.is_empty() || bound.is_empty() {
             return expr;
         }
@@ -1535,26 +1576,19 @@ impl Desugarer {
         tagged: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
-        // This is the entry point and also what every form recurses through,
-        // so the outermost call is what marks the end of a top-level form —
-        // where early bindings are settled (`settle_early_bindings`).
-        let depth = self.early.depth.get();
-        self.early.depth.set(depth + 1);
+        // The entry point, and only that: everything inside a form recurses
+        // through `desugar_form`. So returning from here is the end of a
+        // top-level form — where early bindings are settled
+        // (`settle_early_bindings`) and the form forgotten, whether or not it
+        // desugared. Recursing through here instead would forget a form
+        // halfway through it, which is what the assertion is for.
+        debug_assert!(
+            self.early.is_idle(),
+            "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
+        );
         let result = self.desugar_form(tagged, shared_heap);
-        self.early.depth.set(depth);
-        if depth > 0 {
-            return result;
-        }
-        match result {
-            Ok(expr) => Ok(self.settle_early_bindings(expr)),
-            Err(e) => {
-                self.early.foreign.borrow_mut().clear();
-                self.early.bound.borrow_mut().clear();
-                self.early.introduced.borrow_mut().clear();
-                self.early.imports.borrow_mut().clear();
-                Err(e)
-            }
-        }
+        let finished = self.early.finish_form();
+        result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 
     /// One form, and what every form recurses through. Internal recursion

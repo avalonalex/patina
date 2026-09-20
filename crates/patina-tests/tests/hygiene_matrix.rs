@@ -1275,6 +1275,52 @@ fn a_definition_over_an_import_does_not_capture_an_expanded_template() {
     }
 }
 
+/// A location both sides imported under **two names** — `string-length`, and
+/// `slen` by a `rename` — keeps its two spellings apart when a reference is
+/// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.
+///
+/// The alias is a name for the *location*, and the end of the form reads the
+/// spelling a reference was written with back off it, to take the binding
+/// back where the same expansion introduced a definition of that spelling
+/// (`Desugarer::settle_early_bindings`). With one alias per location both
+/// spellings shared it, the first one seen was what it read back, and the
+/// template's `(slen "abc")` beside the `(define (slen s) …)` its own
+/// expansion introduced stayed bound to the import: `(2 3)`, where `main`
+/// answered `(2 introduced)` before there was any early binding. An alias per
+/// imported name (`Environment::import_alias`) is what keeps them apart.
+///
+/// The second program is the other half: with no introduced definition both
+/// spellings are bound early, so a later definition of either captures
+/// neither — `(3 mine)` is the second spelling having been left as written.
+#[test]
+fn two_names_for_one_import_are_bound_early_as_two() {
+    let library = "(define-library (hm two-names)\n  (import (scheme base)\n    \
+                   (rename (only (scheme base) string-length) (string-length slen)))\n  \
+                   (export def-and-use both)\n  (begin\n    \
+                   (define-syntax def-and-use\n      (syntax-rules ()\n        \
+                   ((_ getter)\n         \
+                   (begin (define (getter) (list (string-length \"ab\") (slen \"abc\")))\n                \
+                   (define (slen s) 'introduced)))))\n    \
+                   (define-syntax both\n      \
+                   (syntax-rules () ((_ s) (list (string-length s) (slen s)))))))\n\
+                   (import (scheme base)\n  \
+                   (rename (only (scheme base) string-length) (string-length slen))\n  \
+                   (hm two-names))\n";
+    let introduced_beside = format!("{library}(def-and-use get)\n(get)");
+    let defined_over = format!(
+        "{library}(define (f) (both \"abc\"))\n(define (slen s) 'mine)\n\
+         (define (string-length s) 'mine)\n(f)"
+    );
+    for vm in [true, false] {
+        assert_eq!(
+            answer(&introduced_beside, vm),
+            "(2 introduced)",
+            "`(2 3)` is `slen` settled by what the form said about `string-length`"
+        );
+        assert_eq!(answer(&defined_over, vm), "(3 3)");
+    }
+}
+
 /// A generated macro whose generator *also introduced the definition it
 /// mentions*, beside a plain definition of the same spelling, reaches the
 /// introduced one across a library boundary — `introduced`, as chibi 0.12 and

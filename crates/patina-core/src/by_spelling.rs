@@ -23,10 +23,15 @@
 //! assertions and seven suite rows, through `call-with-values` and
 //! `dynamic-wind` falling off the instruction path.
 //!
-//! (`apply` is the mild one: its recogniser looks at the head of the *form*,
-//! before any reference is emitted, so a renamed `apply` in value position
-//! would still work. It is listed with the rest so that the rule stays one
-//! rule.)
+//! **`apply` is listed and is not left alone.** Its recogniser looks at the
+//! head of the *form*, before any reference is emitted, so the only `apply`
+//! that ever reaches early binding is one in value position — `(map apply …)`
+//! — and that one works under any name. A first version excluded it with the
+//! rest "so that the rule stays one rule", and review measured what the tidy
+//! rule cost: a library template's `(map apply …)` called a program's later
+//! `(define (apply . _) …)`, where chibi and Gauche call the real one. So the
+//! question early binding asks is [`is_recognized_from_a_reference`], which
+//! is the other four.
 //!
 //! The recognisers name these constants rather than string literals, so the
 //! list cannot drift from them. **A new recogniser adds its name here**; one
@@ -46,9 +51,22 @@ pub const DYNAMIC_WIND: &str = "dynamic-wind";
 
 /// Whether some part of Patina decides what a call means from this spelling.
 pub fn is_recognized(name: &str) -> bool {
+    name == APPLY || is_recognized_from_a_reference(name)
+}
+
+/// Whether a recogniser looks at the name on the **reference** a call's
+/// operator becomes — the `Var` — so that giving the reference another name
+/// changes what the program does. What early binding (#438) asks.
+///
+/// Both backends' names, on either backend: the desugarer that asks does not
+/// know which backend it is feeding. So each backend leaves the *other's*
+/// names unprotected — the tree-walker needs only the two `call/cc` spellings
+/// left alone, the VM only the other two — and that half of #438 stands
+/// until #441 and #442 retire the recognisers.
+pub fn is_recognized_from_a_reference(name: &str) -> bool {
     matches!(
         name,
-        APPLY | CALL_CC | CALL_WITH_CURRENT_CONTINUATION | CALL_WITH_VALUES | DYNAMIC_WIND
+        CALL_CC | CALL_WITH_CURRENT_CONTINUATION | CALL_WITH_VALUES | DYNAMIC_WIND
     )
 }
 
@@ -76,6 +94,17 @@ mod tests {
         // time, on both backends, and so survive a rename.
         for name in ["values", "with-exception-handler", "raise", "force", "car"] {
             assert!(!is_recognized(name), "{name}");
+        }
+        // `apply` is recognised, but from the form's head and never from a
+        // reference: it is the one listed name early binding may rename.
+        assert!(is_recognized("apply") && !is_recognized_from_a_reference("apply"));
+        for name in [
+            "call/cc",
+            "call-with-current-continuation",
+            "call-with-values",
+            "dynamic-wind",
+        ] {
+            assert!(is_recognized_from_a_reference(name), "{name}");
         }
         assert!(is_call_cc("call/cc") && is_call_cc("call-with-current-continuation"));
         assert!(!is_call_cc("call-with-values"));

@@ -2,7 +2,7 @@ use crate::heap::SharedHeap;
 use crate::scope::ScopeSet;
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
@@ -417,10 +417,13 @@ struct RareTables {
     /// the one writer that must drop an entry — `define` over an import.
     links: RefCell<Vec<Option<Owner>>>,
     /// For each imported location something here has been *early-bound* to,
-    /// the hidden name that holds it — see [`Environment::import_alias`].
-    /// Keyed by the owner's environment id and slot, so one location has one
-    /// alias however many expansions ask.
-    import_aliases: RefCell<FxHashMap<(u64, u32), Rc<str>>>,
+    /// the hidden names that hold it — see [`Environment::import_alias`].
+    /// Keyed by the owner's environment id and slot, then by the spelling that
+    /// was asked about: one name for one location has one alias however many
+    /// expansions ask. Nearly always one entry; a location imported under two
+    /// names has two, because the desugarer reads a spelling back off an
+    /// alias (`Desugarer::settle_early_bindings`).
+    import_aliases: RefCell<FxHashMap<(u64, u32), ImportAliases>>,
     /// The distinct environments `links` points into, for the collector. An
     /// importer of `(scheme base)` holds several hundred links into a dozen
     /// environments, and a collection should look at the dozen. Only ever
@@ -429,6 +432,10 @@ struct RareTables {
     /// its importers is — and the registry does that anyway.
     owners: RefCell<Vec<Rc<Environment>>>,
 }
+
+/// The aliases for one imported location: the spelling each was asked for
+/// under, and the alias. A scan, not a table — it holds one entry, or two.
+type ImportAliases = SmallVec<[(Rc<str>, Rc<str>); 1]>;
 
 /// Mint a process-unique, never-reused environment id (0 is reserved as the
 /// "empty" sentinel in the VM's global caches).
@@ -814,8 +821,14 @@ impl Environment {
     /// the location.
     ///
     /// The alias is an ordinary forwarded slot, so it reads, writes and caches
-    /// like the import it stands beside; it is minted once per location
-    /// (`mint` runs only then) and shared by every expansion after.
+    /// like the import it stands beside; it is minted once per name for a
+    /// location (`mint` runs only then) and shared by every expansion after.
+    ///
+    /// Per *name*, not per location alone: a location this environment
+    /// imported under two names — `car`, and `first` by a `rename` — gets an
+    /// alias for each. The desugarer takes an early binding back by reading
+    /// the spelling off the alias, and one alias for both spellings settled a
+    /// reference written `first` by what the form said about `car`.
     ///
     /// Being an ordinary slot, it can be defined over like one, by a program
     /// that happens to spell it — `car.17` is a legal identifier, and
@@ -832,7 +845,12 @@ impl Environment {
         let key = (owner.0.env_id(), owner.1);
         let rare = self.rare.get()?;
         // Out of the borrow first: `owner_of` borrows a table beside it.
-        let known = rare.import_aliases.borrow().get(&key).cloned();
+        let known = rare.import_aliases.borrow().get(&key).and_then(|aliases| {
+            aliases
+                .iter()
+                .find(|(spelling, _)| &**spelling == name)
+                .map(|(_, alias)| Rc::clone(alias))
+        });
         if let Some(alias) = known {
             let still_forwards = self
                 .local_slot(&alias)
@@ -849,9 +867,13 @@ impl Environment {
             }
         };
         self.forward(Rc::clone(&alias), owner);
-        rare.import_aliases
-            .borrow_mut()
-            .insert(key, Rc::clone(&alias));
+        let mut table = rare.import_aliases.borrow_mut();
+        let aliases = table.entry(key).or_default();
+        match aliases.iter_mut().find(|(spelling, _)| &**spelling == name) {
+            // Replacing one that was defined over.
+            Some((_, stale)) => *stale = Rc::clone(&alias),
+            None => aliases.push((Rc::from(name), Rc::clone(&alias))),
+        }
         Some(alias)
     }
 
@@ -2118,16 +2140,34 @@ impl Environment {
     /// Each name a program bound here with its slot, in slot order. With the
     /// slot, because leaving a name out makes position and slot two things.
     fn visible_slots(&self) -> Vec<(u32, String)> {
-        // A set, not a scan per name: an importer that expands library
+        // A table, not a scan per name: an importer that expands library
         // macros holds an alias for each location their templates mention.
-        let hidden: FxHashSet<Rc<str>> = self.rare.get().map_or_else(FxHashSet::default, |rare| {
-            rare.import_aliases.borrow().values().cloned().collect()
-        });
+        let hidden: FxHashMap<Rc<str>, (u64, u32)> =
+            self.rare.get().map_or_else(FxHashMap::default, |rare| {
+                rare.import_aliases
+                    .borrow()
+                    .iter()
+                    .flat_map(|(location, aliases)| {
+                        aliases
+                            .iter()
+                            .map(|(_, alias)| (Rc::clone(alias), *location))
+                    })
+                    .collect()
+            });
         self.bindings
             .borrow()
             .names()
             .enumerate()
-            .filter(|(_, name)| !hidden.contains(&***name))
+            .filter(|(slot, name)| {
+                // Hidden only while it is still the forward it was minted as.
+                // A program that defined the alias's spelling bound a name,
+                // and `import_aliases` goes on listing it until the location
+                // is next asked for (`import_alias` replaces it then).
+                hidden.get(&***name).is_none_or(|location| {
+                    self.owner_of(*slot as u32)
+                        .is_none_or(|(env, owner_slot)| (env.env_id(), owner_slot) != *location)
+                })
+            })
             .map(|(slot, name)| (slot as u32, name.to_string()))
             .collect()
     }
@@ -3214,8 +3254,8 @@ mod import_alias_tests {
     }
 
     #[test]
-    fn one_location_has_one_alias_however_often_it_is_asked_for() {
-        let (library, program) = library_and_program();
+    fn one_name_has_one_alias_however_often_it_is_asked_for() {
+        let (_, program) = library_and_program();
         let mut minted = 0;
         let mut mint = || {
             minted += 1;
@@ -3225,11 +3265,37 @@ mod import_alias_tests {
         let again = program.import_alias("count", &mut mint).unwrap();
         assert_eq!(first, again);
 
-        // A second name for the same location — a prefixed import — shares it.
+        assert_eq!(minted, 1, "an alias per name, not per request");
+    }
+
+    #[test]
+    fn a_second_name_for_the_location_has_an_alias_of_its_own() {
+        let (library, program) = library_and_program();
+        let mut minted = 0;
+        let mut mint = || {
+            minted += 1;
+            Rc::<str>::from(format!("alias.{minted}"))
+        };
+        let first = program.import_alias("count", &mut mint).unwrap();
+
+        // A second name for the same location — a prefixed import. The
+        // desugarer reads the spelling a reference was written with back off
+        // its alias, so the two names cannot share one.
         program.share_binding("c:count", &library, "count");
         let prefixed = program.import_alias("c:count", &mut mint).unwrap();
-        assert_eq!(first, prefixed);
-        assert_eq!(minted, 1, "an alias per location, not per request");
+        assert_ne!(first, prefixed);
+        assert_eq!(
+            program.import_alias("c:count", &mut mint).unwrap(),
+            prefixed
+        );
+        assert_eq!(program.import_alias("count", &mut mint).unwrap(), first);
+        assert_eq!(minted, 2);
+
+        // Both are the library's location, and both are bookkeeping.
+        library.set("count", n(9)).unwrap();
+        assert_eq!(program.get(&first), Some(n(9)));
+        assert_eq!(program.get(&prefixed), Some(n(9)));
+        assert_eq!(program.local_names(), ["count", "c:count"]);
     }
 
     #[test]
@@ -3263,6 +3329,16 @@ mod import_alias_tests {
         // Something defines the alias's own spelling: the slot is the
         // definer's from now on, and no longer the library's location.
         program.define(Rc::clone(&first), n(7));
+        // A name the program bound from that moment, not from whenever the
+        // location is next asked for.
+        assert_eq!(program.local_names(), ["count", "count.alias"]);
+        assert_eq!(
+            program.bindings(),
+            [
+                ("count".to_string(), n(0)),
+                ("count.alias".to_string(), n(7))
+            ]
+        );
         let second = program
             .import_alias("count", || "count.again".into())
             .unwrap();

@@ -23,8 +23,8 @@
 ;; not take `define-library` in a script; `expansion/template-references.scm`
 ;; has the measurement — and is registered `*` / `incomplete` in
 ;; `DIVERGENCES.tsv`. Gauche runs it. Every row was also run under chibi with
-;; the libraries as files (2026-09-19), and it agrees on all but two, each of
-;; which says so where it stands: the `cond-expand` row, where chibi itself
+;; the libraries as files (2026-09-19), and it agrees on all but two of the
+;; fourteen, each of which says so where it stands: the `cond-expand` row, where chibi itself
 ;; fails — `cond-expand: bad feature`, its own `not` having been renamed by its
 ;; own expander, the same mistake made upstream — and the last row, where a
 ;; reference comes *before* the definition its expansion introduces.
@@ -152,6 +152,18 @@
   (list (measure-before (vector 1 2))
         (measure-after (vector 1 2))
         (vector-length (vector 1 2))))
+
+;; A program's *internal* definition of the spelling, beside a template that
+;; means the import: each keeps its own. The template's reference carries only
+;; its expansion's scope, so the body's definition is not its candidate, and
+;; the program's own reference carries the body's.
+(define (measure-inside v)
+  (define (vector-length x) 'internal)
+  (list (size-of v) (vector-length v)))
+
+(test-equal "an internal definition of the spelling and a template's reference keep apart"
+  '(2 internal)
+  (measure-inside (vector 1 2)))
 
 ;; And its own expansion's reference *is* that definition. When the reference
 ;; is desugared the definition is in no environment yet, so it looks headed

@@ -354,7 +354,7 @@ program may by then have defined the spelling itself: `define` over an import
 gives the importer a binding of its own, and the template's `count`, or `car`,
 followed the name to it. So such a reference is given
 `Environment::import_alias` — a name of the use site's own for the import's
-*location*, an ordinary forwarded slot, minted once per location.
+*location*, an ordinary forwarded slot, minted once per imported name.
 
 **Where** matters more than it looks. Relinking only records that the
 expansion came from another program or library; the name is changed where the
@@ -369,10 +369,12 @@ definition of the name, which is in no environment until it runs — and is
 taken back at the end of the top-level form (`settle_early_bindings`).
 
 A macro of the use site's own is not bound early (chibi and Gauche disagree
-there), nor are the five names `patina_core::by_spelling` lists, which some
-part of Patina still recognises by spelling: renamed, a `call/cc` stops
-working on the tree-walker, and a `call-with-values` or `dynamic-wind` leaves
-the VM's instruction path (#441, #442, #443).
+there), nor are four of the names `patina_core::by_spelling` lists — the ones
+recognised from the *reference* itself: renamed, a `call/cc` stops working on
+the tree-walker, and a `call-with-values` or `dynamic-wind` leaves the VM's
+instruction path (#441, #442). The fifth, `apply`, is recognised from the head
+of the form and so is bound like any other when it is passed as a value
+(#443 is what its recogniser still gets wrong).
 
 The identity is needed because `alpha_rename` runs once per top-level form and
 builds its candidate frames from that form alone. A reference in a later form
