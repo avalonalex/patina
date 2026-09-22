@@ -44,6 +44,15 @@ impl FeatureRegistry {
         // Numeric capabilities
         features.insert("ratios".to_string()); // We support exact rationals
         features.insert("exact-closed".to_string()); // Exact arithmetic stays exact
+        // R7RS Appendix B: "Exact complex numbers are provided." Patina's
+        // rectangular complex numbers keep an exact pair exact —
+        // `(* 1+2i 3+4i)` is `-5+10i` and `(+ 1/3+2i 1/6+1i)` is `1/2+3i`, and
+        // `(exact? 1+2i)` is #t — so a portable `(cond-expand (exact-complex …))`
+        // that used to take its fallback branch here now takes the first (#419).
+        // Neither chibi nor Gauche advertises this name: chibi provides them
+        // under its own `complex`, which is not a standard identifier, and
+        // Gauche has no exact complex numbers at all.
+        features.insert("exact-complex".to_string());
         features.insert("ieee-float".to_string()); // f64 is IEEE 754
 
         // Unicode support
@@ -169,6 +178,7 @@ mod tests {
         // Numeric features
         assert!(features.has_feature("ratios"));
         assert!(features.has_feature("exact-closed"));
+        assert!(features.has_feature("exact-complex"));
         assert!(features.has_feature("ieee-float"));
 
         // Unicode

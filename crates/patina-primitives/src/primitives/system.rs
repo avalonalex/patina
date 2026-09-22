@@ -31,9 +31,9 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
 ///
 /// Example (macOS/arm64, VM backend; the exact set is platform-dependent):
 /// ```scheme
-/// (features) => (aarch64 darwin exact-closed full-unicode full-unicode-strings
-///                ieee-float little-endian macosx patina patina-vm posix r7rs
-///                ratios unix)
+/// (features) => (aarch64 darwin exact-closed exact-complex full-unicode
+///                full-unicode-strings ieee-float little-endian macosx patina
+///                patina-vm posix r7rs ratios unix)
 /// ```
 fn features(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if !args.is_empty() {

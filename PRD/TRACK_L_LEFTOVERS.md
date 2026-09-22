@@ -74,7 +74,6 @@ empty, archive this page.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
 **Small**
-- #419 — `(features)` does not advertise `exact-complex`.
 - #432 — an `else` before a `case`'s last clause is reported as "No matching pattern", with no location.
 
 One recorded debt has no issue because it has no known symptom: on the VM,
