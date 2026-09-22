@@ -146,4 +146,19 @@
   (map (lambda (z) (list (exact? z) (inexact? z)))
        '(3+4i 1/2+1/3i 3.0+4i 3+4.0i 3.0+4.0i)))
 
+;; R7RS Appendix B's `exact-complex` is a promise about behaviour, so the row
+;; asserts the promise rather than the name: an implementation that advertises
+;; it must keep an exact complex exact through the arithmetic, and one that
+;; does not is not asked to. Patina advertises it (#419); chibi provides exact
+;; complex numbers under its own non-standard `complex` and Gauche has none, so
+;; both oracles take the `else` branch and the row holds there unchanged.
+(test-equal "exact-complex is advertised only where the arithmetic stays exact"
+  '(#t #t #t)
+  (cond-expand
+    (exact-complex
+      (list (exact? (* 3+4i 1/2+1/3i))
+            (equal? (* 1+2i 3+4i) -5+10i)
+            (equal? (+ 1/3+2i 1/6+1i) 1/2+3i)))
+    (else '(#t #t #t))))
+
 (test-end)
