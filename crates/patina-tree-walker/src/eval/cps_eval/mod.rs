@@ -411,8 +411,8 @@ pub(super) fn lower_quasiquotes_for(
         );
         Some(heap.borrow_mut().alloc_procedure(proc))
     };
-    patina_frontend::lower_quasiquotes(expr, heap, &evaluator.global_env, &constructors)
-        .map_err(|e| EvalError::InvalidSyntax(e.to_string()))
+    patina_frontend::lower_quasiquotes(expr, &constructors)
+        .map_err(|e| EvalError::InternalError(e.0))
 }
 
 /// Does this tree still hold a `Quasiquote`? Debug-only, for the precondition
@@ -431,7 +431,7 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
         found: bool,
     }
     impl patina_ir::ExprVisitor for FindQuasiquote {
-        fn visit_quasiquote(&mut self, _val: &patina_core::TaggedValue) {
+        fn visit_quasiquote(&mut self, _template: &patina_core::QuasiTemplate) {
             self.found = true;
         }
     }
@@ -492,10 +492,12 @@ pub(super) fn eval_cps_with(
         return eval_cps(expr, env, evaluator);
     }
     // Not lowered here: the one caller is the `eval` primitive's callback,
-    // which lowers beside its desugar so a bad template is the caller's
-    // error and stays catchable. Lowering here instead put the failure
-    // through `unhandled_is_final`, which marks a catchable error as having
-    // escaped a callback — and a `guard` around `eval` then never saw it.
+    // which lowers beside its desugar so a failure stays the caller's error
+    // and catchable. Lowering here instead put the failure through
+    // `unhandled_is_final`, which marks a catchable error as having escaped
+    // a callback — and a `guard` around `eval` then never saw it. (What
+    // failed there then was a malformed template, which the desugarer
+    // refuses now; the rule outlives that example.)
     //
     // So this function's caller owes it a lowered tree. The CPS transform
     // panics on a `Quasiquote`, which is a poor way to learn that, so the

@@ -110,6 +110,36 @@
 (test-equal "splicing a map" '(results: 2 4 6)
   `(results: ,@(map (lambda (x) (* x 2)) nums)))
 
+;; ── An unquoted expression is code in the form around it ───────────────────
+;;
+;; #445. The expression inside an `unquote` is ordinary code where the template
+;; stands, so the local keywords and variables of that form are its own. It
+;; used to be desugared afterwards, against the global environment alone: a
+;; keyword bound by `let-syntax` or an internal `define-syntax` was unbound
+;; inside an unquote, and a local variable spelled like a global macro — or
+;; like `apply` — was taken for it, silently wherever the macro accepted the
+;; call. chibi 0.12 and Gauche 0.9.15 answer every row as written, measured
+;; 2026-09-22.
+(test-equal "a let-syntax keyword inside an unquote" '(a expanded)
+  (let-syntax ((m (syntax-rules () ((_) 'expanded)))) `(a ,(m))))
+(test-equal "an internal define-syntax keyword inside an unquote" '(a internal)
+  (let () (define-syntax m (syntax-rules () ((_) 'internal))) `(a ,(m))))
+(test-equal "a local keyword in a vector template and a splice" #(v 2 3)
+  (let-syntax ((m (syntax-rules () ((_ x) (+ x 1))))) `#(v ,(m 1) ,@(list (m 2)))))
+(test-equal "a local keyword in an unquoted dotted tail" '(a . tail)
+  (let-syntax ((m (syntax-rules () ((_) 'tail)))) `(a . ,(m))))
+(test-equal "a local keyword at depth zero inside a nested template"
+  '(a `(b ,(c deep)))
+  (let-syntax ((m (syntax-rules () ((_) 'deep)))) `(a `(b ,(c ,(m))))))
+
+(define (call-when when) `(a ,(when 1)))
+(test-equal "a parameter spelled like a macro is called, not expanded" '(a (called 1))
+  (call-when (lambda (x) (list 'called x))))
+(test-equal "a variable spelled like a macro is a value" '(a 3)
+  (let ((unless 3)) `(a ,unless)))
+(test-equal "a local apply is the local procedure" '(local)
+  (let ((apply (lambda (f xs) 'local))) `(,(apply + '(1 2)))))
+
 ;; ── Errors ─────────────────────────────────────────────────────────────────
 
 ;; `unquote` and `unquote-splicing` outside a template are refused while the
@@ -244,8 +274,9 @@
 ;; Issue #276. The VM compiled templates and the tree-walker evaluated them
 ;; with a separate walker, and the two derived "last", "list context" and
 ;; "tail" independently — so on every shape below the VM answered and the
-;; tree-walker refused. One lowering, run before either backend, is what makes
-;; them agree; these rows are what says so.
+;; tree-walker refused. One derivation of the template, made by the desugarer
+;; before either backend sees it, is what makes them agree; these rows are
+;; what says so.
 ;;
 ;; R7RS §7.1.4 gives `unquote` one template and §4.2.8 makes anything else an
 ;; error, so none of these has a *required* answer and the oracles split. Two
@@ -257,9 +288,9 @@
 ;; which the register carries. What is *not* latitude is Patina giving two
 ;; answers to one program, which is what all of these pin.
 ;;
-;; Written through `eval` for the reason the rows above give: the VM decides
-;; these while compiling, so a row holding one directly would settle the whole
-;; file's fate rather than its own.
+;; Written through `eval` for the reason the rows above give: Patina decides
+;; these while desugaring the form, so a row holding one directly would settle
+;; the whole file's fate rather than its own.
 
 (test-equal "a splice outside a list template" '(1 2)
   (eval '(let ((x '(1 2))) `,@x) (environment '(scheme base))))

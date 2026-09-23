@@ -25,7 +25,7 @@ CoreExpr          (from patina-frontend)
     ▼
  Shared lowering: patina_frontend::lower_quasiquotes
     │  Not a VM pass. Both backends run it before lowering anything,
-    │  so no Quasiquote(TaggedValue) reaches either — it becomes calls
+    │  so no Quasiquote reaches either — its template becomes calls
     │  of the registry's list/append/list->vector, as values
     │
     ▼
@@ -74,7 +74,9 @@ Define, Import, Expand, App, Apply
 ```
 
 - `Import` is intercepted before compilation in `Backend::eval()`
-- `Quasiquote` is expanded by the compiler's own pre-pass (not the desugarer)
+- `Quasiquote` holds a `QuasiTemplate`: the structure the desugarer derived,
+  with each unquoted expression already desugared where it was written
+  (#445). The shared lowering (§4) turns it into calls
 - `Expand` is handled during desugaring
 
 ---
@@ -83,10 +85,17 @@ Define, Import, Expand, App, Apply
 
 **File:** `patina-frontend/src/quasiquote_lower.rs` (not this crate)
 **Input:** `CoreExpr`
-**Output:** `CoreExpr` with `Quasiquote(TaggedValue)` nodes replaced by
-`App` calls to `list`, `append` and `list->vector`. The constructors are
-supplied by the caller, because `patina-primitives` depends on the frontend
-and a pass there cannot name `PrimitiveRegistry` without a cycle.
+**Output:** `CoreExpr` with `Quasiquote` nodes replaced by `App` calls to
+`list`, `append` and `list->vector`. The constructors are supplied by the
+caller, because `patina-primitives` depends on the frontend and a pass there
+cannot name `PrimitiveRegistry` without a cycle.
+
+This is the second half of quasiquote. The first — reading the template,
+tracking nesting depth, and desugaring each unquoted expression — is the
+desugarer's (`patina-frontend/src/desugarer/quasiquote.rs`), because an
+unquoted expression has to be desugared in its form: with the form's local
+keywords and variables, and #438's early binding. Desugared afterwards, as it
+was until #445, a `let-syntax` keyword was unbound inside an unquote.
 
 The callee is the registry's `scheme.base` primitive as a *value* — a
 `Literal` in operator position, allocated once per compilation unit that
@@ -101,8 +110,9 @@ An unquotation takes any number of operands, which is R6RS 11.17's reading
 rather than R7RS 7.1.4's — a deliberate extension, recorded in the module and
 in `expansion/quasiquote-templates.scm`.
 
-Interns plain symbols for nested `quasiquote`/`unquote`/`unquote-splicing`
-markers (not raw identifiers with scope marks).
+The derivation interns plain symbols for nested
+`quasiquote`/`unquote`/`unquote-splicing` markers (not raw identifiers with
+scope marks).
 
 ---
 

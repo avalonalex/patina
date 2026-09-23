@@ -1,4 +1,4 @@
-use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeSet, Symbol, TaggedValue};
+use patina_core::{CoreExpr, CoreExprKind, Formals, QuasiTemplate, ScopeSet, Symbol, TaggedValue};
 
 /// Visitor trait for walking `CoreExpr` trees.
 ///
@@ -65,16 +65,17 @@ pub trait ExprVisitor {
     /// Visit a quoted datum.
     fn visit_quote(&mut self, _val: &TaggedValue) {}
 
-    /// Visit a quasiquoted template.
-    /// The template is stored as a `TaggedValue`; unquote/splicing is handled
-    /// by the evaluator, not during IR traversal.
-    fn visit_quasiquote(&mut self, _val: &TaggedValue) {}
-
     /// Visit an import declaration.
     /// Import sets are kept as `TaggedValue` declarative data, not sub-expressions.
     fn visit_import(&mut self, _import_sets: &[TaggedValue]) {}
 
     // ── Interior nodes (default recurses into children) ───────────────────
+
+    /// Visit a quasiquote template.  Default recurses into its unquoted
+    /// expressions, which the desugarer has already desugared.
+    fn visit_quasiquote(&mut self, template: &QuasiTemplate) {
+        template.for_each_unquoted(&mut |expr| self.visit_expr(expr));
+    }
 
     /// Visit a lambda abstraction.  Default recurses into the body.
     fn visit_lambda(&mut self, _params: &Formals, body: &[CoreExpr], _binding_scopes: &ScopeSet) {
@@ -154,7 +155,7 @@ pub trait ExprVisitor {
             CoreExprKind::Literal(val) => self.visit_literal(val),
             CoreExprKind::Var { name, scopes } => self.visit_var(name, scopes),
             CoreExprKind::Quote(val) => self.visit_quote(val),
-            CoreExprKind::Quasiquote(val) => self.visit_quasiquote(val),
+            CoreExprKind::Quasiquote(template) => self.visit_quasiquote(template),
             CoreExprKind::Lambda {
                 params,
                 body,
@@ -179,7 +180,10 @@ pub trait ExprVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use patina_core::{CoreExpr, CoreExprKind, Formals, ScopeSet, ScopedParam, TaggedValue};
+    use patina_core::{
+        CoreExpr, CoreExprKind, Formals, QuasiConstructor, QuasiTemplate, ScopeSet, ScopedParam,
+        TaggedValue,
+    };
     use std::collections::HashSet;
 
     // ── helpers ──────────────────────────────────────────────────────────
@@ -334,6 +338,33 @@ mod tests {
         assert!(!collector.free.contains("y"));
     }
 
+    #[test]
+    fn test_free_vars_in_a_quasiquote_template() {
+        // (lambda (x) `(a ,x ,@y))  →  free: {y} — the template's unquoted
+        // expressions are code, and the default walk reaches them.
+        let template = QuasiTemplate::Build(
+            QuasiConstructor::Append,
+            vec![
+                QuasiTemplate::Build(
+                    QuasiConstructor::List,
+                    vec![
+                        QuasiTemplate::Datum(TaggedValue::UNSPECIFIED),
+                        QuasiTemplate::Unquoted(std::rc::Rc::new(var("x"))),
+                    ],
+                ),
+                QuasiTemplate::Unquoted(std::rc::Rc::new(var("y"))),
+            ],
+        );
+        let expr = lambda(
+            vec!["x"],
+            vec![CoreExpr::new(CoreExprKind::Quasiquote(template))],
+        );
+        let mut collector = FreeVarCollector::new();
+        collector.visit_expr(&expr);
+        assert!(collector.free.contains("y"));
+        assert!(!collector.free.contains("x"));
+    }
+
     // ── Default walk doesn't panic ────────────────────────────────────────
 
     struct NoopVisitor;
@@ -345,7 +376,13 @@ mod tests {
             lit(),
             var("x"),
             CoreExpr::new(CoreExprKind::Quote(TaggedValue::UNSPECIFIED)),
-            CoreExpr::new(CoreExprKind::Quasiquote(TaggedValue::UNSPECIFIED)),
+            CoreExpr::new(CoreExprKind::Quasiquote(QuasiTemplate::Build(
+                QuasiConstructor::List,
+                vec![
+                    QuasiTemplate::Datum(TaggedValue::UNSPECIFIED),
+                    QuasiTemplate::Unquoted(std::rc::Rc::new(var("x"))),
+                ],
+            ))),
             lambda(vec!["a"], vec![var("a")]),
             if_(lit(), lit(), lit()),
             CoreExpr::new(CoreExprKind::Set {

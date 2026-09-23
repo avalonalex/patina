@@ -41,7 +41,9 @@ impl TailedExpr {
 pub enum TailedExprKind {
     Literal(TaggedValue),
     Quote(TaggedValue),
-    Quasiquote(TaggedValue),
+    /// A template `compile_with_qq_resolving` would have lowered; carried
+    /// only so that codegen can refuse it (`compile` does not lower).
+    Quasiquote,
 
     LocalRef(Symbol),
     ClosureRef {
@@ -137,7 +139,7 @@ fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
     let kind = match &expr.kind {
         ClosedExprKind::Literal(v) => TailedExprKind::Literal(*v),
         ClosedExprKind::Quote(v) => TailedExprKind::Quote(*v),
-        ClosedExprKind::Quasiquote(v) => TailedExprKind::Quasiquote(*v),
+        ClosedExprKind::Quasiquote => TailedExprKind::Quasiquote,
         ClosedExprKind::LocalRef(s) => TailedExprKind::LocalRef(s.clone()),
         ClosedExprKind::ClosureRef { name, slot } => TailedExprKind::ClosureRef {
             name: name.clone(),

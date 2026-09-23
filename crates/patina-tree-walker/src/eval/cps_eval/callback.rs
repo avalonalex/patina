@@ -89,10 +89,11 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         let core_expr = desugarer
             .desugar_tagged(expr, evaluator.heap())
             .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
-        // Same rule for a template the lowering rejects, and it has to be
-        // raised here rather than inside `eval_cps_with`: below
+        // Lowered here rather than inside `eval_cps_with`: below
         // `unhandled_is_final` a catchable error is marked as having escaped
-        // a callback, and a `guard` around `eval` stops seeing it.
+        // a callback, and a `guard` around `eval` stops seeing it. A malformed
+        // template is refused by the desugar above now (#445), so all that
+        // can fail here is a constructor missing from the registry.
         let core_expr = super::lower_quasiquotes_for(&core_expr, evaluator)?;
 
         unhandled_is_final(super::eval_cps_with(

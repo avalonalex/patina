@@ -68,6 +68,7 @@
 //! - `PRD/phase1/CORE_IR_MIGRATION.md` - Full architecture design
 
 mod error;
+mod quasiquote;
 mod utils;
 
 pub use error::{DesugarError, Result};
@@ -2364,7 +2365,9 @@ impl Desugarer {
         Ok(CoreExpr::new(CoreExprKind::Quote(datum)))
     }
 
-    /// Desugar quasiquote using TaggedValue: (quasiquote template) → Quasiquote(template)
+    /// Desugar quasiquote: `(quasiquote template)` → `Quasiquote`, holding
+    /// what the template builds with its unquoted expressions desugared here,
+    /// in this form (`quasiquote.rs`).
     fn desugar_quasiquote_tagged(
         &self,
         args: TaggedValue,
@@ -2378,7 +2381,8 @@ impl Desugarer {
                 got: args_vec.len(),
             });
         }
-        Ok(CoreExpr::new(CoreExprKind::Quasiquote(args_vec[0])))
+        let template = self.derive_quasi_template(args_vec[0], shared_heap)?;
+        Ok(CoreExpr::new(CoreExprKind::Quasiquote(template)))
     }
 
     /// Desugar define-syntax using TaggedValue

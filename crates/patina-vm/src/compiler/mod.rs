@@ -138,24 +138,19 @@ pub fn compile(expr: &CoreExpr) -> Result<(CodeObject, Vec<CodeObject>), Compile
     compile_pipeline(expr, None)
 }
 
-/// Compile with quasiquote expansion *and* compile-time primitive resolution:
-/// `Quasiquote` nodes are first expanded into equivalent `App` calls of the
-/// registry's `list`, `append` and `list->vector` (requires heap access to
-/// walk TaggedValue templates), then callees that resolve to registry
-/// primitives in `env` emit `CallPrimitive` (see `primitive_calls`). This is
-/// the entry the VM backend uses.
+/// Compile with quasiquote lowering *and* compile-time primitive resolution:
+/// `Quasiquote` nodes are first lowered into equivalent `App` calls of the
+/// registry's `list`, `append` and `list->vector` (allocated on `heap`), then
+/// callees that resolve to registry primitives in `env` emit `CallPrimitive`
+/// (see `primitive_calls`). This is the entry the VM backend uses.
 pub fn compile_with_qq_resolving(
     expr: &CoreExpr,
     heap: &SharedHeap,
     env: &Rc<Environment>,
     registry: &PrimitiveRegistry,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
-    let expanded =
-        patina_frontend::lower_quasiquotes(expr, heap, env, &registry_constructors(heap, registry))
-            .map_err(|e| match e {
-                patina_frontend::QuasiquoteError::Desugar(m) => CompileError::Desugar(m),
-                patina_frontend::QuasiquoteError::Internal(m) => CompileError::Internal(m),
-            })?;
+    let expanded = patina_frontend::lower_quasiquotes(expr, &registry_constructors(heap, registry))
+        .map_err(|e| CompileError::Internal(e.0))?;
     compile_pipeline(&expanded, Some((heap, env, registry)))
 }
 
@@ -169,15 +164,12 @@ mod quasiquote_lowering_tests {
     use patina_core::heap::Heap;
     use patina_core::procedure::Procedure;
     use patina_core::tagged_value::TaggedValue;
+    use patina_core::{QuasiConstructor, QuasiTemplate};
     use patina_frontend::lower_quasiquotes;
     use std::cell::RefCell;
 
     fn make_heap() -> SharedHeap {
         Rc::new(RefCell::new(Heap::new()))
-    }
-
-    fn make_env(heap: &SharedHeap) -> Rc<Environment> {
-        Rc::new(Environment::with_heap(heap.clone()))
     }
 
     fn make_registry() -> PrimitiveRegistry {
@@ -186,71 +178,47 @@ mod quasiquote_lowering_tests {
         registry
     }
 
-    #[test]
-    fn expand_self_evaluating() {
-        let heap = make_heap();
-        let env = make_env(&heap);
-        let template = TaggedValue::fixnum(42);
+    fn lower(heap: &SharedHeap, template: QuasiTemplate) -> CoreExpr {
         let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
-        let expanded = lower_quasiquotes(
-            &expr,
-            &heap,
-            &env,
-            &registry_constructors(&heap, &make_registry()),
-        )
-        .expect("template desugars");
+        lower_quasiquotes(&expr, &registry_constructors(heap, &make_registry()))
+            .expect("the constructors resolve")
+    }
 
-        match &expanded.kind {
+    #[test]
+    fn lower_self_evaluating() {
+        let heap = make_heap();
+        let lowered = lower(&heap, QuasiTemplate::Datum(TaggedValue::fixnum(42)));
+
+        match &lowered.kind {
             CoreExprKind::Quote(v) => assert_eq!(v.as_fixnum(), Some(42)),
             other => panic!("expected Quote, got {:?}", other),
         }
     }
 
     #[test]
-    fn expand_symbol() {
+    fn lower_symbol() {
         let heap = make_heap();
-        let env = make_env(&heap);
         let sym = heap.borrow_mut().intern_symbol("foo");
-        let expr = CoreExpr::new(CoreExprKind::Quasiquote(sym));
-        let expanded = lower_quasiquotes(
-            &expr,
-            &heap,
-            &env,
-            &registry_constructors(&heap, &make_registry()),
-        )
-        .expect("template desugars");
+        let lowered = lower(&heap, QuasiTemplate::Datum(sym));
 
-        match &expanded.kind {
+        match &lowered.kind {
             CoreExprKind::Quote(v) => assert!(heap.borrow().is_symbol(*v)),
             other => panic!("expected Quote, got {:?}", other),
         }
     }
 
     #[test]
-    fn expand_list_no_unquotes() {
+    fn lower_list_no_unquotes() {
         let heap = make_heap();
-        let env = make_env(&heap);
-        let a = heap.borrow_mut().intern_symbol("a");
-        let b = heap.borrow_mut().intern_symbol("b");
-        let c = heap.borrow_mut().intern_symbol("c");
-        let template = {
-            let mut h = heap.borrow_mut();
-            let t3 = h.alloc_pair(c, TaggedValue::NULL);
-            let t2 = h.alloc_pair(b, t3);
-            h.alloc_pair(a, t2)
-        };
-        let expr = CoreExpr::new(CoreExprKind::Quasiquote(template));
-        let expanded = lower_quasiquotes(
-            &expr,
-            &heap,
-            &env,
-            &registry_constructors(&heap, &make_registry()),
-        )
-        .expect("template desugars");
+        let parts = ["a", "b", "c"]
+            .iter()
+            .map(|name| QuasiTemplate::Datum(heap.borrow_mut().intern_symbol(name)))
+            .collect();
+        let lowered = lower(&heap, QuasiTemplate::Build(QuasiConstructor::List, parts));
 
         // Should become (<list primitive> 'a 'b 'c) — the primitive itself,
         // not a reference to whatever `list` names where the template sits.
-        match &expanded.kind {
+        match &lowered.kind {
             CoreExprKind::App { func, args } => {
                 assert_eq!(args.len(), 3);
                 match &func.kind {

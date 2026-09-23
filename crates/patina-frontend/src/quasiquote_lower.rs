@@ -1,13 +1,14 @@
-//! Lowering `CoreExprKind::Quasiquote(template)` into `CoreExprKind::App`
-//! calls to `list`, `append` and `list->vector`.
+//! Lowering `CoreExprKind::Quasiquote` into `CoreExprKind::App` calls to
+//! `list`, `append` and `list->vector`.
 //!
-//! **One implementation, for both backends.** It began as the VM compiler's
-//! own pass while the tree-walker evaluated templates with a separate walker,
-//! and the two derived "last", "list context" and "tail" independently — so
-//! they disagreed on template shapes neither report pins down, the VM
-//! answering where the tree-walker refused (issue #276). Deriving the
-//! structure once, before either backend lowers anything, is what makes them
-//! agree by construction rather than by keeping two files in step.
+//! **Only the backend's half.** What a template builds, and every unquoted
+//! expression in it, the desugarer derived where it met the template
+//! (`desugarer/quasiquote.rs`; `patina_core::QuasiTemplate` says why the job
+//! is split). What is left here is putting the constructors in: each
+//! [`QuasiTemplate::Build`] becomes a call, each `Datum` a `Quote`, and each
+//! unquoted expression is lowered in turn, since it may hold a template of
+//! its own. Nothing here can find a program wrong; a failure means a
+//! constructor was not supplied.
 //!
 //! Those three are the registry's own primitives, referenced as *values* —
 //! a `Literal` in operator position — and not by name. A quasiquote denotes
@@ -23,32 +24,22 @@
 //! pipeline and ahead of the CPS transform — so neither needs to handle
 //! `Quasiquote` at all. Nothing downstream of this carries that node.
 
-use crate::Desugarer;
 use patina_core::core_expr::{CoreExpr, CoreExprKind};
-use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
-use patina_runtime::environment::Environment;
+use patina_core::{QuasiConstructor, QuasiTemplate};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Why a template could not be lowered.
+/// A list constructor the lowering calls could not be resolved.
 ///
-/// Two cases, and the distinction is the caller's to render: a `Desugar` is
-/// the program's fault — `,if` names a syntactic keyword — while `Internal`
-/// means a constructor the expansion needs was not supplied.
+/// Never the program's fault: a malformed template is refused by the
+/// desugarer, before this runs.
 #[derive(Debug)]
-pub enum QuasiquoteError {
-    /// An unquoted sub-expression is not valid code.
-    Desugar(String),
-    /// A list constructor this pass calls could not be resolved.
-    Internal(String),
-}
+pub struct QuasiquoteError(pub String);
 
 impl std::fmt::Display for QuasiquoteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            QuasiquoteError::Desugar(m) | QuasiquoteError::Internal(m) => write!(f, "{m}"),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -61,35 +52,27 @@ impl std::fmt::Display for QuasiquoteError {
 /// same lowering.
 pub type ConstructorResolver<'a> = &'a dyn Fn(&str) -> Option<TaggedValue>;
 
-/// Recursively expand all `Quasiquote` nodes in a `CoreExpr` tree.
+/// Recursively lower all `Quasiquote` nodes in a `CoreExpr` tree.
 ///
-/// Must be called before either backend lowers the tree. Requires the shared
-/// heap (to walk tagged-value templates), the environment (to create a
-/// desugarer for unquote sub-expressions) and a resolver for the constructors
-/// the expansion calls — see the module doc for why they are values rather
-/// than names, and [`ConstructorResolver`] for why the caller supplies them.
+/// Must be called before either backend lowers the tree. Takes a resolver
+/// for the constructors the templates are built with — see the module doc
+/// for why they are values rather than names, and [`ConstructorResolver`]
+/// for why the caller supplies them.
 pub fn lower_quasiquotes(
     expr: &CoreExpr,
-    heap: &SharedHeap,
-    env: &Rc<Environment>,
     constructors: ConstructorResolver<'_>,
 ) -> Result<CoreExpr, QuasiquoteError> {
-    let cx = Expansion {
-        desugarer: Desugarer::with_env(env.clone()),
-        heap,
+    let cx = Lowering {
         constructors,
         list: Cell::default(),
         append: Cell::default(),
         list_to_vector: Cell::default(),
     };
-    expand_qq_expr(expr, &cx)
+    lower_expr(expr, &cx)
 }
 
-/// What one compilation unit's templates expand through.
-struct Expansion<'a> {
-    /// For the unquoted sub-expressions, which are ordinary code.
-    desugarer: Desugarer,
-    heap: &'a SharedHeap,
+/// What one compilation unit's templates are lowered through.
+struct Lowering<'a> {
     constructors: ConstructorResolver<'a>,
     /// The constructor procedures, allocated the first time a template needs
     /// each: most units have no quasiquote at all, and one that has a
@@ -99,26 +82,7 @@ struct Expansion<'a> {
     list_to_vector: Cell<Option<TaggedValue>>,
 }
 
-/// The list constructors an expansion calls. `cons` is not among them: a
-/// dotted tail goes through `append`, whose last argument may be anything.
-#[derive(Clone, Copy)]
-enum Constructor {
-    List,
-    Append,
-    ListToVector,
-}
-
-impl Constructor {
-    fn name(self) -> &'static str {
-        match self {
-            Constructor::List => "list",
-            Constructor::Append => "append",
-            Constructor::ListToVector => "list->vector",
-        }
-    }
-}
-
-impl Expansion<'_> {
+impl Lowering<'_> {
     /// The `scheme.base` primitive for `which`, as a procedure value.
     ///
     /// The caller's resolver decides what it is — the VM builds it the way
@@ -129,19 +93,19 @@ impl Expansion<'_> {
     ///
     /// Allocated once per unit and cached: most units have no quasiquote at
     /// all, and one with a hundred templates shares three objects.
-    fn constructor(&self, which: Constructor) -> Result<TaggedValue, QuasiquoteError> {
+    fn constructor(&self, which: QuasiConstructor) -> Result<TaggedValue, QuasiquoteError> {
         // Selected by `match`, so adding a constructor is a compile error
         // here rather than an out-of-bounds index at run time.
         let slot = match which {
-            Constructor::List => &self.list,
-            Constructor::Append => &self.append,
-            Constructor::ListToVector => &self.list_to_vector,
+            QuasiConstructor::List => &self.list,
+            QuasiConstructor::Append => &self.append,
+            QuasiConstructor::ListToVector => &self.list_to_vector,
         };
         if let Some(tv) = slot.get() {
             return Ok(tv);
         }
         let tv = (self.constructors)(which.name()).ok_or_else(|| {
-            QuasiquoteError::Internal(format!(
+            QuasiquoteError(format!(
                 "quasiquote lowering needs the primitive {}, which is not registered",
                 which.name()
             ))
@@ -151,15 +115,13 @@ impl Expansion<'_> {
     }
 }
 
-/// Recursively walk a CoreExpr tree, expanding any Quasiquote nodes.
-fn expand_qq_expr(expr: &CoreExpr, cx: &Expansion<'_>) -> Result<CoreExpr, QuasiquoteError> {
+/// Recursively walk a CoreExpr tree, lowering any Quasiquote nodes.
+fn lower_expr(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, QuasiquoteError> {
     let each = |exprs: &[CoreExpr]| -> Result<Vec<CoreExpr>, QuasiquoteError> {
-        exprs.iter().map(|e| expand_qq_expr(e, cx)).collect()
+        exprs.iter().map(|e| lower_expr(e, cx)).collect()
     };
     let kind = match &expr.kind {
-        CoreExprKind::Quasiquote(template) => {
-            return expand_template(*template, cx, 0);
-        }
+        CoreExprKind::Quasiquote(template) => return lower_template(template, cx),
 
         // Recursively walk child expressions
         CoreExprKind::Lambda {
@@ -173,15 +135,15 @@ fn expand_qq_expr(expr: &CoreExpr, cx: &Expansion<'_>) -> Result<CoreExpr, Quasi
         },
 
         CoreExprKind::If { test, then, else_ } => CoreExprKind::If {
-            test: Rc::new(expand_qq_expr(test, cx)?),
-            then: Rc::new(expand_qq_expr(then, cx)?),
-            else_: Rc::new(expand_qq_expr(else_, cx)?),
+            test: Rc::new(lower_expr(test, cx)?),
+            then: Rc::new(lower_expr(then, cx)?),
+            else_: Rc::new(lower_expr(else_, cx)?),
         },
 
         CoreExprKind::Set { var, scopes, value } => CoreExprKind::Set {
             var: var.clone(),
             scopes: scopes.clone(),
-            value: Rc::new(expand_qq_expr(value, cx)?),
+            value: Rc::new(lower_expr(value, cx)?),
         },
 
         CoreExprKind::Begin(exprs) => CoreExprKind::Begin(each(exprs)?),
@@ -193,24 +155,24 @@ fn expand_qq_expr(expr: &CoreExpr, cx: &Expansion<'_>) -> Result<CoreExpr, Quasi
         } => CoreExprKind::Define {
             name: name.clone(),
             scopes: scopes.clone(),
-            value: Rc::new(expand_qq_expr(value, cx)?),
+            value: Rc::new(lower_expr(value, cx)?),
         },
 
         CoreExprKind::App { func, args } => CoreExprKind::App {
-            func: Rc::new(expand_qq_expr(func, cx)?),
+            func: Rc::new(lower_expr(func, cx)?),
             args: each(args)?,
         },
 
         CoreExprKind::Apply { func, args } => CoreExprKind::Apply {
-            func: Rc::new(expand_qq_expr(func, cx)?),
+            func: Rc::new(lower_expr(func, cx)?),
             args: each(args)?,
         },
 
         CoreExprKind::Expand { expr: inner } => CoreExprKind::Expand {
-            expr: Rc::new(expand_qq_expr(inner, cx)?),
+            expr: Rc::new(lower_expr(inner, cx)?),
         },
 
-        // Leaf nodes: no expansion needed
+        // Leaf nodes: no lowering needed
         CoreExprKind::Literal(_)
         | CoreExprKind::Var { .. }
         | CoreExprKind::Quote(_)
@@ -223,434 +185,24 @@ fn expand_qq_expr(expr: &CoreExpr, cx: &Expansion<'_>) -> Result<CoreExpr, Quasi
     })
 }
 
-// ─── Template expansion ──────────────────────────────────────────────────────
-
-/// Expand a quasiquote template TaggedValue into a CoreExpr that constructs
-/// the result at runtime.
-fn expand_template(
-    template: TaggedValue,
-    cx: &Expansion<'_>,
-    depth: i32,
+/// The expression that builds what `template` describes.
+fn lower_template(
+    template: &QuasiTemplate,
+    cx: &Lowering<'_>,
 ) -> Result<CoreExpr, QuasiquoteError> {
-    // Self-evaluating atoms
-    if template.is_fixnum() || template.is_boolean() || template.is_char() || template.is_null() {
-        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
-    }
-
-    // Symbols → quote as-is
-    if cx.heap.borrow().is_symbol(template) {
-        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
-    }
-
-    // Identifiers → convert to plain symbol (strip scope marks) for consistency
-    // with the tree-walker's quasiquote evaluator, which does the same conversion.
-    // Without this, identifiers inside quasiquote templates retain hygiene marks
-    // and won't be `eq?` to the same-named symbol from a quote.
-    if cx.heap.borrow().is_identifier(template) {
-        let name: Option<String> = cx
-            .heap
-            .borrow()
-            .get_symbol_or_identifier_name(template)
-            .map(String::from);
-        if let Some(name) = name {
-            let sym = cx.heap.borrow_mut().intern_symbol(&name);
-            return Ok(CoreExpr::new(CoreExprKind::Quote(sym)));
-        }
-        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
-    }
-
-    // Strings, bytevectors → quote
-    if template.is_string() || cx.heap.borrow().is_bytevector(template) {
-        return Ok(CoreExpr::new(CoreExprKind::Quote(template)));
-    }
-
-    // Vectors: expand elements, use list->vector
-    if template.is_vector() {
-        return expand_vector_template(template, cx, depth);
-    }
-
-    // Pairs: the interesting case
-    if template.is_pair() {
-        let (car, cdr) = {
-            let h = cx.heap.borrow();
-            (h.car(template), h.cdr(template))
-        };
-
-        // Check for special forms at car
-        let sym_name: Option<String> = cx
-            .heap
-            .borrow()
-            .get_symbol_or_identifier_name(car)
-            .map(String::from);
-
-        if let Some(ref name) = sym_name {
-            match name.as_str() {
-                "quasiquote" => {
-                    // Nested quasiquote: increment depth
-                    let (inner, _rest) = pair_parts(cdr, cx.heap, "quasiquote")?;
-                    let expanded = expand_template(inner, cx, depth + 1)?;
-                    // Reconstruct (quasiquote <expanded>) using a plain symbol
-                    // (car may be an identifier with scope marks; we need a bare symbol)
-                    let qq_sym = cx.heap.borrow_mut().intern_symbol("quasiquote");
-                    return make_list_call(
-                        cx,
-                        vec![CoreExpr::new(CoreExprKind::Quote(qq_sym)), expanded],
-                    );
-                }
-
-                "unquote" => {
-                    if depth == 0 {
-                        // A template that *is* an unquote, rather than one
-                        // holding an element that is. R6RS's multi-operand
-                        // form is a splice and a splice belongs in a list or
-                        // vector template, so there is nothing here to splice
-                        // into: one operand, and `pair_parts` refuses none.
-                        //
-                        // Extra operands are refused rather than dropped.
-                        // Taking the first silently was the behaviour before
-                        // multi-operand unquote existed, and once every other
-                        // position inserts all of them, accepting a form here
-                        // and discarding half of it is the one answer that
-                        // teaches the reader something false.
-                        let operands = operand_list(cdr, cx.heap).ok_or_else(|| {
-                            QuasiquoteError::Desugar(
-                                "unquote: operands must be a proper, finite list".to_string(),
-                            )
-                        })?;
-                        let [inner] = operands.as_slice() else {
-                            return Err(QuasiquoteError::Desugar(format!(
-                                "unquote: a template that is itself an unquote takes one \
-                                 expression, not {}; several can only be spliced into a \
-                                 list or vector template",
-                                operands.len()
-                            )));
-                        };
-                        return desugar_tagged(*inner, cx);
-                    }
-                    // Inside a nested quasiquote the form is rebuilt as data,
-                    // so the operand *list* is what must survive: expanded one
-                    // level shallower, as the list template it is. Rebuilding
-                    // a fixed two elements dropped every operand after the
-                    // first, which is what made ``(foo ,,@q) lose its splice.
-                    return rebuild_unquotation(cdr, cx, depth, "unquote");
-                }
-
-                "unquote-splicing" => {
-                    if depth == 0 {
-                        // Splicing where there is no list to splice into.
-                        // R6RS confines a splice to a list or vector template
-                        // and Gauche raises here; Patina inserts the value,
-                        // which is what it has always done and what the
-                        // register records against both oracles.
-                        let (inner, _rest) = pair_parts(cdr, cx.heap, "unquote-splicing")?;
-                        return desugar_tagged(inner, cx);
-                    }
-                    return rebuild_unquotation(cdr, cx, depth, "unquote-splicing");
-                }
-
-                _ => {}
-            }
-        }
-
-        // Regular pair: expand car and cdr, handling unquote-splicing in list context
-        return expand_pair_template(template, cx, depth);
-    }
-
-    // Other types: quote as-is
-    Ok(CoreExpr::new(CoreExprKind::Quote(template)))
-}
-
-/// Rebuild `(<keyword> . operands)` as data, one quasiquote level shallower.
-///
-/// Reached only at depth > 0, where the form is not evaluated but written
-/// back into the structure. The operands are expanded as the list template
-/// they are, so a splice among them still splices —
-/// ``(foo ,,@q) rebuilds as `(foo (unquote <the elements of q>)) — and then
-/// the keyword is consed on. `append` rather than a cons because the
-/// constructor set deliberately has none; see `Constructor`.
-fn rebuild_unquotation(
-    operands: TaggedValue,
-    cx: &Expansion<'_>,
-    depth: i32,
-    keyword: &str,
-) -> Result<CoreExpr, QuasiquoteError> {
-    // Checked here as well as in element position, so that whether a form is
-    // well-formed does not depend on how deeply it is nested: `(unquote . x)`
-    // was refused at depth 0 and quietly rebuilt at depth 1, because
-    // `expand_pair_template` reads an improper tail as a dotted list.
-    if operand_list(operands, cx.heap).is_none() {
-        return Err(QuasiquoteError::Desugar(format!(
-            "{keyword}: operands must be a proper, finite list"
-        )));
-    }
-    let expanded_operands = expand_pair_template(operands, cx, depth - 1)?;
-    let sym = cx.heap.borrow_mut().intern_symbol(keyword);
-    let head = make_list_call(cx, vec![CoreExpr::new(CoreExprKind::Quote(sym))])?;
-    make_app(cx, Constructor::Append, vec![head, expanded_operands])
-}
-
-/// Expand a pair/list template, handling unquote-splicing in list elements.
-fn expand_pair_template(
-    template: TaggedValue,
-    cx: &Expansion<'_>,
-    depth: i32,
-) -> Result<CoreExpr, QuasiquoteError> {
-    // Collect segments: each segment is either a list of normal elements
-    // or a splice expression. This lets us generate efficient code:
-    //   `(a b ,@xs c d) → (append (list 'a 'b) xs (list 'c 'd))
-    let mut segments: Vec<Segment> = Vec::new();
-    let mut current_elems: Vec<CoreExpr> = Vec::new();
-    let mut current = template;
-    let mut tail_expr: Option<CoreExpr> = None;
-
-    loop {
-        if current.is_null() {
-            break;
-        }
-
-        if !current.is_pair() {
-            // Improper list tail
-            tail_expr = Some(expand_template(current, cx, depth)?);
-            break;
-        }
-
-        let (car, cdr) = {
-            let h = cx.heap.borrow();
-            (h.car(current), h.cdr(current))
-        };
-
-        // Check for tail unquote: current IS (unquote expr) — from dotted pair after splice
-        if depth == 0 && cx.heap.borrow().is_named(car, "unquote") && cdr.is_pair() {
-            let (uq_expr, rest) = pair_parts(cdr, cx.heap, "unquote")?;
-            if rest.is_null() {
-                tail_expr = Some(desugar_tagged(uq_expr, cx)?);
-                break;
-            }
-        }
-
-        // An element that is itself `(unquote …)` or `(unquote-splicing …)`.
-        //
-        // Both take any number of operands, which is the R6RS 11.17 reading:
-        // `(unquote e1 … en)` inserts n values and the splicing spelling
-        // splices n lists. R7RS 7.1.4 admits exactly one of each, so this is
-        // an extension — a deliberate one, matching Gauche, Chez and Larceny,
-        // whose suite asserts it. chibi and Racket take the other reading and
-        // the register records both.
-        //
-        // The one-operand case is the whole of ordinary code and stays on the
-        // cheap path: an unquote contributes to `current_elems` like any
-        // element, so `(a ,x b)` remains one `list` call rather than an
-        // `append` of three segments — the shape family 34's review measured
-        // at +40% when it was routed through segments.
-        if depth == 0 && car.is_pair() {
-            let (inner_car, inner_cdr) = {
-                let h = cx.heap.borrow();
-                (h.car(car), h.cdr(car))
-            };
-            let (splicing, unquoting) = {
-                let h = cx.heap.borrow();
-                (
-                    h.is_named(inner_car, "unquote-splicing"),
-                    h.is_named(inner_car, "unquote"),
-                )
-            };
-
-            if splicing || unquoting {
-                let keyword = if splicing {
-                    "unquote-splicing"
-                } else {
-                    "unquote"
-                };
-                let operands = operand_list(inner_cdr, cx.heap).ok_or_else(|| {
-                    QuasiquoteError::Desugar(format!(
-                        "{keyword}: operands must be a proper, finite list"
-                    ))
-                })?;
-                for operand in operands {
-                    let expanded = desugar_tagged(operand, cx)?;
-                    if splicing {
-                        // A splice ends the run of plain elements before it.
-                        if !current_elems.is_empty() {
-                            segments.push(Segment::List(std::mem::take(&mut current_elems)));
-                        }
-                        segments.push(Segment::Splice(expanded));
-                    } else {
-                        current_elems.push(expanded);
-                    }
-                }
-                current = cdr;
-                continue;
-            }
-        }
-
-        // Check for dotted-pair unquote: (a b . ,x)
-        if depth == 0 && cdr.is_pair() {
-            let (cdr_car, cdr_cdr) = {
-                let h = cx.heap.borrow();
-                (h.car(cdr), h.cdr(cdr))
-            };
-
-            if cx.heap.borrow().is_named(cdr_car, "unquote") && cdr_cdr.is_pair() {
-                let (unquote_expr, rest) = pair_parts(cdr_cdr, cx.heap, "unquote")?;
-                if rest.is_null() {
-                    // This is (... car . ,expr)
-                    current_elems.push(expand_template(car, cx, depth)?);
-                    tail_expr = Some(desugar_tagged(unquote_expr, cx)?);
-                    break;
-                }
-            }
-        }
-
-        // Regular element
-        current_elems.push(expand_template(car, cx, depth)?);
-        current = cdr;
-    }
-
-    // Flush remaining elements
-    if !current_elems.is_empty() {
-        segments.push(Segment::List(std::mem::take(&mut current_elems)));
-    }
-
-    // Generate code from segments
-    if segments.is_empty() {
-        // Empty list
-        return Ok(match tail_expr {
-            Some(tail) => tail,
-            None => CoreExpr::new(CoreExprKind::Quote(TaggedValue::NULL)),
-        });
-    }
-
-    if segments.len() == 1 && tail_expr.is_none() {
-        // Single segment, no tail
-        return Ok(match segments.into_iter().next().unwrap() {
-            Segment::List(elems) => make_list_call(cx, elems)?,
-            Segment::Splice(expr) => expr,
-        });
-    }
-
-    // Multiple segments or has tail: use append
-    let mut append_args: Vec<CoreExpr> = Vec::new();
-    for seg in segments {
-        match seg {
-            Segment::List(elems) => append_args.push(make_list_call(cx, elems)?),
-            Segment::Splice(expr) => append_args.push(expr),
-        }
-    }
-    if let Some(tail) = tail_expr {
-        append_args.push(tail);
-    }
-
-    // (append seg1 seg2 ... segN)
-    make_app(cx, Constructor::Append, append_args)
-}
-
-/// Expand a vector template: convert to list, expand with pair logic (handles splicing),
-/// then convert back with list->vector.
-fn expand_vector_template(
-    template: TaggedValue,
-    cx: &Expansion<'_>,
-    depth: i32,
-) -> Result<CoreExpr, QuasiquoteError> {
-    // Convert vector to a proper list on the heap, then use pair expansion
-    // which handles unquote-splicing correctly.
-    let elements = cx.heap.borrow().vector_slice(template).to_vec();
-
-    // Build a heap list from the vector elements
-    let list = cx.heap.borrow_mut().list_from_iter(elements);
-
-    // Expand as a list (handles splicing, unquote, etc.)
-    let list_expr = if list.is_null() {
-        CoreExpr::new(CoreExprKind::Quote(TaggedValue::NULL))
-    } else {
-        expand_pair_template(list, cx, depth)?
-    };
-
-    // (list->vector <list-expr>)
-    make_app(cx, Constructor::ListToVector, vec![list_expr])
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-enum Segment {
-    List(Vec<CoreExpr>),
-    Splice(CoreExpr),
-}
-
-/// The operands of an `(unquote …)` or `(unquote-splicing …)` form, as a
-/// proper list.
-///
-/// R6RS 11.17 writes both with a `*`: `(unquote <qq template D-1>*)`. R7RS
-/// 7.1.4 gives each exactly one operand and 4.2.8 makes anything else an
-/// error, so accepting a list here is an extension, taken deliberately —
-/// Gauche, Chez and Larceny read it this way and Larceny's suite asserts it.
-///
-/// `Heap::list_to_vec` rather than a walk of its own, and not only to avoid
-/// a duplicate: it stops on a cycle where a hand-rolled loop does not. A
-/// template may hold one, because the reader accepts a datum label —
-/// `` `(a #0=(unquote . #0#)) `` — and the first version of this function
-/// allocated until the process died on exactly that. `None` covers both
-/// refusals, an improper list and a circular one, which is what the caller
-/// wants: no reading of either report accepts either.
-fn operand_list(cdr: TaggedValue, heap: &SharedHeap) -> Option<Vec<TaggedValue>> {
-    heap.borrow().list_to_vec(cdr)
-}
-
-/// Get car and cdr from what a template promised would be a pair.
-///
-/// Checked, because the operand list of `(unquote …)` is written by the
-/// program and can be empty: `` `(a (unquote)) `` reaches here with `tv`
-/// null. `Heap::car` on a non-pair is a `debug_assert` and, in release, a
-/// read of whatever the tagged value points at — that pair of behaviours is
-/// what this returns an error instead of. R7RS 7.1.4 gives `unquote` exactly
-/// one template, so a form with none is not a `<qq template>` and saying so
-/// is the whole fix; whether to *accept* it, as R6RS 11.17's zero-or-more
-/// grammar and Gauche do, is a separate decision this does not take.
-fn pair_parts(
-    tv: TaggedValue,
-    heap: &SharedHeap,
-    form: &str,
-) -> Result<(TaggedValue, TaggedValue), QuasiquoteError> {
-    if !tv.is_pair() {
-        return Err(QuasiquoteError::Desugar(format!(
-            "{form}: expected one expression after the keyword"
-        )));
-    }
-    let h = heap.borrow();
-    Ok((h.car(tv), h.cdr(tv)))
-}
-
-/// Desugar a TaggedValue expression (from an unquote) into CoreExpr.
-///
-/// The failure is a real program error, not an internal one: `,if` names a
-/// syntactic keyword, and #89 made the desugarer say so. Reporting it as
-/// itself is what lets `` `(1 ,if) `` produce the same diagnostic the bare
-/// `if` gets, instead of the panic this used to be.
-fn desugar_tagged(tv: TaggedValue, cx: &Expansion<'_>) -> Result<CoreExpr, QuasiquoteError> {
-    let core_expr = cx
-        .desugarer
-        .desugar_tagged(tv, cx.heap)
-        .map_err(|e| QuasiquoteError::Desugar(e.to_string()))?;
-    // Recursively expand any nested quasiquotes
-    expand_qq_expr(&core_expr, cx)
-}
-
-/// Build `(list e1 e2 ... eN)` as a CoreExpr::App.
-fn make_list_call(cx: &Expansion<'_>, elems: Vec<CoreExpr>) -> Result<CoreExpr, QuasiquoteError> {
-    if elems.is_empty() {
-        return Ok(CoreExpr::new(CoreExprKind::Quote(TaggedValue::NULL)));
-    }
-    make_app(cx, Constructor::List, elems)
-}
-
-/// Build `(<constructor> arg1 arg2 ...)` with the primitive itself in
-/// operator position.
-fn make_app(
-    cx: &Expansion<'_>,
-    which: Constructor,
-    args: Vec<CoreExpr>,
-) -> Result<CoreExpr, QuasiquoteError> {
-    Ok(CoreExpr::new(CoreExprKind::App {
-        func: Rc::new(CoreExpr::new(CoreExprKind::Literal(cx.constructor(which)?))),
-        args,
-    }))
+    Ok(match template {
+        QuasiTemplate::Datum(datum) => CoreExpr::new(CoreExprKind::Quote(*datum)),
+        QuasiTemplate::Unquoted(expr) => lower_expr(expr, cx)?,
+        // `(<constructor> arg1 arg2 ...)` with the primitive itself in
+        // operator position.
+        QuasiTemplate::Build(which, parts) => CoreExpr::new(CoreExprKind::App {
+            func: Rc::new(CoreExpr::new(CoreExprKind::Literal(
+                cx.constructor(*which)?,
+            ))),
+            args: parts
+                .iter()
+                .map(|part| lower_template(part, cx))
+                .collect::<Result<_, _>>()?,
+        }),
+    })
 }
