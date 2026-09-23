@@ -154,10 +154,11 @@ fn every_exported_primitive_can_be_dispatched() {
     ///
     /// Being on a list means "not undispatchable", not "works everywhere":
     ///
-    /// - All six are claimed at **apply** time, by a short-name match on
-    ///   `Procedure::Primitive` (the VM's `vm_control_primitive`, the
-    ///   tree-walker's `cps_eval/application.rs`), so they work in head *and*
-    ///   value position on both backends. `call/cc` and
+    /// - All six are claimed at **apply** time, by a match on
+    ///   `Procedure::Primitive` (the qualified name in the VM's
+    ///   `vm_control_primitive`, the short name in the tree-walker's
+    ///   `cps_eval/application.rs`), so they work in head *and* value
+    ///   position on both backends. `call/cc` and
     ///   `call-with-current-continuation` joined the others on the tree-walker
     ///   with #441: the CPS transform had claimed them *syntactically*, so
     ///   `(define f call/cc)` then `(f …)` reached a registry miss there.

@@ -12,7 +12,7 @@
 //! transform used to claim it syntactically, by the spelling of the call's
 //! operator, so the value did not work as a procedure and a variable of that
 //! spelling was taken for it (Track Q §1.2). The VM claims the same names,
-//! plus `values` and `call-with-values`, by qualified name in
+//! less `force` and plus `values`, by qualified name in
 //! `vm_control_primitive`.
 
 use super::CpsEvaluator;
@@ -32,7 +32,7 @@ impl<'a> CpsEvaluator<'a> {
         proc_tagged: TaggedValue,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        env: Rc<Environment>,
+        _env: Rc<Environment>,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
@@ -181,7 +181,6 @@ impl<'a> CpsEvaluator<'a> {
                         "call-with-current-continuation" | "call/cc" => self.apply_call_cc(
                             args,
                             cont,
-                            env,
                             cont_env,
                             prompt_stack,
                             dynamic_winds,
@@ -448,12 +447,10 @@ impl<'a> CpsEvaluator<'a> {
     /// left the value itself unimplemented and took a variable of that
     /// spelling for the procedure. Here it is claimed by the value, like
     /// every other control primitive in the match above.
-    #[allow(clippy::too_many_arguments)]
     fn apply_call_cc(
         &self,
         args: Vec<TaggedValue>,
         cont: ContValue,
-        env: Rc<Environment>,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
@@ -483,7 +480,7 @@ impl<'a> CpsEvaluator<'a> {
             proc: args[0],
             args: vec![captured],
             cont,
-            env,
+            env: self.evaluator.global_env.clone(),
             cont_env,
             prompt_stack,
             dynamic_winds,

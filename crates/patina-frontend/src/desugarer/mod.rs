@@ -1221,8 +1221,8 @@ impl Desugarer {
     /// - It is not one of the names `patina_core::by_spelling` lists, which
     ///   the VM's code generator recognises from the name on the `Var` this
     ///   becomes. (`apply` and `call/cc` are not among them since #443 and
-    ///   #441: each is claimed by what it is bound to, so a renamed one only
-    ///   loses a fast path.)
+    ///   #441: each is claimed by what it is bound to, so a renamed `apply`
+    ///   only loses its lowering and a renamed `call/cc` loses nothing.)
     ///
     /// The alias is `Environment::import_alias`: an ordinary forwarded slot
     /// for the same location, one per imported name rather than one per

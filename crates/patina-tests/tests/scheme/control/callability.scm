@@ -270,12 +270,12 @@
 ;; call spelled `call/cc`, and that node was the only implementation there
 ;; was. A reference in value position fell through to a registry binding that
 ;; was not there — `Undefined variable: patina.internal.control/call/cc` — and
-;; a variable of the spelling was taken for the primitive (the last row). It
-;; worked when called directly, which is why the 1226/1226 chibi suite never
-;; caught it: that suite never takes `call/cc` as a value. The evaluator
-;; claims the primitive by its value when it is applied now, as it does every
-;; other control procedure. chibi and Gauche answer every row below as both
-;; backends do.
+;; a variable of the spelling was taken for the primitive (the "a parameter
+;; named call/cc" row). It worked when called directly, which is why the
+;; 1226/1226 chibi suite never caught it: that suite never takes `call/cc` as
+;; a value. The evaluator claims the primitive by its value when it is applied
+;; now, as it does every other control procedure. chibi and Gauche answer
+;; every row below as both backends do.
 ;;
 ;; The first shape is `define`-bound, as Track Q §1.2 names it, so the value
 ;; is stored into a global slot; a `let` would never do that.

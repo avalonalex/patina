@@ -86,8 +86,9 @@
 ;;
 ;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
 ;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
-;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's and 21 / 20 +
-;; 1 skip since #443's, both measured 2026-09-23.
+;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's, 21 / 20 + 1
+;; skip since #443's and 23 / 22 + 1 skip since #441's, all measured
+;; 2026-09-23.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -461,7 +462,7 @@
 
 ;; #441: `call/cc` came off that list when the tree-walker stopped claiming it
 ;; by spelling, so a template's `call/cc` is bound like any other reference.
-;; On main the VM left it a bare name, which the program's definition then
+;; Before that the VM left it a bare name, which the program's definition then
 ;; captured (`mine`), and the tree-walker took the program's own call below for
 ;; the primitive (1).
 (define (escape-through-the-template) (escape-with 7))
