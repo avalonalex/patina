@@ -231,11 +231,9 @@ impl CpsTransformer {
 
             CoreExprKind::Begin(exprs) => self.transform_sequence(exprs, k),
 
+            // A call of `call/cc` is an ordinary application: the evaluator
+            // claims the primitive by its value when it is applied (#441).
             CoreExprKind::App { func, args } => {
-                // Check if this is a call/cc application
-                if self.is_callcc(func) && args.len() == 1 {
-                    return self.transform_callcc(&args[0], k);
-                }
                 self.transform_app(func, args, k, expr.source.clone())
             }
 
@@ -364,48 +362,6 @@ impl CpsTransformer {
                 | CoreExprKind::Quote(_)
                 | CoreExprKind::Lambda { .. }
         )
-    }
-
-    /// Check if an expression is a call/cc reference
-    fn is_callcc(&self, expr: &CoreExpr) -> bool {
-        match &expr.kind {
-            // By spelling, and listed as such: `patina_core::by_spelling`.
-            CoreExprKind::Var { name, .. } => patina_core::by_spelling::is_call_cc(name),
-            _ => false,
-        }
-    }
-
-    /// Transform a call/cc application into CpsExpr::CallCC
-    ///
-    /// (call/cc proc) transforms to CallCC { proc: <proc>, cont: k }
-    fn transform_callcc(&self, proc: &CoreExpr, k: &ContVar) -> CpsExpr {
-        if self.is_trivial(proc) {
-            // Proc is trivial - can inline
-            let cps_proc = self.transform_trivial(proc);
-            CpsExpr::new(CpsExprKind::CallCC {
-                proc: Rc::new(cps_proc),
-                cont: k.clone(),
-            })
-        } else {
-            // Proc is not trivial - need to evaluate it first
-            let proc_var = self.gensym("proc");
-            let proc_cont = self.gensym_cont();
-
-            let callcc_expr = CpsExpr::new(CpsExprKind::CallCC {
-                proc: CpsExpr::rc(CpsExprKind::Var {
-                    name: proc_var.clone(),
-                    scopes: ScopeSet::new(),
-                }),
-                cont: k.clone(),
-            });
-
-            CpsExpr::new(CpsExprKind::LetCont {
-                name: proc_cont.clone(),
-                param: proc_var,
-                cont_body: Rc::new(callcc_expr),
-                body: Rc::new(self.transform(proc, &proc_cont)),
-            })
-        }
     }
 
     /// Transform a trivial expression (must be trivial!)
@@ -785,115 +741,49 @@ mod tests {
         assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
     }
 
+    /// A call of `call/cc` is an ordinary application: the tree-walker claims
+    /// the primitive by its value when it is applied, not the transform by
+    /// the call's spelling (#441), which is what let a variable of that
+    /// spelling be taken for it.
     #[test]
-    fn test_transform_callcc() {
+    fn test_transform_callcc_is_an_application() {
         let transformer = CpsTransformer::new();
 
         // (call/cc (lambda (k) 42))
-        let lambda_body = make_literal(42);
         let lambda = CoreExpr::new(CoreExprKind::Lambda {
             params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
-            body: vec![lambda_body],
+            body: vec![make_literal(42)],
             binding_scopes: std::rc::Rc::new(patina_core::ScopeSet::new()),
         });
-
         let expr = CoreExpr::new(CoreExprKind::App {
             func: Rc::new(make_var("call/cc")),
             args: vec![lambda],
         });
 
         let cps = transformer.transform_toplevel(&expr);
-        println!("CPS for call/cc: {}", cps);
-
-        // Should produce a CpsExprKind::CallCC
-        fn has_callcc(e: &CpsExpr) -> bool {
+        // The operator is let-val bound before the call, as any operator is:
+        // `(let-val (f call/cc) … (f a k))`. Follow the binding to its name.
+        fn calls_callcc(e: &CpsExpr, bound: &mut Vec<(String, String)>) -> bool {
             match &e.kind {
-                CpsExprKind::CallCC { .. } => true,
+                CpsExprKind::App { func, .. } => match &func.kind {
+                    CpsExprKind::Var { name, .. } => {
+                        let name: &str = name.as_ref();
+                        name == "call/cc" || bound.iter().any(|(n, v)| n == name && v == "call/cc")
+                    }
+                    _ => false,
+                },
+                CpsExprKind::LetVal { name, value, body } => {
+                    if let CpsExprKind::Var { name: v, .. } = &value.kind {
+                        bound.push((name.to_string(), v.to_string()));
+                    }
+                    calls_callcc(body, bound)
+                }
                 CpsExprKind::LetCont {
                     cont_body, body, ..
-                } => has_callcc(cont_body) || has_callcc(body),
-                CpsExprKind::LetVal { body, .. } => has_callcc(body),
+                } => calls_callcc(cont_body, bound) || calls_callcc(body, bound),
                 _ => false,
             }
         }
-        assert!(has_callcc(&cps), "CPS should contain CallCC node");
-    }
-
-    #[test]
-    fn test_transform_callcc_with_escape() {
-        let transformer = CpsTransformer::new();
-
-        // (call/cc (lambda (exit) (exit 99)))
-        let exit_call = CoreExpr::new(CoreExprKind::App {
-            func: Rc::new(make_var("exit")),
-            args: vec![make_literal(99)],
-        });
-        let lambda = CoreExpr::new(CoreExprKind::Lambda {
-            params: Formals::Fixed(vec![patina_core::ScopedParam::simple("exit".into())]),
-            body: vec![exit_call],
-            binding_scopes: std::rc::Rc::new(patina_core::ScopeSet::new()),
-        });
-
-        let expr = CoreExpr::new(CoreExprKind::App {
-            func: Rc::new(make_var("call/cc")),
-            args: vec![lambda],
-        });
-
-        let cps = transformer.transform_toplevel(&expr);
-        println!("CPS for call/cc with escape: {}", cps);
-
-        fn has_callcc(e: &CpsExpr) -> bool {
-            match &e.kind {
-                CpsExprKind::CallCC { .. } => true,
-                CpsExprKind::LetCont {
-                    cont_body, body, ..
-                } => has_callcc(cont_body) || has_callcc(body),
-                CpsExprKind::LetVal { body, .. } => has_callcc(body),
-                _ => false,
-            }
-        }
-        assert!(has_callcc(&cps));
-    }
-
-    #[test]
-    fn test_transform_nested_callcc() {
-        let transformer = CpsTransformer::new();
-
-        // (+ 1 (call/cc (lambda (k) (k 2))))
-        let k_call = CoreExpr::new(CoreExprKind::App {
-            func: Rc::new(make_var("k")),
-            args: vec![make_literal(2)],
-        });
-        let lambda = CoreExpr::new(CoreExprKind::Lambda {
-            params: Formals::Fixed(vec![patina_core::ScopedParam::simple("k".into())]),
-            body: vec![k_call],
-            binding_scopes: std::rc::Rc::new(patina_core::ScopeSet::new()),
-        });
-        let callcc = CoreExpr::new(CoreExprKind::App {
-            func: Rc::new(make_var("call/cc")),
-            args: vec![lambda],
-        });
-
-        // (+ 1 <callcc>) - represented as App with + variable
-        let add = CoreExpr::new(CoreExprKind::App {
-            func: Rc::new(make_var("+")),
-            args: vec![make_literal(1), callcc],
-        });
-
-        let cps = transformer.transform_toplevel(&add);
-        println!("CPS for nested call/cc: {}", cps);
-
-        fn has_callcc(e: &CpsExpr) -> bool {
-            match &e.kind {
-                CpsExprKind::CallCC { .. } => true,
-                CpsExprKind::LetCont {
-                    cont_body, body, ..
-                } => has_callcc(cont_body) || has_callcc(body),
-                CpsExprKind::LetVal { body, .. } => has_callcc(body),
-                CpsExprKind::PrimOp { .. } => false,
-                _ => false,
-            }
-        }
-        assert!(has_callcc(&cps));
+        assert!(calls_callcc(&cps, &mut Vec::new()), "{cps}");
     }
 }

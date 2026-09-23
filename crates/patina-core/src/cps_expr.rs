@@ -182,7 +182,6 @@ impl CpsExpr {
                 value.for_each_literal(seen, f);
                 cont.for_each_literal(seen, f);
             }
-            CpsExprKind::CallCC { proc, .. } => proc.for_each_literal(seen, f),
             CpsExprKind::PrimOp { args, .. } => {
                 for arg in args {
                     arg.for_each_literal(seen, f);
@@ -342,26 +341,12 @@ pub enum CpsExprKind {
         cont: Rc<CpsExpr>,  // What to do after definition
     },
 
-    // ==================== Control Operators ====================
-    /// Capture current continuation (for call/cc)
-    /// (call/cc (lambda (k) body) current-k)
-    ///
-    /// Reifies the current continuation as a first-class value and passes
-    /// it to the given procedure.
-    ///
-    /// The only control form the CPS transform emits. The prompt API —
-    /// `call-with-continuation-prompt`, `abort-current-continuation` and
-    /// the composable continuation an abort hands its handler — is claimed
-    /// at *apply* time by the tree-walker (`cps_eval/prompts.rs`), like
-    /// `dynamic-wind`, so that it works as a value as well as in operator
-    /// position. `Prompt`, `Control` and `Abort` nodes existed here for that
-    /// API until 2026-09-04 with nothing emitting them.
-    CallCC {
-        /// Procedure that receives the continuation
-        proc: Rc<CpsExpr>,
-        /// Current continuation (to be captured)
-        cont: ContVar,
-    },
+    // No control operators: every control procedure — `call/cc`, the prompt
+    // API, `dynamic-wind` — is claimed at *apply* time by the tree-walker
+    // (`cps_eval/application.rs`), so that it works as a value as well as in
+    // operator position. `Prompt`, `Control` and `Abort` nodes existed here
+    // until 2026-09-04 with nothing emitting them, and `CallCC` until #441,
+    // made of any call *spelled* `call/cc`.
 
     // ==================== Primitives ====================
     /// Primitive operation (known at compile time)
@@ -542,7 +527,6 @@ impl CpsExprKind {
             CpsExprKind::If { .. } => "if",
             CpsExprKind::Set { .. } => "set!",
             CpsExprKind::Define { .. } => "define",
-            CpsExprKind::CallCC { .. } => "call/cc",
             CpsExprKind::PrimOp { .. } => "prim-op",
             CpsExprKind::Halt(_) => "halt",
         }
@@ -631,9 +615,6 @@ impl std::fmt::Display for CpsExprKind {
                 name, value, cont, ..
             } => {
                 write!(f, "(define {} {} {})", name, value, cont)
-            }
-            CpsExprKind::CallCC { proc, cont } => {
-                write!(f, "(call/cc {} #{})", proc, cont)
             }
             CpsExprKind::PrimOp { op, args, cont } => {
                 write!(f, "({:?}", op)?;

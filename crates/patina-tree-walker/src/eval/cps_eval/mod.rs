@@ -29,7 +29,6 @@
 //! - `Define` - Definition
 //!
 //! **Control operators**:
-//! - `CallCC` - Capture current continuation
 //!
 //! - `PrimOp` - Primitive operations
 //! - `Halt` - Program termination

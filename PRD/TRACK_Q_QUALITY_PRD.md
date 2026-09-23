@@ -179,6 +179,17 @@ classifiers no longer suppress dead-code warnings. This is a mechanical move
 with explicit runtime-facing exports, not a new execution tier or a change to
 any dynamic-state rule. `docs/VM_RUNTIME.md` §4.7 links the contract.
 
+**Update 2026-09-23 — the tree-walker's `call/cc` is a value (#441), and the
+table's last rows converge.** The three `call/cc` rows of the table — bound
+with `define`, passed through `map`, reached through `apply` — were the
+tree-walker's alone, and the cause was not a missing registry binding either:
+the CPS transform made a `CallCC` node of any call *spelled* `call/cc`, and
+that node was the backend's only implementation, so the value had none to
+fall back on. The evaluator claims the primitive by its value when it is
+applied now, as it claims `dynamic-wind` and the prompt API; the node is gone,
+and with it the second face — a parameter named `call/cc` taken for the
+primitive. The metric in §7 reads 3, all family 40's (VM).
+
 **The lesson is the one §1.2 already teaches, applied to itself, three times.**
 Every row in that table was measured, but the *cause* attached to two of them
 was inferred from the error text and never checked — a registry name in an
@@ -569,12 +580,14 @@ lanes and the suite oracles.
   `PRD/ARCHIVE/AUDIT_2026_08_10_PRD.md` B3, previously a comment-only
   divergence, which is exactly the discovery mode this metric exists to end).
   As of 2026-09-13 the grep answers **6 scoped rows**: the three §1.2 rows
-  and family 40's three remaining (VM). It read 6 when written and briefly
-  stood at 8 — family 40 grew from three rows to five on 2026-09-12 when H3
-  found its positive direction, and those two converged on 2026-09-13 when the
-  VM learned to resolve a macro-introduced global across top-level forms. The
-  metric being right again by coincidence is the argument for reading it from
-  the grep rather than from this sentence. The multi-value-escape and re-entry rows
+  and family 40's three remaining (VM). As of 2026-09-23 it answers **3**:
+  the §1.2 rows converged with #441, leaving family 40's (#427). It read 6
+  when written and briefly stood at 8 — family 40 grew from three rows to
+  five on 2026-09-12 when H3 found its positive direction, and those two
+  converged on 2026-09-13 when the VM learned to resolve a macro-introduced
+  global across top-level forms. The metric being right again by coincidence
+  is the argument for reading it from the grep rather than from this
+  sentence. The multi-value-escape and re-entry rows
   converged earlier, and the tree-walker's whole nested-trampoline family
   (four callback pins and two scoped rows) converged the same day, taking
   the `assert_divergence` helper with it.

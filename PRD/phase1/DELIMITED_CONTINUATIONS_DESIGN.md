@@ -29,7 +29,7 @@ true, and the 2026-09-03 table recorded the tree-walker as lacking all of it):
 | `call-with-continuation-prompt` | ✅ | ✅ (2026-09-04, #169) |
 | `abort-current-continuation` | ✅ | ✅ (2026-09-04, #169) |
 | delimited capture, composable invoke | ✅ (#160, #164, #166) | ✅ (2026-09-04, #169) |
-| `call/cc` used as a *value* | ✅ | ❌ Track Q §1.2 |
+| `call/cc` used as a *value* | ✅ | ✅ since #441 (Track Q §1.2) |
 
 The TODO comments in the codebase identify:
 ```rust
@@ -94,12 +94,12 @@ Phase 2), all of which now run on both backends and agree.
 
 | | VM | tree-walker |
 |---|---|---|
-| `call/cc`, `call-with-current-continuation` | `vm_control_primitive` | **syntactically**, `cps_transform.rs`'s `is_callcc_reference` |
-| `dynamic-wind`, `apply`, `raise`, `error`, `force`, `call-with-values`, the two prompt names | `vm_control_primitive` | at **apply** time, short-name match in `cps_eval/application.rs` |
+| `call/cc`, `call-with-current-continuation`, `dynamic-wind`, `apply`, `raise`, `error`, `force`, `call-with-values`, the two prompt names | `vm_control_primitive` | at **apply** time, short-name match in `cps_eval/application.rs` |
 
 An apply-time match sees the primitive whatever name reached it; a syntactic
-one only sees the call it was written in — which is why `call/cc` still does
-not work as a value (Track Q §1.2).
+one only sees the call it was written in. `call/cc` was claimed syntactically
+on the tree-walker, by the CPS transform, until #441, and did not work as a
+value there (Track Q §1.2).
 
 The VM has a syntactic claim of its own that this table does not show: its
 code generator emits an instruction sequence for a call *spelled*

@@ -12,8 +12,9 @@
 ;; bare name does not identify. And three with #438: a program defining a name
 ;; it imported, after a template that mentions it was expanded — a fourth
 ;; with #445, for the same reference inside a quasiquote's unquote, two
-;; with #446, for a macro the program made with a library's generator, and
-;; two with #443, for the program's own `apply` in head position.
+;; with #446, for a macro the program made with a library's generator, two
+;; with #443, for the program's own `apply` in head position, and two with
+;; #441, for a template's `call/cc` and the program's own.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -32,10 +33,10 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; twenty of the twenty-one rows. The three #407 rows, the four #408 rows and
+;; twenty-two of the twenty-three rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), the #445 row on 2026-09-22 and the two #446 and two #443 rows
-;; on 2026-09-23, and it answers as Gauche does.
+;; (2026-09-19), the #445 row on 2026-09-22 and the two #446, two #443 and
+;; two #441 rows on 2026-09-23, and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -145,7 +146,7 @@
 (define-library (probe same)
   (import (scheme base))
   (export peek-X bump-Y! get-Y count bump-count! get-count size-of size-in-a-template
-          map-apply sum-of-list)
+          map-apply sum-of-list escape-with)
   (begin
     (define X 0)
     (define Y 0)
@@ -164,7 +165,10 @@
     (define-syntax map-apply
       (syntax-rules () ((_ f l) (map apply (list f) (list l)))))
     ;; `apply` in *head* position.
-    (define-syntax sum-of-list (syntax-rules () ((_ l) (apply + l))))))
+    (define-syntax sum-of-list (syntax-rules () ((_ l) (apply + l))))
+    ;; `call/cc` in head position.
+    (define-syntax escape-with
+      (syntax-rules () ((_ v) (call/cc (lambda (k) (k v) 'fell-through)))))))
 
 ;; Definers with private state, for the introduced-definition rows. Each
 ;; generated macro mentions a definition *its own generator introduced*:
@@ -454,6 +458,19 @@
   (apply + (r7:list 1 2)))
 (test-equal "while a template's apply in head position stays the procedure" 6
   (sum-of-list (r7:list 1 2 3)))
+
+;; #441: `call/cc` came off that list when the tree-walker stopped claiming it
+;; by spelling, so a template's `call/cc` is bound like any other reference.
+;; On main the VM left it a bare name, which the program's definition then
+;; captured (`mine`), and the tree-walker took the program's own call below for
+;; the primitive (1).
+(define (escape-through-the-template) (escape-with 7))
+(define (call/cc f) 'mine)
+
+(test-equal "and a template's call/cc stays the procedure" 7
+  (escape-through-the-template))
+(test-equal "and the program's own call/cc is the one its calls reach" 'mine
+  (call/cc (lambda (k) (k 1))))
 
 ;; ── A definition the macro's own generator introduced ───────────────────────
 ;;

@@ -349,35 +349,6 @@ impl<'a> CpsEvaluator<'a> {
                     });
                 }
 
-                CpsExprKind::CallCC { proc, cont } => {
-                    let procedure =
-                        try_catchable!(self.eval_trivial_tagged(proc, &current_env, &cont_env));
-
-                    let k = cont_env
-                        .get(cont)
-                        .ok_or_else(|| EvalError::UndefinedVariable(cont.to_string()))?
-                        .clone();
-
-                    let captured_k_tagged = self.reify_continuation_tagged(
-                        &k,
-                        &cont_env,
-                        &current_winds,
-                        &exception_handlers,
-                        &prompt_stack,
-                    );
-
-                    return Ok(StepResult::ApplyProc {
-                        proc: procedure,
-                        args: vec![captured_k_tagged],
-                        cont: k,
-                        env: current_env,
-                        cont_env,
-                        prompt_stack,
-                        dynamic_winds: current_winds,
-                        exception_handlers,
-                    });
-                }
-
                 CpsExprKind::PrimOp { op, args, cont } => {
                     // Evaluate args directly to TaggedValue
                     let arg_values: Vec<TaggedValue> = try_catchable!(
