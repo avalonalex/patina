@@ -49,7 +49,6 @@ empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
 - #269 — a definition a template introduces in a body is reachable by its bare name.
-- #442 — VM: `call-with-values` and `dynamic-wind` are recognised by spelling, so a program's own definition is ignored and the value takes a weaker path. These two are the last names #438's fix has to leave alone (`patina_core::by_spelling`); closing it takes them off that list, as #443 took `apply`'s and #441 `call/cc`'s.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
 
 **Ports and I/O**

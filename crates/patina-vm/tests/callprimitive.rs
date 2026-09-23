@@ -10,7 +10,7 @@ use patina_core::procedure::Arity;
 use patina_core::tagged_value::TaggedValue;
 use patina_vm::compiler::compile_with_qq_resolving;
 use patina_vm::runtime::VmState;
-use patina_vm::types::instruction::Instruction;
+use patina_vm::types::instruction::{ControlForm, Instruction};
 use std::rc::Rc;
 
 fn var(name: &str) -> CoreExpr {
@@ -460,4 +460,125 @@ fn non_branch_predicate_use_stays_unfused() {
         0,
         "{instrs:?}"
     );
+}
+
+// ── Control forms with a sequence of their own (#442) ────────────────────────
+//
+// A head-position `call-with-values` or `dynamic-wind` compiles to the form's
+// instruction sequence where its operator is *bound* to the form's procedure
+// when the site is compiled, behind a `JumpUnlessShadowed` guard. Until #442
+// it was where the operator was *spelled* so, whatever it was bound to.
+
+fn thunk(body: CoreExpr) -> CoreExpr {
+    lambda(vec![], vec![body])
+}
+
+/// A fresh VM where both forms are bound as the library loader binds them.
+fn state_with_control_forms() -> VmState {
+    let state = state_with_library_binding(
+        "call-with-values",
+        Arity::Exact(2),
+        &["patina", "internal", "control"],
+    );
+    state.globals.define_primitive(
+        "dynamic-wind",
+        Arity::Exact(3),
+        vec!["patina".into(), "internal".into(), "control".into()],
+    );
+    state
+}
+
+fn cwv_call(operator: &str) -> CoreExpr {
+    app(var(operator), vec![thunk(lit(1)), var("list")])
+}
+
+fn dw_call(operator: &str) -> CoreExpr {
+    app(
+        var(operator),
+        vec![thunk(lit(0)), thunk(lit(1)), thunk(lit(2))],
+    )
+}
+
+fn guarded(instrs: &[Instruction], form: ControlForm) -> usize {
+    instrs
+        .iter()
+        .filter(|i| matches!(i, Instruction::JumpUnlessShadowed { form: f, .. } if *f == form))
+        .count()
+}
+
+#[test]
+fn control_forms_compile_to_their_sequence() {
+    let state = state_with_control_forms();
+    let instrs = compile_all_in(&state, &cwv_call("call-with-values"));
+    assert_eq!(
+        guarded(&instrs, ControlForm::CallWithValues),
+        1,
+        "{instrs:?}"
+    );
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::CallWithValues { .. })),
+        1,
+        "{instrs:?}"
+    );
+    let instrs = compile_all_in(&state, &dw_call("dynamic-wind"));
+    assert_eq!(guarded(&instrs, ControlForm::DynamicWind), 1, "{instrs:?}");
+    assert_eq!(
+        count_matching(&instrs, |i| matches!(i, Instruction::PushWind { .. })),
+        1,
+        "{instrs:?}"
+    );
+}
+
+#[test]
+fn control_forms_follow_the_binding_under_another_name() {
+    // What a renamed import, or the alias early binding gives a library
+    // template's reference, looks like to the compiler.
+    let state = state_with_control_forms();
+    let cwv = state.globals.get("call-with-values").unwrap();
+    let dw = state.globals.get("dynamic-wind").unwrap();
+    state.globals.define("receive-values", cwv);
+    state.globals.define("wind", dw);
+    let instrs = compile_all_in(&state, &cwv_call("receive-values"));
+    assert_eq!(
+        guarded(&instrs, ControlForm::CallWithValues),
+        1,
+        "{instrs:?}"
+    );
+    let instrs = compile_all_in(&state, &dw_call("wind"));
+    assert_eq!(guarded(&instrs, ControlForm::DynamicWind), 1, "{instrs:?}");
+}
+
+#[test]
+fn control_forms_spelled_so_but_bound_elsewhere_are_ordinary_calls() {
+    // The program's own definitions: the name is the form's, the binding is
+    // not, so the site calls what it is bound to.
+    let state = state_with_control_forms();
+    let list = state.globals.get("list").unwrap();
+    state.globals.define("call-with-values", list);
+    state.globals.define("dynamic-wind", list);
+    for expr in [cwv_call("call-with-values"), dw_call("dynamic-wind")] {
+        let instrs = compile_all_in(&state, &expr);
+        assert_eq!(
+            count_matching(&instrs, |i| matches!(
+                i,
+                Instruction::JumpUnlessShadowed { .. }
+            )),
+            0,
+            "{instrs:?}"
+        );
+    }
+}
+
+#[test]
+fn control_forms_at_another_arity_are_ordinary_calls() {
+    // The sequence is for the form's own argument count; any other is the
+    // procedure's to reject, with its own arity error.
+    let state = state_with_control_forms();
+    let instrs = compile_all_in(&state, &app(var("call-with-values"), vec![thunk(lit(1))]));
+    assert_eq!(
+        guarded(&instrs, ControlForm::CallWithValues),
+        0,
+        "{instrs:?}"
+    );
+    assert_eq!(count_generic_calls(&instrs), 1, "{instrs:?}");
 }

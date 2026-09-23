@@ -17,7 +17,7 @@ use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::instruction::{Instruction, TestOp};
+use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
@@ -114,6 +114,9 @@ pub struct VmState {
     /// in (`value_wind_stub`). Built on the first such call; a program that
     /// only ever calls `dynamic-wind` in head position never builds one.
     pub(crate) value_wind_code: Option<CodeObjectId>,
+    /// Id of the two-instruction stub the *value* form of `call-with-values`
+    /// runs in (`value_cwv_stub`). Built on the first such call.
+    pub(crate) value_cwv_code: Option<CodeObjectId>,
     /// Id of the two-instruction stub an abort's prompt handler is called in
     /// (`abort_handler_stub`). Built on the first abort; a program with no
     /// prompts never builds one.
@@ -139,6 +142,13 @@ pub struct VmState {
     /// name-lookup `Call` path when it is set, so rebinding a primitive name
     /// behaves exactly as it did before `CallPrimitive` emission.
     pub shadowed_primitives: Vec<u64>,
+    /// The same for the two control forms pass 5 compiles to a sequence of
+    /// their own, one bit each (`ControlForm::bit`): set when a global
+    /// binding holding the form's procedure is given another value, after
+    /// which `JumpUnlessShadowed` sends every such site to an ordinary call.
+    /// Separate from `shadowed_primitives` because `dynamic-wind` has no
+    /// registry entry to index it by.
+    pub(crate) shadowed_controls: u8,
     /// Reusable argument buffer for `CallPrimitive` dispatch, taken out of
     /// the state (`mem::take`) for the duration of each call so re-entrant
     /// primitives see an empty buffer and simply allocate — only nested
@@ -216,6 +226,7 @@ impl VmState {
             code_units: FxHashMap::default(),
             wind_jump_code: None,
             value_wind_code: None,
+            value_cwv_code: None,
             abort_handler_code: None,
             invoke_step_code: None,
             raise_step_code: None,
@@ -223,6 +234,7 @@ impl VmState {
             heap,
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
+            shadowed_controls: 0,
             scratch_args: Vec::new(),
             continuation_store: RefCell::new(FxHashMap::default()),
             delimited_continuation_store: RefCell::new(FxHashMap::default()),
@@ -243,6 +255,18 @@ impl VmState {
             self.shadowed_primitives.resize(word + 1, 0);
         }
         self.shadowed_primitives[word] |= 1 << (index % 64);
+    }
+
+    /// Record that a binding of `form`'s procedure was given another value;
+    /// its sites call their operator from now on.
+    pub(crate) fn mark_shadowed_control(&mut self, form: ControlForm) {
+        self.shadowed_controls |= form.bit();
+    }
+
+    /// Has a binding of `form`'s procedure been given another value?
+    #[inline]
+    pub(crate) fn is_control_shadowed(&self, form: ControlForm) -> bool {
+        self.shadowed_controls & form.bit() != 0
     }
 
     /// Has the primitive at `index` been rebound since compilation?
@@ -1035,17 +1059,19 @@ pub(super) fn run_loop_until_outcome(
     // A handler installed during this loop is dead once the loop's frame has
     // returned, and this count is the only thing that identifies it: a
     // tail-called `with-exception-handler` installs at `exit_depth`, which is
-    // also where a handler this loop was *started under* sits when the
-    // control primitive that started it tail-replaced its thunk's frame —
-    // `(with-exception-handler h (lambda () (call-with-values p c)))` runs
-    // `p` on a nested loop with `h` at that depth and still owed a raise from
-    // `c`. So the exit-depth `Return` pops nothing (see
-    // `pop_resolved_extents`) and the loop closes its own on the way out.
+    // also where a handler this loop was *started under* sits when whatever
+    // started it tail-replaced its thunk's frame. So the exit-depth `Return`
+    // pops nothing (see `pop_resolved_extents`) and the loop closes its own on
+    // the way out.
     //
-    // The example used to be the value form of `dynamic-wind`, whose thunks
-    // ran on nested loops until 2026-09-02 (issue #157). `call-with-values`'
-    // producer is now the only remaining `run_thunk_outcome` caller with a
-    // result to place, and carries the invariant on its own.
+    // The examples were control primitives that ran a thunk of the program's
+    // on a nested loop: the value form of `dynamic-wind` until 2026-09-02
+    // (issue #157), then `call-with-values`' producer reached as a value —
+    // `(with-exception-handler h (lambda () (cwv p c)))` ran `p` with `h` at
+    // that depth, still owed a raise from `c` — until 2026-09-23 (#442). Both
+    // run their thunks as frames of a stub now. The count stays: whether a
+    // loop still started some other way can begin from a tail-replaced frame
+    // has not been re-checked, and it costs a load.
     let handlers_at_entry = state.exception_handlers.len();
     // The same for prompts. A nested loop that returns at its own exit depth
     // pops nothing there by design (`pop_resolved_extents`), so a prompt
@@ -1433,6 +1459,12 @@ fn dispatch_one_instruction(
         Instruction::JumpUnless { cond, target } => {
             let val = state.reg_at(base, cond);
             if val == TaggedValue::FALSE {
+                state.frames.last_mut().unwrap().pc = target;
+            }
+        }
+
+        Instruction::JumpUnlessShadowed { form, target } => {
+            if !state.is_control_shadowed(form) {
                 state.frames.last_mut().unwrap().pc = target;
             }
         }
@@ -2341,6 +2373,9 @@ pub(crate) fn mark_if_shadowing_primitive_value(
     else {
         return;
     };
+    if let Some(form) = super::control::control_form(qualified_name) {
+        state.mark_shadowed_control(form);
+    }
     let index = state
         .primitive_registry
         .resolve_index_cached(qualified_name, registry_index);

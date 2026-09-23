@@ -1218,11 +1218,14 @@ impl Desugarer {
     /// - By name it reaches, from here and from the root alike, the very
     ///   location the macro's own environment reaches: an import of the use
     ///   site's that is the binding the template meant.
-    /// - It is not one of the names `patina_core::by_spelling` lists, which
-    ///   the VM's code generator recognises from the name on the `Var` this
-    ///   becomes. (`apply` and `call/cc` are not among them since #443 and
-    ///   #441: each is claimed by what it is bound to, so a renamed `apply`
-    ///   only loses its lowering and a renamed `call/cc` loses nothing.)
+    ///
+    /// No name is left out for its spelling. Five were until 2026-09-23,
+    /// because some part of Patina decided what a call meant from the name on
+    /// its `Var`, and renaming the reference changed what the program did:
+    /// `apply` (#443), `call/cc` and `call-with-current-continuation` (#441),
+    /// and `call-with-values` and `dynamic-wind` (#442). Each recogniser now
+    /// asks what the name is bound to, so the alias is recognised as the name
+    /// is. A new fast path has to do the same, or this binding defeats it.
     ///
     /// The alias is `Environment::import_alias`: an ordinary forwarded slot
     /// for the same location, one per imported name rather than one per
@@ -1287,16 +1290,12 @@ impl Desugarer {
     }
 
     /// The location `name` means to `def_env`, with the root's alias for it,
-    /// when the root here imports that very location and the name is not one
-    /// that is recognised by its spelling.
+    /// when the root here imports that very location.
     fn import_of(
         &self,
         name: &Rc<str>,
         def_env: &Rc<Environment>,
     ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
-        if patina_core::by_spelling::is_recognized(name) {
-            return None;
-        }
         let target_env = self.env.root();
         let location = def_env.binding_location(name)?;
         if target_env.binding_location(name).as_ref() != Some(&location) {

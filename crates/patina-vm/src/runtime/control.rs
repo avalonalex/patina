@@ -107,16 +107,13 @@
 //! are `control_flow_matrix.rs`, `escape_from_primitive.rs`, and the Scheme
 //! control suites (including their existing backend-specific expectations).
 
-use super::vm_state::{
-    LoopExit, VmState, frame_globals, run_loop_until, run_loop_until_outcome, vm_eval_expr,
-    vm_load_library,
-};
+use super::vm_state::{VmState, frame_globals, run_loop_until, vm_eval_expr, vm_load_library};
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use crate::types::instruction::{Instruction, PrimitiveFnId};
+use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
@@ -499,22 +496,6 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
     }
 }
 
-/// How a thunk run at a synchronous boundary ended. The same distinction
-/// [`LoopExit`] makes, restated for the boundary's benefit.
-enum ThunkOutcome {
-    Returned(TaggedValue),
-    /// A continuation unwound past this boundary. The caller owns no live
-    /// frame: it must not write a register, and must hand the unwind on.
-    ///
-    /// Nor may it run cleanup of its own. The one boundary that tried —
-    /// the value form of `dynamic-wind`, deciding whether it still owed its
-    /// after-thunk by comparing wind-stack *lengths* — was asking about a
-    /// stack the jump had already replaced with the target's, and truncated
-    /// the target's records to run its own thunk again (issue #157). Cleanup
-    /// that must survive an escape belongs in an instruction, not here.
-    Escaped(TaggedValue),
-}
-
 /// The values a producer handed to `call-with-values`: the elements of a
 /// `#<values>` object (from `values` with other than one argument, from a
 /// primitive such as `exact-integer-sqrt`, or from a continuation invoked
@@ -529,50 +510,6 @@ pub(super) fn unpack_values(state: &VmState, primary: TaggedValue) -> Vec<Tagged
         Some(vals) => vals,
         None => vec![primary],
     }
-}
-
-/// Run a zero-argument callable to completion, reporting whether it returned.
-///
-/// Pushes the thunk's frame, runs the execution loop until that frame returns,
-/// then returns the result.
-///
-/// `call-with-values`' producer is the only caller left. There used to be a
-/// `run_thunk` wrapper over it for the boundaries that ran *bookkeeping*
-/// thunks and had no result to place — a jump's wind thunks, then the value
-/// form of `dynamic-wind`, then an abort's exit winds and a composable
-/// invoke's entry thunks. Each of those in turn stopped being a Rust frame
-/// and became an instruction to come back to, which is what lets a
-/// continuation captured inside one be resumed; with the last two gone
-/// (#165) the wrapper had no callers.
-///
-/// # State contract
-///
-/// Requires a live caller. May grow scratch registers and run a nested loop,
-/// changing all dynamic stacks. Escaped is a transfer, not a producer value;
-/// the caller must park it and return without applying its consumer.
-fn run_thunk_outcome(state: &mut VmState, thunk: TaggedValue) -> Result<ThunkOutcome, VmError> {
-    let depth_before = state.frames.len();
-
-    // Use a return_reg beyond the caller's register window so the thunk's
-    // Return instruction doesn't clobber any live value (e.g. MutableCell in r0).
-    let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
-    // Ensure the register array has room for the scratch slot.
-    if let Some(f) = state.frames.last() {
-        let needed = f.register_base + return_reg as usize + 1;
-        if state.registers.len() < needed {
-            state.registers.resize(needed, TaggedValue::UNSPECIFIED);
-        }
-    }
-
-    // If thunk is a primitive (rare but possible), call it directly.
-    if let Some(result) = call_any(state, thunk, &[], return_reg)? {
-        return Ok(ThunkOutcome::Returned(result));
-    }
-    // VM closure was pushed; run until it returns.
-    Ok(match run_loop_until_outcome(state, depth_before)? {
-        LoopExit::Returned(v) => ThunkOutcome::Returned(v),
-        LoopExit::Escaped(v) => ThunkOutcome::Escaped(v),
-    })
 }
 
 /// Handle a VM-intercepted control primitive call.
@@ -616,8 +553,9 @@ fn handle_control_primitive(
                     got: args.len(),
                 });
             }
-            // Only the value form reaches here; head-position `dynamic-wind`
-            // compiles to `PushWind`/`PopWind`. Run the same instructions in
+            // The value form reaches here, and a head-position call whose
+            // sequence is shadowed (`JumpUnlessShadowed`); an unshadowed one
+            // runs `PushWind`/`PopWind` in place. Run the same instructions in
             // a frame of the machine's own, so that everything this call
             // still owes — its record, its after-thunk, the delivery of its
             // body's value — is a pc a re-entering continuation restores
@@ -808,23 +746,25 @@ fn handle_control_primitive(
                     got: args.len(),
                 });
             }
-            let producer = args[0];
-            let consumer = args[1];
-            // Run producer (0 args); its multiple values, if any, are a
-            // #<values> object in the result.
-            let primary = match run_thunk_outcome(state, producer)? {
-                ThunkOutcome::Returned(v) => v,
-                // The producer escaped. Running the consumer here would run it
-                // on the escape value and then overwrite that value with the
-                // consumer's result — the whole `call-with-values` call is
-                // abandoned, not completed.
-                ThunkOutcome::Escaped(v) => return Err(park_escape(state, v)),
-            };
-            let produced_vals = unpack_values(state, primary);
-            // Consumer may be a primitive (e.g. `list`) or a VM closure.
-            if let Some(result) = call_any(state, consumer, &produced_vals, dst)? {
-                state.set_reg(dst, result);
-            }
+            // Head position's tail sequence, in a frame of the machine's own,
+            // for the reason `DynamicWind` gives above: the consumer still owed
+            // is a pc a continuation captured in the producer restores with the
+            // frame, not a Rust frame it cannot (#442). Until then the producer
+            // ran on a nested loop, and a continuation captured in it did not
+            // come back through the consumer: a producer returning by
+            // `(k 1 2)` answered `#<procedure>`.
+            let code = value_cwv_stub(state)?;
+            let base = state.alloc_registers(value_cwv::NUM_REGS);
+            state.frames.push(CallFrame {
+                pc: 0,
+                register_base: base,
+                num_regs: value_cwv::NUM_REGS,
+                closure: None,
+                return_reg: dst,
+                code,
+            });
+            state.set_reg_at(base, value_cwv::PRODUCER, args[0]);
+            state.set_reg_at(base, value_cwv::CONSUMER, args[1]);
         }
 
         VmControlPrimitive::Apply => {
@@ -1200,8 +1140,7 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// `with-exception-handler` installed *inside* the loop sits at the same
 /// depth and is dead. `run_loop_until_outcome` closes the second kind from
 /// its own entry count. Prompts at that depth belong to the Rust caller that
-/// started the loop (`run_thunk_outcome`, a prompt body), which closes them
-/// itself.
+/// started the loop (a prompt body), which closes them itself.
 ///
 /// # State contract
 ///
@@ -1476,7 +1415,7 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 /// Both callers want the same three properties, and stating them once is the
 /// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — none of its five stubs has constants to trace, but
+/// without qualification — none of its six stubs has constants to trace, but
 /// the invariant is cheaper to keep than to caveat, and a stub that ever does
 /// need them inherits the rule rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
@@ -1654,6 +1593,53 @@ fn value_wind_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
         "dynamic-wind",
         instructions,
         value_wind::NUM_REGS,
+    )
+}
+
+/// The registers of the stub frame the **value** form of `call-with-values`
+/// runs in. See [`value_cwv_stub`].
+mod value_cwv {
+    /// The producer thunk.
+    pub(super) const PRODUCER: u16 = 0;
+    /// The consumer.
+    pub(super) const CONSUMER: u16 = 1;
+    /// What the producer returned: one value, or a `#<values>` object.
+    pub(super) const PRODUCED: u16 = 2;
+    /// Window size of the stub frame.
+    pub(super) const NUM_REGS: u16 = 3;
+}
+
+/// The code object the value form of `call-with-values` runs — the two
+/// instructions `pass5_codegen` emits for it in tail position, in a frame of
+/// their own, as [`value_wind_stub`] is for `dynamic-wind`.
+///
+/// The tail form, so the consumer replaces this frame and returns straight
+/// to the call's destination; the frame is gone by the time it runs, as a
+/// tail call's caller is.
+///
+/// # State contract
+///
+/// Returns loaded/cached stub code via runtime_stub. Changes only the code
+/// store/cache; no frame is pushed and no Scheme code runs.
+fn value_cwv_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    let instructions = vec![
+        Instruction::Call {
+            func: value_cwv::PRODUCER,
+            args: vec![],
+            dst: value_cwv::PRODUCED,
+        },
+        Instruction::TailCallWithValues {
+            consumer: value_cwv::CONSUMER,
+            producer_result: value_cwv::PRODUCED,
+        },
+    ];
+    runtime_stub(
+        state,
+        |s| s.value_cwv_code,
+        |s, id| s.value_cwv_code = Some(id),
+        "call-with-values",
+        instructions,
+        value_cwv::NUM_REGS,
     )
 }
 
@@ -1876,7 +1862,7 @@ fn run_apply_proc(
 }
 
 /// Recognized VM-intercepted control primitives.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VmControlPrimitive {
     DynamicWind,
     CallWithContinuationPrompt,
@@ -1958,6 +1944,15 @@ fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmCont
     let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
         return None;
     };
+    intercepted_primitive(qualified_name)
+}
+
+/// Which intercepted control primitive the primitive of this qualified name
+/// is, if any. [`vm_control_primitive`] asks it of a callee at run time, and
+/// the compiler of an operator's compile-time binding
+/// (`primitive_calls::resolve_primitive_calls`), so the two cannot disagree
+/// about which procedure is `call-with-values`.
+pub(crate) fn intercepted_primitive(qualified_name: &str) -> Option<VmControlPrimitive> {
     // Cheap prefix reject before the linear string scan: every intercepted
     // primitive lives under the excluded namespaces — enforced by
     // `excluded_covers_every_intercepted_primitive` in primitive_calls.rs.
@@ -1966,8 +1961,20 @@ fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmCont
     }
     VM_INTERCEPTED_PRIMITIVES
         .iter()
-        .find(|(name, _)| *name == qualified_name.as_ref())
+        .find(|(name, _)| *name == qualified_name)
         .map(|&(_, ctrl)| ctrl)
+}
+
+/// The control form with an instruction sequence of its own that the
+/// primitive of this qualified name is the procedure of, if any: what pass 5
+/// compiles a call through a name bound to it as, and what a rebinding of it
+/// marks shadowed.
+pub(crate) fn control_form(qualified_name: &str) -> Option<ControlForm> {
+    match intercepted_primitive(qualified_name)? {
+        VmControlPrimitive::CallWithValues => Some(ControlForm::CallWithValues),
+        VmControlPrimitive::DynamicWind => Some(ControlForm::DynamicWind),
+        _ => None,
+    }
 }
 
 /// Try to invoke `func_val` as a full (`call/cc`) continuation. Returns the
@@ -2725,11 +2732,10 @@ fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Proc
 /// any enclosing dispatch loop — or to none of them, if the escape targets a
 /// frame further out — and only `run_loop_until` knows its own `exit_depth`,
 /// so it is the one place allowed to decide whether to resume or exit. Every
-/// synchronous boundary in between (`run_thunk_outcome`, and through it
-/// `call-with-values`) sees the sentinel and learns that the value is the
-/// resumed computation's, not its own — which is the whole difference between
-/// writing a register in a live frame and writing one in a frame that no
-/// longer exists.
+/// synchronous boundary in between (a primitive's callback, say) sees the
+/// sentinel and learns that the value is the resumed computation's, not its
+/// own — which is the whole difference between writing a register in a live
+/// frame and writing one in a frame that no longer exists.
 ///
 /// `value` is what the continuation *delivers*
 /// ([`deliver_value`]), which for `(k)` and `(k v1 v2 …)` is a `#<values>`

@@ -160,6 +160,9 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::JumpUnless { cond, target } => {
             format!("JumpUnless   r{} → {}", cond, target)
         }
+        Instruction::JumpUnlessShadowed { form, target } => {
+            format!("JumpUnlessShadowed {:?} → {}", form, target)
+        }
         Instruction::Call { func, args, dst } => {
             let a: Vec<String> = args.iter().map(|r| format!("r{}", r)).collect();
             format!("Call         r{} ← r{}({})", dst, func, a.join(", "))

@@ -369,11 +369,13 @@ definition of the name, which is in no environment until it runs — and is
 taken back at the end of the top-level form (`settle_early_bindings`).
 
 A macro of the use site's own is not bound early (chibi and Gauche disagree
-there), nor are the two names `patina_core::by_spelling` lists, which are
-recognised from the *reference* itself: renamed, a `call-with-values` or
-`dynamic-wind` leaves the VM's instruction path (#442). `apply` (#443) and
-both spellings of `call/cc` (#441) were on that list until their recognisers
-started asking what the name is bound to, and are bound like any other name.
+there). No name is left out for its spelling. Five were, listed in
+`patina_core::by_spelling`, because some part of Patina recognised them from
+the *reference* itself and renaming one changed what the program did; each
+recogniser learned to ask what the name is bound to — `apply` (#443), both
+spellings of `call/cc` (#441), and `call-with-values` and `dynamic-wind`,
+whose instruction sequence on the VM now runs behind a guard (#442) — and the
+list went with the last.
 
 The identity is needed because `alpha_rename` runs once per top-level form and
 builds its candidate frames from that form alone. A reference in a later form

@@ -78,6 +78,51 @@ fn set_after_use_deoptimizes() {
     assert_eq!(eval("(define (g) (+ 40 2)) (set! + -) (g)"), "38");
 }
 
+/// The sequence a head-position `call-with-values` or `dynamic-wind` compiles
+/// to (#442) is guarded like a `CallPrimitive` site: compiled while the name
+/// is the form's procedure, it calls what the name holds once that changes.
+/// Both positions, because the sequence ends differently in each: in tail
+/// position the ordinary call it falls back to is a `TailCall`.
+#[test]
+fn control_forms_define_after_use_deoptimize() {
+    assert_eq!(
+        eval(
+            "(define (f) (call-with-values (lambda () (values 1 2)) list)) \
+             (define (f-inner) (car (list (call-with-values (lambda () (values 1 2)) list)))) \
+             (define (g) (dynamic-wind (lambda () #f) (lambda () 'body) (lambda () #f))) \
+             (define (g-inner) (car (list (dynamic-wind (lambda () #f) (lambda () 'body) (lambda () #f))))) \
+             (define before (list (f) (f-inner) (g) (g-inner))) \
+             (define (call-with-values p c) 'mine) \
+             (define (dynamic-wind a b c) 'mine) \
+             (list before (f) (f-inner) (g) (g-inner))"
+        ),
+        "(((1 2) (1 2) body body) mine mine mine mine)"
+    );
+}
+
+/// The same through `set!`, and back: restoring the procedure restores the
+/// answer, though not the sequence — the shadow mark stays set, and the site
+/// calls the procedure through its value form from then on.
+#[test]
+fn control_forms_set_after_use_deoptimize() {
+    assert_eq!(
+        eval(
+            "(define saved-cwv call-with-values) \
+             (define saved-dw dynamic-wind) \
+             (define (f) (call-with-values (lambda () (values 1 2)) list)) \
+             (define (g) (dynamic-wind (lambda () #f) (lambda () 'body) (lambda () #f))) \
+             (define before (list (f) (g))) \
+             (set! call-with-values (lambda (p c) 'assigned)) \
+             (set! dynamic-wind (lambda (a b c) 'assigned)) \
+             (define during (list (f) (g))) \
+             (set! call-with-values saved-cwv) \
+             (set! dynamic-wind saved-dw) \
+             (list before during (f) (g))"
+        ),
+        "(((1 2) body) (assigned assigned) (1 2) body)"
+    );
+}
+
 #[test]
 fn deopt_is_per_primitive() {
     // Rebinding car must not disturb cdr's fast path.

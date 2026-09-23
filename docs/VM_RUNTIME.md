@@ -291,7 +291,7 @@ There are **two** probe sets, one per call shape, and they differ in order:
   mutually exclusive), so this is two probe sets by choice, not by drift
 - **`call_any()`** — `call_value()` for call sites that have no
   instruction behind them: a `call-with-values` consumer (instruction and tail
-  instruction) or producer, a prompt body, an exception-handler thunk,
+  instruction), a prompt body, an exception-handler thunk,
   `call/cc`'s procedure, a jump's wind thunks, a composable invoke's re-entry thunks, a higher-order primitive's
   callback, and a parameter converter. It adds the one thing those callers
   cannot get from the dispatch loop: whether the callee finished. `Some(v)` is
@@ -388,7 +388,7 @@ intercepted at call dispatch time.
 | `AbortCurrentContinuation` | `abort-current-continuation` | Find prompt, capture delimited cont, unwind, call handler |
 | `CallWithCurrentContinuation` | `call/cc` | Snapshot full stack, deliver to proc |
 | `Values` | `values` | Store in `value_buffer`, return primary value |
-| `CallWithValues` | `call-with-values` | Clear buffer, run producer, unpack values, call consumer |
+| `CallWithValues` | `call-with-values` | Push a `value_cwv_stub` frame: call the producer, then tail-call the consumer with its values |
 | `WithExceptionHandler` | `with-exception-handler` | Push handler, run thunk, pop on return |
 | `Raise` | `raise` | Pop handler, push `raise_step_stub` — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
@@ -526,6 +526,13 @@ intercepted at call dispatch time.
   wind-stack lengths after the jump had replaced that stack) and left its
   caller's register holding the `NULL` `call/cc`'s capture had cleared it to
   (issue #157)
+- The value form of `call-with-values` does the same since 2026-09-23 (#442):
+  a stub frame running `value_cwv_stub`'s `Call producer` /
+  `TailCallWithValues consumer`, head position's tail sequence. It ran the
+  producer on a nested loop until then, the last control primitive to run a
+  thunk of the program's that way, and a continuation captured in the
+  producer did not come back through the consumer — `(k 1 2)` inside it
+  answered `#<procedure>`, and a re-entry after the consumer had run, `()`
 - Wind records are therefore not swept by frame depth, and carry none. A
   `pop_resolved_winds()` that ran the after-thunk of a record whose body had
   returned existed until 2026-09-02 as the value form's last line of cleanup;
@@ -536,8 +543,9 @@ intercepted at call dispatch time.
 - `Values` stores all args in `value_buffer` unconditionally
 - For single value, also writes to `dst` register directly
 - For multiple values, allocates a heap `Values` object for display
-- `CallWithValues` clears stale `value_buffer` before running producer,
-  then unpacks from buffer or from `#<values>` heap object
+- `CallWithValues` and `TailCallWithValues` unpack the producer's result: a
+  `#<values>` heap object's elements, or the one value. The value form runs
+  the same `TailCallWithValues` from `value_cwv_stub` (§5.3)
 
 ### 5.5 Continuation Invocation
 
