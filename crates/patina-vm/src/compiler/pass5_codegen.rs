@@ -539,7 +539,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             cg.emit(Instruction::LoadConst { dst: expr.dst, idx });
         }
 
-        RegExprKind::Quasiquote(_v) => {
+        RegExprKind::Quasiquote => {
             // Quasiquotes must be expanded before codegen; callers should use
             // `compile_with_qq_resolving` rather than the lower-level `compile`.
             return Err(CompileError::Internal(

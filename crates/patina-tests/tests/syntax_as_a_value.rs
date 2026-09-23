@@ -78,9 +78,11 @@ fn test_a_syntactic_keyword_is_not_a_value() {
 /// diagnostic in `InternalError`, which reads as an interpreter bug rather
 /// than the program error it is.
 ///
-/// The stages differ and always will: the VM expands templates while
-/// compiling, the tree-walker while evaluating. The diagnostic is the part
-/// that has to match, and does.
+/// Both refuse it before the program runs. The stages used to differ — the
+/// VM desugared an unquoted expression while compiling and the tree-walker
+/// while evaluating, both in a pass after the desugarer — until #445 moved
+/// it into the desugarer, where it has the form's local bindings. The
+/// diagnostic matched throughout, and still has to.
 #[test]
 fn test_a_keyword_unquoted_into_a_template_is_not_a_value() {
     for (expr, expected) in [
@@ -93,7 +95,7 @@ fn test_a_keyword_unquoted_into_a_template_is_not_a_value() {
     ] {
         assert_program_eval_error_at(
             &format!("(import (scheme base)) {expr}"),
-            ErrorClass::AtRuntime,
+            ErrorClass::BeforeRun,
             ErrorClass::BeforeRun,
             expected,
         );

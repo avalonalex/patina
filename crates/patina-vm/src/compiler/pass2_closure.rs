@@ -53,7 +53,9 @@ impl ClosedExpr {
 pub enum ClosedExprKind {
     Literal(TaggedValue),
     Quote(TaggedValue),
-    Quasiquote(TaggedValue),
+    /// A template `compile_with_qq_resolving` would have lowered; carried
+    /// only so that codegen can refuse it (`compile` does not lower).
+    Quasiquote,
 
     /// Plain read of a local parameter register.
     LocalRef(Symbol),
@@ -210,7 +212,7 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
     let kind = match &expr.kind {
         CoreExprKind::Literal(v) => ClosedExprKind::Literal(*v),
         CoreExprKind::Quote(v) => ClosedExprKind::Quote(*v),
-        CoreExprKind::Quasiquote(v) => ClosedExprKind::Quasiquote(*v),
+        CoreExprKind::Quasiquote(_) => ClosedExprKind::Quasiquote,
 
         CoreExprKind::Var { name, .. } => match ctx.lookup(name) {
             VarLoc::Local => ClosedExprKind::LocalRef(name.clone()),

@@ -49,7 +49,6 @@ empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
 - #269 — a definition a template introduces in a body is reachable by its bare name.
-- #445 — an unquoted expression is desugared outside its form: a local keyword is unbound there, and #438's early binding does not reach it.
 - #446 — a macro a library's generator defines in the program is bound early (#438) only in the form that generated it.
 - #441 — tree-walker: `call/cc` is recognised by spelling, so it is not callable as a value and a variable of that name is taken for it.
 - #442 — VM: `call-with-values` and `dynamic-wind` are recognised by spelling, so a program's own definition is ignored and the value takes a weaker path.

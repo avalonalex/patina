@@ -482,7 +482,7 @@ fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
     let kind = match &expr.kind {
         CoreExprKind::Literal(v) => CoreExprKind::Literal(*v),
         CoreExprKind::Quote(v) => CoreExprKind::Quote(*v),
-        CoreExprKind::Quasiquote(v) => CoreExprKind::Quasiquote(*v),
+        CoreExprKind::Quasiquote(template) => CoreExprKind::Quasiquote(template.clone()),
 
         CoreExprKind::Var { name, scopes } => {
             if let Some(unique_name) = env.resolve(name, scopes, scope_trace::Op::Get) {

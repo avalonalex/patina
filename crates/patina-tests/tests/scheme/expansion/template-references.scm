@@ -10,7 +10,8 @@
 ;; library's holding *equal values*. Four more came with #408: what the
 ;; template means is a definition its own generator *introduced*, which the
 ;; bare name does not identify. And three with #438: a program defining a name
-;; it imported, after a template that mentions it was expanded.
+;; it imported, after a template that mentions it was expanded — and a fourth
+;; with #445, for the same reference inside a quasiquote's unquote.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -29,9 +30,9 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; fifteen of the sixteen rows. The three #407 rows, the four #408 rows and
+;; sixteen of the seventeen rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), and it answers as Gauche does.
+;; (2026-09-19), and the #445 row on 2026-09-22, and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -80,7 +81,8 @@
 ;;   chibi                     does not complete — registered
 ;;
 ;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
-;; 15 + 1 skip since #438's, all measured 2026-09-19.
+;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
+;; #445's, measured 2026-09-22.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -138,7 +140,8 @@
 ;; is exported as well, because the claim has two directions.
 (define-library (probe same)
   (import (scheme base))
-  (export peek-X bump-Y! get-Y count bump-count! get-count size-of map-apply)
+  (export peek-X bump-Y! get-Y count bump-count! get-count size-of size-in-a-template
+          map-apply)
   (begin
     (define X 0)
     (define Y 0)
@@ -150,6 +153,9 @@
     (define-syntax bump-count! (syntax-rules () ((_) (set! count (+ count 1)))))
     ;; A template whose only free reference is to a procedure of `(scheme base)`.
     (define-syntax size-of (syntax-rules () ((_ v) (vector-length v))))
+    ;; The same reference, inside a quasiquote template's unquote.
+    (define-syntax size-in-a-template
+      (syntax-rules () ((_ v) `(size ,(vector-length v)))))
     ;; `apply` in *value* position, which nothing recognises by its spelling.
     (define-syntax map-apply
       (syntax-rules () ((_ f l) (map apply (list f) (list l)))))))
@@ -367,11 +373,20 @@
 ;; likely to define a namesake of. `measure` is not called until after the
 ;; definition, so nothing about it had been resolved yet.
 (define (measure v) (size-of v))
+(define (measure-in-a-template v) (size-in-a-template v))
 (define (vector-length v) 'mine)
 
 (test-equal "and a template's call to a base procedure stays the base procedure"
   (r7:list 2 'mine)
   (r7:list (measure (vector 1 2)) (vector-length (vector 1 2))))
+
+;; #445: the same call written inside an unquote. That expression used to be
+;; desugared after the form, where the record of which expansion it came from
+;; was gone, so it followed the program's definition when the plain one above
+;; no longer did.
+(test-equal "and so does one inside a quasiquote's unquote"
+  (r7:list 'size 2)
+  (measure-in-a-template (vector 1 2)))
 
 ;; `apply` is one of five procedures some part of Patina recognises by
 ;; spelling (`patina_core::by_spelling`), and four of them have to be left out

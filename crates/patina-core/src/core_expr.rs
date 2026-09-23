@@ -161,9 +161,12 @@ pub enum CoreExprKind {
 
     /// Quasiquote: template with selective evaluation
     /// Example: `(a ,b ,@c) where b and c are evaluated
-    /// The template is stored as a TaggedValue, and will be processed
-    /// recursively by the evaluator to handle unquote/unquote-splicing
-    Quasiquote(TaggedValue),
+    ///
+    /// The structure the template builds, with its unquoted expressions
+    /// already desugared — see [`QuasiTemplate`]. No backend evaluates this:
+    /// `patina_frontend::lower_quasiquotes` turns it into calls before either
+    /// one lowers the tree.
+    Quasiquote(QuasiTemplate),
 
     /// Lambda abstraction
     /// Example: (lambda (x y) (+ x y))
@@ -257,6 +260,98 @@ pub enum CoreExprKind {
     },
 }
 
+/// A quasiquote template as the desugarer leaves it: the structure it
+/// builds, with every unquoted expression already desugared.
+///
+/// Two halves of one job, split between two places because each needs
+/// something the other cannot have. An unquoted expression is ordinary code
+/// and has to be desugared by the desugarer standing in the form, since only
+/// that one knows the form's local keywords, which of its names are local
+/// variables, and what #438's early binding recorded (#445). The list
+/// constructors are procedure *values* from a backend's primitive registry,
+/// which the frontend cannot name. So the desugarer derives this, and
+/// `patina_frontend::lower_quasiquotes` turns each [`QuasiTemplate::Build`]
+/// into a call once a backend supplies the constructors.
+#[derive(Debug, Clone)]
+pub enum QuasiTemplate {
+    /// Part of the template that is data, used as it was written. It becomes
+    /// a `Quote`.
+    Datum(TaggedValue),
+    /// An unquoted expression, desugared where it was written.
+    Unquoted(Rc<CoreExpr>),
+    /// A call of one of the constructors, on the values of the parts.
+    Build(QuasiConstructor, Vec<QuasiTemplate>),
+}
+
+/// The procedures a quasiquote template is built with. `cons` is not among
+/// them: a dotted tail goes through `append`, whose last argument may be
+/// anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuasiConstructor {
+    List,
+    Append,
+    ListToVector,
+}
+
+impl QuasiConstructor {
+    /// The `(scheme base)` name of the procedure.
+    pub fn name(self) -> &'static str {
+        match self {
+            QuasiConstructor::List => "list",
+            QuasiConstructor::Append => "append",
+            QuasiConstructor::ListToVector => "list->vector",
+        }
+    }
+}
+
+impl QuasiTemplate {
+    /// This template with `f` applied to each unquoted expression.
+    pub fn map_unquoted<F>(&self, f: &F) -> QuasiTemplate
+    where
+        F: Fn(&CoreExpr) -> CoreExpr,
+    {
+        match self {
+            QuasiTemplate::Datum(datum) => QuasiTemplate::Datum(*datum),
+            QuasiTemplate::Unquoted(expr) => QuasiTemplate::Unquoted(Rc::new(f(expr))),
+            QuasiTemplate::Build(constructor, parts) => QuasiTemplate::Build(
+                *constructor,
+                parts.iter().map(|part| part.map_unquoted(f)).collect(),
+            ),
+        }
+    }
+
+    /// Call `f` on each unquoted expression, in the template's order.
+    pub fn for_each_unquoted(&self, f: &mut dyn FnMut(&CoreExpr)) {
+        match self {
+            QuasiTemplate::Datum(_) => {}
+            QuasiTemplate::Unquoted(expr) => f(expr),
+            QuasiTemplate::Build(_, parts) => {
+                for part in parts {
+                    part.for_each_unquoted(f);
+                }
+            }
+        }
+    }
+}
+
+/// Shows what the template builds, with the constructors by name:
+/// `` `(a ,b) `` displays as `(list 'a b)`.
+impl std::fmt::Display for QuasiTemplate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QuasiTemplate::Datum(datum) => write!(f, "'{}", datum),
+            QuasiTemplate::Unquoted(expr) => write!(f, "{}", expr),
+            QuasiTemplate::Build(constructor, parts) => {
+                write!(f, "({}", constructor.name())?;
+                for part in parts {
+                    write!(f, " {}", part)?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
+
 impl CoreExprKind {
     /// Check if this expression is in tail position
     pub fn is_tail_position(&self) -> bool {
@@ -291,10 +386,13 @@ impl CoreExprKind {
         F: Fn(&CoreExpr) -> CoreExpr,
     {
         match self {
-            CoreExprKind::Literal(_)
-            | CoreExprKind::Var { .. }
-            | CoreExprKind::Quote(_)
-            | CoreExprKind::Quasiquote(_) => self.clone(),
+            CoreExprKind::Literal(_) | CoreExprKind::Var { .. } | CoreExprKind::Quote(_) => {
+                self.clone()
+            }
+
+            CoreExprKind::Quasiquote(template) => {
+                CoreExprKind::Quasiquote(template.map_unquoted(f))
+            }
 
             CoreExprKind::Lambda {
                 params,
@@ -363,7 +461,7 @@ impl std::fmt::Display for CoreExprKind {
                 }
             }
             CoreExprKind::Quote(v) => write!(f, "'{}", v),
-            CoreExprKind::Quasiquote(v) => write!(f, "`{}", v),
+            CoreExprKind::Quasiquote(template) => write!(f, "(quasiquote {})", template),
             CoreExprKind::Lambda { params, .. } => {
                 write!(f, "(lambda ")?;
                 match params {

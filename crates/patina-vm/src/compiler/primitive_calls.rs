@@ -273,7 +273,7 @@ fn collect_callees(expr: &RegExpr, out: &mut Callees) {
         | RegExprKind::Define { value, .. } => collect_callees(value, out),
         RegExprKind::Literal(_)
         | RegExprKind::Quote(_)
-        | RegExprKind::Quasiquote(_)
+        | RegExprKind::Quasiquote
         | RegExprKind::LocalRef { .. }
         | RegExprKind::ClosureRef { .. }
         | RegExprKind::GlobalRef { .. }

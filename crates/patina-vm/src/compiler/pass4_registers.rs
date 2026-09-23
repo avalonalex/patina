@@ -53,7 +53,9 @@ pub struct RegExpr {
 pub enum RegExprKind {
     Literal(TaggedValue),
     Quote(TaggedValue),
-    Quasiquote(TaggedValue),
+    /// A template `compile_with_qq_resolving` would have lowered; carried
+    /// only so that codegen can refuse it (`compile` does not lower).
+    Quasiquote,
 
     /// Copy from a local parameter register.
     LocalRef {
@@ -252,7 +254,7 @@ fn allocate_ctx(
     let kind = match &expr.kind {
         TailedExprKind::Literal(v) => RegExprKind::Literal(*v),
         TailedExprKind::Quote(v) => RegExprKind::Quote(*v),
-        TailedExprKind::Quasiquote(v) => RegExprKind::Quasiquote(*v),
+        TailedExprKind::Quasiquote => RegExprKind::Quasiquote,
 
         TailedExprKind::LocalRef(name) => {
             let src = alloc.lookup(name).unwrap_or(0); // resolved at compile time

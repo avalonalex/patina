@@ -11,7 +11,9 @@ pub mod cps_transform;
 pub mod visitor;
 
 // Re-export core IR types from patina-core
-pub use patina_core::{CoreExpr, CoreExprKind, Formals, ScopedParam, Symbol};
+pub use patina_core::{
+    CoreExpr, CoreExprKind, Formals, QuasiConstructor, QuasiTemplate, ScopedParam, Symbol,
+};
 
 // Re-export CPS types from patina-core
 pub use patina_core::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};

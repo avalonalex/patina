@@ -94,15 +94,7 @@ impl From<patina_frontend::DesugarError> for VmBackendError {
 
 impl From<crate::error::CompileError> for VmBackendError {
     fn from(e: crate::error::CompileError) -> Self {
-        match e {
-            // Reported as what it is: a desugar failure the compiler happened
-            // to be the one to hit (an unquote inside a quasiquote template).
-            crate::error::CompileError::Desugar(message) => VmBackendError::Desugar {
-                message,
-                location: None,
-            },
-            other => VmBackendError::Compile(other.to_string()),
-        }
+        VmBackendError::Compile(e.to_string())
     }
 }
 

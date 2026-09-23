@@ -27,13 +27,6 @@ pub enum CompileError {
     /// own, from `patina_core::scope_resolve::AmbiguousReference`.
     #[error("{0}")]
     AmbiguousReference(String),
-
-    /// A sub-expression the compiler had to desugar itself failed to desugar
-    /// — the unquotes inside a quasiquote template are the only such site.
-    /// The message is the desugarer's own, and `VmBackendError` reports it as
-    /// a desugar error, so `` `(1 ,if) `` reads exactly like a bare `if` does.
-    #[error("{0}")]
-    Desugar(String),
 }
 
 /// Errors produced during VM execution.
