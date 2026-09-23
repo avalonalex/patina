@@ -515,6 +515,71 @@ fn a_desugar_error_names_a_datum_as_scheme_writes_it() {
     }
 }
 
+/// A circular form is refused, and says so (#459). The reader accepts datum
+/// labels anywhere, and every one of these used to run until killed or
+/// overflow the stack and abort, through walks in the desugarer, the macro
+/// expander, the relinker, the body scan and the `syntax-rules` compiler.
+/// Each case is a different one of those walks. A circular *literal* is
+/// untouched, and `data/circular-data.scm` has the rows that say so, with the
+/// ones built at run time and handed to `eval`.
+#[test]
+fn a_circular_form_is_refused() {
+    let cases = [
+        (
+            "(begin . #0=(1 . #0#))",
+            "a form must be a proper list, not a circular one: (begin . #0=(1 . #0#))",
+        ),
+        (
+            "(when . #0=(#t . #0#))",
+            "a form must be a proper list, not a circular one",
+        ),
+        (
+            "(list 1 #0=(car #0#))",
+            "a form cannot contain itself: #0=(car #0#)",
+        ),
+        // Through a library macro's expansion: the substitution marker and
+        // the relinker walk it before the desugarer does.
+        (
+            "(when #t #0=(list 1 #0#))",
+            "a form cannot contain itself: #0=(list 1 #0#)",
+        ),
+        // Through a body's scan for definitions.
+        (
+            "(let () #0=(begin #0#))",
+            "a form cannot contain itself: #0=(begin #0#)",
+        ),
+        (
+            "(lambda #0=(a . #0#) 1)",
+            "a parameter list cannot be circular: #0=(a . #0#)",
+        ),
+        (
+            "(define-syntax m (syntax-rules () ((_) #0=(list #0#))))",
+            "a syntax-rules template cannot contain itself",
+        ),
+        (
+            "(define-syntax m (syntax-rules () (#0=(_ . #0#) 1)))",
+            "a syntax-rules pattern or template cannot be a circular list",
+        ),
+        (
+            "(define-syntax m (syntax-rules #0=(a . #0#) ((_) 1)))",
+            "got a circular list: #0=(a . #0#)",
+        ),
+        // A sub-list the matcher walks: refused as a use no rule matches.
+        (
+            "(let #0=((x 1) . #0#) x)",
+            "no `syntax-rules` pattern of `let` matches this use",
+        ),
+    ];
+    for (program, expected) in cases {
+        for (backend, rendered) in rendered_on_both(program, "circular.scm") {
+            assert!(
+                rendered.contains(expected),
+                "[{backend}] {program}\nexpected: {expected}\ngot: {rendered}"
+            );
+        }
+    }
+}
+
 /// A program that defines `else` and then writes it before `cond`'s last
 /// clause means the variable, and runs: chibi and Gauche answer 1. #432's
 /// first draft of a rule diagnosing a mid-`else` in `cond` rejected it,

@@ -6,7 +6,8 @@
 
 use super::Expander;
 use crate::macro_expander::Identifier;
-use patina_core::TaggedValue;
+use patina_core::walk::OpenNodes;
+use patina_core::{SpineEnd, TaggedValue};
 use std::rc::Rc;
 
 impl Expander {
@@ -62,7 +63,28 @@ impl Expander {
     /// These forms define their own macro context and their identifiers should
     /// not be marked with the current macro scope. They will be compiled later
     /// when the define-syntax is processed, with their own hygiene context.
+    ///
+    /// A substituted value can be circular, because the reader accepts datum
+    /// labels (#459). One that comes back to itself anywhere, through a
+    /// spine or through an element, is returned whole and unmarked, rather
+    /// than walked until the stack overflows. Whole, because marking copies:
+    /// the copy of a node a cycle passes through is not the node the cycle
+    /// comes back to, so any marked copy of `#0=(a #0#)` unrolls it, where
+    /// chibi and Gauche hand back the datum itself — `eq?` to its own
+    /// `cadr`. As code the desugarer refuses it; as data a macro quotes it,
+    /// and quoted data carries no marks.
     pub(super) fn mark_substituted_tagged(&self, tv: TaggedValue) -> TaggedValue {
+        let mut walk = MarkWalk::default();
+        let marked = self.mark_substituted_in(tv, &mut walk);
+        if walk.circular { tv } else { marked }
+    }
+
+    /// [`Self::mark_substituted_tagged`], inside the pairs `walk` holds open.
+    fn mark_substituted_in(&self, tv: TaggedValue, walk: &mut MarkWalk) -> TaggedValue {
+        if walk.circular {
+            return tv;
+        }
+
         // Fast path: immediate values don't need marking
         if tv.is_fixnum() || tv.is_char() || tv.is_special() {
             return tv;
@@ -101,16 +123,24 @@ impl Expander {
         // case. Flatten the spine once and decide head-ness at element 0,
         // which is what `compile_template` and `rewrite_form` already do.
         if tv.is_pair() {
-            let (elems, tail) = self.spine_of(tv);
+            let Some((elems, tail)) = self.spine_of(tv) else {
+                walk.circular = true;
+                return tv;
+            };
             let head = elems[0];
             if self.is_macro_definition_tagged(head) || self.is_quote_form_tagged(head) {
                 return tv;
             }
+            if !walk.open.enter(tv) {
+                walk.circular = true;
+                return tv;
+            }
             let marked: Vec<TaggedValue> = elems
                 .into_iter()
-                .map(|e| self.mark_substituted_tagged(e))
+                .map(|e| self.mark_substituted_in(e, walk))
                 .collect();
-            let mut out = self.mark_substituted_tagged(tail);
+            let mut out = self.mark_substituted_in(tail, walk);
+            walk.open.leave();
             let mut heap = heap.borrow_mut();
             for e in marked.into_iter().rev() {
                 out = heap.alloc_pair(e, out);
@@ -123,24 +153,14 @@ impl Expander {
     }
 
     /// Flatten a pair's spine into its elements and whatever ends it — `()`
-    /// for a proper list, the final atom for a dotted one. Non-empty by
-    /// construction: the caller has already established `tv` is a pair.
-    fn spine_of(&self, tv: TaggedValue) -> (Vec<TaggedValue>, TaggedValue) {
-        let heap = self.heap();
-        let mut elems = Vec::new();
-        let mut current = tv;
-        loop {
-            let pair = current
-                .is_pair()
-                .then(|| heap.borrow().try_pair(current))
-                .flatten();
-            match pair {
-                Some((car, cdr)) => {
-                    elems.push(car);
-                    current = cdr;
-                }
-                None => return (elems, current),
-            }
+    /// for a proper list, the final atom for a dotted one — or `None` for a
+    /// circular one. Non-empty by construction: the caller has already
+    /// established `tv` is a pair.
+    fn spine_of(&self, tv: TaggedValue) -> Option<(Vec<TaggedValue>, TaggedValue)> {
+        match self.heap().borrow().spine(tv) {
+            (elems, SpineEnd::Null) => Some((elems, TaggedValue::NULL)),
+            (elems, SpineEnd::Improper(tail)) => Some((elems, tail)),
+            (_, SpineEnd::Circular) => None,
         }
     }
 
@@ -158,4 +178,12 @@ impl Expander {
         let heap = self.heap().borrow();
         heap.get_symbol_or_identifier_name(tv) == Some("quote")
     }
+}
+
+/// One marking of a substituted value: the pairs it is inside, and whether it
+/// has met a cycle (`Expander::mark_substituted_tagged`).
+#[derive(Default)]
+struct MarkWalk {
+    open: OpenNodes,
+    circular: bool,
 }

@@ -116,6 +116,28 @@ impl Compiler {
         form: TaggedValue,
         level: usize,
     ) -> Result<Pattern, MacroError> {
+        // A pattern met again inside itself — a datum label can write one — is
+        // refused, rather than compiled until the stack overflows (#459).
+        let compound = form.is_pair() || form.is_vector();
+        if compound && !self.open.enter(form) {
+            return Err(MacroError::InvalidSyntax(format!(
+                "a syntax-rules pattern cannot contain itself: {}",
+                patina_core::format_tagged(form, &self.heap.borrow())
+            )));
+        }
+        let compiled = self.compile_pattern_node(form, level);
+        if compound {
+            self.open.leave();
+        }
+        compiled
+    }
+
+    /// [`Self::compile_pattern`] for one node, inside the ones `open` holds.
+    fn compile_pattern_node(
+        &mut self,
+        form: TaggedValue,
+        level: usize,
+    ) -> Result<Pattern, MacroError> {
         // Handle all identifier types (Symbol, Identifier). The identity is
         // read once here and reused for both the literals test and the pattern
         // variable it may become.

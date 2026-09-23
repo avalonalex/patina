@@ -75,6 +75,7 @@ pub use error::{DesugarError, Result};
 
 use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
+use patina_core::walk::OpenNodes;
 use patina_core::{CoreForm, SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
@@ -142,6 +143,8 @@ struct Renames<'a> {
     aliases: &'a HashMap<Rc<str>, Aliases>,
     /// The expansion's own scope — see `MacroExpansion::scope`.
     expansion_scope: ScopeId,
+    /// The pairs and vectors the rewrite is inside (`rewrite_refs`).
+    open: RefCell<OpenNodes>,
 }
 
 /// The aliases made for one spelling.
@@ -315,6 +318,12 @@ pub struct Desugarer {
 
     /// See [`EarlyBinding`].
     early: Rc<EarlyBinding>,
+
+    /// The forms being desugared, outermost first — so that one met again
+    /// inside itself is refused (`desugar_open_form`). Shared with the child
+    /// desugarers made for nested scopes, like `early`, since a form's
+    /// elements are desugared by them.
+    open_forms: Rc<RefCell<OpenNodes>>,
 }
 
 impl Desugarer {
@@ -349,6 +358,7 @@ impl Desugarer {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            open_forms: Rc::default(),
         }
     }
 
@@ -368,6 +378,7 @@ impl Desugarer {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            open_forms: Rc::default(),
         }
     }
 
@@ -408,6 +419,7 @@ impl Desugarer {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            open_forms: Rc::default(),
         }
     }
 
@@ -431,6 +443,7 @@ impl Desugarer {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            open_forms: Rc::clone(&self.open_forms),
         };
         (desugarer, scope)
     }
@@ -527,6 +540,7 @@ impl Desugarer {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            open_forms: Rc::clone(&self.open_forms),
         }
     }
 
@@ -558,7 +572,7 @@ impl Desugarer {
     ) -> Vec<(Rc<str>, ScopeSet)> {
         let mut names = Vec::new();
         for tv in body_tvs {
-            self.collect_definition_names(*tv, shared_heap, &mut names);
+            self.collect_definition_names(*tv, shared_heap, &mut names, &mut OpenNodes::default());
         }
         names
     }
@@ -619,7 +633,7 @@ impl Desugarer {
     ) -> Vec<(Rc<str>, ScopeSet)> {
         let mut names = Vec::new();
         for tv in body_tvs {
-            self.collect_produced_names(*tv, shared_heap, &mut names, 0);
+            self.collect_produced_names(*tv, shared_heap, &mut names, 0, &mut OpenNodes::default());
         }
         names
     }
@@ -627,17 +641,35 @@ impl Desugarer {
     /// Add the names the macro uses in `tv` define to `out`, descending through
     /// `begin` and into each expansion. `depth` bounds a macro that expands into
     /// a use of itself forever, which the real desugar would not finish either.
+    ///
+    /// A form reached again inside itself — a datum label can write one — is
+    /// not scanned again, and a circular `begin` is scanned once round (#459):
+    /// the desugar that follows refuses both.
     fn collect_produced_names(
         &self,
         tv: TaggedValue,
         shared_heap: &SharedHeap,
         out: &mut Vec<(Rc<str>, ScopeSet)>,
         depth: usize,
+        open: &mut OpenNodes,
     ) {
         const DEPTH_LIMIT: usize = 64;
-        if depth > DEPTH_LIMIT || !tv.is_pair() {
+        if depth > DEPTH_LIMIT || !tv.is_pair() || !open.enter(tv) {
             return;
         }
+        self.collect_produced_names_of_form(tv, shared_heap, out, depth, open);
+        open.leave();
+    }
+
+    /// [`Self::collect_produced_names`] for a pair it has entered.
+    fn collect_produced_names_of_form(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+        out: &mut Vec<(Rc<str>, ScopeSet)>,
+        depth: usize,
+        open: &mut OpenNodes,
+    ) {
         let (head, cdr) = {
             let heap = shared_heap.borrow();
             heap.get_pair(tv)
@@ -647,14 +679,9 @@ impl Desugarer {
         };
         match self.resolve_syntax(&head_name, &head_scopes).ok().flatten() {
             Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
-                let mut current = cdr;
-                while current.is_pair() {
-                    let (car, next) = {
-                        let heap = shared_heap.borrow();
-                        heap.get_pair(current)
-                    };
-                    self.collect_produced_names(car, shared_heap, out, depth);
-                    current = next;
+                let (forms, _) = shared_heap.borrow().spine(cdr);
+                for form in forms {
+                    self.collect_produced_names(form, shared_heap, out, depth, open);
                 }
             }
             Some(SyntaxRef::Macro(compiled_macro)) => {
@@ -670,8 +697,14 @@ impl Desugarer {
                     return;
                 };
                 let mut found = Vec::new();
-                self.collect_definition_names(expansion.form, shared_heap, &mut found);
-                self.collect_produced_names(expansion.form, shared_heap, &mut found, depth + 1);
+                self.collect_definition_names(expansion.form, shared_heap, &mut found, open);
+                self.collect_produced_names(
+                    expansion.form,
+                    shared_heap,
+                    &mut found,
+                    depth + 1,
+                    open,
+                );
                 out.extend(
                     found
                         .into_iter()
@@ -687,15 +720,32 @@ impl Desugarer {
     ///
     /// The head is resolved, not spelled, so a `define` reached under an
     /// import rename counts and one shadowed by a parameter does not.
+    ///
+    /// A `begin` reached again inside itself is not scanned again, and a
+    /// circular one is scanned once round (#459): the desugar that follows
+    /// refuses both.
     fn collect_definition_names(
         &self,
         tv: TaggedValue,
         shared_heap: &SharedHeap,
         out: &mut Vec<(Rc<str>, ScopeSet)>,
+        open: &mut OpenNodes,
     ) {
-        if !tv.is_pair() {
+        if !tv.is_pair() || !open.enter(tv) {
             return;
         }
+        self.collect_definition_names_of_form(tv, shared_heap, out, open);
+        open.leave();
+    }
+
+    /// [`Self::collect_definition_names`] for a pair it has entered.
+    fn collect_definition_names_of_form(
+        &self,
+        tv: TaggedValue,
+        shared_heap: &SharedHeap,
+        out: &mut Vec<(Rc<str>, ScopeSet)>,
+        open: &mut OpenNodes,
+    ) {
         let (head, cdr) = {
             let heap = shared_heap.borrow();
             heap.get_pair(tv)
@@ -719,14 +769,9 @@ impl Desugarer {
                 }
             }
             Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
-                let mut current = cdr;
-                while current.is_pair() {
-                    let (car, next) = {
-                        let heap = shared_heap.borrow();
-                        heap.get_pair(current)
-                    };
-                    self.collect_definition_names(car, shared_heap, out);
-                    current = next;
+                let (forms, _) = shared_heap.borrow().spine(cdr);
+                for form in forms {
+                    self.collect_definition_names(form, shared_heap, out, open);
                 }
             }
             _ => {}
@@ -736,12 +781,18 @@ impl Desugarer {
     /// The name a `define` target binds: the symbol itself, or — for the
     /// procedure shorthand, curried arbitrarily deep — the one at the head of
     /// the nested formals.
+    ///
+    /// The chain of cars can come back on itself — `(define #0=(#0#) 1)` —
+    /// and then there is no name (#459). A tortoise at half speed meets the
+    /// walk only on such a cycle, as in `Heap::spine`.
     fn define_target(
         &self,
         tv: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Option<(Rc<str>, ScopeSet)> {
         let mut current = tv;
+        let mut slow = tv;
+        let mut move_slow = false;
         loop {
             if let Some(binder) = self.identifier_of(current, shared_heap) {
                 return Some(binder);
@@ -749,10 +800,15 @@ impl Desugarer {
             if !current.is_pair() {
                 return None;
             }
-            current = {
-                let heap = shared_heap.borrow();
-                heap.get_pair(current).0
-            };
+            let heap = shared_heap.borrow();
+            current = heap.car(current);
+            if move_slow {
+                slow = heap.car(slow);
+                if current == slow {
+                    return None;
+                }
+            }
+            move_slow = !move_slow;
         }
     }
 
@@ -884,6 +940,7 @@ impl Desugarer {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            open_forms: Rc::clone(&self.open_forms),
         }
     }
 
@@ -1126,6 +1183,7 @@ impl Desugarer {
         let renames = Renames {
             aliases: &renames,
             expansion_scope,
+            open: RefCell::default(),
         };
         self.rewrite_refs(expanded, &renames, 0, shared_heap)
     }
@@ -1454,7 +1512,12 @@ impl Desugarer {
         // Flatten the spine so the head can be told from the arguments. The
         // tail is whatever ends the list — `()` for a proper one, an atom for
         // a dotted one.
-        let (mut elems, tail) = list_to_vec_with_tail_tagged(tv, &shared_heap.borrow());
+        // A circular spine is left as it is (#459), like any cycle
+        // `rewrite_refs` meets: the desugarer refuses it as code.
+        let Some((mut elems, tail)) = list_to_vec_with_tail_tagged(tv, &shared_heap.borrow())
+        else {
+            return tv;
+        };
 
         // `` `(a . ,e) `` reads as `(quasiquote (a unquote e))`: the unquote
         // keyword sits in the spine's *interior*, in cdr position, and governs
@@ -1519,31 +1582,22 @@ impl Desugarer {
         quote_depth: u32,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
-        if tv.is_pair() {
-            return self.rewrite_form(tv, renames, quote_depth, shared_heap);
-        }
-
-        if tv.is_vector() {
-            // Vector elements are evaluated inside quasiquote, so they have to
-            // be walked. A bare `#(...)` is self-evaluating data and is
-            // protected by `quote_depth` like anything else.
-            let (len, elems) = {
-                let heap = shared_heap.borrow();
-                let len = heap.vector_len(tv);
-                let elems: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(tv, i)).collect();
-                (len, elems)
-            };
-            let mut out = Vec::with_capacity(len);
-            let mut changed = false;
-            for e in elems {
-                let new_e = self.rewrite_refs(e, renames, quote_depth, shared_heap);
-                changed |= new_e != e;
-                out.push(new_e);
-            }
-            if !changed {
+        if tv.is_pair() || tv.is_vector() {
+            // An expansion can be circular: the reader accepts datum labels,
+            // and a macro passes what it was given (#459). A pair or vector
+            // met again inside itself is left as it is, rather than walked
+            // until the stack overflows. As code the desugarer refuses it; as
+            // quoted data it needs no relinking.
+            if !renames.open.borrow_mut().enter(tv) {
                 return tv;
             }
-            return shared_heap.borrow_mut().alloc_vector(out);
+            let rewritten = if tv.is_pair() {
+                self.rewrite_form(tv, renames, quote_depth, shared_heap)
+            } else {
+                self.rewrite_vector(tv, renames, quote_depth, shared_heap)
+            };
+            renames.open.borrow_mut().leave();
+            return rewritten;
         }
 
         if quote_depth > 0 {
@@ -1551,6 +1605,32 @@ impl Desugarer {
         }
         self.introduced_alias(tv, renames, shared_heap)
             .unwrap_or(tv)
+    }
+
+    /// [`Self::rewrite_refs`] for a vector.
+    ///
+    /// Vector elements are evaluated inside quasiquote, so they have to be
+    /// walked. A bare `#(...)` is self-evaluating data and is protected by
+    /// `quote_depth` like anything else.
+    fn rewrite_vector(
+        &self,
+        tv: TaggedValue,
+        renames: &Renames<'_>,
+        quote_depth: u32,
+        shared_heap: &SharedHeap,
+    ) -> TaggedValue {
+        let elems = shared_heap.borrow().vector_slice(tv).to_vec();
+        let mut out = Vec::with_capacity(elems.len());
+        let mut changed = false;
+        for e in elems {
+            let new_e = self.rewrite_refs(e, renames, quote_depth, shared_heap);
+            changed |= new_e != e;
+            out.push(new_e);
+        }
+        if !changed {
+            return tv;
+        }
+        shared_heap.borrow_mut().alloc_vector(out)
     }
 
     /// Look up the source location for a TaggedValue in the source map
@@ -1584,7 +1664,7 @@ impl Desugarer {
         // desugared. Recursing through here instead would forget a form
         // halfway through it, which is what the assertion is for.
         debug_assert!(
-            self.early.is_idle(),
+            self.early.is_idle() && self.open_forms.borrow().is_empty(),
             "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
         );
         let result = self.desugar_form(tagged, shared_heap);
@@ -1672,7 +1752,7 @@ impl Desugarer {
             // through this line, so this is where a desugar error gets the
             // position no raising site had to pass along.
             let mut expr = self
-                .desugar_list_tagged(tagged, shared_heap)
+                .desugar_open_form(tagged, shared_heap)
                 .map_err(|e| e.at_opt(source.clone()))?;
             // Attach source location from the source map if available
             // and the desugared result doesn't already have one
@@ -1687,6 +1767,34 @@ impl Desugarer {
         Err(DesugarError::InvalidSyntax(
             "Cannot desugar unknown tagged value type".to_string(),
         ))
+    }
+
+    /// [`Self::desugar_list_tagged`], for a form that is not circular.
+    ///
+    /// The reader accepts datum labels, so a program can hold a form whose
+    /// spine comes back on itself, `(begin . #0=(1 . #0#))`, or one that
+    /// contains itself, `#0=(list 1 #0#)`. Neither is code — R7RS 2.4 allows a
+    /// cycle only in a literal — and each walk of the first collected until
+    /// memory ran out while the second recursed until the stack overflowed
+    /// (#459). Checked here, where every compound form comes through, as
+    /// Gauche checks `list?` at the head of each form and chibi `sexp_listp`.
+    /// A circular literal is untouched: `quote` does not desugar its datum.
+    fn desugar_open_form(&self, form: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        if shared_heap.borrow().spine_is_circular(form) {
+            return Err(DesugarError::InvalidSyntax(format!(
+                "a form must be a proper list, not a circular one: {}",
+                patina_core::debug_format::format_tagged(form, &shared_heap.borrow())
+            )));
+        }
+        if !self.open_forms.borrow_mut().enter(form) {
+            return Err(DesugarError::InvalidSyntax(format!(
+                "a form cannot contain itself: {}",
+                patina_core::debug_format::format_tagged(form, &shared_heap.borrow())
+            )));
+        }
+        let desugared = self.desugar_list_tagged(form, shared_heap);
+        self.open_forms.borrow_mut().leave();
+        desugared
     }
 
     /// Desugar a list (TaggedValue pair) - special form or application

@@ -39,6 +39,7 @@ pub mod scope_trace;
 pub mod source_map;
 pub mod tagged_value;
 pub mod vfs;
+pub mod walk;
 
 // Re-export main types for convenience
 pub use compiled_macro::{CompiledMacro, CompiledRule, Identifier, Pattern, Template};
@@ -71,7 +72,7 @@ pub use heap::gc::{
     MarkBits, MarkSweepCollector, run_mark_phase,
 };
 pub use heap::{
-    GcFreedBits, Heap, SharedHeap,
+    GcFreedBits, Heap, SharedHeap, SpineEnd,
     gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
     new_shared_heap,
 };

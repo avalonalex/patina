@@ -32,6 +32,7 @@ mod tests;
 use super::IdentifierKey;
 use super::utils::ELLIPSIS;
 use crate::error::MacroError;
+use patina_core::walk::OpenNodes;
 use patina_core::{SharedHeap, TaggedValue};
 use patina_runtime::{Environment, PVRef, Pattern, ScopeSet, Template};
 use std::collections::HashMap;
@@ -112,6 +113,12 @@ pub struct Compiler {
 
     /// Shared heap for converting Value literals to TaggedValue at compile time
     pub(super) heap: SharedHeap,
+
+    /// The pairs and vectors of the pattern or template being compiled that
+    /// the compiler is inside — so that one met again inside itself, which a
+    /// datum label can write, is refused rather than compiled until the stack
+    /// overflows (#459).
+    pub(super) open: OpenNodes,
 }
 
 /// Whether an ellipsis spelling was *declared* as something other than `...`.
@@ -146,6 +153,7 @@ impl Compiler {
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
             heap,
+            open: OpenNodes::default(),
         }
     }
 
@@ -175,6 +183,7 @@ impl Compiler {
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
             heap,
+            open: OpenNodes::default(),
         }
     }
 
@@ -208,6 +217,7 @@ impl Compiler {
             quasiquote_depth: 0,
             inherited_identifiers: HashMap::new(),
             heap,
+            open: OpenNodes::default(),
         }
     }
 

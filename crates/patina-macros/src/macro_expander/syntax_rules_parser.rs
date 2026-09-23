@@ -129,11 +129,15 @@ fn parse_literals_list(
     expr: TaggedValue,
     heap: &Heap,
 ) -> Result<Vec<IdentifierKey>, SyntaxRulesParseError> {
+    // Refuses a circular list with an improper one; walking it never ended
+    // (#459).
+    let Some(elements) = heap.list_to_vec(expr) else {
+        return Err(SyntaxRulesParseError(
+            "Literals must be a proper list".to_string(),
+        ));
+    };
     let mut literals = Vec::new();
-    let mut current = expr;
-
-    while current.is_pair() {
-        let car = heap.car(current);
+    for car in elements {
         // Keep the scopes, not just the name: literal membership is decided by
         // identifier identity.
         if let Some(key) = IdentifierKey::from_heap(car, heap) {
@@ -143,13 +147,6 @@ fn parse_literals_list(
                 "Literals must be symbols".to_string(),
             ));
         }
-        current = heap.cdr(current);
-    }
-
-    if current != TaggedValue::NULL {
-        return Err(SyntaxRulesParseError(
-            "Literals must be a proper list".to_string(),
-        ));
     }
 
     Ok(literals)

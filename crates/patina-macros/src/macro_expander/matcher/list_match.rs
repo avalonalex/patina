@@ -99,12 +99,13 @@ where
         }
     }
 
-    // Check for unconsumed input elements
+    // Check for unconsumed input elements. Counted by a length that stops on
+    // a cycle: the iterator's own count never ended on a circular input
+    // (#459), where one more than the pattern's length says what is needed.
     if iter.next().is_some() {
-        let remaining = 1 + iter.count();
         return Err(MatchError::TooManyElements {
             expected: patterns.len(),
-            actual: patterns.len() + remaining,
+            actual: TaggedListIter::len(input, heap).unwrap_or(patterns.len() + 1),
         });
     }
 
@@ -367,8 +368,14 @@ fn match_dotted_list_with_ellipsis_tagged<F>(
 where
     F: Fn(&Pattern, TaggedValue, &mut MatchEnv, usize, &Heap) -> Result<(), MatchError>,
 {
-    // Convert the input to a vector with tail
-    let (input_list, tail_value) = list_to_vec_with_tail_tagged(input, heap);
+    // Convert the input to a vector with tail. A circular input matches no
+    // pattern (#459); walking it never ended.
+    let Some((input_list, tail_value)) = list_to_vec_with_tail_tagged(input, heap) else {
+        return Err(MatchError::TypeMismatch {
+            expected: "list".to_string(),
+            actual: "a circular list".to_string(),
+        });
+    };
 
     // Match patterns against input elements
     let mut input_idx = 0;

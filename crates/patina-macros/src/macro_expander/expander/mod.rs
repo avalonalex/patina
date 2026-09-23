@@ -200,26 +200,14 @@ impl Expander {
         &self,
         tv: TaggedValue,
     ) -> Result<Vec<TaggedValue>, ExpandError> {
-        let heap = self.heap().borrow();
-        let mut result = Vec::new();
-        let mut current = tv;
-
-        loop {
-            if current == TaggedValue::NULL {
-                break;
-            }
-            if current.is_pair() {
-                let (car, cdr) = heap.get_pair(current);
-                result.push(car);
-                current = cdr;
-            } else {
-                return Err(ExpandError::InvalidTemplate {
-                    message: "Expected proper list".to_string(),
-                });
-            }
-        }
-
-        Ok(result)
+        // `Heap::list_to_vec` refuses a circular list as well as an improper
+        // one, where a plain walk followed a circular one forever (#459).
+        self.heap()
+            .borrow()
+            .list_to_vec(tv)
+            .ok_or_else(|| ExpandError::InvalidTemplate {
+                message: "Expected proper list".to_string(),
+            })
     }
 
     /// Convert a Vec<TaggedValue> to a Scheme list (TaggedValue)
