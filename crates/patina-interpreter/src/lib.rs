@@ -152,7 +152,7 @@ pub fn format_error_with_source<E: std::error::Error + HasSourceLocation>(
     source_map: &SourceMap,
 ) -> String {
     if let Some(loc) = error.source_location() {
-        let mut parts = vec![error.to_string()];
+        let mut parts = vec![error.message_without_location()];
         parts.push(format!("  at {}", loc));
         if let Some(ctx) = source_map.format_context(loc) {
             parts.push(ctx);

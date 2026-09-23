@@ -381,6 +381,42 @@ fn a_desugar_error_is_rendered_at_the_form_that_raised_it() {
     }
 }
 
+/// A located error names its position once. The tree-walker's
+/// `EvalError::WithLocation` displays `at <location>` itself, and the
+/// formatter added its own, so the line was on the screen twice there and
+/// once on the VM (#449). Checked for an error at run time and for one
+/// raised before the program runs.
+#[test]
+fn a_located_error_names_its_position_once() {
+    let at_run_time = "(define (f x)\n  (undefined-thing x))\n(f 5)";
+    let before_it_runs = "(define (f n)\n  (case n (else 'many) ((1) 'one)))";
+    for (program, at) in [
+        (at_run_time, "  at once.scm:2:3"),
+        (before_it_runs, "  at once.scm:2:3"),
+    ] {
+        for (backend, rendered) in rendered_on_both(program, "once.scm") {
+            assert_eq!(
+                rendered.matches(" at once.scm").count(),
+                1,
+                "[{backend}] {program}\n{rendered}"
+            );
+            assert!(rendered.contains(at), "[{backend}] {program}\n{rendered}");
+        }
+    }
+}
+
+/// Without a source map to format with, the tree-walker's error still says
+/// where it was: that caller gets the position from `Display`, which #449
+/// left alone.
+#[test]
+fn a_located_tree_walker_error_keeps_its_position_in_its_text() {
+    let interp = TreeWalkInterpreter::new_tree_walker();
+    let (result, _) = interp
+        .eval_program_with_source_name("(define (f x)\n  (undefined-thing x))\n(f 5)", "text.scm");
+    let text = result.expect_err("unbound").to_string();
+    assert!(text.contains("at text.scm:2:3"), "{text}");
+}
+
 /// `case` and `cond` are `syntax-rules` macros, so a malformed use could only
 /// ever fail as "no pattern matches". Each common mistake is now named, with
 /// the clause at fault (#432). Gauche rejects an `else` before `case`'s last
