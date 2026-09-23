@@ -398,10 +398,10 @@ every continuation invocation (`continuation.rs:137`), and every lambda paramete
 (`application.rs:87–115`), mostly for gensym'd names. The CPS `Set`/`Define` arms are
 the user-*written* mutations. Note carefully that this is **not** the same as
 user-*meaningful* mutations: `letrec`, `letrec*`, named `let` and `do` all expand to
-`(set! var init)` on the user's own identifier (`lib/scheme/base/binding.scm:29,36`,
-and the `do` expansion), so those arms fire for writes the user never wrote, under
-names no gensym filter can exclude. The companion document's watchpoint section owns
-that consequence.
+`(set! var init)` on the user's own identifier (the `letrec` and `letrec*`
+templates in `lib/scheme/base/binding.scm`, and the `do` expansion), so those arms
+fire for writes the user never wrote, under names no gensym filter can exclude.
+The companion document's watchpoint section owns that consequence.
 
 ---
 

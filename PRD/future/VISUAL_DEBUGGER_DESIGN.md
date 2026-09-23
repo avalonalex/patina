@@ -379,10 +379,11 @@ The requirement: stop when some variable changes, or changes to a particular val
   `Watch { name, scopes: Option<ScopeSet>, mode: AnyChange | Becomes(TaggedValue),
   scope: Global | Env(u64) }`.
 - **Macro-generated writes are visible, and cannot be filtered by name.** `letrec` and
-  `letrec*` expand to `(set! var init)` on the user's own variable
-  (`lib/scheme/base/binding.scm:29,36`), named `let` expands through `letrec`, and `do`
-  emits `set!` per step variable. So watching a loop variable or any `letrec`-bound
-  name fires on writes the user never typed, under the user's own identifier. There is
+  `letrec*` expand to `(set! var init)` on the user's own variable (their
+  templates in `lib/scheme/base/binding.scm`), named `let` expands through
+  `letrec`, and `do` emits `set!` per step variable. So watching a loop variable
+  or any `letrec`-bound name fires on writes the user never typed, under the
+  user's own identifier. There is
   no gensym prefix to exclude. Two honest responses, both cheap: label each hit with
   its source location and the macro chain from `expansion_records` (so the user sees
   "set from `do` at line 12"), and offer a filter on "writes attributed to a macro

@@ -114,7 +114,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/vectors.scm", 80),
     ("expansion/core-forms.scm", 28),
     ("expansion/define-values.scm", 14),
-    ("expansion/derived-forms.scm", 49),
+    ("expansion/derived-forms.scm", 58),
     ("expansion/ellipsis.scm", 12),
     ("expansion/ellipsis-containers.scm", 13),
     ("expansion/hygiene.scm", 44),
