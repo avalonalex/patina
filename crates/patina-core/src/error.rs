@@ -104,6 +104,17 @@ impl SourceLocation {
 /// Enables generic source-aware error formatting across different backends.
 pub trait HasSourceLocation {
     fn source_location(&self) -> Option<&SourceLocation>;
+
+    /// The error's text without the position `source_location` reports, for
+    /// a formatter that prints the position itself. An error whose `Display`
+    /// already names its position overrides this; printing both put the
+    /// tree-walker's `at` line on the screen twice (#449).
+    fn message_without_location(&self) -> String
+    where
+        Self: fmt::Display,
+    {
+        self.to_string()
+    }
 }
 
 impl fmt::Display for SourceLocation {

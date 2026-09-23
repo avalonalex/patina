@@ -126,6 +126,17 @@ impl patina_core::error::HasSourceLocation for EvalError {
     fn source_location(&self) -> Option<&SourceLocation> {
         self.source_location()
     }
+
+    /// `WithLocation`'s `Display` appends `at <location>`, which a caller with
+    /// no source map to format with still wants. The formatter prints the
+    /// position itself, so it gets the wrapped error's text — every layer of
+    /// it, since a located error can be located again on its way out.
+    fn message_without_location(&self) -> String {
+        match self {
+            EvalError::WithLocation { error, .. } => error.message_without_location(),
+            other => other.to_string(),
+        }
+    }
 }
 
 impl EvalError {
