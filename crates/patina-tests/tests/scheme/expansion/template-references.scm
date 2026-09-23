@@ -10,8 +10,9 @@
 ;; library's holding *equal values*. Four more came with #408: what the
 ;; template means is a definition its own generator *introduced*, which the
 ;; bare name does not identify. And three with #438: a program defining a name
-;; it imported, after a template that mentions it was expanded — and a fourth
-;; with #445, for the same reference inside a quasiquote's unquote.
+;; it imported, after a template that mentions it was expanded — a fourth
+;; with #445, for the same reference inside a quasiquote's unquote, and two
+;; with #446, for a macro the program made with a library's generator.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -19,7 +20,7 @@
 ;; see, or on the program meaning something different by a name the template
 ;; also uses. Neither can be staged without a second library: a `let-syntax` in
 ;; the same program shares the program's bindings, which is the very thing
-;; being distinguished. So the file defines nine `(probe …)` libraries inline.
+;; being distinguished. So the file defines ten `(probe …)` libraries inline.
 ;;
 ;; **chibi 0.12 cannot run this file at all.** It does not support
 ;; `define-library` in a script — measured 2026-09-09, the body's `define`
@@ -30,9 +31,10 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; sixteen of the seventeen rows. The three #407 rows, the four #408 rows and
+;; eighteen of the nineteen rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), and the #445 row on 2026-09-22, and it answers as Gauche does.
+;; (2026-09-19), the #445 row on 2026-09-22 and the two #446 rows on
+;; 2026-09-23, and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -82,7 +84,8 @@
 ;;
 ;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
 ;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
-;; #445's, measured 2026-09-22.
+;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's, measured
+;; 2026-09-23.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -214,6 +217,25 @@
     (define-stepper step-a)
     (define-stepper step-b)))
 
+;; Generators the *program* runs (#446). `define-measurer`'s macro calls a
+;; procedure of `(scheme base)`; `define-tally-counter` also introduces a
+;; `tally` of its own, beside the one this library exports.
+(define-library (probe measurer)
+  (import (scheme base))
+  (export define-measurer tally define-tally-counter)
+  (begin
+    (define-syntax define-measurer
+      (syntax-rules ()
+        ((_ name) (define-syntax name (syntax-rules () ((_ v) (vector-length v)))))))
+    (define tally 'library)
+    (define-syntax define-tally-counter
+      (syntax-rules ()
+        ((_ name)
+         (begin
+           (define tally 0)
+           (define-syntax name
+             (syntax-rules () ((_) (begin (set! tally (+ tally 1)) tally))))))))))
+
 (import (scheme eval) (scheme repl)
         (except (scheme base)
           quote car cdr caar cadr cdar cddr cons pair? null?
@@ -223,7 +245,7 @@
         (srfi 101)
         (srfi 64)
         (probe lit) (probe both) (probe qq) (probe wq) (probe esc) (probe same)
-        (probe introduced) (probe runner))
+        (probe introduced) (probe runner) (probe measurer))
 
 (test-begin "template-references")
 
@@ -374,6 +396,12 @@
 ;; definition, so nothing about it had been resolved yet.
 (define (measure v) (size-of v))
 (define (measure-in-a-template v) (size-in-a-template v))
+;; #446: the macro here is the program's own, made by a library's generator a
+;; form before its use. The record that the generator's expansion was foreign
+;; lasted only that form, so the template's `vector-length` was a bare name by
+;; the time `measure-generated` was desugared.
+(define-measurer size-generated)
+(define (measure-generated v) (size-generated v))
 (define (vector-length v) 'mine)
 
 (test-equal "and a template's call to a base procedure stays the base procedure"
@@ -387,6 +415,18 @@
 (test-equal "and so does one inside a quasiquote's unquote"
   (r7:list 'size 2)
   (measure-in-a-template (vector 1 2)))
+
+(test-equal "and so does one a library's generator put in the program's macro"
+  2 (measure-generated (vector 1 2)))
+
+;; The other direction, which #446's fix had to keep: the generator also
+;; introduced a `tally` in the program, and the template's `tally` is that one,
+;; not the import it shares a spelling with.
+(define-tally-counter tally-tick)
+(define (tally-twice) (tally-tick) (tally-tick))
+(test-equal "and one mentioning what that generator introduced keeps it"
+  (r7:list 2 'library)
+  (r7:list (tally-twice) tally))
 
 ;; `apply` is one of five procedures some part of Patina recognises by
 ;; spelling (`patina_core::by_spelling`), and four of them have to be left out

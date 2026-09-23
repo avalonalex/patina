@@ -305,6 +305,9 @@ impl Compiler {
             // is used. Previously `env` was consulted only as a yes/no predicate
             // and then dropped.
             definition_env: self.env.clone(),
+            // Filled in by the desugarer, which knows which expansions are
+            // foreign; the compiler does not.
+            foreign_expansions: Vec::new(),
         })
     }
 }

@@ -14,7 +14,7 @@
 use crate::environment::Environment;
 use crate::heap::SharedHeap;
 use crate::pvref::PVRef;
-use crate::scope::ScopeSet;
+use crate::scope::{ScopeId, ScopeSet};
 use crate::tagged_value::TaggedValue;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -518,6 +518,22 @@ pub struct CompiledMacro {
     /// so a macro could only ever reference bindings its caller happened to
     /// have. Library-private helpers are the common casualty.
     pub definition_env: Option<Rc<Environment>>,
+
+    /// The expansions of macros from *another* program or library whose
+    /// scopes this macro's inherited identifiers carry, each with the
+    /// environment that macro was defined in.
+    ///
+    /// Early binding (#438) binds a template's reference to an import where it
+    /// is emitted, so that a program's later definition of the spelling cannot
+    /// capture it; it recognises such a reference by a foreign expansion's
+    /// scope, and the record of which scopes are foreign lasts one top-level
+    /// form. A macro a library's generator defines *in the program* is used
+    /// in later forms too, where its template's references carry the
+    /// generator's expansion scope and nothing says that expansion was
+    /// foreign. So the record is taken when the macro is compiled — in the
+    /// form that ran the generator, while it is still known — and put back
+    /// for the form of each expansion (#446). Empty for a written macro.
+    pub foreign_expansions: Vec<(ScopeId, Rc<Environment>)>,
 }
 
 impl CompiledMacro {

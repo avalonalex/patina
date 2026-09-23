@@ -978,6 +978,17 @@ impl Desugarer {
         compiled_macro: &patina_core::CompiledMacro,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
+        // A macro a foreign generator defined carries that generator's
+        // expansion scope on its template's references, and the record that
+        // the expansion was foreign did not outlive the form that ran the
+        // generator. Put it back for this form, so that those references are
+        // bound early here as they were there (#446).
+        if !compiled_macro.foreign_expansions.is_empty() {
+            let mut foreign = self.early.foreign.borrow_mut();
+            for (scope, env) in &compiled_macro.foreign_expansions {
+                foreign.entry(*scope).or_insert_with(|| Rc::clone(env));
+            }
+        }
         let Some(def_env) = compiled_macro.definition_env.as_ref() else {
             return expanded;
         };
@@ -3209,9 +3220,38 @@ impl Desugarer {
             env.heap().clone(),
         );
         let macro_name = name.clone();
-        compiler.compile_macro(name, rules).map_err(|e| {
+        let mut compiled = compiler.compile_macro(name, rules).map_err(|e| {
             DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}"))
-        })
+        })?;
+        compiled.foreign_expansions = self.foreign_expansions_carried_by(&compiled);
+        Ok(compiled)
+    }
+
+    /// The foreign expansions (`EarlyBinding::foreign`) whose scopes the
+    /// identifiers `compiled` inherited carry, for its `foreign_expansions`.
+    ///
+    /// Asked while the form that expanded the generator is still being
+    /// desugared, which is the last moment the record is there: it is emptied
+    /// at the end of the form (#446).
+    fn foreign_expansions_carried_by(
+        &self,
+        compiled: &patina_core::CompiledMacro,
+    ) -> Vec<(ScopeId, Rc<Environment>)> {
+        let foreign = self.early.foreign.borrow();
+        if foreign.is_empty() {
+            return Vec::new();
+        }
+        let mut carried: Vec<(ScopeId, Rc<Environment>)> = Vec::new();
+        for scopes in compiled.inherited_identifiers.values().flatten() {
+            for scope in scopes.iter() {
+                if let Some(env) = foreign.get(scope)
+                    && !carried.iter().any(|(seen, _)| seen == scope)
+                {
+                    carried.push((*scope, Rc::clone(env)));
+                }
+            }
+        }
+        carried
     }
 
     /// Parse the literals list from TaggedValue: (lit1 lit2 ...)
