@@ -49,7 +49,10 @@
     ;; by more clauses". Without this rule the arms below read `else` as a
     ;; test and the desugarer rejected it as syntax used as a value (#432).
     ;; A program that defines `else` itself is not caught here: its `else`
-    ;; is not this literal's binding (#450), so it stays a test.
+    ;; is not this literal's binding (#450), so it stays a test. The binding
+    ;; is read when the `cond` expands, so a definition in the same top-level
+    ;; `begin` has not happened yet and is still caught; chibi and Gauche
+    ;; run that program.
     ((cond (else . body) clause1 clause ...)
      (syntax-error "cond: an else clause must be the last clause, and is followed by"
                    clause1))

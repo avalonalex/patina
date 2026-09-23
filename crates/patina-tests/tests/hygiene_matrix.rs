@@ -1310,6 +1310,56 @@ fn a_definition_over_an_import_is_not_a_library_macros_literal() {
     }
 }
 
+/// An import that is a *copy* still matches the exporting library's literal
+/// of that name. An export a macro introduced is one `share_binding` cannot
+/// share, so the importer holds it at a location of its own; compared by
+/// location alone, the two read as the different globals #450 tells apart,
+/// and `(m kw)` below answered `var`. Gauche 0.9.15 answers `lit`, as does
+/// chibi 0.12 with the library in a file of its own, measured 2026-09-22.
+#[test]
+fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
+    let program = "(define-library (hm introduced)\n  (import (scheme base))\n  \
+                   (export m kw)\n  (begin\n    \
+                   (define-syntax define-kw (syntax-rules () ((_) (define kw 'kw))))\n    \
+                   (define-kw)\n    \
+                   (define-syntax m (syntax-rules (kw) ((_ kw) 'lit) ((_ x) 'var)))))\n\
+                   (import (scheme base) (hm introduced))\n(m kw)";
+    for vm in [true, false] {
+        assert_eq!(
+            answer(program, vm),
+            "lit",
+            "`var` is the copied import read as a global of the program's own"
+        );
+    }
+}
+
+/// Two libraries' bindings of one spelling are two literals, not one: under
+/// SRFI 101's `quote` a library macro's `quote` literal takes its other rule.
+/// chibi 0.12 and Gauche 0.9.15 answer `other`, and `quoted` for the control,
+/// where the use site's `quote` is `(scheme base)`'s, measured 2026-09-22.
+///
+/// The global half of the spelling-based matching recorded in
+/// `scheme_tests/reports/larceny_triage.md`: two names reaching no local
+/// binding matched whenever they were spelled alike, and this answered
+/// `quoted` for both. #450's location comparison is what tells them apart.
+#[test]
+fn a_literal_is_not_another_librarys_binding_of_its_spelling() {
+    let library = "(define-library (hm q)\n  (import (scheme base))\n  (export mq)\n  \
+                   (begin\n    (define-syntax mq\n      \
+                   (syntax-rules (quote) ((_ 'x) 'quoted) ((_ y) 'other)))))\n";
+    let srfi_101 =
+        format!("{library}(import (except (scheme base) quote) (srfi 101) (hm q))\n(mq 'a)");
+    let scheme_base = format!("{library}(import (scheme base) (hm q))\n(mq 'a)");
+    for vm in [true, false] {
+        assert_eq!(
+            answer(&srfi_101, vm),
+            "other",
+            "`quoted` is SRFI 101's `quote` taken for `(scheme base)`'s"
+        );
+        assert_eq!(answer(&scheme_base, vm), "quoted");
+    }
+}
+
 /// A location both sides imported under **two names** — `string-length`, and
 /// `slen` by a `rename` — keeps its two spellings apart when a reference is
 /// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.

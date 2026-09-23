@@ -105,9 +105,18 @@ fn local_binding(
 /// exporting library's location (#406), so where the two names lead is a
 /// question [`Environment::binding_location`] answers exactly.
 ///
-/// Only two bound names at different locations are told apart. A name bound
-/// on one side and unbound on the other matches as it did, as does a name
-/// with no site to look it up in.
+/// Only two bound names at different locations *holding different values*
+/// are told apart. A name bound on one side and unbound on the other matches
+/// as it did, as does a name with no site to look it up in.
+///
+/// The value check is for the one import that is not the library's location:
+/// an export `share_binding` cannot share — a definition a macro introduced,
+/// or one reached through an alias — is installed as a copy, so the importer
+/// has a location of its own holding what the library's holds. By location
+/// alone a library that exports such a name and uses it as its macro's
+/// literal stopped matching its own importer's use of it, where chibi, Gauche
+/// and the matcher before #450 all match. A program's definition over an
+/// import holds a value of its own, so this does not undo #450.
 ///
 /// [`Environment::binding_location`]: patina_runtime::Environment::binding_location
 fn distinct_globals(name: &str, definition: Option<Site<'_>>, use_site: Option<Site<'_>>) -> bool {
@@ -118,7 +127,9 @@ fn distinct_globals(name: &str, definition: Option<Site<'_>>, use_site: Option<S
         definition.env.binding_location(name),
         use_site.env.binding_location(name),
     ) {
-        (Some(lit), Some(input)) => lit != input,
+        (Some(lit), Some(input)) if lit != input => {
+            definition.env.get(name) != use_site.env.get(name)
+        }
         _ => false,
     }
 }
