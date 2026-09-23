@@ -597,7 +597,7 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 `scheme_suite.rs` carries a floor per file and a test keeps it honest.
 
 - `hygiene_matrix.rs` — macro hygiene as a *scoreboard*: 28 use-site-binder
-  shapes against chibi and Racket, and 109 generated / library-imported macro
+  shapes against chibi and Racket, and 111 generated / library-imported macro
   shapes against chibi and Gauche, read as a table when a fix moves a row.
   Its ignored `dump_programs` writes every program out for re-measuring.
   Stays Rust.
