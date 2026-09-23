@@ -323,7 +323,7 @@ impl ClassifyError for patina_runtime::EvalError {
 impl ClassifyError for patina_vm::VmBackendError {
     fn class(&self) -> ErrorClass {
         match self {
-            patina_vm::VmBackendError::Compile(_) | patina_vm::VmBackendError::Desugar(_) => {
+            patina_vm::VmBackendError::Compile(_) | patina_vm::VmBackendError::Desugar { .. } => {
                 ErrorClass::BeforeRun
             }
             patina_vm::VmBackendError::Runtime { .. } => ErrorClass::AtRuntime,

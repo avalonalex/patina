@@ -1,6 +1,6 @@
 //! Error types for the desugarer
 
-use patina_core::{ErrorDetail, ErrorKind};
+use patina_core::{ErrorDetail, ErrorKind, SourceLocation};
 use std::fmt;
 
 /// Errors that can occur during desugaring
@@ -41,9 +41,43 @@ pub enum DesugarError {
 
     /// Generic error with message
     Other(String),
+
+    /// Another desugar error, with where in the source it was raised.
+    ///
+    /// Attached once, by the innermost form that has a position
+    /// (`Desugarer::desugar_form`), so the error points at the form that was
+    /// wrong rather than at the top-level form it sat in. An error raised
+    /// while a macro expanded is placed at the use site, since the template's
+    /// pairs are stamped with it. Its text is the wrapped error's; the
+    /// position reaches the user through `source_location`, which the backends
+    /// carry to `format_interpreter_error` (#432).
+    WithLocation {
+        error: Box<DesugarError>,
+        location: SourceLocation,
+    },
 }
 
 impl DesugarError {
+    /// Place this error at `location`, unless it already has a position — the
+    /// innermost form that knows its place is the more precise answer.
+    pub fn at_opt(self, location: Option<SourceLocation>) -> Self {
+        match (location, self.source_location()) {
+            (Some(location), None) => DesugarError::WithLocation {
+                error: Box::new(self),
+                location,
+            },
+            _ => self,
+        }
+    }
+
+    /// Where in the source this error was raised, if that is known.
+    pub fn source_location(&self) -> Option<&SourceLocation> {
+        match self {
+            DesugarError::WithLocation { location, .. } => Some(location),
+            _ => None,
+        }
+    }
+
     /// Get the error kind for classification
     pub fn to_error_kind(&self) -> ErrorKind {
         match self {
@@ -56,6 +90,7 @@ impl DesugarError {
             DesugarError::InvalidFormals(_) => ErrorKind::Syntax,
             DesugarError::AmbiguousReference(_) => ErrorKind::Syntax,
             DesugarError::Other(_) => ErrorKind::Internal,
+            DesugarError::WithLocation { error, .. } => error.to_error_kind(),
         }
     }
 
@@ -103,6 +138,7 @@ impl fmt::Display for DesugarError {
                 write!(f, "Invalid formal parameters: {}", msg)
             }
             DesugarError::Other(msg) => write!(f, "{}", msg),
+            DesugarError::WithLocation { error, .. } => write!(f, "{}", error),
         }
     }
 }

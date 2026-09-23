@@ -331,6 +331,150 @@ fn a_parse_error_is_rendered_with_its_source_line_and_caret() {
     assert!(rendered.contains('^'), "{rendered}");
 }
 
+/// Run `program` as the file `name` and render the error it stops at the way
+/// the command line does.
+fn rendered_error<B: Backend>(interp: &Interpreter<B>, program: &str, name: &str) -> String
+where
+    B::Error: patina_core::error::HasSourceLocation,
+{
+    let (result, source_map) = interp.eval_program_with_source_name(program, name);
+    let err = result.expect_err("the program is malformed");
+    patina_interpreter::format_backend_error_with_source(&err, &source_map.borrow())
+}
+
+/// Render on both backends, labelled, for assertions that hold on each.
+fn rendered_on_both(program: &str, name: &str) -> [(&'static str, String); 2] {
+    [
+        (
+            "tree-walker",
+            rendered_error(&TreeWalkInterpreter::new_tree_walker(), program, name),
+        ),
+        (
+            "vm",
+            rendered_error(&Interpreter::new(VmBackend::new()), program, name),
+        ),
+    ]
+}
+
+/// A program rejected before it runs is placed at the form that was wrong,
+/// not left without a position (#432). The `case` is on line 3, inside a
+/// definition: the innermost form with a position is the one reported, and a
+/// macro's use site stands for everything its expansion raised.
+#[test]
+fn a_desugar_error_is_rendered_at_the_form_that_raised_it() {
+    let program = "(define before 1)\n\
+                   (define (f n)\n  \
+                   (case n\n    \
+                   ((0) 'zero)\n    \
+                   (else 'many)\n    \
+                   ((1) 'one)))";
+    for (backend, rendered) in rendered_on_both(program, "case.scm") {
+        assert!(
+            rendered.contains("  at case.scm:3:3"),
+            "[{backend}] {rendered}"
+        );
+        assert!(
+            rendered.contains("   3 |   (case n"),
+            "[{backend}] {rendered}"
+        );
+        assert!(rendered.contains('^'), "[{backend}] {rendered}");
+    }
+}
+
+/// `case` and `cond` are `syntax-rules` macros, so a malformed use could only
+/// ever fail as "no pattern matches". Each common mistake is now named, with
+/// the clause at fault (#432). Gauche rejects an `else` before `case`'s last
+/// clause; chibi accepts it and never reaches the clauses after.
+///
+/// `cond` has no such rule — see the next test — so its mid-`else` is
+/// rejected as syntax used as a value, which still has to be placed.
+#[test]
+fn a_malformed_case_or_cond_names_the_clause_at_fault() {
+    let cases = [
+        (
+            "(case 1 ((0) 'zero) (else 'many) ((1) 'one))",
+            "case: an else clause must be the last clause, and is followed by ((1) (quote one))",
+        ),
+        (
+            "(case 1 (else => car) ((1) 'one))",
+            "case: an else clause must be the last clause, and is followed by ((1) (quote one))",
+        ),
+        (
+            "(case 1 (0 'zero) (else 'many))",
+            "case: a clause must be ((datum ...) expression ...) or (else expression ...), \
+             not (0 (quote zero))",
+        ),
+        (
+            "(cond ((= 1 0) 'zero) 1)",
+            "cond: a clause must be (test expression ...), (test => receiver) or \
+             (else expression ...), not 1",
+        ),
+        (
+            "(cond ())",
+            "cond: a clause must be (test expression ...), (test => receiver) or \
+             (else expression ...), not ()",
+        ),
+        (
+            "(cond ((= 1 0) 'zero) (else 'many) ((= 1 1) 'one))",
+            "`else` is a syntactic keyword",
+        ),
+    ];
+    for (program, expected) in cases {
+        for (backend, rendered) in rendered_on_both(program, "clauses.scm") {
+            assert!(
+                rendered.contains(expected),
+                "[{backend}] {program}\nexpected: {expected}\ngot: {rendered}"
+            );
+            assert!(
+                rendered.contains("  at clauses.scm:1:1"),
+                "[{backend}] {program}\n{rendered}"
+            );
+        }
+    }
+}
+
+/// A program that defines `else` and then writes it before `cond`'s last
+/// clause means the variable, and runs: chibi and Gauche answer 1. A rule
+/// diagnosing a mid-`else` in `cond` rejected it, because `else` still
+/// matches the macro's literal after the program defines over the import,
+/// where chibi and Gauche no longer match it (#450). Pinned so the diagnosis
+/// is not added back while that is so.
+#[test]
+fn a_program_defined_else_before_conds_last_clause_is_its_variable() {
+    let program = "(define else 3) (cond (else 1) (#t 2))";
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    assert_eq!(
+        tree_walker.eval_program(program).unwrap().as_fixnum(),
+        Some(1)
+    );
+    assert_eq!(vm.eval_program(program).unwrap().as_fixnum(), Some(1));
+}
+
+/// A use that no rule of a macro accepts says so once, naming the macro. It
+/// used to read "Invalid syntax: Macro expansion failed: Invalid syntax: No
+/// matching pattern for macro …" (#432).
+#[test]
+fn a_use_no_rule_accepts_names_the_macro_once() {
+    let program = "(define-syntax two (syntax-rules () ((_ a b) (list a b))))\n(two 1)";
+    for (backend, rendered) in rendered_on_both(program, "two.scm") {
+        assert!(
+            rendered
+                .contains("Invalid syntax: no `syntax-rules` pattern of `two` matches this use"),
+            "[{backend}] {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("Invalid syntax").count(),
+            1,
+            "[{backend}] {rendered}"
+        );
+        assert!(
+            rendered.contains("  at two.scm:2:1"),
+            "[{backend}] {rendered}"
+        );
+    }
+}
+
 #[test]
 fn tracked_eval_program_variants_reject_input_cut_short_inside_a_datum() {
     let interp = TreeWalkInterpreter::new_tree_walker();

@@ -75,7 +75,21 @@
     ((cond (test result1 result2 ...) clause ...)
      (if test
          (begin result1 result2 ...)
-         (cond clause ...)))))
+         (cond clause ...)))
+
+    ;; Anything else is a clause no rule above accepts — not a list, or
+    ;; empty. Last, so it only names what they all refused (#432).
+    ;;
+    ;; There is deliberately no rule for an else clause with clauses after
+    ;; it, though `case` has one. Here the arms above take that `else` for
+    ;; a test expression, and the desugarer then rejects it as syntax used
+    ;; as a value — unless the program has defined `else` itself, where
+    ;; chibi and Gauche evaluate it as the variable it is, and so does
+    ;; Patina. `else` still matches this macro's literal after such a
+    ;; definition (#450), so a rule here would reject that program.
+    ((cond clause1 clause ...)
+     (syntax-error "cond: a clause must be (test expression ...), (test => receiver) or (else expression ...), not"
+                   clause1))))
 
 ;; case - pattern matching with eqv? comparison
 (define-syntax case
@@ -83,6 +97,16 @@
     ;; Base case with else and =>
     ((case key (else => proc))
      (proc key))
+
+    ;; An else clause with clauses after it. R7RS puts else last, and
+    ;; Gauche rejects this; chibi accepts it and never reaches the clauses
+    ;; after. Without this rule it failed as "no pattern matches", with
+    ;; nothing to say which clause was wrong (#432). It names the clause
+    ;; after the else, which is the user's own text; rebuilding the else
+    ;; clause from this template would print the template's `else`.
+    ((case key (else . body) clause1 clause ...)
+     (syntax-error "case: an else clause must be the last clause, and is followed by"
+                   clause1))
 
     ;; Base case with else
     ((case key (else result1 result2 ...))
@@ -132,4 +156,11 @@
     ;; (`clause ...` matches zero): delegate to the arms above with an
     ;; explicitly unspecified body, rather than copying their dispatch.
     ((case key ((datum ...)) clause ...)
-     (case key ((datum ...) (if #f #f)) clause ...))))
+     (case key ((datum ...) (if #f #f)) clause ...))
+
+    ;; Anything else is a clause that is neither `((datum ...) expr ...)`
+    ;; nor an else clause — `(0 'zero)` for `((0) 'zero)` is the usual one.
+    ;; Last, so it only names what every rule above refused (#432).
+    ((case key clause1 clause ...)
+     (syntax-error "case: a clause must be ((datum ...) expression ...) or (else expression ...), not"
+                   clause1))))

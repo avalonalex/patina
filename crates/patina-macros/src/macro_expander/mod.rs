@@ -149,10 +149,9 @@ fn expand_macro_core_tagged(
     // No rule matched
     debug_ctx.log_no_rules_matched();
 
-    Err(crate::error::MacroError::InvalidSyntax(format!(
-        "No matching pattern for macro {}",
-        compiled_macro.name
-    )))
+    Err(crate::error::MacroError::NoMatchingPattern(
+        compiled_macro.name.to_string(),
+    ))
 }
 
 /// Flip a scope on all identifiers in a TaggedValue tree (Racket-style hygiene)
