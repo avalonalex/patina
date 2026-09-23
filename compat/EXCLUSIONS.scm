@@ -153,8 +153,9 @@
   ;; chibi-app sat here for an `else` clause mid-`case` (app.scm:467). It now
   ;; passes, 6 of 6: `compat/patches/chibi-app.patch` removes the clause after
   ;; `else`, which chibi never reaches, rather than moving `else` below it,
-  ;; which would change what the program does. The poor message Patina gives
-  ;; for that shape, which this entry used to carry, is #432.
+  ;; which would change what the program does. Patina's message for that
+  ;; shape, which this entry used to carry, named neither the clause nor
+  ;; where it was; it does both since #432.
 
   ;; chibi-math-stats sat here for one commit, for calling SRFI 1's `every` on
   ;; a vector at stats.scm:812. It now passes: the file defines its own

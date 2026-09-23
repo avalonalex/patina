@@ -46,16 +46,23 @@ pub enum VmBackendError {
         location: Option<SourceLocation>,
     },
 
-    #[error("desugar error: {0}")]
-    Desugar(String),
+    /// Rejected before it ran. `location` is the form the desugarer was in
+    /// when it refused, where it knew one (#432).
+    #[error("desugar error: {message}")]
+    Desugar {
+        message: String,
+        location: Option<SourceLocation>,
+    },
 }
 
 impl VmBackendError {
     /// Return the source location attached to this error, if any.
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
-            VmBackendError::Runtime { location, .. } => location.as_ref(),
-            _ => None,
+            VmBackendError::Runtime { location, .. } | VmBackendError::Desugar { location, .. } => {
+                location.as_ref()
+            }
+            VmBackendError::Compile(_) => None,
         }
     }
 }
@@ -78,7 +85,10 @@ impl From<VmError> for VmBackendError {
 
 impl From<patina_frontend::DesugarError> for VmBackendError {
     fn from(e: patina_frontend::DesugarError) -> Self {
-        VmBackendError::Desugar(e.to_string())
+        VmBackendError::Desugar {
+            message: e.to_string(),
+            location: e.source_location().cloned(),
+        }
     }
 }
 
@@ -87,7 +97,10 @@ impl From<crate::error::CompileError> for VmBackendError {
         match e {
             // Reported as what it is: a desugar failure the compiler happened
             // to be the one to hit (an unquote inside a quasiquote template).
-            crate::error::CompileError::Desugar(message) => VmBackendError::Desugar(message),
+            crate::error::CompileError::Desugar(message) => VmBackendError::Desugar {
+                message,
+                location: None,
+            },
             other => VmBackendError::Compile(other.to_string()),
         }
     }
@@ -223,7 +236,7 @@ impl VmBackend {
         };
         let core_expr = desugarer
             .desugar_tagged(expr, &heap)
-            .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
+            .map_err(VmBackendError::from)?;
 
         // Handle Import specially — it's a side-effect that modifies the global
         // environment and doesn't need compilation/execution.
@@ -464,7 +477,7 @@ impl VmBackend {
         for tv in parsed {
             let core_expr = desugarer
                 .desugar_tagged(tv, &heap)
-                .map_err(|e| VmBackendError::Desugar(e.to_string()))?;
+                .map_err(VmBackendError::from)?;
 
             let registry = Rc::clone(&self.state.borrow().primitive_registry);
             let (top, nested) =

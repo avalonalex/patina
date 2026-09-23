@@ -73,9 +73,6 @@ empty, archive this page.
 - #381 — the snapshot records no measurement date.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
-**Small**
-- #432 — an `else` before a `case`'s last clause is reported as "No matching pattern", with no location.
-
 One recorded debt has no issue because it has no known symptom: on the VM,
 `vm_raise_value`, the two prompt paths and the value-form arm still locate wind
 records by *depth*, an assumption that continuation identity was introduced to

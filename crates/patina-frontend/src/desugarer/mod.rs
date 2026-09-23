@@ -1666,7 +1666,13 @@ impl Desugarer {
             // (it will manage its own borrows)
             drop(heap);
             let source = self.lookup_source(tagged);
-            let mut expr = self.desugar_list_tagged(tagged, shared_heap)?;
+            // An error from inside this form is placed here unless a form
+            // nested in it already placed it (#432). Every compound form comes
+            // through this line, so this is where a desugar error gets the
+            // position no raising site had to pass along.
+            let mut expr = self
+                .desugar_list_tagged(tagged, shared_heap)
+                .map_err(|e| e.at_opt(source.clone()))?;
             // Attach source location from the source map if available
             // and the desugared result doesn't already have one
             if expr.source.is_none() {
@@ -1773,6 +1779,13 @@ impl Desugarer {
                 patina_macros::MacroError::AmbiguousReference(message) => {
                     DesugarError::AmbiguousReference(message)
                 }
+                // Every `syntax-rules` rule refused the form. The expander's
+                // message says so; wrapping it as "Macro expansion failed:
+                // Invalid syntax: …" said "Invalid syntax" twice and nothing
+                // more (#432).
+                patina_macros::MacroError::NoMatchingPattern(name) => DesugarError::InvalidSyntax(
+                    format!("no `syntax-rules` pattern of `{name}` matches this use"),
+                ),
                 other => DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", other)),
             })?;
 

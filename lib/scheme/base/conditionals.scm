@@ -44,6 +44,13 @@
     ((cond (else result1 result2 ...))
      (begin result1 result2 ...))
 
+    ;; An else clause with clauses after it. R7RS puts else last; without
+    ;; this rule the arms below read `else` as a test expression and the
+    ;; mistake surfaced as a misuse of the keyword (#432). Gauche rejects
+    ;; it too; chibi says "non-final else in cond".
+    ((cond (else . body) clause1 clause ...)
+     (syntax-error "cond: an else clause must be the last clause" (else . body)))
+
     ;; Single test clause with =>
     ((cond (test => proc))
      (let ((temp test))
@@ -75,7 +82,12 @@
     ((cond (test result1 result2 ...) clause ...)
      (if test
          (begin result1 result2 ...)
-         (cond clause ...)))))
+         (cond clause ...)))
+
+    ;; Anything else is a clause that is not a list. Last, so it only
+    ;; names what every rule above refused (#432).
+    ((cond clause1 clause ...)
+     (syntax-error "cond: a clause must be a list" clause1))))
 
 ;; case - pattern matching with eqv? comparison
 (define-syntax case
@@ -83,6 +95,13 @@
     ;; Base case with else and =>
     ((case key (else => proc))
      (proc key))
+
+    ;; An else clause with clauses after it. R7RS puts else last, and
+    ;; Gauche rejects this; chibi accepts it and never reaches the clauses
+    ;; after. Without this rule it failed as "no pattern matches", with
+    ;; nothing to say which clause was wrong (#432).
+    ((case key (else . body) clause1 clause ...)
+     (syntax-error "case: an else clause must be the last clause" (else . body)))
 
     ;; Base case with else
     ((case key (else result1 result2 ...))
@@ -132,4 +151,11 @@
     ;; (`clause ...` matches zero): delegate to the arms above with an
     ;; explicitly unspecified body, rather than copying their dispatch.
     ((case key ((datum ...)) clause ...)
-     (case key ((datum ...) (if #f #f)) clause ...))))
+     (case key ((datum ...) (if #f #f)) clause ...))
+
+    ;; Anything else is a clause that is neither `((datum ...) expr ...)`
+    ;; nor an else clause — `(0 'zero)` for `((0) 'zero)` is the usual one.
+    ;; Last, so it only names what every rule above refused (#432).
+    ((case key clause1 clause ...)
+     (syntax-error "case: a clause must be ((datum ...) expression ...) or (else expression ...)"
+                   clause1))))
