@@ -3,7 +3,7 @@
 //! This module provides common constants, helpers, and utility functions
 //! used across the macro compiler, matcher, and expander.
 
-use patina_core::{Heap, TaggedValue};
+use patina_core::{Heap, SpineEnd, TaggedValue};
 use patina_runtime::PVRef;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -64,8 +64,11 @@ impl<'a> TaggedListIter<'a> {
 
     /// Count the length of a TaggedValue list without collecting
     ///
-    /// Returns None if not a proper list.
+    /// Returns None if not a proper list — improper, or circular (#459).
     pub fn len(list: TaggedValue, heap: &Heap) -> Option<usize> {
+        if heap.spine_is_circular(list) {
+            return None;
+        }
         let mut count = 0;
         let mut current = list;
         loop {
@@ -108,23 +111,17 @@ impl<'a> Iterator for TaggedListIter<'a> {
 
 /// Convert a TaggedValue proper list to a Vec
 ///
-/// Returns an error message if the value is not a proper list.
+/// Returns an error message if the value is not a proper list: improper, or
+/// circular, which the walk used to follow forever (#459).
 pub fn list_to_vec_tagged(value: TaggedValue, heap: &Heap) -> Result<Vec<TaggedValue>, String> {
-    let mut result = Vec::new();
-    let mut current = value;
-
-    loop {
-        if current == TaggedValue::NULL {
-            break;
-        } else if current.is_pair() {
-            result.push(heap.car(current));
-            current = heap.cdr(current);
-        } else {
-            return Err(format!("Expected proper list, got {:?}", current));
-        }
+    match heap.spine(value) {
+        (elements, SpineEnd::Null) => Ok(elements),
+        (_, SpineEnd::Improper(tail)) => Err(format!(
+            "Expected proper list, got one ending with {}",
+            patina_core::format_tagged(tail, heap)
+        )),
+        (_, SpineEnd::Circular) => Err("Expected proper list, got a circular one".to_string()),
     }
-
-    Ok(result)
 }
 
 /// Convert a Vec to a TaggedValue proper list
@@ -134,24 +131,16 @@ pub fn vec_to_list_tagged(values: Vec<TaggedValue>, heap: &mut Heap) -> TaggedVa
 
 /// Convert a TaggedValue list to a Vec, allowing improper lists
 ///
-/// Returns (elements, tail) where tail is the final cdr (NULL for proper lists)
+/// Returns (elements, tail) where tail is the final cdr (NULL for proper
+/// lists), or `None` when the cdrs come back on themselves (#459).
 pub fn list_to_vec_with_tail_tagged(
     value: TaggedValue,
     heap: &Heap,
-) -> (Vec<TaggedValue>, TaggedValue) {
-    let mut result = Vec::new();
-    let mut current = value;
-
-    loop {
-        if current == TaggedValue::NULL {
-            return (result, TaggedValue::NULL);
-        } else if current.is_pair() {
-            result.push(heap.car(current));
-            current = heap.cdr(current);
-        } else {
-            // Improper list - return the tail
-            return (result, current);
-        }
+) -> Option<(Vec<TaggedValue>, TaggedValue)> {
+    match heap.spine(value) {
+        (elements, SpineEnd::Null) => Some((elements, TaggedValue::NULL)),
+        (elements, SpineEnd::Improper(tail)) => Some((elements, tail)),
+        (_, SpineEnd::Circular) => None,
     }
 }
 

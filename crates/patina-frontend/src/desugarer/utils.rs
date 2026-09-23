@@ -5,7 +5,7 @@
 
 use super::error::{DesugarError, Result};
 use patina_core::debug_format::format_tagged;
-use patina_core::{Heap, SharedHeap, TaggedValue};
+use patina_core::{Heap, SharedHeap, SpineEnd, TaggedValue};
 use patina_ir::{Formals, ScopedParam, Symbol};
 use patina_runtime::ScopeSet;
 use std::collections::HashSet;
@@ -23,29 +23,20 @@ pub fn list_to_vec_tagged(
     value: TaggedValue,
     shared_heap: &SharedHeap,
 ) -> Result<Vec<TaggedValue>> {
-    let mut result = Vec::new();
-    let mut current = value;
-
-    loop {
-        if current == TaggedValue::NULL {
-            return Ok(result);
-        }
-
-        // Fast path: native heap pair - just use immutable borrow
-        if current.is_pair() {
-            let heap = shared_heap.borrow();
-            let (car, cdr) = heap.get_pair(current);
-            result.push(car);
-            current = cdr;
-            continue;
-        }
-
-        // Not a native pair and not null — improper list. The tail as Scheme
-        // writes it (#457): its `{:?}` was `TaggedValue::fixnum(3)`.
-        return Err(DesugarError::ExpectedProperList(format!(
+    let heap = shared_heap.borrow();
+    match heap.spine(value) {
+        (elements, SpineEnd::Null) => Ok(elements),
+        // The tail as Scheme writes it (#457): its `{:?}` was
+        // `TaggedValue::fixnum(3)`.
+        (_, SpineEnd::Improper(tail)) => Err(DesugarError::ExpectedProperList(format!(
             "got an improper list ending with {}",
-            format_tagged(current, &shared_heap.borrow())
-        )));
+            format_tagged(tail, &heap)
+        ))),
+        // Walked, this collected elements until memory ran out (#459).
+        (_, SpineEnd::Circular) => Err(DesugarError::ExpectedProperList(format!(
+            "got a circular list: {}",
+            format_tagged(value, &heap)
+        ))),
     }
 }
 
@@ -57,6 +48,15 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
     // Fixed arity: ()
     if formals == TaggedValue::NULL {
         return Ok(Formals::Fixed(vec![]));
+    }
+
+    // Walked below, a circular list collected parameters until memory ran
+    // out (#459).
+    if shared_heap.borrow().spine_is_circular(formals) {
+        return Err(DesugarError::InvalidFormals(format!(
+            "a parameter list cannot be circular: {}",
+            format_tagged(formals, &shared_heap.borrow())
+        )));
     }
 
     // Check for single symbol (variadic) or identifier

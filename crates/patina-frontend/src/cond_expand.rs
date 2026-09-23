@@ -136,40 +136,16 @@ where
 }
 
 /// Convert a TaggedValue list to Vec<TaggedValue>
+///
+/// Refuses a circular list with an improper one, where a plain walk followed a
+/// circular one forever (#459).
 pub(crate) fn tagged_list_to_vec(
     value: TaggedValue,
     shared_heap: &SharedHeap,
 ) -> Result<Vec<TaggedValue>, ParseError> {
-    let mut result = Vec::new();
-    let mut current = value;
-
-    loop {
-        if current == TaggedValue::NULL {
-            return Ok(result);
-        }
-
-        // Try native pair first
-        {
-            let heap = shared_heap.borrow();
-            if current.is_pair() {
-                let (car, cdr) = heap.get_pair(current);
-                result.push(car);
-                current = cdr;
-                continue;
-            }
-        }
-
-        let pair = shared_heap.borrow().try_pair(current);
-        if let Some((car, cdr)) = pair {
-            result.push(car);
-            current = cdr;
-            continue;
-        }
-
-        return Err(ParseError::InvalidSyntax(
-            "Expected proper list in feature requirement".to_string(),
-        ));
-    }
+    shared_heap.borrow().list_to_vec(value).ok_or_else(|| {
+        ParseError::InvalidSyntax("Expected proper list in feature requirement".to_string())
+    })
 }
 
 /// Parse a library name from TaggedValue.

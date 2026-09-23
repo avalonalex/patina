@@ -6,7 +6,7 @@
 use super::super::IdentifierKey;
 use super::Compiler;
 use crate::error::MacroError;
-use patina_core::TaggedValue;
+use patina_core::{SpineEnd, TaggedValue};
 use patina_runtime::PVRef;
 use std::rc::Rc;
 
@@ -237,41 +237,20 @@ impl Compiler {
 
     /// Collect items from a list TaggedValue
     ///
-    /// Returns (items, tail) where tail is Some(value) for improper lists
+    /// Returns (items, tail) where tail is Some(value) for improper lists. A
+    /// circular list is refused: the walk used to follow one forever (#459).
     pub(super) fn collect_list_items(
         &self,
         expr: TaggedValue,
     ) -> Result<(Vec<TaggedValue>, Option<TaggedValue>), MacroError> {
-        let mut items = Vec::new();
-        let mut current = expr;
-
-        loop {
-            if current == TaggedValue::NULL {
-                return Ok((items, None));
-            }
-
-            // Fast path: native pair
-            if current.is_pair() {
-                let heap = self.heap.borrow();
-                let (car, cdr) = heap.get_pair(current);
-                items.push(car);
-                current = cdr;
-                continue;
-            }
-
-            // Check if it's any pair (including boxed)
-            let is_pair = current.is_pair();
-            if is_pair {
-                let heap = self.heap.borrow();
-                if let Some((car, cdr)) = heap.try_pair(current) {
-                    items.push(car);
-                    current = cdr;
-                    continue;
-                }
-            }
-
-            // Improper list: (a b . c)
-            return Ok((items, Some(current)));
+        let heap = self.heap.borrow();
+        match heap.spine(expr) {
+            (items, SpineEnd::Null) => Ok((items, None)),
+            (items, SpineEnd::Improper(tail)) => Ok((items, Some(tail))),
+            (_, SpineEnd::Circular) => Err(MacroError::InvalidSyntax(format!(
+                "a syntax-rules pattern or template cannot be a circular list: {}",
+                patina_core::format_tagged(expr, &heap)
+            ))),
         }
     }
 

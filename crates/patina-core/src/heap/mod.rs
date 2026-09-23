@@ -267,6 +267,17 @@ impl HeapObjectData {
 // Heap Arena
 // ============================================================================
 
+/// How a chain of cdrs ends: [`Heap::spine`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpineEnd {
+    /// `()`: the chain is a proper list.
+    Null,
+    /// Some other value, which ends an improper list.
+    Improper(TaggedValue),
+    /// The chain comes back to a pair it has already passed.
+    Circular,
+}
+
 /// Heap arena for managing TaggedValue allocations
 ///
 /// Uses typed storage for common object types to avoid dynamic dispatch.
@@ -2958,29 +2969,67 @@ impl Heap {
     }
 
     /// Convert a proper list to a Vec, rejecting improper and circular cdr chains.
-    /// Cycle detection uses constant space beyond the returned elements: `slow`
-    /// advances once for every two pairs collected by `current`.
     pub fn list_to_vec(&self, tv: TaggedValue) -> Option<Vec<TaggedValue>> {
-        let mut result = Vec::new();
+        match self.spine(tv) {
+            (elements, SpineEnd::Null) => Some(elements),
+            _ => None,
+        }
+    }
+
+    /// The cars along `tv`'s chain of cdrs, and how the chain ends.
+    ///
+    /// Stops on a cycle, which a plain walk of the cdrs follows forever. Cycle
+    /// detection uses constant space beyond the returned elements: `slow`
+    /// advances once for every two pairs collected by `current`, so it meets
+    /// `current` only if the chain comes back on itself. Nothing can mutate
+    /// the chain while this method borrows the heap.
+    ///
+    /// The reader accepts datum labels, so a program can be circular. Every
+    /// walk of code over a list's spine goes through here, or through
+    /// [`Heap::list_to_vec`], so that one is refused rather than walked until
+    /// memory runs out (#459).
+    pub fn spine(&self, tv: TaggedValue) -> (Vec<TaggedValue>, SpineEnd) {
+        let mut elements = Vec::new();
         let mut current = tv;
         let mut slow = tv;
         let mut move_slow = false;
 
-        while !current.is_null() {
-            let (car, cdr) = self.try_pair(current)?;
-            result.push(car);
+        loop {
+            if current.is_null() {
+                return (elements, SpineEnd::Null);
+            }
+            let Some((car, cdr)) = self.try_pair(current) else {
+                return (elements, SpineEnd::Improper(current));
+            };
+            elements.push(car);
             current = cdr;
             if move_slow {
-                // slow follows pairs already visited by current. Nothing can
-                // mutate the chain while this method borrows the heap.
                 slow = self.cdr(slow);
                 if current == slow {
-                    return None;
+                    return (elements, SpineEnd::Circular);
                 }
             }
             move_slow = !move_slow;
         }
-        Some(result)
+    }
+
+    /// Whether `tv`'s chain of cdrs comes back on itself — [`Heap::spine`]'s
+    /// question, without collecting the elements.
+    pub fn spine_is_circular(&self, tv: TaggedValue) -> bool {
+        let mut current = tv;
+        let mut slow = tv;
+        let mut move_slow = false;
+        while let Some((_, cdr)) = self.try_pair(current) {
+            current = cdr;
+            if move_slow {
+                slow = self.cdr(slow);
+                if current == slow {
+                    return true;
+                }
+            }
+            move_slow = !move_slow;
+        }
+        false
     }
 
     /// Reverse a proper list. Validate before allocating any output pairs.
@@ -3146,8 +3195,43 @@ mod tests {
                 assert_eq!(heap.list_reverse(nodes[0]), None);
                 assert_eq!(heap.list_append(nodes[0], TaggedValue::NULL), None);
                 assert_eq!(heap.stats().allocs_since_gc, before);
+                assert_eq!(heap.spine(nodes[0]).1, SpineEnd::Circular);
+                assert!(heap.spine_is_circular(nodes[0]));
             }
         }
+    }
+
+    /// `spine` says how a chain ends — the question the desugarer, the macro
+    /// expander and the `syntax-rules` compiler ask of code, where a cycle
+    /// is a datum label (#459).
+    #[test]
+    fn a_spine_ends_in_null_an_atom_or_a_cycle() {
+        let mut heap = Heap::new();
+        let proper = heap.list_from_iter([TaggedValue::fixnum(1), TaggedValue::fixnum(2)]);
+        assert_eq!(
+            heap.spine(proper),
+            (
+                vec![TaggedValue::fixnum(1), TaggedValue::fixnum(2)],
+                SpineEnd::Null
+            )
+        );
+        assert!(!heap.spine_is_circular(proper));
+
+        let dotted =
+            heap.list_from_iter_with_tail([TaggedValue::fixnum(1)], TaggedValue::fixnum(9));
+        assert_eq!(
+            heap.spine(dotted),
+            (
+                vec![TaggedValue::fixnum(1)],
+                SpineEnd::Improper(TaggedValue::fixnum(9))
+            )
+        );
+        assert!(!heap.spine_is_circular(dotted));
+
+        assert_eq!(heap.spine(TaggedValue::NULL), (vec![], SpineEnd::Null));
+        let atom = TaggedValue::fixnum(3);
+        assert_eq!(heap.spine(atom), (vec![], SpineEnd::Improper(atom)));
+        assert!(!heap.spine_is_circular(atom));
     }
 
     #[test]

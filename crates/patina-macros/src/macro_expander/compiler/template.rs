@@ -19,6 +19,28 @@ impl Compiler {
         form: TaggedValue,
         level: usize,
     ) -> Result<Template, MacroError> {
+        // A template met again inside itself — a datum label can write one — is
+        // refused, rather than compiled until the stack overflows (#459).
+        let compound = form.is_pair() || form.is_vector();
+        if compound && !self.open.enter(form) {
+            return Err(MacroError::InvalidSyntax(format!(
+                "a syntax-rules template cannot contain itself: {}",
+                patina_core::format_tagged(form, &self.heap.borrow())
+            )));
+        }
+        let compiled = self.compile_template_node(form, level);
+        if compound {
+            self.open.leave();
+        }
+        compiled
+    }
+
+    /// [`Self::compile_template`] for one node, inside the ones `open` holds.
+    fn compile_template_node(
+        &mut self,
+        form: TaggedValue,
+        level: usize,
+    ) -> Result<Template, MacroError> {
         // Handle all identifier types (Symbol, Identifier). Every leaf of every
         // template reaches here, so the identity is read once and reused.
         if let Some(key) = self.identifier_key(form) {

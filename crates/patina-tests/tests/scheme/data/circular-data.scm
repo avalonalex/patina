@@ -42,6 +42,10 @@
 ;;   Gauche                    30 pass, 5 fail, 1 skip
 ;;   chibi                     31 pass, 4 fail, 1 skip
 ;;
+;; and since #459's five rows, measured 2026-09-23: 41 pass on Patina, 34 pass,
+;; 5 fail and 2 skips on Gauche, 36 pass, 4 fail and 1 skip on chibi — the
+;; same failures, as below.
+;;
 ;; Every failure is one difference, and it is worth naming because it is a
 ;; three-way spread rather than "the oracles agree and we don't":
 ;;
@@ -77,7 +81,7 @@
 ;; is ours: R7RS gives error objects no external representation at all, and the
 ;; three implementations share no syllable of one (see below).
 
-(import (scheme base) (scheme read) (scheme write) (srfi 64))
+(import (scheme base) (scheme eval) (scheme read) (scheme write) (srfi 64))
 
 (define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
 (define (shared x) (let ((p (open-output-string))) (write-shared x p) (get-output-string p)))
@@ -362,6 +366,45 @@
 ;; latitude — registered, and not a claim about Gauche.
 (test-assert "and both insertions of one argument are the same object"
   (let ((p (both '#1=(a b . #1#)))) (eq? (car p) (cadr p))))
+
+;; ── A cycle in code, rather than in data (#459) ─────────────────────────────
+;;
+;; R7RS §2.4 allows a cycle in a program only inside a literal. As *code* one
+;; used to hang the process or overflow its stack, depending on whether the
+;; cycle ran through a list's spine or through an element, and a literal
+;; handed through two macros did the same. A form written with labels in the
+;; source cannot be a row here — refused while the file is desugared, it
+;; would take the file with it — so `interpreter_api.rs` has those, and these
+;; rows build the circular code at run time and hand it to `eval`, which
+;; raises where `guard` can see it.
+;;
+;; chibi refuses both `eval` rows. Gauche refuses the spine and never returns
+;; on the element, so that row is skipped there.
+(define-syntax quoted (syntax-rules () ((_ x) (quote x))))
+(define-syntax quoted-twice (syntax-rules () ((_ x) (quoted x))))
+
+(test-assert "a circular literal passed through two macros is itself"
+  (let ((v (quoted-twice #0=(a #0#)))) (eq? v (cadr v))))
+(test-assert "and so is one whose spine is circular"
+  (let ((v (quoted-twice #0=(1 . #0#)))) (eq? v (cdr v))))
+(test-equal "a circular datum in a case clause is only compared" 'miss
+  (case 2 ((#0=(1 2 . #0#)) 'hit) (else 'miss)))
+
+(define (circular-spine-code)
+  (let ((code (list 'list 1)))
+    (set-cdr! (cdr code) code)
+    code))
+(define (circular-element-code)
+  (let ((code (list 'list 1 #f)))
+    (set-car! (cddr code) code)
+    code))
+(test-equal "eval refuses code whose spine is circular" 'refused
+  (guard (e (#t 'refused))
+    (eval (circular-spine-code) (environment '(scheme base)))))
+(cond-expand (gauche (test-skip 1)) (else))
+(test-equal "eval refuses code that contains itself" 'refused
+  (guard (e (#t 'refused))
+    (eval (circular-element-code) (environment '(scheme base)))))
 
 ;; ── A cycle through an error object's irritants ─────────────────────────────
 ;;
