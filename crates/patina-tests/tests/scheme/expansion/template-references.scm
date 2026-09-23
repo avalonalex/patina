@@ -13,8 +13,9 @@
 ;; it imported, after a template that mentions it was expanded — a fourth
 ;; with #445, for the same reference inside a quasiquote's unquote, two
 ;; with #446, for a macro the program made with a library's generator, two
-;; with #443, for the program's own `apply` in head position, and two with
-;; #441, for a template's `call/cc` and the program's own.
+;; with #443, for the program's own `apply` in head position, two with
+;; #441, for a template's `call/cc` and the program's own, and two with #442,
+;; the same for `call-with-values` and `dynamic-wind`.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -33,10 +34,10 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; twenty-two of the twenty-three rows. The three #407 rows, the four #408 rows and
+;; twenty-four of the twenty-five rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), the #445 row on 2026-09-22 and the two #446, two #443 and
-;; two #441 rows on 2026-09-23, and it answers as Gauche does.
+;; (2026-09-19), the #445 row on 2026-09-22 and the two #446, two #443, two
+;; #441 and two #442 rows on 2026-09-23, and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -87,8 +88,8 @@
 ;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
 ;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
 ;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's, 21 / 20 + 1
-;; skip since #443's and 23 / 22 + 1 skip since #441's, all measured
-;; 2026-09-23.
+;; skip since #443's, 23 / 22 + 1 skip since #441's and 25 / 24 + 1 skip
+;; since #442's, all measured 2026-09-23.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -147,7 +148,7 @@
 (define-library (probe same)
   (import (scheme base))
   (export peek-X bump-Y! get-Y count bump-count! get-count size-of size-in-a-template
-          map-apply sum-of-list escape-with)
+          map-apply sum-of-list escape-with values-in-a-template param-in-a-template)
   (begin
     (define X 0)
     (define Y 0)
@@ -169,7 +170,14 @@
     (define-syntax sum-of-list (syntax-rules () ((_ l) (apply + l))))
     ;; `call/cc` in head position.
     (define-syntax escape-with
-      (syntax-rules () ((_ v) (call/cc (lambda (k) (k v) 'fell-through)))))))
+      (syntax-rules () ((_ v) (call/cc (lambda (k) (k v) 'fell-through)))))
+    ;; `call-with-values` and `dynamic-wind`, through the base macros whose
+    ;; templates call them: `let-values` and `parameterize`.
+    (define-syntax values-in-a-template
+      (syntax-rules () ((_) (let-values (((a b) (values 1 2))) (list a b)))))
+    (define p (make-parameter 1))
+    (define-syntax param-in-a-template
+      (syntax-rules () ((_) (parameterize ((p 2)) (p)))))))
 
 ;; Definers with private state, for the introduced-definition rows. Each
 ;; generated macro mentions a definition *its own generator introduced*:
@@ -437,12 +445,12 @@
   (r7:list (tally-twice) tally))
 
 ;; `apply` was one of the procedures some part of Patina recognised by
-;; spelling (`patina_core::by_spelling`); the ones still on that list are left
-;; out of this, because their recogniser looks at the very reference that would
-;; be renamed. `apply`'s looked at the head of the *form*, so an `apply` passed
-;; as a value was bound like any other — it was excluded with the rest at
-;; first, "so that the rule stays one rule", and review measured the cost: this
-;; row answered `(mine)`.
+;; spelling, a list (`patina_core::by_spelling`, gone since #442) whose names
+;; were left out of this, because their recogniser looked at the very reference
+;; that would be renamed. `apply`'s looked at the head of the *form*, so an
+;; `apply` passed as a value was bound like any other — it was excluded with
+;; the rest at first, "so that the rule stays one rule", and review measured
+;; the cost: this row answered `(mine)`.
 (define (sum-through-the-template l) (map-apply + l))
 (define (apply . _) 'mine)
 
@@ -472,6 +480,24 @@
   (escape-through-the-template))
 (test-equal "and the program's own call/cc is the one its calls reach" 'mine
   (call/cc (lambda (k) (k 1))))
+
+;; #442: the last two, `call-with-values` and `dynamic-wind`, which the VM's
+;; code generator recognised by spelling. Here through the base macros whose
+;; templates call them, `let-values` and `parameterize`, from a library
+;; template. Before that the tree-walker's template calls reached the
+;; program's definitions (`(mine mine)`), and the VM's own calls never did: it
+;; ran the instruction sequence, which called the `#f` below as a thunk.
+(define (values-through-the-template) (values-in-a-template))
+(define (param-through-the-template) (param-in-a-template))
+(define (call-with-values producer consumer) 'mine)
+(define (dynamic-wind before thunk after) 'mine)
+
+(test-equal "and a template's call-with-values and dynamic-wind stay the procedures"
+  (r7:list (r7:list 1 2) 2)
+  (r7:list (values-through-the-template) (param-through-the-template)))
+(test-equal "and the program's own are the ones its calls reach" (r7:list 'mine 'mine)
+  (r7:list (call-with-values (lambda () 1) r7:list)
+           (dynamic-wind #f (lambda () 'body) #f)))
 
 ;; ── A definition the macro's own generator introduced ───────────────────────
 ;;

@@ -14,7 +14,6 @@
 //! By placing these types in a foundation crate, we avoid circular dependencies
 //! and enable type-safe representations (no `dyn Any` needed).
 
-pub mod by_spelling;
 pub mod compiled_macro;
 pub mod cont_value;
 pub mod continuation;

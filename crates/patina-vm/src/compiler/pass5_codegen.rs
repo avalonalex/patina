@@ -18,7 +18,7 @@ use super::pass4_registers::{AllocatedExpr, CaptureSource, RegExpr, RegExprKind,
 use super::primitive_calls::{InlineOp, PrimitiveCallMap, ResolvedPrimitive};
 use crate::error::CompileError;
 use crate::types::code_object::{Arity, CodeObject, CodeObjectId, GlobalCacheEntry};
-use crate::types::instruction::{Instruction, TestOp};
+use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use patina_core::core_expr::Symbol;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -78,6 +78,7 @@ impl Codegen {
             Instruction::JumpUnless { target: t, .. } => *t = target,
             Instruction::JumpIf { target: t, .. } => *t = target,
             Instruction::TestJumpUnless { target: t, .. } => *t = target,
+            Instruction::JumpUnlessShadowed { target: t, .. } => *t = target,
             _ => panic!("patch_jump called on non-jump instruction at {}", idx),
         }
     }
@@ -697,91 +698,13 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             arg_tmps,
             is_tail,
         } => {
-            // Recognize (call-with-values producer consumer) and emit
-            // instruction-level sequence instead of a runtime-intercepted Call.
-            // This avoids run_thunk, making call/cc inside the producer safe.
-            if args.len() == 2
-                && let RegExprKind::GlobalRef { name } = &func.kind
-                // By spelling, and listed as such: `patina_core::by_spelling`.
-                && name.as_ref() == patina_core::by_spelling::CALL_WITH_VALUES
+            // `call-with-values` and `dynamic-wind`, where the operator is
+            // bound to them: see `gen_inline_control`.
+            if let RegExprKind::GlobalRef { name } = &func.kind
+                && let Some(&form) = cg.prim_calls.control.get(name)
+                && form.arity() == args.len()
             {
-                // Evaluate producer and consumer into their temps.
-                gen_expr(&args[0], cg)?;
-                gen_expr(&args[1], cg)?;
-                let producer_reg = arg_tmps[0];
-                let consumer_reg = arg_tmps[1];
-                // Call producer (0 args), result in expr.dst.
-                cg.emit(Instruction::Call {
-                    func: producer_reg,
-                    args: vec![],
-                    dst: expr.dst,
-                });
-                // Call consumer with value_buffer or [producer_result].
-                if *is_tail {
-                    cg.emit(Instruction::TailCallWithValues {
-                        consumer: consumer_reg,
-                        producer_result: expr.dst,
-                    });
-                } else {
-                    cg.emit(Instruction::CallWithValues {
-                        dst: expr.dst,
-                        consumer: consumer_reg,
-                        producer_result: expr.dst,
-                    });
-                }
-                return Ok(());
-            }
-
-            // Recognize (dynamic-wind before body after) and emit
-            // instruction-level sequence to avoid run_thunk for the body.
-            //
-            // The value form runs the same instructions in the same order,
-            // from a stub code object the runtime builds (`value_wind_stub` in
-            // `runtime/control.rs`) — that is what makes the two forms agree,
-            // and it is kept in step by hand. Changing the sequence here means
-            // changing it there. See that function for the two deliberate
-            // differences (an unconditional `Return`, a dedicated discard
-            // slot).
-            if args.len() == 3
-                && let RegExprKind::GlobalRef { name } = &func.kind
-                && name.as_ref() == patina_core::by_spelling::DYNAMIC_WIND
-            {
-                gen_expr(&args[0], cg)?;
-                gen_expr(&args[1], cg)?;
-                gen_expr(&args[2], cg)?;
-                let before_reg = arg_tmps[0];
-                let body_reg = arg_tmps[1];
-                let after_reg = arg_tmps[2];
-                // Call before-thunk (result discarded).
-                cg.emit(Instruction::Call {
-                    func: before_reg,
-                    args: vec![],
-                    dst: expr.dst,
-                });
-                // Push wind record.
-                cg.emit(Instruction::PushWind {
-                    before: before_reg,
-                    after: after_reg,
-                });
-                // Call body-thunk, result in expr.dst.
-                cg.emit(Instruction::Call {
-                    func: body_reg,
-                    args: vec![],
-                    dst: expr.dst,
-                });
-                // Pop wind record (does not call after-thunk).
-                cg.emit(Instruction::PopWind);
-                // Call after-thunk (result discarded, goes into before_reg).
-                cg.emit(Instruction::Call {
-                    func: after_reg,
-                    args: vec![],
-                    dst: before_reg,
-                });
-                // expr.dst still holds body result.
-                if *is_tail {
-                    cg.emit(Instruction::Return { val: expr.dst });
-                }
-                return Ok(());
+                return gen_inline_control(form, func, args, arg_tmps, *is_tail, expr.dst, cg);
             }
 
             // Statically-known primitive: skip the callee LoadGlobal and the
@@ -873,6 +796,143 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// A call whose operator was bound to `call-with-values` or `dynamic-wind`
+/// when it was compiled: the form's own instruction sequence, which calls
+/// the thunks as frames of this procedure rather than through the value
+/// form's stub, behind a guard that the operator still is that (#442).
+///
+/// ```text
+///     …operands…
+///     JumpUnlessShadowed form → SEQ
+///     LoadGlobal   f ← name          ; an ordinary call, once the form's
+///     Call / TailCall f(operands)    ; procedure has been rebound anywhere
+///     Jump         → END             ; (not in tail position, which returns)
+/// SEQ:
+///     …the form's sequence…
+/// END:
+/// ```
+///
+/// The guard is what lets the sequence follow the binding and not the
+/// spelling. Until #442 the sequence was emitted for any global *spelled*
+/// `call-with-values`: a program's own definition was never called, and the
+/// procedure reached under another name went the slower value path. Now a
+/// renamed import, or the alias early binding gives a library template's
+/// reference (#438), gets the sequence, and a program that defines or
+/// `set!`s the name after the site was compiled gets its own procedure
+/// called.
+///
+/// Why a shadow mark and not the operator's value. Measured on loops that do
+/// nothing but the form, against the sequence with no guard at all: calling
+/// every one through the value form's stub instead was 16–38% slower (19% on
+/// SRFI 1's multi-list `fold`); loading the operator and comparing it with
+/// the procedure the name was bound to, 4–6%; this, which reads one bit and
+/// loads the operator only when it has to call it, at most about 3%.
+///
+/// **The value form runs the same instructions** from a stub the runtime
+/// builds — `value_wind_stub` and `value_cwv_stub` in `runtime/control.rs` —
+/// which is what makes the two forms agree, and it is kept in step by hand.
+/// Changing a sequence here means changing it there. See those functions for
+/// the deliberate differences (a dedicated discard slot, and the stub's
+/// always being in tail position).
+fn gen_inline_control(
+    form: ControlForm,
+    func: &RegExpr,
+    args: &[RegExpr],
+    arg_tmps: &[u16],
+    is_tail: bool,
+    dst: u16,
+    cg: &mut Codegen,
+) -> Result<(), CompileError> {
+    for arg in args {
+        gen_expr(arg, cg)?;
+    }
+    let to_sequence = cg.emit(Instruction::JumpUnlessShadowed { form, target: 0 });
+    // The operator is loaded after the operands, and only here: `func.dst` is
+    // live across the operands in the general case, so it is none of theirs.
+    gen_expr(func, cg)?;
+    let arg_regs = arg_tmps.to_vec();
+    let to_end = if is_tail {
+        cg.emit(Instruction::TailCall {
+            func: func.dst,
+            args: arg_regs,
+        });
+        None
+    } else {
+        cg.emit(Instruction::Call {
+            func: func.dst,
+            args: arg_regs,
+            dst,
+        });
+        Some(cg.emit_jump_placeholder())
+    };
+    let sequence = cg.current_pc();
+    cg.patch_jump(to_sequence, sequence);
+    match form {
+        ControlForm::CallWithValues => {
+            let producer_reg = arg_tmps[0];
+            let consumer_reg = arg_tmps[1];
+            // Call producer (0 args), result in dst.
+            cg.emit(Instruction::Call {
+                func: producer_reg,
+                args: vec![],
+                dst,
+            });
+            // Call consumer with the values the producer returned.
+            if is_tail {
+                cg.emit(Instruction::TailCallWithValues {
+                    consumer: consumer_reg,
+                    producer_result: dst,
+                });
+            } else {
+                cg.emit(Instruction::CallWithValues {
+                    dst,
+                    consumer: consumer_reg,
+                    producer_result: dst,
+                });
+            }
+        }
+        ControlForm::DynamicWind => {
+            let before_reg = arg_tmps[0];
+            let body_reg = arg_tmps[1];
+            let after_reg = arg_tmps[2];
+            // Call before-thunk (result discarded).
+            cg.emit(Instruction::Call {
+                func: before_reg,
+                args: vec![],
+                dst,
+            });
+            // Push wind record.
+            cg.emit(Instruction::PushWind {
+                before: before_reg,
+                after: after_reg,
+            });
+            // Call body-thunk, result in dst.
+            cg.emit(Instruction::Call {
+                func: body_reg,
+                args: vec![],
+                dst,
+            });
+            // Pop wind record (does not call after-thunk).
+            cg.emit(Instruction::PopWind);
+            // Call after-thunk (result discarded, goes into before_reg).
+            cg.emit(Instruction::Call {
+                func: after_reg,
+                args: vec![],
+                dst: before_reg,
+            });
+            // dst still holds body result.
+            if is_tail {
+                cg.emit(Instruction::Return { val: dst });
+            }
+        }
+    }
+    if let Some(to_end) = to_end {
+        let end = cg.current_pc();
+        cg.patch_jump(to_end, end);
     }
     Ok(())
 }

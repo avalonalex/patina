@@ -169,8 +169,21 @@ semantics, `set!` on captured vars).
 | `Jump` | `target: usize` | `pc ← target` |
 | `JumpIf` | `cond: Reg, target: usize` | `if reg[cond] != #f: pc ← target` |
 | `JumpUnless` | `cond: Reg, target: usize` | `if reg[cond] == #f: pc ← target` |
+| `JumpUnlessShadowed` | `form: ControlForm, target: usize` | `if form's procedure is not shadowed: pc ← target` |
 
 All Scheme values except `#f` are truthy (R7RS §6.3).
+
+`JumpUnlessShadowed` is the guard in front of the sequence a head-position
+`call-with-values` or `dynamic-wind` compiles to (§4.6, #442). Pass 5 emits the
+sequence where the operator is *bound* to the form's procedure when the site is
+compiled — a renamed import and early binding's alias for a library template's
+reference included, a program's own definition of the name not — and puts the
+ordinary `LoadGlobal` + `Call` of the operator between the guard and the
+sequence. `VmState::shadowed_controls` holds one bit per form, set when any
+global binding holding the form's procedure is given another value; every
+writer reports that, as it does for `CallPrimitive`'s shadow bits (§4.5). Clear,
+the operator is still the procedure and the site jumps to the sequence; set,
+it falls through and calls whatever the operator holds now.
 
 ### 4.5 Function Calls
 
@@ -258,7 +271,9 @@ Multiple values flow through `VmState::value_buffer`, not through dedicated
 return/receive instructions. `(values …)` is intercepted as a control
 primitive (§5) and refills the buffer in place; `call-with-values` compiles
 to instruction-level sequences ending in `CallWithValues` /
-`TailCallWithValues`:
+`TailCallWithValues`, where its operator is bound to `call-with-values`
+(behind `JumpUnlessShadowed`, §4.4). Its value form runs the tail sequence
+from a stub (§4.8):
 
 | Instruction | Operands | Semantics |
 |---|---|---|
@@ -289,21 +304,24 @@ same way.
 | `ResumeComposableInvoke` | Take the next step of a composable-continuation invoke that is running the `before` thunks of the extents it re-enters. Never emitted by the compiler, and the analogue of `ResumeWindJump`: it is the whole body of the stub frame pushed under each of those thunks, so that the rest of the invoke is a pc a re-entering continuation restores. It is a separate mechanism rather than a use of the jump's because a jump's target *replaces* the machine and a composable invoke's *extends* it — the handler stack a thunk runs under differs accordingly (see `install_thunk_handlers`). |
 | `ResumeRaise` | The bookkeeping a `raise` owes once its handler has returned: re-push the handler for a `raise-continuable` (R7RS 6.11 reinstalls it for the rest of the thunk), or raise the secondary exception for a non-continuable one. Never emitted by the compiler — the middle instruction of `raise_step_stub`. A frame rather than Rust, so that a continuation captured inside the handler carries the debt: `guard`'s `handler-k` and an abort's composable continuation both replay it (issue #178). |
 
-**Five** instruction sequences are likewise never emitted by the compiler but
+**Six** instruction sequences are likewise never emitted by the compiler but
 built by the runtime as whole code objects: the two one-instruction stubs
 above (`wind_jump_stub`, `invoke_step_stub`), the two-instruction stub an
 **abort** lands on (`abort_handler_stub` — `Call handler(val, k)` / `Return`,
 which is what makes the handler call a frame), the three-instruction stub a
 **raise** runs its handler in (`raise_step_stub` — `Call handler(exception)` /
 `ResumeRaise` / `Return`, which is what makes everything the raise still owes
-a pc), and the six-instruction stub
+a pc), the six-instruction stub
 the **value form** of `dynamic-wind` runs
 (`value_wind_stub`) — `Call before` / `PushWind` / `Call body` / `PopWind` /
 `Call after` / `Return`, the same instructions in the same order that pass 5
-emits for head position (`pass5_codegen.rs`, the `dynamic-wind` case of `RegExprKind::App`), differing only in an unconditional
-`Return` and a dedicated discard slot for the two thunk results. Both stubs
-exist so that work the runtime owes after a thunk returns is a *pc* a captured
-continuation restores, rather than a Rust frame it cannot.
+emits for head position (`gen_inline_control` in `pass5_codegen.rs`),
+differing only in an unconditional `Return` and a dedicated discard slot for
+the two thunk results — and the two-instruction stub the value form of
+`call-with-values` runs (`value_cwv_stub`, #442) — `Call producer` /
+`TailCallWithValues consumer`, head position's tail sequence. The value-form
+stubs exist so that work the runtime owes after a thunk returns is a *pc* a
+captured continuation restores, rather than a Rust frame it cannot.
 
 ---
 

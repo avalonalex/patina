@@ -6,6 +6,10 @@
 //! stable `PrimitiveFnId`. Pass 5 consults the map to emit `CallPrimitive`
 //! instead of `LoadGlobal` + `Call`.
 //!
+//! It also finds the operators bound to `call-with-values` and `dynamic-wind`,
+//! which pass 5 compiles to an instruction sequence of their own behind a
+//! guard (`PrimitiveCallMap::control`).
+//!
 //! Lexically shadowed names never reach this map: pass 2 compiles them to
 //! `LocalRef`/`ClosureRef`, so only true global references are candidates.
 //! Rebinding a primitive name *after* compilation is handled at runtime, not
@@ -22,7 +26,7 @@ use patina_primitives::PrimitiveRegistry;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::pass4_registers::{AllocatedExpr, RegExpr, RegExprKind};
-use crate::types::instruction::PrimitiveFnId;
+use crate::types::instruction::{ControlForm, PrimitiveFnId};
 use patina_core::core_expr::Symbol;
 
 /// The callees pass 5 may compile to a primitive call instead of a generic
@@ -37,6 +41,17 @@ pub struct PrimitiveCallMap {
     /// compile to `CallPrimitiveDirect`, which never deoptimizes because no
     /// global binding stands behind the site.
     pub by_value: FxHashMap<u64, PrimitiveFnId>,
+    /// Names bound to `call-with-values` or `dynamic-wind`, and which. Pass
+    /// 5 compiles a call through one to the form's instruction sequence,
+    /// behind a guard that sends it to an ordinary call once a binding of the
+    /// form's procedure has been given another value
+    /// (`Instruction::JumpUnlessShadowed`).
+    ///
+    /// Keyed on the binding, not on the spelling, since #442: a program's
+    /// own `call-with-values` is a call of the program's procedure, and an
+    /// import renamed, or the alias early binding gives a library
+    /// template's reference (#438), still gets the sequence.
+    pub control: FxHashMap<Symbol, ControlForm>,
 }
 
 /// A callee name resolved to a registry primitive at compile time.
@@ -163,6 +178,10 @@ pub fn resolve_primitive_calls(
     let mut map = PrimitiveCallMap::default();
     for name in callees.names {
         let Some(val) = env.get(&name) else { continue };
+        if let Some(form) = control_form(val, heap) {
+            map.control.insert(name, form);
+            continue;
+        }
         let Some((index, canonical)) = registry_entry(val, heap, registry) else {
             continue;
         };
@@ -181,6 +200,20 @@ pub fn resolve_primitive_calls(
         }
     }
     map
+}
+
+/// The control form `val` is the procedure of, if it has an instruction
+/// sequence. Asked of the value by the runtime's own classification, so a
+/// procedure the VM intercepts as `call-with-values` is the one compiled as it.
+fn control_form(
+    val: patina_core::tagged_value::TaggedValue,
+    heap: &SharedHeap,
+) -> Option<ControlForm> {
+    let proc = heap.borrow().get_procedure(val)?;
+    let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
+        return None;
+    };
+    crate::runtime::control::control_form(qualified_name)
 }
 
 /// The registry index and canonical qualified name of the primitive `val`

@@ -11,9 +11,10 @@
 ;; `assert_program_eval_to`, which is a claim about the language.
 ;;
 ;; The tree-walker answered all of these correctly before the fix, so it is the
-;; expectation. Gauche agrees with all 11 rows. **chibi agrees with 10 of them**
+;; expectation. Gauche agrees with all 13 rows. **chibi agrees with 12 of them**
 ;; and dies with `out of stack space` on the last, which is why that row is
-;; ordered last — see the note above it.
+;; ordered last — see the note above it. (11 and 10 until #442 added two, both
+;; measured 2026-09-23.)
 ;;
 ;; ## The sweep (audit item A4)
 ;;
@@ -24,7 +25,9 @@
 ;;       frames of `value_wind_stub`, the same PushWind/Call/PopWind sequence
 ;;       head position compiles to (issue #157)
 ;;   call-with-values producer (value form)
-;;       `run_thunk_outcome` — skips the consumer
+;;       *not a boundary any more* — since 2026-09-23 the producer is an
+;;       ordinary frame of `value_cwv_stub`, the same `Call` /
+;;       `TailCallWithValues` pair head position compiles to (issue #442)
 ;;   `vm_raise_value` continuable handler
 ;;       `run_loop_until_outcome` — no re-push, no `set_reg`
 ;;   a jump's exit / enter thunks (`step_wind_jump`)
@@ -133,6 +136,27 @@
 
 (test-equal "the value form of call-with-values still works" '(1 2)
   (cwv (lambda () (values 1 2)) list))
+
+;; #442 — the producer of the value form ran on a nested loop, and a
+;; continuation captured in it did not come back through the consumer: invoked
+;; inside the producer with two values it answered `#<procedure>`, and
+;; re-entered after the consumer had run, `(() 3)`. The producer is a frame of
+;; the value form's stub now, so both return through the consumer, as they do
+;; through head position's sequence.
+(define (two-by-continuation) (call/cc (lambda (k) (k 1 2))))
+(test-equal "a continuation in a value-form producer delivers its values" '(1 2)
+  (cwv two-by-continuation list))
+
+(define reenter-producer #f)
+(define reentries 0)
+(test-equal "re-entering a value-form producer runs the consumer again" '((2 20) 3)
+  (let ((r (cwv (lambda ()
+                  (call/cc (lambda (c) (set! reenter-producer c) (values 0 0))))
+                list)))
+    (set! reentries (+ reentries 1))
+    (if (< reentries 3)
+        (reenter-producer reentries (* reentries 10))
+        (list r reentries))))
 
 ;; A continuation captured *inside* a wind body and re-invoked there is an
 ;; in-extent jump, not an escape: the loop that owns the restored frame keeps

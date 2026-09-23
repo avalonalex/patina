@@ -42,6 +42,32 @@ impl TestOp {
     }
 }
 
+/// A control form with an instruction sequence of its own in head position
+/// (#442), guarded by [`Instruction::JumpUnlessShadowed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlForm {
+    /// `(call-with-values producer consumer)`.
+    CallWithValues,
+    /// `(dynamic-wind before body after)`.
+    DynamicWind,
+}
+
+impl ControlForm {
+    /// The argument count the sequence is for. Any other count is compiled
+    /// as an ordinary call, whose arity error is the procedure's to raise.
+    pub fn arity(self) -> usize {
+        match self {
+            ControlForm::CallWithValues => 2,
+            ControlForm::DynamicWind => 3,
+        }
+    }
+
+    /// This form's bit in `VmState::shadowed_controls`.
+    pub fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
 /// A single VM instruction.
 ///
 /// Operands use frame-relative register indices (`Reg = u16`). All values are
@@ -110,6 +136,20 @@ pub enum Instruction {
 
     /// Jump if `reg[cond] == #f`.
     JumpUnless { cond: Reg, target: usize },
+
+    /// Jump to `target` — the instruction sequence of a head-position
+    /// `call-with-values` or `dynamic-wind` — unless `form`'s procedure has
+    /// been shadowed; fall through to an ordinary call of the operator if it
+    /// has.
+    ///
+    /// The guard pass 5 puts in front of the sequence (#442). The site's
+    /// operator was bound to the form's procedure when it was compiled; the
+    /// shadow mark (`VmState::shadowed_controls`) is set when any global
+    /// binding holding that procedure is given another value, which every
+    /// writer reports, as it does for `CallPrimitive`'s shadow bits. So while
+    /// the mark is clear the operator is still that procedure, and once it is
+    /// set every such site calls whatever its operator is now.
+    JumpUnlessShadowed { form: ControlForm, target: usize },
 
     // ── Function Calls ────────────────────────────────────────────────────────
     /// Non-tail call.

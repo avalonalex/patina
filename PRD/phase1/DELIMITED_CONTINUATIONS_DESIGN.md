@@ -101,15 +101,15 @@ one only sees the call it was written in. `call/cc` was claimed syntactically
 on the tree-walker, by the CPS transform, until #441, and did not work as a
 value there (Track Q §1.2).
 
-The VM has a syntactic claim of its own that this table does not show: its
-code generator emits an instruction sequence for a call *spelled*
-`call-with-values` or `dynamic-wind`, ahead of `vm_control_primitive`, because
-the sequence is what keeps a continuation captured inside re-enterable. Every
-syntactic claim, on either backend, is listed in `patina_core::by_spelling`
-(#438): renaming a reference to one of those names changes what the program
-does, so the desugarer's early binding leaves them alone, and the next control
-primitive claimed by spelling has to be added there. #441 and #442 are the
-issues for making these claims follow the binding.
+The VM also has a claim at compile time that this table does not show: its
+code generator emits an instruction sequence for a head-position
+`call-with-values` or `dynamic-wind`, ahead of `vm_control_primitive`. Until
+#442 it did so for a call *spelled* that way; it does so where the operator is
+*bound* to the procedure now, behind a guard (`JumpUnlessShadowed`) that falls
+back to an ordinary call once a binding of it is given another value, and the
+value forms run the same sequences from stubs. No claim on either backend is
+syntactic any more, and `patina_core::by_spelling`, which listed them so that
+the desugarer's early binding (#438) would leave them alone, is gone.
 
 **What is shared with `call/cc`**: the nested trampoline a Rust primitive's
 callback runs on used to start every stack empty, so an abort from inside such
