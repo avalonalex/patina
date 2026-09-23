@@ -124,15 +124,22 @@
 ;; #456. `let` tried its named rule first, and a name is a pattern variable,
 ;; so it matches anything: a body that is one call with a compound operator,
 ;; `((f y))`, was read as the bindings of a named let called `((y 10))`, and
-;; refused. The same shapes above a named let, where `f` is the name, are
-;; controls. chibi 0.12 and Gauche 0.9.15 answer every row as written,
-;; measured 2026-09-23.
+;; refused. `letrec`, `letrec*` and `let*-values` with no bindings expand to a
+;; `let` with none, so the same body reached that rule through them too. The
+;; last row, the same body in a named let called `f`, is the control. chibi
+;; 0.12 and Gauche 0.9.15 answer every row as written, measured 2026-09-23.
 (test-equal "a let whose body calls a computed procedure" 10
   (let ((y 10)) ((car (list (lambda () y))))))
 (test-equal "the same with no bindings" 7
   (let () ((car (list (lambda () 7))))))
 (test-equal "and with forms after the call" 'more
   (let ((y 10)) ((car (list (lambda () y)))) 'more))
+(test-equal "the same through letrec with no bindings" 1
+  (letrec () ((car (list (lambda () 1))))))
+(test-equal "the same through letrec* with no bindings" 2
+  (letrec* () ((car (list (lambda () 2))))))
+(test-equal "the same through let*-values with no bindings" 3
+  (let*-values () ((car (list (lambda () 3))))))
 (test-equal "a named let whose body calls a computed procedure" 1
   (let f ((x 1)) ((car (list (lambda () x))))))
 
