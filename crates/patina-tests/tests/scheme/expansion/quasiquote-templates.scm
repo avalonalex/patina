@@ -324,6 +324,16 @@
 (test-error "a template that is itself a multi-operand unquote is refused" #t
   (eval '(let ((a 1) (b 2)) `(unquote a b)) (environment '(scheme base))))
 
+;; The same for a template that is itself a splice, and for a nested
+;; `quasiquote` (#455): each read its first operand and dropped the rest, so
+;; the first row answered (1) and the second (1 `2). R7RS §4.2.8 makes both
+;; an error — the keywords appear "otherwise than as described above" — so
+;; refusing is permitted, and it is the answer that drops nothing.
+(test-error "a template that is itself a multi-operand splice is refused" #t
+  (eval '(let ((x '(1)) (y '(2))) `(unquote-splicing x y)) (environment '(scheme base))))
+(test-error "a nested quasiquote with two operands is refused" #t
+  (eval '`(1 (quasiquote 2 3)) (environment '(scheme base))))
+
 ;; An operand list must be proper and finite at every depth. The reader
 ;; accepts a datum label, so a template can hold a circular one; walking it
 ;; without a cycle check allocated until the process died.
@@ -355,5 +365,18 @@
   (eval '(let ((x 1)) `(a (unquote . x))) (environment '(scheme base))))
 (test-error "and is refused inside a nested template too" #t
   (eval '(let ((x 1)) ``(a (unquote . x))) (environment '(scheme base))))
+
+;; A template circular itself, rather than in an operand list (#454).
+;; Through an element the walk recursed until the stack overflowed and
+;; aborted the process; through the tail it collected elements until memory
+;; ran out. chibi refuses both, measured 2026-09-23. Gauche spins on a
+;; circular template, as the rows above record, so both are skipped there,
+;; one skip each.
+(cond-expand (gauche (test-skip 1)) (else))
+(test-error "a template circular through an element is refused" #t
+  (eval '`#0=(a #0#) (environment '(scheme base))))
+(cond-expand (gauche (test-skip 1)) (else))
+(test-error "a template circular through its tail is refused" #t
+  (eval '`#0=(a . #0#) (environment '(scheme base))))
 
 (test-end)
