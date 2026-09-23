@@ -11,8 +11,9 @@
 ;; template means is a definition its own generator *introduced*, which the
 ;; bare name does not identify. And three with #438: a program defining a name
 ;; it imported, after a template that mentions it was expanded — a fourth
-;; with #445, for the same reference inside a quasiquote's unquote, and two
-;; with #446, for a macro the program made with a library's generator.
+;; with #445, for the same reference inside a quasiquote's unquote, two
+;; with #446, for a macro the program made with a library's generator, and
+;; two with #443, for the program's own `apply` in head position.
 ;;
 ;; ── Why this file needs libraries, and what that costs ──────────────────────
 ;;
@@ -31,10 +32,10 @@
 ;; a reading, not a citation — nobody has checked the text against it. That is registered as `*` / `incomplete` in
 ;; `DIVERGENCES.tsv` rather than worked around, so the lane holds the claim and
 ;; reports it if chibi gains the support. Gauche runs the file and arbitrates
-;; eighteen of the nineteen rows. The three #407 rows, the four #408 rows and
+;; twenty of the twenty-one rows. The three #407 rows, the four #408 rows and
 ;; the three #438 rows were also run under chibi with the libraries as files
-;; (2026-09-19), the #445 row on 2026-09-22 and the two #446 rows on
-;; 2026-09-23, and it answers as Gauche does.
+;; (2026-09-19), the #445 row on 2026-09-22 and the two #446 and two #443 rows
+;; on 2026-09-23, and it answers as Gauche does.
 ;;
 ;; **The import set is the other half of the staging.** `(scheme base)`'s
 ;; `quote`, `car`, `cons`, `list` and `list?` are excluded and SRFI 101 supplies
@@ -84,8 +85,8 @@
 ;;
 ;; and 9 / 8 + 1 skip since the #407 rows, 13 / 12 + 1 skip since #408's, 16 /
 ;; 15 + 1 skip since #438's, all measured 2026-09-19; 17 / 16 + 1 skip since
-;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's, measured
-;; 2026-09-23.
+;; #445's, measured 2026-09-22; 19 / 18 + 1 skip since #446's and 21 / 20 +
+;; 1 skip since #443's, both measured 2026-09-23.
 ;;
 ;; ── One row was rewritten, and the reason is worth reading ──────────────────
 ;;
@@ -144,7 +145,7 @@
 (define-library (probe same)
   (import (scheme base))
   (export peek-X bump-Y! get-Y count bump-count! get-count size-of size-in-a-template
-          map-apply)
+          map-apply sum-of-list)
   (begin
     (define X 0)
     (define Y 0)
@@ -161,7 +162,9 @@
       (syntax-rules () ((_ v) `(size ,(vector-length v)))))
     ;; `apply` in *value* position, which nothing recognises by its spelling.
     (define-syntax map-apply
-      (syntax-rules () ((_ f l) (map apply (list f) (list l)))))))
+      (syntax-rules () ((_ f l) (map apply (list f) (list l)))))
+    ;; `apply` in *head* position.
+    (define-syntax sum-of-list (syntax-rules () ((_ l) (apply + l))))))
 
 ;; Definers with private state, for the introduced-definition rows. Each
 ;; generated macro mentions a definition *its own generator introduced*:
@@ -428,20 +431,29 @@
   (r7:list 2 'library)
   (r7:list (tally-twice) tally))
 
-;; `apply` is one of five procedures some part of Patina recognises by
-;; spelling (`patina_core::by_spelling`), and four of them have to be left out
-;; of this, because the recogniser looks at the very reference that would be
-;; renamed. `apply`'s looks at the head of the *form*, so an `apply` that is
-;; passed as a value is bound like any other — it was excluded with the rest
-;; at first, "so that the rule stays one rule", and review measured the cost:
-;; this row answered `(mine)`. (What the program's *own* `(apply …)` means
-;; after this definition is another matter, and #443.)
+;; `apply` was one of the procedures some part of Patina recognised by
+;; spelling (`patina_core::by_spelling`); the ones still on that list are left
+;; out of this, because their recogniser looks at the very reference that would
+;; be renamed. `apply`'s looked at the head of the *form*, so an `apply` passed
+;; as a value was bound like any other — it was excluded with the rest at
+;; first, "so that the rule stays one rule", and review measured the cost: this
+;; row answered `(mine)`.
 (define (sum-through-the-template l) (map-apply + l))
 (define (apply . _) 'mine)
 
 (test-equal "and an apply the template passes as a value stays the procedure"
   (r7:list 3)
   (sum-through-the-template (r7:list 1 2)))
+
+;; #443: the program's *own* `apply`, in head position. The desugarer lowered
+;; any head spelled `apply` to its built-in application, whatever the name was
+;; bound to, so this answered 3; it asks whether the head is bound to the
+;; `apply` primitive now. The template's `apply` in head position stays the
+;; library's, as its value-position one above does.
+(test-equal "and the program's own apply is the one its calls reach" 'mine
+  (apply + (r7:list 1 2)))
+(test-equal "while a template's apply in head position stays the procedure" 6
+  (sum-of-list (r7:list 1 2 3)))
 
 ;; ── A definition the macro's own generator introduced ───────────────────────
 ;;

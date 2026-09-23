@@ -134,16 +134,35 @@ fn an_ordinary_identifier_compiles_to_a_call_of_itself() {
 }
 
 /// `apply` is the one desugarer arm deliberately left out of `CoreForm`: it is
-/// special-cased *and* a real procedure binding. It is also the last head
-/// symbol recognized by spelling — so unlike every keyword above, it is
-/// intercepted even with nothing bound.
+/// special-cased *and* a real procedure binding. Like every keyword above, it
+/// is recognized only through its binding — since #443, when it was the last
+/// head recognized by spelling. `(apply a b)` is intercepted where `apply` is
+/// bound to the `apply` primitive, and is an ordinary call with nothing bound
+/// or with anything else bound.
 #[test]
 fn apply_is_excluded_on_purpose() {
     assert!(patina_core::CoreForm::from_name("apply").is_none());
+
     let empty = Desugarer::with_env(Rc::new(Environment::new()));
-    assert!(
-        matches!(desugar_head(&empty, "apply"), Head::Intercepted),
-        "`apply` is still spelling-recognized; if that changed, update this test and the note in \
-         `desugar_list_tagged`"
+    assert!(matches!(desugar_head(&empty, "apply"), Head::CallOfItself));
+
+    let primitive = Rc::new(Environment::new());
+    primitive.define_primitive(
+        "apply",
+        patina_core::procedure::Arity::Min(2),
+        vec!["patina".into(), "internal".into(), "control".into()],
     );
+    let with_primitive = Desugarer::with_env(primitive);
+    assert!(matches!(
+        desugar_head(&with_primitive, "apply"),
+        Head::Intercepted
+    ));
+
+    let other = Rc::new(Environment::new());
+    other.define("apply", TaggedValue::fixnum(0));
+    let with_other = Desugarer::with_env(other);
+    assert!(matches!(
+        desugar_head(&with_other, "apply"),
+        Head::CallOfItself
+    ));
 }

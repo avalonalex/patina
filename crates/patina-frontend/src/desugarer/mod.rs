@@ -193,6 +193,12 @@ fn is_quote_spelling(name: &str) -> bool {
     name == "quote" || alias_base(name) == Some("quote")
 }
 
+/// The spelling a head must have for `(apply f args)` to be lowered to
+/// `CoreExpr::Apply`, and the name the `apply` primitive is registered under
+/// — the filter in front of, and the answer to, the binding check that decides
+/// the lowering (`Desugarer::head_is_the_apply_primitive`, #443).
+const APPLY: &str = "apply";
+
 /// Desugarer converts Value (surface syntax) to CoreExpr (core IR)
 ///
 /// **Macro-Aware Design**: The desugarer can optionally take an environment
@@ -296,11 +302,6 @@ pub struct Desugarer {
     /// Accumulates scopes as we enter binding forms
     current_scopes: ScopeSet,
 
-    /// Names bound by the enclosing binding forms, by spelling. Only the
-    /// `apply` lowering reads it; every other question about shadowing is
-    /// answered by resolving against `env`.
-    shadowed_names: std::collections::HashSet<Rc<str>>,
-
     /// Optional source map for looking up source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
 
@@ -353,7 +354,6 @@ impl Desugarer {
         Self {
             env,
             current_scopes: ScopeSet::new(),
-            shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -373,7 +373,6 @@ impl Desugarer {
         Self {
             env,
             current_scopes: ScopeSet::new(),
-            shadowed_names: std::collections::HashSet::new(),
             source_map: Some(source_map),
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -414,7 +413,6 @@ impl Desugarer {
         Self {
             env,
             current_scopes: scopes,
-            shadowed_names: std::collections::HashSet::new(),
             source_map: None,
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
@@ -438,7 +436,6 @@ impl Desugarer {
         let desugarer = Self {
             env: self.env.clone(),
             current_scopes: new_scopes,
-            shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
@@ -448,11 +445,6 @@ impl Desugarer {
         (desugarer, scope)
     }
 
-    /// Create a child desugarer with additional shadowed names
-    ///
-    /// Used when entering a lambda body where parameters shadow outer bindings.
-    /// Names in `new_shadows` will not be treated as macro calls even if a
-    /// macro with that name exists in the environment.
     /// Put `binding_scope` on this body's references to the names `binders`
     /// binds. A reference a template made to a name that same template binds
     /// carries the template's scopes, never this form's, so without this the
@@ -482,7 +474,6 @@ impl Desugarer {
     ) -> Self {
         let binders: Vec<(Rc<str>, ScopeSet)> = binders.into_iter().collect();
         let new_scopes = self.current_scopes.with_scope(binding_scope);
-        let names: Vec<Rc<str>> = binders.iter().map(|(n, _)| n.clone()).collect();
 
         // A local binding is a binding. Recording it in the environment at the
         // body's scope set is what lets `resolve_syntax` answer by ordinary
@@ -497,9 +488,9 @@ impl Desugarer {
         // fresh scope down with its names; asserting it here is what turns a
         // future omission into a test failure instead of a captured keyword.
         debug_assert!(
-            names.is_empty() || !new_scopes.is_empty(),
+            binders.is_empty() || !new_scopes.is_empty(),
             "local bindings need a scope of their own: {:?}",
-            names
+            binders.iter().map(|(name, _)| name).collect::<Vec<_>>()
         );
         // A child environment even when this body binds no names, because the
         // body is still a body: an internal `define-syntax` installs itself in
@@ -526,27 +517,15 @@ impl Desugarer {
             child
         };
 
-        // Still recorded by spelling for one reader: the `apply` lowering in
-        // `desugar_list`, the last head recognized by spelling (its comment
-        // says why). Literal matching resolves the bindings recorded above.
-        let mut shadowed = self.shadowed_names.clone();
-        shadowed.extend(names);
-
         Self {
             env,
             current_scopes: new_scopes,
-            shadowed_names: shadowed,
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
             open_forms: Rc::clone(&self.open_forms),
         }
-    }
-
-    /// Check if a name is shadowed by a local binding
-    fn is_shadowed(&self, name: &str) -> bool {
-        self.shadowed_names.contains(name)
     }
 
     /// The names a body's internal definitions bind.
@@ -930,12 +909,11 @@ impl Desugarer {
 
     /// Create a child desugarer with a new environment (for let-syntax bodies)
     ///
-    /// This inherits the current shadowed_names and uses the new environment and scopes.
+    /// It uses the new environment and scopes.
     fn with_new_env(&self, env: Rc<Environment>, scopes: ScopeSet) -> Self {
         Self {
             env,
             current_scopes: scopes,
-            shadowed_names: self.shadowed_names.clone(),
             source_map: self.source_map.clone(),
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
@@ -1240,12 +1218,11 @@ impl Desugarer {
     /// - By name it reaches, from here and from the root alike, the very
     ///   location the macro's own environment reaches: an import of the use
     ///   site's that is the binding the template meant.
-    /// - It is not one of the four names
-    ///   `patina_core::by_spelling::is_recognized_from_a_reference` lists,
+    /// - It is not one of the four names `patina_core::by_spelling` lists,
     ///   which the tree-walker's CPS transform and the VM's code generator
-    ///   recognise from the name on the `Var` this becomes. (`apply`, which
-    ///   the desugarer recognises from the *form's* head, never gets here in
-    ///   that position, and in value position is bound like any other.)
+    ///   recognise from the name on the `Var` this becomes. (`apply` is not
+    ///   among them since #443: its lowering asks what the head is bound to,
+    ///   so a renamed `apply` is only an unlowered call.)
     ///
     /// The alias is `Environment::import_alias`: an ordinary forwarded slot
     /// for the same location, one per imported name rather than one per
@@ -1317,7 +1294,7 @@ impl Desugarer {
         name: &Rc<str>,
         def_env: &Rc<Environment>,
     ) -> Option<(patina_core::BindingLocation, Rc<str>)> {
-        if patina_core::by_spelling::is_recognized_from_a_reference(name) {
+        if patina_core::by_spelling::is_recognized(name) {
             return None;
         }
         let target_env = self.env.root();
@@ -1824,28 +1801,17 @@ impl Desugarer {
         // head looked up without them, while value position looked up *with*
         // them — one of the two ways the two lookups had drifted apart before
         // `resolve_syntax` merged them.
-        let (name, head_scopes, is_macro_introduced) = {
+        let (name, head_scopes) = {
             let heap = shared_heap.borrow();
             if let Some(s) = heap.get_symbol_name(car) {
-                (Some(Rc::from(s)), ScopeSet::new(), false)
+                (Some(Rc::from(s)), ScopeSet::new())
             } else if let Some((id_name, id_scopes)) = utils::get_identifier_info(car, &heap) {
-                let introduced = !id_scopes.is_empty();
-                (Some(id_name), id_scopes, introduced)
+                (Some(id_name), id_scopes)
             } else {
-                (None, ScopeSet::new(), false)
+                (None, ScopeSet::new())
             }
         };
         // Immutable borrow released
-
-        // Determine if this name is shadowed by a local binding. A
-        // macro-introduced head is exempt: it carries its own scopes, and
-        // hygiene means the template's `if` is still the special form even
-        // where the use site bound `if`. `resolve_syntax` applies the same
-        // rule from the scopes, so this is only for the `apply` check below.
-        let is_shadowed = name
-            .as_ref()
-            .map(|n| !is_macro_introduced && self.is_shadowed(n))
-            .unwrap_or(false);
 
         // Step 3: Resolve the head symbol, once, for everything a binding can
         // make it mean.
@@ -1944,18 +1910,18 @@ impl Desugarer {
             return self.desugar_core_form(form, cdr, shared_heap);
         }
 
-        // `apply` is the last head symbol recognized by spelling. It is not a
-        // keyword and has no marker: the desugarer special-cases it as an
-        // optimization, but it is also a real procedure binding, so it is
-        // checked whatever the environment holds. That makes it the one name
-        // whose meaning still ignores the binding just resolved — and the
-        // reason `(define (apply a b) …)` is silently ignored, which is the
-        // defect this design fixed for every other name. Tracked separately;
-        // the fix is to key the lowering on the binding, as `core_form` above
-        // does.
+        // `(apply f args)` is lowered to `CoreExpr::Apply`, an optimisation,
+        // where the head is bound to the `apply` primitive itself — keyed on
+        // the binding, as `core_form` above is (#443). A program's own
+        // `(define (apply f xs) …)` is an ordinary call now, where the
+        // spelling alone used to lower it and ignore the definition; so is a
+        // local `apply`, which resolves to its own binding and not the
+        // primitive. The spelling stays as a filter in front: resolving every
+        // head's value would cost each application a second lookup, and a
+        // head spelled otherwise was never lowered.
         if let Some(sym) = &name
-            && !is_shadowed
-            && sym.as_ref() == patina_core::by_spelling::APPLY
+            && sym.as_ref() == APPLY
+            && self.head_is_the_apply_primitive(sym, &head_scopes)
         {
             return self.desugar_apply_tagged(list, cdr, shared_heap);
         }
@@ -2335,8 +2301,8 @@ impl Desugarer {
             let binding_scope = ScopeId::fresh();
             let body_scopes = self.current_scopes.with_scope(binding_scope);
 
-            // Create body desugarer with shadowed names — the formals, and the
-            // body's own internal definitions (see `body_definition_names`).
+            // Create the body's desugarer, binding the formals and the body's
+            // own internal definitions (see `body_definition_names`).
             let binders = utils::formals_to_binders(&params);
             let body_tvs = Self::scope_body(&binders, &body_tvs, binding_scope, shared_heap);
             let body_desugarer = self.enter_binding_form(binders, binding_scope);
@@ -2414,6 +2380,30 @@ impl Desugarer {
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::Begin(body)))
+    }
+
+    /// Whether the head `name`, written with `scopes`, is bound to the `apply`
+    /// primitive — what lets `(apply f args)` be lowered to `CoreExpr::Apply`
+    /// (#443). Asked of the value, so an import rename or prefix of the real
+    /// `apply` still is it, and anything else of that spelling is not.
+    fn head_is_the_apply_primitive(&self, name: &str, scopes: &ScopeSet) -> bool {
+        // As `resolve_reference` does: a head written in source stands in the
+        // scopes the desugarer has accumulated, so a local `apply` is seen.
+        let scopes = if scopes.is_empty() {
+            &self.current_scopes
+        } else {
+            scopes
+        };
+        let Ok((Some(value), _)) = self.env.resolve_with_scopes(name, scopes) else {
+            return false;
+        };
+        let heap = self.env.heap().borrow();
+        heap.get_procedure(value).is_some_and(|procedure| {
+            matches!(
+                procedure.as_ref(),
+                patina_core::procedure::Procedure::Primitive { name: APPLY, .. }
+            )
+        })
     }
 
     /// Desugar apply using TaggedValue
