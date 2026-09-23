@@ -15,11 +15,9 @@
 
 use crate::heap::{Heap, HeapObjectData};
 use crate::tagged_value::TaggedValue;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fmt::Write;
 
-/// Format a TaggedValue for display (without scope annotations)
-///
-/// Identifiers are shown as plain names without scope sets.
 /// Render a name with its invisible characters spelled out.
 ///
 /// A leading BOM, a zero-width space, a soft hyphen, a bidi control or a C1
@@ -57,9 +55,13 @@ pub fn escape_invisible(name: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
+/// Format a TaggedValue for display (without scope annotations)
+///
+/// Identifiers are shown as plain names without scope sets. A circular value
+/// is written with datum labels, as `write` writes it: `#0=(1 2 . #0#)`.
 pub fn format_tagged(tv: TaggedValue, heap: &Heap) -> String {
     let mut buf = String::new();
-    format_tagged_impl(tv, heap, &mut buf, false);
+    format_tagged_impl(tv, heap, &mut buf, &mut Printer::new(tv, heap, false));
     buf
 }
 
@@ -68,8 +70,222 @@ pub fn format_tagged(tv: TaggedValue, heap: &Heap) -> String {
 /// Identifiers are annotated with their scope sets for hygiene debugging.
 pub fn format_tagged_with_scopes(tv: TaggedValue, heap: &Heap) -> String {
     let mut buf = String::new();
-    format_tagged_impl(tv, heap, &mut buf, true);
+    format_tagged_impl(tv, heap, &mut buf, &mut Printer::new(tv, heap, true));
     buf
+}
+
+/// What one call of the formatter carries down: whether to show scopes, and
+/// the datum labels of a circular value.
+///
+/// **Why labels (#457).** This formatter is not only for debugging: the REPL
+/// echoes every result through it, `syntax-error` prints its irritants with
+/// it, and primitives name a bad argument with it. It had no cycle check, so
+/// each of those never returned on a circular value — the REPL stopped
+/// reading input, and `(bitwise-and xs 1)` hung inside the `guard` that
+/// should have caught its type error. A node reached again from inside
+/// itself is labelled as `write` labels it (R7RS 2.4); acyclic output is
+/// unchanged, shared structure included, which is printed in full each time
+/// as `write` prints it.
+struct Printer {
+    with_scopes: bool,
+    /// The nodes a cycle returns to, by their bits.
+    cyclic: FxHashSet<u64>,
+    /// The label each has been given, in the order they were first printed.
+    labels: FxHashMap<u64, usize>,
+}
+
+impl Printer {
+    fn new(tv: TaggedValue, heap: &Heap, with_scopes: bool) -> Self {
+        let mut budget = CycleSearch::BUDGET;
+        let cyclic = if CycleSearch::finishes_within(tv, heap, &mut budget) {
+            FxHashSet::default()
+        } else {
+            let mut search = CycleSearch::default();
+            search.visit(tv, heap);
+            search.cyclic
+        };
+        Printer {
+            with_scopes,
+            cyclic,
+            labels: FxHashMap::default(),
+        }
+    }
+
+    /// Write `#n#` and answer `true` if `tv` has been labelled already;
+    /// otherwise, if a cycle returns to it, write `#n=` before it is printed.
+    fn label(&mut self, tv: TaggedValue, buf: &mut String) -> bool {
+        // Nearly every value has no cycle, and then this is every node's cost.
+        if self.cyclic.is_empty() {
+            return false;
+        }
+        let key = tv.raw_bits();
+        if !self.cyclic.contains(&key) {
+            return false;
+        }
+        if let Some(n) = self.labels.get(&key) {
+            write!(buf, "#{n}#").unwrap();
+            return true;
+        }
+        let n = self.labels.len();
+        self.labels.insert(key, n);
+        write!(buf, "#{n}=").unwrap();
+        false
+    }
+
+    fn is_cyclic(&self, tv: TaggedValue) -> bool {
+        !self.cyclic.is_empty() && self.cyclic.contains(&tv.raw_bits())
+    }
+}
+
+/// A depth-first search for the nodes a cycle returns to: a node met again
+/// while it is still on the path from the root.
+///
+/// A list's spine is walked in a loop, not by recursing on each cdr, so a
+/// long list costs no stack here — the same shape the printer has. Its pairs
+/// stay on the path until the whole list is done, since an element can lead
+/// back to any of them.
+#[derive(Default)]
+struct CycleSearch {
+    on_path: FxHashSet<u64>,
+    done: FxHashSet<u64>,
+    cyclic: FxHashSet<u64>,
+}
+
+impl CycleSearch {
+    /// How many compound nodes the cheap walk visits before giving up.
+    const BUDGET: usize = 1024;
+
+    /// Whether a plain walk of `tv` — every node, as the printer visits them
+    /// — ends before `budget` compound nodes. If it does, `tv` has no cycle,
+    /// since a walk into a cycle never ends; if not, `tv` is circular or
+    /// merely large, and [`CycleSearch::visit`] tells which.
+    ///
+    /// The search allocates two sets and hashes every node, and a value
+    /// printed here is nearly always small and acyclic. The macro matcher
+    /// formats its input on every failed attempt at a rule, so paying for
+    /// the search on each call made `cond`- and `case`-heavy desugaring 15%
+    /// slower. This walk allocates nothing. Measured 2026-09-23, best of 9
+    /// interleaved: 1% on a loop that only desugars such forms, and nothing
+    /// on chibi's R7RS suite.
+    fn finishes_within(tv: TaggedValue, heap: &Heap, budget: &mut usize) -> bool {
+        let mut current = tv;
+        while Self::has_children(current, heap) {
+            if *budget == 0 {
+                return false;
+            }
+            *budget -= 1;
+            if current.is_pair() {
+                if !Self::finishes_within(heap.car(current), heap, budget) {
+                    return false;
+                }
+                current = heap.cdr(current);
+                continue;
+            }
+            if current.is_vector() {
+                for i in 0..heap.vector_len(current) {
+                    if !Self::finishes_within(heap.vector_ref(current, i), heap, budget) {
+                        return false;
+                    }
+                }
+            } else {
+                match heap.get_object(current) {
+                    HeapObjectData::Values(vals) => {
+                        for val in vals.iter() {
+                            if !Self::finishes_within(*val, heap, budget) {
+                                return false;
+                            }
+                        }
+                    }
+                    HeapObjectData::MutableCell(cell) => {
+                        let content = *cell.borrow();
+                        if !Self::finishes_within(content, heap, budget) {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            return true;
+        }
+        true
+    }
+
+    /// Whether a cycle can pass through `tv`: the nodes the printer recurses
+    /// into.
+    fn has_children(tv: TaggedValue, heap: &Heap) -> bool {
+        tv.is_pair()
+            || tv.is_vector()
+            || (tv.is_object()
+                && matches!(
+                    heap.get_object(tv),
+                    HeapObjectData::Values(_) | HeapObjectData::MutableCell(_)
+                ))
+    }
+
+    /// `false` when `tv` needs no visit: seen before, or closing a cycle —
+    /// which is recorded.
+    fn enter(&mut self, tv: TaggedValue) -> bool {
+        let key = tv.raw_bits();
+        if self.on_path.contains(&key) {
+            self.cyclic.insert(key);
+            return false;
+        }
+        if self.done.contains(&key) {
+            return false;
+        }
+        self.on_path.insert(key);
+        true
+    }
+
+    fn leave(&mut self, tv: TaggedValue) {
+        let key = tv.raw_bits();
+        self.on_path.remove(&key);
+        self.done.insert(key);
+    }
+
+    fn visit(&mut self, tv: TaggedValue, heap: &Heap) {
+        if !Self::has_children(tv, heap) {
+            return;
+        }
+        if tv.is_pair() {
+            let mut spine = Vec::new();
+            let mut current = tv;
+            while current.is_pair() && self.enter(current) {
+                spine.push(current);
+                self.visit(heap.car(current), heap);
+                current = heap.cdr(current);
+            }
+            if !current.is_pair() {
+                self.visit(current, heap);
+            }
+            for pair in spine {
+                self.leave(pair);
+            }
+            return;
+        }
+        if !self.enter(tv) {
+            return;
+        }
+        if tv.is_vector() {
+            for i in 0..heap.vector_len(tv) {
+                self.visit(heap.vector_ref(tv, i), heap);
+            }
+        } else {
+            match heap.get_object(tv) {
+                HeapObjectData::Values(vals) => {
+                    for val in vals.iter() {
+                        self.visit(*val, heap);
+                    }
+                }
+                HeapObjectData::MutableCell(cell) => {
+                    let content = *cell.borrow();
+                    self.visit(content, heap);
+                }
+                _ => {}
+            }
+        }
+        self.leave(tv);
+    }
 }
 
 /// Format a real (f64) value in Scheme display style
@@ -136,7 +352,7 @@ fn format_complex(real: TaggedValue, imag: TaggedValue, heap: &Heap, buf: &mut S
 }
 
 /// Format a HeapObjectData value
-fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scopes: bool) {
+fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &mut Printer) {
     match obj {
         HeapObjectData::BigInt(n) => write!(buf, "{}", n).unwrap(),
         HeapObjectData::Rational(r) => write!(buf, "{}", r).unwrap(),
@@ -146,7 +362,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         HeapObjectData::Ephemeron(_) => buf.push_str("#<ephemeron>"),
         HeapObjectData::Identifier { name, scopes } => {
             buf.push_str(name);
-            if with_scopes && !scopes.is_empty() {
+            if printer.with_scopes && !scopes.is_empty() {
                 write!(buf, "{}", scopes).unwrap();
             }
         }
@@ -164,10 +380,10 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
             buf.push(')');
         }
         // The message alone, where `display` and `write` also print the
-        // irritants. This formatter has no cycle detection — `format_tagged`
-        // on a circular list does not terminate — so it must not open a new
-        // way into user data. An irritant is user data, and
-        // `(error "cycle" xs)` with a circular `xs` is one call away.
+        // irritants. Chosen when this formatter had no cycle detection, so
+        // that `(error "cycle" xs)` with a circular `xs` could not hang it;
+        // it has labels now (#457), and the choice stands on its own — an
+        // irritant list can be long, and this is a one-line summary.
         HeapObjectData::Exception { message, .. } => {
             write!(buf, "#<error-object: {}>", message).unwrap()
         }
@@ -212,7 +428,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
                 if i > 0 {
                     buf.push('\n');
                 }
-                format_tagged_impl(*val, heap, buf, with_scopes);
+                format_tagged_impl(*val, heap, buf, printer);
             }
         }
         HeapObjectData::EnvironmentSpecifier { .. } => buf.push_str("#<environment>"),
@@ -229,7 +445,8 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
         }
         HeapObjectData::MutableCell(cell) => {
             buf.push_str("#<cell:");
-            format_tagged_impl(*cell.borrow(), heap, buf, with_scopes);
+            let content = *cell.borrow();
+            format_tagged_impl(content, heap, buf, printer);
             buf.push('>');
         }
         HeapObjectData::VmContinuationRef(id) => write!(buf, "#<continuation:{}>", id).unwrap(),
@@ -241,7 +458,11 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, with_scope
 }
 
 /// Unified recursive formatter for TaggedValue
-fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scopes: bool) {
+fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &mut Printer) {
+    if printer.label(tv, buf) {
+        return;
+    }
+
     // Immediate values
     if tv.is_fixnum() {
         write!(buf, "{}", tv.as_fixnum_unchecked()).unwrap();
@@ -276,7 +497,7 @@ fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
     // Native pairs
     if tv.is_pair() {
         buf.push('(');
-        format_tagged_list(tv, heap, buf, with_scopes);
+        format_tagged_list(tv, heap, buf, printer);
         buf.push(')');
         return;
     }
@@ -296,7 +517,7 @@ fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
             if i > 0 {
                 buf.push(' ');
             }
-            format_tagged_impl(heap.vector_ref(tv, i), heap, buf, with_scopes);
+            format_tagged_impl(heap.vector_ref(tv, i), heap, buf, printer);
         }
         buf.push(')');
         return;
@@ -305,7 +526,7 @@ fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
     // Object types
     if tv.is_object() {
         let obj = heap.get_object(tv);
-        format_object(obj, heap, buf, with_scopes);
+        format_object(obj, heap, buf, printer);
         return;
     }
 
@@ -314,7 +535,10 @@ fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
 }
 
 /// Format tagged list contents, handling dotted lists
-fn format_tagged_list(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scopes: bool) {
+///
+/// A pair in the spine that a cycle returns to is written as a dotted tail,
+/// so that its label has somewhere to go: `(1 2 . #0#)`.
+fn format_tagged_list(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &mut Printer) {
     let mut current = tv;
     let mut first = true;
 
@@ -322,19 +546,19 @@ fn format_tagged_list(tv: TaggedValue, heap: &Heap, buf: &mut String, with_scope
         if current == TaggedValue::NULL {
             break;
         }
-        if current.is_pair() {
+        if current.is_pair() && (first || !printer.is_cyclic(current)) {
             let car = heap.car(current);
             let cdr = heap.cdr(current);
             if !first {
                 buf.push(' ');
             }
             first = false;
-            format_tagged_impl(car, heap, buf, with_scopes);
+            format_tagged_impl(car, heap, buf, printer);
             current = cdr;
         } else {
             // Dotted list tail
             buf.push_str(" . ");
-            format_tagged_impl(current, heap, buf, with_scopes);
+            format_tagged_impl(current, heap, buf, printer);
             break;
         }
     }
@@ -376,5 +600,89 @@ mod complex_spelling_tests {
         let two = heap.alloc_real(2.0);
         let z = heap.alloc_complex(zero, two);
         assert_eq!(format_tagged(z, &heap), "+2.0i");
+    }
+}
+
+/// Datum labels for circular values (#457). Each expected string is what
+/// chibi 0.12, Gauche 0.9.15 and Patina's own `write` print for the same
+/// value, measured 2026-09-23.
+#[cfg(test)]
+mod cycle_tests {
+    use super::format_tagged;
+    use crate::TaggedValue;
+    use crate::heap::Heap;
+
+    fn fx(n: i64) -> TaggedValue {
+        TaggedValue::fixnum(n)
+    }
+
+    /// `(1 2)` with its last cdr pointed back at its head.
+    fn circular_list(heap: &mut Heap) -> TaggedValue {
+        let xs = heap.list_from_iter([fx(1), fx(2)]);
+        let last = heap.cdr(xs);
+        heap.set_cdr(last, xs);
+        xs
+    }
+
+    #[test]
+    fn a_circular_list_is_labelled() {
+        let mut heap = Heap::new();
+        let xs = circular_list(&mut heap);
+        assert_eq!(format_tagged(xs, &heap), "#0=(1 2 . #0#)");
+    }
+
+    #[test]
+    fn a_second_reference_to_a_labelled_node_is_its_label() {
+        let mut heap = Heap::new();
+        let xs = circular_list(&mut heap);
+        let v = heap.alloc_vector(vec![xs, xs]);
+        assert_eq!(format_tagged(v, &heap), "#(#0=(1 2 . #0#) #0#)");
+    }
+
+    #[test]
+    fn a_cycle_into_the_middle_of_a_list_breaks_the_spine_there() {
+        let mut heap = Heap::new();
+        let xs = circular_list(&mut heap);
+        let a = heap.intern_symbol("a");
+        let outer = heap.alloc_pair(a, xs);
+        assert_eq!(format_tagged(outer, &heap), "(a . #0=(1 2 . #0#))");
+        let wrapped = heap.list_from_iter([a, xs]);
+        assert_eq!(format_tagged(wrapped, &heap), "(a #0=(1 2 . #0#))");
+    }
+
+    #[test]
+    fn cycles_through_a_car_and_through_a_vector() {
+        let mut heap = Heap::new();
+        let q = heap.intern_symbol("q");
+        let z = heap.alloc_pair(q, TaggedValue::NULL);
+        heap.set_car(z, z);
+        assert_eq!(format_tagged(z, &heap), "#0=(#0#)");
+
+        let v = heap.alloc_vector(vec![fx(1), fx(2)]);
+        heap.vector_set(v, 1, v);
+        let sym = heap.intern_symbol("z");
+        let l = heap.list_from_iter([v, sym]);
+        assert_eq!(format_tagged(l, &heap), "(#0=#(1 #0#) z)");
+    }
+
+    /// Only a cycle is labelled, as `write` labels (R7RS 6.13.3); structure
+    /// that is merely shared prints in full each time.
+    #[test]
+    fn shared_structure_that_is_not_circular_is_printed_in_full() {
+        let mut heap = Heap::new();
+        let ys = heap.list_from_iter([fx(1), fx(2)]);
+        let both = heap.list_from_iter([ys, ys]);
+        assert_eq!(format_tagged(both, &heap), "((1 2) (1 2))");
+    }
+
+    /// The search walks a spine in a loop, as the printer does, so a long
+    /// list costs it no stack.
+    #[test]
+    fn a_long_list_is_searched_without_recursing_on_its_spine() {
+        let mut heap = Heap::new();
+        let xs = heap.list_from_iter((0..200_000).map(fx));
+        let printed = format_tagged(xs, &heap);
+        assert!(printed.starts_with("(0 1 2 "), "{}", &printed[..20]);
+        assert!(printed.ends_with(" 199999)"));
     }
 }

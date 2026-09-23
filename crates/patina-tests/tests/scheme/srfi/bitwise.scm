@@ -60,6 +60,14 @@
   (list (bitwise-and) (bitwise-ior) (bitwise-xor)))
 (test-equal "one argument is returned unchanged" 42 (bitwise-and 42))
 
+;; A non-integer operand is an error a `guard` can catch, circular or not.
+;; Patina's type error names the operand, and the formatter it used had no
+;; cycle check, so this row ran forever instead of raising (#457).
+(define circular-operand
+  (let ((xs (list 1 2))) (set-cdr! (cdr xs) xs) xs))
+(test-equal "a circular non-integer operand raises" 'raised
+  (guard (e (#t 'raised)) (bitwise-and circular-operand 1)))
+
 ;; Negative operands are sign-extended, so a right shift is arithmetic and
 ;; `bit-count` counts *zero* bits to stay finite.
 (test-equal "a right shift of a negative number is arithmetic" -2

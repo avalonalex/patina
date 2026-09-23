@@ -134,7 +134,7 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/vertical-bar-identifiers.scm", 32),
     ("srfi/and-let.scm", 21),
     ("srfi/bitvector.scm", 31),
-    ("srfi/bitwise.scm", 81),
+    ("srfi/bitwise.scm", 82),
     ("srfi/char-sets.scm", 87),
     ("srfi/fixnums.scm", 54),
     ("srfi/homogeneous-vectors.scm", 60),

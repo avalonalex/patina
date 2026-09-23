@@ -471,6 +471,50 @@ fn a_malformed_case_or_cond_names_the_clause_at_fault() {
     }
 }
 
+/// A desugar error that names a datum writes it as Scheme would, and a
+/// circular one with datum labels (#457). The formals errors and a form's
+/// improper tail used Rust's `{:?}` — `TaggedValue::fixnum(5)` — and
+/// `syntax-error`'s irritants went through a formatter with no cycle check,
+/// so the last program never returned.
+#[test]
+fn a_desugar_error_names_a_datum_as_scheme_writes_it() {
+    let cases = [
+        (
+            "(lambda (a \"s\") 1)",
+            "Parameter must be a symbol, got \"s\"",
+        ),
+        (
+            "(lambda (a . 5) 1)",
+            "a rest parameter must be a symbol, got 5",
+        ),
+        (
+            "(lambda 5 1)",
+            "expected a symbol or a list of symbols, got 5",
+        ),
+        ("(if 1 2 . 3)", "got an improper list ending with 3"),
+        (
+            "(lambda (a #0=(b . #0#)) 1)",
+            "Parameter must be a symbol, got #0=(b . #0#)",
+        ),
+        (
+            "(syntax-error \"bad\" #0=(a . #0#))",
+            "syntax-error: bad #0=(a . #0#)",
+        ),
+    ];
+    for (program, expected) in cases {
+        for (backend, rendered) in rendered_on_both(program, "datum.scm") {
+            assert!(
+                rendered.contains(expected),
+                "[{backend}] {program}\nexpected: {expected}\ngot: {rendered}"
+            );
+            assert!(
+                !rendered.contains("TaggedValue"),
+                "[{backend}] {program}\n{rendered}"
+            );
+        }
+    }
+}
+
 /// A program that defines `else` and then writes it before `cond`'s last
 /// clause means the variable, and runs: chibi and Gauche answer 1. #432's
 /// first draft of a rule diagnosing a mid-`else` in `cond` rejected it,

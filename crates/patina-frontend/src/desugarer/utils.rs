@@ -4,6 +4,7 @@
 //! Utility functions for desugaring
 
 use super::error::{DesugarError, Result};
+use patina_core::debug_format::format_tagged;
 use patina_core::{Heap, SharedHeap, TaggedValue};
 use patina_ir::{Formals, ScopedParam, Symbol};
 use patina_runtime::ScopeSet;
@@ -39,10 +40,11 @@ pub fn list_to_vec_tagged(
             continue;
         }
 
-        // Not a native pair and not null — improper list
+        // Not a native pair and not null — improper list. The tail as Scheme
+        // writes it (#457): its `{:?}` was `TaggedValue::fixnum(3)`.
         return Err(DesugarError::ExpectedProperList(format!(
-            "Expected proper list, got improper list ending with {:?}",
-            current
+            "got an improper list ending with {}",
+            format_tagged(current, &shared_heap.borrow())
         )));
     }
 }
@@ -96,8 +98,8 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
                     params.push(ScopedParam::with_scopes(id.0, id.1));
                 } else {
                     return Err(DesugarError::InvalidFormals(format!(
-                        "Parameter must be a symbol, got {:?}",
-                        car
+                        "Parameter must be a symbol, got {}",
+                        format_tagged(car, &heap)
                     )));
                 }
                 current = cdr;
@@ -137,8 +139,8 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
                     });
                 } else {
                     return Err(DesugarError::InvalidFormals(format!(
-                        "Invalid formal parameters: {:?}",
-                        current
+                        "a rest parameter must be a symbol, got {}",
+                        format_tagged(current, &heap)
                     )));
                 }
             }
@@ -146,8 +148,8 @@ pub fn convert_formals_tagged(formals: TaggedValue, shared_heap: &SharedHeap) ->
     }
 
     Err(DesugarError::InvalidFormals(format!(
-        "Invalid formal parameters: {:?}",
-        formals
+        "expected a symbol or a list of symbols, got {}",
+        format_tagged(formals, &shared_heap.borrow())
     )))
 }
 
