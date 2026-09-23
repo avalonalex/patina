@@ -35,6 +35,15 @@
 //!
 //! The ordinary before/after rows and the remaining #171 capture-site rows
 //! were measured 2026-09-11 with `dump_programs`, using the versions above.
+//!
+//! **The value extent's text changed on 2026-09-23 (#442)**: its operator is
+//! `(as-value dynamic-wind)`, where it was a variable, `dw`, bound to the
+//! procedure — which Patina compiles to head position's sequence since then,
+//! so the value column had become a copy of the head one. chibi and Gauche
+//! were re-run on its 14 programs and answer each as before, and as the head
+//! extent's. Guile and Racket were not re-run: not installed where the change
+//! was made. Their rows rest on the change being unobservable — the operator
+//! is the same procedure either way, and neither expression has an effect.
 //! Racket rejects full re-entry through a module-level `define` (assignment
 //! to a constant); that is an unusable oracle for these programs, not an
 //! answer about wind traversal. Chibi and Gauche have no tagged prompt API,
@@ -227,11 +236,18 @@ impl Extent {
             Extent::Value => "value",
         }
     }
-    /// The operator: the syntactic name, or a variable bound to it.
+    /// The operator: the name, or an expression whose value is the procedure.
+    ///
+    /// Computed rather than a variable since #442. Pass 5 compiles a call
+    /// through a global *bound* to `dynamic-wind` to head position's
+    /// sequence, as it does the name, so the `(define dw dynamic-wind)` this
+    /// used to be tested the head form twice. Nothing can tell the two
+    /// spellings apart but a compiler that looks at bindings: the operand is
+    /// the same procedure, and neither expression has an effect.
     fn operator(self) -> &'static str {
         match self {
             Extent::Head => "dynamic-wind",
-            Extent::Value => "dw",
+            Extent::Value => "(as-value dynamic-wind)",
         }
     }
 }
@@ -377,7 +393,7 @@ fn positioned(shape: &Shape, expr: &str) -> String {
 /// construct one of them cannot parse is a transcription difference smuggled
 /// into the program.
 fn program(shape: &Shape) -> String {
-    let prelude = "(define dw dynamic-wind)\n\
+    let prelude = "(define (as-value procedure) procedure)\n\
                    (define log '())\n\
                    (define (note x) (set! log (cons x log)))";
     let inn = "(note 'in)";

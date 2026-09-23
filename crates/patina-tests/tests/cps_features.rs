@@ -41,6 +41,9 @@ use common::eval_program_vm;
 ///   measure that instead and force `STACK` past 1 MB. Both backends are held
 ///   to nested value-form winds *semantically* by `cps-features.scm`'s
 ///   "re-entering nested value-form extents runs each thunk once".
+/// - `dw` is a **parameter**, not `(define dw dynamic-wind)`: since #442 a
+///   call through a global bound to `dynamic-wind` compiles to head
+///   position's sequence, so that spelling no longer reaches the value form.
 #[test]
 fn test_nested_value_form_winds_do_not_nest_rust_frames() {
     const DEPTH: usize = 5000;
@@ -50,12 +53,11 @@ fn test_nested_value_form_winds_do_not_nest_rust_frames() {
         .spawn(|| {
             let program = format!(
                 r#"
-                (define dw dynamic-wind)
-                (define (nest n)
+                (define (nest dw n)
                   (if (= n 0)
                       'done
-                      (dw (lambda () #f) (lambda () (nest (- n 1))) (lambda () #f))))
-                (nest {DEPTH})
+                      (dw (lambda () #f) (lambda () (nest dw (- n 1))) (lambda () #f))))
+                (nest dynamic-wind {DEPTH})
                 "#
             );
             assert_eq!(eval_program_vm(&program), "done");

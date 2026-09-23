@@ -96,6 +96,7 @@
 //! Work owed after a Scheme call must be representable in captured frames:
 //! `wind_jump_stub` resumes replacement travel; `invoke_step_stub` resumes
 //! extension; `value_wind_stub` completes ordinary dynamic-wind;
+//! `value_cwv_stub` applies a value-form `call-with-values`' consumer;
 //! `abort_handler_stub` delivers the landing's result; `raise_step_stub`
 //! reinstalls a continuable handler or raises a secondary exception. Their
 //! register layouts are shared with the existing `Resume*` instruction arms.
@@ -278,7 +279,7 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 
 /// Call any callable value from a site that has no instruction behind it.
 /// Sites include: `call-with-values`' consumer (both the instruction and the
-/// tail instruction), its producer, a prompt body, an exception-handler thunk,
+/// tail instruction), a prompt body, an exception-handler thunk,
 /// `call/cc`'s procedure
 /// argument, a jump's wind thunks ([`push_wind_step`]), a composable invoke's
 /// re-entry thunks ([`push_invoke_step`] — a separate site with a different
