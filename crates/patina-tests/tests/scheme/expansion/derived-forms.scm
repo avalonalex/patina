@@ -116,6 +116,26 @@
            (odd? (lambda (n) (if (= n 0) #f (even? (- n 1))))))
     (even? 88)))
 
+(test-equal "named let" '(2 1 0)
+  (let loop ((i 0) (acc '()))
+    (if (= i 3) acc (loop (+ i 1) (cons i acc)))))
+(test-equal "a named let with no bindings" 5 (let loop () 5))
+
+;; #456. `let` tried its named rule first, and a name is a pattern variable,
+;; so it matches anything: a body that is one call with a compound operator,
+;; `((f y))`, was read as the bindings of a named let called `((y 10))`, and
+;; refused. The same shapes above a named let, where `f` is the name, are
+;; controls. chibi 0.12 and Gauche 0.9.15 answer every row as written,
+;; measured 2026-09-23.
+(test-equal "a let whose body calls a computed procedure" 10
+  (let ((y 10)) ((car (list (lambda () y))))))
+(test-equal "the same with no bindings" 7
+  (let () ((car (list (lambda () 7))))))
+(test-equal "and with forms after the call" 'more
+  (let ((y 10)) ((car (list (lambda () y)))) 'more))
+(test-equal "a named let whose body calls a computed procedure" 1
+  (let f ((x 1)) ((car (list (lambda () x))))))
+
 ;; ── 4.2.2 let-values, let*-values ──────────────────────────────────────────
 
 (test-equal "let-values" 3 (let-values (((a b) (values 1 2))) (+ a b)))

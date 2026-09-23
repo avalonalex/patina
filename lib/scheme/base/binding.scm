@@ -4,18 +4,24 @@
 
 (define-syntax let
   (syntax-rules ()
-    ;; Named let (recursive binding) - must come first!
+    ;; Regular let (parallel bindings) — first, as in R7RS 7.3's own
+    ;; definition. The named rule's `proc-name` is a pattern variable and
+    ;; matches any datum, so tried first it claimed a regular let whose body
+    ;; is one call with a compound operator: in `(let ((y 10)) ((f y)))` it
+    ;; took `((y 10))` for the name and `((f y))` for the bindings (#456).
+    ;; This rule cannot take a named let instead, since a name is an
+    ;; identifier and `((var val) ...)` matches only a list.
+    ;; (let ((var val) ...) body ...)
+    ;; Expands to: ((lambda (var ...) body ...) val ...)
+    ((let ((var val) ...) body ...)
+     ((lambda (var ...) body ...) val ...))
+    ;; Named let (recursive binding)
     ;; (let name ((var val) ...) body ...)
     ;; Expands to: ((letrec ((name (lambda (var ...) body ...))) name) val ...)
     ((let proc-name ((var val) ...) body ...)
      ((letrec ((proc-name (lambda (var ...) body ...)))
         proc-name)
-      val ...))
-    ;; Regular let (parallel bindings)
-    ;; (let ((var val) ...) body ...)
-    ;; Expands to: ((lambda (var ...) body ...) val ...)
-    ((let ((var val) ...) body ...)
-     ((lambda (var ...) body ...) val ...))))
+      val ...))))
 
 (define-syntax let*
   (syntax-rules ()
