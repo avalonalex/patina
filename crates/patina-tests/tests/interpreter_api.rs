@@ -436,10 +436,9 @@ fn a_malformed_case_or_cond_names_the_clause_at_fault() {
 /// A program that defines `else` and then writes it before `cond`'s last
 /// clause means the variable, and runs: chibi and Gauche answer 1. A rule
 /// diagnosing a mid-`else` in `cond` rejected it, because `else` still
-/// matches the macro's literal after the program's definition — the
-/// binding `(scheme base)` gives `else` is a variable
-/// (`PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`). Pinned so the
-/// diagnosis is not added back while that is so.
+/// matches the macro's literal after the program defines over the import,
+/// where chibi and Gauche no longer match it (#450). Pinned so the diagnosis
+/// is not added back while that is so.
 #[test]
 fn a_program_defined_else_before_conds_last_clause_is_its_variable() {
     let program = "(define else 3) (cond (else 1) (#t 2))";

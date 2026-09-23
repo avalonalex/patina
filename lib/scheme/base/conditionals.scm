@@ -86,7 +86,7 @@
     ;; as a value — unless the program has defined `else` itself, where
     ;; chibi and Gauche evaluate it as the variable it is, and so does
     ;; Patina. `else` still matches this macro's literal after such a
-    ;; definition, so a rule here would reject that program.
+    ;; definition (#450), so a rule here would reject that program.
     ((cond clause1 clause ...)
      (syntax-error "cond: a clause must be (test expression ...), (test => receiver) or (else expression ...), not"
                    clause1))))
