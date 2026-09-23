@@ -383,31 +383,40 @@ fn a_desugar_error_is_rendered_at_the_form_that_raised_it() {
 
 /// `case` and `cond` are `syntax-rules` macros, so a malformed use could only
 /// ever fail as "no pattern matches". Each common mistake is now named, with
-/// the clause at fault (#432): Gauche rejects an `else` before the last
-/// clause of either, and chibi rejects it in `cond`.
+/// the clause at fault (#432). Gauche rejects an `else` before `case`'s last
+/// clause; chibi accepts it and never reaches the clauses after.
+///
+/// `cond` has no such rule — see the next test — so its mid-`else` is
+/// rejected as syntax used as a value, which still has to be placed.
 #[test]
 fn a_malformed_case_or_cond_names_the_clause_at_fault() {
     let cases = [
         (
             "(case 1 ((0) 'zero) (else 'many) ((1) 'one))",
-            "case: an else clause must be the last clause (else (quote many))",
+            "case: an else clause must be the last clause, and is followed by ((1) (quote one))",
         ),
         (
             "(case 1 (else => car) ((1) 'one))",
-            "case: an else clause must be the last clause",
-        ),
-        (
-            "(cond ((= 1 0) 'zero) (else 'many) ((= 1 1) 'one))",
-            "cond: an else clause must be the last clause (else (quote many))",
+            "case: an else clause must be the last clause, and is followed by ((1) (quote one))",
         ),
         (
             "(case 1 (0 'zero) (else 'many))",
-            "case: a clause must be ((datum ...) expression ...) or (else expression ...) \
-             (0 (quote zero))",
+            "case: a clause must be ((datum ...) expression ...) or (else expression ...), \
+             not (0 (quote zero))",
         ),
         (
             "(cond ((= 1 0) 'zero) 1)",
-            "cond: a clause must be a list 1",
+            "cond: a clause must be (test expression ...), (test => receiver) or \
+             (else expression ...), not 1",
+        ),
+        (
+            "(cond ())",
+            "cond: a clause must be (test expression ...), (test => receiver) or \
+             (else expression ...), not ()",
+        ),
+        (
+            "(cond ((= 1 0) 'zero) (else 'many) ((= 1 1) 'one))",
+            "`else` is a syntactic keyword",
         ),
     ];
     for (program, expected) in cases {
@@ -422,6 +431,25 @@ fn a_malformed_case_or_cond_names_the_clause_at_fault() {
             );
         }
     }
+}
+
+/// A program that defines `else` and then writes it before `cond`'s last
+/// clause means the variable, and runs: chibi and Gauche answer 1. A rule
+/// diagnosing a mid-`else` in `cond` rejected it, because `else` still
+/// matches the macro's literal after the program's definition — the
+/// binding `(scheme base)` gives `else` is a variable
+/// (`PRD/macro/SYNTAX_KEYWORD_BINDINGS_DESIGN.md`). Pinned so the
+/// diagnosis is not added back while that is so.
+#[test]
+fn a_program_defined_else_before_conds_last_clause_is_its_variable() {
+    let program = "(define else 3) (cond (else 1) (#t 2))";
+    let tree_walker = TreeWalkInterpreter::new_tree_walker();
+    let vm = Interpreter::new(VmBackend::new());
+    assert_eq!(
+        tree_walker.eval_program(program).unwrap().as_fixnum(),
+        Some(1)
+    );
+    assert_eq!(vm.eval_program(program).unwrap().as_fixnum(), Some(1));
 }
 
 /// A use that no rule of a macro accepts says so once, naming the macro. It

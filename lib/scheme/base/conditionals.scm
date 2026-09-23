@@ -44,13 +44,6 @@
     ((cond (else result1 result2 ...))
      (begin result1 result2 ...))
 
-    ;; An else clause with clauses after it. R7RS puts else last; without
-    ;; this rule the arms below read `else` as a test expression and the
-    ;; mistake surfaced as a misuse of the keyword (#432). Gauche rejects
-    ;; it too; chibi says "non-final else in cond".
-    ((cond (else . body) clause1 clause ...)
-     (syntax-error "cond: an else clause must be the last clause" (else . body)))
-
     ;; Single test clause with =>
     ((cond (test => proc))
      (let ((temp test))
@@ -84,10 +77,19 @@
          (begin result1 result2 ...)
          (cond clause ...)))
 
-    ;; Anything else is a clause that is not a list. Last, so it only
-    ;; names what every rule above refused (#432).
+    ;; Anything else is a clause no rule above accepts — not a list, or
+    ;; empty. Last, so it only names what they all refused (#432).
+    ;;
+    ;; There is deliberately no rule for an else clause with clauses after
+    ;; it, though `case` has one. Here the arms above take that `else` for
+    ;; a test expression, and the desugarer then rejects it as syntax used
+    ;; as a value — unless the program has defined `else` itself, where
+    ;; chibi and Gauche evaluate it as the variable it is, and so does
+    ;; Patina. `else` still matches this macro's literal after such a
+    ;; definition, so a rule here would reject that program.
     ((cond clause1 clause ...)
-     (syntax-error "cond: a clause must be a list" clause1))))
+     (syntax-error "cond: a clause must be (test expression ...), (test => receiver) or (else expression ...), not"
+                   clause1))))
 
 ;; case - pattern matching with eqv? comparison
 (define-syntax case
@@ -99,9 +101,12 @@
     ;; An else clause with clauses after it. R7RS puts else last, and
     ;; Gauche rejects this; chibi accepts it and never reaches the clauses
     ;; after. Without this rule it failed as "no pattern matches", with
-    ;; nothing to say which clause was wrong (#432).
+    ;; nothing to say which clause was wrong (#432). It names the clause
+    ;; after the else, which is the user's own text; rebuilding the else
+    ;; clause from this template would print the template's `else`.
     ((case key (else . body) clause1 clause ...)
-     (syntax-error "case: an else clause must be the last clause" (else . body)))
+     (syntax-error "case: an else clause must be the last clause, and is followed by"
+                   clause1))
 
     ;; Base case with else
     ((case key (else result1 result2 ...))
@@ -157,5 +162,5 @@
     ;; nor an else clause — `(0 'zero)` for `((0) 'zero)` is the usual one.
     ;; Last, so it only names what every rule above refused (#432).
     ((case key clause1 clause ...)
-     (syntax-error "case: a clause must be ((datum ...) expression ...) or (else expression ...)"
+     (syntax-error "case: a clause must be ((datum ...) expression ...) or (else expression ...), not"
                    clause1))))
