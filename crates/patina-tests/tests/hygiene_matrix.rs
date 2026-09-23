@@ -1275,6 +1275,41 @@ fn a_definition_over_an_import_does_not_capture_an_expanded_template() {
     }
 }
 
+/// A program's definition over an imported name is not the binding a
+/// library macro's *literal* of that name means (#450) — the literal-side
+/// twin of the test above. chibi 0.12 and Gauche 0.9.15 answer `2`, `lit` and
+/// `1`, measured 2026-09-22.
+///
+/// Two identifiers spelled alike and reaching no local binding were matched
+/// whatever global each reached, so after `(define else #f)` the `(else 1)`
+/// below was still `cond`'s else clause and answered `1`. The literal now
+/// matches when the two reach one location (`Environment::binding_location`),
+/// which the program's `else` stops doing once it defines over the import.
+///
+/// The other two are the controls. A macro the program defines itself sees
+/// the program's own `else` as its literal's binding, before the definition
+/// and after it, in both oracles: `lit`. And a program that never defines
+/// `else` reaches the imported keyword, as it always did.
+#[test]
+fn a_definition_over_an_import_is_not_a_library_macros_literal() {
+    let over_the_import = "(import (scheme base))\n(define else #f)\n\
+                           (cond (#f 0) (else 1) (#t 2))";
+    let the_programs_own_macro = "(import (scheme base))\n\
+                                  (define-syntax m\n  \
+                                  (syntax-rules (else) ((_ else) 'lit) ((_ x) 'var)))\n\
+                                  (define else #f)\n(m else)";
+    let never_defined = "(import (scheme base))\n(cond (#f 0) (else 1))";
+    for vm in [true, false] {
+        assert_eq!(
+            answer(over_the_import, vm),
+            "2",
+            "`1` is the program's `else` taken for `cond`'s keyword"
+        );
+        assert_eq!(answer(the_programs_own_macro, vm), "lit");
+        assert_eq!(answer(never_defined, vm), "1");
+    }
+}
+
 /// A location both sides imported under **two names** — `string-length`, and
 /// `slen` by a `rename` — keeps its two spellings apart when a reference is
 /// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.

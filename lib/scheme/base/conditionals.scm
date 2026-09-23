@@ -44,6 +44,16 @@
     ((cond (else result1 result2 ...))
      (begin result1 result2 ...))
 
+    ;; An else clause with clauses after it. R7RS puts else last; chibi
+    ;; reports "non-final else in cond" and Gauche "'else' clause followed
+    ;; by more clauses". Without this rule the arms below read `else` as a
+    ;; test and the desugarer rejected it as syntax used as a value (#432).
+    ;; A program that defines `else` itself is not caught here: its `else`
+    ;; is not this literal's binding (#450), so it stays a test.
+    ((cond (else . body) clause1 clause ...)
+     (syntax-error "cond: an else clause must be the last clause, and is followed by"
+                   clause1))
+
     ;; Single test clause with =>
     ((cond (test => proc))
      (let ((temp test))
@@ -79,14 +89,6 @@
 
     ;; Anything else is a clause no rule above accepts — not a list, or
     ;; empty. Last, so it only names what they all refused (#432).
-    ;;
-    ;; There is deliberately no rule for an else clause with clauses after
-    ;; it, though `case` has one. Here the arms above take that `else` for
-    ;; a test expression, and the desugarer then rejects it as syntax used
-    ;; as a value — unless the program has defined `else` itself, where
-    ;; chibi and Gauche evaluate it as the variable it is, and so does
-    ;; Patina. `else` still matches this macro's literal after such a
-    ;; definition (#450), so a rule here would reject that program.
     ((cond clause1 clause ...)
      (syntax-error "cond: a clause must be (test expression ...), (test => receiver) or (else expression ...), not"
                    clause1))))

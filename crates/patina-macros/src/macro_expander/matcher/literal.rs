@@ -15,8 +15,9 @@ use patina_runtime::{ScopeId, ScopeSet};
 /// Does `input` match the pattern literal `lit`?
 ///
 /// Identifiers match when both reach the same local binding, or neither
-/// reaches one and they are spelled alike — or, spelled differently, when
-/// neither is local and both name one global value ([`denotes_same_binding`]).
+/// reaches one and they are spelled alike and not two different globals
+/// ([`distinct_globals`]) — or, spelled differently, when neither is local and
+/// both name one global value ([`denotes_same_binding`]).
 /// A literal that is not an identifier is a datum and compares as one.
 ///
 /// This used to be a spelling test with a veto: the desugarer kept the set of
@@ -53,7 +54,11 @@ pub fn matches_literal(
     let input_binding = || local_binding(input_name, scopes_of(input, heap), macro_scope, use_site);
 
     if lit_name == input_name {
-        return Ok(lit_binding()? == input_binding()?);
+        let (lit_local, input_local) = (lit_binding()?, input_binding()?);
+        if lit_local.is_some() || input_local.is_some() {
+            return Ok(lit_local == input_local);
+        }
+        return Ok(!distinct_globals(lit_name, definition, use_site));
     }
     // Spelled differently, the two can still be one binding — a global
     // imported under a rename. A local binding is never renamed, so either
@@ -87,6 +92,35 @@ fn local_binding(
     site.env
         .scoped_binding_of(name, scopes)
         .map_err(|ambiguous| ambiguous.to_string())
+}
+
+/// Whether `name` is a global on both sides, and a different one on each.
+///
+/// Neither side reaching a local binding used to settle a pair spelled alike
+/// as a match, whatever the two globals were. So once a program defined over
+/// an imported `else`, `(cond (#f 0) (else 1))` still took the else clause —
+/// the program's variable and `(scheme base)`'s keyword read as one binding
+/// because neither is local. chibi and Gauche evaluate the variable (#450).
+/// The same shape for a template's *reference* was #407: an import is the
+/// exporting library's location (#406), so where the two names lead is a
+/// question [`Environment::binding_location`] answers exactly.
+///
+/// Only two bound names at different locations are told apart. A name bound
+/// on one side and unbound on the other matches as it did, as does a name
+/// with no site to look it up in.
+///
+/// [`Environment::binding_location`]: patina_runtime::Environment::binding_location
+fn distinct_globals(name: &str, definition: Option<Site<'_>>, use_site: Option<Site<'_>>) -> bool {
+    let (Some(definition), Some(use_site)) = (definition, use_site) else {
+        return false;
+    };
+    match (
+        definition.env.binding_location(name),
+        use_site.env.binding_location(name),
+    ) {
+        (Some(lit), Some(input)) => lit != input,
+        _ => false,
+    }
 }
 
 fn scopes_of(tv: TaggedValue, heap: &Heap) -> ScopeSet {
