@@ -88,7 +88,7 @@ use std::path::{Path, PathBuf};
 /// does not require editing Rust; lowering one still does.
 const SUITE: &[(&str, i64)] = &[
     ("control/apply.scm", 5),
-    ("control/callability.scm", 30),
+    ("control/callability.scm", 31),
     ("control/case-lambda.scm", 20),
     ("control/cps-features.scm", 107),
     ("control/guard.scm", 22),
@@ -127,7 +127,7 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/quasiquote-templates.scm", 75),
     ("expansion/syntax-rules.scm", 37),
     ("expansion/syntax-rules-literals.scm", 30),
-    ("expansion/template-references.scm", 21),
+    ("expansion/template-references.scm", 23),
     ("reader/at-identifiers.scm", 11),
     ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),

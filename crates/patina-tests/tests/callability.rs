@@ -230,13 +230,12 @@ fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
 /// is the kind of claim this file exists to distrust: the prompt body only
 /// *became* a caller in issue #179, and inherited the hole in silence.
 ///
-/// **VM-only assertions, and not because the tree-walker disagrees about the
-/// answer.** Each of these names a control primitive in value position, which
-/// the tree-walker resolves through a registry binding that is not there —
-/// the hole `tests/scheme/control/callability.scm`'s "call/cc bound to a
-/// variable" and its two neighbours already pin, still Q2 part 1's to fix. Pinning three more rows
-/// of that one family here would just be three more things to collapse when
-/// it lands.
+/// **Asserted on both backends since #441.** They were VM-only while the
+/// tree-walker could not take `call/cc` as a value: its CPS transform claimed
+/// the primitive by the spelling of a call, so a reference in value position
+/// reached a registry binding that is not there. The call sites named here
+/// are the VM's; on the tree-walker the same programs go through
+/// `CallbackContext` and the apply-time match in `cps_eval/application.rs`.
 ///
 /// Every row was measured against `main` at `30e0bd6` before the fix: each was
 /// `Undefined variable: patina.internal.control/…`, or the `Internal error`
@@ -253,22 +252,19 @@ fn test_procedure_p_is_wider_than_the_sites_that_require_a_procedure() {
 #[test]
 fn every_frameless_call_site_takes_a_control_primitive() {
     // `call/cc`'s own procedure argument, given `call/cc`.
-    assert_eq!(eval_program_vm("(procedure? (call/cc call/cc))"), "#t");
+    assert_program_eval_to("(procedure? (call/cc call/cc))", "#t");
     // A parameter converter, the one caller that must have its value
     // synchronously, so it runs a nested dispatch loop for a callee that
     // pushed a frame. The converter runs on the initial value too (R7RS 4.2.6).
-    assert_eq!(
-        eval_program_vm("(define q (make-parameter (lambda (k) 5) call/cc))\n(q)"),
-        "5"
+    assert_program_eval_to(
+        "(define q (make-parameter (lambda (k) 5) call/cc))\n(q)",
+        "5",
     );
     // A higher-order primitive's callback, which re-enters the VM from Rust:
     // `assoc`'s and `member`'s comparator. `(apply + '(1 2))` is 3, so the
     // first entry matches.
-    assert_eq!(
-        eval_program_vm("(assoc + (list (list '(1 2))) apply)"),
-        "((1 2))"
-    );
-    assert_eq!(eval_program_vm("(member + (list '(1 2)) apply)"), "((1 2))");
+    assert_program_eval_to("(assoc + (list (list '(1 2))) apply)", "((1 2))");
+    assert_program_eval_to("(member + (list '(1 2)) apply)", "((1 2))");
 }
 
 /// A wind thunk does reach the probe — it just cannot satisfy it.

@@ -147,25 +147,23 @@ fn every_exported_primitive_can_be_dispatched() {
     /// Per backend, because the sets can genuinely differ — and a difference
     /// is what this test is for. Today they are the same six names: the VM
     /// matches them in `vm_control_primitive`, the tree-walker in
-    /// `cps_eval/application.rs` and the CPS transform. Until 2026-09-04 the
+    /// `cps_eval/application.rs`. Until 2026-09-04 the
     /// tree-walker claimed four and *registered* the two prompt names with a
     /// deliberate not-implemented error (#170); issue #169 gave it the
     /// implementation and deleted the registration, and the two moved here.
     ///
     /// Being on a list means "not undispatchable", not "works everywhere":
     ///
-    /// - `apply`, `dynamic-wind`, `call-with-continuation-prompt` and
-    ///   `abort-current-continuation` are claimed at **apply** time, by a
-    ///   short-name match on `Procedure::Primitive` (the VM's
-    ///   `vm_control_primitive`, the tree-walker's `cps_eval/application.rs`),
-    ///   so they work in head *and* value position on both backends.
-    /// - `call/cc` and `call-with-current-continuation` are claimed
-    ///   **syntactically** on the tree-walker, in `cps_transform.rs`'s
-    ///   `is_callcc_reference`, so `(define f call/cc)` then `(f …)` still
-    ///   reaches a registry miss there. That is #169's defect in another
-    ///   place, already pinned as `tests/scheme/control/callability.scm`'s
-    ///   "call/cc bound to a variable" row under Track Q §1.2, so it is excluded here
-    ///   rather than counted twice.
+    /// - All six are claimed at **apply** time, by a match on
+    ///   `Procedure::Primitive` (the qualified name in the VM's
+    ///   `vm_control_primitive`, the short name in the tree-walker's
+    ///   `cps_eval/application.rs`), so they work in head *and* value
+    ///   position on both backends. `call/cc` and
+    ///   `call-with-current-continuation` joined the others on the tree-walker
+    ///   with #441: the CPS transform had claimed them *syntactically*, so
+    ///   `(define f call/cc)` then `(f …)` reached a registry miss there.
+    ///   `tests/scheme/control/callability.scm`'s "call/cc in value position"
+    ///   rows are what pin that.
     ///
     /// A name added to either list owes a pin somewhere for whatever it does
     /// *not* do.

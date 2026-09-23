@@ -8,10 +8,12 @@
 //! The short-name match below is where this backend claims its control
 //! primitives, and it claims them at *apply* time: the match sees the
 //! primitive whatever name reached it, so `(define dw dynamic-wind)` and
-//! `(dw …)` work. `call/cc` is the one exception — the CPS transform claims
-//! it syntactically (`is_callcc_reference`), which is why it does not work as
-//! a value (Track Q §1.2). The VM claims the same names, plus `values` and
-//! `call-with-values`, by qualified name in `vm_control_primitive`.
+//! `(dw …)` work. `call/cc` is claimed here too since #441; the CPS
+//! transform used to claim it syntactically, by the spelling of the call's
+//! operator, so the value did not work as a procedure and a variable of that
+//! spelling was taken for it (Track Q §1.2). The VM claims the same names,
+//! less `force` and plus `values`, by qualified name in
+//! `vm_control_primitive`.
 
 use super::CpsEvaluator;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
@@ -168,6 +170,15 @@ impl<'a> CpsEvaluator<'a> {
                     // Helper methods now take Vec<TaggedValue> directly
                     match *name {
                         "call-with-values" => self.apply_call_with_values(
+                            args,
+                            cont,
+                            cont_env,
+                            prompt_stack,
+                            dynamic_winds,
+                            exception_handlers,
+                        ),
+
+                        "call-with-current-continuation" | "call/cc" => self.apply_call_cc(
                             args,
                             cont,
                             cont_env,
@@ -426,6 +437,55 @@ impl<'a> CpsEvaluator<'a> {
             dynamic_winds,
             exception_handlers,
         )
+    }
+
+    /// `(call/cc proc)`: capture the continuation this call returns to, with
+    /// the machine state it carries, and apply `proc` to it.
+    ///
+    /// The whole of this backend's `call/cc` since #441. It was a `CallCC`
+    /// node the CPS transform made of any call *spelled* `call/cc`, which
+    /// left the value itself unimplemented and took a variable of that
+    /// spelling for the procedure. Here it is claimed by the value, like
+    /// every other control primitive in the match above.
+    fn apply_call_cc(
+        &self,
+        args: Vec<TaggedValue>,
+        cont: ContValue,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<StepResult, EvalError> {
+        if args.len() != 1 {
+            return self.maybe_route_error_through_cps(
+                EvalError::WrongArity {
+                    expected: "1".to_string(),
+                    actual: args.len(),
+                },
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
+        }
+        let captured = self.reify_continuation_tagged(
+            &cont,
+            &cont_env,
+            &dynamic_winds,
+            &exception_handlers,
+            &prompt_stack,
+        );
+        Ok(StepResult::ApplyProc {
+            proc: args[0],
+            args: vec![captured],
+            cont,
+            env: self.evaluator.global_env.clone(),
+            cont_env,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        })
     }
 
     fn apply_dynamic_wind(

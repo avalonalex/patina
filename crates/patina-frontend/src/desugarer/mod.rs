@@ -1218,11 +1218,11 @@ impl Desugarer {
     /// - By name it reaches, from here and from the root alike, the very
     ///   location the macro's own environment reaches: an import of the use
     ///   site's that is the binding the template meant.
-    /// - It is not one of the four names `patina_core::by_spelling` lists,
-    ///   which the tree-walker's CPS transform and the VM's code generator
-    ///   recognise from the name on the `Var` this becomes. (`apply` is not
-    ///   among them since #443: its lowering asks what the head is bound to,
-    ///   so a renamed `apply` is only an unlowered call.)
+    /// - It is not one of the names `patina_core::by_spelling` lists, which
+    ///   the VM's code generator recognises from the name on the `Var` this
+    ///   becomes. (`apply` and `call/cc` are not among them since #443 and
+    ///   #441: each is claimed by what it is bound to, so a renamed `apply`
+    ///   only loses its lowering and a renamed `call/cc` loses nothing.)
     ///
     /// The alias is `Environment::import_alias`: an ordinary forwarded slot
     /// for the same location, one per imported name rather than one per

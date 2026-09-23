@@ -41,7 +41,8 @@ impl<'a> CpsEvaluator<'a> {
                 // safe: `CpsExprKind::ContRef` is constructed nowhere outside
                 // a `patina-core` unit test, so neither this arm nor
                 // `eval_one_step`'s runs. The live `call/cc` reification is
-                // `step.rs`'s `CallCC` arm, which passes the real stack.
+                // `application.rs`'s `apply_call_cc`, which passes the real
+                // stack.
                 //
                 // A stored empty stack is not "no opinion" — since re-entry
                 // restores whatever is stored, it *erases* the caller's

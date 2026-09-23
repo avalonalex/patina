@@ -28,11 +28,12 @@
 //! - `Set` - Mutation
 //! - `Define` - Definition
 //!
-//! **Control operators**:
-//! - `CallCC` - Capture current continuation
-//!
+//! **Other forms**:
 //! - `PrimOp` - Primitive operations
 //! - `Halt` - Program termination
+//!
+//! There is no control-operator form: `call/cc`, `dynamic-wind` and the
+//! prompt API are primitives claimed when they are applied (`application.rs`).
 //!
 //! # Continuation Representation
 //!

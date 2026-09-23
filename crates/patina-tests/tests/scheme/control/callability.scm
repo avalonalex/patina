@@ -216,12 +216,12 @@
 
 ;; A continuation reached through `apply`, on both backends.
 ;;
-;; Kept separate because it is easy to conflate with the one case still failing
-;; on the tree-walker, and it was conflated once: this was first written as a
-;; pinned divergence, and `assert_divergence` rejected it. What the tree-walker
-;; still fails is `(apply call/cc …)` — `call/cc` *as apply's callee*, resolved
-;; by name in value position — not a continuation object, which it invokes here
-;; fine. That one is pinned as the "apply on call/cc" row at the end of this file.
+;; Kept separate because it is easy to conflate with `(apply call/cc …)` —
+;; `call/cc` *as apply's callee* — and it was conflated once: this was first
+;; written as a pinned divergence, and `assert_divergence` rejected it. The
+;; tree-walker invoked a continuation object here fine all along; it was the
+;; other that failed there, until #441. That one is the "apply on call/cc" row
+;; at the end of this file.
 (test-equal "apply invokes a continuation" 42
   (call/cc (lambda (k) (let ((f apply)) (f k '(42))))))
 
@@ -259,50 +259,48 @@
 (test-equal "the producer is the same dispatcher" '()
   (call-with-values values list))
 
-;; ── `call/cc` in value position (Track Q §1.2) ───────────────────────────────
+;; ── `call/cc` in value position (Track Q §1.2, #441) ─────────────────────────
 ;;
 ;; Migrated from `crates/patina-tests/tests/backend_divergence.rs` (#193),
-;; where they were `assert_divergence` quarantines. Each row asserts the
-;; answer R7RS requires; the line above it names the backend known to get it
-;; wrong, using the feature identifier that backend advertises (see
-;; `docs/TEST_ORGANIZATION.md`). The driver fails the run the day that
-;; backend starts passing, and the fix is to delete the line.
+;; where they were `assert_divergence` quarantines, and held here as rows the
+;; tree-walker was expected to fail until #441 fixed them.
 ;;
-;; Shared root cause: R7RS §6.10 makes `call/cc` an ordinary procedure, but
-;; the tree-walker claims it *syntactically* (`cps_transform.rs`'s
-;; `is_callcc_reference`), so a reference in value position falls through to a
-;; registry binding that is not there — `Undefined variable:
-;; patina.internal.control/call/cc`. It works when called directly, which is
-;; why the 1226/1226 chibi suite never catches it: that suite never takes
-;; `call/cc` as a value. Q2 part 1 is the fix — a real binding behind the name.
-;; chibi and Gauche answer every row below as the VM does.
+;; R7RS §6.10 makes `call/cc` an ordinary procedure, but the tree-walker
+;; claimed it *syntactically*: the CPS transform made a `CallCC` node of any
+;; call spelled `call/cc`, and that node was the only implementation there
+;; was. A reference in value position fell through to a registry binding that
+;; was not there — `Undefined variable: patina.internal.control/call/cc` — and
+;; a variable of the spelling was taken for the primitive (the "a parameter
+;; named call/cc" row). It worked when called directly, which is why the
+;; 1226/1226 chibi suite never caught it: that suite never takes `call/cc` as
+;; a value. The evaluator claims the primitive by its value when it is applied
+;; now, as it does every other control procedure. chibi and Gauche answer
+;; every row below as both backends do.
 ;;
-;; The first shape is `define`-bound, as Track Q §1.2 names it: the top-level
-;; `define` itself succeeds on the tree-walker (the registry miss is raised
-;; at the *call*, which the row's own assertion catches), so the binding can
-;; stay a global and the row still costs one expected failure rather than the
-;; file. A `let` would pass the same test while never storing a control
-;; primitive into a global slot.
+;; The first shape is `define`-bound, as Track Q §1.2 names it, so the value
+;; is stored into a global slot; a `let` would never do that.
 
 (define callcc-as-value call/cc)
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
 (test-equal "call/cc bound with define" 1
   (callcc-as-value (lambda (k) 1)))
 
-;; Same root cause, kept separate because passing a control operator *through
-;; a higher-order procedure* is the shape real code hits (SRFI 1).
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+;; Kept separate because passing a control operator *through a higher-order
+;; procedure* is the shape real code hits (SRFI 1).
 (test-equal "call/cc passed to a higher-order procedure" '(6)
   (map (lambda (f) (f (lambda (k) 6))) (list call/cc)))
 
 ;; Was "fails on both", recorded so Q2 would not mistake backend *agreement*
-;; for correctness. Half of it is fixed: the VM evaluates it to 1, as R7RS
-;; requires and as chibi does, so what was a shared gap is an ordinary
-;; divergence with the tree-walker on the wrong side — the same registry hole
-;; as the two rows above, and `apply` is simply a third way to reach it.
-(cond-expand (patina-tree-walker (test-expect-fail 1)) (else))
+;; for correctness. The VM was fixed first; `apply` is simply a third way to
+;; reach the value.
 (test-equal "apply on call/cc" 1
   (apply call/cc (list (lambda (k) 1))))
+
+;; The other face: a variable of the spelling was taken for the primitive, so
+;; the tree-walker captured a continuation and applied 5 to it — `Not a
+;; procedure: #<integer>`.
+(define (run-with-call/cc call/cc) (call/cc 5))
+(test-equal "a parameter named call/cc is the argument" '(mine 5)
+  (run-with-call/cc (lambda (x) (list 'mine x))))
 
 ;; Track Q §1.2 recorded this as a VM failure (`Wrong number of arguments:
 ;; expected 1, got 2`) at `7a6a797`; both backends return 7 as of `2d4ce29`.

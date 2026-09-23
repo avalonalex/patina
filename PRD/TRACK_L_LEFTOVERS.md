@@ -49,8 +49,7 @@ empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
 - #269 — a definition a template introduces in a body is reachable by its bare name.
-- #441 — tree-walker: `call/cc` is recognised by spelling, so it is not callable as a value and a variable of that name is taken for it.
-- #442 — VM: `call-with-values` and `dynamic-wind` are recognised by spelling, so a program's own definition is ignored and the value takes a weaker path. #441 and #442 are the four names #438's fix has to leave alone (`patina_core::by_spelling`); each one closed takes its names off that list, as #443 took `apply`'s.
+- #442 — VM: `call-with-values` and `dynamic-wind` are recognised by spelling, so a program's own definition is ignored and the value takes a weaker path. These two are the last names #438's fix has to leave alone (`patina_core::by_spelling`); closing it takes them off that list, as #443 took `apply`'s and #441 `call/cc`'s.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
 
 **Ports and I/O**
