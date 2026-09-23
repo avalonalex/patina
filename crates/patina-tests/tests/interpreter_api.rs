@@ -419,11 +419,12 @@ fn a_located_tree_walker_error_keeps_its_position_in_its_text() {
 
 /// `case` and `cond` are `syntax-rules` macros, so a malformed use could only
 /// ever fail as "no pattern matches". Each common mistake is now named, with
-/// the clause at fault (#432). Gauche rejects an `else` before `case`'s last
-/// clause; chibi accepts it and never reaches the clauses after.
+/// the clause at fault (#432). Gauche rejects an `else` before the last
+/// clause of either; chibi rejects it in `cond`, and in `case` accepts it and
+/// never reaches the clauses after.
 ///
-/// `cond` has no such rule — see the next test — so its mid-`else` is
-/// rejected as syntax used as a value, which still has to be placed.
+/// `cond`'s rule waited on #450: until a program's own `else` stopped
+/// matching the literal, it rejected the program the next test runs.
 #[test]
 fn a_malformed_case_or_cond_names_the_clause_at_fault() {
     let cases = [
@@ -452,7 +453,8 @@ fn a_malformed_case_or_cond_names_the_clause_at_fault() {
         ),
         (
             "(cond ((= 1 0) 'zero) (else 'many) ((= 1 1) 'one))",
-            "`else` is a syntactic keyword",
+            "cond: an else clause must be the last clause, and is followed by \
+             ((= 1 1) (quote one))",
         ),
     ];
     for (program, expected) in cases {
@@ -470,11 +472,11 @@ fn a_malformed_case_or_cond_names_the_clause_at_fault() {
 }
 
 /// A program that defines `else` and then writes it before `cond`'s last
-/// clause means the variable, and runs: chibi and Gauche answer 1. A rule
-/// diagnosing a mid-`else` in `cond` rejected it, because `else` still
-/// matches the macro's literal after the program defines over the import,
-/// where chibi and Gauche no longer match it (#450). Pinned so the diagnosis
-/// is not added back while that is so.
+/// clause means the variable, and runs: chibi and Gauche answer 1. #432's
+/// first draft of a rule diagnosing a mid-`else` in `cond` rejected it,
+/// because `else` still matched the macro's literal after the program defined
+/// over the import. The rule is back since #450 made the program's `else` a
+/// different binding from the literal's, and this is what it must not catch.
 #[test]
 fn a_program_defined_else_before_conds_last_clause_is_its_variable() {
     let program = "(define else 3) (cond (else 1) (#t 2))";

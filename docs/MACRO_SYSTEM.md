@@ -439,9 +439,15 @@ scope for what it binds.
 
 Two cases compare by something other than which local binding is reached:
 
-- **Globals spelled alike match**, whichever global each reaches. A library
-  macro with a `quote` literal therefore still matches a use site whose
-  `quote` is SRFI 101's.
+- **Globals spelled alike match unless they are two different bindings**
+  (`distinct_globals`, #450): both bound, at different locations
+  (`Environment::binding_location`), holding different values. A program's
+  `(define else #f)` over the import is therefore not `cond`'s `else`, and a
+  library macro's `quote` literal does not match a use site whose `quote` is
+  SRFI 101's — chibi and Gauche agree on both. The value check keeps an
+  import installed as a copy (an export `share_binding` cannot share)
+  matching the library's literal. A name bound on one side and unbound on
+  the other still matches.
 - **Globals spelled differently match by value** (`denotes_same_binding`),
   which is what lets `(rename (scheme base) (else alt))` match `else`.
 

@@ -480,9 +480,9 @@ incognito and must be split into its own PR with its own pin.
    literal and the input through `Environment::scoped_binding_of` and compares
    the local bindings they reach, which closed triage family 41 in both
    directions; `LiteralBinding`, `resolve_literal_bindings` and
-   `is_literal_shadowed_tagged` are deleted, not delegated to. Still by
-   spelling: two *global* names spelled alike match whichever globals they
-   reach, and `shadowed_names` survives for the `apply` head check alone. (b) 🟡 **Sized 2026-09-13** in
+   `is_literal_shadowed_tagged` are deleted, not delegated to. Two bound
+   *global* names spelled alike are told apart by binding since #450
+   (2026-09-22); `shadowed_names` survives for the `apply` head check alone. (b) 🟡 **Sized 2026-09-13** in
    `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" — the design
    note this item was gated on. The recorded steal defect is already fixed (the
    VM resolves such a reference to the introduced global's identity, #315). A

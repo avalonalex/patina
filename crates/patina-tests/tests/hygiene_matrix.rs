@@ -1275,6 +1275,91 @@ fn a_definition_over_an_import_does_not_capture_an_expanded_template() {
     }
 }
 
+/// A program's definition over an imported name is not the binding a
+/// library macro's *literal* of that name means (#450) — the literal-side
+/// twin of the test above. chibi 0.12 and Gauche 0.9.15 answer `2`, `lit` and
+/// `1`, measured 2026-09-22.
+///
+/// Two identifiers spelled alike and reaching no local binding were matched
+/// whatever global each reached, so after `(define else #f)` the `(else 1)`
+/// below was still `cond`'s else clause and answered `1`. The literal now
+/// matches when the two reach one location (`Environment::binding_location`),
+/// which the program's `else` stops doing once it defines over the import.
+///
+/// The other two are the controls. A macro the program defines itself sees
+/// the program's own `else` as its literal's binding, before the definition
+/// and after it, in both oracles: `lit`. And a program that never defines
+/// `else` reaches the imported keyword, as it always did.
+#[test]
+fn a_definition_over_an_import_is_not_a_library_macros_literal() {
+    let over_the_import = "(import (scheme base))\n(define else #f)\n\
+                           (cond (#f 0) (else 1) (#t 2))";
+    let the_programs_own_macro = "(import (scheme base))\n\
+                                  (define-syntax m\n  \
+                                  (syntax-rules (else) ((_ else) 'lit) ((_ x) 'var)))\n\
+                                  (define else #f)\n(m else)";
+    let never_defined = "(import (scheme base))\n(cond (#f 0) (else 1))";
+    for vm in [true, false] {
+        assert_eq!(
+            answer(over_the_import, vm),
+            "2",
+            "`1` is the program's `else` taken for `cond`'s keyword"
+        );
+        assert_eq!(answer(the_programs_own_macro, vm), "lit");
+        assert_eq!(answer(never_defined, vm), "1");
+    }
+}
+
+/// An import that is a *copy* still matches the exporting library's literal
+/// of that name. An export a macro introduced is one `share_binding` cannot
+/// share, so the importer holds it at a location of its own; compared by
+/// location alone, the two read as the different globals #450 tells apart,
+/// and `(m kw)` below answered `var`. Gauche 0.9.15 answers `lit`, as does
+/// chibi 0.12 with the library in a file of its own, measured 2026-09-22.
+#[test]
+fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
+    let program = "(define-library (hm introduced)\n  (import (scheme base))\n  \
+                   (export m kw)\n  (begin\n    \
+                   (define-syntax define-kw (syntax-rules () ((_) (define kw 'kw))))\n    \
+                   (define-kw)\n    \
+                   (define-syntax m (syntax-rules (kw) ((_ kw) 'lit) ((_ x) 'var)))))\n\
+                   (import (scheme base) (hm introduced))\n(m kw)";
+    for vm in [true, false] {
+        assert_eq!(
+            answer(program, vm),
+            "lit",
+            "`var` is the copied import read as a global of the program's own"
+        );
+    }
+}
+
+/// Two libraries' bindings of one spelling are two literals, not one: under
+/// SRFI 101's `quote` a library macro's `quote` literal takes its other rule.
+/// chibi 0.12 and Gauche 0.9.15 answer `other`, and `quoted` for the control,
+/// where the use site's `quote` is `(scheme base)`'s, measured 2026-09-22.
+///
+/// The global half of the spelling-based matching recorded in
+/// `scheme_tests/reports/larceny_triage.md`: two names reaching no local
+/// binding matched whenever they were spelled alike, and this answered
+/// `quoted` for both. #450's location comparison is what tells them apart.
+#[test]
+fn a_literal_is_not_another_librarys_binding_of_its_spelling() {
+    let library = "(define-library (hm q)\n  (import (scheme base))\n  (export mq)\n  \
+                   (begin\n    (define-syntax mq\n      \
+                   (syntax-rules (quote) ((_ 'x) 'quoted) ((_ y) 'other)))))\n";
+    let srfi_101 =
+        format!("{library}(import (except (scheme base) quote) (srfi 101) (hm q))\n(mq 'a)");
+    let scheme_base = format!("{library}(import (scheme base) (hm q))\n(mq 'a)");
+    for vm in [true, false] {
+        assert_eq!(
+            answer(&srfi_101, vm),
+            "other",
+            "`quoted` is SRFI 101's `quote` taken for `(scheme base)`'s"
+        );
+        assert_eq!(answer(&scheme_base, vm), "quoted");
+    }
+}
+
 /// A location both sides imported under **two names** — `string-length`, and
 /// `slen` by a `rename` — keeps its two spellings apart when a reference is
 /// bound early (#438). Gauche 0.9.15 answers `(2 introduced)` and `(3 3)`.
