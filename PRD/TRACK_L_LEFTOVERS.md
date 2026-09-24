@@ -58,7 +58,7 @@ empty, archive this page.
 - #426 — `list-copy` on a circular list never returns.
 
 **Backends**
-- #482 — VM: an `import` evaluated by `eval` or `load` imports nothing.
+- #485 — tree-walker: an `only` import set naming an identifier the library does not export is accepted.
 - #425 — tree-walker: a library body that raises is reported as a Rust debug dump.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 

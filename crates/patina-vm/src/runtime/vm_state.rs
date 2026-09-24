@@ -19,6 +19,7 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
+use patina_core::core_expr::{CoreExpr, CoreExprKind};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -922,23 +923,44 @@ pub(super) fn vm_eval_expr(
 
 /// Expand and compile the datum `expr` in `env`, as `eval` does.
 ///
+/// An `import` is done here, into `env`, as the tree-walker's `eval` and the
+/// backend's top level do it, and what is compiled is its value, unspecified:
+/// the compiler has nothing to make of an import, and compiled one to
+/// nothing, so an `import` that `eval` or `load` evaluated imported nothing
+/// (#482).
+///
 /// # State contract
 ///
 /// Reads the environment and registry; runs the expander, which may load
-/// libraries. Loads no code and pushes no frame.
+/// libraries, and for an `import` loads its libraries and binds their
+/// exports in `env`. Loads no code and pushes no frame.
 fn compile_for_eval(
-    state: &VmState,
+    state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
-    let core_expr = desugarer
+    let mut core_expr = desugarer
         .desugar_tagged(expr, &heap)
         .map_err(|e| VmError::Runtime {
             message: format!("eval: desugar error: {}", e),
         })?;
+
+    if let CoreExprKind::Import { import_sets } = &core_expr.kind {
+        for &import_set in import_sets {
+            let import_set =
+                patina_frontend::LibraryDefinition::parse_import_set_tagged(import_set, &heap)
+                    .map_err(|e| VmError::Runtime {
+                        message: format!("Invalid import set: {}", e),
+                    })?;
+            vm_process_import_set(state, &import_set, env).map_err(|e| VmError::Runtime {
+                message: e.to_string(),
+            })?;
+        }
+        core_expr = CoreExpr::new(CoreExprKind::Literal(TaggedValue::UNSPECIFIED));
+    }
 
     compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
         VmError::Runtime {
