@@ -58,7 +58,7 @@ empty, archive this page.
 - #426 — `list-copy` on a circular list never returns.
 
 **Backends**
-- #420 — VM: a primitive as a `call-with-values` consumer loses an escaping callback.
+- #469 — VM: a primitive as a prompt's body in tail position loses an escaping callback.
 - #425 — tree-walker: a library body that raises is reported as a Rust debug dump.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 

@@ -261,6 +261,29 @@ pub(super) fn spread_apply_args(
     Ok(arg_vals)
 }
 
+/// The call `(apply proc arg ... arg-list)` makes: `proc`, and the fixed
+/// arguments with the final list spread onto the end.
+///
+/// # State contract
+///
+/// Reads only the heap; returns detached arguments or an arity or
+/// improper-list error. The caller keeps them protected as for
+/// [`spread_apply_tail`].
+fn apply_call(
+    state: &VmState,
+    args: &[TaggedValue],
+) -> Result<(TaggedValue, Vec<TaggedValue>), VmError> {
+    if args.len() < 2 {
+        return Err(VmError::ArityMismatch {
+            expected: "at least 2".into(),
+            got: args.len(),
+        });
+    }
+    let mut call_args: Vec<TaggedValue> = args[1..args.len() - 1].to_vec();
+    call_args.extend(spread_apply_tail(state, *args.last().unwrap())?);
+    Ok((args[0], call_args))
+}
+
 /// `apply`'s final argument, flattened. Errors if it is not a proper list.
 ///
 /// # State contract
@@ -777,16 +800,7 @@ fn handle_control_primitive(
             // lowers `(apply f xs)` to `Instruction::Apply`. Every other route
             // arrives here — `apply` as a value, and also `(apply +)`, which
             // the desugarer's own arity check hands back to the value path.
-            if args.len() < 2 {
-                return Err(VmError::ArityMismatch {
-                    expected: "at least 2".into(),
-                    got: args.len(),
-                });
-            }
-            let callee = args[0];
-            // Fixed arguments, then the final list spread onto the end.
-            let mut call_args: Vec<TaggedValue> = args[1..args.len() - 1].to_vec();
-            call_args.extend(spread_apply_tail(state, *args.last().unwrap())?);
+            let (callee, call_args) = apply_call(state, args)?;
             // The same dispatcher `Instruction::Apply` uses, so the value form
             // and the head-position form accept the same callees.
             return call_value(state, callee, &call_args, dst);
@@ -2856,10 +2870,19 @@ pub(super) fn call_value_with_probe(
 
 /// Dispatch a call to an arbitrary callee value in tail position — the body
 /// of the `TailCall` instruction, also used by the deopt path of tail-shaped
-/// primitive sites (PRD P8.2). Control primitives, primitives, and
-/// parameters pop the frame and deliver straight to the caller; closures
-/// reuse the current frame's register window. Returns `Some(value)` when the
-/// enclosing `run_loop_until` must exit with `value`.
+/// primitive sites (PRD P8.2). Primitives and parameters run with the frame
+/// still on the stack, then pop it and deliver straight to the caller; a
+/// control primitive pops it first and is dispatched from the caller, except
+/// `apply`, which is a tail call of its procedure; closures reuse the current
+/// frame's register window. Returns `Some(value)` when the enclosing
+/// `run_loop_until` must exit with `value`.
+///
+/// **A primitive runs before the frame is popped** because that is how an
+/// escape out of its callback is told (`across_reentry`): the continuation
+/// restores a shallower stack than the callback started on. Popped first, the
+/// primitive stands at the depth of this frame's caller, which is exactly
+/// where a continuation captured just outside the tail call restores to, and
+/// the escape reads as the callback returning (#420).
 ///
 /// # State contract
 ///
@@ -2899,6 +2922,17 @@ pub(super) fn tail_call_value_with_probe(
         // returned"), then dispatch the primitive as if called from the
         // parent frame.
         if let Some(ctrl) = vm_control_primitive(state, func_val) {
+            // `apply` in tail position is a tail call of its procedure, and
+            // goes the way that tail call would, with this frame still on the
+            // stack. Popping it first ran a primitive procedure at the depth
+            // of this frame's caller, where a continuation its callback
+            // invokes restores to — `across_reentry` saw no shallower stack,
+            // and `((as-value apply) member (list 2 lst esc))` inside a
+            // `call/cc` lost the escape its comparator made (#420).
+            if ctrl == VmControlPrimitive::Apply {
+                let (callee, call_args) = apply_call(state, arg_vals)?;
+                return tail_call_value(state, callee, &call_args, exit_depth);
+            }
             let frame = state.frames.pop().expect("tail call ctrl with empty stack");
             let return_reg = frame.return_reg;
             state.free_top_registers(frame.register_base);

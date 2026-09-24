@@ -13,10 +13,14 @@
 //! `ContinuationEscape` so the primitive unwinds through its own `?`, and the
 //! dispatch loop takes the value from there.
 //!
-//! **One shape is still wrong** — a primitive used as a `call-with-values`
-//! *consumer*, whose callback escapes; the frame-depth check structurally
-//! cannot see it. Diagnosis in `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` §6. Do not
-//! read this file as the class being closed.
+//! The escape is told by frame depth: the continuation restores a shallower
+//! stack than the callback started on. That holds only while the primitive
+//! runs with its caller's frame on the stack, and two tail-position routes
+//! popped the frame first — a `call-with-values` consumer and `apply` called
+//! as a value — which put the primitive at the very depth the continuation
+//! restores to, and the escape went unseen (#420, fixed 2026-09-23; the rows
+//! are in `cps-features.scm`). A third, a primitive as a prompt's body in
+//! tail position, is #469.
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!

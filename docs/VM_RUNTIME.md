@@ -751,6 +751,17 @@ Notes on the cells that are not a plain yes:
   to, and an error nothing handles while the travel's stub frames are still on
   the stack is reported and still ends the process: `execute` finds the exit
   in the frames (`exit_in_progress`) and notes it for the runner.
+- **A primitive runs with its caller's frame on the stack, even in tail
+  position.** An escape out of its callback is told by frame depth
+  (`across_reentry`): the continuation restores a shallower stack than the
+  callback started on. A primitive run after its tail frame is popped stands
+  at the depth of that frame's caller, which is where a continuation captured
+  just outside the tail call restores to, and the escape reads as the callback
+  returning. So `tail_call_value` runs a primitive before the pop, and the two
+  routes that forward to a procedure in tail position go through it — a
+  `call-with-values` consumer (`TailCallWithValues`) and `apply` as a value
+  (#420). A primitive as a prompt's body in tail position still runs after
+  the pop (#469)
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.
