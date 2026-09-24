@@ -781,8 +781,8 @@ Notes on the cells that are not a plain yes:
   `map` and `for-each`) or, on the VM, run the callee as a frame of the
   machine (`force`, a control primitive with a stub since #476; a parameter's
   converter, the call of a resumable primitive in `resume_stub`'s frame since
-  #478), and the one still a primitive is wrong there — `eval`/`load`
-  (#477). #420
+  #478; `eval`'s and `load`'s code, a closure over the compiled datum that
+  the same frame calls since #477). #420
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it

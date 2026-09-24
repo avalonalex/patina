@@ -541,7 +541,7 @@ pub enum Instruction {
     /// the top with the new callee, arguments and state, in the stub for
     /// their count.
     ///
-    /// The general form of what `ResumeForce` does for `force` (#478):
+    /// The general form of what `ResumeForce` does for `force` (#477, #478):
     /// a primitive that has to call a procedure the program gave it and then
     /// carry on hands the call to the machine (`patina_primitives::Step`),
     /// and this frame is where the rest of the primitive waits. A

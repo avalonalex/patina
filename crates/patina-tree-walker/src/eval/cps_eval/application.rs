@@ -24,6 +24,19 @@ use patina_core::{DynamicWindRecord, Procedure};
 use patina_core::{Environment, ScopedParam};
 use std::rc::Rc;
 
+/// The continuation variable a `Step::Eval`'s expression delivers its value
+/// to, bound to the primitive's `ResumePrimitive` continuation. Not a name
+/// the transform's gensyms (`k_N`) can take.
+const EVAL_K: &str = "%eval-k";
+
+/// What [`CpsEvaluator::eval_step`] made of a datum.
+enum EvalStep {
+    /// A CPS expression to run, delivering to [`EVAL_K`].
+    Run(Rc<patina_core::CpsExpr>),
+    /// Already evaluated.
+    Value(TaggedValue),
+}
+
 impl<'a> CpsEvaluator<'a> {
     /// Apply a CPS procedure (returns StepResult for trampolining)
     #[allow(clippy::too_many_arguments)]
@@ -950,7 +963,7 @@ impl<'a> CpsEvaluator<'a> {
         };
 
         // A resumable primitive hands its calls to this machine rather than
-        // making them from Rust (`patina_primitives::Step`, #478).
+        // making them from Rust (`patina_primitives::Step`, #477, #478).
         let resumable = self
             .evaluator
             .primitive_registry
@@ -1102,6 +1115,42 @@ impl<'a> CpsEvaluator<'a> {
                 dynamic_winds,
                 exception_handlers,
             }),
+            Ok(patina_primitives::Step::Eval { expr, env, state }) => {
+                let resume = |cont| ContValue::ResumePrimitive {
+                    index,
+                    state,
+                    original_cont: Box::new(cont),
+                };
+                match self.eval_step(expr, &env) {
+                    // On this trampoline, under a continuation environment
+                    // of its own that binds only where its value goes.
+                    Ok(EvalStep::Run(expr)) => Ok(StepResult::Continue {
+                        expr,
+                        env,
+                        cont_env: ContEnv::new().insert(EVAL_K.into(), resume(cont)),
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    }),
+                    Ok(EvalStep::Value(value)) => Ok(StepResult::InvokeContinuation {
+                        cont: resume(cont),
+                        value,
+                        env: self.evaluator.global_env.clone(),
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    }),
+                    Err(err) => self.maybe_route_error_through_cps(
+                        err,
+                        cont,
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    ),
+                }
+            }
             Err(err) if declined_by_every_handler => Err(super::exceptions::unhandled(
                 err,
                 &cont,
@@ -1117,6 +1166,19 @@ impl<'a> CpsEvaluator<'a> {
                 exception_handlers,
             ),
         }
+    }
+
+    /// A `Step::Eval`'s datum made ready for this trampoline: expanded, and
+    /// transformed to deliver its value to [`EVAL_K`] — or, for an `import`,
+    /// which the transform does not take, done here and its value.
+    fn eval_step(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<EvalStep, EvalError> {
+        let core = super::callback::expand_for_eval(self.evaluator, expr, env)?;
+        if let patina_core::CoreExprKind::Import { .. } = &core.kind {
+            // An import touches no dynamic state; the plain entry handles it.
+            return super::eval_cps(&core, env.clone(), self.evaluator).map(EvalStep::Value);
+        }
+        let cps = patina_ir::CpsTransformer::new().transform(&core, &EVAL_K.into());
+        Ok(EvalStep::Run(Rc::new(cps)))
     }
 
     #[allow(clippy::too_many_arguments)]

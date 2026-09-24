@@ -1294,6 +1294,30 @@ impl Heap {
         }
     }
 
+    /// The code id a VM closure holds once [`Heap::retire_vm_closure`] has
+    /// retired it: no code object has it, and a collection that frees the
+    /// closure reports it so the VM can pass over it.
+    pub const RETIRED_VM_CLOSURE_CODE: u64 = u64::MAX;
+
+    /// Retire the VM closure `val`: give up its claim on its code, returning
+    /// the code id it held, or `None` if it is not a closure or was retired
+    /// already. For a closure the VM made to be called once and will not call
+    /// again — `eval`'s, whose code it then lets go as soon as nothing else
+    /// needs it, rather than when a collection frees the closure (#477).
+    pub fn retire_vm_closure(&mut self, val: TaggedValue) -> Option<u64> {
+        if !val.is_object() {
+            return None;
+        }
+        match &mut self.objects[val.heap_index() as usize] {
+            HeapObjectData::VmClosure { code_id, .. }
+                if *code_id != Self::RETIRED_VM_CLOSURE_CODE =>
+            {
+                Some(std::mem::replace(code_id, Self::RETIRED_VM_CLOSURE_CODE))
+            }
+            _ => None,
+        }
+    }
+
     /// Get the globals environment from a VM closure by heap index.
     pub fn get_vm_closure_globals(
         &self,

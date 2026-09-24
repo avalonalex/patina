@@ -55,7 +55,8 @@ pub(super) fn trace_pending_escape(visitor: &mut patina_core::GcVisitor<'_>) {
 // `load`, and what the outermost loop did here before trampolines had ids.
 //
 // The kind is what makes that last rule land in the right place: a run that
-// is a form (a top-level form, or the `eval` primitive's expression) may end
+// is a form (a top-level form, or an expression `eval` runs on a run of its
+// own, which only a caller with no machine to hand it to does now) may end
 // early with a resumed chain's value; a run that is a primitive's callback
 // may not, because the primitive is waiting for the callback's value, so it
 // passes the escape up instead.
@@ -71,8 +72,10 @@ thread_local! {
 /// What a run of the loop is *for*, which decides what its `Halt` means.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum TrampolineKind {
-    /// A form: `Halt` is the form's value. A top-level form, or the
-    /// expression the `eval` primitive was handed.
+    /// A form: `Halt` is the form's value. A top-level form, or an
+    /// expression `eval` runs on a run of its own — only for a caller with
+    /// no machine to hand it to; `eval` itself runs its datum on the
+    /// trampoline it is on (`Step::Eval`, #477).
     Form,
     /// A primitive's callback: `Halt` is the value the primitive is waiting
     /// for.

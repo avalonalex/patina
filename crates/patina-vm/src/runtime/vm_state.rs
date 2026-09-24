@@ -441,7 +441,7 @@ impl VmState {
     }
 
     /// A closure was made of the code `id`.
-    fn note_closure_made(&self, id: CodeObjectId) {
+    pub(super) fn note_closure_made(&self, id: CodeObjectId) {
         let code = self.loaded_code(id);
         // The code making the closure is running, and a unit is let go only
         // whole, so the closure's own code is loaded; a count missed here
@@ -453,6 +453,22 @@ impl VmState {
         if let Some(code) = code {
             code.live_closures.set(code.live_closures.get() + 1);
         }
+    }
+
+    /// Retire `closure`, the closure a `Step::Eval` compiled, once its call
+    /// has returned (`Heap::retire_vm_closure`): count it down, and let go of
+    /// its unit if nothing else needs it — a frame, a continuation, or a
+    /// closure its code made. Nothing if it was retired already.
+    pub(super) fn retire_eval_closure(&mut self, closure: TaggedValue) {
+        let Some(id) = self.heap.borrow_mut().retire_vm_closure(closure) else {
+            return;
+        };
+        let id = CodeObjectId(id);
+        if let Some(code) = self.loaded_code(id) {
+            code.live_closures
+                .set(code.live_closures.get().saturating_sub(1));
+        }
+        self.release_unit_if_unused(id);
     }
 
     /// After a collection: count down the closures it freed, and let go of
@@ -467,6 +483,10 @@ impl VmState {
     fn after_collection(&mut self) {
         let freed = self.heap.borrow_mut().take_gc_freed_closure_code_ids();
         for id in freed {
+            if id == patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE {
+                // Counted down when it was retired.
+                continue;
+            }
             let id = CodeObjectId(id);
             let code = self.loaded_code(id);
             // Counted when it was made, and its code kept while it lived.
@@ -864,29 +884,19 @@ fn vm_process_import_set(
 
 /// Evaluate a datum expression in the given environment using the VM.
 ///
-/// Used by the `eval` primitive. Swaps `state.globals` to the given
-/// environment, executes in the main VmState using `execute_nested`
-/// (which respects the current frame depth), then restores globals.
+/// `VmApplyContext::eval_expr`: for a caller with no frame to run the code
+/// in, which runs a resumable primitive's `Step::Eval` synchronously. The
+/// `eval` primitive itself has its datum run as a frame ([`eval_closure`],
+/// #477), since a continuation cannot carry this Rust frame. Swaps
+/// `state.globals` to the given environment, executes in the main VmState
+/// using `execute_nested` (which respects the current frame depth), then
+/// restores globals.
 pub(super) fn vm_eval_expr(
     state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<TaggedValue, VmError> {
-    let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
-    let heap = state.globals.heap().clone();
-
-    let core_expr = desugarer
-        .desugar_tagged(expr, &heap)
-        .map_err(|e| VmError::Runtime {
-            message: format!("eval: desugar error: {}", e),
-        })?;
-
-    let (top, nested) =
-        compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(
-            |e| VmError::Runtime {
-                message: format!("eval: compile error: {}", e),
-            },
-        )?;
+    let (top, nested) = compile_for_eval(state, expr, env)?;
 
     // Swap globals to the eval environment, execute in the main state,
     // then restore. This keeps continuations and code objects valid.
@@ -908,6 +918,58 @@ pub(super) fn vm_eval_expr(
     state.globals = saved_globals;
 
     result
+}
+
+/// Expand and compile the datum `expr` in `env`, as `eval` does.
+///
+/// # State contract
+///
+/// Reads the environment and registry; runs the expander, which may load
+/// libraries. Loads no code and pushes no frame.
+fn compile_for_eval(
+    state: &VmState,
+    expr: TaggedValue,
+    env: &Rc<Environment>,
+) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
+    let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
+    let heap = state.globals.heap().clone();
+
+    let core_expr = desugarer
+        .desugar_tagged(expr, &heap)
+        .map_err(|e| VmError::Runtime {
+            message: format!("eval: desugar error: {}", e),
+        })?;
+
+    compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
+        VmError::Runtime {
+            message: format!("eval: compile error: {}", e),
+        }
+    })
+}
+
+/// The datum `expr`, compiled in `env`, as a closure of no arguments whose
+/// globals are `env`: what a resumable primitive's `Step::Eval` has its stub
+/// frame call (#477). Its frames read and define `env`'s globals as any
+/// closure's do, so nothing is swapped, and its code lives as long as the
+/// closure or a frame running it, as any unit's does.
+///
+/// # State contract
+///
+/// Loads the compiled unit and allocates the closure; pushes no frame and
+/// runs no Scheme code.
+pub(super) fn eval_closure(
+    state: &mut VmState,
+    expr: TaggedValue,
+    env: &Rc<Environment>,
+) -> Result<TaggedValue, VmError> {
+    let (top, nested) = compile_for_eval(state, expr, env)?;
+    let top_id = state.load_unit(top, nested);
+    let closure = state
+        .heap
+        .borrow_mut()
+        .alloc_vm_closure(top_id.0, Vec::new(), env.clone());
+    state.note_closure_made(top_id);
+    Ok(closure)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
