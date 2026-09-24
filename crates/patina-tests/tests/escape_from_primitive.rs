@@ -35,7 +35,11 @@
 //! `%parameter-convert` and `%parameter-set!` are resumable primitives
 //! (`patina_primitives::Step`), which hand the call to the VM's `resume_stub`
 //! frame or the tree-walker's `ResumePrimitive` continuation and are resumed
-//! with its result. The one still wrong there: `eval`/`load` (#477).
+//! with its result. `eval` and `load` are resumable too since #477: each hands
+//! the machine a datum to evaluate (`Step::Eval`), which the VM compiles into
+//! a closure for the stub frame to call and the tree-walker runs on the
+//! trampoline it is on, so no primitive left calls back into the program
+//! from Rust.
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!
@@ -321,5 +325,66 @@ fn test_reentering_a_file_callback_after_the_call_returned() {
                      (reenter (lambda (proc) (call-with-output-file "{output}" proc))))"#
         ),
         "((101 101 102) (101 101 102))",
+    );
+}
+
+/// Re-entering, after `eval` has returned, a continuation captured inside the
+/// code it evaluated: `eval` returns again, with the new value (#477), in and
+/// out of tail position. `eval` ran the code on a run of its own from Rust,
+/// which a continuation cannot carry: out of tail position the VM answered a
+/// stray internal `#<cell>`, and the tree-walker abandoned the form. The
+/// machine runs it now (`patina_primitives::Step::Eval`), and both answer as
+/// chibi does. Rust rather than a suite row because Gauche's
+/// `interaction-environment` does not see a script's top-level definitions.
+#[test]
+fn test_reentering_eval_after_it_returned() {
+    assert_program_eval_to(
+        r#"(import (scheme base) (scheme eval) (scheme repl))
+           (define %kk #f)
+           (define (non-tail)
+             (let ((out '()))
+               (let ((r (eval '(+ 100 (call/cc (lambda (c) (set! %kk c) 1)))
+                              (interaction-environment))))
+                 (set! out (cons r out))
+                 (if (< (length out) 3) (%kk (length out)) (reverse out)))))
+           (define (ev)
+             (eval '(+ 100 (call/cc (lambda (c) (set! %kk c) 1))) (interaction-environment)))
+           (define (tail)
+             (let ((out '()))
+               (let ((r (ev)))
+                 (set! out (cons r out))
+                 (if (< (length out) 3) (%kk (length out)) (reverse out)))))
+           (list (non-tail) (tail))"#,
+        "((101 101 102) (101 101 102))",
+    );
+}
+
+/// Re-entering, after `load` has returned, a continuation captured by a form
+/// of the loaded file: the rest of that form runs again, `load` carries on
+/// from where its file stands — at the end — and returns again (#477), as
+/// chibi's does. The tree-walker abandoned the form, `load` running each form
+/// on a run of its own. Rust because it needs a file on disk, and because
+/// Gauche loads into a module that does not see the script's definitions.
+#[test]
+fn test_reentering_a_loaded_form_after_load_returned() {
+    let dir = TempDir::new().expect("temp dir");
+    let loaded = scratch_path(&dir, "loaded.scm");
+    std::fs::write(
+        &loaded,
+        "(define lr (+ 100 (call/cc (lambda (c) (set! kk c) 1))))\n",
+    )
+    .expect("loaded file");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme load))
+               (define kk #f)
+               (define (main)
+                 (let ((out '()))
+                   (let ((r (begin (load "{loaded}") lr)))
+                     (set! out (cons r out))
+                     (if (< (length out) 3) (kk (length out)) (reverse out)))))
+               (main)"#
+        ),
+        "(101 101 102)",
     );
 }

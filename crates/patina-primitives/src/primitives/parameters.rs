@@ -17,7 +17,7 @@
 //! ```
 
 use crate::apply_context::ApplyContext;
-use crate::registry::Step;
+use crate::registry::{Step, done_with_result};
 use patina_core::TaggedValue;
 use patina_core::heap::ParameterData;
 use patina_runtime::EvalError;
@@ -118,15 +118,6 @@ pub(super) fn parameter_convert(
         // assignment, and `%parameterize-swap!` is what makes that safe.
         None => Step::Done(value),
     })
-}
-
-/// A resume that is done with what the call returned.
-pub(super) fn done_with_result(
-    _ctx: &dyn ApplyContext,
-    _state: TaggedValue,
-    result: TaggedValue,
-) -> Result<Step, EvalError> {
-    Ok(Step::Done(result))
 }
 
 /// `(%parameter-set! param value)` — what calling a parameter object with one

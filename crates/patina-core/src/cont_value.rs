@@ -258,7 +258,7 @@ pub enum ContValue {
     /// A resumable primitive's call has returned: resume the primitive at
     /// registry `index` with the `state` it kept and the value, then carry on
     /// with `original_cont` — the tree-walker's form of the VM's
-    /// `resume_stub` (`patina_primitives::Step`, #478). A continuation
+    /// `resume_stub` (`patina_primitives::Step`, #477, #478). A continuation
     /// captured in the call carries this, so re-entered after the primitive
     /// returned it resumes the primitive again.
     ResumePrimitive {

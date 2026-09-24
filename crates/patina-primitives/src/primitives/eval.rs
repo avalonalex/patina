@@ -9,7 +9,7 @@
 //! - `scheme-report-environment` - R5RS environment with all bindings
 
 use crate::apply_context::ApplyContext;
-use crate::registry::{PrimitiveFn, PrimitiveRegistry};
+use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
 use patina_core::{CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
 use patina_frontend::{Desugarer, ImportSet, LibraryDefinition};
 use patina_runtime::Arity;
@@ -195,12 +195,11 @@ fn has_top_level_definition(expr: &CoreExpr) -> bool {
 /// Evaluates an expression in the specified environment.
 /// If expr-or-def is a definition, the environment must be mutable.
 ///
-/// Uses CPS evaluation to ensure proper continuation support for lambdas
-/// created during evaluation.
-fn primitive_eval(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+/// The machine evaluates it ([`Step::Eval`]), as its own code rather than on
+/// a run of its own from Rust, so a continuation captured in it carries the
+/// caller: re-entered after `eval` has returned, it returns from `eval`
+/// again (#477).
+fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, EvalError> {
     if args.len() != 2 {
         return Err(EvalError::WrongArity {
             expected: "eval expects 2 arguments".to_string(),
@@ -243,8 +242,11 @@ fn primitive_eval(
         ));
     }
 
-    // Evaluate via CPS for full continuation support
-    ctx.eval_expr(args[0], &env)
+    Ok(Step::Eval {
+        expr: args[0],
+        env,
+        state: TaggedValue::UNSPECIFIED,
+    })
 }
 
 /// R5RS syntactic keywords (special forms)
@@ -669,16 +671,32 @@ fn primitive_scheme_report_environment(
     Ok(heap.borrow_mut().alloc_environment_specifier(env, false))
 }
 
+/// The state `load` keeps between the forms of its file, a vector: the forms
+/// still to evaluate, the parse error that ends them (a string) or `#f`, and
+/// the environment specifier they are evaluated in.
+///
+/// Every continuation captured in a form shares it, so one captured in an
+/// earlier form and re-entered from a later one carries on with the form
+/// after the one that re-entered it — the position of the port chibi's
+/// `load` reads from, and what `escape_from_primitive.rs` checks.
+mod load_state {
+    pub(super) const FORMS: usize = 0;
+    pub(super) const ERROR: usize = 1;
+    pub(super) const ENV: usize = 2;
+}
+
 /// (load filename) → unspecified
 /// (load filename environment-specifier) → unspecified
 ///
 /// Reads and evaluates all expressions from the given file.
 /// If an environment specifier is given, evaluates in that environment;
 /// otherwise uses the interaction environment.
-fn primitive_load(
-    ctx: &dyn ApplyContext,
-    args: Vec<TaggedValue>,
-) -> Result<TaggedValue, EvalError> {
+///
+/// The machine evaluates each form ([`Step::Eval`]), as `eval` has it do,
+/// and resumes this with the next (#477). The file is parsed first, to the
+/// end or to a parse error, which is raised once the forms before it have
+/// run — where reading form by form raised it.
+fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
             expected: "load expects 1 or 2 arguments".to_string(),
@@ -699,20 +717,19 @@ fn primitive_load(
         })?
     };
 
-    // Get the environment to evaluate in
-    let env = if args.len() == 2 {
+    // The environment to evaluate in, as a specifier the state can hold.
+    let env_spec = if args.len() == 2 {
         let heap_ref = heap.borrow();
-        match heap_ref.get_environment_specifier(args[1]) {
-            Some((env, _mutable)) => env.clone(),
-            None => {
-                return Err(EvalError::TypeError(format!(
-                    "load: expected environment, got {}",
-                    heap_ref.type_name(args[1])
-                )));
-            }
+        if heap_ref.get_environment_specifier(args[1]).is_none() {
+            return Err(EvalError::TypeError(format!(
+                "load: expected environment, got {}",
+                heap_ref.type_name(args[1])
+            )));
         }
+        args[1]
     } else {
-        ctx.interaction_environment()
+        let env = ctx.interaction_environment();
+        heap.borrow_mut().alloc_environment_specifier(env, true)
     };
 
     // Read the file
@@ -721,28 +738,60 @@ fn primitive_load(
         .read_to_string(std::path::Path::new(&filename))
         .map_err(|e| EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)))?;
 
-    // Parse and evaluate all expressions
-    let mut parser =
-        patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
-            EvalError::InvalidSyntax(format!("load: parse error in '{}': {}", filename, e))
-        })?;
-
-    loop {
+    let parse_error = |e: &dyn std::fmt::Display| format!("load: parse error in '{filename}': {e}");
+    let mut parser = patina_frontend::Parser::new_with_heap(&content, heap.clone())
+        .map_err(|e| EvalError::InvalidSyntax(parse_error(&e)))?;
+    let mut forms = Vec::new();
+    let error = loop {
         match parser.parse_next() {
-            Ok(Some(expr)) => {
-                ctx.eval_expr(expr, &env)?;
-            }
-            Ok(None) => break,
-            Err(e) => {
-                return Err(EvalError::InvalidSyntax(format!(
-                    "load: parse error in '{}': {}",
-                    filename, e
-                )));
-            }
+            Ok(Some(expr)) => forms.push(expr),
+            Ok(None) => break None,
+            Err(e) => break Some(parse_error(&e)),
         }
-    }
+    };
 
-    Ok(TaggedValue::UNSPECIFIED)
+    let state = {
+        let mut heap = heap.borrow_mut();
+        let forms = heap.list_from_iter(forms);
+        let error = match error {
+            Some(message) => heap.alloc_string(message),
+            None => TaggedValue::FALSE,
+        };
+        heap.alloc_vector(vec![forms, error, env_spec])
+    };
+    load_next(ctx, state, TaggedValue::UNSPECIFIED)
+}
+
+/// `load`'s next step: evaluate the next form of its file, raise the parse
+/// error that ends them, or finish. What a form returned is not used.
+fn load_next(
+    ctx: &dyn ApplyContext,
+    state: TaggedValue,
+    _result: TaggedValue,
+) -> Result<Step, EvalError> {
+    let heap = ctx.heap();
+    let (forms, error, env_spec) = {
+        let heap = heap.borrow();
+        (
+            heap.vector_ref(state, load_state::FORMS),
+            heap.vector_ref(state, load_state::ERROR),
+            heap.vector_ref(state, load_state::ENV),
+        )
+    };
+    let next = heap.borrow().try_pair(forms);
+    if let Some((expr, rest)) = next {
+        heap.borrow_mut().vector_set(state, load_state::FORMS, rest);
+        let env = heap
+            .borrow()
+            .get_environment_specifier(env_spec)
+            .map(|(env, _)| env.clone())
+            .ok_or_else(|| EvalError::InternalError("load: lost its environment".into()))?;
+        return Ok(Step::Eval { expr, env, state });
+    }
+    if let Some(message) = heap.borrow().get_string_contents(error) {
+        return Err(EvalError::InvalidSyntax(message));
+    }
+    Ok(Step::Done(TaggedValue::UNSPECIFIED))
 }
 
 /// (interaction-environment) → environment-specifier
@@ -776,12 +825,13 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // eval - evaluate expression in environment
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.eval",
         "eval",
         Arity::Exact(2),
         "Evaluates an expression in the specified environment.",
         primitive_eval,
+        done_with_result,
     ));
 
     // null-environment - R5RS environment with only syntactic keywords
@@ -803,12 +853,13 @@ pub fn register(registry: &mut PrimitiveRegistry) {
     ));
 
     // load - read and evaluate a file (scheme load library)
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "patina.internal.eval",
         "load",
         Arity::Range(1, 2),
         "Reads and evaluates all expressions from a file.",
         primitive_load,
+        load_next,
     ));
 
     // interaction-environment - return the REPL/global environment (scheme repl library)

@@ -80,21 +80,8 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         expr: TaggedValue,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
-        use patina_frontend::Desugarer;
-
         let evaluator = self.cps.evaluator;
-        let desugarer = Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
-        // Bad syntax handed to the `eval` primitive is the caller's error,
-        // raised while the program runs — catchable, like the VM's path.
-        let core_expr = desugarer
-            .desugar_tagged(expr, evaluator.heap())
-            .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
-        // Lowered here rather than inside `eval_cps_with`: below
-        // `unhandled_is_final` a catchable error is marked as having escaped
-        // a callback, and a `guard` around `eval` stops seeing it. A malformed
-        // template is refused by the desugar above now (#445), so all that
-        // can fail here is a constructor missing from the registry.
-        let core_expr = super::lower_quasiquotes_for(&core_expr, evaluator)?;
+        let core_expr = expand_for_eval(evaluator, expr, env)?;
 
         unhandled_is_final(super::eval_cps_with(
             &core_expr,
@@ -113,4 +100,29 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
     fn interaction_environment(&self) -> Rc<Environment> {
         self.cps.evaluator.interaction_environment()
     }
+}
+
+/// Expand the datum `expr` in `env` and lower its quasiquotes, as `eval`
+/// does before running it — on a run of its own ([`CallbackContext`]'s
+/// `eval_expr`) or on the running trampoline (a resumable primitive's
+/// `Step::Eval`, #477).
+///
+/// Bad syntax handed to `eval` is the caller's error, raised while the
+/// program runs — catchable, like the VM's path. Lowered here rather than
+/// inside `eval_cps_with`: below `unhandled_is_final` a catchable error is
+/// marked as having escaped a callback, and a `guard` around `eval` stops
+/// seeing it. A malformed template is refused by the desugar now (#445), so
+/// all that can fail in the lowering is a constructor missing from the
+/// registry.
+pub(super) fn expand_for_eval(
+    evaluator: &crate::eval::Evaluator,
+    expr: TaggedValue,
+    env: &Rc<Environment>,
+) -> Result<patina_core::CoreExpr, EvalError> {
+    let desugarer =
+        patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
+    let core_expr = desugarer
+        .desugar_tagged(expr, evaluator.heap())
+        .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
+    super::lower_quasiquotes_for(&core_expr, evaluator)
 }

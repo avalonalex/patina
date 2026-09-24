@@ -1,9 +1,11 @@
 //! Primitive procedure registry for backend-agnostic primitives
 
 use crate::apply_context::ApplyContext;
+use patina_runtime::environment::Environment;
 use patina_runtime::{Arity, EvalError, SharedHeap, TaggedValue};
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Handler for heap-only primitives (~260 primitives)
 /// These only need the heap for allocation/inspection. Arguments are borrowed:
@@ -40,6 +42,27 @@ pub enum Step {
         args: CallArgs,
         state: TaggedValue,
     },
+    /// Evaluate the datum `expr` in `env`, as `eval` does, and resume the
+    /// primitive with `state` and its value. The machine expands and runs it
+    /// as its own code — the VM a closure over the compiled form, the
+    /// tree-walker a CPS expression on the running trampoline — so a
+    /// continuation captured in it carries the rest of the primitive, as one
+    /// captured in a [`Step::Call`] does (#477).
+    Eval {
+        expr: TaggedValue,
+        env: Rc<Environment>,
+        state: TaggedValue,
+    },
+}
+
+/// A resume that is done with what the call returned: the second half of a
+/// primitive that makes one call and answers its value.
+pub fn done_with_result(
+    _ctx: &dyn ApplyContext,
+    _state: TaggedValue,
+    result: TaggedValue,
+) -> Result<Step, EvalError> {
+    Ok(Step::Done(result))
 }
 
 /// The arguments of a [`Step::Call`]: held inline up to three, which covers
@@ -87,6 +110,10 @@ fn run_synchronously(
                 state,
             } => {
                 let result = ctx.apply_proc(callee, args.into_vec())?;
+                step = resume(ctx, state, result)?;
+            }
+            Step::Eval { expr, env, state } => {
+                let result = ctx.eval_expr(expr, &env)?;
                 step = resume(ctx, state, result)?;
             }
         }

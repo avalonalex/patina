@@ -109,7 +109,9 @@
 //! are `control_flow_matrix.rs`, `escape_from_primitive.rs`, and the Scheme
 //! control suites (including their existing backend-specific expectations).
 
-use super::vm_state::{VmState, frame_globals, run_loop_until, vm_eval_expr, vm_load_library};
+use super::vm_state::{
+    VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
+};
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
@@ -1318,8 +1320,8 @@ pub(super) fn step_wind_jump(
     // and carries on (`escape_from_primitive.rs`). Nothing can make
     // returning into a primitive that is done right, which is why the
     // procedures that call back into the program are Scheme (#471) or run
-    // the callee as a frame (`force`, #476; a resumable primitive's call,
-    // #478); the one still wrong there is #477.
+    // the callee as a frame (`force`, #476; a resumable primitive's call or
+    // `eval`'s code, #478 and #477).
     let kept = cc
         .reentry
         .iter()
@@ -1676,8 +1678,8 @@ mod value_cwv {
 /// suspended past its last instruction, and re-entered after the primitive
 /// has returned it stops there with a `PC out of bounds` error. The
 /// procedures that call back into the program are Scheme since #471, or run
-/// the callee as a frame (`force`, #476; a parameter's converter, #478), so
-/// that takes one that is still a primitive: `eval` (#477).
+/// the callee as a frame (`force`, #476; a parameter's converter, #478;
+/// `eval`'s code, #477), so no consumer leaves it that way any more.
 ///
 /// # State contract
 ///
@@ -1739,9 +1741,12 @@ pub(super) mod resume_step {
     pub(in crate::runtime) const CALLEE: u16 = 2;
     /// What the call returned, and then the value the frame returns.
     pub(in crate::runtime) const RESULT: u16 = 3;
+    /// `#t` while CALLEE is the closure a `Step::Eval` compiled, which
+    /// `ResumePrimitive` retires when it returns so that its code can go.
+    pub(in crate::runtime) const EVAL: u16 = 4;
     /// The call's arguments, one to a register — or, past
     /// [`INLINE_ARGS`] of them, all of them as a list, for `Apply`.
-    pub(in crate::runtime) const ARGS: u16 = 4;
+    pub(in crate::runtime) const ARGS: u16 = 5;
     /// The most arguments a stub passes in registers: a converter takes one,
     /// and a list costs an allocation and a spread on every call.
     pub(in crate::runtime) const INLINE_ARGS: usize = 3;
@@ -1797,15 +1802,23 @@ fn resume_stub(state: &mut VmState, argc: usize) -> Result<Rc<CodeObject>, VmErr
     )
 }
 
-/// Put a call's callee and arguments into the stub frame at `base`, as
-/// [`resume_stub`]'s variant for their count reads them.
+/// Put a call and the state kept across it into the stub frame at `base`,
+/// as [`resume_stub`]'s variant for its argument count reads them.
 ///
 /// # State contract
 ///
 /// Requires the stub frame on top at `base`. Writes its call registers, and
 /// allocates a list past the inline count; calls no Scheme.
-fn set_resume_call(state: &mut VmState, base: usize, callee: TaggedValue, args: CallArgs) {
+fn set_resume_call(state: &mut VmState, base: usize, call: ResumeCall) {
+    let ResumeCall {
+        callee,
+        args,
+        kept,
+        eval,
+    } = call;
+    state.set_reg_at(base, resume_step::STATE, kept);
     state.set_reg_at(base, resume_step::CALLEE, callee);
+    state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(eval));
     if args.len() <= resume_step::INLINE_ARGS {
         for (i, arg) in args.into_iter().enumerate() {
             state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
@@ -1852,6 +1865,59 @@ fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
     }
 }
 
+/// A resumable primitive's step as this machine takes it: a value, or a call
+/// for `resume_stub`'s frame to make — `Step::Eval`'s datum compiled into a
+/// closure over its environment ([`eval_closure`]), called like any other.
+enum VmStep {
+    Done(TaggedValue),
+    Call(ResumeCall),
+}
+
+/// The call a resumable primitive's step asks `resume_stub`'s frame to make.
+struct ResumeCall {
+    callee: TaggedValue,
+    args: CallArgs,
+    /// The primitive's state, kept across the call.
+    kept: TaggedValue,
+    /// Whether `callee` is a `Step::Eval`'s closure ([`resume_step::EVAL`]).
+    eval: bool,
+}
+
+/// The primitive's `step`, or its error, as a [`VmStep`].
+///
+/// # State contract
+///
+/// For `Step::Eval`, expands, compiles and loads the datum, which can load
+/// libraries; pushes no frame and runs no other Scheme code.
+fn vm_step(
+    state: &mut VmState,
+    step: Result<Step, patina_primitives::EvalError>,
+) -> Result<VmStep, VmError> {
+    Ok(match step.map_err(eval_to_vm_error)? {
+        Step::Done(value) => VmStep::Done(value),
+        Step::Call {
+            callee,
+            args,
+            state: kept,
+        } => VmStep::Call(ResumeCall {
+            callee,
+            args,
+            kept,
+            eval: false,
+        }),
+        Step::Eval {
+            expr,
+            env,
+            state: kept,
+        } => VmStep::Call(ResumeCall {
+            callee: eval_closure(state, expr, &env)?,
+            args: CallArgs::new(),
+            kept,
+            eval: true,
+        }),
+    })
+}
+
 /// Start the resumable primitive at `index` on `args`, for a call whose value
 /// goes to `dst`: deliver it there if the primitive is done at once, or push
 /// `resume_stub`'s frame to make the call it asks for.
@@ -1870,16 +1936,9 @@ fn start_resumable(
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    match registry
-        .start(index, args, &ctx)
-        .map_err(eval_to_vm_error)?
-    {
-        Step::Done(value) => state.set_reg(dst, value),
-        Step::Call {
-            callee,
-            args,
-            state: kept,
-        } => push_resume_frame(state, index, kept, callee, args, dst)?,
+    match vm_step(state, registry.start(index, args, &ctx))? {
+        VmStep::Done(value) => state.set_reg(dst, value),
+        VmStep::Call(call) => push_resume_frame(state, index, call, dst)?,
     }
     Ok(())
 }
@@ -1905,14 +1964,14 @@ fn tail_start_resumable(
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    let step = registry
-        .start(index, args, &ctx)
-        .map_err(eval_to_vm_error)?;
+    // Taken, `Step::Eval`'s expansion included, before the frame is popped:
+    // the expander can load a library, which runs code of its own.
+    let step = vm_step(state, registry.start(index, args, &ctx))?;
     let frame = state.frames.pop().expect("tail call with empty stack");
     let return_reg = frame.return_reg;
     state.free_top_registers(frame.register_base);
     match step {
-        Step::Done(value) => {
+        VmStep::Done(value) => {
             if state.frames.len() == exit_depth {
                 return Ok(Some(value));
             }
@@ -1920,17 +1979,13 @@ fn tail_start_resumable(
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
         }
-        Step::Call {
-            callee,
-            args,
-            state: kept,
-        } => push_resume_frame(state, index, kept, callee, args, return_reg)?,
+        VmStep::Call(call) => push_resume_frame(state, index, call, return_reg)?,
     }
     Ok(None)
 }
 
-/// Push `resume_stub`'s frame for the resumable primitive at `index`, to call
-/// `callee` on `args` and resume the primitive with `kept`; the frame returns
+/// Push `resume_stub`'s frame for the resumable primitive at `index`, to make
+/// `call` and resume the primitive with what it returns; the frame returns
 /// the primitive's value to `return_reg` of the frame below.
 ///
 /// # State contract
@@ -1940,12 +1995,10 @@ fn tail_start_resumable(
 fn push_resume_frame(
     state: &mut VmState,
     index: usize,
-    kept: TaggedValue,
-    callee: TaggedValue,
-    args: CallArgs,
+    call: ResumeCall,
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = resume_stub(state, args.len())?;
+    let code = resume_stub(state, call.args.len())?;
     let base = state.alloc_registers(resume_step::NUM_REGS);
     state.frames.push(CallFrame {
         pc: 0,
@@ -1956,8 +2009,7 @@ fn push_resume_frame(
         code,
     });
     state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
-    state.set_reg_at(base, resume_step::STATE, kept);
-    set_resume_call(state, base, callee, args);
+    set_resume_call(state, base, call);
     Ok(())
 }
 
@@ -1975,27 +2027,26 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
         .ok_or_else(|| VmError::Runtime {
             message: "resume-primitive: malformed stub frame".into(),
         })? as usize;
+    if state.reg_at(base, resume_step::EVAL) == TaggedValue::TRUE {
+        // An `eval`'s code is let go once nothing needs it, as it was when a
+        // nested run executed it. Again on a re-entry, which finds the
+        // closure retired already.
+        let closure = state.reg_at(base, resume_step::CALLEE);
+        state.retire_eval_closure(closure);
+    }
     let kept = state.reg_at(base, resume_step::STATE);
     let result = state.reg_at(base, resume_step::RESULT);
     let registry = Rc::clone(&state.primitive_registry);
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    match registry
-        .resume(index, kept, result, &ctx)
-        .map_err(eval_to_vm_error)?
-    {
-        Step::Done(value) => state.set_reg_at(base, resume_step::RESULT, value),
-        Step::Call {
-            callee,
-            args,
-            state: kept,
-        } => {
+    match vm_step(state, registry.resume(index, kept, result, &ctx))? {
+        VmStep::Done(value) => state.set_reg_at(base, resume_step::RESULT, value),
+        VmStep::Call(call) => {
             // Round again from the top, in the variant for this call's
             // argument count; the loop picks up a changed code object.
-            let code = resume_stub(state, args.len())?;
-            state.set_reg_at(base, resume_step::STATE, kept);
-            set_resume_call(state, base, callee, args);
+            let code = resume_stub(state, call.args.len())?;
+            set_resume_call(state, base, call);
             let frame = state.frames.last_mut().expect("the stub frame");
             frame.code = code;
             frame.pc = 0;
@@ -3684,23 +3735,17 @@ pub(super) fn exec_call_primitive_direct(
         state: state as *mut VmState,
     };
     let index = func_id.0 as usize;
-    let step = registry
-        .start(index, arg_vals, &ctx)
-        .map_err(eval_to_vm_error)?;
+    let step = vm_step(state, registry.start(index, arg_vals, &ctx))?;
     // No frame check here: a continuation escaping out of a re-entrant
     // primitive is signalled at the boundary (`across_reentry`) and unwinds
     // through the `?` above, so by this point the frames are the ones this
     // call started with. An earlier fix guarded it here instead, which caught
     // only primitives in call position.
     match step {
-        Step::Done(result) => state.set_reg_at(base, dst, result),
+        VmStep::Done(result) => state.set_reg_at(base, dst, result),
         // A resumable primitive's call runs in `resume_stub`'s frame, which
-        // returns the primitive's value to `dst` (#478).
-        Step::Call {
-            callee,
-            args,
-            state: kept,
-        } => push_resume_frame(state, index, kept, callee, args, dst)?,
+        // returns the primitive's value to `dst` (#477, #478).
+        VmStep::Call(call) => push_resume_frame(state, index, call, dst)?,
     }
     Ok(None)
 }
