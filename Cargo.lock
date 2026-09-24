@@ -620,6 +620,7 @@ dependencies = [
  "patina-frontend",
  "patina-ir",
  "patina-runtime",
+ "smallvec",
  "thiserror",
  "tracing",
  "unicode-casefold",

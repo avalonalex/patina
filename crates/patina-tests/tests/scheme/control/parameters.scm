@@ -191,4 +191,37 @@
       (if (< entries 2) (reenter-k #f)))
     (list entries conversions)))
 
+;; ── A continuation captured in a converter (#478) ───────────────────────────
+;;
+;; Re-entered after the call that ran the converter has returned: the rest of
+;; that call runs again with the value delivered, as chibi's and Gauche's
+;; converters, which Scheme calls, do. The converter was called from Rust on
+;; both backends, which a continuation cannot carry, so the re-entry found
+;; nothing to return into — the VM answered `(5 () ())` and the tree-walker
+;; abandoned the form. `make-parameter`, `%parameter-convert` and
+;; `%parameter-set!` hand the call to the machine now
+;; (`patina_primitives::Step`), which runs it as a frame or a continuation.
+;;
+;; Each captures its continuation on the first conversion of 5 and re-enters
+;; it with 10, then 20.
+(define (converter-reentered use)
+  (let ((k #f) (out '()))
+    (let* ((conv (lambda (x) (call/cc (lambda (c) (if (and (not k) (= x 5)) (set! k c)) x))))
+           (r (use conv)))
+      (set! out (cons r out))
+      (if (< (length out) 3) (k (* (length out) 10)) (reverse out)))))
+
+(test-equal "re-entering a converter parameterize ran runs the parameterize again"
+  '(5 10 20)
+  (converter-reentered
+    (lambda (conv) (let ((p (make-parameter 0 conv))) (parameterize ((p 5)) (p))))))
+
+(test-equal "…and one make-parameter ran makes the parameter again" '(5 10 20)
+  (converter-reentered
+    (lambda (conv) (let ((p (make-parameter 5 conv))) (p)))))
+
+(test-equal "…and one setting the parameter sets it again" '(5 10 20)
+  (converter-reentered
+    (lambda (conv) (let ((p (make-parameter 0 conv))) (p 5) (p)))))
+
 (test-end)

@@ -313,6 +313,35 @@ impl<'a> CpsEvaluator<'a> {
                 })
             }
 
+            ContValue::ResumePrimitive {
+                index,
+                state,
+                original_cont,
+            } => {
+                // A resumable primitive's call has returned: resume it, with
+                // the step's own dynamic environment for anything it calls.
+                let step = {
+                    let ctx = super::callback::CallbackContext {
+                        cps: self,
+                        prompt_stack: &prompt_stack,
+                        dynamic_winds: &dynamic_winds,
+                        exception_handlers: &exception_handlers,
+                    };
+                    self.evaluator
+                        .primitive_registry
+                        .resume(index, state, value, &ctx)
+                };
+                self.resumable_step(
+                    index,
+                    step,
+                    *original_cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                )
+            }
+
             ContValue::ForceCache {
                 promise,
                 original_cont,

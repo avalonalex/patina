@@ -9,7 +9,8 @@ pub mod registry;
 
 pub use apply_context::ApplyContext;
 pub use registry::{
-    HOTaggedHandler, PrimitiveFn, PrimitiveHandler, PrimitiveRegistry, TaggedHandler,
+    CallArgs, HOTaggedHandler, PrimitiveFn, PrimitiveHandler, PrimitiveRegistry, ResumableResume,
+    ResumableStart, Step, TaggedHandler,
 };
 
 // Re-export EvalError for convenience

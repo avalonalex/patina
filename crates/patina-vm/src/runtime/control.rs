@@ -122,6 +122,7 @@ use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
+use patina_primitives::{CallArgs, Step};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -340,8 +341,7 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// argument, a jump's wind thunks ([`push_wind_step`]), a composable invoke's
 /// re-entry thunks ([`push_invoke_step`] — a separate site with a different
 /// handler-stack policy, not the same one), a higher-order primitive's
-/// callback ([`run_apply_proc`]), and a parameter converter (through
-/// [`call_any_sync`]).
+/// callback ([`run_apply_proc`]).
 ///
 /// **[`call_value`] plus the one thing those callers need and the dispatch
 /// loop's callers get for free: whether the callee is finished.** `Some(v)` is
@@ -394,102 +394,36 @@ pub(super) fn call_any(
     Ok(Some(state.reg(return_reg)))
 }
 
-/// Try to call a parameter object. Returns `Some(Ok(result))` if `func_val`
-/// is a parameter, `None` otherwise.
+/// Try to call a parameter object with no argument, which reads it. Returns
+/// `Some(Ok(value))` if `func_val` is a parameter, `None` otherwise.
+///
+/// Setting one, `(p v)`, never reaches here: the call paths send it to
+/// `%parameter-set!` first ([`parameter_set_call`]), whose converter is a
+/// call the machine makes (#478). It ran the converter from Rust here, on a
+/// nested loop behind a re-entry boundary (`call_any_sync`, gone with it).
 ///
 /// # State contract
 ///
-/// None leaves state unchanged. A getter reads the parameter; a setter may
-/// run a converter and change all dynamic state. Store the parameter value only
-/// after normal conversion; propagate an escape without writing it.
+/// Reads the parameter; changes no state.
 fn try_call_parameter(
     state: &mut VmState,
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Option<Result<TaggedValue, VmError>> {
     let heap = state.heap.borrow();
-    let (values, converter) = heap.get_parameter(func_val)?;
+    let (values, _converter) = heap.get_parameter(func_val)?;
     drop(heap);
-    match args.len() {
-        0 => {
-            // Get current value (top of stack)
-            let stack = values.borrow();
-            let val = stack.last().copied().unwrap_or(TaggedValue::UNSPECIFIED);
-            Some(Ok(val))
-        }
-        1 => {
-            // Set value (replace top of stack, applying converter if present)
-            let new_val = if let Some(conv) = converter {
-                match call_any_sync(state, conv, &[args[0]]) {
-                    Ok(v) => v,
-                    Err(e) => return Some(Err(e)),
-                }
-            } else {
-                args[0]
-            };
-            let mut stack = values.borrow_mut();
-            if let Some(top) = stack.last_mut() {
-                *top = new_val;
-            }
-            Some(Ok(TaggedValue::UNSPECIFIED))
-        }
-        _ => Some(Err(VmError::ArityMismatch {
+    if !args.is_empty() {
+        return Some(Err(VmError::ArityMismatch {
             expected: "0 or 1".into(),
             got: args.len(),
-        })),
+        }));
     }
-}
-
-/// Synchronously call a callable value and return its result.
-/// Used for parameter converters and similar internal callbacks.
-///
-/// [`call_any`] with the nested loop attached, so the callee set is not this
-/// function's to state — it is whatever `call_any` takes. It probed primitive
-/// → closure until 2026-09-05 and nothing else, which is `call_any`'s hole
-/// (issue #186) one dispatcher over.
-///
-/// Only reached from [`try_call_parameter`], i.e. from *setting* a parameter
-/// by calling it. `make-parameter`'s own initial conversion is a registry
-/// primitive and goes through [`run_apply_proc`] instead.
-///
-/// # State contract
-///
-/// Requires a live caller. Allocates a scratch return slot beyond its window,
-/// may run a nested loop, and may change all dynamic stacks. Returns a value
-/// only on normal completion; across_reentry propagates an abandoned call.
-fn call_any_sync(
-    state: &mut VmState,
-    func_val: TaggedValue,
-    args: &[TaggedValue],
-) -> Result<TaggedValue, VmError> {
-    // Use a return_reg beyond the caller's window to avoid clobbering live regs.
-    let depth_before = state.frames.len();
-    let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
-    if let Some(f) = state.frames.last() {
-        let needed = f.register_base + return_reg as usize + 1;
-        if state.registers.len() < needed {
-            state.registers.resize(needed, TaggedValue::UNSPECIFIED);
-        }
-    }
-    // A callee that needs no frame is finished here and now.
-    if let Some(result) = call_any(state, func_val, args, return_reg)? {
-        return Ok(result);
-    }
-    // run_loop_until returns the value directly from Return instruction dispatch.
-    // Routed through the re-entry boundary: this is how a parameter converter
-    // runs during `parameterize`, and a continuation can escape out of it.
-    match across_reentry(
-        state,
-        depth_before,
-        |s| run_loop_until(s, depth_before),
-        |v| *v,
-    ) {
-        Ok(v) => Ok(v),
-        Err(Reentry::Escaped) => Err(VmError::Runtime {
-            message: "continuation escaped".into(),
-        }),
-        Err(Reentry::Failed(e)) => Err(e),
-    }
+    let stack = values.borrow();
+    Some(Ok(stack
+        .last()
+        .copied()
+        .unwrap_or(TaggedValue::UNSPECIFIED)))
 }
 
 fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::HeapIndex> {
@@ -1384,8 +1318,8 @@ pub(super) fn step_wind_jump(
     // and carries on (`escape_from_primitive.rs`). Nothing can make
     // returning into a primitive that is done right, which is why the
     // procedures that call back into the program are Scheme (#471) or run
-    // the callee as a frame (`force`, #476); the ones still wrong there are
-    // #477 and #478.
+    // the callee as a frame (`force`, #476; a resumable primitive's call,
+    // #478); the one still wrong there is #477.
     let kept = cc
         .reentry
         .iter()
@@ -1548,12 +1482,15 @@ fn runtime_stub(
     slot: impl Fn(&VmState) -> Option<CodeObjectId>,
     set_slot: impl Fn(&mut VmState, CodeObjectId),
     name: &str,
-    instructions: Vec<Instruction>,
+    instructions: impl FnOnce() -> Vec<Instruction>,
     num_regs: u16,
 ) -> Result<Rc<CodeObject>, VmError> {
     if let Some(id) = slot(state) {
         return state.code_object(id);
     }
+    // Built only here, on the first call: a stub is fetched on every call of
+    // what it serves, and the cached one is all but those first.
+    let instructions = instructions();
     let id = state.load(CodeObject {
         id: CodeObjectId::label(),
         name: Some(Rc::from(name)),
@@ -1621,7 +1558,7 @@ fn wind_jump_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
         |s| s.wind_jump_code,
         |s, id| s.wind_jump_code = Some(id),
         "wind-jump",
-        vec![Instruction::ResumeWindJump],
+        || vec![Instruction::ResumeWindJump],
         wind_step::NUM_REGS,
     )
 }
@@ -1675,33 +1612,35 @@ mod value_wind {
 /// Returns loaded/cached stub code via runtime_stub. Changes only the code
 /// store/cache; no frame is pushed and no Scheme code runs.
 fn value_wind_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    let instructions = vec![
-        Instruction::Call {
-            func: value_wind::BEFORE,
-            args: vec![],
-            dst: value_wind::DISCARD,
-        },
-        Instruction::PushWind {
-            before: value_wind::BEFORE,
-            after: value_wind::AFTER,
-        },
-        Instruction::Call {
-            func: value_wind::BODY,
-            args: vec![],
-            dst: value_wind::RESULT,
-        },
-        // Pops the record; the after-thunk is the `Call` that follows, so
-        // that a jump out of *it* no longer sees this extent as entered.
-        Instruction::PopWind,
-        Instruction::Call {
-            func: value_wind::AFTER,
-            args: vec![],
-            dst: value_wind::DISCARD,
-        },
-        Instruction::Return {
-            val: value_wind::RESULT,
-        },
-    ];
+    let instructions = || {
+        vec![
+            Instruction::Call {
+                func: value_wind::BEFORE,
+                args: vec![],
+                dst: value_wind::DISCARD,
+            },
+            Instruction::PushWind {
+                before: value_wind::BEFORE,
+                after: value_wind::AFTER,
+            },
+            Instruction::Call {
+                func: value_wind::BODY,
+                args: vec![],
+                dst: value_wind::RESULT,
+            },
+            // Pops the record; the after-thunk is the `Call` that follows, so
+            // that a jump out of *it* no longer sees this extent as entered.
+            Instruction::PopWind,
+            Instruction::Call {
+                func: value_wind::AFTER,
+                args: vec![],
+                dst: value_wind::DISCARD,
+            },
+            Instruction::Return {
+                val: value_wind::RESULT,
+            },
+        ]
+    };
     runtime_stub(
         state,
         |s| s.value_wind_code,
@@ -1737,26 +1676,27 @@ mod value_cwv {
 /// suspended past its last instruction, and re-entered after the primitive
 /// has returned it stops there with a `PC out of bounds` error. The
 /// procedures that call back into the program are Scheme since #471, or run
-/// the callee as a frame (`force`, #476), so that takes one that is still a
-/// primitive: `eval` (#477), a parameter whose converter the call runs
-/// (#478).
+/// the callee as a frame (`force`, #476; a parameter's converter, #478), so
+/// that takes one that is still a primitive: `eval` (#477).
 ///
 /// # State contract
 ///
 /// Returns loaded/cached stub code via runtime_stub. Changes only the code
 /// store/cache; no frame is pushed and no Scheme code runs.
 fn value_cwv_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    let instructions = vec![
-        Instruction::Call {
-            func: value_cwv::PRODUCER,
-            args: vec![],
-            dst: value_cwv::PRODUCED,
-        },
-        Instruction::TailCallWithValues {
-            consumer: value_cwv::CONSUMER,
-            producer_result: value_cwv::PRODUCED,
-        },
-    ];
+    let instructions = || {
+        vec![
+            Instruction::Call {
+                func: value_cwv::PRODUCER,
+                args: vec![],
+                dst: value_cwv::PRODUCED,
+            },
+            Instruction::TailCallWithValues {
+                consumer: value_cwv::CONSUMER,
+                producer_result: value_cwv::PRODUCED,
+            },
+        ]
+    };
     runtime_stub(
         state,
         |s| s.value_cwv_code,
@@ -1788,6 +1728,282 @@ thread_local! {
     static EMPTY_REENTRY: Rc<[u64]> = Rc::from(Vec::new());
 }
 
+/// The registers of the stub frame a resumable primitive's call runs in. See
+/// [`resume_stub`] and [`Instruction::ResumePrimitive`].
+pub(super) mod resume_step {
+    /// The primitive's registry index, as a fixnum.
+    pub(in crate::runtime) const INDEX: u16 = 0;
+    /// The state the primitive asked to keep across the call.
+    pub(in crate::runtime) const STATE: u16 = 1;
+    /// The procedure the primitive asked to call.
+    pub(in crate::runtime) const CALLEE: u16 = 2;
+    /// What the call returned, and then the value the frame returns.
+    pub(in crate::runtime) const RESULT: u16 = 3;
+    /// The call's arguments, one to a register — or, past
+    /// [`INLINE_ARGS`] of them, all of them as a list, for `Apply`.
+    pub(in crate::runtime) const ARGS: u16 = 4;
+    /// The most arguments a stub passes in registers: a converter takes one,
+    /// and a list costs an allocation and a spread on every call.
+    pub(in crate::runtime) const INLINE_ARGS: usize = 3;
+    /// One stub per argument count up to [`INLINE_ARGS`], and one for more.
+    pub(crate) const VARIANTS: usize = INLINE_ARGS + 2;
+    /// Window size of the stub frame, the same for every variant, so that a
+    /// frame can change variant between calls.
+    pub(in crate::runtime) const NUM_REGS: u16 = ARGS + INLINE_ARGS as u16;
+}
+
+/// The code object a resumable primitive's call of `argc` arguments runs in:
+/// `Call callee(args…)` / `ResumePrimitive` / `Return`, or with more than
+/// [`resume_step::INLINE_ARGS`] arguments `Apply callee args` over a list. A
+/// frame of the machine rather than a Rust call, so a continuation captured
+/// in the call carries the rest of the primitive (#478); `force_stub` is the
+/// same shape for `force`.
+///
+/// # State contract
+///
+/// Returns loaded/cached stub code via runtime_stub. Changes only the code
+/// store/cache; no frame is pushed and no Scheme code runs.
+fn resume_stub(state: &mut VmState, argc: usize) -> Result<Rc<CodeObject>, VmError> {
+    let variant = argc.min(resume_step::INLINE_ARGS + 1);
+    let instructions = move || {
+        let call = if argc <= resume_step::INLINE_ARGS {
+            Instruction::Call {
+                func: resume_step::CALLEE,
+                args: (0..argc as u16).map(|i| resume_step::ARGS + i).collect(),
+                dst: resume_step::RESULT,
+            }
+        } else {
+            Instruction::Apply {
+                func: resume_step::CALLEE,
+                args: vec![resume_step::ARGS],
+                dst: resume_step::RESULT,
+            }
+        };
+        vec![
+            call,
+            Instruction::ResumePrimitive,
+            Instruction::Return {
+                val: resume_step::RESULT,
+            },
+        ]
+    };
+    runtime_stub(
+        state,
+        move |s| s.resume_codes[variant],
+        move |s, id| s.resume_codes[variant] = Some(id),
+        "resume-primitive",
+        instructions,
+        resume_step::NUM_REGS,
+    )
+}
+
+/// Put a call's callee and arguments into the stub frame at `base`, as
+/// [`resume_stub`]'s variant for their count reads them.
+///
+/// # State contract
+///
+/// Requires the stub frame on top at `base`. Writes its call registers, and
+/// allocates a list past the inline count; calls no Scheme.
+fn set_resume_call(state: &mut VmState, base: usize, callee: TaggedValue, args: CallArgs) {
+    state.set_reg_at(base, resume_step::CALLEE, callee);
+    if args.len() <= resume_step::INLINE_ARGS {
+        for (i, arg) in args.into_iter().enumerate() {
+            state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
+        }
+    } else {
+        let list = state.heap.borrow_mut().list_from_iter(args);
+        state.set_reg_at(base, resume_step::ARGS, list);
+    }
+}
+
+/// The registry index of `prim`, if it is a resumable primitive
+/// (`PrimitiveHandler::Resumable`).
+fn resumable_index(state: &VmState, prim: &Procedure) -> Option<usize> {
+    let Procedure::Primitive {
+        qualified_name,
+        registry_index,
+        ..
+    } = prim
+    else {
+        return None;
+    };
+    let registry = &state.primitive_registry;
+    let index = registry.resolve_index_cached(qualified_name, registry_index)?;
+    registry.resumable(index).map(|_| index)
+}
+
+/// `%parameter-set!`'s registry index when `(func_val arg)` is setting a
+/// parameter object: the backends dispatch that call to it, so a converter is
+/// a call the machine makes (#478).
+fn parameter_set_call(
+    state: &VmState,
+    func_val: TaggedValue,
+    args: &[TaggedValue],
+) -> Option<usize> {
+    if args.len() != 1 || !state.heap.borrow().is_parameter(func_val) {
+        return None;
+    }
+    state.parameter_set
+}
+
+fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
+    VmError::Runtime {
+        message: e.to_string(),
+    }
+}
+
+/// Start the resumable primitive at `index` on `args`, for a call whose value
+/// goes to `dst`: deliver it there if the primitive is done at once, or push
+/// `resume_stub`'s frame to make the call it asks for.
+///
+/// # State contract
+///
+/// Requires a live caller with a valid dst slot. Runs the primitive's Rust
+/// first half; on a call, pushes one frame returning to dst. Calls no Scheme.
+fn start_resumable(
+    state: &mut VmState,
+    index: usize,
+    args: &[TaggedValue],
+    dst: u16,
+) -> Result<(), VmError> {
+    let registry = Rc::clone(&state.primitive_registry);
+    let ctx = VmApplyContext {
+        state: state as *mut VmState,
+    };
+    match registry
+        .start(index, args, &ctx)
+        .map_err(eval_to_vm_error)?
+    {
+        Step::Done(value) => state.set_reg(dst, value),
+        Step::Call {
+            callee,
+            args,
+            state: kept,
+        } => push_resume_frame(state, index, kept, callee, args, dst)?,
+    }
+    Ok(())
+}
+
+/// [`start_resumable`] for a call in tail position: the primitive runs with
+/// the calling frame still on the stack, then the frame is popped and the
+/// value delivered to its caller, or `resume_stub`'s frame replaces it.
+/// Returns `Some(value)` when the enclosing loop must exit with `value`, as
+/// [`tail_call_value`] does.
+///
+/// # State contract
+///
+/// Requires a live tail-call frame above its caller and the driver exit
+/// depth. Pops that frame; may push the stub frame in its place. Calls no
+/// Scheme.
+fn tail_start_resumable(
+    state: &mut VmState,
+    index: usize,
+    args: &[TaggedValue],
+    exit_depth: usize,
+) -> Result<Option<TaggedValue>, VmError> {
+    let registry = Rc::clone(&state.primitive_registry);
+    let ctx = VmApplyContext {
+        state: state as *mut VmState,
+    };
+    let step = registry
+        .start(index, args, &ctx)
+        .map_err(eval_to_vm_error)?;
+    let frame = state.frames.pop().expect("tail call with empty stack");
+    let return_reg = frame.return_reg;
+    state.free_top_registers(frame.register_base);
+    match step {
+        Step::Done(value) => {
+            if state.frames.len() == exit_depth {
+                return Ok(Some(value));
+            }
+            state.set_reg(return_reg, value);
+            // The popped frame's extents close now, as after `Return`.
+            pop_resolved_extents(state, exit_depth);
+        }
+        Step::Call {
+            callee,
+            args,
+            state: kept,
+        } => push_resume_frame(state, index, kept, callee, args, return_reg)?,
+    }
+    Ok(None)
+}
+
+/// Push `resume_stub`'s frame for the resumable primitive at `index`, to call
+/// `callee` on `args` and resume the primitive with `kept`; the frame returns
+/// the primitive's value to `return_reg` of the frame below.
+///
+/// # State contract
+///
+/// Requires the frame the value is for on top. Allocates the argument list
+/// and pushes one frame; calls no Scheme.
+fn push_resume_frame(
+    state: &mut VmState,
+    index: usize,
+    kept: TaggedValue,
+    callee: TaggedValue,
+    args: CallArgs,
+    return_reg: u16,
+) -> Result<(), VmError> {
+    let code = resume_stub(state, args.len())?;
+    let base = state.alloc_registers(resume_step::NUM_REGS);
+    state.frames.push(CallFrame {
+        pc: 0,
+        register_base: base,
+        num_regs: resume_step::NUM_REGS,
+        closure: None,
+        return_reg,
+        code,
+    });
+    state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
+    state.set_reg_at(base, resume_step::STATE, kept);
+    set_resume_call(state, base, callee, args);
+    Ok(())
+}
+
+/// A resumable primitive's call has returned into `resume_stub`'s frame at
+/// `base`: resume the primitive; see [`Instruction::ResumePrimitive`].
+///
+/// # State contract
+///
+/// Requires the stub frame on top at `base`. Runs the primitive's Rust
+/// continuation; writes the RESULT register, or the call registers and pc.
+pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), VmError> {
+    let index = state
+        .reg_at(base, resume_step::INDEX)
+        .as_fixnum()
+        .ok_or_else(|| VmError::Runtime {
+            message: "resume-primitive: malformed stub frame".into(),
+        })? as usize;
+    let kept = state.reg_at(base, resume_step::STATE);
+    let result = state.reg_at(base, resume_step::RESULT);
+    let registry = Rc::clone(&state.primitive_registry);
+    let ctx = VmApplyContext {
+        state: state as *mut VmState,
+    };
+    match registry
+        .resume(index, kept, result, &ctx)
+        .map_err(eval_to_vm_error)?
+    {
+        Step::Done(value) => state.set_reg_at(base, resume_step::RESULT, value),
+        Step::Call {
+            callee,
+            args,
+            state: kept,
+        } => {
+            // Round again from the top, in the variant for this call's
+            // argument count; the loop picks up a changed code object.
+            let code = resume_stub(state, args.len())?;
+            state.set_reg_at(base, resume_step::STATE, kept);
+            set_resume_call(state, base, callee, args);
+            let frame = state.frames.last_mut().expect("the stub frame");
+            frame.code = code;
+            frame.pc = 0;
+        }
+    }
+    Ok(())
+}
+
 /// The registers of the stub frame `force` runs a delayed promise's thunk in.
 /// See [`force_stub`] and [`Instruction::ResumeForce`].
 pub(super) mod force_step {
@@ -1812,17 +2028,19 @@ pub(super) mod force_step {
 /// Returns loaded/cached stub code via runtime_stub. Changes only the code
 /// store/cache; no frame is pushed and no Scheme code runs.
 fn force_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    let instructions = vec![
-        Instruction::Call {
-            func: force_step::THUNK,
-            args: vec![],
-            dst: force_step::RESULT,
-        },
-        Instruction::ResumeForce,
-        Instruction::Return {
-            val: force_step::RESULT,
-        },
-    ];
+    let instructions = || {
+        vec![
+            Instruction::Call {
+                func: force_step::THUNK,
+                args: vec![],
+                dst: force_step::RESULT,
+            },
+            Instruction::ResumeForce,
+            Instruction::Return {
+                val: force_step::RESULT,
+            },
+        ]
+    };
     runtime_stub(
         state,
         |s| s.force_code,
@@ -1944,7 +2162,7 @@ enum Reentry {
 ///
 /// `depth_before` is the caller's own frame depth *before* it pushed anything
 /// for this call — passed in rather than sampled here, because a caller that
-/// has already pushed a frame (`call_any_sync`) would otherwise compare
+/// has already pushed a frame (as `call_any_sync` did) would otherwise compare
 /// against the pushed depth and read every normal return as an escape.
 ///
 /// Route new boundaries through here. The first attempt at this fix covered
@@ -1981,7 +2199,7 @@ fn across_reentry<T>(
     // place that decides it — its own doc has said so since the first attempt
     // at the escape fix "covered one boundary of four". Issue #177's first fix
     // covered one of four again: `force` (through `apply_proc`) worked while
-    // `eval` and a tail-position parameter *set* (through `call_any_sync`,
+    // `eval` and a tail-position parameter *set* (then through `call_any_sync`,
     // which stored the abort's value into the parameter) did not.
     if state.pending_transfer {
         return Err(Reentry::Escaped);
@@ -2500,17 +2718,19 @@ pub(super) mod raise_step {
 /// Returns loaded/cached stub code via runtime_stub. Changes only the code
 /// store/cache; no frame is pushed and no Scheme code runs.
 fn raise_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    let instructions = vec![
-        Instruction::Call {
-            func: raise_step::HANDLER,
-            args: vec![raise_step::EXCEPTION],
-            dst: raise_step::RESULT,
-        },
-        Instruction::ResumeRaise,
-        Instruction::Return {
-            val: raise_step::RESULT,
-        },
-    ];
+    let instructions = || {
+        vec![
+            Instruction::Call {
+                func: raise_step::HANDLER,
+                args: vec![raise_step::EXCEPTION],
+                dst: raise_step::RESULT,
+            },
+            Instruction::ResumeRaise,
+            Instruction::Return {
+                val: raise_step::RESULT,
+            },
+        ]
+    };
     runtime_stub(
         state,
         |s| s.raise_step_code,
@@ -2554,7 +2774,7 @@ fn invoke_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
         |s| s.invoke_step_code,
         |s, id| s.invoke_step_code = Some(id),
         "invoke-step",
-        vec![Instruction::ResumeComposableInvoke],
+        || vec![Instruction::ResumeComposableInvoke],
         invoke_step::NUM_REGS,
     )
 }
@@ -2625,16 +2845,18 @@ mod abort_step {
 /// Returns loaded/cached stub code via runtime_stub. Changes only the code
 /// store/cache; no frame is pushed and no Scheme code runs.
 fn abort_handler_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
-    let instructions = vec![
-        Instruction::Call {
-            func: abort_step::HANDLER,
-            args: vec![abort_step::VAL, abort_step::CONT],
-            dst: abort_step::RESULT,
-        },
-        Instruction::Return {
-            val: abort_step::RESULT,
-        },
-    ];
+    let instructions = || {
+        vec![
+            Instruction::Call {
+                func: abort_step::HANDLER,
+                args: vec![abort_step::VAL, abort_step::CONT],
+                dst: abort_step::RESULT,
+            },
+            Instruction::Return {
+                val: abort_step::RESULT,
+            },
+        ]
+    };
     runtime_stub(
         state,
         |s| s.abort_handler_code,
@@ -3103,9 +3325,15 @@ pub(super) fn call_value_with_probe(
             return handle_control_primitive(state, ctrl, arg_vals, dst);
         }
         if let Some(prim) = primitive_procedure(state, func_val) {
+            if let Some(index) = resumable_index(state, &prim) {
+                return start_resumable(state, index, arg_vals, dst);
+            }
             let result = call_primitive_proc(state, &prim, arg_vals);
             state.set_reg(dst, result?);
             return Ok(());
+        }
+        if let Some(index) = parameter_set_call(state, func_val, arg_vals) {
+            return start_resumable(state, index, &[func_val, arg_vals[0]], dst);
         }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             state.set_reg(dst, result?);
@@ -3238,6 +3466,9 @@ pub(super) fn tail_call_value_with_probe(
         // continuation, so this saves the two heap borrows
         // `try_invoke_continuation` spends before it can decline.
         if let Some(prim) = primitive_procedure(state, func_val) {
+            if let Some(index) = resumable_index(state, &prim) {
+                return tail_start_resumable(state, index, arg_vals, exit_depth);
+            }
             let result = call_primitive_proc(state, &prim, arg_vals)?;
             let frame = state.frames.pop().expect("tail call with empty stack");
             if state.frames.len() == exit_depth {
@@ -3261,7 +3492,12 @@ pub(super) fn tail_call_value_with_probe(
             return tail_invoke_delimited(state, func_val, dc, value, exit_depth);
         }
 
-        // Parameters in tail position: same as primitives.
+        // Parameters in tail position: same as primitives, and a set through
+        // `%parameter-set!`, whose converter the machine calls.
+        if let Some(index) = parameter_set_call(state, func_val, arg_vals) {
+            let args = [func_val, arg_vals[0]];
+            return tail_start_resumable(state, index, &args, exit_depth);
+        }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             let result = result?;
             let frame = state
@@ -3433,7 +3669,9 @@ pub(super) fn exec_call_primitive(
 ///
 /// Requires a valid immutable registry id and current base/dst. A callback
 /// can change every dynamic component. Normal completion writes dst and
-/// returns None; an escape propagates before that write, with landing intact.
+/// returns None, or for a resumable primitive's call pushes `resume_stub`'s
+/// frame, which writes dst when it returns; an escape propagates before that
+/// write, with landing intact.
 pub(super) fn exec_call_primitive_direct(
     state: &mut VmState,
     base: usize,
@@ -3445,17 +3683,25 @@ pub(super) fn exec_call_primitive_direct(
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
-    let result = registry
-        .apply_by_index(func_id.0 as usize, arg_vals, &ctx)
-        .map_err(|e| VmError::Runtime {
-            message: e.to_string(),
-        })?;
+    let index = func_id.0 as usize;
+    let step = registry
+        .start(index, arg_vals, &ctx)
+        .map_err(eval_to_vm_error)?;
     // No frame check here: a continuation escaping out of a re-entrant
     // primitive is signalled at the boundary (`across_reentry`) and unwinds
     // through the `?` above, so by this point the frames are the ones this
     // call started with. An earlier fix guarded it here instead, which caught
     // only primitives in call position.
-    state.set_reg_at(base, dst, result);
+    match step {
+        Step::Done(result) => state.set_reg_at(base, dst, result),
+        // A resumable primitive's call runs in `resume_stub`'s frame, which
+        // returns the primitive's value to `dst` (#478).
+        Step::Call {
+            callee,
+            args,
+            state: kept,
+        } => push_resume_frame(state, index, kept, callee, args, dst)?,
+    }
     Ok(None)
 }
 

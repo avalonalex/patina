@@ -18,12 +18,79 @@ pub type TaggedHandler = fn(&SharedHeap, &[TaggedValue]) -> Result<TaggedValue, 
 pub type HOTaggedHandler =
     fn(&dyn ApplyContext, Vec<TaggedValue>) -> Result<TaggedValue, EvalError>;
 
+/// What a resumable primitive asks of the machine running it.
+///
+/// A primitive that has to call a procedure the program gave it, and then
+/// carry on with the result, cannot do the call itself from Rust: a
+/// continuation captured inside the procedure cannot carry the Rust frame, so
+/// re-entered after the primitive returned it has nothing to return into
+/// (#471, #476–#478). So it hands the call to the machine instead — the VM
+/// runs it in a stub frame, the tree-walker as a continuation — and is
+/// resumed with the result, with the state it asked to keep. Nothing of the
+/// primitive is on the Rust stack while the procedure runs.
+pub enum Step {
+    /// Finished, with this value.
+    Done(TaggedValue),
+    /// Call `callee` with `args`; when it returns `v`, resume the primitive
+    /// with `state` and `v`. `state` is whatever the rest of the primitive
+    /// needs — a value the machine keeps where the collector sees it, and
+    /// which a continuation captured in the call carries along.
+    Call {
+        callee: TaggedValue,
+        args: CallArgs,
+        state: TaggedValue,
+    },
+}
+
+/// The arguments of a [`Step::Call`]: held inline up to three, which covers
+/// every call a resumable primitive makes, so asking for one allocates
+/// nothing.
+pub type CallArgs = smallvec::SmallVec<[TaggedValue; 3]>;
+
+/// A resumable primitive's first half: its arguments in, a [`Step`] out.
+pub type ResumableStart = fn(&dyn ApplyContext, &[TaggedValue]) -> Result<Step, EvalError>;
+
+/// A resumable primitive's continuation: the `state` its last [`Step::Call`]
+/// asked to keep, and what the call returned.
+pub type ResumableResume =
+    fn(&dyn ApplyContext, TaggedValue, TaggedValue) -> Result<Step, EvalError>;
+
 /// Handler variant for a primitive
 pub enum PrimitiveHandler {
     /// Heap-only: only needs SharedHeap
     Heap(TaggedHandler),
     /// Higher-order: needs ApplyContext (for apply_proc, eval_expr, load_scheme_library)
     HigherOrder(HOTaggedHandler),
+    /// Calls a procedure and carries on with the result through the machine,
+    /// not from Rust ([`Step`]).
+    Resumable {
+        start: ResumableStart,
+        resume: ResumableResume,
+    },
+}
+
+/// Run a resumable primitive's calls from Rust, for a caller that has no
+/// machine to hand them to. What every call site did before [`Step`]
+/// existed, and still right wherever no continuation can be captured in the
+/// call; the machines take the other route.
+fn run_synchronously(
+    ctx: &dyn ApplyContext,
+    mut step: Step,
+    resume: ResumableResume,
+) -> Result<TaggedValue, EvalError> {
+    loop {
+        match step {
+            Step::Done(value) => return Ok(value),
+            Step::Call {
+                callee,
+                args,
+                state,
+            } => {
+                let result = ctx.apply_proc(callee, args.into_vec())?;
+                step = resume(ctx, state, result)?;
+            }
+        }
+    }
 }
 
 /// Handler-side exact-arity check: the standard `WrongArity` error every
@@ -79,6 +146,26 @@ impl PrimitiveFn {
             arity,
             help,
             handler: PrimitiveHandler::HigherOrder(handler),
+        }
+    }
+
+    /// A primitive that calls a procedure by asking the machine to (see
+    /// [`Step`]): `start` runs on the arguments, and `resume` each time a call
+    /// it asked for returns.
+    pub fn new_resumable(
+        library: &'static str,
+        name: &'static str,
+        arity: Arity,
+        help: &'static str,
+        start: ResumableStart,
+        resume: ResumableResume,
+    ) -> Self {
+        PrimitiveFn {
+            library,
+            name,
+            arity,
+            help,
+            handler: PrimitiveHandler::Resumable { start, resume },
         }
     }
 
@@ -261,6 +348,9 @@ impl PrimitiveRegistry {
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()),
+            PrimitiveHandler::Resumable { start, resume } => {
+                run_synchronously(ctx, start(ctx, args)?, *resume)
+            }
         }
     }
 
@@ -277,6 +367,55 @@ impl PrimitiveRegistry {
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), &args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+            PrimitiveHandler::Resumable { start, resume } => {
+                run_synchronously(ctx, start(ctx, &args)?, *resume)
+            }
+        }
+    }
+
+    /// The resumable primitive at `index`'s two halves, if it is one — for a
+    /// machine that runs its calls itself rather than through
+    /// [`Self::apply_by_index`].
+    pub fn resumable(&self, index: usize) -> Option<(ResumableStart, ResumableResume)> {
+        match &self.entries.get(index)?.handler {
+            PrimitiveHandler::Resumable { start, resume } => Some((*start, *resume)),
+            _ => None,
+        }
+    }
+
+    /// Apply the primitive at `index` as a machine that makes a resumable
+    /// primitive's calls itself: a resumable one's first [`Step`], and any
+    /// other's value as [`Step::Done`] — so one dispatch serves both, where
+    /// [`Self::apply_by_index`] would run the calls from Rust.
+    pub fn start(
+        &self,
+        index: usize,
+        args: &[TaggedValue],
+        ctx: &dyn ApplyContext,
+    ) -> Result<Step, EvalError> {
+        let primitive = self.entry(index)?;
+        primitive.check_arity(args.len())?;
+        match &primitive.handler {
+            PrimitiveHandler::Heap(h) => h(ctx.heap(), args).map(Step::Done),
+            PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()).map(Step::Done),
+            PrimitiveHandler::Resumable { start, .. } => start(ctx, args),
+        }
+    }
+
+    /// Resume the resumable primitive at `index` with the state its last
+    /// call kept and what that call returned.
+    pub fn resume(
+        &self,
+        index: usize,
+        state: TaggedValue,
+        result: TaggedValue,
+        ctx: &dyn ApplyContext,
+    ) -> Result<Step, EvalError> {
+        match &self.entry(index)?.handler {
+            PrimitiveHandler::Resumable { resume, .. } => resume(ctx, state, result),
+            _ => Err(EvalError::InternalError(format!(
+                "primitive {index} is not resumable"
+            ))),
         }
     }
 

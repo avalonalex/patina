@@ -300,8 +300,10 @@ There are **two** probe sets, one per call shape, and they differ in order:
   the stack. It carried its own narrower probe set until 2026-09-05 (no control
   primitive: issue #186), so `(call-with-values (lambda () (values + '(1 2)))
   apply)` failed at a name lookup
-- **`call_any_sync()`** — `call_any()` plus the nested `run_loop_until()` for a
-  callee that did push a frame; reached when a parameter is *set* by calling it
+- A parameter *set*, `(p v)`, is `%parameter-set!`, a resumable primitive
+  (`patina_primitives::Step`): the call paths send it there before
+  `try_call_parameter` sees it, and its converter runs in `resume_stub`'s
+  frame. It ran on a nested loop through `call_any_sync()` until #478
 - A `with-exception-handler` thunk that finishes without a frame closes its
   handler extent by truncating to the handler-stack length recorded before
   installation. A prompt body does the same for prompts. Neither can rely on
@@ -777,9 +779,10 @@ Notes on the cells that are not a plain yes:
   Rust frame. So the procedures that call back into the program are Scheme
   (#471; `member`, `assoc`, `call-with-port` and the file variants, beside
   `map` and `for-each`) or, on the VM, run the callee as a frame of the
-  machine (`force`, a control primitive with a stub since #476), and the
-  ones still primitives are wrong there — `eval`/`load` (#477), parameter
-  converters (#478). #420
+  machine (`force`, a control primitive with a stub since #476; a parameter's
+  converter, the call of a resumable primitive in `resume_stub`'s frame since
+  #478), and the one still a primitive is wrong there — `eval`/`load`
+  (#477). #420
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it
