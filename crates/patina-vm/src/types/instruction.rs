@@ -513,6 +513,24 @@ pub enum Instruction {
     /// `runtime/control.rs`.
     ResumeRaise,
 
+    /// What `force` owes once a promise's thunk has returned: R7RS 7.3's
+    /// bookkeeping, one turn of it. Never emitted by the compiler — the
+    /// middle instruction of `force_stub`, `Call thunk` / `ResumeForce` /
+    /// `Return`. If the promise is done — the thunk forced it re-entrantly —
+    /// its value stands; if the thunk returned a promise (`delay-force`), this
+    /// one takes its state and, if that is not done, the frame goes round
+    /// again from the top with its thunk; otherwise this one is done, holding
+    /// what the thunk returned. The value lands in the register the `Return`
+    /// reads.
+    ///
+    /// A frame rather than Rust (#476): a continuation captured inside the
+    /// thunk carries it, so re-entered after `force` returned it still settles
+    /// the promise and returns its first value. The primitive `force` ran the
+    /// thunk across a re-entry boundary, which no continuation can carry, and
+    /// answered a stray internal value there. Its frame's registers are the
+    /// `force_step` module in `runtime/control.rs`.
+    ResumeForce,
+
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },

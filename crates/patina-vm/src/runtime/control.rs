@@ -98,7 +98,8 @@
 //! extension; `value_wind_stub` completes ordinary dynamic-wind;
 //! `value_cwv_stub` applies a value-form `call-with-values`' consumer;
 //! `abort_handler_stub` delivers the landing's result; `raise_step_stub`
-//! reinstalls a continuable handler or raises a secondary exception. Their
+//! reinstalls a continuable handler or raises a secondary exception;
+//! `force_stub` settles a promise once its thunk has returned. Their
 //! register layouts are shared with the existing `Resume*` instruction arms.
 //! Native Rust stack frames are not captured; moving a call into this module
 //! does not make a synchronous native callback replayable.
@@ -118,7 +119,7 @@ use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
 use crate::types::{CallFrame, CodeObjectId};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
-use patina_core::heap::SharedHeap;
+use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use std::rc::Rc;
@@ -797,6 +798,41 @@ fn handle_control_primitive(
             state.set_reg(dst, packed);
         }
 
+        VmControlPrimitive::Force => {
+            // (force obj) — R7RS §4.2.5. A promise that is done, and anything
+            // that is not a promise, is answered here; a delayed promise's
+            // thunk runs in `force_stub`'s frame, so that what `force` still
+            // owes when it returns is a pc a continuation captured in the
+            // thunk restores (#476).
+            if args.len() != 1 {
+                return Err(VmError::ArityMismatch {
+                    expected: "1".into(),
+                    got: args.len(),
+                });
+            }
+            let obj = args[0];
+            let cell = state.heap.borrow().get_promise(obj);
+            let state_now = cell.as_deref().map(|cell| *cell.borrow());
+            match state_now {
+                None => state.set_reg(dst, obj),
+                Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
+                Some(PromiseState::Delayed(thunk)) => {
+                    let code = force_stub(state)?;
+                    let base = state.alloc_registers(force_step::NUM_REGS);
+                    state.frames.push(CallFrame {
+                        pc: 0,
+                        register_base: base,
+                        num_regs: force_step::NUM_REGS,
+                        closure: None,
+                        return_reg: dst,
+                        code,
+                    });
+                    state.set_reg_at(base, force_step::PROMISE, obj);
+                    state.set_reg_at(base, force_step::THUNK, thunk);
+                }
+            }
+        }
+
         VmControlPrimitive::CallWithValues => {
             // (call-with-values producer consumer)
             if args.len() != 2 {
@@ -1347,8 +1383,9 @@ pub(super) fn step_wind_jump(
     // a later form of the same `load` resumes the earlier one's remainder
     // and carries on (`escape_from_primitive.rs`). Nothing can make
     // returning into a primitive that is done right, which is why the
-    // procedures that call back into the program are Scheme (#471); the
-    // ones that are still primitives are #476, #477 and #478.
+    // procedures that call back into the program are Scheme (#471) or run
+    // the callee as a frame (`force`, #476); the ones still wrong there are
+    // #477 and #478.
     let kept = cc
         .reentry
         .iter()
@@ -1494,7 +1531,7 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 /// Both callers want the same three properties, and stating them once is the
 /// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — none of its six stubs has constants to trace, but
+/// without qualification — none of its seven stubs has constants to trace, but
 /// the invariant is cheaper to keep than to caveat, and a stub that ever does
 /// need them inherits the rule rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
@@ -1699,9 +1736,10 @@ mod value_cwv {
 /// continuation captured in a primitive consumer's callback holds this frame
 /// suspended past its last instruction, and re-entered after the primitive
 /// has returned it stops there with a `PC out of bounds` error. The
-/// procedures that call back into the program are Scheme since #471, so that
-/// takes one that is still a primitive: `force` (#476), `eval` (#477), a
-/// parameter whose converter the call runs (#478).
+/// procedures that call back into the program are Scheme since #471, or run
+/// the callee as a frame (`force`, #476), so that takes one that is still a
+/// primitive: `eval` (#477), a parameter whose converter the call runs
+/// (#478).
 ///
 /// # State contract
 ///
@@ -1748,6 +1786,104 @@ pub(super) fn captured_reentry(state: &VmState) -> Rc<[u64]> {
 thread_local! {
     /// The one empty boundary stack every capture outside a boundary shares.
     static EMPTY_REENTRY: Rc<[u64]> = Rc::from(Vec::new());
+}
+
+/// The registers of the stub frame `force` runs a delayed promise's thunk in.
+/// See [`force_stub`] and [`Instruction::ResumeForce`].
+pub(super) mod force_step {
+    /// The promise being forced.
+    pub(in crate::runtime) const PROMISE: u16 = 0;
+    /// The thunk the frame calls: the promise's, or on a later turn that of
+    /// the promise a `delay-force` handed it.
+    pub(in crate::runtime) const THUNK: u16 = 1;
+    /// What the thunk returned, and then the value the frame returns.
+    pub(in crate::runtime) const RESULT: u16 = 2;
+    /// Window size of the stub frame.
+    pub(in crate::runtime) const NUM_REGS: u16 = 3;
+}
+
+/// The code object a delayed promise's thunk runs in: `Call thunk` /
+/// `ResumeForce` / `Return`. A frame of the machine rather than a Rust call,
+/// like the value forms' stubs, so a continuation captured in the thunk
+/// carries the rest of the force (#476).
+///
+/// # State contract
+///
+/// Returns loaded/cached stub code via runtime_stub. Changes only the code
+/// store/cache; no frame is pushed and no Scheme code runs.
+fn force_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
+    let instructions = vec![
+        Instruction::Call {
+            func: force_step::THUNK,
+            args: vec![],
+            dst: force_step::RESULT,
+        },
+        Instruction::ResumeForce,
+        Instruction::Return {
+            val: force_step::RESULT,
+        },
+    ];
+    runtime_stub(
+        state,
+        |s| s.force_code,
+        |s, id| s.force_code = Some(id),
+        "force",
+        instructions,
+        force_step::NUM_REGS,
+    )
+}
+
+/// One turn of `force`'s bookkeeping, after the promise's thunk returned
+/// into `force_stub`'s frame at `base`; see [`Instruction::ResumeForce`].
+///
+/// # State contract
+///
+/// Requires the stub frame on top at `base`. Writes its RESULT register, or
+/// its THUNK register and pc; changes the promise's state on the heap. Calls
+/// no Scheme.
+pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmError> {
+    let promise = state.reg_at(base, force_step::PROMISE);
+    let result = state.reg_at(base, force_step::RESULT);
+    let cell = state
+        .heap
+        .borrow()
+        .get_promise(promise)
+        .ok_or_else(|| VmError::Runtime {
+            message: "force: the promise being forced is gone".into(),
+        })?;
+    let now = *cell.borrow();
+    let settled = match now {
+        // The thunk forced this promise re-entrantly: that value stands, and
+        // this thunk's result is dropped (R7RS 7.3, "unless promise-done?").
+        PromiseState::Forced(value) => Some(value),
+        PromiseState::Delayed(_) => {
+            if state.heap.borrow().is_promise(result) {
+                // `delay-force`: this promise takes the other's state, and the
+                // other shares this one's, so either forced later sees one
+                // value (`Heap::promise_update`).
+                state.heap.borrow_mut().promise_update(promise, result);
+                let cell = state.heap.borrow().get_promise(promise).expect("still one");
+                let next = *cell.borrow();
+                match next {
+                    PromiseState::Forced(value) => Some(value),
+                    PromiseState::Delayed(thunk) => {
+                        state.set_reg_at(base, force_step::THUNK, thunk);
+                        None
+                    }
+                }
+            } else {
+                *cell.borrow_mut() = PromiseState::Forced(result);
+                Some(result)
+            }
+        }
+    };
+    match settled {
+        Some(value) => state.set_reg_at(base, force_step::RESULT, value),
+        // Not done: round again from the `Call`, in this same frame, so a
+        // chain of `delay-force`s runs in constant space.
+        None => state.frames.last_mut().expect("the stub frame").pc = 0,
+    }
+    Ok(())
 }
 
 /// The handler stack a `dynamic-wind` record captures.
@@ -2013,6 +2149,7 @@ pub(crate) enum VmControlPrimitive {
     RaiseContinuable,
     Error,
     Exit,
+    Force,
 }
 
 /// The single source of truth for which qualified names the VM intercepts.
@@ -2022,8 +2159,8 @@ pub(crate) enum VmControlPrimitive {
 /// `compiler/primitive_calls.rs`).
 ///
 /// The predicate is "the registry cannot implement this — it needs the VM's
-/// own call machinery". For twelve of the thirteen the reason is control flow: a
-/// directly dispatched registry handler would bypass the VM's
+/// own call machinery". For thirteen of the fourteen the reason is control
+/// flow: a directly dispatched registry handler would bypass the VM's
 /// continuation/exception cooperation. `apply` is the exception and is why the
 /// predicate is worded that way rather than as "control primitives": spreading
 /// a list into a call is not control flow, but it is equally impossible from
@@ -2069,6 +2206,10 @@ pub(crate) const VM_INTERCEPTED_PRIMITIVES: &[(&str, VmControlPrimitive)] = &[
     // Bound in `(patina internal system)` with `emergency-exit`, which is not
     // intercepted: it runs no after thunks, so the registry's is all it needs.
     ("patina.internal.system/exit", VmControlPrimitive::Exit),
+    // Intercepted so that a delayed promise's thunk runs as a frame of the
+    // machine (`force_stub`, #476); the registry's `force` ran it across a
+    // re-entry boundary.
+    ("patina.internal.lazy/force", VmControlPrimitive::Force),
 ];
 
 /// If `func_val` is a VM-intercepted control primitive, return which one.

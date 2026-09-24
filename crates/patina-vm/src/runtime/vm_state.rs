@@ -152,6 +152,9 @@ pub struct VmState {
     /// (`raise_step_stub`). Built on the first raise that reaches a
     /// handler; a program that never raises never builds one.
     pub(crate) raise_step_code: Option<CodeObjectId>,
+    /// Id of the three-instruction stub a delayed promise's thunk is run in
+    /// (`force_stub`). Built on the first `force` of a promise not yet done.
+    pub(crate) force_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -256,6 +259,7 @@ impl VmState {
             abort_handler_code: None,
             invoke_step_code: None,
             raise_step_code: None,
+            force_code: None,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -1238,12 +1242,12 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 ///
 /// The innermost frame is not always the one that *has* a source map. The
 /// stubs the runtime builds rather than compiles carry none at all —
-/// `value_wind_stub`, `wind_jump_stub`, `invoke_step_stub`,
-/// `abort_handler_stub` and `raise_step_stub` — and any of them can be
-/// the top frame when an error is raised: the value form's thunks tail-call
-/// out of their own frames, leaving the stub innermost, and a jump's, a
-/// composable invoke's re-entry thunks, an abort's handler and a raise's
-/// handler do the same. Read
+/// `value_wind_stub`, `value_cwv_stub`, `wind_jump_stub`, `invoke_step_stub`,
+/// `abort_handler_stub`, `raise_step_stub` and `force_stub` — and any of them
+/// can be the top frame when an error is raised: the value form's thunks
+/// tail-call out of their own frames, leaving the stub innermost, and a
+/// jump's, a composable invoke's re-entry thunks, an abort's handler, a
+/// raise's handler and a promise's thunk do the same. Read
 /// literally, that costs the error its caret entirely — `(dw (lambda () 1)
 /// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
 /// head-position `dynamic-wind` printed file, line and source line.
@@ -1663,6 +1667,12 @@ fn dispatch_one_instruction(
             if !state.dynamic_winds.is_empty() {
                 state.dynamic_winds.pop();
             }
+        }
+
+        Instruction::ResumeForce => {
+            // A promise's thunk has returned into `force_stub`'s frame; see
+            // [`Instruction::ResumeForce`].
+            super::control::resume_force(state, base)?;
         }
 
         Instruction::ResumeRaise => {

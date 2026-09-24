@@ -393,6 +393,7 @@ intercepted at call dispatch time.
 | `Raise` | `raise` | Pop handler, push `raise_step_stub` — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
 | `Error` | `error` | Construct error object, then Raise |
+| `Force` | `force` | A done promise's value, or a non-promise itself; a delayed promise's thunk runs in `force_stub`'s frame (`Call thunk` / `ResumeForce` / `Return`, #476) |
 | `Exit` | `exit` | Jump to an empty target outside every extent: the travel runs each outstanding after thunk (§5.3), and arrival ends the process (#336) |
 
 ### 5.2 Exception Handling
@@ -635,11 +636,14 @@ case, closed on arrival — see §5.5's note on issue #176.
 
 #### Aborting out of a Rust primitive's callback
 
-A primitive that calls back into Scheme — `force`, `map`, `assoc` with a
-comparator, a `parameterize` converter — runs a **nested dispatch loop** under
-a Rust frame it will lose if control leaves. `across_reentry` guards those
-boundaries by frame depth: a stack shorter than the one the call started with
-means the frames the Rust code owned are gone.
+A primitive that calls back into Scheme — `eval`, a `parameterize` converter,
+and when #177 was found also `force`, `map` and `assoc` with a comparator
+(Scheme since #471, and `force` a VM control primitive since #476) — runs a
+**nested dispatch loop** under a Rust frame it will lose if control leaves.
+`across_reentry` guards those boundaries. Since #475 a continuation that
+arrives from outside one leaves it (`VmState::reentry`); when #177 was found
+the test was frame depth alone — a stack shorter than the one the call
+started with means the frames the Rust code owned are gone.
 
 **An abort is the shape that depth cannot see** (issue #177). It cuts every
 stack back to its prompt and pushes one stub frame that has yet to run, so
@@ -772,8 +776,10 @@ Notes on the cells that are not a plain yes:
   be right for a callback whose primitive is done: no continuation carries a
   Rust frame. So the procedures that call back into the program are Scheme
   (#471; `member`, `assoc`, `call-with-port` and the file variants, beside
-  `map` and `for-each`), and the ones still primitives are wrong there —
-  `force` (#476), `eval`/`load` (#477), parameter converters (#478). #420
+  `map` and `for-each`) or, on the VM, run the callee as a frame of the
+  machine (`force`, a control primitive with a stub since #476), and the
+  ones still primitives are wrong there — `eval`/`load` (#477), parameter
+  converters (#478). #420
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it

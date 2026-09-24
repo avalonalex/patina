@@ -306,15 +306,19 @@ same way.
 | `ResumeWindJump` | Take the next step of a continuation jump that is running wind thunks (§7.3). Never emitted by the compiler: it is the whole body of the stub frame the runtime pushes under each thunk. |
 | `ResumeComposableInvoke` | Take the next step of a composable-continuation invoke that is running the `before` thunks of the extents it re-enters. Never emitted by the compiler, and the analogue of `ResumeWindJump`: it is the whole body of the stub frame pushed under each of those thunks, so that the rest of the invoke is a pc a re-entering continuation restores. It is a separate mechanism rather than a use of the jump's because a jump's target *replaces* the machine and a composable invoke's *extends* it — the handler stack a thunk runs under differs accordingly (see `install_thunk_handlers`). |
 | `ResumeRaise` | The bookkeeping a `raise` owes once its handler has returned: re-push the handler for a `raise-continuable` (R7RS 6.11 reinstalls it for the rest of the thunk), or raise the secondary exception for a non-continuable one. Never emitted by the compiler — the middle instruction of `raise_step_stub`. A frame rather than Rust, so that a continuation captured inside the handler carries the debt: `guard`'s `handler-k` and an abort's composable continuation both replay it (issue #178). |
+| `ResumeForce` | What `force` owes once a delayed promise's thunk has returned (R7RS 7.3): keep the promise's value if the thunk forced it re-entrantly; take the returned promise's state for a `delay-force`, and go round again from the top of the frame if that is not done; otherwise make the promise done with what the thunk returned. Never emitted by the compiler — the middle instruction of `force_stub`. A frame rather than Rust, so that a continuation captured inside the thunk, re-entered after `force` returned, still settles the promise and returns its first value (issue #476). |
 
-**Six** instruction sequences are likewise never emitted by the compiler but
+**Seven** instruction sequences are likewise never emitted by the compiler but
 built by the runtime as whole code objects: the two one-instruction stubs
 above (`wind_jump_stub`, `invoke_step_stub`), the two-instruction stub an
 **abort** lands on (`abort_handler_stub` — `Call handler(val, k)` / `Return`,
 which is what makes the handler call a frame), the three-instruction stub a
 **raise** runs its handler in (`raise_step_stub` — `Call handler(exception)` /
 `ResumeRaise` / `Return`, which is what makes everything the raise still owes
-a pc), the six-instruction stub
+a pc), the three-instruction stub `force` runs a delayed promise's thunk in
+(`force_stub`, #476 — `Call thunk` / `ResumeForce` / `Return`, where
+`ResumeForce` settles the promise or, for a `delay-force`, sends the frame
+round again with the next thunk), the six-instruction stub
 the **value form** of `dynamic-wind` runs
 (`value_wind_stub`) — `Call before` / `PushWind` / `Call body` / `PopWind` /
 `Call after` / `Return`, the same instructions in the same order that pass 5
@@ -348,6 +352,7 @@ The `VmControlPrimitive` enum:
 | `Raise` | `raise` |
 | `RaiseContinuable` | `raise-continuable` |
 | `Error` | `error` |
+| `Force` | `force` |
 
 These are detected via `vm_control_primitive()` which checks if a function value
 matches a known control primitive, then dispatched via `handle_control_primitive()`.
