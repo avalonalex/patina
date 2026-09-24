@@ -118,8 +118,15 @@
 ;; the abort truncates to the prompt's frame depth, and the value form's
 ;; bookkeeping is frames rather than a Rust call the truncation walked out
 ;; from under. On both backends since the tree-walker's prompt API (#169).
+;;
+;; `dw-vf` computes its operator, so the call reaches `dynamic-wind` only as a
+;; value, where it was written. `(define dw-vf dynamic-wind)` stopped doing
+;; that with #442: a global holding the procedure when a call through it is
+;; compiled gets head position's sequence, as the name does.
 
-(define dw-vf dynamic-wind)
+(define (vf-value procedure) procedure)
+(define-syntax dw-vf
+  (syntax-rules () ((_ arg ...) ((vf-value dynamic-wind) arg ...))))
 (define t-vf (make-continuation-prompt-tag 'value-form))
 (define (vf-probe body)
   (let ((log '()))

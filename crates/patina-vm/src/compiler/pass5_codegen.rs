@@ -853,6 +853,10 @@ fn gen_inline_control(
     let to_sequence = cg.emit(Instruction::JumpUnlessShadowed { form, target: 0 });
     // The operator is loaded after the operands, and only here: `func.dst` is
     // live across the operands in the general case, so it is none of theirs.
+    // Every other call loads it first, and so does the tree-walker; an
+    // operand that rebinds the operator can tell the difference, which R7RS
+    // leaves unspecified (§4.1.3), and loading it only on this branch is the
+    // cost the sequence saves.
     gen_expr(func, cg)?;
     let arg_regs = arg_tmps.to_vec();
     let to_end = if is_tail {

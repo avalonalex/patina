@@ -174,16 +174,19 @@ semantics, `set!` on captured vars).
 All Scheme values except `#f` are truthy (R7RS §6.3).
 
 `JumpUnlessShadowed` is the guard in front of the sequence a head-position
-`call-with-values` or `dynamic-wind` compiles to (§4.6, #442). Pass 5 emits the
-sequence where the operator is *bound* to the form's procedure when the site is
-compiled — a renamed import and early binding's alias for a library template's
-reference included, a program's own definition of the name not — and puts the
+`call-with-values` or `dynamic-wind` compiles to (§4.6 and §7.3, #442). Pass 5
+emits the sequence where the operator is *bound* to the form's procedure when
+the site is compiled — a renamed import and early binding's alias for a library
+template's reference included, a program's own definition of the name not, nor
+a name answered through a macro-expansion alias — and puts the
 ordinary `LoadGlobal` + `Call` of the operator between the guard and the
 sequence. `VmState::shadowed_controls` holds one bit per form, set when any
 global binding holding the form's procedure is given another value; every
-writer reports that, as it does for `CallPrimitive`'s shadow bits (§4.5). Clear,
-the operator is still the procedure and the site jumps to the sequence; set,
-it falls through and calls whatever the operator holds now.
+writer of a value reports that, as it does for `CallPrimitive`'s shadow bits
+(§4.5). Clear, the operator is still the procedure and the site jumps to the
+sequence; set, it falls through and calls whatever the operator holds now. The
+bit is VM-wide and one-way: once any binding of the procedure is rebound, every
+site of that form takes the ordinary call for the rest of the run.
 
 ### 4.5 Function Calls
 

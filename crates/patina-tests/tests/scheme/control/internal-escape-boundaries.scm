@@ -51,6 +51,19 @@
 (test-begin "internal-escape-boundaries")
 
 ;; ── Escapes out of the value forms ──────────────────────────────────────────
+;;
+;; `dw` and `cwv` call the two procedures *as values*. A variable bound to one
+;; no longer does that: since #442 a call through a global that holds
+;; `dynamic-wind` when the call is compiled gets head position's instruction
+;; sequence, as the name itself does, so `(define dw dynamic-wind)` tested the
+;; head form twice. Each is a macro whose operator is computed instead, which
+;; reaches the procedure only as a value and keeps the call where it was
+;; written — tail or not, in the frame it was written in.
+(define (as-value procedure) procedure)
+(define-syntax dw
+  (syntax-rules () ((_ arg ...) ((as-value dynamic-wind) arg ...))))
+(define-syntax cwv
+  (syntax-rules () ((_ arg ...) ((as-value call-with-values) arg ...))))
 
 ;; A2 — `dynamic-wind` called as a value, escaped out of from its body.
 ;;
@@ -64,8 +77,6 @@
 ;; frame depth from the top-level program it used to be, and the abort was never
 ;; something a green run could demonstrate anyway. What is pinned is the answer:
 ;; the escape delivers 7. Reproducing the original abort needs the pre-fix VM.
-(define dw dynamic-wind)
-
 (define (escape-from-a-wide-frame k)
   (let ((x1 1) (x2 2) (x3 3) (x4 4) (x5 5) (x6 6) (x7 7) (x8 8)
         (x9 9) (x10 10) (x11 11) (x12 12) (x13 13) (x14 14) (x15 15))
@@ -106,7 +117,6 @@
 
 ;; C3 — `call-with-values` as a value, producer escapes. The consumer ran
 ;; anyway, on the escape value, and its result then replaced it.
-(define cwv call-with-values)
 (define consumer-ran 'no)
 (test-equal "escape from a call-with-values producer called as a value" '(42 no)
   (let ((r (call/cc (lambda (k)

@@ -123,6 +123,36 @@ fn control_forms_set_after_use_deoptimize() {
     );
 }
 
+/// A name a macro's definition introduced, reached by its bare spelling, is
+/// an alias, and a second expansion re-points it without writing the binding
+/// it reached — so no shadow mark is set, and a site compiled against the
+/// first must not have trusted it. Found in review of #442, which made the
+/// `call-with-values` half of this answer `(cwv 1)`; the `car` half answered
+/// `1` on main already. Both now call what the alias reaches, as the
+/// tree-walker does.
+///
+/// chibi and Gauche report `helper` unbound instead: the definition is
+/// hygienically the macro's, and Patina's bare-name reach into it is #269.
+/// What is pinned here is only that the VM's fast paths agree with its
+/// ordinary calls.
+#[test]
+fn a_re_pointed_alias_is_never_a_fast_path() {
+    assert_eq!(
+        eval(
+            "(define-syntax def-helper (syntax-rules () ((_ v) (define helper v)))) \
+             (def-helper call-with-values) \
+             (define (f) (helper (lambda () 1) (lambda (x) (list 'cwv x)))) \
+             (def-helper (lambda (p c) 'second)) \
+             (define-syntax def-h2 (syntax-rules () ((_ v) (define h2 v)))) \
+             (def-h2 car) \
+             (define (g) (h2 '(1 2))) \
+             (def-h2 cdr) \
+             (list (f) (g))"
+        ),
+        "(second (2))"
+    );
+}
+
 #[test]
 fn deopt_is_per_primitive() {
     // Rebinding car must not disturb cdr's fast path.

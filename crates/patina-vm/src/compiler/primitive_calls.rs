@@ -177,12 +177,26 @@ pub fn resolve_primitive_calls(
 
     let mut map = PrimitiveCallMap::default();
     for name in callees.names {
+        // Only a binding of the environment's own. A name it answers through
+        // a macro-expansion alias, or as the name-only view of a definition a
+        // macro introduced, can be pointed at another binding without any
+        // write to the one it reaches now, which is what the shadow marks
+        // watch — a second expansion defining it again re-points the alias.
+        // The environment is parentless (asserted in `compile_pipeline`), so
+        // no local slot means one of those. Imports, and the aliases early
+        // binding makes, are slots of their own and keep their fast paths.
+        if env.local_slot(&name).is_none() {
+            continue;
+        }
         let Some(val) = env.get(&name) else { continue };
-        if let Some(form) = control_form(val, heap) {
+        let Some(proc) = heap.borrow().get_procedure(val) else {
+            continue;
+        };
+        if let Some(form) = control_form(&proc) {
             map.control.insert(name, form);
             continue;
         }
-        let Some((index, canonical)) = registry_entry(val, heap, registry) else {
+        let Some((index, canonical)) = primitive_entry(&proc, registry) else {
             continue;
         };
         map.by_name.insert(
@@ -194,7 +208,8 @@ pub fn resolve_primitive_calls(
         );
     }
     for val in callees.values {
-        if let Some((index, _)) = registry_entry(val, heap, registry) {
+        let proc = heap.borrow().get_procedure(val);
+        if let Some((index, _)) = proc.and_then(|proc| primitive_entry(&proc, registry)) {
             map.by_value
                 .insert(val.raw_bits(), PrimitiveFnId(index as u32));
         }
@@ -202,33 +217,24 @@ pub fn resolve_primitive_calls(
     map
 }
 
-/// The control form `val` is the procedure of, if it has an instruction
-/// sequence. Asked of the value by the runtime's own classification, so a
-/// procedure the VM intercepts as `call-with-values` is the one compiled as it.
-fn control_form(
-    val: patina_core::tagged_value::TaggedValue,
-    heap: &SharedHeap,
-) -> Option<ControlForm> {
-    let proc = heap.borrow().get_procedure(val)?;
-    let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
+/// The control form `proc` is the procedure of, if it has an instruction
+/// sequence. Asked by the runtime's own classification, so a procedure the
+/// VM intercepts as `call-with-values` is the one compiled as it.
+fn control_form(proc: &Procedure) -> Option<ControlForm> {
+    let Procedure::Primitive { qualified_name, .. } = proc else {
         return None;
     };
     crate::runtime::control::control_form(qualified_name)
 }
 
-/// The registry index and canonical qualified name of the primitive `val`
+/// The registry index and canonical qualified name of the primitive `proc`
 /// is, if it is one that may be called by index.
-fn registry_entry(
-    val: patina_core::tagged_value::TaggedValue,
-    heap: &SharedHeap,
-    registry: &PrimitiveRegistry,
-) -> Option<(usize, String)> {
-    let proc = heap.borrow().get_procedure(val)?;
+fn primitive_entry(proc: &Procedure, registry: &PrimitiveRegistry) -> Option<(usize, String)> {
     let Procedure::Primitive {
         qualified_name,
         registry_index,
         ..
-    } = proc.as_ref()
+    } = proc
     else {
         return None;
     };

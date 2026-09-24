@@ -146,9 +146,16 @@ pub enum Instruction {
     /// operator was bound to the form's procedure when it was compiled; the
     /// shadow mark (`VmState::shadowed_controls`) is set when any global
     /// binding holding that procedure is given another value, which every
-    /// writer reports, as it does for `CallPrimitive`'s shadow bits. So while
-    /// the mark is clear the operator is still that procedure, and once it is
-    /// set every such site calls whatever its operator is now.
+    /// writer of a value reports, as it does for `CallPrimitive`'s shadow
+    /// bits. So while the mark is clear the operator is still that procedure,
+    /// and once it is set every such site calls whatever its operator is now.
+    /// Two things keep that true: the compiler gives a fast path only to a
+    /// binding of the environment's own, never to a name answered through a
+    /// macro-expansion alias, which can be re-pointed without a write
+    /// (`resolve_primitive_calls`); and a top-level `define-syntax` over the
+    /// name reports nothing, for these sites as for `CallPrimitive`'s, so one
+    /// compiled before it keeps the procedure — as chibi's does, where Gauche
+    /// and the tree-walker raise.
     JumpUnlessShadowed { form: ControlForm, target: usize },
 
     // ── Function Calls ────────────────────────────────────────────────────────
