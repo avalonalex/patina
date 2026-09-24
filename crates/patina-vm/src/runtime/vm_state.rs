@@ -1593,29 +1593,20 @@ fn dispatch_one_instruction(
         } => {
             let consumer_val = state.reg_at(base, consumer);
             let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
-            // Pop current frame (tail position), then call consumer.
-            let frame = state
-                .frames
-                .pop()
-                .expect("TailCallWithValues with empty stack");
-            let return_reg = frame.return_reg;
-            state.free_top_registers(frame.register_base);
-            if state.frames.len() == exit_depth {
-                // At exit depth — call consumer; if it returns immediately,
-                // return the result.
-                // One test, not two: `call_any` answers `Some` exactly when
-                // the depth is unchanged, and the depth here *is* `exit_depth`
-                // — so a `None` says the consumer pushed a frame and the loop
-                // has to run it. A second `frames.len() == exit_depth` check
-                // used to follow this, unreachable under that contract and
-                // reading a register the frame it names may not have.
-                if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)? {
-                    return Ok(Some(result));
-                }
-            } else if let Some(result) = call_any(state, consumer_val, &produced_vals, return_reg)?
+            // A tail call of the consumer like any other, so it goes where
+            // `TailCall`'s callee does. That matters for a primitive consumer:
+            // `tail_call_value` runs it *before* popping this frame, so a
+            // continuation its callback invokes restores a shallower stack
+            // than the callback started on, which is how `across_reentry`
+            // tells an escape. Popping first, as this arm did until #420, put
+            // the primitive at the very depth the continuation restores to —
+            // `(call/cc (lambda (k) (call-with-values … member)))` with a
+            // comparator that called `k` lost the escape and answered
+            // `member`'s own result.
+            if let Some(exit_val) =
+                tail_call_value(state, consumer_val, &produced_vals, exit_depth)?
             {
-                state.set_reg(return_reg, result);
-                pop_resolved_extents(state, exit_depth);
+                return Ok(Some(exit_val));
             }
         }
 

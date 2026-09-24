@@ -1358,6 +1358,41 @@
   (call/cc (lambda (k)
     (let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x)))))))
 
+;; #420 — the primitive reached in tail position through a control procedure
+;; that forwards to it: `call-with-values`' consumer, and `apply` called as a
+;; value. Both popped the calling frame before running the primitive, which
+;; put it at the very depth the continuation restores to, so the escape looked
+;; like the callback returning and the VM's `member` carried on to `(1 2 3)`.
+;; A direct call, and `apply` in head position, run the primitive with the
+;; frame still there, and always worked; and only in tail position of the
+;; `call/cc` lambda does it show, since anywhere else the continuation
+;; restores a shallower stack.
+(test-equal "an escape out of a call-with-values consumer's callback" 'x
+  (call/cc (lambda (k)
+    (call-with-values (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x))))
+                      member))))
+
+(test-equal "…and out of one apply reaches as a value" 'x
+  (call/cc (lambda (k)
+    (let ((f apply)) (f member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))))
+
+;; The value form of `call-with-values` ends in the same instruction, run from
+;; a stub frame of its own (`value_cwv_stub`), which is the frame that must
+;; still be there while the consumer runs.
+(test-equal "…and out of the value form's consumer's callback" 'x
+  (call/cc (lambda (k)
+    (let ((cwv call-with-values))
+      (cwv (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))))
+
+;; The other direction, which the fix had to keep: a continuation the callback
+;; captures and invokes itself is a return, however the primitive was reached.
+(test-equal "…while one the callback uses itself is still a return" '((2 3) (2 3))
+  (let ((own (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
+    (list (call/cc (lambda (k)
+            (call-with-values (lambda () (values 2 '(1 2 3) own)) member)))
+          (call/cc (lambda (k)
+            (let ((f apply)) (f member (list 2 '(1 2 3) own))))))))
+
 ;; The primitive stops when the continuation is invoked, instead of running
 ;; on to completion. `member` would otherwise keep calling the comparator for
 ;; the remaining elements — each call re-invoking the continuation.

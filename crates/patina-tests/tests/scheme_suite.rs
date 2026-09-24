@@ -90,7 +90,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/apply.scm", 5),
     ("control/callability.scm", 31),
     ("control/case-lambda.scm", 20),
-    ("control/cps-features.scm", 107),
+    ("control/cps-features.scm", 111),
     ("control/guard.scm", 22),
     ("control/internal-escape-boundaries.scm", 13),
     ("control/parameters.scm", 18),
