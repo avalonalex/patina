@@ -5,12 +5,13 @@
 //! and global-binding invalidation. See `docs/VM_RUNTIME.md` for the design.
 
 use super::control::{
-    abort_to_prompt, call_any, call_closure_from_regs, call_value, call_value_with_probe,
-    capture_delimited, captured_handlers, classify_error, exec_call_primitive,
-    exec_call_primitive_direct, find_prompt, finish_delimited_invoke, invoke_step, is_catchable,
-    park_escape, park_transfer, pop_resolved_extents, push_invoke_step, raise_step, self_tail_call,
-    spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
-    tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
+    Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
+    call_value_with_probe, capture_delimited, captured_handlers, classify_error,
+    exec_call_primitive, exec_call_primitive_direct, find_prompt, finish_delimited_invoke,
+    invoke_step, is_catchable, park_escape, park_transfer, pop_resolved_extents, push_invoke_step,
+    raise_step, self_tail_call, spread_apply_args, step_wind_jump, tail_call_closure_resolved,
+    tail_call_value, tail_call_value_with_probe, tail_invoke_delimited, unpack_values,
+    vm_raise_value, wind_step,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -669,15 +670,16 @@ pub(super) fn vm_load_library(
     let search_paths: Vec<std::path::PathBuf> = library_registry.borrow().search_paths().to_vec();
     let heap = state.globals.heap().clone();
 
-    // Try simple (Rust) loaders first
-    let rust_result = {
-        let loaders = loader_registry.borrow();
-        loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
-    };
+    let lib = (|| -> Result<Library, LibraryError> {
+        // Try simple (Rust) loaders first
+        let rust_result = {
+            let loaders = loader_registry.borrow();
+            loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+        };
+        if let Some(lib) = rust_result {
+            return Ok(lib);
+        }
 
-    let lib = if let Some(lib) = rust_result {
-        lib
-    } else {
         // Try evaluating (Scheme .sld) loaders
         let can_load_library =
             |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
@@ -692,16 +694,18 @@ pub(super) fn vm_load_library(
             )?
         };
 
-        if let Some(parsed) = parsed {
-            vm_evaluate_parsed_library(state, parsed)?
-        } else {
-            library_registry.borrow_mut().end_loading(name);
-            return Err(LibraryError::NotFound(name.to_vec()));
+        match parsed {
+            Some(parsed) => vm_evaluate_parsed_library(state, parsed),
+            None => Err(LibraryError::NotFound(name.to_vec())),
         }
-    };
+    })();
 
-    // End loading tracking
+    // End loading tracking, whether or not the load succeeded: a failure left
+    // on the stack reads as a circular dependency to the next import of the
+    // same library, which a program can make after catching the first
+    // failure — `eval` of an `import` inside a `guard`, or `environment`.
     library_registry.borrow_mut().end_loading(name);
+    let lib = lib?;
 
     // Register the library
     let _ = library_registry.borrow_mut().register(lib);
@@ -781,8 +785,15 @@ fn vm_evaluate_parsed_library(
                 message: format!("compile error: {}", e),
             })?;
 
+            // Each body form is a re-entry boundary: a raise in it can reach
+            // a handler of the program's, and one that escapes (a `guard`
+            // around the `eval` or `environment` that loads the library)
+            // leaves this load. The rest of the body must not run then, and
+            // the library must not be registered or its exports bound.
             let top_id = state.load_unit(top, nested);
-            let result = execute_nested(state, top_id);
+            let depth_before = state.frames.len();
+            let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
+                .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
 
             result.map_err(|e| LibraryError::ParseError {
@@ -933,7 +944,9 @@ pub(super) fn vm_eval_expr(
 ///
 /// Reads the environment and registry; runs the expander, which may load
 /// libraries, and for an `import` loads its libraries and binds their
-/// exports in `env`. Loads no code and pushes no frame.
+/// exports in `env`. Loading a library runs its body, so this is a re-entry
+/// into the machine: its callers cross it as a boundary (`across_reentry`).
+/// Leaves no code of its own loaded and no frame pushed.
 fn compile_for_eval(
     state: &mut VmState,
     expr: TaggedValue,
