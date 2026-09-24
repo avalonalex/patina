@@ -152,6 +152,9 @@ pub struct VmState {
     /// (`raise_step_stub`). Built on the first raise that reaches a
     /// handler; a program that never raises never builds one.
     pub(crate) raise_step_code: Option<CodeObjectId>,
+    /// Id of the three-instruction stub a delayed promise's thunk is run in
+    /// (`force_stub`). Built on the first `force` of a promise not yet done.
+    pub(crate) force_code: Option<CodeObjectId>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -256,6 +259,7 @@ impl VmState {
             abort_handler_code: None,
             invoke_step_code: None,
             raise_step_code: None,
+            force_code: None,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -1663,6 +1667,12 @@ fn dispatch_one_instruction(
             if !state.dynamic_winds.is_empty() {
                 state.dynamic_winds.pop();
             }
+        }
+
+        Instruction::ResumeForce => {
+            // A promise's thunk has returned into `force_stub`'s frame; see
+            // [`Instruction::ResumeForce`].
+            super::control::resume_force(state, base)?;
         }
 
         Instruction::ResumeRaise => {

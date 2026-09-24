@@ -881,6 +881,22 @@
     (lambda () (list 'y (force (delay (abort-current-continuation t-177 'a3)))))
     t-177 (lambda (v k) (list 'h v))))
 
+;; `force` is not that primitive on the VM since #476: a delayed promise's
+;; thunk runs in a stub frame of the machine (`force_stub`), so the two rows
+;; above test the abort's landing through that frame. The boundary they were
+;; written for is still there under a Rust primitive's callback, so the same
+;; two shapes again through `member`'s:
+(test-equal "an abort out of a Rust primitive's callback reaches its prompt: tail" '(h a1)
+  (call-with-continuation-prompt
+    (lambda () (prim-member 1 '(1) (lambda (a b) (abort-current-continuation t-177 'a1))))
+    t-177 (lambda (v k) (list 'h v))))
+
+(test-equal "an abort out of a Rust primitive's callback reaches its prompt: non-tail" '(h a3)
+  (call-with-continuation-prompt
+    (lambda ()
+      (list 'y (prim-member 1 '(1) (lambda (a b) (abort-current-continuation t-177 'a3)))))
+    t-177 (lambda (v k) (list 'h v))))
+
 ;; An abort out of a callback reached through a *nested trampoline* — the
 ;; one a Rust primitive's callback runs on, on the tree-walker — finds its
 ;; prompt. Both backends since 2026-09-10; the VM since #177. The

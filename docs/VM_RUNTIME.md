@@ -393,6 +393,7 @@ intercepted at call dispatch time.
 | `Raise` | `raise` | Pop handler, push `raise_step_stub` — **no unwind** (§5.2) |
 | `RaiseContinuable` | `raise-continuable` | Like Raise but handler returns to raise site |
 | `Error` | `error` | Construct error object, then Raise |
+| `Force` | `force` | A done promise's value, or a non-promise itself; a delayed promise's thunk runs in `force_stub`'s frame (`Call thunk` / `ResumeForce` / `Return`, #476) |
 | `Exit` | `exit` | Jump to an empty target outside every extent: the travel runs each outstanding after thunk (§5.3), and arrival ends the process (#336) |
 
 ### 5.2 Exception Handling
@@ -772,8 +773,10 @@ Notes on the cells that are not a plain yes:
   be right for a callback whose primitive is done: no continuation carries a
   Rust frame. So the procedures that call back into the program are Scheme
   (#471; `member`, `assoc`, `call-with-port` and the file variants, beside
-  `map` and `for-each`), and the ones still primitives are wrong there —
-  `force` (#476), `eval`/`load` (#477), parameter converters (#478). #420
+  `map` and `for-each`) or, on the VM, run the callee as a frame of the
+  machine (`force`, a control primitive with a stub since #476), and the
+  ones still primitives are wrong there — `eval`/`load` (#477), parameter
+  converters (#478). #420
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it

@@ -165,6 +165,24 @@
 (define p-outer-forcing (delay (force p-inner-sum)))
 (test-equal "a promise whose body forces another promise" 3 (force p-outer-forcing))
 
+;; ── A continuation captured in a promise's body ─────────────────────────────
+
+;; #476: re-entered after `force` has returned, the body runs its remainder
+;; again and `force` returns the promise's first value, which the promise
+;; keeps (§4.2.5) — 101 each time. On the VM `force` ran the thunk from Rust,
+;; across a re-entry boundary no continuation can carry, so the re-entered
+;; body's value had nothing to return into and the VM answered a stray
+;; internal `#<cell>`. The thunk runs in a frame of the machine now
+;; (`force_stub`), which the continuation carries; the tree-walker's native
+;; `force` was already right, and chibi and Gauche agree.
+(test-equal "re-entering a promise's body after force returned keeps the first value"
+  '(101 101 101)
+  (let ((saved #f) (out '()))
+    (let* ((p (delay (+ 100 (call/cc (lambda (c) (set! saved c) 1)))))
+           (r (force p)))
+      (set! out (cons r out))
+      (if (< (length out) 3) (saved (length out)) (reverse out)))))
+
 ;; ── Lazy data structures ────────────────────────────────────────────────────
 
 ;; Shared on purpose: all three rows below are about this one shape, and the

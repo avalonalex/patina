@@ -29,9 +29,9 @@
 //! is a different defect: a Rust frame cannot be part of a continuation, so
 //! nothing can resume the primitive. The procedures that call back into the
 //! program are Scheme since #471 for that reason — `member` and `assoc` with a
-//! comparator, `call-with-port` and the file variants — and the ones still
-//! primitives are wrong there: `force` (#476), `eval`/`load` (#477), parameter
-//! converters (#478).
+//! comparator, `call-with-port` and the file variants — and the VM's `force`
+//! runs a promise's thunk in a stub frame since #476. The ones still wrong
+//! there: `eval`/`load` (#477), parameter converters (#478).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!

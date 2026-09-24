@@ -158,6 +158,7 @@ pub(crate) fn is_excluded(qualified_name: &str) -> bool {
     qualified_name.starts_with("patina.internal.control/")
         || qualified_name.starts_with("patina.internal.errors/")
         || qualified_name == "patina.internal.system/exit"
+        || qualified_name == "patina.internal.lazy/force"
 }
 
 /// Build the `CallPrimitive` emission map for one compilation unit.
