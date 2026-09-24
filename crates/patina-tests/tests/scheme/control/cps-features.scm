@@ -1376,6 +1376,14 @@
   (call/cc (lambda (k)
     (let ((f apply)) (f member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))))
 
+;; The value form of `call-with-values` ends in the same instruction, run from
+;; a stub frame of its own (`value_cwv_stub`), which is the frame that must
+;; still be there while the consumer runs.
+(test-equal "…and out of the value form's consumer's callback" 'x
+  (call/cc (lambda (k)
+    (let ((cwv call-with-values))
+      (cwv (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))))
+
 ;; The other direction, which the fix had to keep: a continuation the callback
 ;; captures and invokes itself is a return, however the primitive was reached.
 (test-equal "…while one the callback uses itself is still a return" '((2 3) (2 3))

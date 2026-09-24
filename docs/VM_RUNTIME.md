@@ -761,7 +761,8 @@ Notes on the cells that are not a plain yes:
   routes that forward to a procedure in tail position go through it — a
   `call-with-values` consumer (`TailCallWithValues`) and `apply` as a value
   (#420). A primitive as a prompt's body in tail position still runs after
-  the pop (#469)
+  the pop (#469), and a parameter's converter called as `call/cc`'s procedure
+  runs at the depth `call/cc`'s continuation restores to (#472)
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.

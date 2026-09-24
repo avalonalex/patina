@@ -281,7 +281,7 @@ from a stub (§4.8):
 | Instruction | Operands | Semantics |
 |---|---|---|
 | `CallWithValues` | `dst: Reg, consumer: Reg, producer_result: Reg` | Call consumer with the buffered values (or the single producer result); result → `dst` |
-| `TailCallWithValues` | `consumer: Reg, producer_result: Reg` | Tail-position variant: pops the frame first |
+| `TailCallWithValues` | `consumer: Reg, producer_result: Reg` | Tail-position variant: a tail call of the consumer, dispatched as `TailCall`'s callee is — a closure reuses the frame, a primitive runs before the frame is popped (#420) |
 
 Both consumer sides *take* the buffer (`mem::take`) rather than borrow it —
 deliberately, so re-entrant producer/consumer code always sees a clean

@@ -264,6 +264,13 @@ pub(super) fn spread_apply_args(
 /// The call `(apply proc arg ... arg-list)` makes: `proc`, and the fixed
 /// arguments with the final list spread onto the end.
 ///
+/// A `proc` that is `apply` again is unwrapped here, in a loop, so the
+/// procedure returned never is. Dispatching each level instead recursed in
+/// Rust once per `apply` — through `call_value` off the head of the stack,
+/// through `tail_call_value` in tail position — and a deep enough nesting
+/// built as data, `(apply apply (list apply (list apply …)))`, overflowed the
+/// native stack and aborted the process.
+///
 /// # State contract
 ///
 /// Reads only the heap; returns detached arguments or an arity or
@@ -273,14 +280,38 @@ fn apply_call(
     state: &VmState,
     args: &[TaggedValue],
 ) -> Result<(TaggedValue, Vec<TaggedValue>), VmError> {
+    let (mut callee, mut call_args) = apply_call_once(state, args)?;
+    while vm_control_primitive(state, callee) == Some(VmControlPrimitive::Apply) {
+        (callee, call_args) = apply_call_once(state, &call_args)?;
+    }
+    Ok((callee, call_args))
+}
+
+/// One level of [`apply_call`].
+///
+/// # State contract
+///
+/// As [`apply_call`].
+fn apply_call_once(
+    state: &VmState,
+    args: &[TaggedValue],
+) -> Result<(TaggedValue, Vec<TaggedValue>), VmError> {
     if args.len() < 2 {
         return Err(VmError::ArityMismatch {
             expected: "at least 2".into(),
             got: args.len(),
         });
     }
-    let mut call_args: Vec<TaggedValue> = args[1..args.len() - 1].to_vec();
-    call_args.extend(spread_apply_tail(state, *args.last().unwrap())?);
+    let fixed = &args[1..args.len() - 1];
+    let spread = spread_apply_tail(state, *args.last().unwrap())?;
+    // As in `spread_apply_args`: with no fixed prefix the flattened list *is*
+    // the argument vector, and `(f proc lst)` is the dominant shape.
+    if fixed.is_empty() {
+        return Ok((args[0], spread));
+    }
+    let mut call_args: Vec<TaggedValue> = Vec::with_capacity(fixed.len() + spread.len());
+    call_args.extend_from_slice(fixed);
+    call_args.extend(spread);
     Ok((args[0], call_args))
 }
 
@@ -301,8 +332,9 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 }
 
 /// Call any callable value from a site that has no instruction behind it.
-/// Sites include: `call-with-values`' consumer (both the instruction and the
-/// tail instruction), a prompt body, an exception-handler thunk,
+/// Sites include: `call-with-values`' consumer (the non-tail instruction; the
+/// tail one goes through [`tail_call_value`] since #420), a prompt body, an
+/// exception-handler thunk,
 /// `call/cc`'s procedure
 /// argument, a jump's wind thunks ([`push_wind_step`]), a composable invoke's
 /// re-entry thunks ([`push_invoke_step`] — a separate site with a different
@@ -327,10 +359,10 @@ fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedVal
 /// `set_reg` inside `call_value` that it reads back. It holds because the only
 /// dispatch loop whose `exit_depth` is 0 is [`super::vm_state::execute`]'s, and that loop's one
 /// frame is never popped by a tail call: pass 3 marks top-level expressions as
-/// **not** in tail position (`pass3_tail.rs`), so `TailCallWithValues` and
-/// `tail_call_value_with_probe` — the two paths that pop before dispatching —
-/// always leave a caller behind. Every other loop exits at a depth of 1 or
-/// more.
+/// **not** in tail position (`pass3_tail.rs`), so `tail_call_value_with_probe`
+/// — whose control-primitive branch pops before dispatching, and which
+/// `TailCallWithValues` goes through — always leaves a caller behind. Every
+/// other loop exits at a depth of 1 or more.
 ///
 /// It did hold its own until 2026-09-05, one probe short: primitive →
 /// parameter → continuation → closure, with **no control primitive**, which is
@@ -798,8 +830,10 @@ fn handle_control_primitive(
             // the work is spreading a list into a real call and only the VM
             // can do that. Head position does not need one: the desugarer
             // lowers `(apply f xs)` to `Instruction::Apply`. Every other route
-            // arrives here — `apply` as a value, and also `(apply +)`, which
-            // the desugarer's own arity check hands back to the value path.
+            // off the head of the stack arrives here — `apply` as a value, and
+            // also `(apply +)`, which the desugarer's own arity check hands
+            // back to the value path. In tail position `tail_call_value` takes
+            // `apply` itself, before popping the frame (#420).
             let (callee, call_args) = apply_call(state, args)?;
             // The same dispatcher `Instruction::Apply` uses, so the value form
             // and the head-position form accept the same callees.
@@ -1130,7 +1164,8 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// wherever the frame stack has just shrunk and the departing frame's value
 /// has been delivered: `Return`, and each tail-position branch that pops the
 /// frame itself because its callee (a control primitive, a primitive, a
-/// parameter, a `call-with-values` consumer) delivers straight to the caller.
+/// parameter — a `call-with-values` consumer among them, through
+/// `tail_call_value`) delivers straight to the caller.
 ///
 /// A handler is live exactly while the thunk it was installed for has a
 /// frame, which is `stack_depth < frames.len()`; the same holds of prompts.
@@ -1629,8 +1664,13 @@ mod value_cwv {
 /// their own, as [`value_wind_stub`] is for `dynamic-wind`.
 ///
 /// The tail form, so the consumer replaces this frame and returns straight
-/// to the call's destination; the frame is gone by the time it runs, as a
-/// tail call's caller is.
+/// to the call's destination, as a tail call's callee does: a closure takes
+/// over the frame's window, and a primitive or parameter runs with the frame
+/// still on the stack and pops it on return (`tail_call_value`, #420). So a
+/// continuation captured in a primitive consumer's callback holds this frame
+/// suspended past its last instruction, and re-entered after the primitive
+/// has returned it stops there with a `PC out of bounds` error — one of the
+/// wrong answers every route gives that case, on both backends (#471).
 ///
 /// # State contract
 ///

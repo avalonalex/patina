@@ -19,8 +19,11 @@
 //! popped the frame first — a `call-with-values` consumer and `apply` called
 //! as a value — which put the primitive at the very depth the continuation
 //! restores to, and the escape went unseen (#420, fixed 2026-09-23; the rows
-//! are in `cps-features.scm`). A third, a primitive as a prompt's body in
-//! tail position, is #469.
+//! are in `cps-features.scm`). Two more are open: a primitive as a prompt's
+//! body in tail position (#469), and a parameter as `call/cc`'s procedure,
+//! whose converter runs at that depth too (#472). Re-entering a callback's
+//! continuation after its primitive has returned is a different defect, on
+//! both backends (#471).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!
