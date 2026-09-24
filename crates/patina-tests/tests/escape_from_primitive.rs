@@ -13,17 +13,18 @@
 //! `ContinuationEscape` so the primitive unwinds through its own `?`, and the
 //! dispatch loop takes the value from there.
 //!
-//! The escape is told by frame depth: the continuation restores a shallower
-//! stack than the callback started on. That holds only while the primitive
-//! runs with its caller's frame on the stack, and two tail-position routes
-//! popped the frame first — a `call-with-values` consumer and `apply` called
-//! as a value — which put the primitive at the very depth the continuation
-//! restores to, and the escape went unseen (#420, fixed 2026-09-23; the rows
-//! are in `cps-features.scm`). Two more are open: a primitive as a prompt's
-//! body in tail position (#469), and a parameter as `call/cc`'s procedure,
-//! whose converter runs at that depth too (#472). Re-entering a callback's
-//! continuation after its primitive has returned is a different defect, on
-//! both backends (#471).
+//! The escape is told by the continuation, not the frames. Each re-entry
+//! boundary has an id, a continuation records the boundaries it was captured
+//! inside (`VmContinuation::reentry`), and one that arrives from outside a
+//! boundary leaves it. Frame depth told it until 2026-09-23, and could not
+//! tell every case: a continuation captured before the primitive was called
+//! and one the callback captured after a tail call popped its own frame
+//! restore the very same machine (#469, #472, #474), and one captured outside
+//! at a deeper stack restores more frames than the callback started with,
+//! which panicked (#473). #420 had closed two tail-position routes just before
+//! by running the primitive before the pop. The rows are in `cps-features.scm`
+//! and `prompts.scm`. Re-entering a callback's continuation after its
+//! primitive has returned is a different defect, on both backends (#471).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!

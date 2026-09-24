@@ -744,6 +744,7 @@ fn handle_control_primitive(
                 deliver_reg: dst,
                 exit_status: None,
                 abort_landing: false,
+                reentry: captured_reentry(state),
             };
             let cont_tv = state.alloc_vm_continuation(cont);
             // Call proc with the continuation object.
@@ -778,6 +779,8 @@ fn handle_control_primitive(
                 deliver_reg: 0,
                 exit_status: Some(status),
                 abort_landing: false,
+                // Never read: arriving ends the process first.
+                reentry: captured_reentry(state),
             });
             step_wind_jump(state, target, TaggedValue::UNSPECIFIED)?;
             return Err(park_escape(state, TaggedValue::UNSPECIFIED));
@@ -1327,6 +1330,30 @@ pub(super) fn step_wind_jump(
     if let Some(status) = cc.exit_status {
         patina_runtime::exit_status::end_process(status);
     }
+    // Which of the re-entry boundaries now on the Rust stack the target is
+    // inside: those it was captured inside that are still there, a prefix of
+    // both stacks. The rest it leaves, and every loop and `across_reentry`
+    // inside them unwinds on the way to the frames just restored — told by
+    // this, where the depths cannot tell it (`VmState::reentry`). Set anew
+    // by each arrival, since a jump made during another's travel replaces
+    // it.
+    //
+    // Only when *every* boundary the target was captured inside is still
+    // there. One captured inside a boundary that has since returned — an
+    // earlier form of a `load`, a callback whose primitive is done — is not
+    // coming from outside the boundaries now running; its frames are a
+    // machine the Rust stack no longer has, and the frame depths decide
+    // where it resumes, as they did before continuations carried these:
+    // a later form of the same `load` resumes the earlier one's remainder
+    // and carries on (`escape_from_primitive.rs`). Returning into a
+    // primitive that is done is #471's.
+    let kept = cc
+        .reentry
+        .iter()
+        .zip(&state.reentry)
+        .take_while(|(captured, active)| captured == active)
+        .count();
+    state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
     state.registers = cc.registers.clone();
     state.frames = cc.frames.clone();
     state.dynamic_winds = cc.dynamic_winds.clone();
@@ -1698,6 +1725,27 @@ fn value_cwv_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
     )
 }
 
+/// The re-entry boundaries a continuation captured now is inside
+/// (`VmContinuation::reentry`).
+///
+/// Shared when empty, as [`captured_handlers`]'s stack is: most captures
+/// happen inside no boundary at all.
+///
+/// # State contract
+///
+/// Reads the boundary stack only; changes no dynamic component.
+pub(super) fn captured_reentry(state: &VmState) -> Rc<[u64]> {
+    if state.reentry.is_empty() {
+        return EMPTY_REENTRY.with(Rc::clone);
+    }
+    Rc::from(state.reentry.as_slice())
+}
+
+thread_local! {
+    /// The one empty boundary stack every capture outside a boundary shares.
+    static EMPTY_REENTRY: Rc<[u64]> = Rc::from(Vec::new());
+}
+
 /// The handler stack a `dynamic-wind` record captures.
 ///
 /// Shared when empty: `Rc<[T]>` allocates a header even for no elements, and
@@ -1748,7 +1796,9 @@ enum Reentry {
 ///
 /// Every `ApplyContext` method, and every synchronous nested run, is such a
 /// boundary: the Rust code below it holds a stack it loses if a continuation
-/// is invoked inside. On a shrink the carried value is stashed on
+/// is invoked inside. When one arrives from outside the boundary — told by
+/// the boundaries it was captured inside ([`VmState::reentry`]), or by a
+/// stack cut below the boundary — the carried value is parked on
 /// [`VmState::pending_escape`] and the caller is told to unwind rather than
 /// carry on with frames it no longer owns.
 ///
@@ -1773,7 +1823,14 @@ fn across_reentry<T>(
     body: impl FnOnce(&mut VmState) -> Result<T, VmError>,
     value_of: impl FnOnce(&T) -> TaggedValue,
 ) -> Result<T, Reentry> {
+    // This boundary's place on `VmState::reentry`: the number of boundaries
+    // outside it. A continuation captured in here carries its id; one
+    // captured before it was entered does not, and arriving leaves it.
+    let level = state.reentry.len();
+    state.reentry.push(state.next_reentry);
+    state.next_reentry += 1;
     let result = body(state);
+    state.reentry.pop();
     // A transfer has abandoned this call whatever the depths say, and the
     // depths cannot say: an abort cuts every stack back to its prompt and
     // pushes one stub frame, which lands at exactly `depth_before` when the
@@ -1789,12 +1846,33 @@ fn across_reentry<T>(
     if state.pending_transfer {
         return Err(Reentry::Escaped);
     }
-    if state.frames.len() < depth_before {
+    // A continuation captured outside this boundary arrived inside it. Asked
+    // of the continuation, not of the frames: one captured before the
+    // primitive was called and one the callback captured after a tail call
+    // popped its own frame restore the very same machine, and only the first
+    // leaves (#469, #472); one captured outside at a deeper stack restores
+    // more frames than this boundary started with, not fewer (#473). The
+    // depth test stays as the rule it always was, for a stack cut below the
+    // boundary by a route that is not an arrival.
+    let left = state.reentry_kept.is_some_and(|kept| kept <= level);
+    if left || state.frames.len() < depth_before {
         // Any error here belongs to a call that is being abandoned; what
-        // resumes is the continuation's value, not this one's outcome.
-        let carried = result.as_ref().ok().map(value_of);
-        state.pending_escape = Some(carried.unwrap_or(TaggedValue::UNSPECIFIED));
+        // resumes is the continuation's value, not this one's outcome. The
+        // loop that saw it arrive has usually parked it already.
+        if state.pending_escape.is_none() {
+            let carried = result.as_ref().ok().map(value_of);
+            state.pending_escape = Some(carried.unwrap_or(TaggedValue::UNSPECIFIED));
+        }
         return Err(Reentry::Escaped);
+    }
+    // Not left. On a normal return a value still parked is one a
+    // continuation captured in here delivered at this boundary's own depth —
+    // the callback returning through it — which the loop parked because the
+    // depth alone read as an escape, and which `result` already carries. Left
+    // parked, the next error any loop saw was taken for that continuation
+    // arriving (#474).
+    if result.is_ok() {
+        state.pending_escape = None;
     }
     result.map_err(Reentry::Failed)
 }
@@ -2189,6 +2267,10 @@ pub(super) fn abort_to_prompt(
         deliver_reg: abort_step::RESULT,
         exit_status: None,
         abort_landing: true,
+        // The boundaries the abort is made inside: an abort's leaving them is
+        // `pending_transfer`'s to say, as it was before continuations carried
+        // these, so its landing keeps every one.
+        reentry: captured_reentry(state),
     };
     let target_tv = state.alloc_vm_continuation(target);
     match step_wind_jump(state, target_tv, val) {
@@ -2917,12 +2999,12 @@ pub(super) fn call_value_with_probe(
 /// frame's register window. Returns `Some(value)` when the enclosing
 /// `run_loop_until` must exit with `value`.
 ///
-/// **A primitive runs before the frame is popped** because that is how an
-/// escape out of its callback is told (`across_reentry`): the continuation
-/// restores a shallower stack than the callback started on. Popped first, the
-/// primitive stands at the depth of this frame's caller, which is exactly
-/// where a continuation captured just outside the tail call restores to, and
-/// the escape reads as the callback returning (#420).
+/// **A primitive runs before the frame is popped**, as any tail callee runs
+/// with its caller still returning through it. Until continuations carried
+/// their re-entry boundaries (`VmState::reentry`, #469) this was also how an
+/// escape out of the primitive's callback was told — by a shallower stack —
+/// and popping first put the primitive at exactly the depth a continuation
+/// captured just outside the tail call restores to (#420).
 ///
 /// # State contract
 ///
