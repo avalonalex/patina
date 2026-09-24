@@ -212,7 +212,7 @@
 ;; returned.
 (define (call-with-port port proc)
   (if (not (port? port))
-      (error "call-with-port expects a port as first argument"))
+      (error "call-with-port expects a port as first argument" port))
   (call-with-values
     (lambda () (proc port))
     (lambda results

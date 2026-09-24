@@ -73,6 +73,11 @@ use tempfile::TempDir;
 /// That is twice this file's own promise — "every re-entrant primitive" — has
 /// been narrower than it sounds. `eval` and the parameter set are listed now
 /// because they were missing, not only because they broke.
+///
+/// And once the other way: `member`, `assoc`, `call-with-port` and the file
+/// variants are Scheme since #471, so their rows call the primitives still
+/// under them, from `(patina internal lists)` and `(patina internal io)` —
+/// the standard names would reach no boundary at all.
 #[test]
 fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     let dir = TempDir::new().expect("temp dir");
@@ -84,14 +89,21 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     // through globals so that the `eval` row — which runs its form in a fresh
     // environment — can reach them like any other.
     const PRELUDE: &str = "(import (scheme base) (scheme lazy) (scheme file) \
-                           (scheme eval) (scheme repl)) \
+                           (scheme eval) (scheme repl) \
+                           (rename (only (patina internal lists) member assoc) \
+                                   (member prim-member) (assoc prim-assoc)) \
+                           (rename (only (patina internal io) call-with-port \
+                                         call-with-input-file call-with-output-file) \
+                                   (call-with-port prim-call-with-port) \
+                                   (call-with-input-file prim-call-with-input-file) \
+                                   (call-with-output-file prim-call-with-output-file))) \
                            (define esc #f) \
                            (define t (make-continuation-prompt-tag 'p)) \
                            (define unwound 0)";
 
     let bodies = [
-        "(member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
-        "(assoc 2 '((1 . a) (2 . b)) (lambda (a b) LEAVE))".to_string(),
+        "(prim-member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
+        "(prim-assoc 2 '((1 . a) (2 . b)) (lambda (a b) LEAVE))".to_string(),
         "(force (delay LEAVE))".to_string(),
         "(make-parameter 1 (lambda (v) LEAVE))".to_string(),
         // A parameter *set*, which reaches its converter through a different
@@ -99,9 +111,9 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
         // value into the parameter.
         "(let ((q (make-parameter 0 (lambda (v) (if (= v 5) LEAVE v))))) (q 5))".to_string(),
         "(eval 'LEAVE (interaction-environment))".to_string(),
-        "(call-with-port (open-output-string) (lambda (p) LEAVE))".to_string(),
-        format!(r#"(call-with-input-file "{input}" (lambda (p) LEAVE))"#),
-        format!(r#"(call-with-output-file "{output}" (lambda (p) LEAVE))"#),
+        "(prim-call-with-port (open-output-string) (lambda (p) LEAVE))".to_string(),
+        format!(r#"(prim-call-with-input-file "{input}" (lambda (p) LEAVE))"#),
+        format!(r#"(prim-call-with-output-file "{output}" (lambda (p) LEAVE))"#),
     ];
 
     for (transfer, wrap, leave, value) in [
@@ -225,7 +237,8 @@ fn test_load_reenters_a_continuation_captured_by_an_earlier_form() {
     );
 }
 
-/// What the port primitives do with their port when the callback escapes.
+/// What the port procedures do with their port when the callback escapes —
+/// Scheme since #471, primitives when this was written.
 /// R7RS 6.13.1: `call-with-port` closes the port "if `proc` returns" — and
 /// only then, because a `guard` clause runs after that escape and is entitled
 /// to read what the callback wrote, or to decide the port is still its own.

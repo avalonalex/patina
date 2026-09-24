@@ -1700,7 +1700,8 @@ mod value_cwv {
 /// suspended past its last instruction, and re-entered after the primitive
 /// has returned it stops there with a `PC out of bounds` error. The
 /// procedures that call back into the program are Scheme since #471, so that
-/// takes one that is still a primitive: `force` (#476), `eval` (#477).
+/// takes one that is still a primitive: `force` (#476), `eval` (#477), a
+/// parameter whose converter the call runs (#478).
 ///
 /// # State contract
 ///

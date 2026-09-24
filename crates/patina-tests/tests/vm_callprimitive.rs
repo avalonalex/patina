@@ -187,8 +187,16 @@ fn control_primitives_still_intercepted() {
 fn higher_order_primitive_through_fast_path() {
     // member's predicate form re-enters the VM from a CallPrimitive dispatch.
     // (vector-map used to be the example here, but it is an ordinary Scheme
-    // closure now — the continuation-broken Rust version was deleted.)
-    assert_eq!(eval("(member 2.0 '(1 2 3) =)"), "(2 3)");
+    // closure now — the continuation-broken Rust version was deleted.) So is
+    // `(scheme base)`'s `member` since #471, so this calls the primitive under
+    // it, from `(patina internal lists)`.
+    assert_eq!(
+        eval(
+            "(import (rename (only (patina internal lists) member) (member prim-member))) \
+             (prim-member 2.0 '(1 2 3) =)"
+        ),
+        "(2 3)"
+    );
     assert_eq!(
         eval("(import (scheme lazy)) (force (delay (+ 20 22)))"),
         "42"
