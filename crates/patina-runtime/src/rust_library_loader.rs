@@ -37,7 +37,7 @@ impl RustLibraryLoader {
         let builder = self
             .builders
             .get(name)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+            .ok_or_else(|| LibraryError::not_found(name))?;
 
         // Call the builder to populate the environment
         let exports = builder(name.to_vec(), env.clone());
@@ -159,7 +159,7 @@ mod tests {
     fn test_rust_loader_not_found() {
         let loader = RustLibraryLoader::new();
         let result = loader.load(&["nonexistent".to_string()], &[]);
-        assert!(matches!(result, Err(LibraryError::NotFound(_))));
+        assert!(matches!(result, Err(LibraryError::NotFound { .. })));
     }
 
     #[test]

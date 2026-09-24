@@ -103,12 +103,13 @@ fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str, what: &str
     })
 }
 
-/// Uniform search-path surface over the two backends' inherent methods
-/// (`add_library_search_path` / `prepend_library_search_path` are not on the
-/// `Backend` trait).
+/// Uniform library surface over the two backends' inherent methods
+/// (`add_library_search_path`, `prepend_library_search_path` and
+/// `bootstrap_error` are not on the `Backend` trait).
 trait LibraryPaths {
     fn prepend(&self, dir: std::path::PathBuf);
     fn append(&self, dir: std::path::PathBuf);
+    fn bootstrap_error(&self) -> Option<String>;
 }
 
 impl LibraryPaths for VmBackend {
@@ -117,6 +118,9 @@ impl LibraryPaths for VmBackend {
     }
     fn append(&self, dir: std::path::PathBuf) {
         self.add_library_search_path(dir);
+    }
+    fn bootstrap_error(&self) -> Option<String> {
+        VmBackend::bootstrap_error(self).map(ToString::to_string)
     }
 }
 
@@ -127,11 +131,27 @@ impl LibraryPaths for patina_tree_walker::TreeWalker {
     fn append(&self, dir: std::path::PathBuf) {
         self.add_library_search_path(dir);
     }
+    fn bootstrap_error(&self) -> Option<String> {
+        patina_tree_walker::TreeWalker::bootstrap_error(self).map(ToString::to_string)
+    }
 }
 
-/// Apply `-I` / `-A` directories — and, for a script run, the script's own
-/// directory — to a backend's library search path.
-fn apply_library_paths(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option<&str>) {
+/// Make a new backend ready to run: refuse to go on without the base
+/// library, then apply `-I` / `-A` directories — and, for a script run, the
+/// script's own directory — to its library search path.
+///
+/// Without `(scheme base)` a program runs in an environment with nothing in
+/// it, and its first reference fails as an unbound variable, or its `import`
+/// of the base library as a cycle through itself. The loading failure is the
+/// one to report, once, before anything runs (#436).
+fn prepare_backend(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option<&str>) {
+    if let Some(e) = backend.bootstrap_error() {
+        eprintln!(
+            "Error: cannot load the base library: {e}\n\
+             Set PATINA_LIBRARY_PATH to the directory holding scheme/base.sld."
+        );
+        process::exit(1);
+    }
     // Prepend in reverse so the first -I listed is searched first.
     for dir in opts.prepend_paths.iter().rev() {
         backend.prepend(std::path::PathBuf::from(dir));
@@ -152,7 +172,7 @@ fn apply_library_paths(backend: &dyn LibraryPaths, opts: &CliOptions, script: Op
 fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &CliOptions) -> ! {
     use patina_tree_walker::eval::format_write_tagged;
 
-    apply_library_paths(interp.backend(), opts, None);
+    prepare_backend(interp.backend(), opts, None);
     let heap = interp.backend().global_env().heap().clone();
     for expr in &opts.eval_exprs {
         match interp.eval_program(expr) {
@@ -255,7 +275,7 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         // Tracing is a VM instrument, which is why `main` refuses `--trace`
         // with `--tree-walker` rather than quietly running the other backend.
         let (interp, tracer) = traced_vm();
-        apply_library_paths(interp.backend(), opts, script);
+        prepare_backend(interp.backend(), opts, script);
         let clean = run_program(&interp, &program, opts.keep_going);
         if !clean {
             eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
@@ -263,11 +283,11 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         clean
     } else if opts.use_tree_walker {
         let interp = TreeWalkInterpreter::new_tree_walker();
-        apply_library_paths(interp.backend(), opts, script);
+        prepare_backend(interp.backend(), opts, script);
         run_program(&interp, &program, opts.keep_going)
     } else {
         let interp = Interpreter::new(VmBackend::new());
-        apply_library_paths(interp.backend(), opts, script);
+        prepare_backend(interp.backend(), opts, script);
         run_program(&interp, &program, opts.keep_going)
     };
     // An error that interrupted an `exit` stopped the program; the exit it
@@ -450,7 +470,7 @@ fn dump_bytecode(code: &str) -> ! {
 fn run_repl_tree_walker(opts: &CliOptions) {
     match Repl::new() {
         Ok(mut repl) => {
-            apply_library_paths(repl.interpreter().backend(), opts, None);
+            prepare_backend(repl.interpreter().backend(), opts, None);
             let clean = repl.run();
             patina_runtime::exit_status::end_process(if clean { 0 } else { 1 });
         }
@@ -465,7 +485,7 @@ fn run_repl_vm(opts: &CliOptions) {
     use patina_core::debug_format::format_tagged;
 
     let interp = Interpreter::new(VmBackend::new());
-    apply_library_paths(interp.backend(), opts, None);
+    prepare_backend(interp.backend(), opts, None);
     let heap = interp.backend().global_env().heap().clone();
 
     println!("Patina Scheme R7RS Interpreter");

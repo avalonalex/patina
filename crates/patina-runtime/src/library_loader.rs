@@ -491,7 +491,7 @@ impl LibraryLoaderRegistry {
             }
         }
 
-        Err(LibraryError::NotFound(name.to_vec()))
+        Err(LibraryError::not_found(name))
     }
 
     /// Check if any loader can potentially load the given library.
@@ -623,7 +623,7 @@ mod tests {
             if self.can_load(name) {
                 Ok(Library::new(name.to_vec()))
             } else {
-                Err(LibraryError::NotFound(name.to_vec()))
+                Err(LibraryError::not_found(name))
             }
         }
 
@@ -636,7 +636,7 @@ mod tests {
     fn test_registry_empty() {
         let registry = LibraryLoaderRegistry::new();
         let result = registry.load(&["test".to_string()], &[]);
-        assert!(matches!(result, Err(LibraryError::NotFound(_))));
+        assert!(matches!(result, Err(LibraryError::NotFound { .. })));
     }
 
     #[test]

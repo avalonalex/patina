@@ -8,15 +8,41 @@
 
 use crate::library::Library;
 use patina_core::FileSystem;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
+
+/// A library's place on the loading stack, taken by
+/// [`LibraryRegistry::begin_loading_scoped`] and given back when dropped.
+#[must_use = "dropping it ends the load at once"]
+pub struct Loading {
+    registry: Rc<RefCell<LibraryRegistry>>,
+    name: Vec<String>,
+}
+
+impl Drop for Loading {
+    fn drop(&mut self) {
+        // Not while the registry is borrowed, which only an unwinding panic
+        // can leave it: a second panic would abort the process.
+        if let Ok(mut registry) = self.registry.try_borrow_mut() {
+            registry.end_loading(&self.name);
+        }
+    }
+}
 
 /// Error types for library operations
 #[derive(Debug, Clone)]
 pub enum LibraryError {
-    /// Library not found in any search path
-    NotFound(Vec<String>),
+    /// Library not found in any search path. `searched` is the path a loader
+    /// looked through, in order — what someone has to fix — and is empty
+    /// where the failure was a lookup among libraries already loaded
+    /// ([`LibraryError::not_found`]).
+    NotFound {
+        name: Vec<String>,
+        searched: Vec<PathBuf>,
+    },
 
     /// Circular dependency detected during loading
     CircularDependency(Vec<Vec<String>>),
@@ -52,6 +78,22 @@ pub enum LibraryError {
 pub const NATIVE_EXTENSION_MARKER: &str = "requires the native extension";
 
 impl LibraryError {
+    /// A library that is not loaded, looked up by `name`.
+    pub fn not_found(name: &[String]) -> Self {
+        LibraryError::NotFound {
+            name: name.to_vec(),
+            searched: Vec::new(),
+        }
+    }
+
+    /// A library that none of the directories on `searched` holds.
+    pub fn not_found_in(name: &[String], searched: &[PathBuf]) -> Self {
+        LibraryError::NotFound {
+            name: name.to_vec(),
+            searched: searched.to_vec(),
+        }
+    }
+
     /// A failure while reading or installing a library, attributed to the file
     /// it came from. `None` covers an inline `define-library`, which has no
     /// file — the empty string the callers used to write by hand.
@@ -66,8 +108,17 @@ impl LibraryError {
 impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LibraryError::NotFound(name) => {
-                write!(f, "Library {} not found", format_library_name(name))
+            LibraryError::NotFound { name, searched } => {
+                // The corpus harness reads the name out of "Library (…) not
+                // found" (`extract_missing_libraries`), so the directories
+                // come after it.
+                write!(f, "Library {} not found", format_library_name(name))?;
+                if !searched.is_empty() {
+                    let dirs: Vec<String> =
+                        searched.iter().map(|d| d.display().to_string()).collect();
+                    write!(f, "; searched {}", dirs.join(", "))?;
+                }
+                Ok(())
             }
             LibraryError::CircularDependency(chain) => {
                 writeln!(f, "Circular library dependency detected:")?;
@@ -405,6 +456,23 @@ impl LibraryRegistry {
         if let Some(pos) = self.loading_stack.iter().position(|n| n == name) {
             self.loading_stack.remove(pos);
         }
+    }
+
+    /// [`LibraryRegistry::begin_loading`] for as long as the returned guard
+    /// lives: dropping it ends the load. A loader holds it across everything
+    /// that can fail, so a failure cannot leave the library on the loading
+    /// stack, where the next attempt to load it — after a `guard` caught the
+    /// first failure, or at a REPL after fixing a typo — would be reported as
+    /// a cycle through itself (#436).
+    pub fn begin_loading_scoped(
+        registry: &Rc<RefCell<Self>>,
+        name: &[String],
+    ) -> Result<Loading, LibraryError> {
+        registry.borrow_mut().begin_loading(name)?;
+        Ok(Loading {
+            registry: Rc::clone(registry),
+            name: name.to_vec(),
+        })
     }
 
     /// Get all loaded library names

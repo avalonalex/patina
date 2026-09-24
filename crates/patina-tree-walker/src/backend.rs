@@ -142,6 +142,11 @@ impl TreeWalker {
     pub fn prepend_library_search_path(&self, path: std::path::PathBuf) {
         self.evaluator.prepend_library_search_path(path);
     }
+
+    /// See [`Evaluator::bootstrap_error`](crate::eval::Evaluator::bootstrap_error).
+    pub fn bootstrap_error(&self) -> Option<&patina_runtime::LibraryError> {
+        self.evaluator.bootstrap_error()
+    }
 }
 
 impl Default for TreeWalker {

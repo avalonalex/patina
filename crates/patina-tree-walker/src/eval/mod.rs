@@ -58,6 +58,9 @@ pub struct Evaluator {
     /// trampoline entry costs no heap borrow and the per-step safe point is
     /// a single load.
     pub(crate) gc_pending: Rc<std::cell::Cell<bool>>,
+    /// Why `(scheme base)` could not be loaded at construction, if it could
+    /// not: see [`Evaluator::bootstrap_error`].
+    bootstrap_error: Option<patina_runtime::LibraryError>,
 }
 
 impl Evaluator {
@@ -97,7 +100,7 @@ impl Evaluator {
             .set_gc_threshold(gc.current_threshold());
         let gc_pending = global_env.heap().borrow().gc_pending_handle();
 
-        let evaluator = Evaluator {
+        let mut evaluator = Evaluator {
             global_env,
             debug: Rc::new(DebugConfig::new()),
             library_registry,
@@ -106,6 +109,7 @@ impl Evaluator {
             fs,
             gc: RefCell::new(gc),
             gc_pending,
+            bootstrap_error: None,
         };
 
         // Initialize library loaders
@@ -117,7 +121,7 @@ impl Evaluator {
         );
 
         // Load bootstrap library
-        evaluator.load_bootstrap();
+        evaluator.bootstrap_error = evaluator.load_bootstrap();
 
         evaluator
     }
@@ -328,10 +332,14 @@ impl Evaluator {
         loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new(self.fs.clone())));
     }
 
-    fn load_bootstrap(&self) {
+    /// Load the bootstrap libraries into the global environment, returning
+    /// why `(scheme base)` could not be loaded, if it could not.
+    fn load_bootstrap(&self) -> Option<patina_runtime::LibraryError> {
         // Load (scheme base) library
         // This will load Rust primitives and automatically load base-extras.scm
-        let _ = self.load_library(&["scheme".to_string(), "base".to_string()]);
+        let base = self
+            .load_library(&["scheme".to_string(), "base".to_string()])
+            .err();
 
         // Load Patina debugging utilities
         // Auto-loaded in REPL for convenience (commonly used during development)
@@ -364,6 +372,15 @@ impl Evaluator {
                 lib.import_into(&self.global_env, name, name);
             }
         }
+        base
+    }
+
+    /// Why the base library, `(scheme base)`, could not be loaded when this
+    /// evaluator was made — `lib/` not found, most often. Every program then
+    /// runs in an environment with nothing in it, so the CLI says this once,
+    /// up front, instead (#436).
+    pub fn bootstrap_error(&self) -> Option<&patina_runtime::LibraryError> {
+        self.bootstrap_error.as_ref()
     }
 
     /// Load Scheme-implemented extras for a library
@@ -560,11 +577,8 @@ impl Evaluator {
             }
         }
 
-        // Check for circular dependencies
-        {
-            let mut registry = self.library_registry.borrow_mut();
-            registry.begin_loading(name)?;
-        }
+        // Check for circular dependencies, ended on every way out (#436).
+        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, name)?;
 
         // Get search paths (copy to avoid borrow conflicts)
         let search_paths = {
@@ -603,21 +617,21 @@ impl Evaluator {
                 )?
             };
 
-            if let Some(parsed) = parsed {
+            match parsed {
                 // Parse succeeded, now evaluate
-                (self.evaluate_parsed_library(parsed)?, false)
-            } else {
+                Some(parsed) => (self.evaluate_parsed_library(parsed)?, false),
                 // No loader can handle this library
-                self.library_registry.borrow_mut().end_loading(name);
-                return Err(patina_runtime::LibraryError::NotFound(name.to_vec()));
+                None => {
+                    return Err(patina_runtime::LibraryError::not_found_in(
+                        name,
+                        &search_paths,
+                    ));
+                }
             }
         };
 
         // End loading tracking
-        {
-            let mut registry = self.library_registry.borrow_mut();
-            registry.end_loading(name);
-        }
+        drop(loading);
 
         // Register the library first
         {
@@ -722,10 +736,9 @@ impl Evaluator {
             &can_load_library,
         )?;
 
-        let name = parsed.name.clone();
-        self.library_registry.borrow_mut().begin_loading(&name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
         let result = self.evaluate_parsed_library(parsed);
-        self.library_registry.borrow_mut().end_loading(&name);
+        drop(loading);
         let lib = result?;
         self.library_registry.borrow_mut().register_or_replace(lib);
         Ok(())

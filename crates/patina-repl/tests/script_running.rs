@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{run_both_backends, run_patina};
+use common::{BOTH_BACKENDS, expect_failure_on_both_backends, run_both_backends, run_patina};
 use std::fs;
 use tempfile::TempDir;
 
@@ -88,4 +88,114 @@ fn project_local_patina_lib_resolves() {
     // cwd is the project directory; the script's own directory is excluded as
     // the resolution route by placing the dependency only under .patina/lib.
     run_both_backends(temp.path(), &["main.scm"], "42");
+}
+
+/// A library whose load fails is not left marked as loading: loading it again
+/// reports the same failure, not a cycle through itself (#436). A `guard`
+/// makes the second attempt reachable in one program, as fixing a typo and
+/// importing again does at a REPL.
+#[test]
+fn a_library_that_failed_to_load_fails_the_same_way_again() {
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("m");
+    fs::create_dir(&lib_dir).unwrap();
+    fs::write(
+        lib_dir.join("broken.sld"),
+        "(define-library (m broken)\n  (export x)\n  (import (scheme base))\n  (begin (define x (car 5))))\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("e.scm"),
+        r#"(import (scheme base) (scheme write) (scheme eval))
+(define (try)
+  (guard (e (#t (if (error-object? e) (error-object-message e) e)))
+    (environment '(m broken))
+    'loaded))
+(write (try)) (newline)
+(write (try)) (newline)
+"#,
+    )
+    .unwrap();
+
+    for extra in BOTH_BACKENDS {
+        let mut args = extra.to_vec();
+        args.extend_from_slice(&["-A", ".", "e.scm"]);
+        let (stdout, stderr, ok) = run_patina(temp.path(), &args);
+        assert!(ok, "patina {args:?} failed\nstderr: {stderr}");
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(lines.len(), 2, "patina {args:?}: {stdout}");
+        assert!(lines[0].contains("car"), "patina {args:?}: {stdout}");
+        assert_eq!(
+            lines[0], lines[1],
+            "patina {args:?}: the second attempt differs"
+        );
+    }
+}
+
+/// A library that cannot be found is reported with the directories that
+/// were searched, the thing to fix (#436).
+#[test]
+fn a_missing_library_names_the_directories_searched() {
+    let temp = TempDir::new().unwrap();
+    let extra = temp.path().join("extra-libs");
+    fs::create_dir(&extra).unwrap();
+    fs::write(
+        temp.path().join("main.scm"),
+        "(import (scheme base) (no such lib))\n",
+    )
+    .unwrap();
+    let extra_arg = extra.to_str().unwrap();
+    expect_failure_on_both_backends(temp.path(), &["-A", extra_arg, "main.scm"], |stderr| {
+        assert!(
+            stderr.contains("Library (no such lib) not found; searched ")
+                && stderr.contains(extra_arg),
+            "stderr: {stderr}"
+        );
+    });
+}
+
+/// A binary that cannot find its own library says so before running
+/// anything, with the directories searched and what to set — not an
+/// unbound `display`, nor its `import` of `(scheme base)` reported as a cycle
+/// through itself (#436).
+#[test]
+fn a_binary_without_its_library_says_so_up_front() {
+    let temp = TempDir::new().unwrap();
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir(&bin_dir).unwrap();
+    let binary = bin_dir.join("patina");
+    fs::copy(env!("CARGO_BIN_EXE_patina"), &binary).unwrap();
+    fs::write(temp.path().join("q.scm"), "(display 1)\n").unwrap();
+    fs::write(
+        temp.path().join("p.scm"),
+        "(import (scheme base) (scheme write))\n(display 1)\n",
+    )
+    .unwrap();
+
+    for extra in BOTH_BACKENDS {
+        for script in ["q.scm", "p.scm"] {
+            let output = std::process::Command::new(&binary)
+                .args(extra.iter().copied().chain([script]))
+                .env_remove("PATINA_LIBRARY_PATH")
+                .env_remove("PATINA_HOME")
+                .env_remove("PATINA_ISOLATED_LIBRARIES")
+                .env("HOME", temp.path())
+                .current_dir(temp.path())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success(),
+                "{extra:?} {script}: ran\n{stdout}"
+            );
+            assert!(stdout.is_empty(), "{extra:?} {script}: ran\n{stdout}");
+            assert!(
+                stderr.contains("cannot load the base library")
+                    && stderr.contains("Library (scheme base) not found; searched ")
+                    && stderr.contains("PATINA_LIBRARY_PATH"),
+                "{extra:?} {script}: {stderr}"
+            );
+        }
+    }
 }
