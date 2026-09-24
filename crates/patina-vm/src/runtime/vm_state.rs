@@ -1242,12 +1242,12 @@ fn maybe_collect(state: &VmState, is_outermost: bool) {
 ///
 /// The innermost frame is not always the one that *has* a source map. The
 /// stubs the runtime builds rather than compiles carry none at all —
-/// `value_wind_stub`, `wind_jump_stub`, `invoke_step_stub`,
-/// `abort_handler_stub` and `raise_step_stub` — and any of them can be
-/// the top frame when an error is raised: the value form's thunks tail-call
-/// out of their own frames, leaving the stub innermost, and a jump's, a
-/// composable invoke's re-entry thunks, an abort's handler and a raise's
-/// handler do the same. Read
+/// `value_wind_stub`, `value_cwv_stub`, `wind_jump_stub`, `invoke_step_stub`,
+/// `abort_handler_stub`, `raise_step_stub` and `force_stub` — and any of them
+/// can be the top frame when an error is raised: the value form's thunks
+/// tail-call out of their own frames, leaving the stub innermost, and a
+/// jump's, a composable invoke's re-entry thunks, an abort's handler, a
+/// raise's handler and a promise's thunk do the same. Read
 /// literally, that costs the error its caret entirely — `(dw (lambda () 1)
 /// (lambda () (error "boom")) (lambda () 2))` printed a bare message where
 /// head-position `dynamic-wind` printed file, line and source line.

@@ -636,11 +636,14 @@ case, closed on arrival — see §5.5's note on issue #176.
 
 #### Aborting out of a Rust primitive's callback
 
-A primitive that calls back into Scheme — `force`, `map`, `assoc` with a
-comparator, a `parameterize` converter — runs a **nested dispatch loop** under
-a Rust frame it will lose if control leaves. `across_reentry` guards those
-boundaries by frame depth: a stack shorter than the one the call started with
-means the frames the Rust code owned are gone.
+A primitive that calls back into Scheme — `eval`, a `parameterize` converter,
+and when #177 was found also `force`, `map` and `assoc` with a comparator
+(Scheme since #471, and `force` a VM control primitive since #476) — runs a
+**nested dispatch loop** under a Rust frame it will lose if control leaves.
+`across_reentry` guards those boundaries. Since #475 a continuation that
+arrives from outside one leaves it (`VmState::reentry`); when #177 was found
+the test was frame depth alone — a stack shorter than the one the call
+started with means the frames the Rust code owned are gone.
 
 **An abort is the shape that depth cannot see** (issue #177). It cuts every
 stack back to its prompt and pushes one stub frame that has yet to run, so

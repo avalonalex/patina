@@ -98,7 +98,8 @@
 //! extension; `value_wind_stub` completes ordinary dynamic-wind;
 //! `value_cwv_stub` applies a value-form `call-with-values`' consumer;
 //! `abort_handler_stub` delivers the landing's result; `raise_step_stub`
-//! reinstalls a continuable handler or raises a secondary exception. Their
+//! reinstalls a continuable handler or raises a secondary exception;
+//! `force_stub` settles a promise once its thunk has returned. Their
 //! register layouts are shared with the existing `Resume*` instruction arms.
 //! Native Rust stack frames are not captured; moving a call into this module
 //! does not make a synchronous native callback replayable.
@@ -1530,7 +1531,7 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 /// Both callers want the same three properties, and stating them once is the
 /// point of the helper. The object goes through `state.load`, so the GC's
 /// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — none of its six stubs has constants to trace, but
+/// without qualification — none of its seven stubs has constants to trace, but
 /// the invariant is cheaper to keep than to caveat, and a stub that ever does
 /// need them inherits the rule rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
@@ -2158,8 +2159,8 @@ pub(crate) enum VmControlPrimitive {
 /// `compiler/primitive_calls.rs`).
 ///
 /// The predicate is "the registry cannot implement this — it needs the VM's
-/// own call machinery". For twelve of the thirteen the reason is control flow: a
-/// directly dispatched registry handler would bypass the VM's
+/// own call machinery". For thirteen of the fourteen the reason is control
+/// flow: a directly dispatched registry handler would bypass the VM's
 /// continuation/exception cooperation. `apply` is the exception and is why the
 /// predicate is worded that way rather than as "control primitives": spreading
 /// a list into a call is not control flow, but it is equally impossible from

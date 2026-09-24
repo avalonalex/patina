@@ -197,6 +197,9 @@ fn higher_order_primitive_through_fast_path() {
         ),
         "(2 3)"
     );
+    // `force` rode the same path until #476. It is a VM control primitive
+    // now, excluded from `CallPrimitive` (`primitive_calls::is_excluded`),
+    // so this row only pins that the exclusion leaves the call working.
     assert_eq!(
         eval("(import (scheme lazy)) (force (delay (+ 20 22)))"),
         "42"

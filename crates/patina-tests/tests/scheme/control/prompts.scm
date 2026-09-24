@@ -854,11 +854,11 @@
 ;; An abort out of a Rust primitive's callback reaches its prompt — issue
 ;; #177, fixed 2026-09-05.
 ;;
-;; `force` runs its thunk through `ApplyContext::apply_proc`, a re-entry
-;; boundary with a nested dispatch loop under it. An abort there is not a
-;; return: it cuts every stack back to its prompt and pushes one stub frame
-;; that has yet to run, so the primitive must be abandoned rather than handed
-;; a value.
+;; `force` ran its thunk through `ApplyContext::apply_proc` until #476, a
+;; re-entry boundary with a nested dispatch loop under it. An abort there is
+;; not a return: it cuts every stack back to its prompt and pushes one stub
+;; frame that has yet to run, so the primitive must be abandoned rather than
+;; handed a value.
 ;;
 ;; The **tail** spelling is the one that broke. The tail call pops the prompt
 ;; body's frame before `force` runs, so the abort's landing sits at exactly
@@ -871,12 +871,12 @@
 
 (define t-177 (make-continuation-prompt-tag 'p))
 
-(test-equal "an abort out of a primitive's callback reaches its prompt: tail" '(h a1)
+(test-equal "an abort out of a promise's thunk reaches its prompt: tail" '(h a1)
   (call-with-continuation-prompt
     (lambda () (force (delay (abort-current-continuation t-177 'a1))))
     t-177 (lambda (v k) (list 'h v))))
 
-(test-equal "an abort out of a primitive's callback reaches its prompt: non-tail" '(h a3)
+(test-equal "an abort out of a promise's thunk reaches its prompt: non-tail" '(h a3)
   (call-with-continuation-prompt
     (lambda () (list 'y (force (delay (abort-current-continuation t-177 'a3)))))
     t-177 (lambda (v k) (list 'h v))))

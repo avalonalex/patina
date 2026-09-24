@@ -77,7 +77,10 @@ use tempfile::TempDir;
 /// And once the other way: `member`, `assoc`, `call-with-port` and the file
 /// variants are Scheme since #471, so their rows call the primitives still
 /// under them, from `(patina internal lists)` and `(patina internal io)` —
-/// the standard names would reach no boundary at all.
+/// the standard names would reach no boundary at all. `force`'s row reaches
+/// none on either backend now: the VM runs a promise's thunk in a stub frame
+/// since #476, and the tree-walker's `force` was always native CPS. It stays
+/// as a check that leaving the thunk still reaches the target.
 #[test]
 fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     let dir = TempDir::new().expect("temp dir");
