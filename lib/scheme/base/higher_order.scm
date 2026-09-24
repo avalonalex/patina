@@ -163,3 +163,58 @@
                     (vector-set! out i (apply proc (map (lambda (v) (vector-ref v i)) vectors)))
                     (loop (+ i 1)))
                   out))))))
+
+;; ── Procedures that call back into the program ──────────────────────────────
+;;
+;; `member` and `assoc` with a comparator, and `call-with-port`, are Scheme for
+;; the reason `map` is: a continuation captured inside the procedure the
+;; program passed must carry the rest of the work *this* procedure owes, and a
+;; Rust primitive's frame cannot be part of a continuation. Re-entered after
+;; the primitive had returned, such a continuation found nothing to return
+;; into: the VM answered with a stray internal value (`#<cell>`) and the
+;; tree-walker abandoned the form, where chibi and Gauche, whose versions are
+;; Scheme, resume the search or return the procedure's value (#471).
+;;
+;; Without a comparator there is nothing to call back, and the primitives
+;; (`%member`, `%assoc`) keep that path. So do calls with too many arguments,
+;; which the primitive rejects with its own arity error.
+;;
+;; The rest follows the primitives exactly: the comparator is called as
+;; `(compare obj elem)`, an improper tail ends the search with #f, and `assoc`
+;; passes over an entry that is not a pair.
+
+(define (member obj lst . compare)
+  (cond ((null? compare) (%member obj lst))
+        ((null? (cdr compare)) (%member-by (car compare) obj lst))
+        (else (apply %member obj lst compare))))
+
+(define (%member-by same? obj lst)
+  (and (pair? lst)
+       (if (same? obj (car lst))
+           lst
+           (%member-by same? obj (cdr lst)))))
+
+(define (assoc obj alist . compare)
+  (cond ((null? compare) (%assoc obj alist))
+        ((null? (cdr compare)) (%assoc-by (car compare) obj alist))
+        (else (apply %assoc obj alist compare))))
+
+(define (%assoc-by same? obj alist)
+  (and (pair? alist)
+       (let ((entry (car alist)))
+         (if (and (pair? entry) (same? obj (car entry)))
+             entry
+             (%assoc-by same? obj (cdr alist))))))
+
+;; R7RS §6.13.1: the port is closed if `proc` returns, and not if it does not
+;; — an escape or a raise leaves it open for whatever receives control, as the
+;; primitive did (`escape_from_primitive.rs`). Every value `proc` returns is
+;; returned.
+(define (call-with-port port proc)
+  (if (not (port? port))
+      (error "call-with-port expects a port as first argument"))
+  (call-with-values
+    (lambda () (proc port))
+    (lambda results
+      (close-port port)
+      (apply values results))))

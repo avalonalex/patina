@@ -768,11 +768,15 @@ Notes on the cells that are not a plain yes:
   callback's loop started with, which ran them inside the callback and
   panicked (#473). A continuation captured inside a boundary that has since
   returned is not an arrival from outside; the depths still decide where it
-  resumes, which is right for an earlier form of the same `load` and wrong
-  for a callback whose primitive is done (#471). #420 had already made
-  `tail_call_value` run a primitive before popping the frame, as any tail
-  callee runs, and routed a `call-with-values` consumer and `apply` as a value
-  through it
+  resumes, which is right for an earlier form of the same `load` and cannot
+  be right for a callback whose primitive is done: no continuation carries a
+  Rust frame. So the procedures that call back into the program are Scheme
+  (#471; `member`, `assoc`, `call-with-port` and the file variants, beside
+  `map` and `for-each`), and the ones still primitives are wrong there —
+  `force` (#476), `eval`/`load` (#477), parameter converters (#478). #420
+  had already made `tail_call_value` run a primitive before popping the
+  frame, as any tail callee runs, and routed a `call-with-values` consumer
+  and `apply` as a value through it
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.

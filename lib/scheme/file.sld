@@ -9,8 +9,6 @@
                 open-output-file
                 open-binary-input-file
                 open-binary-output-file
-                call-with-input-file
-                call-with-output-file
                 file-exists?
                 delete-file))
 
@@ -26,4 +24,5 @@
     file-exists?
     delete-file)
 
-  (include "file/redirect.scm"))
+  (include "file/redirect.scm")
+  (include "file/call-with-file.scm"))

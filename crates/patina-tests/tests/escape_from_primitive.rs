@@ -23,8 +23,15 @@
 //! at a deeper stack restores more frames than the callback started with,
 //! which panicked (#473). #420 had closed two tail-position routes just before
 //! by running the primitive before the pop. The rows are in `cps-features.scm`
-//! and `prompts.scm`. Re-entering a callback's continuation after its
-//! primitive has returned is a different defect, on both backends (#471).
+//! and `prompts.scm`.
+//!
+//! Re-entering a callback's continuation after its primitive has *returned*
+//! is a different defect: a Rust frame cannot be part of a continuation, so
+//! nothing can resume the primitive. The procedures that call back into the
+//! program are Scheme since #471 for that reason — `member` and `assoc` with a
+//! comparator, `call-with-port` and the file variants — and the ones still
+//! primitives are wrong there: `force` (#476), `eval`/`load` (#477), parameter
+//! converters (#478).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!
@@ -263,5 +270,36 @@ fn test_an_escape_out_of_a_port_callback_leaves_the_port_open() {
                  (output-port-open? (call-with-output-file "{output}" (lambda (p) p))))"#
         ),
         "((x #\\s) #f (y #t) #f)",
+    );
+}
+
+/// Re-entering, after `call-with-input-file` has returned, a continuation
+/// captured inside its procedure: the rest of the call — closing the port and
+/// returning the value — runs again (#471). The two file procedures were Rust
+/// primitives, which a continuation cannot carry, so the re-entry found
+/// nothing to return into and the VM answered a stray internal `#<cell>`;
+/// they are `call-with-port` over an opened port now, in Scheme, and answer
+/// as chibi and Gauche do. Rust because it needs a file on disk.
+#[test]
+fn test_reentering_a_file_callback_after_the_call_returned() {
+    let dir = TempDir::new().expect("temp dir");
+    let input = scratch_path(&dir, "in.txt");
+    std::fs::write(&input, "abc").expect("input file");
+    let output = scratch_path(&dir, "out.txt");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme file))
+               (define (reenter call)
+                 (let ((saved #f) (out '()))
+                   (let ((r (call (lambda (port)
+                                    (+ 100 (call/cc (lambda (c)
+                                                      (if (not saved) (set! saved c))
+                                                      1)))))))
+                     (set! out (cons r out))
+                     (if (< (length out) 3) (saved (length out)) (reverse out)))))
+               (list (reenter (lambda (proc) (call-with-input-file "{input}" proc)))
+                     (reenter (lambda (proc) (call-with-output-file "{output}" proc))))"#
+        ),
+        "((101 101 102) (101 101 102))",
     );
 }

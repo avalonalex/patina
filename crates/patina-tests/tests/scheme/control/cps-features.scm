@@ -1425,6 +1425,42 @@
   (let ((m (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))))
     (list m (guard (e (#t 'caught)) (car 5)))))
 
+;; #471 — re-entering, after the call has returned, a continuation captured
+;; inside the procedure a program passed: the comparator of `member` or
+;; `assoc`, `call-with-port`'s procedure. Each was a Rust primitive, which a
+;; continuation cannot carry, so the re-entry found nothing to return into:
+;; the VM answered `()` or a stray internal `#<cell>`, and the tree-walker
+;; abandoned the form. They are Scheme now (`lib/scheme/base/higher_order.scm`),
+;; and the re-entry resumes the rest of the call, as chibi's and Gauche's do.
+(define (reenter-after-return call again)
+  (let ((saved #f) (out '()))
+    (let ((r (call (lambda (v) (call/cc (lambda (c) (if (not saved) (set! saved c)) v))))))
+      (set! out (cons r out))
+      (if (< (length out) 3) (saved (again (length out))) (reverse out)))))
+
+;; The first comparison is re-entered answering #f, so the search goes on to
+;; the elements after it — which only a `member` whose loop the continuation
+;; carries can do.
+(test-equal "re-entering member's comparator after it returned resumes the search"
+  '((2 3) (2 3) (2 3))
+  (reenter-after-return
+    (lambda (capture) (member 2 '(1 2 3) (lambda (a b) (capture (= a b)))))
+    (lambda (n) #f)))
+
+(test-equal "…and assoc's" '((2 . b) (2 . b) (2 . b))
+  (reenter-after-return
+    (lambda (capture) (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (capture (= a b)))))
+    (lambda (n) #f)))
+
+;; The procedure's value is re-entered as 1 and then 2, and each time the call
+;; returns it, having closed a port that is already closed.
+(test-equal "…and call-with-port's procedure, whose value the call returns"
+  '(101 101 102)
+  (reenter-after-return
+    (lambda (capture)
+      (call-with-port (open-input-string "abc") (lambda (port) (+ 100 (capture 1)))))
+    (lambda (n) n)))
+
 ;; The other direction, which the fix had to keep: a continuation the callback
 ;; captures and invokes itself is a return, however the primitive was reached.
 (test-equal "…while one the callback uses itself is still a return" '((2 3) (2 3))
