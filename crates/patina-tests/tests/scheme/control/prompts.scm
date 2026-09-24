@@ -1069,6 +1069,24 @@
   (call-with-continuation-prompt abort-current-continuation t-186
     (lambda (v k) (list 'h v)) t-186 'ab))
 
+;; #469 — a primitive body whose callback escapes through a full continuation
+;; captured outside the prompt. In tail position the calling frame is popped
+;; before the prompt is pushed, so the primitive runs at exactly the depth the
+;; continuation restores to, and the VM took the escape for the callback
+;; returning: `member` carried on to `(1 2 3)`. The arrival is told by the
+;; continuation now — captured outside the primitive's re-entry boundary, so
+;; it leaves it — not by the depth. The tree-walker always answered `x`;
+;; chibi has no prompts, and Gauche's are not this API (see the register).
+(test-equal "a primitive prompt body's callback escaping, in tail position" 'x
+  (call/cc (lambda (k)
+    (call-with-continuation-prompt member t-186 (lambda (v) v)
+      2 '(1 2 3) (lambda (a b) (k 'x))))))
+
+(test-equal "…and not in tail position" 'x
+  (call/cc (lambda (k)
+    (list (call-with-continuation-prompt member t-186 (lambda (v) v)
+            2 '(1 2 3) (lambda (a b) (k 'x)))))))
+
 ;; ── guard, resumed through a composable continuation ───────────────────────
 ;;
 ;; `lib/scheme/base/exceptions.scm` defines `guard` by R7RS 7.3's expansion,

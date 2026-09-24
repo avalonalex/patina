@@ -5,6 +5,7 @@
 
 use super::{CallFrame, Reg};
 use patina_core::tagged_value::TaggedValue;
+use std::rc::Rc;
 
 /// An entry on the prompt stack, recording the dynamic context needed to
 /// handle an `AbortToPrompt` or to restore after normal return.
@@ -186,4 +187,10 @@ pub struct VmContinuation {
     /// not only the first, and `ResumeWindJump` reads this to park each one as
     /// such (`VmState::pending_transfer`, #342).
     pub abort_landing: bool,
+
+    /// The re-entry boundaries the machine was inside when this was captured,
+    /// outermost first (`VmState::reentry`). A jump to it from inside
+    /// boundaries it does not share leaves them — their Rust primitives are
+    /// abandoned — whatever the frame depths say; see `step_wind_jump`.
+    pub reentry: Rc<[u64]>,
 }

@@ -79,6 +79,29 @@ pub struct VmState {
     /// and `execute`, with the rest of the machine, so a form cannot leave
     /// one latched for the next.
     pub(crate) pending_transfer: bool,
+    /// The re-entry boundaries the machine is inside, outermost first: one id
+    /// per [`across_reentry`](super::control) still on the Rust stack — a
+    /// primitive running a callback, `eval`, a parameter converter. Ids are
+    /// never reused, so one names one boundary for the life of the machine.
+    ///
+    /// A full continuation records the stack at capture
+    /// (`VmContinuation::reentry`), and that is what tells an escape out of a
+    /// boundary from a return into it. Frame depths could not: a callback's
+    /// own continuation, captured after a tail call popped its frame, and one
+    /// captured before the primitive was called restore byte-identical
+    /// machines (#469, #472, #474), and one captured outside at a deeper
+    /// stack restores more frames than the callback's loop started with
+    /// (#473).
+    pub(crate) reentry: Vec<u64>,
+    /// The id the next boundary takes.
+    pub(crate) next_reentry: u64,
+    /// Set by a full continuation's arrival (`step_wind_jump`) when the
+    /// continuation was captured outside some of the boundaries now on
+    /// [`Self::reentry`]: how many of them it keeps. Every boundary past that
+    /// count is left, and each dispatch loop and `across_reentry` inside one
+    /// unwinds rather than resuming. Cleared by the loop that resumes into
+    /// the arrival, which is inside the boundaries kept, and by `execute`.
+    pub(crate) reentry_kept: Option<usize>,
     /// Stack of active continuation prompts (SRFI-226).
     pub prompt_stack: Vec<PromptFrame>,
     /// Stack of active `dynamic-wind` records.
@@ -207,6 +230,9 @@ impl VmState {
             frames: Vec::new(),
             pending_escape: None,
             pending_transfer: false,
+            reentry: Vec::new(),
+            next_reentry: 1,
+            reentry_kept: None,
             prompt_stack: Vec::new(),
             dynamic_winds: Vec::new(),
             exception_handlers: Vec::new(),
@@ -945,6 +971,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     // mistaken for in-flight when the next form runs.
     state.pending_escape = None;
     state.pending_transfer = false;
+    state.reentry_kept = None;
     if result.is_err() {
         // An error that reaches the top level abandons whatever the machine
         // was doing: the frames it was running, the handlers and wind
@@ -1033,7 +1060,10 @@ pub(super) fn run_loop_until(
 ///
 /// This is the only place that decides whether a continuation invocation is
 /// this loop's business: the frames it restored are either ones this loop
-/// still owns (resume) or ones further out (exit, reporting `Escaped`). Every
+/// still owns (resume) or ones further out (exit, reporting `Escaped`). A
+/// continuation that arrives from outside the re-entry boundary this loop
+/// runs in is further out whatever frames it restored
+/// (`VmState::reentry_kept`). Every
 /// synchronous boundary below reports the invocation as
 /// [`VmError::ContinuationEscape`] and lets the decision happen here once.
 pub(super) fn run_loop_until_outcome(
@@ -1085,6 +1115,10 @@ pub(super) fn run_loop_until_outcome(
     // own body: that one is closed on arrival (issue #176), because no loop
     // need return between the re-entry and the abort that finds it.
     let prompts_at_entry = state.prompt_stack.len();
+    // The re-entry boundaries this loop runs inside. A continuation arriving
+    // from outside the innermost of them leaves it, and this loop with it,
+    // however many frames it restored (`VmState::reentry_kept`).
+    let reentry_level = state.reentry.len();
 
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
@@ -1113,7 +1147,8 @@ pub(super) fn run_loop_until_outcome(
                 // `VmError` and would otherwise look catchable and be handed
                 // to a `guard`. See `VmState::pending_escape`.
                 if let Some(value) = state.pending_escape.take() {
-                    if state.frames.len() <= exit_depth {
+                    let left = state.reentry_kept.is_some_and(|kept| kept < reentry_level);
+                    if left || state.frames.len() <= exit_depth {
                         // Still in flight: this loop does not own the frame
                         // the escape landed in, so the one that does must
                         // still find it parked. Returning it in `Escaped`
@@ -1125,8 +1160,11 @@ pub(super) fn run_loop_until_outcome(
                     }
                     // Control resumed in a frame this loop still owns, so
                     // the landing (if this was one) is about to run and no
-                    // boundary further out is owed the news.
+                    // boundary further out is owed the news. Nor further in:
+                    // every boundary the arrival left has already unwound,
+                    // or this loop could not be running.
                     state.pending_transfer = false;
+                    state.reentry_kept = None;
                     cur_code = state.current_code()?;
                     continue;
                 }
@@ -1594,15 +1632,14 @@ fn dispatch_one_instruction(
             let consumer_val = state.reg_at(base, consumer);
             let produced_vals = unpack_values(state, state.reg_at(base, producer_result));
             // A tail call of the consumer like any other, so it goes where
-            // `TailCall`'s callee does. That matters for a primitive consumer:
-            // `tail_call_value` runs it *before* popping this frame, so a
-            // continuation its callback invokes restores a shallower stack
-            // than the callback started on, which is how `across_reentry`
-            // tells an escape. Popping first, as this arm did until #420, put
-            // the primitive at the very depth the continuation restores to —
-            // `(call/cc (lambda (k) (call-with-values … member)))` with a
-            // comparator that called `k` lost the escape and answered
-            // `member`'s own result.
+            // `TailCall`'s callee does: a primitive consumer runs *before*
+            // this frame is popped. Popping first, as this arm did until
+            // #420, put the primitive at the very depth a continuation its
+            // callback invokes restores to, which is how an escape was told
+            // then — `(call/cc (lambda (k) (call-with-values … member)))`
+            // with a comparator that called `k` lost the escape and answered
+            // `member`'s own result. The continuation's re-entry boundaries
+            // tell it now (`VmState::reentry`).
             if let Some(exit_val) =
                 tail_call_value(state, consumer_val, &produced_vals, exit_depth)?
             {

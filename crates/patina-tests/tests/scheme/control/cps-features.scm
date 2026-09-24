@@ -1384,6 +1384,47 @@
     (let ((cwv call-with-values))
       (cwv (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))))
 
+;; #472 — the same blindness through `call/cc` itself: a parameter object as
+;; `call/cc`'s procedure calls its converter with the continuation, and the
+;; converter ran at exactly the depth that continuation restores to. The VM
+;; delivered nothing and set the parameter to the converter's result. An
+;; escape is told by the continuation now: one captured outside the
+;; converter's boundary leaves it.
+(define p-472 (make-parameter 0 (lambda (x) (if (procedure? x) (x 'esc) x))))
+(test-equal "an escape out of a parameter converter call/cc called" '(esc (esc) 0)
+  (let* ((a (call/cc p-472))
+         (b (list (call/cc p-472))))
+    (list a b (p-472))))
+
+;; #473 — the other face of depth: a continuation captured outside the
+;; primitive, in a procedure that has since returned, restores *more* frames
+;; than the callback started with. The callback's loop took them for its own
+;; and ran them inside the callback, and the VM panicked on a register window
+;; that no longer existed.
+;;
+;; Top-level procedures on purpose: the shape needs `g`'s frames deeper than
+;; the frame that calls `member`, and a `let` inside `test-equal` put the two
+;; where the old loop happened to land on the right answer.
+(define saved-473 #f)
+(define (g-473) (call/cc (lambda (c) (set! saved-473 c) 'first)))
+(define (run-473)
+  (let ((first (g-473)))
+    (if (eq? first 'first)
+        (list 'member-returned
+              (member 2 '(1 2 3) (lambda (a b) (saved-473 'from-callback))))
+        (list 'after-jump first))))
+(test-equal "an escape out of a callback to a deeper continuation" '(after-jump from-callback)
+  (run-473))
+
+;; #474 — and after a callback returns through its own continuation, a later
+;; error is still an error. The loop had parked that return as an escape, and
+;; nothing cleared it; the next error any loop saw was taken for the escape
+;; arriving, and the `guard` below never ran.
+(test-equal "a later error after a callback returns through its own continuation"
+  '((2 3) caught)
+  (let ((m (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))))
+    (list m (guard (e (#t 'caught)) (car 5)))))
+
 ;; The other direction, which the fix had to keep: a continuation the callback
 ;; captures and invokes itself is a return, however the primitive was reached.
 (test-equal "…while one the callback uses itself is still a return" '((2 3) (2 3))

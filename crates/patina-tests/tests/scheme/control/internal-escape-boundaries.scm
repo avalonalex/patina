@@ -40,11 +40,15 @@
 ;;   `try_invoke_continuation` delimited enter thunks    `run_thunk`
 ;;   `Instruction::InvokeContinuation` enter thunks      `run_thunk`
 ;;
-;; The decision itself lives in exactly one place: `run_loop_until_outcome`
-;; compares the restored frame depth against its own `exit_depth`. Boundaries do
-;; not each re-derive it — the two that did (`call_value_with_probe` and its
-;; tail twin) got the `==` case wrong, which is how an escape into the caller's
-;; own frame both clobbered a register and abandoned the rest of the form.
+;; The decision lives in `run_loop_until_outcome` and `across_reentry`, and
+;; nowhere else. A continuation that arrives from outside the re-entry
+;; boundary a loop runs in leaves it (`VmState::reentry`, since 2026-09-23 —
+;; the depth alone could not tell every case, #469 and #472–#474); otherwise
+;; the loop compares the restored frame depth against its own `exit_depth`.
+;; Boundaries do not each re-derive it — the two that did
+;; (`call_value_with_probe` and its tail twin) got the `==` case wrong, which is
+;; how an escape into the caller's own frame both clobbered a register and
+;; abandoned the rest of the form.
 
 (import (scheme base) (srfi 64))
 

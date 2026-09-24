@@ -751,18 +751,28 @@ Notes on the cells that are not a plain yes:
   to, and an error nothing handles while the travel's stub frames are still on
   the stack is reported and still ends the process: `execute` finds the exit
   in the frames (`exit_in_progress`) and notes it for the runner.
-- **A primitive runs with its caller's frame on the stack, even in tail
-  position.** An escape out of its callback is told by frame depth
-  (`across_reentry`): the continuation restores a shallower stack than the
-  callback started on. A primitive run after its tail frame is popped stands
-  at the depth of that frame's caller, which is where a continuation captured
-  just outside the tail call restores to, and the escape reads as the callback
-  returning. So `tail_call_value` runs a primitive before the pop, and the two
-  routes that forward to a procedure in tail position go through it — a
-  `call-with-values` consumer (`TailCallWithValues`) and `apply` as a value
-  (#420). A primitive as a prompt's body in tail position still runs after
-  the pop (#469), and a parameter's converter called as `call/cc`'s procedure
-  runs at the depth `call/cc`'s continuation restores to (#472)
+- **An escape out of a callback is told by the continuation, not by the
+  frames.** Every Rust primitive that calls back into the VM does it across
+  a re-entry boundary (`across_reentry`), each with an id
+  (`VmState::reentry`), and a full continuation records the boundaries it
+  was captured inside (`VmContinuation::reentry`). On arrival, a
+  continuation leaves every boundary it was not captured inside
+  (`VmState::reentry_kept`), and each loop and boundary inside those unwinds
+  rather than resuming, whatever frames it restored. Frame depth decided it
+  until 2026-09-23 and could not in three shapes: a continuation captured
+  before the primitive was called and one its callback captured after a tail
+  call popped the callback's frame restore the very same machine — the first
+  leaves, the second is the callback returning (#469, #472, and #474, where
+  the second left its value parked for the next error to be taken for); and
+  one captured outside at a deeper stack restores more frames than the
+  callback's loop started with, which ran them inside the callback and
+  panicked (#473). A continuation captured inside a boundary that has since
+  returned is not an arrival from outside; the depths still decide where it
+  resumes, which is right for an earlier form of the same `load` and wrong
+  for a callback whose primitive is done (#471). #420 had already made
+  `tail_call_value` run a primitive before popping the frame, as any tail
+  callee runs, and routed a `call-with-values` consumer and `apply` as a value
+  through it
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.
