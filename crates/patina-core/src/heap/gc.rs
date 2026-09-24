@@ -1165,6 +1165,15 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 original_cont
             }
 
+            ContValue::ResumePrimitive {
+                state,
+                original_cont,
+                ..
+            } => {
+                visitor.visit(*state);
+                original_cont
+            }
+
             ContValue::DynamicWindCleanup {
                 after,
                 original_cont,

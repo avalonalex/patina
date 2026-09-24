@@ -15,6 +15,7 @@ num-rational = { workspace = true }
 num-traits = { workspace = true }
 num-complex = { workspace = true }
 
+smallvec = { workspace = true }
 thiserror = { workspace = true }
 unicode-casefold = "0.2"
 unicode-properties = { workspace = true }

@@ -234,6 +234,7 @@ fn exit_in_progress(
             }
             ContValue::CallWithValuesConsumer { original_cont, .. }
             | ContValue::ForceCache { original_cont, .. }
+            | ContValue::ResumePrimitive { original_cont, .. }
             | ContValue::DynamicWindCleanup { original_cont, .. }
             | ContValue::DynamicWindAfterDone { original_cont, .. }
             | ContValue::ExceptionHandlerCleanup { original_cont }

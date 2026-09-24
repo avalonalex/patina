@@ -30,8 +30,12 @@
 //! nothing can resume the primitive. The procedures that call back into the
 //! program are Scheme since #471 for that reason — `member` and `assoc` with a
 //! comparator, `call-with-port` and the file variants — and the VM's `force`
-//! runs a promise's thunk in a stub frame since #476. The ones still wrong
-//! there: `eval`/`load` (#477), parameter converters (#478).
+//! runs a promise's thunk in a stub frame since #476. A parameter's converter
+//! is a call the machine makes since #478: `make-parameter`,
+//! `%parameter-convert` and `%parameter-set!` are resumable primitives
+//! (`patina_primitives::Step`), which hand the call to the VM's `resume_stub`
+//! frame or the tree-walker's `ResumePrimitive` continuation and are resumed
+//! with its result. The one still wrong there: `eval`/`load` (#477).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!

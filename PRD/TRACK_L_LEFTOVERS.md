@@ -58,7 +58,7 @@ empty, archive this page.
 - #426 — `list-copy` on a circular list never returns.
 
 **Backends**
-- #477, #478 — re-entering a continuation captured in `eval`'d code or a parameter converter, after the call returned, gives a wrong answer; the procedures still Rust primitives that call back into the program (#471 moved the rest to Scheme, #476 made `force` a VM control primitive).
+- #477 — re-entering a continuation captured in `eval`'d or `load`ed code, after the call returned, gives a wrong answer; the last Rust primitives that call back into the program (#471 moved the rest to Scheme, #476 made `force` a VM control primitive, #478 had parameter converters hand the call to the machine).
 - #425 — tree-walker: a library body that raises is reported as a Rust debug dump.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 

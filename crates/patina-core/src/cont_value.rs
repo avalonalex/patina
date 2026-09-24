@@ -255,6 +255,17 @@ pub enum ContValue {
         promise: TaggedValue,
         original_cont: Box<ContValue>,
     },
+    /// A resumable primitive's call has returned: resume the primitive at
+    /// registry `index` with the `state` it kept and the value, then carry on
+    /// with `original_cont` — the tree-walker's form of the VM's
+    /// `resume_stub` (`patina_primitives::Step`, #478). A continuation
+    /// captured in the call carries this, so re-entered after the primitive
+    /// returned it resumes the primitive again.
+    ResumePrimitive {
+        index: usize,
+        state: TaggedValue,
+        original_cont: Box<ContValue>,
+    },
     // Note: ParameterizeCleanup has been removed.
     // Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
     /// Special continuation for dynamic-wind cleanup

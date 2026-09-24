@@ -326,11 +326,30 @@ impl<'a> CpsEvaluator<'a> {
                 );
             }
             self.jump_to_continuation(val_tagged, k, cont_env, prompt_stack, dynamic_winds)
-        } else if let Some((values, converter)) = param_opt {
+        } else if let Some((values, _converter)) = param_opt {
+            // Setting one, `(p v)`, is `%parameter-set!`, whose converter is a
+            // call this machine makes rather than one from Rust (#478).
+            let set_index = (args.len() == 1)
+                .then(|| {
+                    self.evaluator
+                        .primitive_registry
+                        .resolve_index("scheme.base/%parameter-set!")
+                })
+                .flatten();
+            if let Some(index) = set_index {
+                return self.start_resumable(
+                    index,
+                    &[proc_tagged, args[0]],
+                    cont,
+                    cont_env,
+                    prompt_stack,
+                    dynamic_winds,
+                    exception_handlers,
+                );
+            }
             // Parameters are callable - pass TaggedValue args directly
             self.apply_parameter(
                 values,
-                converter,
                 args,
                 cont,
                 cont_env,
@@ -930,6 +949,25 @@ impl<'a> CpsEvaluator<'a> {
             }
         };
 
+        // A resumable primitive hands its calls to this machine rather than
+        // making them from Rust (`patina_primitives::Step`, #478).
+        let resumable = self
+            .evaluator
+            .primitive_registry
+            .resolve_index_cached(qualified_name, registry_index)
+            .filter(|&index| self.evaluator.primitive_registry.resumable(index).is_some());
+        if let Some(index) = resumable {
+            return self.start_resumable(
+                index,
+                &args,
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            );
+        }
+
         // Dispatch through the cached registry index — no name hashing. The
         // owned entry point moves `args` straight into higher-order handlers
         // instead of re-copying them at the registry boundary. The context
@@ -985,11 +1023,106 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
+    /// Start the resumable primitive at registry `index` on `args`, and act on
+    /// the [`Step`](patina_primitives::Step) it returns.
+    #[allow(clippy::too_many_arguments)]
+    fn start_resumable(
+        &self,
+        index: usize,
+        args: &[TaggedValue],
+        cont: ContValue,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<StepResult, EvalError> {
+        let step = {
+            let ctx = super::callback::CallbackContext {
+                cps: self,
+                prompt_stack: &prompt_stack,
+                dynamic_winds: &dynamic_winds,
+                exception_handlers: &exception_handlers,
+            };
+            self.evaluator.primitive_registry.start(index, args, &ctx)
+        };
+        self.resumable_step(
+            index,
+            step,
+            cont,
+            cont_env,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        )
+    }
+
+    /// What a resumable primitive's step means for this machine: its value
+    /// delivered to `cont`, or the call it asks for made with a
+    /// `ResumePrimitive` continuation that brings the result back to it —
+    /// so nothing of the primitive is on the Rust stack while the call runs.
+    /// An error goes where any primitive's does.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn resumable_step(
+        &self,
+        index: usize,
+        step: Result<patina_primitives::Step, EvalError>,
+        cont: ContValue,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Result<StepResult, EvalError> {
+        // Taken whatever the result, so it can never describe a later call.
+        let declined_by_every_handler = super::types::take_unhandled_in_callback();
+        match step {
+            Ok(patina_primitives::Step::Done(value)) => Ok(StepResult::InvokeContinuation {
+                cont,
+                value,
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            }),
+            Ok(patina_primitives::Step::Call {
+                callee,
+                args,
+                state,
+            }) => Ok(StepResult::ApplyProc {
+                proc: callee,
+                args: args.into_vec(),
+                cont: ContValue::ResumePrimitive {
+                    index,
+                    state,
+                    original_cont: Box::new(cont),
+                },
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            }),
+            Err(err) if declined_by_every_handler => Err(super::exceptions::unhandled(
+                err,
+                &cont,
+                &cont_env,
+                &prompt_stack,
+            )),
+            Err(err) => self.maybe_route_error_through_cps(
+                err,
+                cont,
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            ),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn apply_parameter(
         &self,
         values: Rc<std::cell::RefCell<Vec<TaggedValue>>>,
-        converter: Option<TaggedValue>,
         args: Vec<TaggedValue>,
         cont: ContValue,
         cont_env: ContEnv,
@@ -999,7 +1132,7 @@ impl<'a> CpsEvaluator<'a> {
     ) -> Result<StepResult, EvalError> {
         // Parameters can be called with 0 or 1 arguments:
         // (param)      => get current value (top of stack)
-        // (param val)  => set value (replace top of stack after applying converter)
+        // (param val)  => `%parameter-set!`, dispatched before this is reached
         let result_tagged = match args.len() {
             0 => {
                 // Get current value (top of stack) - already TaggedValue
@@ -1008,49 +1141,10 @@ impl<'a> CpsEvaluator<'a> {
                     EvalError::InvalidSyntax("parameter stack is empty".to_string())
                 })?
             }
-            1 => {
-                // Set value (replace top of stack after applying converter)
-                let new_val = if let Some(conv) = converter {
-                    // Apply converter to new value using CPS machinery. The
-                    // converter is user code, so it runs under this step's
-                    // dynamic environment: a raise inside it reaches the
-                    // handlers installed here, and only what escapes every
-                    // one of them comes back as a Rust error.
-                    let converted = {
-                        let ctx = super::callback::CallbackContext {
-                            cps: self,
-                            prompt_stack: &prompt_stack,
-                            dynamic_winds: &dynamic_winds,
-                            exception_handlers: &exception_handlers,
-                        };
-                        patina_primitives::ApplyContext::apply_proc(&ctx, conv, vec![args[0]])
-                    };
-                    let declined_by_every_handler = super::types::take_unhandled_in_callback();
-                    match converted {
-                        Ok(v) => v,
-                        Err(err) if declined_by_every_handler => return Err(err),
-                        Err(err) => {
-                            return self.maybe_route_error_through_cps(
-                                err,
-                                cont,
-                                cont_env,
-                                prompt_stack,
-                                dynamic_winds,
-                                exception_handlers,
-                            );
-                        }
-                    }
-                } else {
-                    args[0]
-                };
-
-                // Set the new value (replace top of stack)
-                let mut stack = values.borrow_mut();
-                if let Some(top) = stack.last_mut() {
-                    *top = new_val;
-                }
-                TaggedValue::UNSPECIFIED
-            }
+            // Setting it, `(p v)`, never reaches here: `apply_cps_step` sends
+            // that to `%parameter-set!` first, whose converter is a call this
+            // machine makes (#478). It ran the converter from Rust here, on a
+            // nested trampoline.
             _ => {
                 return self.maybe_route_error_through_cps(
                     EvalError::WrongArity {

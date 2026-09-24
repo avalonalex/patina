@@ -155,6 +155,14 @@ pub struct VmState {
     /// Id of the three-instruction stub a delayed promise's thunk is run in
     /// (`force_stub`). Built on the first `force` of a promise not yet done.
     pub(crate) force_code: Option<CodeObjectId>,
+    /// Ids of the three-instruction stubs a resumable primitive's call runs
+    /// in (`resume_stub`), one per argument count up to
+    /// `resume_step::INLINE_ARGS` and one that spreads a list for more. Each
+    /// built on the first such call.
+    pub(crate) resume_codes: [Option<CodeObjectId>; super::control::resume_step::VARIANTS],
+    /// `%parameter-set!`'s registry index, which a call `(p v)` of a
+    /// parameter object runs (#478); looked up once, here, not per call.
+    pub(crate) parameter_set: Option<usize>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     pub globals: Rc<Environment>,
@@ -228,6 +236,7 @@ impl VmState {
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let gc_pending = heap.borrow().gc_pending_handle();
         heap.borrow_mut().enable_gc_freed_closure_tracking();
+        let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
             registers: Vec::new(),
             frames: Vec::new(),
@@ -260,6 +269,8 @@ impl VmState {
             invoke_step_code: None,
             raise_step_code: None,
             force_code: None,
+            resume_codes: [None; super::control::resume_step::VARIANTS],
+            parameter_set,
             globals,
             heap,
             primitive_registry: Rc::new(registry),
@@ -1667,6 +1678,12 @@ fn dispatch_one_instruction(
             if !state.dynamic_winds.is_empty() {
                 state.dynamic_winds.pop();
             }
+        }
+
+        Instruction::ResumePrimitive => {
+            // A resumable primitive's call has returned into `resume_stub`'s
+            // frame; see [`Instruction::ResumePrimitive`].
+            super::control::resume_primitive(state, base)?;
         }
 
         Instruction::ResumeForce => {

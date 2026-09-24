@@ -531,6 +531,25 @@ pub enum Instruction {
     /// `force_step` module in `runtime/control.rs`.
     ResumeForce,
 
+    /// A resumable primitive's call has returned: resume the primitive
+    /// (`PrimitiveRegistry::resume`) with the state it kept and the result.
+    /// Never emitted by the compiler — the middle instruction of
+    /// `resume_stub`, `Call callee(args…)` / `ResumePrimitive` / `Return`
+    /// (`Apply callee args` past three arguments). If
+    /// the primitive is done, its value lands in the register the `Return`
+    /// reads; if it asks for another call, the frame goes round again from
+    /// the top with the new callee, arguments and state, in the stub for
+    /// their count.
+    ///
+    /// The general form of what `ResumeForce` does for `force` (#478):
+    /// a primitive that has to call a procedure the program gave it and then
+    /// carry on hands the call to the machine (`patina_primitives::Step`),
+    /// and this frame is where the rest of the primitive waits. A
+    /// continuation captured in the call carries the frame, so re-entered
+    /// after the primitive returned it resumes the primitive again. Its
+    /// registers are the `resume_step` module in `runtime/control.rs`.
+    ResumePrimitive,
+
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
     Define { name: Symbol, src: Reg },

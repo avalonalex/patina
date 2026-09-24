@@ -93,7 +93,7 @@ const SUITE: &[(&str, i64)] = &[
     ("control/cps-features.scm", 117),
     ("control/guard.scm", 22),
     ("control/internal-escape-boundaries.scm", 13),
-    ("control/parameters.scm", 18),
+    ("control/parameters.scm", 21),
     ("control/prompts.scm", 62),
     ("control/tail-recursion.scm", 38),
     ("control/values.scm", 10),

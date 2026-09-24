@@ -1205,8 +1205,8 @@
 ;;
 ;; A Rust primitive's callback — `member` or `assoc` with a predicate,
 ;; `call-with-port` (the primitives, called here as `prim-member` and so on;
-;; see the top of the file), `force`, a parameter converter — runs on a nested
-;; trampoline on the tree-walker. Until 2026-09-10 that trampoline started with
+;; see the top of the file), `force`, and a parameter converter until #478 —
+;; runs on a nested trampoline on the tree-walker. Until 2026-09-10 that trampoline started with
 ;; every stack empty and read every continuation invoke inside the callback as
 ;; leaving the primitive, so: a `raise` in the callback found no handler, a
 ;; retry loop or a local `call/cc` inside the callback abandoned the primitive
@@ -1498,9 +1498,10 @@
                  (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
       (list r (reverse seen)))))
 
-;; The parameter *set* path, which runs a converter through a different
-;; boundary than `make-parameter` construction does. On the VM this used to
-;; lose the enclosing top-level `define` outright.
+;; The parameter *set* path, which ran a converter through a different
+;; boundary than `make-parameter` construction did; both hand the call to the
+;; machine since #478. On the VM this used to lose the enclosing top-level
+;; `define` outright.
 (test-equal "an escape out of a parameter converter during parameterize"
   'from-converter
   (let ((kk #f))

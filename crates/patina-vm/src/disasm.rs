@@ -312,6 +312,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::ResumeComposableInvoke => "ResumeComposableInvoke".to_string(),
         Instruction::ResumeRaise => "ResumeRaise".to_string(),
         Instruction::ResumeForce => "ResumeForce".to_string(),
+        Instruction::ResumePrimitive => "ResumePrimitive".to_string(),
         Instruction::Nop => "Nop".to_string(),
     }
 }
