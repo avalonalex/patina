@@ -388,3 +388,59 @@ fn test_reentering_a_loaded_form_after_load_returned() {
         "(101 101 102)",
     );
 }
+
+/// A raise in the body of a library that an `eval`'d `import` loads, caught
+/// by a `guard` around the `eval`: the handler escapes out of the load. The
+/// VM ran the rest of the library body after the escape, registered the
+/// half-run library and bound its exports, then pushed `eval`'s stub frame
+/// onto the stack the escape had restored, so the stub's value landed in a
+/// register of the `guard`'s frame — `a` below — and the second `import`
+/// found the library loaded. chibi raises twice and leaves `f` unbound, as
+/// the tree-walker does; Gauche raises once, finds its half-loaded module the
+/// second time, and leaves `f` unbound too. Rust because it needs a library
+/// on disk and `eval`'s environment to see the script's definitions.
+#[test]
+fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
+    use patina_interpreter::Interpreter;
+    use patina_runtime::Backend;
+
+    fn run<B: Backend>(interpreter: &Interpreter<B>, program: &str) -> String {
+        let value = interpreter
+            .eval_program(program)
+            .unwrap_or_else(|e| panic!("{program}: {e}"));
+        patina_primitives::primitives::io::datum_writer::format_write_tagged(
+            value,
+            interpreter.backend().global_env().heap(),
+        )
+    }
+
+    let root = TempDir::new().expect("temp dir");
+    let dir = root.path().join("escape482");
+    std::fs::create_dir_all(&dir).expect("library dir");
+    std::fs::write(
+        dir.join("raises.sld"),
+        "(define-library (escape482 raises) (import (scheme base)) (export f)
+           (begin (define f 1) (car '()) (set! f 2)))",
+    )
+    .expect("library file");
+    const PROGRAM: &str = r#"(import (scheme base) (scheme eval) (scheme repl))
+        (define (attempt)
+          (let ((a 10))
+            (list (guard (e (#t 'raised))
+                    (eval '(import (escape482 raises)) (interaction-environment))
+                    'imported)
+                  a)))
+        (list (attempt) (attempt)
+              (guard (e (#t 'unbound)) (eval 'f (interaction-environment))))"#;
+    const EXPECTED: &str = "((raised 10) (raised 10) unbound)";
+
+    let vm = common::vm_interpreter();
+    vm.backend()
+        .add_library_search_path(root.path().to_path_buf());
+    assert_eq!(run(&vm, PROGRAM), EXPECTED, "VM");
+
+    let tw = common::tree_walker_interpreter();
+    tw.backend()
+        .add_library_search_path(root.path().to_path_buf());
+    assert_eq!(run(&tw, PROGRAM), EXPECTED, "tree-walker");
+}

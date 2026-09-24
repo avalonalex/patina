@@ -142,7 +142,7 @@ const SUITE: &[(&str, i64)] = &[
     ("srfi/sorting.scm", 5),
     ("srfi/string-cursors.scm", 15),
     ("stdlib/comparators.scm", 5),
-    ("stdlib/eval.scm", 44),
+    ("stdlib/eval.scm", 45),
     ("stdlib/hash-tables.scm", 6),
     ("stdlib/lazy-evaluation.scm", 33),
     ("stdlib/library-bindings.scm", 15),

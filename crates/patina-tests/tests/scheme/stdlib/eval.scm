@@ -14,7 +14,8 @@
 ;;
 ;; Divergences are recorded in `DIVERGENCES.tsv`, not restated here.
 
-(import (scheme base) (scheme eval) (scheme inexact) (scheme r5rs) (srfi 64))
+(import (scheme base) (scheme eval) (scheme inexact) (scheme r5rs) (scheme repl)
+        (srfi 64))
 
 (test-begin "eval")
 
@@ -151,6 +152,17 @@
 (cond-expand (chibi (test-skip 1)) (else))
 (test-error "defining into null-environment is refused" #t
   (eval '(define x 10) (null-environment 5)))
+
+;; ── An import eval evaluates (#482) ────────────────────────────────────────
+;;
+;; `eval` of an `import` binds the library's exports in the environment, for
+;; what is evaluated there next. The VM compiled the form to nothing, so the
+;; row below found `char-upcase` unbound.
+
+(test-equal "an import eval evaluates binds the library's exports" #\A
+  (begin
+    (eval '(import (scheme char)) (interaction-environment))
+    (eval '(char-upcase #\a) (interaction-environment))))
 
 ;; ── Import sets (Larceny family 10) ────────────────────────────────────────
 

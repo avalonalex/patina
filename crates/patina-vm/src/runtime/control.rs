@@ -1888,7 +1888,8 @@ struct ResumeCall {
 /// # State contract
 ///
 /// For `Step::Eval`, expands, compiles and loads the datum, which can load
-/// libraries; pushes no frame and runs no other Scheme code.
+/// libraries and so run their bodies, across a re-entry boundary; an escape
+/// out of one is returned as the sentinel. Leaves no frame pushed.
 fn vm_step(
     state: &mut VmState,
     step: Result<Step, patina_primitives::EvalError>,
@@ -1909,12 +1910,26 @@ fn vm_step(
             expr,
             env,
             state: kept,
-        } => VmStep::Call(ResumeCall {
-            callee: eval_closure(state, expr, &env)?,
-            args: CallArgs::new(),
-            kept,
-            eval: true,
-        }),
+        } => {
+            // A re-entry boundary: an `import` loads its libraries here, and
+            // a raise in a library body can reach a handler of the program's
+            // that escapes. The frames every caller is about to push onto or
+            // rewrite are then gone (#482).
+            let depth_before = state.frames.len();
+            let callee = across_reentry(
+                state,
+                depth_before,
+                |s| eval_closure(s, expr, &env),
+                |_| TaggedValue::UNSPECIFIED,
+            )
+            .map_err(Reentry::into_vm_error)?;
+            VmStep::Call(ResumeCall {
+                callee,
+                args: CallArgs::new(),
+                kept,
+                eval: true,
+            })
+        }
     })
 }
 
@@ -2192,7 +2207,7 @@ struct VmApplyContext {
 }
 
 /// How a re-entry into the VM ended, when it did not end normally.
-enum Reentry {
+pub(super) enum Reentry {
     /// A continuation captured outside the boundary was invoked inside it.
     /// The value it carries is on [`VmState::pending_escape`].
     Escaped,
@@ -2226,7 +2241,7 @@ enum Reentry {
 /// no live heap borrow. body may change all dynamic state. On transfer returns
 /// Escaped with the value parked, leaving the landing intact for its driver;
 /// it performs no dynamic-stack cleanup or transaction rollback.
-fn across_reentry<T>(
+pub(super) fn across_reentry<T>(
     state: &mut VmState,
     depth_before: usize,
     body: impl FnOnce(&mut VmState) -> Result<T, VmError>,
@@ -2287,6 +2302,17 @@ fn across_reentry<T>(
 }
 
 impl Reentry {
+    /// [`Reentry::into_eval_error`] for a boundary the machine crosses itself
+    /// rather than a primitive's callback: the escape is the non-catchable
+    /// sentinel, which the dispatch loop takes with the value parked; a
+    /// failure is the body's own error.
+    pub(super) fn into_vm_error(self) -> VmError {
+        match self {
+            Reentry::Escaped => VmError::ContinuationEscape,
+            Reentry::Failed(e) => e,
+        }
+    }
+
     /// The escape sentinel is deliberately `ContinuationEscape`: it is already
     /// non-catchable, so no `guard` between the primitive and the dispatch
     /// loop can swallow it.

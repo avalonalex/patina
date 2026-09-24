@@ -222,3 +222,21 @@ fn test_load_of_a_cut_short_file_raises_a_read_error_whatever_the_path() {
     );
     assert_program_eval_to(&code, "read-error");
 }
+
+/// An `import` in a loaded file binds the library's exports for the forms
+/// after it, as a program's does. The VM compiled it to nothing, so the next
+/// form found `char-upcase` unbound, where the tree-walker, chibi and Gauche
+/// import (#482).
+#[test]
+fn test_load_performs_an_import_in_the_file() {
+    let path = resource_path("imports.scm");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme load))
+        (load "{}")
+        loaded-up
+        "#,
+        path
+    );
+    assert_program_eval_to(&code, "#\\A");
+}

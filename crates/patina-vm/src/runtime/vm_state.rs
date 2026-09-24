@@ -5,12 +5,13 @@
 //! and global-binding invalidation. See `docs/VM_RUNTIME.md` for the design.
 
 use super::control::{
-    abort_to_prompt, call_any, call_closure_from_regs, call_value, call_value_with_probe,
-    capture_delimited, captured_handlers, classify_error, exec_call_primitive,
-    exec_call_primitive_direct, find_prompt, finish_delimited_invoke, invoke_step, is_catchable,
-    park_escape, park_transfer, pop_resolved_extents, push_invoke_step, raise_step, self_tail_call,
-    spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
-    tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
+    Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
+    call_value_with_probe, capture_delimited, captured_handlers, classify_error,
+    exec_call_primitive, exec_call_primitive_direct, find_prompt, finish_delimited_invoke,
+    invoke_step, is_catchable, park_escape, park_transfer, pop_resolved_extents, push_invoke_step,
+    raise_step, self_tail_call, spread_apply_args, step_wind_jump, tail_call_closure_resolved,
+    tail_call_value, tail_call_value_with_probe, tail_invoke_delimited, unpack_values,
+    vm_raise_value, wind_step,
 };
 use crate::error::VmError;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
@@ -19,6 +20,7 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
+use patina_core::core_expr::{CoreExpr, CoreExprKind};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -668,15 +670,16 @@ pub(super) fn vm_load_library(
     let search_paths: Vec<std::path::PathBuf> = library_registry.borrow().search_paths().to_vec();
     let heap = state.globals.heap().clone();
 
-    // Try simple (Rust) loaders first
-    let rust_result = {
-        let loaders = loader_registry.borrow();
-        loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
-    };
+    let lib = (|| -> Result<Library, LibraryError> {
+        // Try simple (Rust) loaders first
+        let rust_result = {
+            let loaders = loader_registry.borrow();
+            loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+        };
+        if let Some(lib) = rust_result {
+            return Ok(lib);
+        }
 
-    let lib = if let Some(lib) = rust_result {
-        lib
-    } else {
         // Try evaluating (Scheme .sld) loaders
         let can_load_library =
             |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
@@ -691,16 +694,18 @@ pub(super) fn vm_load_library(
             )?
         };
 
-        if let Some(parsed) = parsed {
-            vm_evaluate_parsed_library(state, parsed)?
-        } else {
-            library_registry.borrow_mut().end_loading(name);
-            return Err(LibraryError::NotFound(name.to_vec()));
+        match parsed {
+            Some(parsed) => vm_evaluate_parsed_library(state, parsed),
+            None => Err(LibraryError::NotFound(name.to_vec())),
         }
-    };
+    })();
 
-    // End loading tracking
+    // End loading tracking, whether or not the load succeeded: a failure left
+    // on the stack reads as a circular dependency to the next import of the
+    // same library, which a program can make after catching the first
+    // failure — `eval` of an `import` inside a `guard`, or `environment`.
     library_registry.borrow_mut().end_loading(name);
+    let lib = lib?;
 
     // Register the library
     let _ = library_registry.borrow_mut().register(lib);
@@ -780,8 +785,15 @@ fn vm_evaluate_parsed_library(
                 message: format!("compile error: {}", e),
             })?;
 
+            // Each body form is a re-entry boundary: a raise in it can reach
+            // a handler of the program's, and one that escapes (a `guard`
+            // around the `eval` or `environment` that loads the library)
+            // leaves this load. The rest of the body must not run then, and
+            // the library must not be registered or its exports bound.
             let top_id = state.load_unit(top, nested);
-            let result = execute_nested(state, top_id);
+            let depth_before = state.frames.len();
+            let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
+                .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
 
             result.map_err(|e| LibraryError::ParseError {
@@ -922,23 +934,46 @@ pub(super) fn vm_eval_expr(
 
 /// Expand and compile the datum `expr` in `env`, as `eval` does.
 ///
+/// An `import` is done here, into `env`, as the tree-walker's `eval` and the
+/// backend's top level do it, and what is compiled is its value, unspecified:
+/// the compiler has nothing to make of an import, and compiled one to
+/// nothing, so an `import` that `eval` or `load` evaluated imported nothing
+/// (#482).
+///
 /// # State contract
 ///
 /// Reads the environment and registry; runs the expander, which may load
-/// libraries. Loads no code and pushes no frame.
+/// libraries, and for an `import` loads its libraries and binds their
+/// exports in `env`. Loading a library runs its body, so this is a re-entry
+/// into the machine: its callers cross it as a boundary (`across_reentry`).
+/// Leaves no code of its own loaded and no frame pushed.
 fn compile_for_eval(
-    state: &VmState,
+    state: &mut VmState,
     expr: TaggedValue,
     env: &Rc<Environment>,
 ) -> Result<(CodeObject, Vec<CodeObject>), VmError> {
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
-    let core_expr = desugarer
+    let mut core_expr = desugarer
         .desugar_tagged(expr, &heap)
         .map_err(|e| VmError::Runtime {
             message: format!("eval: desugar error: {}", e),
         })?;
+
+    if let CoreExprKind::Import { import_sets } = &core_expr.kind {
+        for &import_set in import_sets {
+            let import_set =
+                patina_frontend::LibraryDefinition::parse_import_set_tagged(import_set, &heap)
+                    .map_err(|e| VmError::Runtime {
+                        message: format!("Invalid import set: {}", e),
+                    })?;
+            vm_process_import_set(state, &import_set, env).map_err(|e| VmError::Runtime {
+                message: e.to_string(),
+            })?;
+        }
+        core_expr = CoreExpr::new(CoreExprKind::Literal(TaggedValue::UNSPECIFIED));
+    }
 
     compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
         VmError::Runtime {
