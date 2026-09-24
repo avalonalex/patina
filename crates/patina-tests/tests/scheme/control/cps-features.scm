@@ -46,6 +46,23 @@
 ;; a library none of them touch, on any implementation that lacks SRFI 41.
 (cond-expand (patina (import (scheme stream))) (else))
 
+;; The rows under "A primitive's callback" and "Escaping out of a callback"
+;; are about a callback a *Rust* primitive runs — the VM's re-entry
+;; boundaries, the tree-walker's nested trampoline. `member`, `assoc` and
+;; `call-with-port` were those primitives until #471 wrote them in Scheme,
+;; which left those rows passing without reaching a boundary at all. So on
+;; Patina they call the primitives still under them, from the internal
+;; libraries; elsewhere the names are the standard procedures, which is what
+;; the oracles answer for.
+(cond-expand
+  (patina (import (rename (only (patina internal lists) member assoc)
+                          (member prim-member) (assoc prim-assoc))
+                  (rename (only (patina internal io) call-with-port)
+                          (call-with-port prim-call-with-port))))
+  (else (define prim-member member)
+        (define prim-assoc assoc)
+        (define prim-call-with-port call-with-port)))
+
 (test-begin "cps-features")
 
 ;; ── Exception handler stack management ─────────────────────────────────────
@@ -1187,7 +1204,8 @@
 ;; ── A primitive's callback ─────────────────────────────────────────────────
 ;;
 ;; A Rust primitive's callback — `member` or `assoc` with a predicate,
-;; `call-with-port`, `force`, a parameter converter — runs on a nested
+;; `call-with-port` (the primitives, called here as `prim-member` and so on;
+;; see the top of the file), `force`, a parameter converter — runs on a nested
 ;; trampoline on the tree-walker. Until 2026-09-10 that trampoline started with
 ;; every stack empty and read every continuation invoke inside the callback as
 ;; leaving the primitive, so: a `raise` in the callback found no handler, a
@@ -1210,7 +1228,7 @@
 (test-equal "call-with-port survives an in-extent continuation invoke"
   '("012" (after))
   (let ((log '()))
-    (let* ((r (call-with-port (open-output-string)
+    (let* ((r (prim-call-with-port (open-output-string)
                 (lambda (p)
                   (let ((n 0))
                     (let ((k (call/cc (lambda (c) c))))
@@ -1228,7 +1246,7 @@
 (test-equal "a callback using its own continuation returns the primitive's value"
   '((2 3) (after))
   (let ((log '()))
-    (let* ((r (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
+    (let* ((r (prim-member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
            (l (begin (set! log (cons 'after log)) log)))
       (list r l))))
 
@@ -1241,13 +1259,13 @@
 (test-equal "a declining guard inside a port callback reaches the outer guard: raise"
   '(outer sym)
   (guard (outer (#t (list 'outer outer)))
-    (call-with-port (open-input-string "a")
+    (prim-call-with-port (open-input-string "a")
       (lambda (p) (guard (e ((string? e) 'no)) (raise 'sym))))))
 
 (test-equal "a declining guard inside a port callback reaches the outer guard: raise-continuable"
   '(outer sym)
   (guard (outer (#t (list 'outer outer)))
-    (call-with-port (open-input-string "a")
+    (prim-call-with-port (open-input-string "a")
       (lambda (p) (guard (e ((string? e) 'no)) (raise-continuable 'sym))))))
 
 ;; A declining `guard` *outside* the callback. The raise inside the callback
@@ -1263,7 +1281,7 @@
   '(outer sym)
   (guard (outer (#t (list 'outer outer)))
     (guard (e ((string? e) 'no))
-      (call-with-port (open-input-string "a") (lambda (p) (raise 'sym))))))
+      (prim-call-with-port (open-input-string "a") (lambda (p) (raise 'sym))))))
 
 ;; A handler that returns from a non-continuable raise inside a callback is
 ;; called **once**. The callback's run pops the handler and calls it; when it
@@ -1276,14 +1294,14 @@
   (let ((n 0))
     (guard (o (#t (list 'outer n (error-object? o))))
       (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
-        (lambda () (member 1 '(1 2) (lambda (a b) (raise 'x))))))))
+        (lambda () (prim-member 1 '(1 2) (lambda (a b) (raise 'x))))))))
 
 (test-equal "a handler returning inside a callback is called once: error"
   '(outer 1)
   (let ((n 0))
     (guard (o (#t (list 'outer n)))
       (with-exception-handler (lambda (e) (set! n (+ n 1)) 'ignored)
-        (lambda () (member 1 '(1 2) (lambda (a b) (error "boom"))))))))
+        (lambda () (prim-member 1 '(1 2) (lambda (a b) (error "boom"))))))))
 
 ;; A continuation captured inside an after-thunk that is running as a step
 ;; of a jump *out of* the callback. The thunk runs on the callback's
@@ -1295,7 +1313,7 @@
   '(escaped 2 (after after))
   (let ((n 0) (saved #f) (log '()))
     (let ((r (call/cc (lambda (out)
-               (member 1 '(1) (lambda (a b)
+               (prim-member 1 '(1) (lambda (a b)
                  (dynamic-wind (lambda () #f)
                                (lambda () (out 'escaped))
                                (lambda () (call/cc (lambda (k) (set! saved k)))
@@ -1333,8 +1351,8 @@
 (test-equal "an escape out of a callback, repeatedly and from a nested depth"
   '(deep deep deep)
   (let ()
-    (define (run) (call/cc (lambda (k) (member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
-    (define (nested) (call/cc (lambda (k) (member 2 '(1 2) (lambda (a b) (k (run)))))))
+    (define (run) (call/cc (lambda (k) (prim-member 2 '(1 2 3) (lambda (a b) (k 'deep))))))
+    (define (nested) (call/cc (lambda (k) (prim-member 2 '(1 2) (lambda (a b) (k (run)))))))
     (let* ((a (run)) (b (run)) (c (nested)))
       (list a b c))))
 
@@ -1344,19 +1362,19 @@
 ;; frame; the primitive-comparator forms are covered elsewhere.
 (test-equal "a closure callback that does not escape still works"
   '((2 3) (2 . b))
-  (list (member 2 '(1 2 3) (lambda (a b) (= a b)))
-        (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b)))))
+  (list (prim-member 2 '(1 2 3) (lambda (a b) (= a b)))
+        (prim-assoc 2 '((1 . a) (2 . b)) (lambda (a b) (= a b)))))
 
 ;; Reaching the same primitive other than by call position: `apply` and
 ;; value-position dispatch go through a different path on the VM, which has
 ;; no depth check of its own — they work because the escape is signalled
 ;; from the re-entry boundary, and every route unwinds the same way.
 (test-equal "an escape out of a callback reached through apply" 'x
-  (call/cc (lambda (k) (apply member (list 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+  (call/cc (lambda (k) (apply prim-member (list 2 '(1 2 3) (lambda (a b) (k 'x)))))))
 
 (test-equal "an escape out of a callback reached in value position" 'x
   (call/cc (lambda (k)
-    (let ((ops (list member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x)))))))
+    (let ((ops (list prim-member))) ((car ops) 2 '(1 2 3) (lambda (a b) (k 'x)))))))
 
 ;; #420 — the primitive reached in tail position through a control procedure
 ;; that forwards to it: `call-with-values`' consumer, and `apply` called as a
@@ -1370,11 +1388,11 @@
 (test-equal "an escape out of a call-with-values consumer's callback" 'x
   (call/cc (lambda (k)
     (call-with-values (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x))))
-                      member))))
+                      prim-member))))
 
 (test-equal "…and out of one apply reaches as a value" 'x
   (call/cc (lambda (k)
-    (let ((f apply)) (f member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))))
+    (let ((f apply)) (f prim-member (list 2 '(1 2 3) (lambda (a b) (k 'x))))))))
 
 ;; The value form of `call-with-values` ends in the same instruction, run from
 ;; a stub frame of its own (`value_cwv_stub`), which is the frame that must
@@ -1382,7 +1400,7 @@
 (test-equal "…and out of the value form's consumer's callback" 'x
   (call/cc (lambda (k)
     (let ((cwv call-with-values))
-      (cwv (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) member)))))
+      (cwv (lambda () (values 2 '(1 2 3) (lambda (a b) (k 'x)))) prim-member)))))
 
 ;; #472 — the same blindness through `call/cc` itself: a parameter object as
 ;; `call/cc`'s procedure calls its converter with the continuation, and the
@@ -1411,7 +1429,7 @@
   (let ((first (g-473)))
     (if (eq? first 'first)
         (list 'member-returned
-              (member 2 '(1 2 3) (lambda (a b) (saved-473 'from-callback))))
+              (prim-member 2 '(1 2 3) (lambda (a b) (saved-473 'from-callback))))
         (list 'after-jump first))))
 (test-equal "an escape out of a callback to a deeper continuation" '(after-jump from-callback)
   (run-473))
@@ -1422,17 +1440,53 @@
 ;; arriving, and the `guard` below never ran.
 (test-equal "a later error after a callback returns through its own continuation"
   '((2 3) caught)
-  (let ((m (member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))))
+  (let ((m (prim-member 2 '(1 2 3) (lambda (a b) (call/cc (lambda (k2) (k2 (= a b))))))))
     (list m (guard (e (#t 'caught)) (car 5)))))
+
+;; #471 — re-entering, after the call has returned, a continuation captured
+;; inside the procedure a program passed: the comparator of `member` or
+;; `assoc`, `call-with-port`'s procedure. Each was a Rust primitive, which a
+;; continuation cannot carry, so the re-entry found nothing to return into:
+;; the VM answered `()` or a stray internal `#<cell>`, and the tree-walker
+;; abandoned the form. They are Scheme now (`lib/scheme/base/higher_order.scm`),
+;; and the re-entry resumes the rest of the call, as chibi's and Gauche's do.
+(define (reenter-after-return call again)
+  (let ((saved #f) (out '()))
+    (let ((r (call (lambda (v) (call/cc (lambda (c) (if (not saved) (set! saved c)) v))))))
+      (set! out (cons r out))
+      (if (< (length out) 3) (saved (again (length out))) (reverse out)))))
+
+;; The first comparison is re-entered answering #f, so the search goes on to
+;; the elements after it — which only a `member` whose loop the continuation
+;; carries can do.
+(test-equal "re-entering member's comparator after it returned resumes the search"
+  '((2 3) (2 3) (2 3))
+  (reenter-after-return
+    (lambda (capture) (member 2 '(1 2 3) (lambda (a b) (capture (= a b)))))
+    (lambda (n) #f)))
+
+(test-equal "…and assoc's" '((2 . b) (2 . b) (2 . b))
+  (reenter-after-return
+    (lambda (capture) (assoc 2 '((1 . a) (2 . b)) (lambda (a b) (capture (= a b)))))
+    (lambda (n) #f)))
+
+;; The procedure's value is re-entered as 1 and then 2, and each time the call
+;; returns it, having closed a port that is already closed.
+(test-equal "…and call-with-port's procedure, whose value the call returns"
+  '(101 101 102)
+  (reenter-after-return
+    (lambda (capture)
+      (call-with-port (open-input-string "abc") (lambda (port) (+ 100 (capture 1)))))
+    (lambda (n) n)))
 
 ;; The other direction, which the fix had to keep: a continuation the callback
 ;; captures and invokes itself is a return, however the primitive was reached.
 (test-equal "…while one the callback uses itself is still a return" '((2 3) (2 3))
   (let ((own (lambda (a b) (call/cc (lambda (k2) (k2 (= a b)))))))
     (list (call/cc (lambda (k)
-            (call-with-values (lambda () (values 2 '(1 2 3) own)) member)))
+            (call-with-values (lambda () (values 2 '(1 2 3) own)) prim-member)))
           (call/cc (lambda (k)
-            (let ((f apply)) (f member (list 2 '(1 2 3) own))))))))
+            (let ((f apply)) (f prim-member (list 2 '(1 2 3) own))))))))
 
 ;; The primitive stops when the continuation is invoked, instead of running
 ;; on to completion. `member` would otherwise keep calling the comparator for
@@ -1440,7 +1494,7 @@
 (test-equal "the escaped-from primitive is abandoned" '(#f (1))
   (let ((seen '()))
     (let ((r (call/cc (lambda (k)
-               (member 9 '(1 2 3)
+               (prim-member 9 '(1 2 3)
                  (lambda (a b) (set! seen (cons b seen)) (k #f)))))))
       (list r (reverse seen)))))
 
@@ -1465,6 +1519,6 @@
   '(sym x)
   (guard (e ((symbol? e) (list 'sym e))
             ((error-object? e) (raise (error-object-message e))))
-    (call-with-port (open-input-string "a") (lambda (p) (raise 'x)))))
+    (prim-call-with-port (open-input-string "a") (lambda (p) (raise 'x)))))
 
 (test-end)

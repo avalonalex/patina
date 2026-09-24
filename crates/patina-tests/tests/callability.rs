@@ -261,10 +261,21 @@ fn every_frameless_call_site_takes_a_control_primitive() {
         "5",
     );
     // A higher-order primitive's callback, which re-enters the VM from Rust:
-    // `assoc`'s and `member`'s comparator. `(apply + '(1 2))` is 3, so the
-    // first entry matches.
-    assert_program_eval_to("(assoc + (list (list '(1 2))) apply)", "((1 2))");
-    assert_program_eval_to("(member + (list '(1 2)) apply)", "((1 2))");
+    // `assoc`'s and `member`'s comparator — the primitives', from
+    // `(patina internal lists)`, since `(scheme base)`'s two are Scheme
+    // (#471) and call it from a frame. `(apply + '(1 2))` is 3, so the first
+    // entry matches.
+    const PRIMS: &str = "(import (scheme base) \
+                         (rename (only (patina internal lists) member assoc) \
+                                 (member prim-member) (assoc prim-assoc)))";
+    assert_program_eval_to(
+        &format!("{PRIMS} (prim-assoc + (list (list '(1 2))) apply)"),
+        "((1 2))",
+    );
+    assert_program_eval_to(
+        &format!("{PRIMS} (prim-member + (list '(1 2)) apply)"),
+        "((1 2))",
+    );
 }
 
 /// A wind thunk does reach the probe — it just cannot satisfy it.

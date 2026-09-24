@@ -1345,8 +1345,10 @@ pub(super) fn step_wind_jump(
     // machine the Rust stack no longer has, and the frame depths decide
     // where it resumes, as they did before continuations carried these:
     // a later form of the same `load` resumes the earlier one's remainder
-    // and carries on (`escape_from_primitive.rs`). Returning into a
-    // primitive that is done is #471's.
+    // and carries on (`escape_from_primitive.rs`). Nothing can make
+    // returning into a primitive that is done right, which is why the
+    // procedures that call back into the program are Scheme (#471); the
+    // ones that are still primitives are #476, #477 and #478.
     let kept = cc
         .reentry
         .iter()
@@ -1696,8 +1698,10 @@ mod value_cwv {
 /// still on the stack and pops it on return (`tail_call_value`, #420). So a
 /// continuation captured in a primitive consumer's callback holds this frame
 /// suspended past its last instruction, and re-entered after the primitive
-/// has returned it stops there with a `PC out of bounds` error — one of the
-/// wrong answers every route gives that case, on both backends (#471).
+/// has returned it stops there with a `PC out of bounds` error. The
+/// procedures that call back into the program are Scheme since #471, so that
+/// takes one that is still a primitive: `force` (#476), `eval` (#477), a
+/// parameter whose converter the call runs (#478).
 ///
 /// # State contract
 ///

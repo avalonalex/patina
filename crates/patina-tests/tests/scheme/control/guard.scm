@@ -26,6 +26,15 @@
 
 (import (scheme base) (srfi 64))
 
+;; Two rows need a callback a *Rust* primitive runs — a nested run loop — and
+;; call the primitive under `call-with-port` for it, which is Scheme since
+;; #471 and would run no nested loop. See the same block in
+;; `cps-features.scm`.
+(cond-expand
+  (patina (import (rename (only (patina internal io) call-with-port)
+                          (call-with-port prim-call-with-port))))
+  (else (define prim-call-with-port call-with-port)))
+
 (test-begin "guard")
 
 ;; ── Every clause shape ─────────────────────────────────────────────────────
@@ -139,7 +148,7 @@
 ;; pins ("a composable continuation resumed through a successful guard
 ;; returns to its invoker").
 (test-equal "a guard that succeeds inside a callback leaves the callback's port open" #\b
-  (call-with-port (open-input-string "abc")
+  (prim-call-with-port (open-input-string "abc")
     (lambda (p)
       (guard (e (#t 'no)) (read-char p))
       (read-char p))))
@@ -223,7 +232,7 @@
   '(car-error car-error)
   (let ((cwv call-with-values))
     (list (probe-after
-            (call-with-port (open-input-string "a")
+            (prim-call-with-port (open-input-string "a")
               (lambda (port) (leak (lambda () 'x)))))
           (probe-after
             (cwv (lambda () (leak (lambda () 'x))) list)))))

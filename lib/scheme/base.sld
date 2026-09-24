@@ -9,14 +9,19 @@
   (import (patina internal syntax)       ; §4.1, §4.2, §4.3 Syntactic keywords
           (patina internal predicates)   ; §6.1 Booleans, §6.3 Symbols
           (patina internal numbers)      ; §6.2 Numbers
-          (patina internal lists)        ; §6.4 Pairs and lists
+          ;; §6.4 Pairs and lists. `member` and `assoc` are Scheme, in
+          ;; higher_order.scm, over the primitives' two-argument form.
+          (except (patina internal lists) member assoc)
+          (rename (only (patina internal lists) member assoc)
+                  (member %member) (assoc %assoc))
           (patina internal chars)        ; §6.6 Characters
           (patina internal strings)      ; §6.7 Strings
           (patina internal vectors)      ; §6.8 Vectors
           (patina internal bytevectors)  ; §6.9 Bytevectors
           (patina internal control)      ; §6.10 Control (apply, values, call/cc; map/for-each are Scheme, in higher_order.scm)
           (patina internal errors)       ; §6.11 Exceptions
-          (patina internal io)           ; §6.13 I/O
+          ;; §6.13 I/O. `call-with-port` is Scheme, in higher_order.scm.
+          (except (patina internal io) call-with-port)
           (patina internal records)      ; §5.5 Record types
           (patina internal params)       ; §4.2.6 Dynamic bindings
           (patina internal system))      ; features

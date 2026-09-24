@@ -34,6 +34,16 @@
 
 (import (scheme base) (scheme write) (scheme lazy) (srfi 64))
 
+;; The rows that need a *Rust* primitive — a frameless prompt body, a callback
+;; on the tree-walker's nested trampoline — call the one under `member` or
+;; `assoc`: those two are Scheme since #471, and would reach no primitive at
+;; all. See the same block in `cps-features.scm`.
+(cond-expand
+  (patina (import (rename (only (patina internal lists) member assoc)
+                          (member prim-member) (assoc prim-assoc))))
+  (else (define prim-member member)
+        (define prim-assoc assoc)))
+
 (test-begin "prompts")
 
 ;; ── The API, on both backends (issue #169, closed 2026-09-04) ──────────────
@@ -887,7 +897,7 @@
 (test-equal "an abort out of a nested trampoline callback reaches its prompt" '(h x)
   (guard (e (#t (list 'caught (error-object? e))))
     (call-with-continuation-prompt
-      (lambda () (assoc 1 '((1 . a)) (lambda (a b) (abort-current-continuation t-177 'x))))
+      (lambda () (prim-assoc 1 '((1 . a)) (lambda (a b) (abort-current-continuation t-177 'x))))
       t-177 (lambda (v k) (list 'h v)))))
 
 ;; A composable continuation captured from inside an exception handler
@@ -952,7 +962,7 @@
   (let ()
     (define (cmp a b)
       (call-with-continuation-prompt (lambda () (equal? a b)) t-179b (lambda (v k) 'h2)))
-    (let ((r (call-with-continuation-prompt assoc t-179 (lambda (v k) (list 'H v))
+    (let ((r (call-with-continuation-prompt prim-assoc t-179 (lambda (v k) (list 'H v))
                                             2 '((1 a) (2 b)) cmp)))
       (list r (guard (e (#t 'no-prompt)) (abort-current-continuation t-179 'stale))))))
 
@@ -979,7 +989,7 @@
 (test-equal "a carried prompt is re-established on the invoking run"
   '((1) (inner (resumed-with 42)))
   (let ((kk #f))
-    (let ((first (member 1 '(1) (lambda (a b)
+    (let ((first (prim-member 1 '(1) (lambda (a b)
                    (call-with-continuation-prompt
                      (lambda ()
                        (call-with-continuation-prompt
@@ -1079,12 +1089,12 @@
 ;; chibi has no prompts, and Gauche's are not this API (see the register).
 (test-equal "a primitive prompt body's callback escaping, in tail position" 'x
   (call/cc (lambda (k)
-    (call-with-continuation-prompt member t-186 (lambda (v) v)
+    (call-with-continuation-prompt prim-member t-186 (lambda (v) v)
       2 '(1 2 3) (lambda (a b) (k 'x))))))
 
 (test-equal "…and not in tail position" 'x
   (call/cc (lambda (k)
-    (list (call-with-continuation-prompt member t-186 (lambda (v) v)
+    (list (call-with-continuation-prompt prim-member t-186 (lambda (v) v)
             2 '(1 2 3) (lambda (a b) (k 'x)))))))
 
 ;; ── guard, resumed through a composable continuation ───────────────────────

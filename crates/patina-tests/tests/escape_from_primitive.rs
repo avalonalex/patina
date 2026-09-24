@@ -23,8 +23,15 @@
 //! at a deeper stack restores more frames than the callback started with,
 //! which panicked (#473). #420 had closed two tail-position routes just before
 //! by running the primitive before the pop. The rows are in `cps-features.scm`
-//! and `prompts.scm`. Re-entering a callback's continuation after its
-//! primitive has returned is a different defect, on both backends (#471).
+//! and `prompts.scm`.
+//!
+//! Re-entering a callback's continuation after its primitive has *returned*
+//! is a different defect: a Rust frame cannot be part of a continuation, so
+//! nothing can resume the primitive. The procedures that call back into the
+//! program are Scheme since #471 for that reason — `member` and `assoc` with a
+//! comparator, `call-with-port` and the file variants — and the ones still
+//! primitives are wrong there: `force` (#476), `eval`/`load` (#477), parameter
+//! converters (#478).
 //!
 //! # The tree-walker's side, closed 2026-09-10
 //!
@@ -66,6 +73,11 @@ use tempfile::TempDir;
 /// That is twice this file's own promise — "every re-entrant primitive" — has
 /// been narrower than it sounds. `eval` and the parameter set are listed now
 /// because they were missing, not only because they broke.
+///
+/// And once the other way: `member`, `assoc`, `call-with-port` and the file
+/// variants are Scheme since #471, so their rows call the primitives still
+/// under them, from `(patina internal lists)` and `(patina internal io)` —
+/// the standard names would reach no boundary at all.
 #[test]
 fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     let dir = TempDir::new().expect("temp dir");
@@ -77,14 +89,21 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     // through globals so that the `eval` row — which runs its form in a fresh
     // environment — can reach them like any other.
     const PRELUDE: &str = "(import (scheme base) (scheme lazy) (scheme file) \
-                           (scheme eval) (scheme repl)) \
+                           (scheme eval) (scheme repl) \
+                           (rename (only (patina internal lists) member assoc) \
+                                   (member prim-member) (assoc prim-assoc)) \
+                           (rename (only (patina internal io) call-with-port \
+                                         call-with-input-file call-with-output-file) \
+                                   (call-with-port prim-call-with-port) \
+                                   (call-with-input-file prim-call-with-input-file) \
+                                   (call-with-output-file prim-call-with-output-file))) \
                            (define esc #f) \
                            (define t (make-continuation-prompt-tag 'p)) \
                            (define unwound 0)";
 
     let bodies = [
-        "(member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
-        "(assoc 2 '((1 . a) (2 . b)) (lambda (a b) LEAVE))".to_string(),
+        "(prim-member 2 '(1 2 3) (lambda (a b) LEAVE))".to_string(),
+        "(prim-assoc 2 '((1 . a) (2 . b)) (lambda (a b) LEAVE))".to_string(),
         "(force (delay LEAVE))".to_string(),
         "(make-parameter 1 (lambda (v) LEAVE))".to_string(),
         // A parameter *set*, which reaches its converter through a different
@@ -92,9 +111,9 @@ fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
         // value into the parameter.
         "(let ((q (make-parameter 0 (lambda (v) (if (= v 5) LEAVE v))))) (q 5))".to_string(),
         "(eval 'LEAVE (interaction-environment))".to_string(),
-        "(call-with-port (open-output-string) (lambda (p) LEAVE))".to_string(),
-        format!(r#"(call-with-input-file "{input}" (lambda (p) LEAVE))"#),
-        format!(r#"(call-with-output-file "{output}" (lambda (p) LEAVE))"#),
+        "(prim-call-with-port (open-output-string) (lambda (p) LEAVE))".to_string(),
+        format!(r#"(prim-call-with-input-file "{input}" (lambda (p) LEAVE))"#),
+        format!(r#"(prim-call-with-output-file "{output}" (lambda (p) LEAVE))"#),
     ];
 
     for (transfer, wrap, leave, value) in [
@@ -218,7 +237,8 @@ fn test_load_reenters_a_continuation_captured_by_an_earlier_form() {
     );
 }
 
-/// What the port primitives do with their port when the callback escapes.
+/// What the port procedures do with their port when the callback escapes —
+/// Scheme since #471, primitives when this was written.
 /// R7RS 6.13.1: `call-with-port` closes the port "if `proc` returns" — and
 /// only then, because a `guard` clause runs after that escape and is entitled
 /// to read what the callback wrote, or to decide the port is still its own.
@@ -263,5 +283,36 @@ fn test_an_escape_out_of_a_port_callback_leaves_the_port_open() {
                  (output-port-open? (call-with-output-file "{output}" (lambda (p) p))))"#
         ),
         "((x #\\s) #f (y #t) #f)",
+    );
+}
+
+/// Re-entering, after `call-with-input-file` has returned, a continuation
+/// captured inside its procedure: the rest of the call — closing the port and
+/// returning the value — runs again (#471). The two file procedures were Rust
+/// primitives, which a continuation cannot carry, so the re-entry found
+/// nothing to return into and the VM answered a stray internal `#<cell>`;
+/// they are `call-with-port` over an opened port now, in Scheme, and answer
+/// as chibi and Gauche do. Rust because it needs a file on disk.
+#[test]
+fn test_reentering_a_file_callback_after_the_call_returned() {
+    let dir = TempDir::new().expect("temp dir");
+    let input = scratch_path(&dir, "in.txt");
+    std::fs::write(&input, "abc").expect("input file");
+    let output = scratch_path(&dir, "out.txt");
+    assert_program_eval_to(
+        &format!(
+            r#"(import (scheme base) (scheme file))
+               (define (reenter call)
+                 (let ((saved #f) (out '()))
+                   (let ((r (call (lambda (port)
+                                    (+ 100 (call/cc (lambda (c)
+                                                      (if (not saved) (set! saved c))
+                                                      1)))))))
+                     (set! out (cons r out))
+                     (if (< (length out) 3) (saved (length out)) (reverse out)))))
+               (list (reenter (lambda (proc) (call-with-input-file "{input}" proc)))
+                     (reenter (lambda (proc) (call-with-output-file "{output}" proc))))"#
+        ),
+        "((101 101 102) (101 101 102))",
     );
 }
