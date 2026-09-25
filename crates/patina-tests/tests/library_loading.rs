@@ -104,7 +104,7 @@ fn test_library_display_format() {
 
 #[test]
 fn test_library_error_display() {
-    let err = LibraryError::NotFound(vec!["nonexistent".to_string()]);
+    let err = LibraryError::not_found(&["nonexistent".to_string()]);
     assert_eq!(err.to_string(), "Library (nonexistent) not found");
 
     let err2 = LibraryError::AlreadyLoaded(vec!["scheme".to_string(), "base".to_string()]);

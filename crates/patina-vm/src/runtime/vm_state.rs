@@ -645,12 +645,12 @@ pub(super) fn vm_load_library(
     let library_registry = state
         .library_registry
         .as_ref()
-        .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?
+        .ok_or_else(|| LibraryError::not_found(name))?
         .clone();
     let loader_registry = state
         .loader_registry
         .as_ref()
-        .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?
+        .ok_or_else(|| LibraryError::not_found(name))?
         .clone();
 
     // Check if already loaded
@@ -661,25 +661,24 @@ pub(super) fn vm_load_library(
         }
     }
 
-    // Circular dependency detection
-    {
-        let mut registry = library_registry.borrow_mut();
-        registry.begin_loading(name)?;
-    }
+    // Circular dependency detection, ended on every way out (#436): a
+    // failure left on the stack reads as a circular dependency to the next
+    // import of the same library, which a program can make after catching the
+    // first failure — `eval` of an `import` inside a `guard`, or `environment`.
+    let loading = LibraryRegistry::begin_loading_scoped(&library_registry, name)?;
 
     let search_paths: Vec<std::path::PathBuf> = library_registry.borrow().search_paths().to_vec();
     let heap = state.globals.heap().clone();
 
-    let lib = (|| -> Result<Library, LibraryError> {
-        // Try simple (Rust) loaders first
-        let rust_result = {
-            let loaders = loader_registry.borrow();
-            loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
-        };
-        if let Some(lib) = rust_result {
-            return Ok(lib);
-        }
+    // Try simple (Rust) loaders first
+    let rust_result = {
+        let loaders = loader_registry.borrow();
+        loaders.try_simple_load_with_heap(name, &search_paths, heap.clone())?
+    };
 
+    let lib = if let Some(lib) = rust_result {
+        lib
+    } else {
         // Try evaluating (Scheme .sld) loaders
         let can_load_library =
             |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
@@ -695,17 +694,13 @@ pub(super) fn vm_load_library(
         };
 
         match parsed {
-            Some(parsed) => vm_evaluate_parsed_library(state, parsed),
-            None => Err(LibraryError::NotFound(name.to_vec())),
+            Some(parsed) => vm_evaluate_parsed_library(state, parsed)?,
+            None => return Err(LibraryError::not_found_in(name, &search_paths)),
         }
-    })();
+    };
 
-    // End loading tracking, whether or not the load succeeded: a failure left
-    // on the stack reads as a circular dependency to the next import of the
-    // same library, which a program can make after catching the first
-    // failure — `eval` of an `import` inside a `guard`, or `environment`.
-    library_registry.borrow_mut().end_loading(name);
-    let lib = lib?;
+    // End loading tracking
+    drop(loading);
 
     // Register the library
     let _ = library_registry.borrow_mut().register(lib);
@@ -715,7 +710,7 @@ pub(super) fn vm_load_library(
         .borrow()
         .get(name)
         .cloned()
-        .ok_or_else(|| LibraryError::NotFound(name.to_vec()))
+        .ok_or_else(|| LibraryError::not_found(name))
 }
 
 /// Evaluate a parsed library (.sld file) using the VM.

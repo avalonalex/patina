@@ -111,9 +111,20 @@ pub struct VmBackend {
     global_env: Rc<Environment>,
     library_registry: Rc<RefCell<LibraryRegistry>>,
     loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
+    /// Why `(scheme base)` could not be loaded at construction, if it could
+    /// not: see [`VmBackend::bootstrap_error`].
+    bootstrap_error: Option<LibraryError>,
 }
 
 impl VmBackend {
+    /// Why the base library, `(scheme base)`, could not be loaded when this
+    /// backend was made — `lib/` not found, most often. Every program then
+    /// runs in an environment with nothing in it, so the CLI says this once,
+    /// up front, instead (#436).
+    pub fn bootstrap_error(&self) -> Option<&LibraryError> {
+        self.bootstrap_error.as_ref()
+    }
+
     /// How many compiled code objects the VM is holding: what a test checks to
     /// see the code of finished forms let go (#338). Not an interface.
     #[doc(hidden)]
@@ -170,11 +181,12 @@ impl VmBackend {
         state.library_registry = Some(Rc::clone(&library_registry));
         state.loader_registry = Some(Rc::clone(&loader_registry));
 
-        let backend = VmBackend {
+        let mut backend = VmBackend {
             state: RefCell::new(state),
             global_env,
             library_registry,
             loader_registry,
+            bootstrap_error: None,
         };
 
         // Initialize library loaders
@@ -186,7 +198,7 @@ impl VmBackend {
         );
 
         // Load bootstrap libraries (scheme base, etc.)
-        backend.load_bootstrap();
+        backend.bootstrap_error = backend.load_bootstrap();
 
         backend
     }
@@ -369,10 +381,11 @@ impl VmBackend {
         )));
     }
 
-    /// Load bootstrap libraries and import them into the global environment.
-    fn load_bootstrap(&self) {
+    /// Load bootstrap libraries and import them into the global environment,
+    /// returning why `(scheme base)` could not be loaded, if it could not.
+    fn load_bootstrap(&self) -> Option<LibraryError> {
         // Load (scheme base)
-        let _ = self.load_library(&["scheme".into(), "base".into()]);
+        let base = self.load_library(&["scheme".into(), "base".into()]).err();
 
         // Load Patina debug utilities
         let _ = self.load_library(&["patina".into(), "debug".into()]);
@@ -394,6 +407,7 @@ impl VmBackend {
         // `import` and `expand` work at the top level but are not
         // `(scheme base)` exports, so nothing above binds them.
         stdlib::seed_top_level_syntax(&self.global_env);
+        base
     }
 
     /// Get an already-loaded library by name.
@@ -402,7 +416,7 @@ impl VmBackend {
             .borrow()
             .get(name)
             .cloned()
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))
+            .ok_or_else(|| LibraryError::not_found(name))
     }
 
     /// Return library search paths from the library registry.
@@ -442,10 +456,9 @@ impl VmBackend {
             &can_load_library,
         )?;
 
-        let name = parsed.name.clone();
-        self.library_registry.borrow_mut().begin_loading(&name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
         let result = self.evaluate_parsed_library(parsed);
-        self.library_registry.borrow_mut().end_loading(&name);
+        drop(loading);
         let lib = result?;
         self.library_registry.borrow_mut().register_or_replace(lib);
         Ok(())
@@ -490,11 +503,8 @@ impl VmBackend {
             }
         }
 
-        // Circular dependency detection
-        {
-            let mut registry = self.library_registry.borrow_mut();
-            registry.begin_loading(name)?;
-        }
+        // Circular dependency detection, ended on every way out (#436).
+        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, name)?;
 
         let search_paths = self.library_search_paths();
         let heap = self.global_env.heap().clone();
@@ -523,16 +533,14 @@ impl VmBackend {
                 )?
             };
 
-            if let Some(parsed) = parsed {
-                self.evaluate_parsed_library(parsed)?
-            } else {
-                self.library_registry.borrow_mut().end_loading(name);
-                return Err(LibraryError::NotFound(name.to_vec()));
+            match parsed {
+                Some(parsed) => self.evaluate_parsed_library(parsed)?,
+                None => return Err(LibraryError::not_found_in(name, &search_paths)),
             }
         };
 
         // End loading tracking
-        self.library_registry.borrow_mut().end_loading(name);
+        drop(loading);
 
         // Register the library
         let _ = self.library_registry.borrow_mut().register(lib);
@@ -542,7 +550,7 @@ impl VmBackend {
             .borrow()
             .get(name)
             .cloned()
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))
+            .ok_or_else(|| LibraryError::not_found(name))
     }
 
     /// Evaluate a parsed library (from a .sld file) using the VM.

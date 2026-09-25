@@ -569,7 +569,7 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
         // Find the .sld file
         let path = self
             .find_sld_file(name, search_paths)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+            .ok_or_else(|| LibraryError::not_found_in(name, search_paths))?;
 
         // Parse it with no library checker
         self.parse_sld_file_with_checker(name, path, &|_| false)
@@ -595,7 +595,7 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
         // Find the .sld file
         let path = self
             .find_sld_file(name, search_paths)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+            .ok_or_else(|| LibraryError::not_found_in(name, search_paths))?;
 
         // Parse it with the library checker
         self.parse_sld_file_with_checker(name, path, can_load_library)
@@ -611,7 +611,7 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
         // Find the .sld file
         let path = self
             .find_sld_file(name, search_paths)
-            .ok_or_else(|| LibraryError::NotFound(name.to_vec()))?;
+            .ok_or_else(|| LibraryError::not_found_in(name, search_paths))?;
 
         // Parse it with the shared heap and library checker
         self.parse_sld_file_with_heap_and_checker(name, path, heap, can_load_library)
