@@ -950,11 +950,17 @@ impl Evaluator {
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
-                // Then import only the specified identifiers
-                let allowed: HashSet<_> = identifiers.iter().collect();
-                for name in temp_env.local_names() {
-                    if allowed.contains(&name) {
-                        env.copy_binding(name.as_str(), &temp_env, &name);
+                // Then import only the specified identifiers, each of which
+                // the set must provide: one it does not is an error, as in a
+                // library's imports above and on the VM, chibi and Gauche.
+                // Keeping only what matched let a misspelt name through
+                // silently (#485).
+                for id in identifiers {
+                    if !env.copy_binding(id.as_str(), &temp_env, id) {
+                        return Err(EvalError::InvalidSyntax(format!(
+                            "Identifier '{}' not found in import set",
+                            id
+                        )));
                     }
                 }
                 Ok(())
