@@ -199,3 +199,22 @@ fn a_binary_without_its_library_says_so_up_front() {
         }
     }
 }
+
+/// A program's `only` import naming an identifier the library does not
+/// export is an error on both backends, as chibi and Gauche report it; the
+/// tree-walker kept what matched and ran on (#485).
+#[test]
+fn an_only_import_of_an_identifier_not_exported_is_an_error() {
+    let temp = TempDir::new().unwrap();
+    fs::write(
+        temp.path().join("main.scm"),
+        "(import (scheme base) (scheme write))\n(import (only (scheme char) nope))\n(write 'after)\n",
+    )
+    .unwrap();
+    expect_failure_on_both_backends(temp.path(), &["main.scm"], |stderr| {
+        assert!(
+            stderr.contains("Identifier 'nope' not found in import set"),
+            "stderr: {stderr}"
+        );
+    });
+}

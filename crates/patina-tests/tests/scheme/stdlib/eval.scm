@@ -164,6 +164,15 @@
     (eval '(import (scheme char)) (interaction-environment))
     (eval '(char-upcase #\a) (interaction-environment))))
 
+;; An `only` naming an identifier the set does not provide is an error, as it
+;; is in a library's imports. The tree-walker's top level kept what matched
+;; and let the rest through silently (#485). chibi raises it too, but at this
+;; point in the file uncatchably, ending the run (alone, `test-error` catches
+;; it), so it is skipped there and Gauche arbitrates.
+(cond-expand (chibi (test-skip 1)) (else))
+(test-error "an only import naming what the library does not export raises" #t
+  (eval '(import (only (scheme char) nope)) (interaction-environment)))
+
 ;; ── Import sets (Larceny family 10) ────────────────────────────────────────
 
 ;; Build the argument with cons: this environment intentionally has no quote.
