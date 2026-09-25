@@ -218,3 +218,37 @@ fn an_only_import_of_an_identifier_not_exported_is_an_error() {
         );
     });
 }
+
+/// A `rename` of an identifier the set does not provide is an error on both
+/// backends, in a program's imports and in a library's, as Gauche and Chez
+/// report it and as Patina's `environment` already did (#489). The VM
+/// accepted both and the tree-walker the first.
+#[test]
+fn a_rename_of_an_identifier_not_provided_is_an_error() {
+    let temp = TempDir::new().unwrap();
+    let lib_dir = temp.path().join("t");
+    fs::create_dir(&lib_dir).unwrap();
+    fs::write(
+        lib_dir.join("renames.sld"),
+        "(define-library (t renames) (import (scheme base) (rename (scheme char) (nope yes)))\n  (export v) (begin (define v 'ok)))\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("program.scm"),
+        "(import (scheme base) (rename (scheme char) (nope yes)))\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("library.scm"),
+        "(import (scheme base) (t renames))\n",
+    )
+    .unwrap();
+    for script in ["program.scm", "library.scm"] {
+        expect_failure_on_both_backends(temp.path(), &["-A", ".", script], |stderr| {
+            assert!(
+                stderr.contains("Identifier 'nope' not found for rename"),
+                "{script}: {stderr}"
+            );
+        });
+    }
+}

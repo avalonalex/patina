@@ -1008,6 +1008,17 @@ impl Evaluator {
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_for_eval(import_set, &temp_env)?;
 
+                // Each renamed identifier must be one the set provides, as
+                // in a library's imports above and on the VM (#489).
+                for (old_name, _) in renames {
+                    if temp_env.local_slot(old_name).is_none() {
+                        return Err(EvalError::InvalidSyntax(format!(
+                            "Identifier '{}' not found for rename",
+                            old_name
+                        )));
+                    }
+                }
+
                 // Build rename map
                 let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
 
