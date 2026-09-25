@@ -876,6 +876,15 @@ fn vm_process_import_set(
         } => {
             let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
             vm_process_import_set(state, import_set, &temp_env)?;
+            // Refused, as by the backend's resolver: see there (#489).
+            for (old_name, _) in renames {
+                if temp_env.local_slot(old_name).is_none() {
+                    return Err(LibraryError::parse(
+                        None,
+                        format!("Identifier '{}' not found for rename", old_name),
+                    ));
+                }
+            }
             let rename_map: std::collections::HashMap<_, _> = renames
                 .iter()
                 .map(|(o, n)| (o.clone(), n.clone()))

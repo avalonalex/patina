@@ -715,6 +715,18 @@ impl VmBackend {
             } => {
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
                 self.process_import_set(import_set, &temp_env)?;
+                // R7RS leaves open a `rename` of an identifier the set does not
+                // provide; it is refused, as Gauche and Chez refuse it and as
+                // `only` is, because accepting it leaves the new name unbound
+                // and the old one imported, a typo found far from itself (#489).
+                for (old_name, _) in renames {
+                    if temp_env.local_slot(old_name).is_none() {
+                        return Err(LibraryError::parse(
+                            None,
+                            format!("Identifier '{}' not found for rename", old_name),
+                        ));
+                    }
+                }
                 let rename_map: std::collections::HashMap<_, _> = renames
                     .iter()
                     .map(|(o, n)| (o.clone(), n.clone()))

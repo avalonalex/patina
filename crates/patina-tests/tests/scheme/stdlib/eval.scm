@@ -173,6 +173,11 @@
 (test-error "an only import naming what the library does not export raises" #t
   (eval '(import (only (scheme char) nope)) (interaction-environment)))
 
+;; So is a `rename` of one, a choice where the report is silent: see the
+;; register, and #489.
+(test-error "a rename of an identifier the set does not provide raises" #t
+  (eval '(import (rename (scheme char) (nope yes))) (interaction-environment)))
+
 ;; ── Import sets (Larceny family 10) ────────────────────────────────────────
 
 ;; Build the argument with cons: this environment intentionally has no quote.
