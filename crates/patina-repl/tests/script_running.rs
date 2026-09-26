@@ -14,6 +14,34 @@ use common::{BOTH_BACKENDS, expect_failure_on_both_backends, run_both_backends, 
 use std::fs;
 use tempfile::TempDir;
 
+/// #417 used to abort before touching a small file: the read limit became
+/// the allocation size. Keep the large request in a child process so a
+/// regression fails this test rather than aborting the entire Rust suite.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn oversized_read_bytevector_reads_only_the_available_bytes() {
+    let temp = TempDir::new().unwrap();
+    let bytes: Vec<u8> = (0..10000).map(|i| (i % 250) as u8).collect();
+    fs::write(temp.path().join("tenk.bin"), bytes).unwrap();
+    fs::write(temp.path().join("empty.bin"), []).unwrap();
+    fs::write(
+        temp.path().join("read.scm"),
+        include_str!("fixtures/oversized-read-bytevector.scm"),
+    )
+    .unwrap();
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.extend_from_slice(&["--isolated-libraries", "read.scm"]);
+        let (stdout, stderr, status) = common::run_with_deadline_status(temp.path(), &args, None);
+        assert!(status.success(), "{backend:?}: {status}\n{stderr}");
+        assert_eq!(
+            stdout.trim(),
+            "(#u8() (10000 0 249) #t #u8())\n(#u8() empty #t #u8())",
+            "{backend:?}: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn shebang_script_runs() {
     let temp = TempDir::new().unwrap();
