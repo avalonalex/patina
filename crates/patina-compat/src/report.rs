@@ -174,6 +174,14 @@ pub fn render(
     let total = results.len();
     let count = |key: &str| results.iter().filter(|r| r.status.key() == key).count();
     let pass = count("pass");
+    // A pass establishes different things in each mode. Split the same
+    // successful rows as the headline, not every package that had a suite.
+    let passing_mode = |mode: &str| {
+        results
+            .iter()
+            .filter(|r| r.status == Status::Pass && r.mode == mode)
+            .count()
+    };
 
     let excluded: BTreeMap<&str, &Exclusion> =
         exclusions.iter().map(|e| (e.slug.as_str(), e)).collect();
@@ -235,6 +243,13 @@ pub fn render(
         measured_at.unwrap_or("unknown (not recorded in this snapshot)")
     );
     let _ = writeln!(out, "**{} of {} packages pass.**\n", pass, total);
+    let _ = writeln!(
+        out,
+        "Of these passes, **{} ran test suites** and **{} passed import-only probes**. \
+         The harness does not call exported procedures in probe mode.\n",
+        passing_mode("test"),
+        passing_mode("probe"),
+    );
     if !applied.is_empty() {
         let _ = writeln!(
             out,
@@ -565,6 +580,69 @@ mod tests {
         let report = render(&two_results(), "vm", None, &[], true);
         assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
         assert!(!report.contains("in scope**"), "{}", report);
+    }
+
+    #[test]
+    fn pass_split_ignores_failures_and_keeps_a_pass_with_a_drifted_exclusion() {
+        let results = vec![
+            PackageResult {
+                slug: "suite-pass".into(),
+                mode: "test",
+                status: Status::Pass,
+            },
+            PackageResult {
+                slug: "probe-pass".into(),
+                mode: "probe",
+                status: Status::Pass,
+            },
+            PackageResult {
+                slug: "suite-fail".into(),
+                mode: "test",
+                status: Status::WrongResult,
+            },
+            PackageResult {
+                slug: "probe-fail".into(),
+                mode: "probe",
+                status: Status::Timeout,
+            },
+        ];
+        let mut exclusions = excluding("suite-fail", "wrong-result");
+        exclusions.extend(excluding("probe-pass", "out-of-scope"));
+        let report = render(&results, "vm", None, &exclusions, true);
+        assert!(report.contains("**2 of 4 packages pass.**"), "{report}");
+        let split = "Of these passes, **1 ran test suites** and **1 passed import-only probes**.";
+        assert!(report.contains(split), "{report}");
+        assert!(report.contains("**2 of 3 in scope**"), "{report}");
+        assert!(report.find(split).unwrap() < report.find("in scope**").unwrap());
+    }
+
+    #[test]
+    fn filtered_pass_split_can_have_no_suites_or_no_probes() {
+        for (mode, split) in [
+            (
+                "test",
+                "**1 ran test suites** and **0 passed import-only probes**",
+            ),
+            (
+                "probe",
+                "**0 ran test suites** and **1 passed import-only probes**",
+            ),
+        ] {
+            let results = vec![PackageResult {
+                slug: "selected".into(),
+                mode,
+                status: Status::Pass,
+            }];
+            let report = render(
+                &results,
+                "tree-walker",
+                None,
+                &excluding("not-selected", "wrong-result"),
+                false,
+            );
+            assert!(report.contains("**1 of 1 packages pass.**"), "{report}");
+            assert!(report.contains(split), "{report}");
+        }
     }
 
     #[test]

@@ -62,7 +62,7 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #429 — most passes are import-only; how to make the number mean more.
+- #429 — expand execution coverage beyond import-only probes.
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
