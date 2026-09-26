@@ -260,13 +260,10 @@
 	(cons x (recur (car rest) (cdr rest)))
 	x)))
 
-;;; (unfold not-pair? car cdr lis values)
-
-(define (list-copy lis)
-  (let recur ((lis lis))
-    (if (pair? lis)
-	(cons (car lis) (recur (cdr lis)))
-	lis)))
+;; PATINA LOCAL EDIT: use the imported (scheme base) list-copy binding (#426).
+;; It copies the same finite proper/dotted spines and rejects circular cdr
+;; chains. Removing the reference definition also makes (srfi 1) and
+;; (scheme list) re-export that binding; see ../1.sld for the deviation.
 
 ;;; IOTA count [start step]	(start start+step ... start+(count-1)*step)
 

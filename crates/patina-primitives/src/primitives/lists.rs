@@ -3,7 +3,7 @@
 //! Implements pair construction, list manipulation, and search operations.
 
 use crate::apply_context::ApplyContext;
-use patina_core::TaggedValue;
+use patina_core::{SpineEnd, TaggedValue};
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
@@ -638,7 +638,7 @@ pub(super) fn make_list(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
 }
 
 /// (list-copy list) - Create shallow copy of list
-/// Handles both proper lists and improper lists (dotted lists)
+/// Copies proper and dotted spines; rejects circular cdr chains.
 pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     if args.len() != 1 {
         return Err(EvalError::WrongArity {
@@ -647,57 +647,17 @@ pub(super) fn list_copy(heap: &SharedHeap, args: &[TaggedValue]) -> Result<Tagge
         });
     }
 
-    let input = args[0];
-
-    // Handle empty list
-    if input.is_null() {
-        return Ok(TaggedValue::NULL);
-    }
-
-    // Fast path: native heap pair - copy using heap operations
-    if input.is_pair() {
-        // Collect all car values and find the tail
-        let mut cars: Vec<TaggedValue> = Vec::new();
-        let mut current = input;
-
-        {
-            let heap_ref = heap.borrow();
-            while current.is_pair() {
-                cars.push(heap_ref.car(current));
-                current = heap_ref.cdr(current);
-            }
+    // Validate before allocating output pairs. Unlike list_to_vec, spine
+    // preserves an improper tail (and returns a non-pair input unchanged).
+    let (cars, end) = heap.borrow().spine(args[0]);
+    let tail = match end {
+        SpineEnd::Null => TaggedValue::NULL,
+        SpineEnd::Improper(tail) => tail,
+        SpineEnd::Circular => {
+            return Err(EvalError::TypeError("list-copy: circular list".into()));
         }
-
-        // current is now the tail (Null for proper list, other value for improper list)
-        return Ok(heap.borrow_mut().list_from_iter_with_tail(cars, current));
-    }
-
-    // Fallback path: use try_pair for any other pair types
-
-    // Try to walk as a pair - collect cars and find tail
-    let mut cars: Vec<TaggedValue> = Vec::new();
-    let mut current = input;
-
-    loop {
-        if current.is_null() {
-            break;
-        }
-        if let Some((car, cdr)) = heap.borrow().try_pair(current) {
-            cars.push(car);
-            current = cdr;
-        } else {
-            // Not a pair - improper list tail or non-pair input
-            break;
-        }
-    }
-
-    if cars.is_empty() {
-        // Not a pair at all, return as-is
-        return Ok(input);
-    }
-
-    // tail: Null for a proper list, the non-pair value for an improper one
-    Ok(heap.borrow_mut().list_from_iter_with_tail(cars, current))
+    };
+    Ok(heap.borrow_mut().list_from_iter_with_tail(cars, tail))
 }
 
 /// (set-car! pair obj) - Mutate the car of a pair

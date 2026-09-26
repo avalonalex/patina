@@ -12,11 +12,9 @@
     (let lp ((n n) (res '()))
       (if (<= n 0) res (lp (- n 1) (cons default res))))))
 
-(define (list-copy ls)
-  (let lp ((ls ls) (res '()))
-    (if (pair? ls)
-        (lp (cdr ls) (cons (car ls) res))
-        (append (reverse res) ls))))
+;; PATINA LOCAL EDIT: omit the list-copy shim and use the imported
+;; (scheme base) binding, sharing its checked shallow copy with (srfi 1)
+;; and (scheme list) (#426). See ../PROVENANCE.md for the deviation.
 
 (define (list-set! ls k x)
   (cond ((null? ls) (error "invalid list index"))

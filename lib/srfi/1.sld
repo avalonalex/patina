@@ -6,6 +6,9 @@
 ;;
 ;; Adapted for R7RS: imports (srfi 8) for receive, plus shims for
 ;; check-arg, let-optionals, :optional.
+;; Local deviation (#426): list-copy re-exports (scheme base)'s binding.
+;; It preserves finite proper/dotted shallow copies and rejects circular
+;; cdr chains instead of recursing indefinitely in the reference code.
 
 (define-library (srfi 1)
   (import (scheme base)
