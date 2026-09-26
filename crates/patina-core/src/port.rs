@@ -1017,17 +1017,20 @@ impl Port {
                 Ok(remaining.chars().next())
             }
             PortData::Stdio(StdioKind::Stdin) => {
-                // For stdin, we need to use fill_buf to peek
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
-                let buf = handle.fill_buf()?;
-                if buf.is_empty() {
-                    return Ok(None);
+                // A stdin chunk can end inside a character, or contain invalid
+                // bytes after it (#416). Read just one complete character and
+                // leave it in the unread text shared by every stdin port.
+                // All textual reads see it there; stdin's byte operations are
+                // rejected by the Scheme primitives (the policy in #412).
+                drop(data); // read_char borrows the port again.
+                let ch = self.read_char()?;
+                if let Some(ch) = ch {
+                    let mut bytes = [0; 4];
+                    self.pushback
+                        .borrow_mut()
+                        .push_str(ch.encode_utf8(&mut bytes));
                 }
-                // Try to decode first UTF-8 char from buffer
-                let s = std::str::from_utf8(buf)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                Ok(s.chars().next())
+                Ok(ch)
             }
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

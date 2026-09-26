@@ -170,6 +170,13 @@ fn a_read_inside_the_program_continues_right_after_its_form() {
             "(import (scheme base) (scheme read) (scheme write))\n(write (read))\n(1 2) (display \"after\")\n",
             "(1 2)after",
         ),
+        // Consume the buffered newline, then peek at the next form's opening
+        // parenthesis in the source. The program reader must still see it,
+        // even though the peek uses the program's own stdin port (#416).
+        (
+            "(import (scheme base) (scheme write))\n(begin (read-char) (write (peek-char)))\n(display 42)\n",
+            "#\\(42",
+        ),
     ] {
         for backend in BOTH_BACKENDS {
             let (stdout, stderr, ok) = run_with_deadline(dir.path(), backend, Some(program));

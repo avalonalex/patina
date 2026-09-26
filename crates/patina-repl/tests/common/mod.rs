@@ -132,16 +132,25 @@ pub fn run_with_deadline_status(
     args: &[&str],
     input: Option<&str>,
 ) -> (String, String, std::process::ExitStatus) {
+    run_with_deadline_bytes(cwd, args, input.unwrap_or("").as_bytes())
+}
+
+/// [`run_with_deadline_status`] with raw input, for invalid or incomplete UTF-8.
+pub fn run_with_deadline_bytes(
+    cwd: &Path,
+    args: &[&str],
+    input: &[u8],
+) -> (String, String, std::process::ExitStatus) {
     use std::io::Write;
 
     let mut patina = spawn_patina(cwd, args);
     let mut sink = patina.stdin.take().expect("stdin pipe");
-    let input = input.unwrap_or("").to_owned();
+    let input = input.to_owned();
     // On its own thread: a child that exits without reading leaves this
     // write blocked or broken, and neither should fail the run — the
     // child's own stderr is the better report, so a broken pipe is dropped.
     let writer = std::thread::spawn(move || {
-        let _ = sink.write_all(input.as_bytes());
+        let _ = sink.write_all(&input);
     });
     let result = patina.finish_with_status();
     let _ = writer.join();
@@ -162,11 +171,20 @@ pub struct RunningPatina {
 }
 
 pub fn spawn_patina(cwd: &Path, args: &[&str]) -> RunningPatina {
+    spawn_patina_with_stdin(cwd, args, std::process::Stdio::piped())
+}
+
+/// Like [`spawn_patina`], with a redirected file or another stdin source.
+pub fn spawn_patina_with_stdin(
+    cwd: &Path,
+    args: &[&str],
+    stdin: std::process::Stdio,
+) -> RunningPatina {
     use std::io::Read;
     use std::process::Stdio;
 
     let mut child = patina_command(cwd, args, &[])
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
