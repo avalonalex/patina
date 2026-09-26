@@ -1293,13 +1293,13 @@ impl Port {
             )),
             PortData::File(fp) => {
                 if let FileHandle::Input(ref mut reader) = fp.handle {
-                    let mut buf = vec![0u8; k];
-                    match read_until_full_or_eof(reader, &mut buf)? {
+                    // k limits consumption, not allocation (#417). Grow with
+                    // the bytes read, retrying short/interrupted reads until
+                    // that limit or EOF, as read-bytevector! does (#414).
+                    let mut buf = Vec::new();
+                    match reader.take(k as u64).read_to_end(&mut buf)? {
                         0 => Ok(None), // EOF
-                        n => {
-                            buf.truncate(n);
-                            Ok(Some(buf))
-                        }
+                        _ => Ok(Some(buf)),
                     }
                 } else {
                     Err(io::Error::new(
@@ -2156,6 +2156,56 @@ mod tests {
         let mut target = [0u8; 7];
         assert_eq!(read_until_full_or_eof(&mut reader, &mut target).unwrap(), 1);
         assert_eq!(read_until_full_or_eof(&mut reader, &mut target).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_file_read_bytevector_allocates_for_the_data_not_the_limit() {
+        let fs = crate::vfs::MemoryFs::new();
+        let contents: Vec<u8> = (0..10000).map(|i| (i % 250) as u8).collect();
+        fs.add_file("/bytes.bin", contents.clone());
+        let port = Port::open_binary_input_file("/bytes.bin", &fs).unwrap();
+
+        // A modest limit keeps the old eager allocation safe to test while
+        // exposing its retained capacity. The CLI test covers an abort-sized
+        // limit in a child process, where it cannot kill the test runner.
+        let bytes = port.read_bytevector(1 << 20).unwrap().unwrap();
+        assert_eq!(bytes, contents);
+        assert!(
+            bytes.capacity() <= 64 * 1024,
+            "10 KB of data retained {} bytes for a 1 MB limit",
+            bytes.capacity()
+        );
+        assert_eq!(port.read_bytevector(1 << 20).unwrap(), None);
+        assert_eq!(port.read_bytevector(0).unwrap(), Some(vec![]));
+    }
+
+    #[test]
+    fn test_file_read_bytevector_retries_short_and_interrupted_reads() {
+        let reader = scripted(vec![
+            Err(io::ErrorKind::Interrupted.into()),
+            Ok(vec![1, 2]),
+            Err(io::ErrorKind::Interrupted.into()),
+            Ok(vec![3, 4]),
+            Ok(vec![5]),
+            Err(io::ErrorKind::PermissionDenied.into()),
+        ]);
+        let port = Port::new_port(
+            PortKind::Binary,
+            PortDirection::Input,
+            PortData::File(FilePortData {
+                path: "scripted".into(),
+                handle: FileHandle::Input(reader),
+            }),
+        );
+        // Neither a zero-length request nor reaching the limit may consume
+        // the next byte. Only Interrupted is retried; other errors survive.
+        assert_eq!(port.read_bytevector(0).unwrap(), Some(vec![]));
+        assert_eq!(port.read_bytevector(4).unwrap(), Some(vec![1, 2, 3, 4]));
+        assert_eq!(port.read_u8().unwrap(), Some(5));
+        assert_eq!(
+            port.read_bytevector(4).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
     }
 
     #[test]
