@@ -55,7 +55,6 @@ empty, archive this page.
 - #411 — `read` on a binary file port over-reads past its datum.
 
 **Backends**
-- #425 — tree-walker: a library body that raises is reported as a Rust debug dump.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**

@@ -327,20 +327,16 @@ fn a_wind_thunk_reaches_the_probe_it_cannot_satisfy() {
 /// Where the gap cost the most: an error nothing handles ends the program, and
 /// on the VM the message that ended it was `unhandled exception: #<unknown>`.
 ///
-/// The two backends still word this differently, and the test says so rather
-/// than settling for a substring both happen to contain. The VM formats the
-/// raised object with the datum writer, so it now carries the irritants; the
-/// tree-walker's `error` never builds the heap object at all — it raises an
-/// `EvalError` whose `Display` drops the `irritants_display` it computed. The
-/// wording is not the property under test, but neither diagnostic may fall
-/// back to `#<unknown>`, and that part holds on both.
+/// Both backends format the raised object with the datum writer. The
+/// tree-walker discarded the irritants until #425 made `error` follow the
+/// same path as `raise`; neither may fall back to `#<unknown>`.
 #[test]
 fn test_an_uncaught_error_names_its_message() {
     for (backend, result, expected) in [
         (
             "tree-walker",
             try_eval_program_tree_walker(r#"(error "boom" 1 2)"#),
-            "Scheme exception (Error): boom",
+            "unhandled exception: #<error-object: boom 1 2>",
         ),
         (
             "vm",
@@ -376,6 +372,42 @@ fn test_a_re_raised_error_object_names_its_message() {
             message.contains("#<error-object: boom 1 2>"),
             "[{backend}] uncaught error object was not named: {message}"
         );
+        assert_eq!(
+            message.matches("unhandled exception:").count(),
+            1,
+            "{message}"
+        );
+    }
+}
+
+/// A terminal failure in an inline library retains the same diagnostic as
+/// a top-level raise, with no Rust Debug representation of the condition.
+#[test]
+fn library_body_errors_are_reported_once_with_irritants() {
+    for body in [
+        "(error \"boom\" 1 2)",
+        "(raise (guard (e (else e)) (error \"boom\" 1 2)))",
+    ] {
+        let code = format!(
+            "(define-library (diagnostic425 broken) (import (scheme base)) (export y) (begin (define y {body})))"
+        );
+        for result in [
+            try_eval_program_tree_walker(&code),
+            try_eval_program_vm(&code),
+        ] {
+            let message = result.expect_err("the library body raises");
+            assert!(
+                message.contains("unhandled exception: #<error-object: boom 1 2>"),
+                "{message}"
+            );
+            assert_eq!(
+                message.matches("unhandled exception:").count(),
+                1,
+                "{message}"
+            );
+            assert!(!message.contains("SchemeException"), "{message}");
+            assert!(!message.contains("irritants_display"), "{message}");
+        }
     }
 }
 

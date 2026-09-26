@@ -740,10 +740,9 @@ impl<'a> CpsEvaluator<'a> {
             // One wording for both — see the VM's `vm_raise_value` for why:
             // `guard` re-raises with `raise-continuable`, so "continuable" here
             // described the expansion rather than the user's code.
-            let msg = format!("unhandled exception: {}", exception_str);
             let err = EvalError::SchemeException {
                 kind: ExceptionKind::Error,
-                message: msg,
+                message: exception_str,
                 irritants_display: String::new(),
             };
             Err(super::exceptions::unhandled(
@@ -798,57 +797,19 @@ impl<'a> CpsEvaluator<'a> {
         // Create exception object directly as TaggedValue
         let exception_tagged = heap.borrow_mut().alloc_exception(
             patina_core::ExceptionKind::Error,
-            message.clone(),
-            irritants_tagged.clone(),
+            message,
+            irritants_tagged,
         );
 
-        // Now do the same as raise (non-continuable)
-        if let Some(handler_entry) = exception_handlers.last().cloned() {
-            // Pop this handler (one-shot semantics)
-            let mut new_handlers = exception_handlers;
-            new_handlers.pop();
-
-            // Create continuation for when handler returns
-            let handler_return_cont = ContValue::RaiseHandlerReturn {
-                continuable: false,
-                original_exception: Some(exception_tagged),
-                original_cont: Box::new(cont),
-                popped_handler: None,
-            };
-
-            // Handler is already TaggedValue - use directly for ApplyProc.proc
-            // Call handler with exception
-            Ok(StepResult::ApplyProc {
-                proc: handler_entry.handler,
-                args: vec![exception_tagged],
-                cont: handler_return_cont,
-                env: self.evaluator.global_env.clone(),
-                cont_env,
-                prompt_stack,
-                dynamic_winds,
-                exception_handlers: new_handlers,
-            })
-        } else {
-            // No handler - propagate to Rust level
-            use patina_core::ExceptionKind;
-            use patina_primitives::primitives::io::datum_writer::format_display_tagged;
-            let irritants_display = irritants_tagged
-                .iter()
-                .map(|tv| format_display_tagged(*tv, heap))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let err = EvalError::SchemeException {
-                kind: ExceptionKind::Error,
-                message,
-                irritants_display,
-            };
-            Err(super::exceptions::unhandled(
-                err,
-                &cont,
-                &cont_env,
-                &prompt_stack,
-            ))
-        }
+        self.apply_raise(
+            vec![exception_tagged],
+            cont,
+            cont_env,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+            false,
+        )
     }
 
     fn apply_apply(
@@ -1121,7 +1082,15 @@ impl<'a> CpsEvaluator<'a> {
                     state,
                     original_cont: Box::new(cont),
                 };
-                match self.eval_step(expr, &env) {
+                let context = super::callback::CallbackContext {
+                    cps: self,
+                    prompt_stack: &prompt_stack,
+                    dynamic_winds: &dynamic_winds,
+                    exception_handlers: &exception_handlers,
+                };
+                let evaluated = self.eval_step(expr, &env, &context);
+                let declined = super::types::take_unhandled_in_callback();
+                match evaluated {
                     // On this trampoline, under a continuation environment
                     // of its own that binds only where its value goes.
                     Ok(EvalStep::Run(expr)) => Ok(StepResult::Continue {
@@ -1141,6 +1110,12 @@ impl<'a> CpsEvaluator<'a> {
                         dynamic_winds,
                         exception_handlers,
                     }),
+                    Err(err) if declined => Err(super::exceptions::unhandled(
+                        err,
+                        &cont,
+                        &cont_env,
+                        &prompt_stack,
+                    )),
                     Err(err) => self.maybe_route_error_through_cps(
                         err,
                         cont,
@@ -1171,11 +1146,17 @@ impl<'a> CpsEvaluator<'a> {
     /// A `Step::Eval`'s datum made ready for this trampoline: expanded, and
     /// transformed to deliver its value to [`EVAL_K`] — or, for an `import`,
     /// which the transform does not take, done here and its value.
-    fn eval_step(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<EvalStep, EvalError> {
+    fn eval_step(
+        &self,
+        expr: TaggedValue,
+        env: &Rc<Environment>,
+        context: &super::callback::CallbackContext<'_, '_, '_>,
+    ) -> Result<EvalStep, EvalError> {
         let core = super::callback::expand_for_eval(self.evaluator, expr, env)?;
         if let patina_core::CoreExprKind::Import { .. } = &core.kind {
-            // An import touches no dynamic state; the plain entry handles it.
-            return super::eval_cps(&core, env.clone(), self.evaluator).map(EvalStep::Value);
+            // An import can initialize a library and call the program's
+            // handlers. It inherits the same context as other evaluated forms.
+            return context.eval_import(&core, env).map(EvalStep::Value);
         }
         let cps = patina_ir::CpsTransformer::new().transform(&core, &EVAL_K.into());
         Ok(EvalStep::Run(Rc::new(cps)))

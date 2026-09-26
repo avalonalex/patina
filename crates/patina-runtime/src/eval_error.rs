@@ -22,7 +22,7 @@ use patina_core::error::SourceLocation;
 use patina_core::{ErrorDetail, ErrorKind, ExceptionKind};
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Error, Debug, Clone)]
 pub enum EvalError {
     #[error("Undefined variable: {}", patina_core::escape_invisible(_0))]
     UndefinedVariable(String),
@@ -77,7 +77,7 @@ pub enum EvalError {
     /// Uses ExceptionKind from patina-core for consistency.
     /// The irritants are serialized to a string for the error message.
     /// This can be caught by `guard` or `with-exception-handler`.
-    #[error("Scheme exception ({kind:?}): {message}")]
+    #[error("unhandled exception: {message}")]
     SchemeException {
         kind: ExceptionKind,
         message: String,

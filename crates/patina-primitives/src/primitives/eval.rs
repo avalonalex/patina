@@ -75,9 +75,9 @@ fn environment_imports(
             }
         }
     };
-    let library = ctx
-        .load_scheme_library(library_name)
-        .map_err(|e| EvalError::InvalidSyntax(format!("environment: cannot load library: {e}")))?;
+    // Loading can run Scheme and escape to the caller's handler. Preserve
+    // that control transfer instead of replacing it with a syntax error.
+    let library = ctx.load_scheme_library(library_name)?;
     let mut bindings: BTreeMap<String, String> = library
         .export_names()
         .into_iter()

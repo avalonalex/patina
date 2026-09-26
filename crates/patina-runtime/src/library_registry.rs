@@ -59,6 +59,13 @@ pub enum LibraryError {
     /// Parse error in library file
     ParseError { file: String, message: String },
 
+    /// Evaluation failed after parsing. Keep the error typed: a continuation
+    /// escaping a library load must reach its trampoline, not become prose.
+    EvaluationError {
+        file: String,
+        error: Box<crate::EvalError>,
+    },
+
     /// The library's implementation is a compiled shared object
     /// (`include-shared`), which Patina cannot load.
     ///
@@ -78,6 +85,15 @@ pub enum LibraryError {
 pub const NATIVE_EXTENSION_MARKER: &str = "requires the native extension";
 
 impl LibraryError {
+    /// Leave a running library load without wrapping an evaluation error or
+    /// control transfer in a new Scheme condition (#425).
+    pub fn into_eval_error(self) -> crate::EvalError {
+        match self {
+            Self::EvaluationError { error, .. } => *error,
+            other => crate::EvalError::InvalidSyntax(format!("Failed to load library: {other}")),
+        }
+    }
+
     /// A library that is not loaded, looked up by `name`.
     pub fn not_found(name: &[String]) -> Self {
         LibraryError::NotFound {
@@ -138,6 +154,13 @@ impl std::fmt::Display for LibraryError {
             }
             LibraryError::ParseError { file, message } => {
                 write!(f, "Parse error in {}: {}", file, message)
+            }
+            LibraryError::EvaluationError { file, error } => {
+                if file.is_empty() {
+                    write!(f, "Error evaluating library body: {error}")
+                } else {
+                    write!(f, "Error evaluating library body in {file}: {error}")
+                }
             }
             LibraryError::NativeExtensionRequired { file, extension } => {
                 write!(

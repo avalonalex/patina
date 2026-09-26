@@ -1,18 +1,13 @@
 //! The [`ApplyContext`] a step hands a primitive: the evaluator, plus the
 //! step's own dynamic environment.
 //!
-//! A Rust higher-order primitive — `member` with a predicate, `call-with-port`,
-//! `force`, a parameter converter, `eval` — calls back into Scheme through
-//! `ApplyContext::apply_proc` or `eval_expr`. The `Evaluator`'s own
-//! implementation (`apply_context_impl.rs`) starts the callback's trampoline
-//! with every stack empty, which is right for a call from outside any step
-//! (`Backend::apply`) and wrong for one from inside: the callback then cannot
-//! see the handlers, winds or prompts installed around the primitive. This
-//! context carries the calling step's three stacks by reference and starts
-//! the callback's trampoline under clones of them. The clone happens only
-//! when a callback is actually made, so `(+ 1 2)` pays nothing for it.
-//!
-//! Everything else delegates to the evaluator.
+//! `environment` and evaluated imports can initialize a Scheme library.
+//! That body must inherit the caller's handlers, winds and prompts, including
+//! when a dependency is loaded (#425). This context carries those stacks by
+//! reference; a nested run clones them only when evaluation is needed.
+//! Calls from outside a running step use `detached`, with empty stacks.
+//! `apply_proc` and `eval_expr` remain available to embedding callers; the
+//! resumable primitives hand their calls and datums to the machine itself.
 
 use super::CpsEvaluator;
 use super::types::{ExceptionHandler, PromptFrame};
@@ -30,6 +25,49 @@ pub(crate) struct CallbackContext<'c, 'a, 's> {
 }
 
 impl<'a> CallbackContext<'_, 'a, '_> {
+    /// A library body, evaluated under the caller's handlers, winds and
+    /// prompts. Only an error that actually leaves a nested run has already
+    /// been offered to those handlers; import/expansion failures have not.
+    pub(crate) fn eval_core(
+        &self,
+        expr: &patina_core::CoreExpr,
+        env: &Rc<Environment>,
+    ) -> Result<TaggedValue, EvalError> {
+        if let patina_core::CoreExprKind::Import { .. } = &expr.kind {
+            return self.eval_import(expr, env);
+        }
+        let expr = super::lower_quasiquotes_for(expr, self.cps.evaluator)?;
+        unhandled_is_final(super::eval_cps_with(
+            &expr,
+            env.clone(),
+            self.cps.evaluator,
+            self.prompt_stack.to_vec(),
+            self.dynamic_winds.to_vec(),
+            self.exception_handlers.to_vec(),
+        ))
+    }
+
+    pub(crate) fn eval_import(
+        &self,
+        expr: &patina_core::CoreExpr,
+        env: &Rc<Environment>,
+    ) -> Result<TaggedValue, EvalError> {
+        let patina_core::CoreExprKind::Import { import_sets } = &expr.kind else {
+            unreachable!("eval_import requires an import")
+        };
+        for import_set in import_sets {
+            let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
+                *import_set,
+                self.heap(),
+            )
+            .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {e}")))?;
+            self.cps
+                .evaluator
+                .process_import_for_eval_with(&import_set, env, self)?;
+        }
+        Ok(TaggedValue::UNSPECIFIED)
+    }
+
     /// The context for a call from outside any step: nothing to inherit.
     pub(crate) fn detached(cps: &'a CpsEvaluator<'a>) -> CallbackContext<'a, 'a, 'static> {
         CallbackContext {
@@ -46,7 +84,9 @@ impl<'a> CallbackContext<'_, 'a, '_> {
 /// Marking it is what stops the call site from routing it through the same
 /// handlers a second time (`types::mark_unhandled_in_callback`).
 fn unhandled_is_final(result: Result<TaggedValue, EvalError>) -> Result<TaggedValue, EvalError> {
-    if result.as_ref().is_err_and(|e| e.is_catchable()) {
+    // A detached load has no primitive caller to consume the flag. Leaving
+    // one set would make a later, unrelated call bypass its own handlers.
+    if super::types::current_trampoline() != 0 && result.as_ref().is_err_and(|e| e.is_catchable()) {
         super::types::mark_unhandled_in_callback();
     }
     result
@@ -83,18 +123,14 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         let evaluator = self.cps.evaluator;
         let core_expr = expand_for_eval(evaluator, expr, env)?;
 
-        unhandled_is_final(super::eval_cps_with(
-            &core_expr,
-            env.clone(),
-            evaluator,
-            self.prompt_stack.to_vec(),
-            self.dynamic_winds.to_vec(),
-            self.exception_handlers.to_vec(),
-        ))
+        self.eval_core(&core_expr, env)
     }
 
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
-        self.cps.evaluator.load_scheme_library(name)
+        self.cps
+            .evaluator
+            .load_library_with(name, self)
+            .map_err(patina_runtime::LibraryError::into_eval_error)
     }
 
     fn interaction_environment(&self) -> Rc<Environment> {
