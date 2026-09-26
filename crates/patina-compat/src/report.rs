@@ -11,6 +11,15 @@ use crate::sexp;
 use patina_core::SharedHeap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+/// The measurement carried by a results file. Older version-1 snapshots
+/// have no timestamp; rendering one must not invent a measurement date.
+pub struct Snapshot {
+    pub results: Vec<PackageResult>,
+    pub backend: String,
+    pub measured_at: Option<String>,
+}
 
 /// Make `text` safe to drop into a markdown table cell.
 ///
@@ -38,12 +47,17 @@ fn status_detail(status: &Status) -> Option<(&'static str, &[String])> {
 }
 
 /// Serialize results to the s-expression snapshot format.
-pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
+pub fn to_sexp(results: &[PackageResult], backend: &str, measured_at: &str) -> String {
     let mut out = String::new();
     out.push_str(";; patina-compat results — regenerate with: cargo run -p patina-compat -- run\n");
     out.push_str("(patina-compat-results\n");
     out.push_str(" (version 1)\n");
     let _ = writeln!(out, " (backend \"{}\")", sexp::escape_string(backend));
+    let _ = writeln!(
+        out,
+        " (measured-at \"{}\")",
+        sexp::escape_string(measured_at)
+    );
     out.push_str(" (results\n");
     for r in results {
         let _ = write!(
@@ -66,20 +80,40 @@ pub fn to_sexp(results: &[PackageResult], backend: &str) -> String {
     out
 }
 
-/// Parse a results snapshot back into `PackageResult`s and the backend it
-/// was measured on (for `report`).
-pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<(Vec<PackageResult>, String), String> {
+/// Parse results and their original measurement metadata for `report`.
+pub fn from_sexp(source: &str, heap: &SharedHeap) -> Result<Snapshot, String> {
     let (sections, rows) = sexp::document_rows(source, "patina-compat-results", "results", heap)?;
     let backend = sections
         .iter()
         .find_map(|s| sexp::clause_argument(*s, "backend", heap))
         .and_then(|tv| sexp::string_value(tv, heap))
         .unwrap_or_else(|| "vm".to_string());
+    let mut measured_at = None;
+    for fields in sections
+        .iter()
+        .filter_map(|s| sexp::tagged_form(*s, "measured-at", heap))
+    {
+        if measured_at.is_some() {
+            return Err("duplicate measured-at in results snapshot".into());
+        }
+        let value = match fields.as_slice() {
+            [value] => sexp::string_value(*value, heap),
+            _ => None,
+        }
+        .ok_or("measured-at must contain one RFC 3339 timestamp string")?;
+        OffsetDateTime::parse(&value, &Rfc3339)
+            .map_err(|e| format!("invalid measured-at timestamp: {e}"))?;
+        measured_at = Some(value);
+    }
     let results = rows
         .into_iter()
         .map(|row| parse_result_row(row, heap))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((results, backend))
+    Ok(Snapshot {
+        results,
+        backend,
+        measured_at,
+    })
 }
 
 fn parse_result_row(
@@ -133,6 +167,7 @@ fn parse_result_row(
 pub fn render(
     results: &[PackageResult],
     backend: &str,
+    measured_at: Option<&str>,
     exclusions: &[Exclusion],
     full_corpus: bool,
 ) -> String {
@@ -193,6 +228,11 @@ pub fn render(
         out,
         "# Patina third-party compatibility ({} backend)\n",
         backend
+    );
+    let _ = writeln!(
+        out,
+        "**Measured:** {}\n",
+        measured_at.unwrap_or("unknown (not recorded in this snapshot)")
     );
     let _ = writeln!(out, "**{} of {} packages pass.**\n", pass, total);
     if !applied.is_empty() {
@@ -443,11 +483,15 @@ mod tests {
             },
         ];
 
-        let text = to_sexp(&results, "tree-walker");
+        let measured_at = "2026-09-19T08:09:10Z";
+        let text = to_sexp(&results, "tree-walker", measured_at);
         let heap = patina_core::new_shared_heap();
-        let (parsed, backend) = from_sexp(&text, &heap).unwrap();
+        let snapshot = from_sexp(&text, &heap).unwrap();
 
-        assert_eq!(backend, "tree-walker");
+        assert_eq!(snapshot.backend, "tree-walker");
+        assert_eq!(snapshot.measured_at.as_deref(), Some(measured_at));
+        assert!(text.contains(" (measured-at \"2026-09-19T08:09:10Z\")"));
+        let parsed = snapshot.results;
         assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0].slug, "a");
         assert_eq!(parsed[0].mode, "test");
@@ -485,6 +529,26 @@ mod tests {
         ]
     }
 
+    /// Only an absent field is legacy metadata; corrupt metadata must not
+    /// quietly become an undated report.
+    #[test]
+    fn malformed_measurement_times_are_rejected() {
+        let heap = patina_core::new_shared_heap();
+        for field in [
+            "(measured-at)",
+            "(measured-at 123)",
+            "(measured-at \"\")",
+            "(measured-at \"2026-09-19\")",
+            "(measured-at \"2026-02-30T00:00:00Z\")",
+            "(measured-at \"2026-09-19T08:09:10Z\" \"extra\")",
+            "(measured-at \"2026-09-19T08:09:10Z\") (measured-at \"2026-09-20T00:00:00Z\")",
+        ] {
+            let source = format!("(patina-compat-results (version 1) {field} (results))");
+            let error = from_sexp(&source, &heap).err().expect(field);
+            assert!(error.contains("measured-at"), "{field}: {error}");
+        }
+    }
+
     fn excluding(slug: &str, expect: &'static str) -> Vec<Exclusion> {
         vec![Exclusion {
             slug: slug.into(),
@@ -498,14 +562,20 @@ mod tests {
     /// appears beside it only when something was actually excluded.
     #[test]
     fn report_headline_keeps_the_raw_number() {
-        let report = render(&two_results(), "vm", &[], true);
+        let report = render(&two_results(), "vm", None, &[], true);
         assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
         assert!(!report.contains("in scope**"), "{}", report);
     }
 
     #[test]
     fn an_exclusion_narrows_only_the_scoped_number() {
-        let report = render(&two_results(), "vm", &excluding("b", "out-of-scope"), true);
+        let report = render(
+            &two_results(),
+            "vm",
+            None,
+            &excluding("b", "out-of-scope"),
+            true,
+        );
         assert!(report.contains("**1 of 2 packages pass.**"), "{}", report);
         assert!(report.contains("**1 of 1 in scope**"), "{}", report);
         assert!(
@@ -519,7 +589,13 @@ mod tests {
     /// is reported, not silently applied.
     #[test]
     fn an_exclusion_that_no_longer_matches_is_reported_as_drift() {
-        let report = render(&two_results(), "vm", &excluding("a", "out-of-scope"), true);
+        let report = render(
+            &two_results(),
+            "vm",
+            None,
+            &excluding("a", "out-of-scope"),
+            true,
+        );
         assert!(
             report.contains("Exclusions that have drifted"),
             "{}",
@@ -537,9 +613,15 @@ mod tests {
             mode: "probe",
             status: Status::MissingLibrary(vec!["srfi 160 base".into()]),
         }];
-        let queued = render(&results, "vm", &[], true);
+        let queued = render(&results, "vm", None, &[], true);
         assert!(queued.contains("(srfi 160 base)"), "{}", queued);
-        let dropped = render(&results, "vm", &excluding("b", "missing-library"), true);
+        let dropped = render(
+            &results,
+            "vm",
+            None,
+            &excluding("b", "missing-library"),
+            true,
+        );
         assert!(!dropped.contains("| (srfi 160 base) |"), "{}", dropped);
     }
 
@@ -549,7 +631,13 @@ mod tests {
     #[test]
     fn a_drifted_exclusion_stops_excusing_its_package() {
         // `a` passes; the entry expects out-of-scope, so it has drifted.
-        let report = render(&two_results(), "vm", &excluding("a", "out-of-scope"), true);
+        let report = render(
+            &two_results(),
+            "vm",
+            None,
+            &excluding("a", "out-of-scope"),
+            true,
+        );
         assert!(
             report.contains("Exclusions that have drifted"),
             "{}",
@@ -567,6 +655,7 @@ mod tests {
         let report = render(
             &two_results(),
             "vm",
+            None,
             &excluding("a", "missing-library"),
             true,
         );
@@ -584,7 +673,7 @@ mod tests {
             expect: "out-of-scope",
             note: "fails on (or a | b) upstream".into(),
         }];
-        let report = render(&two_results(), "vm", &exclusions, true);
+        let report = render(&two_results(), "vm", None, &exclusions, true);
         assert!(report.contains(r"(or a \| b)"), "{}", report);
     }
 
@@ -595,6 +684,7 @@ mod tests {
         let report = render(
             &two_results(),
             "vm",
+            None,
             &excluding("gone-from-corpus", "missing-library"),
             true,
         );
@@ -610,6 +700,7 @@ mod tests {
         let report = render(
             &two_results(),
             "vm",
+            None,
             &excluding("not-in-this-run", "missing-library"),
             false,
         );

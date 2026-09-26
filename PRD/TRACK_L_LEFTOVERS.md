@@ -64,7 +64,6 @@ empty, archive this page.
 **The corpus and its harness**
 - #429 — most passes are import-only; how to make the number mean more.
 - #382 — the classifier keys on error prose no producer knows is parsed.
-- #381 — the snapshot records no measurement date.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
 One recorded debt has no issue because it has no known symptom: on the VM,

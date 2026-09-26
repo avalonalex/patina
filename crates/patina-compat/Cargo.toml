@@ -8,6 +8,7 @@ description = "Self-contained third-party compatibility harness for Patina (Trac
 patina-core = { path = "../patina-core" }
 patina-frontend = { path = "../patina-frontend" }
 patina-runtime = { path = "../patina-runtime" }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 tempfile = "3"

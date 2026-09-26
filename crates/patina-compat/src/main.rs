@@ -19,6 +19,7 @@ use run::RunConfig;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -294,9 +295,22 @@ fn run_command(opts: &Options) {
         );
         process::exit(2);
     }
+    // The start of the measurement, not the time a report is rendered.
+    // Capture once so the snapshot and its report always carry the same time.
+    let measured_at = OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .expect("zero nanoseconds is valid")
+        .format(&Rfc3339)
+        .expect("current UTC time fits RFC 3339");
     let results = run::run_corpus(&selected, &universe, &providers, &config);
 
-    let rendered = report::render(&results, backend, &exclusions, opts.filter.is_none());
+    let rendered = report::render(
+        &results,
+        backend,
+        Some(&measured_at),
+        &exclusions,
+        opts.filter.is_none(),
+    );
 
     // Both artifacts are written, not just the snapshot: the rendered matrix
     // is committed too, and printing it to stdout alone left it stale unless
@@ -312,7 +326,7 @@ fn run_command(opts: &Options) {
         opts.results_path.as_deref(),
         &opts.results_path(),
         subset,
-        || report::to_sexp(&results, backend),
+        || report::to_sexp(&results, backend, &measured_at),
     );
     write_artifact(
         "report",
@@ -361,17 +375,23 @@ fn report_command(opts: &Options) {
         }
     };
     let heap = patina_core::new_shared_heap();
-    // The snapshot records which backend it measured; the CLI flag plays no
-    // part in re-rendering.
+    // Backend and measurement time come from the snapshot; neither the CLI
+    // flag nor the current time changes the measurement being re-rendered.
     let exclusions = load_exclusions(opts, &heap);
     match report::from_sexp(&source, &heap) {
         // A snapshot is whatever it was written from, and re-rendering cannot
         // tell. Only the committed one is known to cover the whole corpus —
         // `--results` honours an arbitrary file, including the subset a
         // `--filter` run writes, so naming one withdraws the assumption.
-        Ok((results, backend)) => println!(
+        Ok(snapshot) => println!(
             "{}",
-            report::render(&results, &backend, &exclusions, opts.results_path.is_none())
+            report::render(
+                &snapshot.results,
+                &snapshot.backend,
+                snapshot.measured_at.as_deref(),
+                &exclusions,
+                opts.results_path.is_none(),
+            )
         ),
         Err(e) => {
             eprintln!("Error: {}", e);
