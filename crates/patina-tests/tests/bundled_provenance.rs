@@ -49,12 +49,12 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/116/ilists-base.scm", 0xde2e997658b2dc5b),
     ("lib/srfi/116/ilists-impl.scm", 0x745933629d7b4e17),
     // SRFI 117's and 127's own reference implementations (John Cowan, MIT).
-    // 117's is pinned post-edit — one PATINA LOCAL EDIT to list-queue-join!,
-    // marked in place and recorded in PROVENANCE.md. The two `.sld` files are
-    // ours, not upstream's (upstream names the libraries `(srfi-117)` and
+    // 117's is pinned post-edit — PATINA LOCAL EDITs to list-queue-join! and
+    // the list-copy shim, marked in place and recorded in PROVENANCE.md.
+    // The two `.sld` files are ours, not upstream's (upstream names `(srfi-117)` and
     // `(lseqs)`), and are pinned so an edit to them is deliberate too.
-    ("lib/srfi/117.sld", 0xcbbd0e9aaac6aef6),
-    ("lib/srfi/117/list-queues-impl.scm", 0x30690c9b26f3e72b),
+    ("lib/srfi/117.sld", 0xeac48faa17442ef6),
+    ("lib/srfi/117/list-queues-impl.scm", 0xcd8bb53dac83be90),
     ("lib/srfi/127.sld", 0x6171c0c4565c6a0f),
     ("lib/srfi/127/lseqs-impl.scm", 0x13a69d50373b02fe),
     // SRFI 134's implementation is the body of upstream's own `srfi/134.sld`,

@@ -181,6 +181,41 @@ fn eval_to_string(src: &str) -> String {
     vm_out
 }
 
+/// #426: sharing list-copy means sharing its binding, including SRFI 117's
+/// private use. Rebinding an import is a Patina policy, so this belongs here;
+/// portable copying semantics are in tests/scheme/data/list-copy.scm.
+#[test]
+fn list_copy_imports_share_the_base_binding() {
+    assert_eq!(
+        eval_to_string(
+            r#"
+            (import (scheme base)
+                    (prefix (only (srfi 1) list-copy) srfi:)
+                    (prefix (only (scheme list) list-copy) scheme:)
+                    (prefix (only (scheme small) list-copy) small:)
+                    (scheme list-queue))
+            (define original list-copy)
+            (define initially-shared
+              (and (eq? list-copy srfi:list-copy)
+                   (eq? list-copy scheme:list-copy)
+                   (eq? list-copy small:list-copy)))
+            (define replacement (lambda (xs) (list 'replacement)))
+            (define queue (list-queue 1 2))
+            (set! srfi:list-copy replacement)
+            (define observed
+              (list initially-shared
+                    (eq? list-copy replacement)
+                    (eq? scheme:list-copy replacement)
+                    (eq? small:list-copy replacement)
+                    (list-queue-list (list-queue-copy queue))))
+            (set! list-copy original)
+            observed
+            "#,
+        ),
+        "(#t #t #t #t (replacement))"
+    );
+}
+
 /// Headline forms reached through the alias name, not the SRFI name.
 #[test]
 fn test_alias_bindings_are_usable() {

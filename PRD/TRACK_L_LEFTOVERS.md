@@ -53,7 +53,6 @@ empty, archive this page.
 
 **Ports and I/O**
 - #411 — `read` on a binary file port over-reads past its datum.
-- #426 — `list-copy` on a circular list never returns.
 
 **Backends**
 - #425 — tree-walker: a library body that raises is reported as a Rust debug dump.

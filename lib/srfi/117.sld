@@ -1,9 +1,9 @@
 ;; SRFI 117: mutable list queues.
 ;;
 ;; `117/list-queues-impl.scm` is the SRFI's own reference implementation,
-;; byte-identical (John Cowan, MIT); see `PROVENANCE.md`. Only this library
-;; declaration is local: upstream's names the library `(srfi-117)`, which is
-;; not the name R7RS code imports.
+;; with the local edits recorded in `PROVENANCE.md` (John Cowan, MIT).
+;; This library declaration is local too: upstream names the library
+;; `(srfi-117)`, which is not the name R7RS code imports.
 (define-library (srfi 117)
   (import (scheme base) (scheme case-lambda))
   (export make-list-queue list-queue list-queue-copy list-queue-unfold

@@ -104,6 +104,7 @@ const SUITE: &[(&str, i64)] = &[
     ("data/character-properties.scm", 8),
     ("data/conversion.scm", 62),
     ("data/external-representation.scm", 12),
+    ("data/list-copy.scm", 43),
     ("data/lists.scm", 77),
     ("data/numeric-operations.scm", 124),
     ("data/numeric-predicates.scm", 93),

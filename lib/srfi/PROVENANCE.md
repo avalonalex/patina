@@ -146,12 +146,18 @@ What the fixes *did* buy is upstream test coverage: the suites in
 `scheme_tests/upstream/srfi/{117,127}/` were re-vendored at those commits
 (2026-08-30) and all six new assertions passed on arrival on both backends.
 
-**One `PATINA LOCAL EDIT` in `117/list-queues-impl.scm`**, marked in place:
-`list-queue-join!` did an unguarded `(set-cdr! (get-last queue1) …)`, which
-raises when queue1 is empty — Larceny's suite hits it — and never re-pointed
-queue1's last pair, so `(list-queue-append! a b)` followed by
-`list-queue-add-back!` lost every element of `b`. Both are repaired without
-changing the joined result.
+**Two `PATINA LOCAL EDIT`s in `117/list-queues-impl.scm`**, marked in place:
+
+- `list-queue-join!` did an unguarded `(set-cdr! (get-last queue1) …)`, which
+  raises when queue1 is empty — Larceny's suite hits it — and never re-pointed
+  queue1's last pair, so `(list-queue-append! a b)` followed by
+  `list-queue-add-back!` lost every element of `b`. Both are repaired without
+  changing the joined result.
+- The R7RS `list-copy` shim is omitted in favor of the imported `(scheme base)`
+  binding (#426). It preserves shallow copying of finite spines and shares
+  the base procedure's rejection of circular cdr chains. `(srfi 1)` and its
+  `(scheme list)` alias also use that binding; the adapted SRFI 1 port records
+  its deviation in `1.sld`.
 
 **Two upstream properties, left as found** because they are the
 specification's own reference implementation and neither suite nor Patina has
@@ -162,9 +168,10 @@ legitimately returns one truncates the sequence.
 
 **The `.sld` files are Patina's.** Upstream names these libraries
 `(srfi-117)` and `(lseqs)`, which is not what R7RS code imports; ours declare
-`(srfi 117)` and `(srfi 127)` and include the byte-identical implementation
-beside them. `(srfi 127)`'s takes its generator procedures from the bundled
-`(srfi 158)` rather than the `(srfi 121)` of the SRFI's day.
+`(srfi 117)` and `(srfi 127)` and include the implementation beside them
+(117 with the edits above, 127 byte-identical). `(srfi 127)`'s takes its
+generator procedures from the bundled `(srfi 158)` rather than the
+`(srfi 121)` of the SRFI's day.
 
 **SRFI 162 has no library of its own, deliberately.** Its bindings are exported
 from `(srfi 128)` because SRFI 162 says to: *"Implementers are urged to add them
