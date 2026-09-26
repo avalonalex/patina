@@ -728,6 +728,12 @@ to `compat/reports/results.scm` and their rendering to
 `compat/reports/report.md`. Use `--tree-walker` for that backend, with explicit
 `--results` and `--report` paths to preserve the canonical VM artifacts.
 
+The pass headline is followed by the number of passing packages that ran
+test suites and the number that only passed import probes. Both counts come
+from the snapshot's per-package `mode` and `status`; failed packages do not
+contribute to either count. Probe mode imports libraries without calling
+their exported procedures, so a probe pass establishes loading only.
+
 New snapshots carry `(measured-at "2026-09-19T08:09:10Z")`: the UTC start time
 of the corpus run, in RFC 3339 format at second precision. The report prints
 that same value as **Measured**. `cargo run --release -p patina-compat -- report`

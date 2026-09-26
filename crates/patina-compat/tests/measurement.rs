@@ -16,7 +16,9 @@ fn report_preserves_the_measurement_time_or_its_absence() {
     ] {
         let source = format!(
             "(patina-compat-results (version 1) (backend \"vm\") {metadata}
-             (results ((slug \"example\") (mode probe) (status pass))))"
+             (results ((slug \"example\") (mode probe) (status pass))
+                      ((slug \"suite\") (mode test) (status pass))
+                      ((slug \"failed-suite\") (mode test) (status wrong-result))))"
         );
         std::fs::write(&results, &source).unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_patina-compat"))
@@ -41,7 +43,13 @@ fn report_preserves_the_measurement_time_or_its_absence() {
             report.contains(&format!("**Measured:** {measured}\n")),
             "{report}"
         );
-        assert!(report.contains("**1 of 1 packages pass.**"), "{report}");
+        assert!(report.contains("**2 of 3 packages pass.**"), "{report}");
+        assert!(
+            report.contains(
+                "Of these passes, **1 ran test suites** and **1 passed import-only probes**."
+            ),
+            "{report}"
+        );
         assert_eq!(std::fs::read_to_string(&results).unwrap(), source);
     }
 }
