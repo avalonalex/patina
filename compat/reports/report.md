@@ -1,5 +1,7 @@
 # Patina third-party compatibility (vm backend)
 
+**Measured:** 2026-09-26T16:18:10Z
+
 **143 of 161 packages pass.**
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.

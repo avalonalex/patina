@@ -2,6 +2,7 @@
 (patina-compat-results
  (version 1)
  (backend "vm")
+ (measured-at "2026-09-26T16:18:10Z")
  (results
   ((slug "arvyy-interface") (mode test) (status pass))
   ((slug "arvyy-mustache") (mode test) (status pass))

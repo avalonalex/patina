@@ -720,6 +720,27 @@ cargo test --workspace
 cargo test --package patina-tests --test interpreter_api
 ```
 
+### Third-party corpus measurements
+
+Build the binary under test with `cargo build --release`, then run
+`cargo run --release -p patina-compat -- run`. It writes the measured results
+to `compat/reports/results.scm` and their rendering to
+`compat/reports/report.md`. Use `--tree-walker` for that backend, with explicit
+`--results` and `--report` paths to preserve the canonical VM artifacts.
+
+New snapshots carry `(measured-at "2026-09-19T08:09:10Z")`: the UTC start time
+of the corpus run, in RFC 3339 format at second precision. The report prints
+that same value as **Measured**. `cargo run --release -p patina-compat -- report`
+only re-renders saved results; it preserves their measurement time. Legacy
+snapshots without this optional version-1 field remain readable and report
+their measurement time as unknown. Re-run the corpus to date them; do not
+stamp an old snapshot with today's date.
+
+The timestamp identifies when the run happened, not the tested binary's
+source revision or the corpus revision. Those are not recorded by the
+snapshot format. A corpus number should carry its measurement date, and a
+change to any `(scheme …)` export list is a reason to re-measure.
+
 ## Inline Test Guidelines
 
 ### When to Use Inline Tests
