@@ -204,6 +204,7 @@ impl<'a> CpsEvaluator<'a> {
                 CpsExprKind::Define {
                     name,
                     scopes,
+                    visible_by_name,
                     value,
                     cont,
                 } => {
@@ -215,9 +216,15 @@ impl<'a> CpsEvaluator<'a> {
                     // This matches direct evaluator behavior where internal defines
                     // go to the lambda's body scope, not to LetVal temporaries
                     //
-                    // Bound under its scopes, with a name-only view of the
-                    // same cell — see `Environment::define_scoped_definition`.
-                    def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
+                    // Introduced body definitions must not be visible to
+                    // the caller by spelling (#269). Source-written ones
+                    // also carry body scopes by this point, so the transform
+                    // records which definitions need a name-only view.
+                    if *visible_by_name {
+                        def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
+                    } else {
+                        def_env.define_with_scopes(Rc::clone(name), scopes.clone(), val);
+                    }
                     current_expr = Rc::clone(cont);
                 }
 

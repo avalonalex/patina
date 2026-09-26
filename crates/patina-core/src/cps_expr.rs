@@ -325,7 +325,7 @@ pub enum CpsExprKind {
         cont: Rc<CpsExpr>,  // What to do after mutation
     },
 
-    /// Define (top-level binding)
+    /// Definition at top level or in a body.
     ///
     /// `scopes` mirrors `Set`'s, and for the same reason: the defined
     /// identifier's hygiene scopes are part of which binding this is, not
@@ -337,6 +337,11 @@ pub enum CpsExprKind {
     Define {
         name: Symbol,
         scopes: ScopeSet,
+        /// Source-written definitions and top-level definitions retain a
+        /// name-only view. A macro-introduced body definition is private to
+        /// its scopes (#269). Recorded before the transform adds body scopes
+        /// to source-written definitions, which otherwise look introduced.
+        visible_by_name: bool,
         value: Rc<CpsExpr>, // Must be trivial
         cont: Rc<CpsExpr>,  // What to do after definition
     },

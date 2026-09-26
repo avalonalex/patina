@@ -15,8 +15,9 @@
 ;; definition broke SRFI 165's `define-computation-type`, which is why
 ;; `(srfi 166)` could not load.
 ;;
-;; **Every row here uses its own spellings**, for introduced names as well as
-;; the caller's. Each Rust test was a program of its own; in one file, two rows
+;; **Top-level introductions use distinct spellings**, for introduced names
+;; as well as the caller's. Body-local rows deliberately reuse private names.
+;; Each Rust test was a program of its own; in one file, two rows
 ;; introducing the same name at top level would meet in the VM's by-name
 ;; relinking — the jabberwocky-steal defect `hygiene.scm`'s family-40 section
 ;; describes — and a row could pass or fail on another row's definitions. The
@@ -29,19 +30,15 @@
 ;; from a different expansion's template. Read both before changing how an
 ;; introduced definition is named or relinked.
 ;;
-;; ── Measured 2026-09-11 (chibi 0.12, Gauche via `gosh -r7`) ─────────────────
+;; ── Measured 2026-09-26 (chibi 0.12, Gauche 0.9.15) ─────────────────────────
 ;;
-;;   patina VM / tree-walker   17 pass, 1 expected failure — pinned below
-;;   chibi                     18 pass
-;;   Gauche                    16 pass, 2 fail — registered as latitude
+;;   patina VM / tree-walker   31 pass
+;;   chibi                     30 pass, 1 fail — outer-keyword capture (#269)
+;;   Gauche                    29 pass, 2 fail — duplicate-formal latitude
 ;;
-;; The expected failure is a Patina defect this migration found: a body's
-;; introduced definition is reachable from the use site by name. Gauche's two
-;; are the duplicate-formal rows, which R7RS leaves it free to accept.
-;;
-;; 2026-09-14 adds one row, a later form reading a macro-introduced global
-;; spelled like a keyword: 19 rows, and chibi and Gauche pass it. It introduces
-;; `when`, which no other row does.
+;; All three differences are recorded in DIVERGENCES.tsv. #269 removes the
+;; former expected failure for a caller reaching an introduced body keyword;
+;; the added rows cover both variable and keyword privacy and valid access.
 
 (import (scheme base) (scheme eval) (srfi 64))
 
@@ -182,10 +179,8 @@
 ;; ── A generated macro still reaches the expansion's definitions ─────────────
 ;;
 ;; The counterpart the fix must not break: a macro-introduced definition stays
-;; reachable from a macro that the *same* expansion generated, even though
-;; that reference is resolved by name rather than by scopes
-;; (`link_definition_env_refs`). This is the R7RS suite's `jabberwocky` shape,
-;; and making the definition scope-only broke it.
+;; reachable from a macro that the *same* expansion generated, through its
+;; binding identity. This is the R7RS suite's `jabberwocky` shape.
 (define-syntax jabberwocky
   (syntax-rules ()
     ((_ hatter)
@@ -216,10 +211,9 @@
   (begin (bump-mutated) (get-mutated)))
 
 ;; ...and it can *write* it. The `set!` sits in a macro the expansion
-;; generated, so it arrives relinked to the bare name rather than carrying
-;; scopes — a different path from the row above, whose `set!` is in the outer
-;; template. Giving reads a name-only view without giving writes the same one
-;; left the name readable and unassignable. chibi and Gauche answer 5.
+;; generated, a different path from the row above, whose `set!` is in the
+;; outer template. Reads and writes must reach the same binding. chibi and
+;; Gauche answer 5.
 (define-syntax jab-assign
   (syntax-rules ()
     ((_ h s) (begin (define assigned-hare 1)
@@ -261,10 +255,8 @@
 ;; The ellipsis half of the test, with the caller supplying the name, is in
 ;; `ellipsis.scm`, where all four agree.
 ;;
-;; Patina defect, #269: a definition a template introduces in a body —
-;; `define` or `define-syntax` — is reachable from the use site by its bare
-;; name, on both backends. The same holds at top level, which R7RS permits.
-(cond-expand (patina (test-expect-fail 1)) (else))
+;; #269: both kinds of body definition used to be visible by name on both
+;; backends. Top-level name visibility is a separate choice (#427).
 (test-error "a keyword a template introduces in a body is not the caller's" #t
   (let ()
     (define-syntax listify
@@ -276,6 +268,114 @@
               (e (list arg (... ...)))))))))
     (listify car)
     (apply-to-list 1 2 3)))
+
+(define-syntax introduce-body-value
+  (syntax-rules () ((_)
+    (begin (define hidden-body-value (+ 9 1))))))
+
+(test-error "a variable a template introduces in a body is not the caller's" #t
+  (let () (introduce-body-value) hidden-body-value))
+
+(test-error "the caller cannot assign an introduced body variable by name" #t
+  (let () (introduce-body-value) (set! hidden-body-value 99)))
+
+;; The positive counterpart to refusal: the caller still reads and writes
+;; its own binding. A global catches the VM's former body alias, where an
+;; already-renamed lexical reference would bypass that alias.
+(define outer-body-value 'outer)
+(define-syntax introduce-over-outer
+  (syntax-rules () ((_)
+    (begin (begin (define outer-body-value 'private))))))
+
+(test-equal "an introduced body variable does not capture an outer read" 'outer
+  (let () (introduce-over-outer) outer-body-value))
+
+(test-equal "an introduced body variable does not capture an outer write" 'updated
+  (begin
+    (let () (introduce-over-outer) (set! outer-body-value 'updated))
+    outer-body-value))
+
+(define-syntax introduce-body-counter
+  (syntax-rules () ((_ getter setter)
+    (begin
+      (define private-body-counter (+ 1 1))
+      (define-syntax getter (syntax-rules () ((_) private-body-counter)))
+      (define-syntax setter
+        (syntax-rules () ((_ value) (set! private-body-counter value))))))))
+
+(test-equal "generated body getters and setters keep two private cells" '(11 22)
+  (let ()
+    (introduce-body-counter get-first set-first!)
+    (introduce-body-counter get-second set-second!)
+    (set-first! 11)
+    (set-second! 22)
+    (list (get-first) (get-second))))
+
+(define-syntax introduce-body-keyword
+  (syntax-rules () ((_ getter)
+    (begin
+      (define-syntax private-body-keyword (syntax-rules () ((_) 42)))
+      (define-syntax getter (syntax-rules () ((_) (private-body-keyword))))))))
+
+(test-equal "a generated body macro reaches its private keyword" 42
+  (let () (introduce-body-keyword get-keyword) (get-keyword)))
+
+(define-syntax introduce-distinct-body-keyword
+  (syntax-rules () ((_ getter value)
+    (begin
+      (define-syntax distinct-body-keyword (syntax-rules () ((_) value)))
+      (define-syntax getter (syntax-rules () ((_) (distinct-body-keyword))))))))
+
+(test-equal "two expansions keep distinct private body keywords" '(31 32)
+  (let ()
+    (introduce-distinct-body-keyword get-first-keyword 31)
+    (introduce-distinct-body-keyword get-second-keyword 32)
+    (list (get-first-keyword) (get-second-keyword))))
+
+(test-error "a generated getter does not expose its private keyword" #t
+  (let () (introduce-body-keyword get-keyword) (private-body-keyword)))
+
+;; Measured 2026-09-26: Gauche 0.9.15 and Chez 10.3.0 preserve the caller's
+;; keyword. Chibi 0.12 incorrectly captures it, despite refusing the
+;; previously-unbound keyword above; registered as an oracle defect (#269).
+(define-syntax outer-body-keyword (syntax-rules () ((_) 'outer)))
+(define-syntax introduce-over-keyword
+  (syntax-rules () ((_)
+    (define-syntax outer-body-keyword (syntax-rules () ((_) 'private))))))
+
+(test-equal "an introduced body keyword does not capture an outer keyword" 'outer
+  (let () (introduce-over-keyword) (outer-body-keyword)))
+
+;; Here define-syntax is already present when the body is entered, rather
+;; than produced by expanding one of its forms: the other desugaring path.
+(define-syntax with-private-body-keyword
+  (syntax-rules () ((_ body)
+    (let ()
+      (define-syntax direct-body-keyword (syntax-rules () ((_) 17)))
+      body))))
+
+(test-error "a keyword in a generated body is not the caller's" #t
+  (with-private-body-keyword (direct-body-keyword)))
+
+(define-syntax use-private-body-keyword
+  (syntax-rules () ((_)
+    (let ()
+      (define-syntax direct-body-control (syntax-rules () ((_) 17)))
+      (direct-body-control)))))
+
+(test-equal "a generated body still reaches its own keyword" 17
+  (use-private-body-keyword))
+
+(define-syntax define-caller-body-names
+  (syntax-rules () ((_ value-name keyword-name)
+    (begin
+      (define value-name 10)
+      (define-syntax keyword-name (syntax-rules () ((_) 20)))))))
+
+(test-equal "caller-supplied body definition names stay visible" '(10 20)
+  (let ()
+    (define-caller-body-names caller-value caller-keyword)
+    (list caller-value (caller-keyword))))
 
 ;; ── Top-level names the VM mints ────────────────────────────────────────────
 

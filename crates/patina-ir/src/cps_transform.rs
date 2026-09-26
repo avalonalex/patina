@@ -291,6 +291,7 @@ impl CpsTransformer {
             } => {
                 // Transform: (define name value)
                 // Into: evaluate value, do define, continue with unspecified
+                let visible_by_name = scopes.is_empty() || self.body_scopes.borrow().is_empty();
                 let scopes = self.define_scopes(scopes);
 
                 if self.is_trivial(value) {
@@ -298,6 +299,7 @@ impl CpsTransformer {
                     CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
                         scopes: scopes.clone(),
+                        visible_by_name,
                         value: Rc::new(cps_value),
                         cont: CpsExpr::rc(CpsExprKind::Continue {
                             cont: k.clone(),
@@ -311,6 +313,7 @@ impl CpsTransformer {
                     let def_expr = CpsExpr::new(CpsExprKind::Define {
                         name: name.clone(),
                         scopes: scopes.clone(),
+                        visible_by_name,
                         value: CpsExpr::rc(CpsExprKind::Var {
                             name: val_var.clone(),
                             scopes: ScopeSet::new(),

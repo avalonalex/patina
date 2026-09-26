@@ -1420,20 +1420,12 @@ impl Environment {
 
     /// Define a binding that a name-only lookup can also reach.
     ///
-    /// This is what a `define` needs and what `define_with_scopes`
-    /// deliberately withholds. A macro-introduced *parameter* must stay
-    /// invisible to a reference written in source, so it is filed under its
-    /// scopes alone. A macro-introduced *definition* is not, for a reason that
-    /// has since been measured not to hold: definition-environment relinking
-    /// resolves its target by name (`link_definition_env_refs`), so a
-    /// definition reachable only under scopes was taken to be unreachable from
-    /// the R7RS suite's `jabberwocky` test. Jabberwocky never relinks — its
-    /// definition and use share an environment and resolve by scopes — and
-    /// filing a macro-introduced definition under its scopes alone fails no
-    /// `cargo test` row and no chibi row (2026-09-13;
-    /// `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"). The
-    /// name-only view stays until that change has run against the Larceny
-    /// lanes and the compat corpus.
+    /// Source-written parameters and internal definitions need this view:
+    /// they acquire body scopes while their source references can still be
+    /// name-only. Introduced body definitions use `define_with_scopes`
+    /// instead (#269); their generated getters and setters reach the scoped
+    /// binding directly. Macro-introduced top-level definitions retain this
+    /// view for now, alongside the VM's global aliases (#427).
     ///
     /// The name-only view's reach is *plain* access — [`get`], [`set`], and
     /// the relinker resolving through them — not scoped resolution's
@@ -1464,7 +1456,7 @@ impl Environment {
     /// Position of the most recent name-visible scoped definition of `name`
     /// in this environment, if there is one.
     ///
-    /// This is the name-only view of a macro-introduced definition. It is one
+    /// This is the name-only view of a name-visible scoped binding. It is one
     /// cell, not a copy: an earlier version stored the value under the bare
     /// name as well, and a `set!` through the scoped path then left the two
     /// disagreeing — the freeze `alias_bindings` documents as the reason its

@@ -138,6 +138,14 @@ boundary and not a refactor of the current architecture):
 
 ## Scoped Relinking, Sized
 
+**Body-definition update (2026-09-26, #269):** V2 is removed; V3 is scope-only
+for introduced body definitions, with name visibility recorded before CPS
+adds scopes to source-written definitions. V4 preserves body keyword scopes
+in both desugaring paths. Top-level name visibility (V1 and V3's global case)
+remains separate work under #427. The measurements below describe the earlier,
+broader experiment; #269's Scheme rows now pin body privacy and same-expansion
+access without requiring that top-level change.
+
 *(Added 2026-09-13, corrected 2026-09-14. Track Q's Q7.5(b) is gated on "a
 written design note", and prerequisite 2 above names the same work; this is
 that note. The mutation below ran on `main` at `9105d328`. The Patina columns
