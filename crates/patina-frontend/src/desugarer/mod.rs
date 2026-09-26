@@ -2532,7 +2532,8 @@ impl Desugarer {
     /// Both written body forms and expanded `define-syntax` forms bind the
     /// keyword at its own scopes (#269). A caller-supplied name with no
     /// scopes stands in the body's context, just like a source reference.
-    /// Keep the existing name-visible top-level behaviour separate (#427).
+    /// Top-level keywords keep their existing name visibility; #427 changes
+    /// introduced variables only.
     fn define_syntax_binding(
         &self,
         env: &Environment,

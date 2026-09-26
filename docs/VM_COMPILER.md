@@ -120,9 +120,9 @@ scope marks).
 
 **File:** `alpha_rename.rs`
 **Input:** `CoreExpr` (after quasiquote expansion)
-**Output:** `Renamed { expr, global_aliases }` — the tree with all variables
-uniquely renamed and scope sets cleared, plus the environment aliases the
-*pipeline* installs for it after codegen (see §5.1)
+**Output:** `Renamed { expr, introduced_globals }` — the tree with all variables
+uniquely renamed and scope sets cleared, plus the introduced binding identities
+the pipeline records in the environment after codegen (see §5.1)
 
 This pass bridges the gap between the tree-walker's runtime scope-set resolution
 and the VM's compile-time variable resolution:
@@ -151,16 +151,19 @@ The generated spelling contains a space (`tmp #136`). That is deliberate: a
 space is a delimiter, so the reader cannot produce the symbol from source, and
 these names outlive the form that made them.
 
-Renaming leaves the bare name unbound, and the desugarer's definition-environment
-relinking still resolves by that bare name. So the pass returns
-`global_aliases`, and `compile_pipeline` installs each with
-`Environment::define_alias` **after** codegen — after, so a compile that fails
-leaves the environment untouched. An alias rather than a definition of the bare
-name, because `get` consults real bindings first (a user's global of that
-spelling wins) and an alias forwards each access rather than freezing a copy (a
-later `set!` is visible). The alias table is keyed by the bare name, so where
-two forms introduce one spelling the later wins — the one place hygiene
-identity collapses back to a name, tracked in Track L §6.
+Renaming leaves the bare name unbound. The pass returns each introduced
+definition's original name, scopes and renamed global in `introduced_globals`;
+`compile_pipeline` records them with `Environment::define_introduced_global`
+after codegen, so a failed compile leaves the environment untouched. The list
+keeps every definition, even when one form introduces the same spelling twice.
+Later forms and definition-environment relinking resolve through those binding
+identities, so same-expansion references and generated library accessors reach
+their private state.
+
+Since #427, the compiler installs no alias under the bare spelling. Such an
+alias let an unrelated expansion — even a reference compiled before the
+definition — reach a private global by name. With it removed, those references
+stay unbound; ordinary source globals still support forward references.
 
 ```rust
 struct Binding {

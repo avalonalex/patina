@@ -70,7 +70,7 @@ fn compile_pipeline(
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
     let alpha_rename::Renamed {
         expr: renamed,
-        global_aliases,
+        introduced_globals,
     } = alpha_rename::alpha_rename(expr, resolver.map(|(_, env, _)| env))?;
 
     let analysis = pass1_analysis::Pass1Analysis::run(&renamed);
@@ -86,44 +86,28 @@ fn compile_pipeline(
 
     // Install last, so the passes above stay a pure function of their input
     // and a compile that fails leaves the environment untouched. See
-    // `Renamed::global_aliases` for what these are and why they are aliases.
+    // `Renamed::introduced_globals` for the identities later forms resolve.
     //
     // Without an environment there is nothing to install into; that path
     // (`compile`) compiles hand-built `CoreExpr` trees, which have no macro
     // expansion and so no such definitions.
     match resolver {
         Some((_, env, _)) => {
-            // The bare-name alias contract holds only in a parentless
-            // environment — `get` returns on an alias hit rather than falling
-            // through, so one whose target is unbound would eclipse a parent's
-            // binding. Every environment this path compiles against is a
-            // parentless global one; the assertion is what keeps that true.
+            // Only global environments hold these identities; lexical
+            // definitions are resolved within the form being compiled.
             debug_assert!(
                 env.parent().is_none(),
-                "bare-name aliases need a parentless environment"
+                "introduced globals need a root environment"
             );
-            for (bare, renamed) in global_aliases {
-                // Two records of one definition, and both are needed. The
-                // alias answers the *bare* spelling at run time, which is
-                // what definition-environment relinking asks for. The
-                // identity answers a *scoped* reference at compile time,
-                // which is what a later top-level form needs — this pass
-                // sees one form, so without it that reference degrades to
-                // its spelling and the alias, or a user's global of the same
-                // name, answers instead. Triage family 40.
-                env.define_introduced_global(
-                    bare.clone(),
-                    renamed.scopes.clone(),
-                    renamed.name.clone(),
-                );
-                env.define_alias(bare, env.clone(), renamed.name);
+            for (name, renamed) in introduced_globals {
+                env.define_introduced_global(name, renamed.scopes, renamed.name);
             }
         }
         None => debug_assert!(
-            global_aliases.is_empty(),
-            "compile() has no environment to install aliases into, and its \
+            introduced_globals.is_empty(),
+            "compile() has no environment to record introduced globals in, and its \
              hand-built CoreExpr trees are not macro-expanded — a tree that \
-             produced aliases came from somewhere that needs compile_with_qq_resolving"
+             introduced globals came from somewhere that needs compile_with_qq_resolving"
         ),
     }
     Ok(code)

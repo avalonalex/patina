@@ -42,9 +42,8 @@ struct Binding {
 /// A macro-introduced top-level definition, after renaming: the scope set
 /// that gives it its identity, and the global it was renamed to.
 ///
-/// The scope set is carried, not re-derived, because the caller records two
-/// things from it — a bare-name alias and a binding identity — and deriving
-/// the identity a second time is how two tables of one fact come to disagree.
+/// The caller records this identity for references in later top-level
+/// forms and for definition-environment relinking across libraries.
 #[derive(Clone)]
 pub(crate) struct RenamedGlobal {
     pub(crate) scopes: ScopeSet,
@@ -55,22 +54,10 @@ pub(crate) struct RenamedGlobal {
 struct RenameEnv {
     frames: Vec<Vec<Binding>>,
     counter: u32,
-    /// `(bare name, renamed global)` for each macro-introduced top-level
-    /// definition that was renamed, in the order met. See
-    /// `Renamed::global_aliases`.
-    ///
-    /// A list, not a map keyed by the bare name, and it was a map until
-    /// #408. One form can introduce a spelling twice — a macro expanding to
-    /// two definer calls does — and each entry is also the record of a
-    /// binding *identity*, which the caller files by `(name, scopes)`. Keyed
-    /// by name here, the earlier one was overwritten before the caller ever
-    /// saw it, so its identity was never recorded, a later form's reference
-    /// to it found no candidate and fell back to the name, and the name is
-    /// the *later* definition: the first run's macro read and assigned the
-    /// second run's state, silently. For the alias nothing changes — the
-    /// caller installs these in order, and a keyed insert there lets the
-    /// last of a spelling win the bare name, as it always did.
-    global_aliases: Vec<(Symbol, RenamedGlobal)>,
+    /// Each introduced top-level definition's original name and identity.
+    /// A list, not a map by spelling: one form can introduce the same name
+    /// twice, and both identities must survive for later references (#408).
+    introduced_globals: Vec<(Symbol, RenamedGlobal)>,
     /// Whether definitions seen right now become globals.
     ///
     /// True until a lambda body is entered, and false inside it — including
@@ -116,7 +103,7 @@ impl RenameEnv {
         Self {
             frames: vec![],
             counter: 0,
-            global_aliases: Vec::new(),
+            introduced_globals: Vec::new(),
             at_top_level: true,
             ambiguous: RefCell::new(None),
             global_env,
@@ -173,7 +160,7 @@ impl RenameEnv {
         // form. Without them a reference carrying an earlier expansion's
         // scopes finds nothing, falls out of this function as its bare
         // spelling, and is answered at run time by whatever that spelling
-        // means: a user's global, or the bare-name alias. Triage family 40.
+        // means: a user's global, or an unbound name. Triage family 40.
         if let Some(global_env) = &self.global_env {
             global_env.for_each_introduced_global(name, |scopes, unique_name| {
                 if patina_core::scope_resolve::is_candidate(scopes, ref_scopes) {
@@ -259,43 +246,17 @@ fn scoped_global_name(name: &Symbol, scopes: &ScopeSet) -> Symbol {
     Rc::from(unique)
 }
 
-/// The output of alpha-renaming: the tree, and the environment aliases the
-/// caller must install for it.
+/// The renamed tree and the introduced global identities the caller records.
 pub(crate) struct Renamed {
     pub(crate) expr: CoreExpr,
-    /// `(bare name, renamed global)` pairs.
+    /// `(original name, renamed global)` for every introduced definition.
     ///
-    /// A macro-introduced top-level definition is renamed, which makes it a
-    /// global under a name no source code mentions. The definition-environment
-    /// relinking still resolves its target by the *bare* name, so something
-    /// answers for it — though no measured program needs that answer:
-    /// jabberwocky never relinks, and deleting this alias with the other
-    /// by-name views fails no `cargo test` or chibi row
-    /// (`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"). A
-    /// plain definition of that name would overwrite a user's own global of
-    /// the same spelling, and would freeze a copy of the value besides.
-    ///
-    /// `Environment::define_alias` is neither: it is consulted only after real
-    /// bindings, so a user's binding wins, and it forwards each access rather
-    /// than copying, so a later `set!` is visible. Returned rather than
-    /// installed here so this pass stays a pure transformation.
-    ///
-    /// The environment's alias table is keyed by the bare name, so when two
-    /// definitions introduce the same spelling — in two forms or in one — the
-    /// later one wins it, even though `scoped_global_name` has just given
-    /// them distinct globals. That is the one place hygiene identity collapses
-    /// back to a name, kept because the relinking that consumes it resolves
-    /// by name where the name is what a mention means. `define_alias` records
-    /// the rule.
-    ///
-    /// Each entry carries the scope set as well, so the caller can record the
-    /// binding *identity* alongside the alias — see
-    /// `Environment::define_introduced_global`. That record is keyed by
-    /// `(name, scopes)` and so keeps the definitions the alias collapses
-    /// distinct, which is what lets a later top-level form, or a relinked
-    /// reference from another library, resolve to the right one. It is why
-    /// this is a list with an entry per definition and not a map by name.
-    pub(crate) global_aliases: Vec<(Symbol, RenamedGlobal)>,
+    /// Later top-level forms and library relinking resolve through these
+    /// identities (`Environment::define_introduced_global`). There is no
+    /// bare-name alias: it would let an unrelated expansion reach a binding
+    /// its scopes rejected (#427). Keep one entry per definition, including
+    /// separate expansions of the same spelling in a single form (#408).
+    pub(crate) introduced_globals: Vec<(Symbol, RenamedGlobal)>,
 }
 
 /// Alpha-rename a CoreExpr tree for hygienic variable resolution.
@@ -319,11 +280,7 @@ pub(crate) fn alpha_rename(
     let mut out = rename_body(std::slice::from_ref(expr), &mut env);
     env.pop_frame();
 
-    // One expression in, one out today: only the lambda-body arm of
-    // `rename_body` splices a second, and a lambda's body is spliced inside
-    // `rename_expr`. The `Begin` is not dead code for that reason — it is what
-    // keeps this total, so a future change that does splice here produces a
-    // correct program rather than one silently missing its first node.
+    // Keep the result total if renaming ever contributes more than one form.
     let expr = if out.len() == 1 {
         out.pop().expect("one element")
     } else {
@@ -335,7 +292,7 @@ pub(crate) fn alpha_rename(
     }
     Ok(Renamed {
         expr,
-        global_aliases: env.global_aliases,
+        introduced_globals: env.introduced_globals,
     })
 }
 
@@ -413,14 +370,9 @@ fn body_define_bindings(
         .collect()
 }
 
-/// Rename a body or `Begin`. An introduced body definition is reachable
-/// only through its scopes; a bare-name alias here would expose it to the
-/// caller (#269).
-///
-/// A top-level definition records an environment alias for the caller to
-/// install (`Renamed::global_aliases`) rather than defining the bare name,
-/// which would clobber a user's global and freeze a copy of the value. A
-/// lambda-body definition has no such alias.
+/// Rename a body or `Begin`, recording introduced top-level identities for
+/// references in later forms. No introduced definition gets a bare-name
+/// alias: only references with matching scopes may reach it (#269, #427).
 fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
     let mut out = Vec::with_capacity(exprs.len());
     for expr in exprs {
@@ -440,10 +392,9 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
         if let Some((name, scopes, new_name)) = rename
             && env.at_top_level
         {
-            // A global: the bare name is answered by an environment alias
-            // the caller installs, so a user's own global of that name
-            // still wins and a `set!` is not frozen into a copy.
-            env.global_aliases.push((
+            // Record the identity; a later form resolves to this same global
+            // for reads and writes, without exposing it by its bare name.
+            env.introduced_globals.push((
                 name,
                 RenamedGlobal {
                     scopes,

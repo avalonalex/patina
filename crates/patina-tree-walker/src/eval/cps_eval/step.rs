@@ -216,8 +216,8 @@ impl<'a> CpsEvaluator<'a> {
                     // This matches direct evaluator behavior where internal defines
                     // go to the lambda's body scope, not to LetVal temporaries
                     //
-                    // Introduced body definitions must not be visible to
-                    // the caller by spelling (#269). Source-written ones
+                    // Introduced definitions must not be visible to
+                    // the caller by spelling (#269, #427). Source-written ones
                     // also carry body scopes by this point, so the transform
                     // records which definitions need a name-only view.
                     if *visible_by_name {

@@ -87,7 +87,7 @@
 //! well as across a library, and every one of them silently: the first run's
 //! macro read and assigned the second run's `X`. Review of #408 found it. The
 //! VM kept one record per *spelling* per form of the definitions it renamed,
-//! so the first run's identity was never recorded (`RenameEnv::global_aliases`
+//! so the first run's identity was never recorded (`RenameEnv::introduced_globals`
 //! in patina-vm). Two runs in two forms never showed it, which is what
 //! `introducing-twice` had been measuring.
 //!
@@ -139,9 +139,9 @@
 //! binder — the family-40 shapes (the last section of
 //! `tests/scheme/expansion/hygiene.scm`; the last three rows of
 //! `larceny_families.rs` before #193 Phase 1 deleted it), where a reference
-//! from a *different* expansion must not reach the definition, the two
-//! backends currently diverge, and the tree-walker is the one chibi agrees
-//! with (#427). The half where the reference *should* reach it is
+//! from a different expansion must not reach the definition. Both backends
+//! agree with chibi and Gauche since #427; those Scheme rows also cover uses
+//! compiled before the definition. The half where the reference should reach it is
 //! [`MADE`]'s since #408: the `Introducing` makers, whose generated macro
 //! mentions a definition its own generator introduced, in one program and
 //! across a library. Each is a new `Site`, `Binder`, `Maker` or the like, not
@@ -1296,6 +1296,53 @@ fn a_do_result_clause_is_not_a_definition_context() {
     assert_eq!(eval_program_tree_walker(code), "(5 global)");
 }
 
+/// #427's top-level policy also applies to library exports: an introduced
+/// variable is private, but a caller-supplied name and generated accessors
+/// remain exportable. Chibi 0.12 and Gauche 0.9.15 agree, measured with these
+/// library declarations in .sld files (chibi cannot load inline libraries).
+#[test]
+fn introduced_globals_are_private_but_their_accessors_can_be_exported() {
+    let hidden_export = r#"
+        (define-library (hm hidden-export)
+          (export hidden)
+          (import (scheme base))
+          (begin
+            (define-syntax install
+              (syntax-rules () ((_) (define hidden 10))))
+            (install)))
+        (import (hm hidden-export))
+        hidden
+    "#;
+    for (backend, result) in [
+        ("vm", try_eval_program_vm(hidden_export)),
+        ("tree-walker", try_eval_program_tree_walker(hidden_export)),
+    ] {
+        let error = result.expect_err("a bare export must not expose the introduced binding");
+        assert!(error.contains("hidden"), "{backend}: {error}");
+    }
+
+    let public_accessors = r#"
+        (define-library (hm public-accessors)
+          (export public get-private set-private!)
+          (import (scheme base))
+          (begin
+            (define-syntax install
+              (syntax-rules () ((_ public-name getter setter)
+                (begin
+                  (define hidden 10)
+                  (define public-name 11)
+                  (define-syntax getter (syntax-rules () ((_) hidden)))
+                  (define-syntax setter
+                    (syntax-rules () ((_ value) (set! hidden value))))))))
+            (install public get-private set-private!)))
+        (import (scheme base) (hm public-accessors))
+        (set-private! 17)
+        (list public (get-private))
+    "#;
+    assert_eq!(eval_program_vm(public_accessors), "(11 17)");
+    assert_eq!(eval_program_tree_walker(public_accessors), "(11 17)");
+}
+
 /// A program that defines over an imported name *after* a library macro
 /// mentioning it was expanded does not capture the template's reference: one
 /// procedure, compiled once, bumps the library's `count` on both of its
@@ -1374,27 +1421,42 @@ fn a_definition_over_an_import_is_not_a_library_macros_literal() {
     }
 }
 
-/// An import that is a *copy* still matches the exporting library's literal
-/// of that name. An export a macro introduced is one `share_binding` cannot
-/// share, so the importer holds it at a location of its own; compared by
-/// location alone, the two read as the different globals #450 tells apart,
-/// and `(m kw)` below answered `var`. Gauche 0.9.15 answers `lit`, as does
-/// chibi 0.12 with the library in a file of its own, measured 2026-09-22.
+/// A copied import still matches the exporting library's literal (#450).
+/// The original fixture exported a macro-introduced global by its bare name,
+/// which #427 deliberately makes private. Force the import's copied-value
+/// representation here instead, preserving the matcher regression without
+/// making global privacy depend on the old fixture.
 #[test]
 fn an_import_installed_as_a_copy_still_matches_the_librarys_literal() {
-    let program = "(define-library (hm introduced)\n  (import (scheme base))\n  \
-                   (export m kw)\n  (begin\n    \
-                   (define-syntax define-kw (syntax-rules () ((_) (define kw 'kw))))\n    \
-                   (define-kw)\n    \
-                   (define-syntax m (syntax-rules (kw) ((_ kw) 'lit) ((_ x) 'var)))))\n\
-                   (import (scheme base) (hm introduced))\n(m kw)";
-    for vm in [true, false] {
+    fn check<B: patina_runtime::Backend>(interp: patina_interpreter::Interpreter<B>) {
+        interp
+            .eval_program(
+                r#"
+            (define-library (hm copied)
+              (import (scheme base))
+              (export m kw)
+              (begin
+                (define kw 'kw)
+                (define-syntax m
+                  (syntax-rules (kw) ((_ kw) 'lit) ((_ x) 'var)))))
+            (import (scheme base) (hm copied))
+        "#,
+            )
+            .unwrap();
+        let env = interp.backend().global_env();
+        let shared = env.binding_location("kw");
+        let value = env.get("kw").unwrap();
+        // The fallback import representation: same value, its own location.
+        env.define("kw", value);
+        assert_ne!(env.binding_location("kw"), shared);
         assert_eq!(
-            answer(program, vm),
-            "lit",
-            "`var` is the copied import read as a global of the program's own"
+            interp.eval_program("(eq? (m kw) 'lit)").unwrap(),
+            patina_core::TaggedValue::TRUE,
+            "a copied import must still match the library's literal"
         );
     }
+    check(common::vm_interpreter());
+    check(common::tree_walker_interpreter());
 }
 
 /// Two libraries' bindings of one spelling are two literals, not one: under

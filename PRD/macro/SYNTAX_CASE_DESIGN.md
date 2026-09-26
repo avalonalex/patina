@@ -141,10 +141,16 @@ boundary and not a refactor of the current architecture):
 **Body-definition update (2026-09-26, #269):** V2 is removed; V3 is scope-only
 for introduced body definitions, with name visibility recorded before CPS
 adds scopes to source-written definitions. V4 preserves body keyword scopes
-in both desugaring paths. Top-level name visibility (V1 and V3's global case)
-remains separate work under #427. The measurements below describe the earlier,
-broader experiment; #269's Scheme rows now pin body privacy and same-expansion
-access without requiring that top-level change.
+in both desugaring paths. #269's Scheme rows pin body privacy and
+same-expansion access.
+
+**Global-definition update (2026-09-26, #427):** V1 is removed and V3 is
+scope-only for introduced globals too. Step 1 is complete: an introduced
+variable is reachable by its binding identity, including through generated
+library accessors, but not by an unrelated expansion, a source spelling or a
+bare export. Caller-supplied names and ordinary forward globals remain
+visible. Top-level keyword visibility (V4) is unchanged. The tables below
+record the earlier experiment, not the current implementation.
 
 *(Added 2026-09-13, corrected 2026-09-14. Track Q's Q7.5(b) is gated on "a
 written design note", and prerequisite 2 above names the same work; this is
@@ -258,7 +264,8 @@ name and the scope set it was introduced at — and never through its spelling.
 Measured above, that is two independent changes, and a third that only looked
 related.
 
-1. **Delete the by-name views.** V1 and V2 on the VM. On the tree-walker a
+1. **Delete the by-name views.** *(Implemented by #269 and #427,
+   2026-09-26.)* V1 and V2 on the VM. On the tree-walker a
    macro-introduced `define` binds at its scopes only, which needs the CPS
    `Define` to carry whether the name was introduced, since `define_scopes`
    erases that today. `define_introduced_global` stays: it is the identity. A
@@ -276,10 +283,10 @@ related.
    #405 on 2026-09-18 made a scoped identifier in `Template::Literal` a
    mention at all — `CompiledMacro::inherited_identifiers` — and #408 on
    2026-09-19 made the alias name the binding. The note after this item says
-   how the question it ends on was settled. Step 1 has **not** landed, so the
-   by-name views are still there; nothing in step 2 as built leans on them —
-   the relinker finds an introduced definition by its identity and falls back
-   to the name only where the mention's scopes select what the name reaches.)*
+   how the question it ends on was settled. Step 1 followed in #269 and
+   #427: nothing in step 2 leans on the removed by-name views. The relinker
+   finds an introduced definition by its identity and falls back to the name
+   only where the mention's scopes select what the name reaches.)*
    Needed for the exported getter, and for nothing else measured. `template_symbols` becomes the template's free
    *identifiers*, `(name, scopes)`, taken from `Template::Symbol` and from
    scoped identifiers in `Template::Literal`. Each resolves in the definition

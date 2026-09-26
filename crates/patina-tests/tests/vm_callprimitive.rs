@@ -123,33 +123,34 @@ fn control_forms_set_after_use_deoptimize() {
     );
 }
 
-/// A name a macro's definition introduced, reached by its bare spelling, is
-/// an alias, and a second expansion re-points it without writing the binding
-/// it reached — so no shadow mark is set, and a site compiled against the
-/// first must not have trusted it. Found in review of #442, which made the
-/// `call-with-values` half of this answer `(cwv 1)`; the `car` half answered
-/// `1` on main already. Both now call what the alias reaches, as the
-/// tree-walker does.
-///
-/// chibi and Gauche report `helper` unbound instead: the definition is
-/// hygienically the macro's, and Patina's bare-name reach into it is #269.
-/// What is pinned here is only that the VM's fast paths agree with its
-/// ordinary calls.
+/// Re-pointing an alias does not write the binding it previously reached,
+/// so no shadow mark is set and a fast path must never trust that alias.
+/// Found in review of #442 for `call-with-values` and ordinary primitives.
+/// The original Scheme fixture used bare-name access to an introduced
+/// global, removed by #427. Install and re-point aliases directly to keep
+/// testing the compiler's alias guard independently of that old policy.
 #[test]
 fn a_re_pointed_alias_is_never_a_fast_path() {
-    assert_eq!(
-        eval(
-            "(define-syntax def-helper (syntax-rules () ((_ v) (define helper v)))) \
-             (def-helper call-with-values) \
-             (define (f) (helper (lambda () 1) (lambda (x) (list 'cwv x)))) \
-             (def-helper (lambda (p c) 'second)) \
-             (define-syntax def-h2 (syntax-rules () ((_ v) (define h2 v)))) \
-             (def-h2 car) \
+    use patina_runtime::Backend;
+
+    let interp = common::vm_interpreter();
+    let env = interp.backend().global_env();
+    env.define_alias("helper", env.clone(), "call-with-values".into());
+    env.define_alias("h2", env.clone(), "car".into());
+    interp
+        .eval_program(
+            "(define (f) (helper (lambda () 1) (lambda (x) (list 'cwv x)))) \
              (define (g) (h2 '(1 2))) \
-             (def-h2 cdr) \
-             (list (f) (g))"
-        ),
-        "(second (2))"
+             (define (second p c) 'second)",
+        )
+        .unwrap();
+    env.define_alias("helper", env.clone(), "second".into());
+    env.define_alias("h2", env.clone(), "cdr".into());
+    assert_eq!(
+        interp
+            .eval_program("(equal? (list (f) (g)) '(second (2)))")
+            .unwrap(),
+        patina_core::TaggedValue::TRUE
     );
 }
 

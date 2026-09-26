@@ -574,7 +574,9 @@ lanes and the suite oracles.
   divergence, which is exactly the discovery mode this metric exists to end).
   As of 2026-09-13 the grep answers **6 scoped rows**: the three §1.2 rows
   and family 40's three remaining (VM). As of 2026-09-23 it answers **3**:
-  the §1.2 rows converged with #441, leaving family 40's (#427). It read 6
+  the §1.2 rows converged with #441, leaving family 40's (#427). As of
+  2026-09-26 it answers **0**: #427 retires those last three quarantines.
+  It read 6
   when written and briefly stood at 8 — family 40 grew from three rows to
   five on 2026-09-12 when H3 found its positive direction, and those two
   converged on 2026-09-13 when the VM learned to resolve a macro-introduced

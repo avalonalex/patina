@@ -47,9 +47,6 @@ its date (#381), and the archive's status line went stale twice.
 Each line is an issue. When one closes, delete its line; when this list is
 empty, archive this page.
 
-**Library semantics and hygiene** — the oldest open defects the track found
-- #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
-
 **Backends**
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 

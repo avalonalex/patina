@@ -256,7 +256,8 @@
 ;; `ellipsis.scm`, where all four agree.
 ;;
 ;; #269: both kinds of body definition used to be visible by name on both
-;; backends. Top-level name visibility is a separate choice (#427).
+;; backends. Top-level variable privacy is pinned in hygiene.scm (#427);
+;; top-level keywords retain their name visibility.
 (test-error "a keyword a template introduces in a body is not the caller's" #t
   (let ()
     (define-syntax listify
