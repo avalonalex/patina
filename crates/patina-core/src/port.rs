@@ -287,7 +287,12 @@ fn utf8_char_len(first: u8) -> usize {
 /// `read-bytevector`, which never look there: once per boundary, silently,
 /// where there had been a loud error.
 ///
-/// Only `fill_char` assembles one, and only `peek-char` asks it to. `fill_buf`
+/// The datum reader also returns the unused tail of a line here with
+/// [`unread`](Self::unread), so byte operations see it too (#411). A line ends
+/// at a newline or EOF, never part-way through a character that the next line
+/// would complete.
+///
+/// Only `fill_char` assembles a character, and only `peek-char` asks it to. `fill_buf`
 /// hands out what is buffered and waits for nothing more, as the inner reader
 /// would: `peek-u8`, `u8-ready?` and `read_until` have no use for a whole
 /// character, and waiting for one is a wait for bytes. On a file that costs
@@ -299,8 +304,8 @@ fn utf8_char_len(first: u8) -> usize {
 /// `peek-char` need not take it on trust.
 pub struct WholeCharReader {
     inner: Box<dyn ReadPort>,
-    /// The one character that straddled a chunk, when there is one; at most
-    /// four bytes. Empty means every call goes to `inner`.
+    /// A character that straddled a chunk, or the unused tail of a line the
+    /// datum reader returned. Empty means every call goes to `inner`.
     carry: Vec<u8>,
     /// Bytes of `carry` already consumed.
     carry_pos: usize,
@@ -317,6 +322,18 @@ impl WholeCharReader {
 
     fn carried(&self) -> &[u8] {
         &self.carry[self.carry_pos..]
+    }
+
+    /// Return the unused tail of a line obtained with `read_until`. It ends
+    /// at a newline or EOF, so no complete character crosses its far edge.
+    /// Every character and byte operation sees these bytes before the source.
+    pub fn unread(&mut self, mut bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            return;
+        }
+        bytes.extend_from_slice(self.carried());
+        self.carry = bytes;
+        self.carry_pos = 0;
     }
 
     /// The buffer, which begins with the whole of the next character unless

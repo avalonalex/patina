@@ -5,6 +5,7 @@
 
 use super::ports::get_input_port_tagged;
 use patina_core::TaggedValue;
+use patina_core::port::{FileHandle, WholeCharReader, utf8_prefix};
 use patina_frontend::{Parser, Reader};
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
@@ -75,14 +76,14 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     }
 
     if is_file {
-        // The pushback buffer was already drained by read_buffered, so
-        // Port::read_line reads from the underlying file here
-        let file_port = port.clone();
-        return read_buffered(&port, heap, move || {
-            file_port
-                .read_line()
-                .map_err(|e| EvalError::IOError(e.to_string()))
-        });
+        let mut data = port.data.borrow_mut();
+        let PortData::File(file) = &mut *data else {
+            unreachable!("the port was a file above")
+        };
+        let FileHandle::Input(input) = &mut file.handle else {
+            return Err(EvalError::TypeError("not an input file port".to_string()));
+        };
+        return read_file(input, heap);
     }
 
     let remaining = remaining.unwrap();
@@ -139,6 +140,56 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     }
 }
 
+/// Feed raw lines to the incremental reader, decoding only their valid UTF-8
+/// prefix. Return every byte after the datum to the file reader, where both
+/// character and byte operations can reach it (#411).
+///
+/// Keep the line-fed parser (#341): a large multiline datum is read once,
+/// and a long atom is not repeatedly re-lexed at arbitrary byte boundaries.
+fn read_file(input: &mut WholeCharReader, heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
+    let mut reader = Reader::new(patina_frontend::dialect::allow_r6rs());
+    let mut consumed_chars = 0;
+    let mut bytes = Vec::new();
+    loop {
+        input
+            .read_until(b'\n', &mut bytes)
+            .map_err(|e| EvalError::IOError(e.to_string()))?;
+        let text = utf8_prefix(&bytes);
+        let undecodable = text.len() < bytes.len();
+        reader.feed(text);
+        if bytes.is_empty() || undecodable {
+            // No further text can finish this datum. Keep ordinary syntax
+            // errors distinct from a datum that reached undecodable bytes.
+            reader.no_more_text();
+        }
+        if let Some(datum) = reader.next_datum(heap, |parser| parser) {
+            let value = match datum {
+                Ok(value) => value,
+                Err(e) if undecodable && ran_out_of_text(&e) => return Err(undecodable_bytes()),
+                Err(e) => return Err(read_error(&e)),
+            };
+            let in_line = reader.take_consumed() - consumed_chars;
+            let used: usize = text.chars().take(in_line).map(char::len_utf8).sum();
+            // Ending the decodable prefix must not invent a delimiter for
+            // an atom such as x followed by 0xFF. A closer ends its datum
+            // whatever follows it, as on the bytevector-port path above.
+            if undecodable && used == text.len() && !text.ends_with([')', ']', '"', '|']) {
+                return Err(undecodable_bytes());
+            }
+            input.unread(bytes.split_off(used));
+            return Ok(value);
+        }
+        if undecodable {
+            return Err(undecodable_bytes());
+        }
+        if bytes.is_empty() {
+            return Ok(TaggedValue::EOF);
+        }
+        consumed_chars += text.chars().count();
+        bytes.clear();
+    }
+}
+
 /// What `read` reports when the text at the front of a binary port stops at
 /// bytes that do not decode, and the datum — or the search for one — reached
 /// them.
@@ -165,7 +216,7 @@ fn ran_out_of_text(e: &patina_frontend::ParseError) -> bool {
     }
 }
 
-/// Read one datum from a line-oriented source (stdin or a file port).
+/// Read one datum from a line-oriented source (stdin).
 ///
 /// Lines are read until they hold a complete datum, each fed to a [`Reader`]
 /// as it arrives: the datum is read once, rather than the text being read

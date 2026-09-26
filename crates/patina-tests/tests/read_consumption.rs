@@ -10,7 +10,7 @@
 //! The string-port rows, the control showing the rule is the port's and not
 //! the file's, moved to `tests/scheme/stdlib/ports.scm` (#193).
 //!
-//! At the foot are the bytevector-port rows that cannot be suite rows either,
+//! At the foot are binary-port rows that cannot be suite rows either,
 //! for a different reason: they are about bytes that do not decode, where no
 //! oracle can corroborate.
 
@@ -31,7 +31,7 @@ fn temp_path(name: &str) -> String {
 struct TempFile(String);
 
 impl TempFile {
-    fn new(name: &str, content: &str) -> Self {
+    fn new(name: &str, content: impl AsRef<[u8]>) -> Self {
         let path = temp_path(name);
         std::fs::write(&path, content).unwrap();
         TempFile(path)
@@ -50,6 +50,123 @@ impl Drop for TempFile {
 // =============================================================================
 // File ports
 // =============================================================================
+
+/// #411: byte and character operations must share the position left by
+/// `read`. File rows live here because the Scheme suites cannot create files.
+/// Chibi 0.12 and Gauche 0.9.15 agree on these results (2026-09-26).
+#[test]
+fn test_file_read_leaves_the_remainder_for_every_byte_operation() {
+    let file = TempFile::new("read_then_bytes", "x λyz\nrest");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file) (scheme read))
+        (define p (open-binary-input-file "{}"))
+        (define target (bytevector 0 0 0 0))
+        (let* ((datum (read p))
+               (ready (u8-ready? p))
+               (peek1 (peek-u8 p)) (peek2 (peek-u8 p))
+               (empty (read-bytevector 0 p))
+               (space (read-u8 p))
+               (lead (read-bytevector 1 p))
+               (count (read-bytevector! target p 1 3))
+               (char-peek (peek-char p)) (char (read-char p))
+               (line (read-line p)) (next (read p))
+               (end (eof-object? (read-u8 p))))
+          (close-port p)
+          (list datum ready peek1 peek2 empty space lead count target
+                char-peek char line next end))
+        "#,
+        file.path()
+    );
+    assert_program_eval_to(
+        &code,
+        r#"(x #t 32 32 #u8() 32 #u8(206) 2 #u8(0 187 121 0) #\z #\z "" rest #t)"#,
+    );
+
+    // The remainder is still ready even if the underlying file reached EOF.
+    let file = TempFile::new("read_then_bytes_at_eof", "x ");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file) (scheme read))
+        (define p (open-binary-input-file "{}"))
+        (let* ((datum (read p)) (ready (u8-ready? p))
+               (bytes (read-bytevector 1 p)) (end (eof-object? (read p))))
+          (close-port p) (list datum ready bytes end))
+        "#,
+        file.path()
+    );
+    assert_program_eval_to(&code, "(x #t #u8(32) #t)");
+}
+
+/// A finished datum does not require the rest of its line to be UTF-8.
+/// Chibi 0.12 and Gauche 0.9.15 agree on these results (2026-09-26).
+#[test]
+fn test_file_read_leaves_undecodable_bytes_after_a_finished_datum() {
+    for (i, (input, remaining, expected)) in [
+        (
+            &b"x \xff\nrest"[..],
+            7,
+            "(x 32 #u8(32 255 10 114 101 115 116) #t)",
+        ),
+        (&b"(1)\xff"[..], 1, "((1) 255 #u8(255) #t)"),
+        (&b"\"a\"\xff"[..], 1, "(\"a\" 255 #u8(255) #t)"),
+        (&b"|a|\xff"[..], 1, "(a 255 #u8(255) #t)"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let file = TempFile::new(&format!("read_before_binary_{i}"), input);
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-binary-input-file "{}"))
+            (let* ((datum (read p)) (peek (peek-u8 p))
+                   (bytes (read-bytevector {remaining} p)) (end (eof-object? (read p))))
+              (close-port p) (list datum peek bytes end))
+            "#,
+            file.path()
+        );
+        assert_program_eval_to(&code, expected);
+    }
+}
+
+/// UTF-8 and tokens can both straddle the native file buffer's 8 KiB edge.
+/// A large multiline datum still feeds the incremental reader only once.
+/// Chibi 0.12 and Gauche 0.9.15 agree on these results (2026-09-26).
+#[test]
+fn test_file_read_preserves_bytes_across_buffer_boundaries() {
+    for (i, prefix) in [
+        // A symbol ends exactly at the boundary; its delimiter is next.
+        format!("{}x", " ".repeat(8191)),
+        // A two-byte character crosses that boundary inside the datum.
+        format!("{}λ", " ".repeat(8191)),
+        // A four-byte character crosses it inside a string.
+        format!("\"{}🦀\"", "a".repeat(8190)),
+        // Comments and newlines all count towards the consumed offset.
+        format!("#; (ignored) ({}λ)", "1\n".repeat(10000)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut bytes = prefix.as_bytes().to_vec();
+        bytes.extend_from_slice(b" \xffz");
+        let file = TempFile::new(&format!("read_boundary_{i}"), bytes);
+        let quoted = format!("\"{}\"", prefix.replace('\\', "\\\\").replace('"', "\\\""));
+        let code = format!(
+            r#"
+            (import (scheme base) (scheme file) (scheme read))
+            (define p (open-binary-input-file "{}"))
+            (define reference (open-input-string {quoted}))
+            (let* ((same (equal? (read p) (read reference)))
+                   (space (read-u8 p)) (peek (peek-u8 p))
+                   (bytes (read-bytevector 2 p)))
+              (close-port p) (list same space peek bytes))
+            "#,
+            file.path()
+        );
+        assert_program_eval_to(&code, "(#t 32 255 #u8(255 122))");
+    }
+}
 
 #[test]
 fn test_file_port_incomplete_datum_is_a_read_error() {
@@ -331,7 +448,7 @@ fn test_a_byte_order_mark_does_not_shift_what_read_consumes() {
 }
 
 // =============================================================================
-// Bytevector ports: where the text stops
+// Binary ports: where the text stops
 // =============================================================================
 //
 // `read` on a binary port parses the decodable text at its front (#404). The
@@ -381,42 +498,60 @@ fn test_binary_port_datum_that_runs_into_undecodable_bytes_is_a_read_error() {
         "35 124 255 124 35 32 120", // inside a block comment
         "120 206",                  // x, then half of a two-byte character
     ] {
-        let code = format!(
-            r#"
-            (import (scheme base) (scheme read))
+        let file = TempFile::new(
+            "invalid_utf8",
+            bytes
+                .split_whitespace()
+                .map(|b| b.parse::<u8>().unwrap())
+                .collect::<Vec<_>>(),
+        );
+        for open in [
+            format!("(open-input-bytevector (bytevector {bytes}))"),
+            format!("(open-binary-input-file \"{}\")", file.path()),
+        ] {
+            let code = format!(
+                r#"
+            (import (scheme base) (scheme file) (scheme read))
             (define (mentions? text word)
               (let ((n (string-length text)) (m (string-length word)))
                 (let loop ((i 0))
                   (and (<= (+ i m) n)
                        (or (string=? (substring text i (+ i m)) word)
                            (loop (+ i 1)))))))
-            (define p (open-input-bytevector (bytevector {bytes})))
+            (define p {open})
             (guard (e (#t (list (read-error? e)
                                 (mentions? (error-object-message e) "UTF-8"))))
               (read p))
             "#
-        );
-        assert_program_eval_to(&code, "(#t #t)");
+            );
+            assert_program_eval_to(&code, "(#t #t)");
+        }
     }
 }
 
 /// An error that is there whatever follows it is still reported as itself.
 #[test]
 fn test_binary_port_syntax_error_before_undecodable_bytes_is_not_blamed_on_them() {
-    assert_program_eval_to(
-        r#"
-        (import (scheme base) (scheme read))
+    let file = TempFile::new("syntax_before_invalid_utf8", [41, 32, 255]);
+    for open in [
+        "(open-input-bytevector (bytevector 41 32 255))".to_string(),
+        format!("(open-binary-input-file \"{}\")", file.path()),
+    ] {
+        let code = format!(
+            r#"
+        (import (scheme base) (scheme file) (scheme read))
         (define (mentions? text word)
           (let ((n (string-length text)) (m (string-length word)))
             (let loop ((i 0))
               (and (<= (+ i m) n)
                    (or (string=? (substring text i (+ i m)) word)
                        (loop (+ i 1)))))))
-        (define p (open-input-bytevector (bytevector 41 32 255)))   ; a stray )
+        (define p {open})   ; a stray )
         (guard (e (#t (list (read-error? e)
                             (mentions? (error-object-message e) "UTF-8"))))
           (read p))
-        "#,
-        "(#t #f)",
-    );
+        "#
+        );
+        assert_program_eval_to(&code, "(#t #f)");
+    }
 }

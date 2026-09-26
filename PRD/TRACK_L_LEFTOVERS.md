@@ -51,9 +51,6 @@ empty, archive this page.
 - #269 — a definition a template introduces in a body is reachable by its bare name.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
 
-**Ports and I/O**
-- #411 — `read` on a binary file port over-reads past its datum.
-
 **Backends**
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
