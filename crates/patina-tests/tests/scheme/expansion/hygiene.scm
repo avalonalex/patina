@@ -23,7 +23,10 @@
 ;; including five VM-only expected failures for family 40. #315 (2026-09-13)
 ;; fixed those two rows on the VM and added a 44th, leaving three VM-only
 ;; expected failures, the family's refusal rows. Both external oracles pass
-;; all 44; the tree-walker does too.
+;; all 44; the tree-walker does too. #427 (2026-09-26) retires the remaining
+;; quarantines and adds eight privacy and forward-reference controls: 52
+;; assertions pass on both backends and Gauche. Chibi passes 51; its macro
+;; forward-write discrepancy is recorded in DIVERGENCES.tsv for investigation.
 ;;
 ;; `hygiene_matrix.rs` is not part of that and stays Rust: two tables of shapes
 ;; scored against reference implementations (its header says which, and how
@@ -594,33 +597,17 @@
 
 ;; ── One expansion's private global, seen from another (Larceny family 40) ───
 ;;
-;; Migrated from `crates/patina-tests/tests/backend_divergence.rs` (#193),
-;; where they were the three `assert_divergence` quarantines pinning **the VM**
-;; as the diverging backend. Each row is a `test-error` — the right answer is a
-;; refusal — and the line above it says the VM is expected to fail it by
-;; answering, using the feature identifier the VM advertises (see
-;; `docs/TEST_ORGANIZATION.md`). The driver fails the run the day the VM
-;; starts refusing, and the fix is to delete the line and close family 40 in
-;; `scheme_tests/reports/larceny_triage.md`.
+;; Migrated from `crates/patina-tests/tests/backend_divergence.rs` (#193).
+;; The three VM quarantines became ordinary error assertions with #427.
+;; One expansion's definition is private: a different expansion's reference
+;; carries scopes that reject it. Chibi 0.12, Gauche 0.9.15 and both Patina
+;; backends now refuse all three shapes.
 ;;
-;; One expansion's `(define hidden-x …)` introduces a *scoped* top-level
-;; definition; a different expansion's template reference to that spelling
-;; carries scopes that reject it. Measured 2026-09-09 on the first shape and
-;; 2026-09-10 on all three, and the VM is alone: chibi 0.12 errors "undefined variable", Gauche 0.9.15
-;; errors "unbound variable", the tree-walker errors "Undefined variable", and
-;; only the VM answers 10. One expansion's private definition is not another
-;; expansion's to see, and three implementations say so. The VM still
-;; answers: its compiler installs a bare-name alias for a renamed
-;; macro-introduced global (`alpha_rename`'s `rename_body`), kept for relinking
-;; by name. The jabberwocky steal that mechanism was once blamed for is fixed;
-;; these rows are what the alias still answers.
-;;
-;; The unusual direction is the reason to read these before "fixing" one:
-;; closing them means removing the bare-name views, not loosening the
-;; tree-walker back to the capture chibi rejects. A 2026-09-13 mutation that
-;; removed them made all three refuse on the VM and failed nothing else in
-;; `cargo test` or the chibi lanes (`PRD/macro/SYNTAX_CASE_DESIGN.md`,
-;; "Scoped Relinking, Sized").
+;; The VM used to install a bare-name alias beside the renamed global. A
+;; reference with no matching binding became a name-only load or store, and
+;; the alias answered it. Removing that alias keeps the binding identity
+;; available to legitimate references while refusing the unrelated ones.
+;; The tree-walker likewise keeps introduced definitions scope-only.
 ;;
 ;; The definitions are top-level forms, as in the original programs; only the
 ;; use is inside the row, so that the refusal is a caught error and not a dead
@@ -636,17 +623,14 @@
 (define-syntax def-x (syntax-rules () ((_) (define hidden-x 10))))
 (def-x)
 (define-syntax use-x (syntax-rules () ((_) hidden-x)))
-(cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-error "one expansion's definition is not another expansion's reference" #t
   (use-x))
 
-;; Write direction, exercising `set_scoped_terminal`'s refusal — the only row
-;; that reaches it, since every hygiene-matrix write row's global is a plain
-;; `define` the terminal's `local_slot` arm answers first.
+;; This write attempt reads the private binding before assigning it. The
+;; constant-RHS forward-write row below separately pins refusal of the store.
 (define-syntax defc (syntax-rules () ((_) (define hidden-count 0))))
 (defc)
 (define-syntax inc (syntax-rules () ((_) (set! hidden-count (+ hidden-count 1)))))
-(cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-error "one expansion's definition is not another expansion's write target" #t
   (inc))
 
@@ -655,16 +639,61 @@
 ;; `hidden-priv` exists — `defpriv`'s is hygienically hidden. The R7RS suite's
 ;; `jabberwocky` shape keeps working because there the `define` and the
 ;; generated `define-syntax` share one expansion, so the getter's reference
-;; carries the defining expansion's scope. `define_scoped_definition`'s doc
-;; records the contract boundary this pins.
+;; carries the defining expansion's scope. Binding identity also keeps
+;; generated accessors working across library boundaries (#408).
 (define-syntax defpriv (syntax-rules () ((_) (define hidden-priv 10))))
 (define-syntax defgetter
   (syntax-rules () ((_ g) (define-syntax g (syntax-rules () ((_) hidden-priv))))))
 (defpriv)
 (defgetter get)
-(cond-expand (patina-vm (test-expect-fail 1)) (else))
 (test-error "a generated getter cannot see a different expansion's private define" #t
   (get))
+
+;; R7RS permits a top-level introduced definition to be visible by its bare
+;; name or to stay private. Patina now chooses privacy, like chibi and
+;; Gauche, consistently on both backends (#427).
+(test-error "a source reference cannot read an introduced global by spelling" #t
+  hidden-x)
+(test-error "a source reference cannot assign an introduced global by spelling" #t
+  (set! hidden-count 99))
+
+;; Compile the uses before the introduced definition exists. The runtime
+;; must still refuse them; a compile-time rejection of unresolved references
+;; alone cannot distinguish this from the valid forward references below.
+(define-syntax introduce-later
+  (syntax-rules () ((_ getter)
+    (begin
+      (define hidden-later 10)
+      (define-syntax getter (syntax-rules () ((_) hidden-later)))))))
+(define-syntax read-later-private (syntax-rules () ((_) hidden-later)))
+(define-syntax write-later-private (syntax-rules () ((_) (set! hidden-later 20))))
+(define (early-private-reader) (read-later-private))
+(define (early-private-writer) (write-later-private))
+(introduce-later read-own-later)
+
+(test-error "an earlier compiled read cannot reach a later introduced global" #t
+  (early-private-reader))
+(test-error "an earlier compiled write cannot reach a later introduced global" #t
+  (early-private-writer))
+(test-equal "the refused write leaves the same-expansion binding intact" 10
+  (read-own-later))
+
+(define-syntax read-ordinary-later (syntax-rules () ((_) ordinary-later)))
+(define-syntax write-ordinary-later
+  (syntax-rules () ((_) (set! ordinary-later 20))))
+(define (early-ordinary-reader) (read-ordinary-later))
+(define (early-ordinary-writer) (write-ordinary-later))
+(define ordinary-later 10)
+
+(test-equal "a macro's forward reference still reads an ordinary global" 10
+  (early-ordinary-reader))
+(test-equal "a macro's forward reference still assigns an ordinary global" 20
+  (begin (early-ordinary-writer) (early-ordinary-reader)))
+
+(define-syntax define-caller-global
+  (syntax-rules () ((_ name) (define name 77))))
+(define-caller-global caller-global)
+(test-equal "a caller-supplied global definition name stays visible" 77 caller-global)
 
 ;; Track H3 seeds 370/371: the positive same-expansion face of family 40, and
 ;; the half of it that was reachable from ordinary code. The generated macro
@@ -680,10 +709,9 @@
 ;; degraded to its bare spelling, and was answered by whatever that spelling
 ;; meant at run time. Fixed by recording each introduced definition's binding
 ;; identity in the environment, which is what a later form resolves against.
-;; The three refusal rows above are the same family and are *not* fixed: they
-;; turn on a scoped reference that resolves to nothing being refused rather
-;; than answered by the bare-name alias, which needs the alias to stop
-;; answering scoped references — see the triage entry.
+;; #427 completes the family by removing the bare-name alias; the three
+;; refusal rows above now pass while these legitimate references keep
+;; resolving through the recorded binding identity.
 ;;
 ;; These must remain top-level definitions: moving them into a test's local
 ;; body would exercise a different resolution path, and the defect was

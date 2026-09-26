@@ -310,32 +310,28 @@ as well, so that any reference of that spelling could reach it, is what let a
 `let-syntax ((quote …))` around a *call* capture the callee template's
 `quote` (Larceny triage family 33).
 
-**A macro-introduced top-level definition is recorded twice, on purpose.** The
-VM renames one to a global no source mentions, derived from the scope set that
-is its identity, and then records two things about it in the environment: a
-bare-name *alias*, and the *binding identity* itself. They answer different
-questions and neither replaces the other. The alias answers the bare spelling
-at run time, kept because definition-environment relinking resolves its target
-by name, although no `cargo test` or chibi row needs it
-(`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized"); it is
-consulted after real bindings, so a user's own global of that spelling still
-wins. The identity answers a *scoped* reference at compile
-time. It also answers a later form's desugar-time reads — a literal
-comparison, and the check for syntax used as a value — because
-`Environment`'s candidate walk takes the root's identities alongside its scoped
-table. The tree-walker files such a definition in the scoped table itself, so
-before the walk took both, the two backends' desugarers saw different bindings
-for one reference: the VM matched a macro-introduced `else` as `cond`'s
-literal, and refused a macro-introduced `when` as syntax.
+**A macro-introduced top-level definition is private to its binding identity.**
+The VM renames it to a global no source mentions, derived from its scope set,
+and records that identity in the environment. A later form can resolve it at
+compile time, and the desugarer sees it during literal comparison and the
+check for syntax used as a value. `Environment`'s candidate walk takes the
+root's identities alongside its scoped table; the tree-walker files the
+introduced definition in that scoped table itself.
+
+Since #427, neither backend exposes an introduced variable through its bare
+spelling. The VM's former bare-name alias let unrelated expansions reach a
+binding their scopes rejected; the tree-walker's name-visible view let plain
+source and bare library exports reach it. Both views are gone. Caller-supplied
+definition names stay public, and source-written parameters and internal
+definitions retain the name visibility their source references need.
 
 The identity has a third reader since #408: **definition-environment
 relinking across a library.** A generated macro's template can mention a
 definition its own generator introduced — `(begin (define count 0)
 (define-syntax name … count …))`, the ordinary shape of a definer with
-private state. Used from outside the library, that mention needs an alias, and
-the bare name is the wrong thing to alias to whenever something else in the
-library has the spelling: a plain definition, or the definition a second run
-of the definer introduced. The mention's own scopes select the right one, so
+private state. Used from outside the library, that mention needs an alias to
+the private binding. Its bare spelling does not expose it, and may belong to
+a plain definition instead. The mention's own scopes select the right one, so
 the relinker asks `Environment::introduced_definition` which top-level
 definition they select and aliases to *that* — the renamed global on the VM,
 and on the tree-walker the scope set the definition is filed under, read and
@@ -741,7 +737,7 @@ exists to catch.
 |---|---|
 | `phase` | `desugar` / `compile` (the VM's renamer) / `run`. Without it the desugarer's lookups and the evaluator's interleave indistinguishably. |
 | `scopes` | what the binding is *filed under*. `{}` means the plain by-name table, where set-of-scopes resolution cannot see it. |
-| `byname` | `visible_by_name` — whether a name-only lookup may also reach it. The difference between a parameter and a definition. |
+| `byname` | `visible_by_name` — whether a name-only lookup may also reach it. Source-written parameters and definitions need this view; introduced definitions stay scope-only. |
 | `cands` | how many bindings **passed** `is_candidate` — the same meaning at every site, so the backends can be compared. |
 | `picked` / `via` | which binding won, and how it ended: `scoped`, `byname` (the rule declined and the by-name fallback answered), `unbound` (the rule declined and the fallback found nothing — on a name whose `BIND` shows a scoped binding, that is the fallback *refusing* a rejected binding, the family-36 rule at work), `ambiguous` (two candidates, neither more specific). At `phase=compile` the VM defers its fallback to runtime, so `byname` there means only "left to a by-name lookup". |
 | `op` | `get`, `set`, or `bind` for a binding occurrence being renamed. The VM's renamer serves all three through one function. |

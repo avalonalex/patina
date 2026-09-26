@@ -337,9 +337,9 @@ pub enum CpsExprKind {
     Define {
         name: Symbol,
         scopes: ScopeSet,
-        /// Source-written definitions and top-level definitions retain a
-        /// name-only view. A macro-introduced body definition is private to
-        /// its scopes (#269). Recorded before the transform adds body scopes
+        /// Source-written definitions retain a name-only view. Every
+        /// macro-introduced definition is private to its scopes (#269, #427).
+        /// Recorded before the transform adds body scopes
         /// to source-written definitions, which otherwise look introduced.
         visible_by_name: bool,
         value: Rc<CpsExpr>, // Must be trivial

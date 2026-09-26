@@ -92,10 +92,10 @@ table below; its family 40, family 41 and H2 rows were brought up to date on
 |---|---|---|
 | Families 14/15/23 and 33–39 | Their regression suites pass; the original hygiene matrix is 28/28 on both backends | These recorded Scheme shapes are closed |
 | Core-syntax import renaming | The library-import regression and keyword suite pass on both backends | Track L §6's old open label was stale |
-| Family 40, introduced globals | Three VM expected failures in `expansion/hygiene.scm`, all passing on the tree-walker; #315 fixed the other two of the original five | Preserve binding identity through global relinking (Track L §6, relinking by name) |
+| Family 40, introduced globals | ✅ Fixed 2026-09-26 (#427): the three refusal rows pass on both backends; #315 fixed the reachable half. Forward references, source privacy and library accessors are pinned too | None in this family |
 | Family 41, pattern literals | ✅ Fixed by #318, whose entry dates it 2026-09-13, and its VM follow-up #321 (2026-09-14); #324 (2026-09-14) extended it to macro-produced definitions. The rows are ordinary assertions on both backends | Global names spelled alike still match by spelling — "Not ours", spelling-based literal matching |
 | H2 environment API properties | ✅ No quarantines left: #316 (2026-09-13) resolves a scoped write the way the read resolves it, closing #289, #290 and #291 | None |
-| Family 47, generated macros across a library | ✅ Fixed 2026-09-18 (#402): the matrix's second table, 45 shapes, reads 45 of 45 on both backends, 18 of them moved. The relinker's value-comparing skip the same review found (#407) was fixed 2026-09-19 with an equal-values axis: 63 of 63. The neighbouring shape — a generator that also *introduces* the definition its macro mentions, beside a plain one of that spelling or a second run's — was fixed the same day (#408): 40 more rows, 12 of them red on both backends and 10 on the VM alone, 103 of 103. A definition over an import after the expansion (#438) was fixed the same day too, 6 more rows red on both backends: 109 of 109. The same with the generator a library exports run in the program, and its macro used a form later (#446), was fixed 2026-09-23: 2 more rows red on both backends, 111 of 111 | None in this family. Family 40's *refusal* rows (#427) are separate. Nothing recognised by spelling is outside #438's fix any more: `apply` (#443), `call/cc`'s two spellings (#441), and `call-with-values` and `dynamic-wind` (#442) each follow the binding, and `patina_core::by_spelling` went with them |
+| Family 47, generated macros across a library | ✅ Fixed 2026-09-18 (#402): the matrix's second table, 45 shapes, reads 45 of 45 on both backends, 18 of them moved. The relinker's value-comparing skip the same review found (#407) was fixed 2026-09-19 with an equal-values axis: 63 of 63. The neighbouring shape — a generator that also *introduces* the definition its macro mentions, beside a plain one of that spelling or a second run's — was fixed the same day (#408): 40 more rows, 12 of them red on both backends and 10 on the VM alone, 103 of 103. A definition over an import after the expansion (#438) was fixed the same day too, 6 more rows red on both backends: 109 of 109. The same with the generator a library exports run in the program, and its macro used a form later (#446), was fixed 2026-09-23: 2 more rows red on both backends, 111 of 111 | None in this family. Family 40's refusal rows closed separately in #427. Nothing recognised by spelling is outside #438's fix any more: `apply` (#443), `call/cc`'s two spellings (#441), and `call-with-values` and `dynamic-wind` (#442) each follow the binding, and `patina_core::by_spelling` went with them |
 | `do` result-clause definitions | The existing regression still pins acceptance on both backends | Reject definitions in an expression context; separate from hygiene |
 
 H1's normal generated gate also passes: 112 binding cases, five variants
@@ -690,9 +690,23 @@ failure list.
 - **The gate was one test wide, and is now zero.** Enforcement scored 95 of 96 binaries before the fix, failing only `test_let_syntax_nested_lexical_scoping` — this family — and 96 of 96 after. Nothing else in the repo resolved a reference the rule could not decide, so the distance to a determined model was exactly this one shape.
 - With that clear, enforcement stopped being a switch. `resolve_scoped` returns an error for an ambiguous reference on every path: the desugarer reports a `DesugarError`, the VM's renamer a `CompileError`, the tree-walker an `EvalError` at the read. `PATINA_AMBIGUITY_STRICT` is gone with it — once refusing was free, the variable only offered a way to ask for the wrong answer. `PATINA_AMBIGUITY_LOG` stays: the `TIE` half is still reported and never raised, since Flatt's rule cannot see it.
 
-### 40. The VM resolves a cross-expansion macro-introduced global by bare name — VM only since step 1; **the reachable half fixed 2026-09-13**, three refusal rows still open
-- The three open refusal rows are tracked as #427.
-- Ours: `crates/patina-tests/tests/scheme/expansion/hygiene.scm`, rows "one expansion's definition is not another expansion's reference", "one expansion's definition is not another expansion's write target" and "a generated getter cannot see a different expansion's private define" — three backend-scoped `test-expect-fail` rows pinning the VM as the diverging backend, arbitrated by chibi and Gauche on every oracle run. The two H3 positive rows beside them — "a generated macro reads its private global despite a source global's spelling" and "a generated macro assigns its private global without changing the source global" — are **ordinary assertions now**, and the reason they were the ones to fix first is below.
+### 40. Cross-expansion access to an introduced global — ✅ fixed (#315, #427)
+
+- **Completed 2026-09-26 (#427).** The three VM refusal quarantines in
+  `crates/patina-tests/tests/scheme/expansion/hygiene.scm` are ordinary error
+  assertions now. The VM keeps each introduced global's binding identity but
+  installs no bare-name alias; the tree-walker keeps introduced globals
+  scope-only. This also makes source access and bare library exports private
+  on both backends, like chibi and Gauche. Same-expansion getters/setters,
+  including generated library accessors, still resolve the binding identity.
+- Eight Scheme controls cover source reads/writes, uses compiled before an
+  introduced definition, an unchanged private value after a refused write,
+  ordinary forward globals and caller-supplied definition names. The file
+  passes all 52 assertions on both backends and Gauche. Chibi passes 51: its
+  macro forward-write behavior differs from Patina, Gauche and Chez, recorded
+  as `needs-investigation` in `DIVERGENCES.tsv` rather than called an oracle
+  defect. The library export policy is also pinned in `hygiene_matrix.rs`.
+- The record below describes the earlier diagnosis and the two-part fix.
 
 - **The half that was reachable from ordinary code — fixed 2026-09-13.** The family was pinned as five expected failures, which reads as managed. Two of them were also this, on the default backend:
 
@@ -713,22 +727,28 @@ failure list.
 
 - **Mechanism, and why the scopes were never the problem.** `alpha_rename` runs once per top-level form and builds its frames from that form alone (`top_level_define_bindings`), so a definition an *earlier* form introduced is not even a candidate: `PATINA_SCOPE_TRACE` shows `cands=0 … via=byname` on the VM against `cands=1 … via=scoped` on the tree-walker, for the same reference. With no candidate the reference falls out of the renamer as its bare spelling with empty scopes, and the runtime answers it by name — the user's global, or the bare-name alias. Inside one form the scopes decide correctly, so nothing was wrong with the scope sets; what was missing was the renamer's view across compile units.
 
-- **The fix** records each macro-introduced definition's binding identity in the environment, beside the alias that was already installed there: `Environment::define_introduced_global(name, scopes, renamed_to)`, read back by `RenameEnv::resolve` through the same `patina_core::scope_resolve` rule both backends use. The alias stays — removing it was expected to strand definition-environment relinking, and to be issue #269's fix wearing a disguise; a 2026-09-13 mutation found no `cargo test` or chibi row depending on it (`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized") — so the two records now say different things on purpose: the alias answers the bare spelling at run time, the identity answers a scoped reference at compile time.
+- **The first fix (#315)** recorded each macro-introduced definition's binding identity in the environment, beside the alias that was already installed there: `Environment::define_introduced_global(name, scopes, renamed_to)`, read back by `RenameEnv::resolve` through the same `patina_core::scope_resolve` rule both backends use. The alias stayed then — removing it was expected to strand definition-environment relinking, and to be issue #269's fix wearing a disguise; a 2026-09-13 mutation found no `cargo test` or chibi row depending on it (`PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized") — so the two records then said different things: the alias answers the bare spelling at run time, the identity answers a scoped reference at compile time.
 
-- **What is still open, and why it is a different change.** The three refusal rows turn on the opposite direction: a scoped reference that resolves to *nothing* should be refused, as chibi and the tree-walker refuse it, and is instead answered by the bare-name alias. Refusing it means the alias must stop answering scoped references — and the renamer currently emits every unresolved reference with `ScopeSet::new()`, so by the time the runtime sees it the fact that it was scoped is gone. That was recorded as needing scope information to survive the renamer (Q7.5(b)'s scoped relinking, or the resolve-once design). Measured 2026-09-13 it needs neither: deleting the bare-name views makes all three rows refuse on the VM, pending the Larceny lanes and the compat corpus — see "Scoped Relinking, Sized" in `PRD/macro/SYNTAX_CASE_DESIGN.md`.
+- **The refusal half, closed by #427.** A scoped reference that resolves
+  to nothing still leaves the renamer with empty scopes, deferring its lookup
+  to runtime. The bare-name alias then used to answer it. This was first
+  thought to require preserving reference scopes through the renamer, but the
+  2026-09-13 experiment showed that deleting the alias suffices. #427 makes
+  that deletion, preserving ordinary forward references while refusing even
+  references compiled before the introduced definition exists.
 - Surfaced 2026-08-31 by the review of step 1. One expansion's `(define x …)` introduces a scoped top-level definition; a *different* expansion's template reference to that spelling carries scopes that reject it. Before step 1 both backends answered the value through the by-name fallback; chibi 0.12 errors "undefined variable" on all three shapes — one expansion's hygienically-introduced definition is not another expansion's to see — and since step 1 the tree-walker agrees, so the fix *narrowed* wrongness to one backend and this entry pins the remainder rather than reporting a regression.
 
 ```scheme
 (define-syntax def-x (syntax-rules () ((_) (define x 10))))
 (def-x)
 (define-syntax use-x (syntax-rules () ((_) x)))
-(use-x)          ; chibi and tree-walker: undefined variable — VM: 10
+(use-x)          ; undefined on all three now; the VM answered 10 before #427
 ```
 
-- The same split in the write direction (`set!` from a second expansion — the only traffic `set_scoped_terminal`'s refusal gets, no matrix write row reaches it), and for the generated-getter idiom, where a macro-generated macro's template references a private define from a *different* expansion. The R7RS suite's `jabberwocky` keeps working on both backends because there the `define` and the generated `define-syntax` share one expansion, so the getter's reference carries the defining expansion's scope and resolves scoped.
-- **Why the VM differs:** its compiler renames a macro-introduced global and installs a **bare-name alias** for it (`alpha_rename`'s `rename_body` / `global_aliases`), so any later reference of that spelling reaches it by name after scopes are gone. It was recorded as the relinking-by-name mechanism behind Track L §6's two `jabberwocky` symptoms. Both of those now answer as chibi does — the VM resolves them to the introduced global's identity (#315) — and the alias is left answering shapes like these, where no identity accepts the reference.
-- The fix is sized in `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" (Track Q's Q7.5(b)): delete the bare-name views, not loosen the tree-walker back to the capture chibi rejects. Until then the three quarantines fail the moment the VM stops answering, which is the signal to replace them with `assert_program_eval_to` error pins.
-- The matrix cannot see this family: it has no macro-introduced-global binder axis (recorded in its "Adding axes" list). The tree-walker's trace shows the refusal as `RESOLVE … via=unbound` on a name whose `BIND` two lines up is a scoped definition.
+- The same split was measured in the write direction (`set!` from a second expansion), and for the generated-getter idiom, where a macro-generated macro's template references a private define from a *different* expansion. The R7RS suite's `jabberwocky` keeps working on both backends because there the `define` and the generated `define-syntax` share one expansion, so the getter's reference carries the defining expansion's scope and resolves scoped.
+- **Why the VM differed:** its compiler renamed a macro-introduced global and installed a bare-name alias for it (`alpha_rename`'s former `global_aliases` output). Any later reference of that spelling could reach it after scopes were gone. #315 made legitimate references resolve to the introduced global's identity; #427 removes the alias that kept answering unrelated references.
+- The fix was sized in `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized" (Track Q's Q7.5(b)): delete the bare-name views, not loosen the tree-walker back to the capture chibi rejects. #427 removes those views and retires the three Scheme quarantines.
+- The generated matrix has no cross-expansion refusal axis (recorded in its "Adding axes" list); the Scheme rows cover it. The tree-walker's trace shows the refusal as `RESOLVE … via=unbound` on a name whose `BIND` two lines up is a scoped definition.
 
 **H3 positive cases, 2026-09-12.** The generated sweep at runtime `0c992ddb`
 found the opposite direction with seeds **370/371/374/375**: a private define,

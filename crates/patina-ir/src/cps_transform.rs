@@ -291,7 +291,7 @@ impl CpsTransformer {
             } => {
                 // Transform: (define name value)
                 // Into: evaluate value, do define, continue with unspecified
-                let visible_by_name = scopes.is_empty() || self.body_scopes.borrow().is_empty();
+                let visible_by_name = scopes.is_empty();
                 let scopes = self.define_scopes(scopes);
 
                 if self.is_trivial(value) {

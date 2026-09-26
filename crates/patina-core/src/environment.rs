@@ -1160,13 +1160,11 @@ impl Environment {
     /// Record that a macro-introduced top-level definition of `name`, at
     /// `scopes`, was renamed to the global `renamed_to`.
     ///
-    /// The companion of [`define_alias`] for the same definition: the alias
-    /// answers the *bare* spelling at run time, which is what
-    /// definition-environment relinking asks for, and this records the
-    /// *binding identity*, which is what a later form's scoped reference
-    /// needs. Keeping both is deliberate. Dropping the alias would strand
-    /// relinking; dropping this leaves a later form resolving by spelling,
-    /// which is triage family 40.
+    /// Records the binding identity that later forms resolve at compile and
+    /// desugar time, and that definition-environment relinking uses to find
+    /// the renamed global. No bare-name alias is installed: that would let a
+    /// reference from another expansion reach a definition its scopes reject
+    /// (#427, triage family 40).
     ///
     /// Two different expansions get different scope sets and so are different
     /// entries, which is the whole point — and which means a program that
@@ -1181,7 +1179,6 @@ impl Environment {
     /// n = 12000. The same key makes a repeated identical `(name, scopes)`
     /// overwrite, which happens when one expansion is compiled twice.
     ///
-    /// [`define_alias`]: Self::define_alias
     pub fn define_introduced_global(&self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
         self.rare
             .get_or_init(Default::default)
@@ -1262,35 +1259,14 @@ impl Environment {
     /// Install a macro-expansion alias: `alias` resolves to `target_name` as
     /// bound in `target_env`, looked up afresh on every access.
     ///
-    /// Two kinds of caller, and they rely on different things:
-    ///
-    /// - The desugarer installs a **generated, unique** `alias`, so it cannot
-    ///   shadow anything the program wrote.
-    /// - The VM's compiler installs one under a **bare** name, for a
-    ///   macro-introduced global it renamed. `get` consults `bindings` first,
-    ///   so a real binding of that name wins — which is what keeps a macro's
-    ///   temporary from overwriting a user's global of the same spelling. It
-    ///   used to be why a user's later global of that spelling stole the
-    ///   macro's private definition, `(jab get 10) (define mh 99) (get)`; that
-    ///   answers 10 now, as chibi and Gauche do, because the renamer resolves
-    ///   such a reference to the introduced global's identity
-    ///   (`define_introduced_global`) and never asks the alias. What the alias
-    ///   still answers is anything reaching the name that no identity
-    ///   accepts: a scoped reference from a different expansion (triage family
-    ///   40), a source reference to the bare name, a library export of the bare
-    ///   name, and the definition-environment relinker's by-name lookup of its
-    ///   target. `PRD/macro/SYNTAX_CASE_DESIGN.md`, "Scoped Relinking, Sized",
-    ///   measures each and what removing the alias takes.
-    ///
-    ///   The bare kind is sound only in an environment with **no parent**,
-    ///   since `get` *returns* on an alias hit rather than falling through, so
-    ///   one whose target is unbound would eclipse a parent's binding. The
-    ///   environments that path compiles against are the parentless global
-    ///   ones, asserted at the install site.
+    /// The desugarer installs a generated, unique alias so it cannot shadow
+    /// anything the program wrote. For an introduced definition, its scopes
+    /// select the target: the renamed global on the VM, or a scoped alias on
+    /// the tree-walker. The VM no longer installs aliases under the bare
+    /// spelling of introduced globals (#427).
     ///
     /// Keyed by `alias`, so a second install under the same name replaces the
-    /// first. For the bare-name kind that means the most recently compiled
-    /// definition of a given spelling is the one relinking reaches.
+    /// first.
     pub fn define_alias(
         &self,
         alias: impl Into<Rc<str>>,
@@ -1422,20 +1398,14 @@ impl Environment {
     ///
     /// Source-written parameters and internal definitions need this view:
     /// they acquire body scopes while their source references can still be
-    /// name-only. Introduced body definitions use `define_with_scopes`
-    /// instead (#269); their generated getters and setters reach the scoped
-    /// binding directly. Macro-introduced top-level definitions retain this
-    /// view for now, alongside the VM's global aliases (#427).
+    /// name-only. All introduced definitions use `define_with_scopes`
+    /// instead (#269, #427); their generated getters and setters reach the
+    /// scoped binding directly, including through scoped library aliases.
     ///
-    /// The name-only view's reach is *plain* access — [`get`], [`set`], and
+    /// The name-only view's reach is plain access — [`get`], [`set`], and
     /// the relinker resolving through them — not scoped resolution's
-    /// fallback. A **scoped** reference whose resolution rejected this
-    /// binding stays refused (`get_scoped_fallback` / `set_scoped_fallback`):
-    /// since the family 36 fix, one expansion's introduced definition is not
-    /// reachable from a different expansion's introduced reference, which is
-    /// what chibi answers too. The VM still reaches it through its bare-name
-    /// alias — triage family 40 pins that divergence, and Track L §6's
-    /// relinking-by-name entry is its root.
+    /// fallback. A scoped reference whose resolution rejected this binding
+    /// stays refused (`get_scoped_fallback` / `set_scoped_fallback`).
     ///
     /// [`get`]: Self::get
     /// [`set`]: Self::set
@@ -1925,10 +1895,11 @@ impl Environment {
     /// name. A plain binding or an alias there is what the reference reaches
     /// exactly when no scoped binding claimed it, since
     /// [`get_scoped_fallback`] takes the same walk. A name-visible scoped
-    /// definition is, when it is the one resolution chose. The one alias that
-    /// can *be* a chosen scoped binding is the VM's bare-name alias for an
-    /// introduced global it renamed, recognised by the identity recorded
-    /// beside it ([`define_introduced_global`]).
+    /// definition is, when it is the one resolution chose. An alias to a
+    /// renamed introduced global can also name the chosen binding, recognised
+    /// by its recorded identity ([`define_introduced_global`]). This check
+    /// supports such aliases, though the compiler no longer installs them
+    /// under an introduced definition's bare spelling.
     ///
     /// `Err` as [`scoped_binding_of`] gives it: an ambiguous reference
     /// denotes no binding.
@@ -2651,7 +2622,7 @@ mod introduced_global_tests {
 
     /// The property the fix rests on: two expansions of one macro introduce
     /// the same spelling and must stay two bindings. Collapsing them is what
-    /// the bare-name alias does, and why it cannot answer a scoped reference.
+    /// the removed bare-name alias did; scoped references need the identities.
     #[test]
     fn two_expansions_of_one_spelling_are_two_entries() {
         let env = Environment::new();
@@ -2722,8 +2693,8 @@ mod name_view_tests {
             .expect("not ambiguous")
     }
 
-    /// The tree-walker's shape: a definer macro run twice files two
-    /// name-visible definitions, and the name means the most recent.
+    /// For two name-visible scoped definitions, the name means the most
+    /// recent. Introduced definitions no longer use this view (#427).
     #[test]
     fn the_name_reaches_only_the_latest_of_two_introduced_definitions() {
         let env = Environment::new();
@@ -2747,8 +2718,9 @@ mod name_view_tests {
         assert!(reaches(&env, "x", &[7]));
     }
 
-    /// The VM's shape: each introduced global is renamed and its identity
-    /// recorded, and the bare name is an alias to the most recent.
+    /// An explicitly installed alias can name an introduced global's
+    /// identity. The VM no longer creates these bare aliases (#427), but the
+    /// environment API still needs to compare their bindings correctly.
     #[test]
     fn a_bare_alias_is_the_introduced_global_it_was_installed_for() {
         let env = Rc::new(Environment::new());
@@ -3095,8 +3067,8 @@ mod introduced_definition_tests {
     fn tree_walker_library() -> Rc<Environment> {
         let library = Rc::new(Environment::new());
         library.define("count", n(100));
-        library.define_scoped_definition("count", scopes(&[1]), n(10));
-        library.define_scoped_definition("count", scopes(&[2]), n(20));
+        library.define_with_scopes("count", scopes(&[1]), n(10));
+        library.define_with_scopes("count", scopes(&[2]), n(20));
         library
     }
 
@@ -3169,12 +3141,11 @@ mod introduced_definition_tests {
     #[test]
     fn the_vms_renamed_global_is_found_by_the_same_question() {
         // The VM renames an introduced definition to a global of its own and
-        // records the identity; the bare name is an alias to the latest.
+        // records the identity, without exposing the bare name.
         let library = Rc::new(Environment::new());
         for (run, renamed, value) in [(1, "count.g1", 10), (2, "count.g2", 20)] {
             library.define(renamed, n(value));
             library.define_introduced_global("count".into(), scopes(&[run]), renamed.into());
-            library.define_alias("count", Rc::clone(&library), renamed.into());
         }
         let (home, found) = library
             .introduced_definition("count", &scopes(&[1, 7]))
