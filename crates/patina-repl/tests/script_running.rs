@@ -26,25 +26,7 @@ fn oversized_read_bytevector_reads_only_the_available_bytes() {
     fs::write(temp.path().join("empty.bin"), []).unwrap();
     fs::write(
         temp.path().join("read.scm"),
-        r#"(import (scheme base) (scheme write) (scheme file))
-(define limit (expt 2 46))
-(define (check name)
-  (let* ((p (open-binary-input-file name))
-         (zero (read-bytevector 0 p))
-         (bytes (read-bytevector limit p))
-         (end (read-bytevector limit p))
-         (zero-at-end (read-bytevector 0 p)))
-    (write (list zero
-                 (if (eof-object? bytes) 'empty
-                     (list (bytevector-length bytes)
-                           (bytevector-u8-ref bytes 0)
-                           (bytevector-u8-ref bytes 9999)))
-                 (eof-object? end) zero-at-end))
-    (newline)
-    (close-port p)))
-(check "tenk.bin")
-(check "empty.bin")
-"#,
+        include_str!("fixtures/oversized-read-bytevector.scm"),
     )
     .unwrap();
     for backend in BOTH_BACKENDS {
