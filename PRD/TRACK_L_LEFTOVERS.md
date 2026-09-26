@@ -53,7 +53,6 @@ empty, archive this page.
 
 **Ports and I/O**
 - #411 — `read` on a binary file port over-reads past its datum.
-- #416 — `peek-char` on standard input fails at a buffer boundary.
 - #426 — `list-copy` on a circular list never returns.
 
 **Backends**
