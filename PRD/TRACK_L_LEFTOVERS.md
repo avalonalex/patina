@@ -48,7 +48,6 @@ Each line is an issue. When one closes, delete its line; when this list is
 empty, archive this page.
 
 **Library semantics and hygiene** — the oldest open defects the track found
-- #269 — a definition a template introduces in a body is reachable by its bare name.
 - #427 — VM only: a different expansion's reference reaches a macro-introduced global by name.
 
 **Backends**

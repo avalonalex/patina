@@ -2072,7 +2072,7 @@ impl Desugarer {
             let define_syntax_info =
                 current_desugarer.try_parse_define_syntax_tagged(*tv, shared_heap);
 
-            if let Some((macro_name, transformer_tv)) = define_syntax_info {
+            if let Some((macro_name, binder_scopes, transformer_tv)) = define_syntax_info {
                 // Compile the macro immediately
                 let compiled_macro = self.compile_syntax_rules_tagged(
                     transformer_tv,
@@ -2088,7 +2088,7 @@ impl Desugarer {
                     .heap()
                     .borrow_mut()
                     .alloc_macro(Rc::new(compiled_macro));
-                new_env.define(macro_name.to_string(), tv);
+                current_desugarer.define_syntax_binding(&new_env, macro_name, binder_scopes, tv);
 
                 current_env = new_env.clone();
                 current_desugarer = current_desugarer.with_new_env(new_env, body_scopes.clone());
@@ -2122,13 +2122,13 @@ impl Desugarer {
 
     /// Try to parse a TaggedValue as a define-syntax form
     ///
-    /// Returns (macro_name, transformer_tv) if the TaggedValue is a
+    /// Returns (macro_name, binder_scopes, transformer_tv) if the TaggedValue is a
     /// (define-syntax name transformer) form. Works directly with TaggedValue.
     fn try_parse_define_syntax_tagged(
         &self,
         tagged: TaggedValue,
         shared_heap: &SharedHeap,
-    ) -> Option<(Rc<str>, TaggedValue)> {
+    ) -> Option<(Rc<str>, ScopeSet, TaggedValue)> {
         // Must be a pair
         if !tagged.is_pair() {
             return None;
@@ -2167,16 +2167,9 @@ impl Desugarer {
             return None;
         }
 
-        // Extract macro name
-        let macro_name = if let Some(s) = heap.get_symbol_name(name_tv) {
-            Rc::from(s)
-        } else if let Some((id_name, _)) = utils::get_identifier_info(name_tv, &heap) {
-            id_name
-        } else {
-            return None;
-        };
+        let (macro_name, binder_scopes) = utils::symbol_or_identifier(name_tv, &heap)?;
 
-        Some((macro_name, transformer_tv))
+        Some((macro_name, binder_scopes, transformer_tv))
     }
 
     /// Desugar if using TaggedValue
@@ -2510,18 +2503,10 @@ impl Desugarer {
             ));
         }
 
-        // Extract name from TaggedValue
-        let name = {
-            let heap = shared_heap.borrow();
-            if let Some(s) = heap.get_symbol_name(args_vec[0]) {
-                Rc::from(s)
-            } else if let Some((id_name, _)) = utils::get_identifier_info(args_vec[0], &heap) {
-                id_name
-            } else {
-                return Err(DesugarError::InvalidSyntax(
-                    "define-syntax requires (define-syntax name transformer)".to_string(),
-                ));
-            }
+        let Some((name, binder_scopes)) = self.identifier_of(args_vec[0], shared_heap) else {
+            return Err(DesugarError::InvalidSyntax(
+                "define-syntax requires (define-syntax name transformer)".to_string(),
+            ));
         };
 
         // Compile macro immediately and install in environment
@@ -2537,11 +2522,34 @@ impl Desugarer {
 
         // Install in environment
         let tv = env.heap().borrow_mut().alloc_macro(Rc::new(compiled_macro));
-        env.define(name.to_string(), tv);
+        self.define_syntax_binding(env, name, binder_scopes, tv);
 
         Ok(CoreExpr::new(CoreExprKind::Literal(
             TaggedValue::UNSPECIFIED,
         )))
+    }
+
+    /// Both written body forms and expanded `define-syntax` forms bind the
+    /// keyword at its own scopes (#269). A caller-supplied name with no
+    /// scopes stands in the body's context, just like a source reference.
+    /// Keep the existing name-visible top-level behaviour separate (#427).
+    fn define_syntax_binding(
+        &self,
+        env: &Environment,
+        name: Rc<str>,
+        binder_scopes: ScopeSet,
+        value: TaggedValue,
+    ) {
+        if self.current_scopes.is_empty() {
+            env.define(name, value);
+        } else {
+            let scopes = if binder_scopes.is_empty() {
+                self.current_scopes.clone()
+            } else {
+                binder_scopes
+            };
+            env.define_with_scopes(name, scopes, value);
+        }
     }
 
     /// Desugar import using TaggedValue: (import import-set ...) → Import { import_sets }

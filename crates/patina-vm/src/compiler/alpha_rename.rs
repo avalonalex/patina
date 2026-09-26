@@ -413,23 +413,14 @@ fn body_define_bindings(
         .collect()
 }
 
-/// Rename a body or `Begin`, splicing a name-only alias after any definition
-/// whose name was rewritten because it carried hygiene scopes.
-///
-/// The alias exists for the reason `Environment::define_scoped_definition`
-/// documents, which measurement has since weakened: definition-environment
-/// relinking resolves its target by name, but deleting this splice with the
-/// other by-name views fails no `cargo test` or chibi row, and closes #269's
-/// by-name reach from the use site (`PRD/macro/SYNTAX_CASE_DESIGN.md`,
-/// "Scoped Relinking, Sized").
+/// Rename a body or `Begin`. An introduced body definition is reachable
+/// only through its scopes; a bare-name alias here would expose it to the
+/// caller (#269).
 ///
 /// A top-level definition records an environment alias for the caller to
 /// install (`Renamed::global_aliases`) rather than defining the bare name,
 /// which would clobber a user's global and freeze a copy of the value. A
-/// lambda-body definition is a local, so the bare name is simply bound
-/// alongside — spliced flat rather than wrapped in a nested `Begin`, because
-/// the passes downstream scan a `Begin`'s immediate children for
-/// definitions.
+/// lambda-body definition has no such alias.
 fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
     let mut out = Vec::with_capacity(exprs.len());
     for expr in exprs {
@@ -446,32 +437,19 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
             }
             _ => None,
         };
-        if let Some((name, scopes, new_name)) = rename {
-            if env.at_top_level {
-                // A global: the bare name is answered by an environment alias
-                // the caller installs, so a user's own global of that name
-                // still wins and a `set!` is not frozen into a copy.
-                env.global_aliases.push((
-                    name,
-                    RenamedGlobal {
-                        scopes,
-                        name: new_name,
-                    },
-                ));
-            } else {
-                // A local: nothing outside this body resolves it, so the bare
-                // name can simply be bound here too.
-                out.push(renamed);
-                out.push(CoreExpr::new(CoreExprKind::Define {
-                    name,
-                    scopes: ScopeSet::new(),
-                    value: CoreExpr::rc(CoreExprKind::Var {
-                        name: new_name,
-                        scopes: ScopeSet::new(),
-                    }),
-                }));
-                continue;
-            }
+        if let Some((name, scopes, new_name)) = rename
+            && env.at_top_level
+        {
+            // A global: the bare name is answered by an environment alias
+            // the caller installs, so a user's own global of that name
+            // still wins and a `set!` is not frozen into a copy.
+            env.global_aliases.push((
+                name,
+                RenamedGlobal {
+                    scopes,
+                    name: new_name,
+                },
+            ));
         }
         out.push(renamed);
     }
