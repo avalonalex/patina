@@ -569,6 +569,15 @@ impl Evaluator {
         &self,
         name: &[String],
     ) -> Result<Rc<patina_runtime::Library>, patina_runtime::LibraryError> {
+        let cps = cps_eval::CpsEvaluator::new(self);
+        self.load_library_with(name, &cps_eval::CallbackContext::detached(&cps))
+    }
+
+    fn load_library_with(
+        &self,
+        name: &[String],
+        context: &cps_eval::CallbackContext<'_, '_, '_>,
+    ) -> Result<Rc<patina_runtime::Library>, patina_runtime::LibraryError> {
         // Check if already loaded
         {
             let registry = self.library_registry.borrow();
@@ -619,7 +628,7 @@ impl Evaluator {
 
             match parsed {
                 // Parse succeeded, now evaluate
-                Some(parsed) => (self.evaluate_parsed_library(parsed)?, false),
+                Some(parsed) => (self.evaluate_parsed_library(parsed, context)?, false),
                 // No loader can handle this library
                 None => {
                     return Err(patina_runtime::LibraryError::not_found_in(
@@ -737,7 +746,9 @@ impl Evaluator {
         )?;
 
         let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
-        let result = self.evaluate_parsed_library(parsed);
+        let cps = cps_eval::CpsEvaluator::new(self);
+        let result =
+            self.evaluate_parsed_library(parsed, &cps_eval::CallbackContext::detached(&cps));
         drop(loading);
         let lib = result?;
         self.library_registry.borrow_mut().register_or_replace(lib);
@@ -751,13 +762,14 @@ impl Evaluator {
     fn evaluate_parsed_library(
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
+        context: &cps_eval::CallbackContext<'_, '_, '_>,
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
         // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
 
         // Step 1: Resolve imports
         for import_set in &parsed.imports {
-            self.process_import_set(import_set, &lib_env)?;
+            self.process_import_set(import_set, &lib_env, context)?;
         }
 
         // Step 2: Evaluate library body (definitions only)
@@ -784,15 +796,17 @@ impl Evaluator {
                 }
             })?;
 
-            // Evaluate using CPS evaluator
-            eval_cps(&core_expr, lib_env.clone(), self).map_err(|e| {
-                patina_runtime::LibraryError::ParseError {
+            // Initialization runs under the importing program's dynamic
+            // context. A guard can leave the load here: preserve that escape
+            // and do not evaluate later forms or register a partial library.
+            context.eval_core(&core_expr, &lib_env).map_err(|e| {
+                patina_runtime::LibraryError::EvaluationError {
                     file: parsed
                         .source
                         .as_ref()
                         .map(|p| p.display().to_string())
                         .unwrap_or_default(),
-                    message: format!("Error evaluating library body: {:?}", e),
+                    error: Box::new(e),
                 }
             })?;
         }
@@ -806,6 +820,7 @@ impl Evaluator {
         &self,
         import_set: &patina_runtime::library_loader::ImportSet,
         lib_env: &Rc<Environment>,
+        context: &cps_eval::CallbackContext<'_, '_, '_>,
     ) -> Result<(), patina_runtime::LibraryError> {
         use patina_runtime::library_loader::ImportSet;
         use std::collections::HashSet;
@@ -813,7 +828,7 @@ impl Evaluator {
         match import_set {
             ImportSet::Library(lib_name) => {
                 // Direct library import: import all exports
-                let imported_lib = self.load_library(lib_name)?;
+                let imported_lib = self.load_library_with(lib_name, context)?;
 
                 // Import all exports into this library's environment — the
                 // bindings themselves, not what they hold now (#406)
@@ -831,7 +846,7 @@ impl Evaluator {
                 // First process the inner import set to get the bindings
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
+                self.process_import_set(import_set, &temp_env, context)?;
 
                 // Then import only the specified identifiers
                 for id in identifiers {
@@ -852,7 +867,7 @@ impl Evaluator {
                 // Import all except specific identifiers
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
+                self.process_import_set(import_set, &temp_env, context)?;
 
                 let exclude: HashSet<_> = identifiers.iter().collect();
 
@@ -870,7 +885,7 @@ impl Evaluator {
                 // Import with prefix: foo → prefix:foo
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
+                self.process_import_set(import_set, &temp_env, context)?;
 
                 // Import all bindings with the prefix added
                 for name in temp_env.local_names() {
@@ -888,7 +903,7 @@ impl Evaluator {
                 // Import with renames: old-name → new-name
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
+                self.process_import_set(import_set, &temp_env, context)?;
 
                 // R7RS 5.6.1: `rename` is the source import set with the listed
                 // identifiers renamed -- every *other* export still comes
@@ -924,15 +939,29 @@ impl Evaluator {
         import_set: &patina_frontend::ImportSet,
         env: &Rc<Environment>,
     ) -> Result<(), EvalError> {
+        let cps = cps_eval::CpsEvaluator::new(self);
+        self.process_import_for_eval_with(
+            import_set,
+            env,
+            &cps_eval::CallbackContext::detached(&cps),
+        )
+    }
+
+    fn process_import_for_eval_with(
+        &self,
+        import_set: &patina_frontend::ImportSet,
+        env: &Rc<Environment>,
+        context: &cps_eval::CallbackContext<'_, '_, '_>,
+    ) -> Result<(), EvalError> {
         use patina_frontend::ImportSet;
         use std::collections::HashSet;
 
         match import_set {
             ImportSet::Library(lib_name) => {
                 // Load the library
-                let lib = self.load_library(lib_name).map_err(|e| {
-                    EvalError::InvalidSyntax(format!("Failed to load library: {}", e))
-                })?;
+                let lib = self
+                    .load_library_with(lib_name, context)
+                    .map_err(patina_runtime::LibraryError::into_eval_error)?;
 
                 // Import all exports into the current environment
                 for export_name in lib.export_names() {
@@ -948,7 +977,7 @@ impl Evaluator {
                 // First process the nested import set into a temporary environment
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_for_eval(import_set, &temp_env)?;
+                self.process_import_for_eval_with(import_set, &temp_env, context)?;
 
                 // Then import only the specified identifiers, each of which
                 // the set must provide: one it does not is an error, as in a
@@ -973,7 +1002,7 @@ impl Evaluator {
                 // Process nested import set into temp environment
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_for_eval(import_set, &temp_env)?;
+                self.process_import_for_eval_with(import_set, &temp_env, context)?;
 
                 // Import all except specified identifiers
                 let excluded: HashSet<_> = identifiers.iter().collect();
@@ -989,7 +1018,7 @@ impl Evaluator {
                 // Process nested import set into temp environment
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_for_eval(import_set, &temp_env)?;
+                self.process_import_for_eval_with(import_set, &temp_env, context)?;
 
                 // Import all with prefix
                 for name in temp_env.local_names() {
@@ -1006,7 +1035,7 @@ impl Evaluator {
                 // Process nested import set into temp environment
                 // Use shared heap for TaggedValue compatibility
                 let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_for_eval(import_set, &temp_env)?;
+                self.process_import_for_eval_with(import_set, &temp_env, context)?;
 
                 // Each renamed identifier must be one the set provides, as
                 // in a library's imports above and on the VM (#489).

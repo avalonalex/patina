@@ -64,6 +64,272 @@ mod common;
 use common::{assert_program_eval_to, scratch_path};
 use tempfile::TempDir;
 
+fn assert_library_program(root: &std::path::Path, program: &str, expected: &str) {
+    use patina_interpreter::Interpreter;
+    use patina_runtime::Backend;
+
+    fn run<B: Backend>(interpreter: &Interpreter<B>, program: &str) -> String {
+        let value = interpreter
+            .eval_program(program)
+            .unwrap_or_else(|e| panic!("{program}: {e}"));
+        patina_primitives::primitives::io::datum_writer::format_write_tagged(
+            value,
+            interpreter.backend().global_env().heap(),
+        )
+    }
+    let vm = common::vm_interpreter();
+    vm.backend().add_library_search_path(root.to_path_buf());
+    let tw = common::tree_walker_interpreter();
+    tw.backend().add_library_search_path(root.to_path_buf());
+    assert_eq!(run(&vm, program), expected, "VM: {program}");
+    assert_eq!(run(&tw, program), expected, "tree-walker: {program}");
+}
+
+/// #425: a failed library load must deliver the original raised object to
+/// the caller's handler. Real .sld files defer evaluation until the guarded
+/// load; inline define-library would fail before the guard was installed.
+/// Measured 2026-09-26: chibi 0.12 and Gauche 0.9.15 preserve "boom" and
+/// (1 2). Chibi also preserves a raised symbol; Gauche replaces it with a
+/// "given non-condition object" error. Retry behavior follows chibi, as in
+/// the #482 regression below.
+#[test]
+fn library_load_preserves_raised_objects_and_can_be_retried() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("payload425");
+    std::fs::create_dir(&dir).unwrap();
+    for (name, body, expected) in [
+        ("error", "(error \"boom\" 1 2)", "(\"boom\" (1 2))"),
+        (
+            "raised",
+            "(raise (guard (e (else e)) (error \"boom\" 1 2)))",
+            "(\"boom\" (1 2))",
+        ),
+        ("symbol", "(raise 'sentinel)", "sentinel"),
+    ] {
+        std::fs::write(
+            dir.join(format!("{name}.sld")),
+            format!(
+                "(define-library (payload425 {name}) (import (scheme base)) (export y)
+               (begin (define y {body}) (set! y 'must-not-run)))"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("dependent.sld"),
+            format!(
+                "(define-library (payload425 dependent) (import (scheme base)
+               (rename (only (payload425 {name}) y) (y imported-y)))
+               (export y) (begin (define y imported-y)))"
+            ),
+        )
+        .unwrap();
+        for library in [name, "dependent"] {
+            for load in [
+                format!("(environment '(payload425 {library}))"),
+                format!("(eval '(import (payload425 {library})) (interaction-environment))"),
+            ] {
+                let program = format!(
+                    r#"
+                    (import (scheme base) (scheme eval) (scheme repl))
+                    (define (attempt)
+                      (guard (e (else (if (error-object? e)
+                                           (list (error-object-message e) (error-object-irritants e))
+                                           e)))
+                        {load}
+                        'must-not-return))
+                    (list (attempt) (attempt)
+                          (guard (e (else 'unbound)) (eval 'y (interaction-environment))))
+                "#
+                );
+                let expected = format!("({expected} {expected} unbound)");
+                assert_library_program(root.path(), &program, &expected);
+            }
+        }
+    }
+}
+
+/// Library initialization must run its handler in the raise's dynamic
+/// extent, then run the after thunk when guard escapes. Both the condition
+/// and its mutable irritant retain their identities across a re-raise.
+/// Chibi 0.12 agrees (2026-09-26). Gauche 0.9.15 wraps the condition and
+/// bypasses the inner handler during compilation: (#f (before after caught)).
+#[test]
+fn library_load_handlers_preserve_identity_and_wind_order() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("wind425");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("state.sld"),
+        r#"
+      (define-library (wind425 state)
+        (import (scheme base)) (export token original mark! log)
+        (begin
+          (define token (vector 'token))
+          (define original (guard (e (else e)) (error "boom" token)))
+          (define events '())
+          (define (mark! x) (set! events (cons x events)))
+          (define (log) (reverse events))))
+    "#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("broken.sld"),
+        r#"
+      (define-library (wind425 broken)
+        (import (scheme base) (wind425 state)) (export y)
+        (begin
+          (define y
+            (dynamic-wind (lambda () (mark! 'before))
+                          (lambda () (raise original))
+                          (lambda () (mark! 'after))))
+          (mark! 'must-not-run)))
+    "#,
+    )
+    .unwrap();
+    for load in [
+        "(environment '(wind425 broken))",
+        "(eval '(import (wind425 broken)) (interaction-environment))",
+    ] {
+        let program = format!(
+            r#"
+          (import (scheme base) (scheme eval) (scheme repl) (wind425 state))
+          (define result
+            (guard (e (else (mark! 'caught)
+                           (list (eq? e original)
+                                 (eq? (car (error-object-irritants e)) token))))
+              (with-exception-handler
+                (lambda (e) (mark! 'handler) (raise e))
+                (lambda () {load}))))
+          (list result (log))
+        "#
+        );
+        assert_library_program(
+            root.path(),
+            &program,
+            "((#t #t) (before handler after caught))",
+        );
+    }
+}
+
+/// Pins the VM's existing resumption behavior, rather than oracle agreement:
+/// chibi 0.12 answers #<undef> and Gauche 0.9.15 refuses the raised symbol
+/// during library compilation (2026-09-26). Repeating with an error object
+/// still gives #<undef> in chibi and an unhandled error in Gauche.
+#[test]
+fn library_load_can_resume_a_continuable_raise() {
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("resume425");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("value.sld"),
+        r#"
+      (define-library (resume425 value) (import (scheme base)) (export y)
+        (begin (define y (raise-continuable 'resume-me)) (set! y (+ y 1))))
+    "#,
+    )
+    .unwrap();
+    for load in [
+        "(eval 'y (environment '(resume425 value)))",
+        "(begin (eval '(import (resume425 value)) (interaction-environment)) (eval 'y (interaction-environment)))",
+    ] {
+        let program = format!(
+            r#"
+          (import (scheme base) (scheme eval) (scheme repl))
+          (with-exception-handler
+            (lambda (e) (if (eq? e 'resume-me) 42 (raise e)))
+            (lambda () {load}))
+        "#
+        );
+        assert_library_program(root.path(), &program, "43");
+    }
+}
+
+/// Once the inherited handler declines an error, returning through the
+/// loader must not offer that error to the same handler again. A later
+/// evaluation must still be able to handle an unrelated error.
+#[test]
+fn library_load_does_not_offer_an_unhandled_error_twice() {
+    use patina_interpreter::{Interpreter, format_backend_error_with_source};
+    use patina_runtime::Backend;
+
+    fn check<B: Backend>(interpreter: &Interpreter<B>, load: &str)
+    where
+        B::Error: patina_interpreter::HasSourceLocation,
+    {
+        interpreter
+            .eval_program("(import (scheme base) (scheme eval) (scheme repl)) (define calls 0)")
+            .unwrap();
+        let program = format!(
+            r#"
+          (with-exception-handler
+            (lambda (e) (set! calls (+ calls 1)) (raise e))
+            (lambda () {load}))
+        "#
+        );
+        let (result, source_map) =
+            interpreter.eval_program_with_source_name(&program, "unhandled425.scm");
+        let error = result.expect_err("the handler re-raises");
+        let message = format_backend_error_with_source(&error, &source_map.borrow());
+        assert!(message.contains("#<error-object: boom 1 2>"), "{message}");
+        assert_eq!(
+            message.matches("unhandled exception:").count(),
+            1,
+            "{message}"
+        );
+        assert_eq!(
+            interpreter.eval_program("calls").unwrap().as_fixnum(),
+            Some(1)
+        );
+        assert_eq!(
+            interpreter
+                .eval_program("(guard (e (else 42)) (car '()))")
+                .unwrap()
+                .as_fixnum(),
+            Some(42)
+        );
+    }
+
+    let root = TempDir::new().unwrap();
+    let dir = root.path().join("unhandled425");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join("broken.sld"),
+        r#"
+      (define-library (unhandled425 broken) (import (scheme base)) (export y)
+        (begin (define y (error "boom" 1 2))))
+    "#,
+    )
+    .unwrap();
+    for load in [
+        "(environment '(unhandled425 broken))",
+        "(eval '(import (unhandled425 broken)) (interaction-environment))",
+    ] {
+        let vm = common::vm_interpreter();
+        vm.backend()
+            .add_library_search_path(root.path().to_path_buf());
+        check(&vm, load);
+        let tw = common::tree_walker_interpreter();
+        tw.backend()
+            .add_library_search_path(root.path().to_path_buf());
+        check(&tw, load);
+
+        // The public loader runs with no Scheme caller to consume the
+        // callback marker. Failure there must not poison the next program.
+        assert!(
+            tw.backend()
+                .evaluator()
+                .load_library(&["unhandled425".into(), "broken".into()])
+                .is_err()
+        );
+        assert_eq!(
+            tw.eval_program("(guard (e (else 42)) (car '()))")
+                .unwrap()
+                .as_fixnum(),
+            Some(42)
+        );
+    }
+}
+
 /// Every re-entrant primitive reachable without a file, **left by both kinds
 /// of transfer**: a full continuation escaping out, and an
 /// `abort-current-continuation` reaching a prompt outside. `'x` is what each

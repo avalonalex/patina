@@ -476,7 +476,7 @@ pub fn eval_cps(
 }
 
 /// [`eval_cps`], on a trampoline that starts under the given dynamic
-/// environment — the `eval` primitive's entry, from a step that has one.
+/// environment, for library initialization or an embedding callback.
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
@@ -485,15 +485,10 @@ pub(super) fn eval_cps_with(
     dynamic_winds: Vec<patina_core::DynamicWindRecord>,
     exception_handlers: Vec<types::ExceptionHandler>,
 ) -> Result<TaggedValue, EvalError> {
-    use patina_core::CoreExprKind;
     use patina_ir::CpsTransformer;
 
-    if let CoreExprKind::Import { .. } = &expr.kind {
-        // An import touches no dynamic state; the plain entry handles it.
-        return eval_cps(expr, env, evaluator);
-    }
-    // Not lowered here: the one caller is the `eval` primitive's callback,
-    // which lowers beside its desugar so a failure stays the caller's error
+    // Not lowered here: CallbackContext lowers before entering the run,
+    // so a failure stays the caller's error
     // and catchable. Lowering here instead put the failure through
     // `unhandled_is_final`, which marks a catchable error as having escaped
     // a callback — and a `guard` around `eval` then never saw it. (What

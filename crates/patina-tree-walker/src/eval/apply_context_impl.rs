@@ -44,7 +44,7 @@ impl ApplyContext for Evaluator {
 
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
         self.load_library(name)
-            .map_err(|e| EvalError::InternalError(format!("cannot load library: {}", e)))
+            .map_err(patina_runtime::LibraryError::into_eval_error)
     }
 
     fn interaction_environment(&self) -> Rc<Environment> {
