@@ -735,14 +735,21 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 28 drivers cover binary-record read/write round trips;
+assertion count. The 34 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
-and sets; SLIB formatting, string search, string casing, string ports, line
+and sets, HAMTs and bounded-balance trees, and their alist, bitwise, vector
+and list helpers; SLIB formatting, string search, string casing, string ports, line
 I/O, generic writing and printf; SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 and SRFI 180 and MacDuffie JSON.
 The PFDS checks exercise branching updates that preserve older versions,
 deque rebalancing, lazy-tail memoization, sequence splits and set operations.
+The map checks cover hash collisions, sparse and deep branches, tree ranks
+and indexed lookups, callback counts, ordered folds and map combinations.
+The HAMT driver gates the upstream correction in `compat/patches/` (#508),
+including 480 mixed operations checked against an alist model with five
+hash functions. Its named correctness exception is recorded alongside the
+SRFI exceptions in `compat/patches/README.md`.
 The text checks exercise search boundaries, mutation, callback results, port
 state, formatting and bounded output.
 The SRFI procedure checks cover stable keyed sorting and destructive operations,
@@ -757,15 +764,22 @@ recursive bindings, and optional-argument defaults and rest arguments. They
 also check that generated bindings do not capture user variables. Prefixed
 imports keep the corpus macros distinct from similarly named bundled forms.
 
-All 230 assertions were compared against both Patina backends, Chibi 0.12
+All 302 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
+The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
+backends and Gauche, while Chibi passes 71. Its one difference is the known
+SRFI 151 defect returning 0 for `(arithmetic-shift -1 -100)`; the PFDS bitwise
+driver keeps the expected -1. This is already classified as `oracle-defect`
+in `crates/patina-tests/tests/scheme/DIVERGENCES.tsv`, under `srfi/bitwise.scm`
+and "a negative operand fills to -1". It is not a passing comparison or a
+reason to change Patina's answer.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
 were renamed into `(patina-corpus srfi ...)`, with implementation bodies
 identical to the patched corpus: search paths alone let preloaded reference
 libraries interfere.
-Chibi lacks SRFI 60, so its JSON run used the portable `lib/srfi/60.sld`
+Chibi lacks SRFI 60, so its JSON and PFDS runs used the portable `lib/srfi/60.sld`
 facade over its native SRFI 151; Gauche used its native SRFI 60.
 
 CI runs all active smoke drivers on both backends, using the release build

@@ -1,0 +1,173 @@
+# PFDS HAMT: repair colliding-key updates and nested traversal (#508).
+#
+# Owner-approved correctness exception, 2026-09-27; see README.md. This is an
+# upstream repair, not a portability rewrite. The pinned source loses both
+# keys after inserting 1 and 33, loses a third equal-hash key, and raises
+# while mapping or folding nested nodes on both Patina backends, Chibi 0.12
+# and Gauche 0.9.15. The original 22-check driver passed only 9 on all four.
+#
+# Consume five-bit hash slices once, use the PFDS bit predicate's argument
+# order, retain full collision hashes, and translate bitmap positions to
+# compact vector indices. Remove empty children using the shortened vector.
+# Traverse the actual child node and propagate the fold callback recursively.
+#
+# All four implementations pass the 23-check smoke driver after correction,
+# including 480 mixed operations checked against an independent alist model
+# with five hash functions. Pristine compat/vendor/ extractions are unchanged.
+--- a/pfds/hash-array-mapped-trie.sld
++++ b/pfds/hash-array-mapped-trie.sld
+@@ -51,7 +51,7 @@
+     (define cardinality 32) ; 64
+ 
+     (define (mask key level)
+-      (bitwise-arithmetic-shift-right (bitwise-and key (- (expt 2 5) 1)) level))
++      (bitwise-and (bitwise-arithmetic-shift-right key level) (- (expt 2 5) 1)))
+ 
+     (define (level-up level)
+       (+ level 5))
+@@ -99,7 +99,7 @@
+         (define bitmap (subtrie-bitmap node))
+         (define vector (subtrie-vector node))
+         (define index (mask h level))
+-        (if (not (bit-set? bitmap index))
++        (if (not (bitwise-bit-set? bitmap index))
+           default
+           (let ((node (vector-ref vector (ctpop bitmap index))))
+             (cond ((leaf? node)
+@@ -132,45 +132,45 @@
+         (define vector (subtrie-vector subtrie))
+         (define index (mask h level))
+         (define (fixup node)
+-          (make-subtrie bitmap (vector-set vector index node)))
+-        (if (not (bit-set? bitmap index))
++          (make-subtrie bitmap (vector-set vector (ctpop bitmap index) node)))
++        (if (not (bitwise-bit-set? bitmap index))
+           (make-subtrie (bitwise-bit-set bitmap index)
+                         (vector-insert vector
+                                        (ctpop bitmap index)
+                                        (make-leaf key (update base))))
+           (let ((node (vector-ref vector (ctpop bitmap index))))
+             (cond ((leaf? node)
+-                   (fixup (handle-leaf node level)))
++                   (fixup (handle-leaf node (level-up level))))
+                   ((collision? node)
+-                   (fixup (handle-collision node level)))
++                   (fixup (handle-collision node (level-up level))))
+                   (else
+                     (fixup (handle-subtrie node (level-up level))))))))
+ 
+       (define (handle-leaf node level)
+         (define lkey  (leaf-key node))
+-        (define khash (bitwise-arithmetic-shift-right h level))
+-        (define lhash (bitwise-arithmetic-shift-right (hash lkey) level))
++        (define lhash (hash lkey))
+         (cond ((eqv? key lkey)
+                (make-leaf key (update (leaf-value node))))
+-              ((equal? khash lhash)
++              ((equal? h lhash)
+                (make-collision lhash
+                                (list (cons lkey (leaf-value node))
+                                      (cons key (update base)))))
+               (else
+-                (handle-subtrie (wrap-subtrie node lhash) (level-up level)))))
++                (handle-subtrie (wrap-subtrie node lhash level) level))))
+ 
+       (define (handle-collision node level)
+-        (define khash (bitwise-arithmetic-shift-right h level))
+-        (define chash (bitwise-arithmetic-shift-right (collision-hash node) level))
+-        (if (equal? khash chash)
++        (define chash (collision-hash node))
++        (if (equal? h chash)
+           (make-collision (collision-hash node)
+                           (alist-update (collision-alist node) key update base eqv?))
+           ;; TODO: there may be a better (more efficient) way to do this
+           ;; but simple is better for now (see also handle-leaf)
+-          (handle-subtrie (wrap-subtrie node chash) (level-up level))))
+-
+-      (define (wrap-subtrie node chash)
+-        (make-subtrie (bitwise-bit-set 0 (mask chash 0)) (vector node)))
++          (handle-subtrie (wrap-subtrie node chash level) level)))
++
++      ;; LEVEL names the next unconsumed five-bit slice. Collision nodes
++      ;; retain the full hash so promotion and later updates agree.
++      (define (wrap-subtrie node chash level)
++        (make-subtrie (bitwise-bit-set 0 (mask chash level)) (vector node)))
+ 
+       (define h (hash key))
+       (define idx (mask h 0))
+@@ -193,7 +193,7 @@
+         (define index   (mask h level))
+         (define (fixup node)
+           (update bitmap vector index node))
+-        (if (not (bit-set? bitmap index))
++        (if (not (bitwise-bit-set? bitmap index))
+           subtrie
+           (let ((node (vector-ref vector (ctpop bitmap index))))
+             (cond ((leaf? node)
+@@ -204,10 +204,12 @@
+                     (fixup (handle-subtrie node (level-up level))))))))
+ 
+       (define (update bitmap vector index value)
++        ;; Bitmap positions and compact vector indices are different.
++        (define position (ctpop bitmap index))
+         (if value
+-          (make-subtrie bitmap (vector-set vector index value))
+-          (let ((vector* (vector-remove vector index)))
+-            (if (equal? '#() vector)
++          (make-subtrie bitmap (vector-set vector position value))
++          (let ((vector* (vector-remove vector position)))
++            (if (equal? '#() vector*)
+               #f
+               (make-subtrie (bitwise-bit-unset bitmap index)
+                             vector*)))))
+@@ -239,7 +241,7 @@
+     (define (vec-map mapper vector)
+       (define (handle-subtrie trie)
+         (make-subtrie (subtrie-bitmap trie)
+-                      (vector-map dispatch (subtrie-vector vector))))
++                      (vector-map dispatch (subtrie-vector trie))))
+ 
+       (define (handle-leaf leaf)
+         (make-leaf (leaf-key leaf)
+@@ -264,30 +266,31 @@
+                     (and val (dispatch val)))
+                   vector))
+ 
+-    (define (fold/handle-subtrie trie accum vector)
+-      (vector-fold fold/dispatch accum (subtrie-vector vector)))
+-
+-    (define (fold/handle-leaf leaf accum combine vector)
++    (define (fold/handle-subtrie trie accum combine)
++      (vector-fold (lambda (val acc) (fold/dispatch val acc combine))
++                   accum (subtrie-vector trie)))
++
++    (define (fold/handle-leaf leaf accum combine)
+       (combine (leaf-key leaf) (leaf-value leaf) accum))
+ 
+-    (define (fold/handle-collision collision accum combine vector)
++    (define (fold/handle-collision collision accum combine)
+       (fold-right (lambda (pair acc)
+                     (combine (car pair) (cdr pair) acc))
+                   accum
+                   (collision-alist collision)))
+ 
+-    (define (fold/dispatch val accum combine vector)
++    (define (fold/dispatch val accum combine)
+       (cond ((leaf? val)
+-             (fold/handle-leaf val accum combine vector))
++             (fold/handle-leaf val accum combine))
+             ((collision? val)
+-             (fold/handle-collision val accum combine vector))
++             (fold/handle-collision val accum combine))
+             (else
+-              (fold/handle-subtrie val accum vector))))
++              (fold/handle-subtrie val accum combine))))
+ 
+     (define (fold combine initial vector)
+       (vector-fold (lambda (val accum)
+                      ;; top level can have false values
+-                     (if (not val) accum (fold/dispatch val accum combine vector)))
++                     (if (not val) accum (fold/dispatch val accum combine)))
+                    initial
+                    vector))
+ 

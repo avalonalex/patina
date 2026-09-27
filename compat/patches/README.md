@@ -15,7 +15,7 @@ record of every difference.
 A patch is **not** a way to make a failure go away. The test is the same for
 every one of them: **the rewrite is the one the package's author would make to
 run on a conforming R7RS implementation, and it changes no behaviour being
-measured.** The two named owner-approved correctness exceptions below are
+measured.** The three named owner-approved correctness exceptions below are
 the only departures from that rule. Otherwise, if a patch would paper over a
 real incompatibility, the package belongs in `compat/EXCLUSIONS.scm` with a
 reason, or should simply fail.
@@ -104,22 +104,28 @@ signal; the finding goes in its exclusion note instead.
 
 ### Named correctness exceptions
 
-On 2026-09-27 the owner authorized local corrections for two upstream defects
-found while adding the #429 SRFI smoke batch:
+On 2026-09-27 the owner authorized local corrections for upstream defects
+found while adding the #429 SRFI and PFDS smoke batches:
 
 - [#504](https://github.com/avalonalex/patina/issues/504), `srfi-95.patch`:
   make `sorted?` compare the elements of a two-element array.
 - [#505](https://github.com/avalonalex/patina/issues/505), `srfi-180.patch`:
   validate JSON number syntax before calling Scheme's `string->number`.
+- [#508](https://github.com/avalonalex/patina/issues/508),
+  `pfds-hash-array-mapped-trie.patch`: preserve colliding keys and repair
+  nested replacement, deletion, mapping and folding. Hash slices advance once,
+  collision nodes retain full hashes, and bitmap positions are translated to
+  compact child-vector indices. The smoke driver also checks 480 mixed
+  operations against an alist model, preserving earlier map versions.
 
-These patches deliberately correct upstream behavior. Both defects were
+These patches deliberately correct upstream behavior. All defects were
 reproduced with the pinned libraries on Patina's two backends, Chibi and
-Gauche; both corrections are checked on those same implementations, and their
+Gauche; all corrections are checked on those same implementations, and their
 regressions are asserted by the CI smoke drivers. They do not weaken an
 assertion or hide a Patina difference. The corpus now measures these packages
 with the documented corrections, not the pristine upstream behavior.
 
-This is a named exception, not general permission to repair upstream packages
+These are named exceptions, not general permission to repair upstream packages
 to raise the corpus score. Further correctness patches need their own owner
 decision and recorded evidence. Pristine extractions still stay unchanged.
 
