@@ -18,6 +18,8 @@ fn report_preserves_the_measurement_time_or_its_absence() {
             "(patina-compat-results (version 1) (backend \"vm\") {metadata}
              (results ((slug \"example\") (mode probe) (status pass))
                       ((slug \"suite\") (mode test) (status pass))
+                      ((slug \"smoke\") (mode smoke) (status pass))
+                      ((slug \"failed-smoke\") (mode smoke) (status wrong-result))
                       ((slug \"failed-suite\") (mode test) (status wrong-result))))"
         );
         std::fs::write(&results, &source).unwrap();
@@ -43,10 +45,10 @@ fn report_preserves_the_measurement_time_or_its_absence() {
             report.contains(&format!("**Measured:** {measured}\n")),
             "{report}"
         );
-        assert!(report.contains("**2 of 3 packages pass.**"), "{report}");
+        assert!(report.contains("**3 of 5 packages pass.**"), "{report}");
         assert!(
             report.contains(
-                "Of these passes, **1 ran test suites** and **1 passed import-only probes**."
+                "Of these passes, **1 ran test suites**, **1 passed smoke checks**, and **1 passed import-only probes**."
             ),
             "{report}"
         );

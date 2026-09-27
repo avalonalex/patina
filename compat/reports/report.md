@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-26T16:57:13Z
+**Measured:** 2026-09-27T07:05:08Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites** and **106 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **6 passed smoke checks**, and **100 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -71,7 +71,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-app | test | pass | in scope |
 | chibi-assert | test | missing-library | upstream-test-defect |
 | chibi-base64 | test | pass | in scope |
-| chibi-binary-record | probe | pass | in scope |
+| chibi-binary-record | smoke | pass | in scope |
 | chibi-bytevector | test | pass | in scope |
 | chibi-char-set | probe | pass | in scope |
 | chibi-char-set-boundary | probe | pass | in scope |
@@ -124,7 +124,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | lassik-trivial-tar-writer | probe | pass | in scope |
 | lassik-unpack-assoc | probe | pass | in scope |
 | lightweight-testing | probe | pass | in scope |
-| macduffie-json | probe | pass | in scope |
+| macduffie-json | smoke | pass | in scope |
 | okmij-ssax | test | pass | in scope |
 | pfds-alist | probe | pass | in scope |
 | pfds-bitwise | probe | pass | in scope |
@@ -134,11 +134,11 @@ These packages still run on every pass — exclusion decides whether a result co
 | pfds-fector | probe | pass | in scope |
 | pfds-fingertree | probe | pass | in scope |
 | pfds-hash-array-mapped-trie | probe | pass | in scope |
-| pfds-heap | probe | pass | in scope |
+| pfds-heap | smoke | pass | in scope |
 | pfds-lazy-list | probe | pass | in scope |
 | pfds-list-helpers | probe | pass | in scope |
 | pfds-priority-search-queue | probe | pass | in scope |
-| pfds-queue | probe | pass | in scope |
+| pfds-queue | smoke | pass | in scope |
 | pfds-sequence | probe | pass | in scope |
 | pfds-set | probe | pass | in scope |
 | pfds-vector | probe | pass | in scope |
@@ -165,7 +165,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-dynamic | probe | pass | in scope |
 | slib-factor | probe | pass | in scope |
 | slib-filename | probe | pass | in scope |
-| slib-format | probe | pass | in scope |
+| slib-format | smoke | pass | in scope |
 | slib-fourier-transform | probe | pass | in scope |
 | slib-generic-write | probe | pass | in scope |
 | slib-line-io | probe | pass | in scope |
@@ -223,7 +223,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-42 | probe | pass | in scope |
 | srfi-43 | probe | pass | in scope |
 | srfi-51 | probe | pass | in scope |
-| srfi-63 | probe | pass | in scope |
+| srfi-63 | smoke | pass | in scope |
 | srfi-64 | test | pass | in scope |
 | srfi-78 | probe | pass | in scope |
 | srfi-95 | probe | pass | in scope |

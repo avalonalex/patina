@@ -1,10 +1,12 @@
 //! Execute the corpus against a patina binary and classify each package.
 //!
-//! Two execution modes per package:
+//! Three execution modes per package:
 //! - **test** — the package ships a test program (`(test "run-tests.scm")` in
 //!   its `package.scm`); run it with `-k`, so an error that escapes to top
 //!   level is reported and the suite still reaches its tally. Classification
 //!   reads that tally first, then the exit status and stderr.
+//! - **smoke** — a maintained assertion driver, with a checked completion tally.
+//!   Run strictly so an error cannot be hidden by later assertions.
 //! - **probe** — no test program; synthesize `(import ...)` of every library
 //!   the package provides, and run it without `-k`, so its first error ends
 //!   it and the exit status says so.
@@ -90,7 +92,7 @@ impl Status {
 #[derive(Debug)]
 pub struct PackageResult {
     pub slug: String,
-    pub mode: &'static str, // "test" | "probe"
+    pub mode: &'static str, // "test" | "smoke" | "probe"
     pub status: Status,
 }
 
@@ -201,14 +203,22 @@ fn run_package(
             redirect_into(path, &package.root, patched_root.as_deref()),
             "test",
         ),
-        None => (write_probe(&scratch, package), "probe"),
+        None => match &package.smoke {
+            Some(smoke) => {
+                let script = scratch.join("smoke.scm");
+                std::fs::write(&script, crate::smoke::source(package, smoke))
+                    .expect("write generated smoke driver");
+                (script, "smoke")
+            }
+            None => (write_probe(&scratch, package), "probe"),
+        },
     };
     let search_roots = search_roots(
         package,
         universe,
         providers,
         &scratch,
-        mode == "test",
+        mode != "probe",
         &config.supplied_lib_root,
         patched_root.as_deref(),
     );
@@ -224,9 +234,8 @@ fn run_package(
     if config.tree_walker {
         cmd.arg("--tree-walker");
     }
-    // A test program keeps going past an error that escapes to top level, so
-    // its tally still prints for `test_suite_failed` to read. A probe does
-    // not: its first error is its verdict.
+    // An upstream suite keeps going past a top-level error to print a tally.
+    // Probes and maintained smoke drivers stop at their first uncaught error.
     if mode == "test" {
         cmd.arg("-k");
     }
@@ -243,7 +252,21 @@ fn run_package(
             eprintln!("warning: {}: spawn failed: {}", package.slug, e);
             Status::RuntimeError
         }
-        Ok(out) => classify(&out, mode),
+        Ok(out) => {
+            if mode == "smoke" {
+                let smoke = package.smoke.as_ref().expect("smoke mode has a driver");
+                let status = classify_smoke(&out, smoke.assertions);
+                if status != Status::Pass {
+                    eprintln!(
+                        "{}: smoke failed or did not complete {} assertions\n{}{}",
+                        package.slug, smoke.assertions, out.stdout, out.stderr
+                    );
+                }
+                status
+            } else {
+                classify(&out, mode)
+            }
+        }
     };
 
     PackageResult {
@@ -306,6 +329,15 @@ fn search_roots(
     // is what the tests below inspect.
     let mut roots = Vec::with_capacity(closure.len() + 1);
     roots.push(supplied_lib_root.to_path_buf());
+    if is_test_run && let Some(smoke) = &package.smoke {
+        roots.push(
+            smoke
+                .script
+                .parent()
+                .expect("smoke directory")
+                .to_path_buf(),
+        );
+    }
     for pkg in closure {
         // A patched copy leads its own pristine root: the patch is the thing
         // being measured when one exists, and the vendored tree behind it is
@@ -566,6 +598,7 @@ fn self_check_package(config: &RunConfig) -> Package {
         depends: Vec::new(),
         test_depends: Vec::new(),
         test_script: None,
+        smoke: None,
         off_path_libraries: Vec::new(),
     }
 }
@@ -617,6 +650,15 @@ fn spawn_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Captured, S
         exit_ok,
         timed_out,
     })
+}
+
+/// A completion tally cannot excuse an interpreter error, failing exit or
+/// timeout, even when it was printed before that failure.
+fn classify_smoke(out: &Captured, assertions: usize) -> Status {
+    match classify(out, "smoke") {
+        Status::Pass => crate::smoke::completion(&out.stdout, assertions),
+        failure => failure,
+    }
 }
 
 fn classify(out: &Captured, mode: &str) -> Status {
@@ -1025,6 +1067,7 @@ mod tests {
             depends: Vec::new(),
             test_depends: Vec::new(),
             test_script: None,
+            smoke: None,
             off_path_libraries: Vec::new(),
         }
     }
@@ -1212,6 +1255,34 @@ mod tests {
             exit_ok,
             timed_out: false,
         }
+    }
+
+    #[test]
+    fn smoke_completion_never_hides_an_execution_failure() {
+        let complete = "(patina-compat-smoke 3 0)\n";
+        assert_eq!(
+            classify_smoke(&captured(complete, "", true), 3),
+            Status::Pass
+        );
+        assert_eq!(
+            classify_smoke(&captured(complete, "", false), 3),
+            Status::RuntimeError
+        );
+        assert_eq!(
+            classify_smoke(&captured(complete, "Error: late failure", true), 3),
+            Status::RuntimeError
+        );
+        let mut timeout = captured(complete, "", true);
+        timeout.timed_out = true;
+        assert_eq!(classify_smoke(&timeout, 3), Status::Timeout);
+        assert_eq!(
+            classify_smoke(&captured("", "", true), 3),
+            Status::RuntimeError
+        );
+        assert_eq!(
+            classify_smoke(&captured("(patina-compat-smoke 2 1)\n", "", true), 3),
+            Status::WrongResult
+        );
     }
 
     #[test]
