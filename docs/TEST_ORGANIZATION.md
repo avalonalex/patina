@@ -735,27 +735,33 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 22 drivers cover binary-record read/write round trips;
+assertion count. The 28 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets; SLIB formatting, string search, string casing, string ports, line
 I/O, generic writing and printf; SRFI 63 arrays, SRFI 95 sorting, SRFI 43
-vectors, SRFI 37 argument parsing; and SRFI 180 and MacDuffie JSON.
+vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
+and SRFI 180 and MacDuffie JSON.
 The PFDS checks exercise branching updates that preserve older versions,
 deque rebalancing, lazy-tail memoization, sequence splits and set operations.
 The text checks exercise search boundaries, mutation, callback results, port
 state, formatting and bounded output.
-The SRFI batch checks stable keyed sorting and destructive operations,
+The SRFI procedure checks cover stable keyed sorting and destructive operations,
 indexed vector callbacks and slices, argument-parser callback seeds, JSON
 round trips and error records. The SRFI 95 and 180 drivers also gate the
 two-element sortedness and JSON number grammar corrections in
 `compat/patches/`; their named policy exceptions are recorded in
 `compat/patches/README.md` (#504, #505).
+The syntax drivers exercise short-circuit evaluation, parallel and sequential
+multiple-value bindings, arity dispatch, `cut` versus `cute` evaluation timing,
+recursive bindings, and optional-argument defaults and rest arguments. They
+also check that generated bindings do not capture user variables. Prefixed
+imports keep the corpus macros distinct from similarly named bundled forms.
 
-All 178 assertions were compared against both Patina backends, Chibi 0.12
+All 230 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
-For the new SRFI comparisons, temporary library declarations and imports
+For the SRFI comparisons, temporary library declarations and imports
 were renamed into `(patina-corpus srfi ...)`, with implementation bodies
 identical to the patched corpus: search paths alone let preloaded reference
 libraries interfere.

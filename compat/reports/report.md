@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T17:47:18Z
+**Measured:** 2026-09-27T18:01:11Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **22 passed smoke checks**, and **84 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **28 passed smoke checks**, and **78 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -198,10 +198,10 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-uri | probe | pass | in scope |
 | slib-xml-parse | probe | pass | in scope |
 | srfi-106 | probe | out-of-scope | ffi |
-| srfi-11 | probe | pass | in scope |
+| srfi-11 | smoke | pass | in scope |
 | srfi-145 | probe | pass | in scope |
 | srfi-156 | test | pass | in scope |
-| srfi-16 | probe | pass | in scope |
+| srfi-16 | smoke | pass | in scope |
 | srfi-166 | probe | pass | in scope |
 | srfi-170 | probe | out-of-scope | ffi |
 | srfi-175 | test | pass | in scope |
@@ -209,14 +209,14 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-180 | smoke | pass | in scope |
 | srfi-19 | probe | pass | in scope |
 | srfi-197 | test | runtime-error | upstream-test-defect |
-| srfi-2 | probe | pass | in scope |
-| srfi-227 | probe | pass | in scope |
+| srfi-2 | smoke | pass | in scope |
+| srfi-227 | smoke | pass | in scope |
 | srfi-235 | test | pass | in scope |
 | srfi-25 | probe | pass | in scope |
-| srfi-26 | probe | pass | in scope |
+| srfi-26 | smoke | pass | in scope |
 | srfi-28 | probe | pass | in scope |
 | srfi-29 | probe | pass | in scope |
-| srfi-31 | probe | pass | in scope |
+| srfi-31 | smoke | pass | in scope |
 | srfi-37 | smoke | pass | in scope |
 | srfi-38 | probe | pass | in scope |
 | srfi-39 | probe | pass | in scope |
