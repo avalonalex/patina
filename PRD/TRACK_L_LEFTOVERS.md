@@ -37,7 +37,8 @@ its date (#381), and the archive's status line went stale twice.
 - **Execution coverage (#429, measured 2026-09-27):** three smoke batches
   exercise 18 packages with 126 assertions. Of the 143 passes, 37 run upstream
   suites, 18 run maintained smoke checks, and 88 remain import-only probes.
-  A pass means only what that package's mode measured.
+  The smoke drivers are gated in CI on both backends. A pass means only what
+  that package's mode measured.
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
   backends. Of the 22 failures, 17 are not ours or are by decision, 3 wait on
   #422 and 2 are ours (#418, #423). `./scripts/run_larceny_tests.sh`.

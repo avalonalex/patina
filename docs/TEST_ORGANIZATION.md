@@ -749,6 +749,27 @@ and Gauche 0.9.15 using the pinned corpus libraries. Drivers and their
 test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 
+CI runs all active smoke drivers on both backends, using the release build
+from the R7RS compliance job. The same gates can be run locally:
+
+```bash
+./target/release/patina-compat check-smoke
+./target/release/patina-compat check-smoke --tree-walker
+```
+
+`check-smoke` discovers its selection from the manifest, keeps the full
+corpus available for dependency resolution, and requires every selected
+package to finish in smoke mode with a passing result. It exits 0 on success,
+1 for a failed or incomplete driver, and 2 for setup errors (including no
+active drivers, invalid registrations, or failed artifact writes). It rejects
+filters and exclusions. `run` remains a measurement command: package failures
+are recorded in its results without making its exit status fail.
+
+The smoke gate prints its report but writes artifacts only when `--results`
+and/or `--report` explicitly names a destination. CI supplies separate paths
+under `$RUNNER_TEMP` for each backend; these subset measurements never replace
+the committed full-corpus reports by default.
+
 Execution prefers the package's own test program, then a registered smoke
 driver, then the import probe. Smoke mode retains the probe's imports of every
 provided library under unused prefixes before evaluating the driver's own

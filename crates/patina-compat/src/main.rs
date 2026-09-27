@@ -8,6 +8,7 @@
 //!
 //!     cargo run -p patina-compat --release -- run
 //!     cargo run -p patina-compat --release -- report
+//!     cargo run -p patina-compat --release -- check-smoke
 
 mod corpus;
 mod exclusions;
@@ -31,18 +32,20 @@ fn workspace_root() -> PathBuf {
 }
 
 fn print_help() {
-    eprintln!("Usage: patina-compat <run|report> [OPTIONS]");
+    eprintln!("Usage: patina-compat <run|report|check-smoke> [OPTIONS]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  run      Execute the corpus, write both artifacts, print the report");
     eprintln!("  report   Re-render the report from an existing results snapshot");
+    eprintln!("  check-smoke  Run all smoke drivers; exit 1 if any fails, 2 on setup errors");
+    eprintln!("               No filters or exclusions; artifacts require explicit paths");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --patina <path>   Binary under test (default: target/release/patina)");
     eprintln!("  --vendor <dir>    Corpus directory (default: compat/vendor)");
-    eprintln!("  --results <file>  Snapshot path (default: compat/reports/results.scm)");
+    eprintln!("  --results <file>  Snapshot path (run default: compat/reports/results.scm)");
     eprintln!(
-        "  --report <file>   Rendered matrix path, run only (default: compat/reports/report.md)"
+        "  --report <file>   Rendered matrix path, run/check-smoke (run default: compat/reports/report.md)"
     );
     eprintln!("  --exclusions <f>  Opt-out list (default: compat/EXCLUSIONS.scm; `none` disables)");
     eprintln!("  --filter <substr> Only packages whose slug contains <substr>");
@@ -54,6 +57,7 @@ fn print_help() {
 enum Command {
     Run,
     Report,
+    CheckSmoke,
 }
 
 struct Options {
@@ -153,6 +157,7 @@ fn parse_args() -> Options {
         match arg.as_str() {
             "run" => opts.command = Some(Command::Run),
             "report" => opts.command = Some(Command::Report),
+            "check-smoke" => opts.command = Some(Command::CheckSmoke),
             "--patina" => opts.patina = PathBuf::from(require_value(&mut iter, "--patina")),
             "--vendor" => opts.vendor = PathBuf::from(require_value(&mut iter, "--vendor")),
             "--results" => {
@@ -201,8 +206,9 @@ fn parse_args() -> Options {
 fn main() {
     let opts = parse_args();
     match opts.command {
-        Some(Command::Run) => run_command(&opts),
+        Some(Command::Run) => run_command(&opts, false),
         Some(Command::Report) => report_command(&opts),
+        Some(Command::CheckSmoke) => run_command(&opts, true),
         None => {
             print_help();
             process::exit(2);
@@ -210,7 +216,13 @@ fn main() {
     }
 }
 
-fn run_command(opts: &Options) {
+fn run_command(opts: &Options, check_smoke: bool) {
+    if check_smoke
+        && (opts.filter.is_some() || opts.exclusions_path.is_some() || opts.no_exclusions)
+    {
+        eprintln!("Error: check-smoke does not accept --filter, --exclusions or --no-exclusions");
+        process::exit(2);
+    }
     if !opts.patina.is_file() {
         eprintln!(
             "Error: patina binary not found at {} (build with `cargo build --release`)",
@@ -224,7 +236,13 @@ fn run_command(opts: &Options) {
     // and doing that on the far side of ~162 subprocess spawns would throw
     // away minutes of work to report something that costs milliseconds to
     // check.
-    let exclusions = load_exclusions(opts, &heap);
+    // Every active smoke driver must pass. The measurement's exclusions
+    // cannot turn a failing driver into a successful gate.
+    let exclusions = if check_smoke {
+        Vec::new()
+    } else {
+        load_exclusions(opts, &heap)
+    };
     let universe = match corpus::discover(&opts.vendor, &heap) {
         Ok(p) => p,
         Err(e) => {
@@ -237,6 +255,7 @@ fn run_command(opts: &Options) {
     let providers = corpus::providers(&universe);
     let selected: Vec<&corpus::Package> = universe
         .iter()
+        .filter(|p| !check_smoke || p.smoke.is_some())
         .filter(|p| {
             opts.filter
                 .as_ref()
@@ -244,7 +263,11 @@ fn run_command(opts: &Options) {
         })
         .collect();
     if selected.is_empty() {
-        eprintln!("Error: no packages selected");
+        if check_smoke {
+            eprintln!("Error: no smoke drivers registered");
+        } else {
+            eprintln!("Error: no packages selected");
+        }
         process::exit(2);
     }
 
@@ -304,14 +327,11 @@ fn run_command(opts: &Options) {
         .format(&Rfc3339)
         .expect("current UTC time fits RFC 3339");
     let results = run::run_corpus(&selected, &universe, &providers, &config);
+    // Smoke-only results are a subset too, even without a slug filter.
+    // Running a gate must never replace the committed full-corpus snapshot.
+    let subset = check_smoke || opts.filter.is_some();
 
-    let rendered = report::render(
-        &results,
-        backend,
-        Some(&measured_at),
-        &exclusions,
-        opts.filter.is_none(),
-    );
+    let rendered = report::render(&results, backend, Some(&measured_at), &exclusions, !subset);
 
     // Both artifacts are written, not just the snapshot: the rendered matrix
     // is committed too, and printing it to stdout alone left it stale unless
@@ -321,15 +341,14 @@ fn run_command(opts: &Options) {
     // artifact — that would silently shrink the committed baseline to whatever
     // was filtered. Naming a path is what authorizes writing it, per artifact,
     // so `--filter --results <file>` cannot take the report down with it.
-    let subset = opts.filter.is_some();
-    write_artifact(
+    let results_written = write_artifact(
         "results",
         opts.results_path.as_deref(),
         &opts.results_path(),
         subset,
         || report::to_sexp(&results, backend, &measured_at),
     );
-    write_artifact(
+    let report_written = write_artifact(
         "report",
         opts.report_path.as_deref(),
         &opts.report_path(),
@@ -338,31 +357,47 @@ fn run_command(opts: &Options) {
     );
 
     println!("{}", rendered);
+    if check_smoke && (!results_written || !report_written) {
+        process::exit(2);
+    }
+    if check_smoke
+        && results
+            .iter()
+            .any(|result| result.mode != "smoke" || result.status != run::Status::Pass)
+    {
+        process::exit(1);
+    }
 }
 
 /// Write one artifact, unless this is a subset run that did not name a path
-/// for it.
+/// for it. Return false if a requested write failed.
 fn write_artifact(
     what: &str,
     requested: Option<&std::path::Path>,
     path: &std::path::Path,
     subset: bool,
     contents: impl FnOnce() -> String,
-) {
+) -> bool {
     if subset && requested.is_none() {
         eprintln!(
-            "filtered run: {} left unchanged (pass --{} <file> to save a subset)",
+            "subset run: {} left unchanged (pass --{} <file> to save a subset)",
             path.display(),
             what
         );
-        return;
+        return true;
     }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     match std::fs::write(path, contents()) {
-        Ok(()) => eprintln!("written: {}", path.display()),
-        Err(e) => eprintln!("warning: could not write {}: {}", path.display(), e),
+        Ok(()) => {
+            eprintln!("written: {}", path.display());
+            true
+        }
+        Err(e) => {
+            eprintln!("warning: could not write {}: {}", path.display(), e);
+            false
+        }
     }
 }
 
