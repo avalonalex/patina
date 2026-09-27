@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 71 drivers cover binary-record read/write round trips;
+assertion count. The 81 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -745,6 +745,8 @@ SLIB integer and real math, modular arithmetic, rational approximation,
 factorization, matrix operations, array iteration, interpolation and subarrays;
 SLIB byte arrays, byte/number encodings, coercions, chapter ordering, filename
 matching, soundex, formatted input, pretty printing and URI processing;
+SLIB color spaces, palette dictionaries, daylight models, character plotting,
+Fourier transforms, minimization and random sampling;
 SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
@@ -849,7 +851,27 @@ The patch policy authorizes upstream correctness repairs discovered during
 #429 without further per-patch approval, with issue evidence, reference
 comparisons and CI regression assertions required.
 
-All 946 assertions were compared against both Patina backends, Chibi 0.12
+The color/scientific batch adds 155 assertions across ten SLIB drivers:
+color-space (43), color (27), daylight (15), nbs-iscc (8), resene (8),
+saturate (8), charplot (10), fourier-transform (13), minimize (10) and
+random-inexact (13). Checks cover color conversions and serialization,
+whitepoints, weighted color differences, spectral boundaries and integration,
+palette lookup and enumeration, fixed solar geometry and sky-model identities,
+plotted dimensions/labels/markers, transform signs and multidimensional round
+trips, minimum locations and evaluation counts, and sampling transformations.
+Floating comparisons use explicit tolerances. Plot checks set dimensions and
+capture string ports; callback sample sets are checked without imposing an
+evaluation order. Random checks inject equal samples within each Box-Muller
+pair to permit either `let` initializer order, restore the shared binding,
+and compare state replay only within a host. No statistical thresholds or
+cross-host PRNG sequences are asserted. File-backed illuminant readers and
+full physical/colorimetric conformance are outside this smoke scope.
+The #525 overlays repair folded parser tags, hexadecimal string lengths,
+whitepoint construction, scalar metric factors, squared CIE94 scales, the
+last spectral table row, descending spectrum traversal and the solid-sphere
+sampler's documented squared-norm return value.
+
+All 1101 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -890,6 +912,23 @@ no complete before-repair assertion total is claimed. Gauche alone loses
 zero/multiple callback results in `call-with-tmpnam`: the original captures
 them in a single-value `let`, whose result arity is unspecified by R7RS.
 The overlay uses `call-with-values` and preserves every result on all four.
+The color/scientific batch passes 137/155 before repair and 155/155 afterward
+on both Patina backends and Gauche. Chibi passes 136/155 before and 154/155
+afterward. Its remaining automatic Fourier round-trip failure is an **oracle
+defect**: evaluating a later real-minus-complex subtraction changes the
+imaginary component of an earlier sum. The primitive-only reproduction is:
+
+```scheme
+(import (scheme base) (scheme inexact) (scheme write))
+(let* ((t (* (exp (* 0-2i (atan 1))) -2))
+       (u -2) (sum (+ u t)) (difference (- u t)))
+  (write (list sum difference t)))
+```
+
+Chibi prints `sum` with imaginary part -2, although it was +2 before the
+subtraction; both Patina backends and Gauche preserve +2. The correct Fourier
+expectation remains in the driver. This difference is recorded here and in
+#525, outside the `tests/scheme` oracle lane; it is not a passing comparison.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
@@ -925,6 +964,16 @@ conditional branches; URI's absolute-path test performs no filesystem calls.
 Patina receives `test-lib` and the corpus Chibi pathname dependency, while the
 references use their native directory support. No implementation body is
 adapted for these reference comparisons beyond the documented overlays.
+
+The color/scientific comparisons also isolate pinned SRFI 95, including its
+`.scm` implementation and SRFI 63 imports. They stage `lib/srfi/27.sld` and
+`27.scm` unchanged apart from renaming the declaration/imports to
+`(patina-corpus srfi 27)` on all four hosts. Chibi's native C aliases and state
+behavior otherwise interfere with replacing `random-real`; these comparisons
+measure the SLIB transformations over the same portable SRFI 27 dependency
+used by Patina. All SLIB implementation bodies match the corpus with its
+named overlays. Before-repair measurements retain previously merged dependency
+overlays and omit only the three #525 overlays.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:
