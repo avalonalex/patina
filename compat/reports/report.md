@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T19:08:19Z
+**Measured:** 2026-09-27T19:45:24Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **36 passed smoke checks**, and **70 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **42 passed smoke checks**, and **64 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -199,7 +199,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-xml-parse | probe | pass | in scope |
 | srfi-106 | probe | out-of-scope | ffi |
 | srfi-11 | smoke | pass | in scope |
-| srfi-145 | probe | pass | in scope |
+| srfi-145 | smoke | pass | in scope |
 | srfi-156 | test | pass | in scope |
 | srfi-16 | smoke | pass | in scope |
 | srfi-166 | probe | pass | in scope |
@@ -214,15 +214,15 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-235 | test | pass | in scope |
 | srfi-25 | probe | pass | in scope |
 | srfi-26 | smoke | pass | in scope |
-| srfi-28 | probe | pass | in scope |
-| srfi-29 | probe | pass | in scope |
+| srfi-28 | smoke | pass | in scope |
+| srfi-29 | smoke | pass | in scope |
 | srfi-31 | smoke | pass | in scope |
 | srfi-37 | smoke | pass | in scope |
-| srfi-38 | probe | pass | in scope |
-| srfi-39 | probe | pass | in scope |
+| srfi-38 | smoke | pass | in scope |
+| srfi-39 | smoke | pass | in scope |
 | srfi-42 | probe | pass | in scope |
 | srfi-43 | smoke | pass | in scope |
-| srfi-51 | probe | pass | in scope |
+| srfi-51 | smoke | pass | in scope |
 | srfi-63 | smoke | pass | in scope |
 | srfi-64 | test | pass | in scope |
 | srfi-78 | probe | pass | in scope |
