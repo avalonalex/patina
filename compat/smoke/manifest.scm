@@ -19,4 +19,8 @@
   ((slug "slib-generic-write") (assertions 7))
   ((slug "slib-printf") (assertions 7))
   ((slug "srfi-63") (assertions 6))
+  ((slug "srfi-95") (assertions 14))
+  ((slug "srfi-43") (assertions 12))
+  ((slug "srfi-37") (assertions 8))
+  ((slug "srfi-180") (assertions 18))
   ((slug "macduffie-json") (assertions 6))))

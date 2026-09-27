@@ -1,0 +1,23 @@
+# srfi-95: compare two-element arrays (#504)
+#
+# dimax is length minus one, so only dimax <= 0 is trivially sorted. The
+# upstream <= 1 shortcut accepts #(2 1) and "ba" without a comparison.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the defect
+# with the pinned package. SRFI 95 requires testing adjacent inversions:
+# https://srfi.schemers.org/srfi-95/srfi-95.html
+#
+# Owner-approved correctness exception to the behavior-preserving patch
+# policy (2026-09-27). compat/smoke/srfi-95.scm gates the repaired vector,
+# string and keyed cases. The pristine extraction remains unchanged.
+# Measured after: all 14 smoke assertions pass on all four implementations.
+--- a/srfi/95.scm
++++ b/srfi/95.scm
+@@ -28,7 +28,7 @@
+   (cond ((null? seq) #t)
+         ((array? seq)
+          (let ((dimax (+ -1 (car (array-dimensions seq)))))
+-           (or (<= dimax 1)
++           (or (<= dimax 0)
+                (let loop ((idx (+ -1 dimax))
+                           (last (key (array-ref seq dimax))))
+                  (or (negative? idx)

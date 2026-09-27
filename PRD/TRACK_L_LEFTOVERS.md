@@ -34,9 +34,9 @@ its date (#381), and the archive's status line went stale twice.
   passes the same 143 and reads 143 of 144, because one excluded package files
   its failure in a different bucket there (#382).
   `cargo run --release -p patina-compat -- run`.
-- **Execution coverage (#429, measured 2026-09-27):** three smoke batches
-  exercise 18 packages with 126 assertions. Of the 143 passes, 37 run upstream
-  suites, 18 run maintained smoke checks, and 88 remain import-only probes.
+- **Execution coverage (#429, measured 2026-09-27):** four smoke batches
+  exercise 22 packages with 178 assertions. Of the 143 passes, 37 run upstream
+  suites, 22 run maintained smoke checks, and 84 remain import-only probes.
   The smoke drivers are gated in CI on both backends. A pass means only what
   that package's mode measured.
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
@@ -54,7 +54,7 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #429 — expand execution coverage beyond the first 18 smoke drivers; 88 passing packages remain import-only.
+- #429 — expand execution coverage beyond the first 22 smoke drivers; 84 passing packages remain import-only.
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
@@ -78,6 +78,6 @@ split or where matching them has a cost, and none should be taken in passing.
 
 - **Self-contained.** No build-, test- or CI-time dependency on another Scheme or a package manager. The corpus is data pinned by checksum.
 - **What ships:** `PRD/phase2/R7RS_LARGE_STATUS.md` is the bundling policy — R7RS-large libraries and SRFIs, never another implementation's namespace.
-- **What is excluded, and what is patched:** `compat/EXCLUSIONS.scm` (a closed set of reasons; an excluded package still runs) and `compat/patches/README.md` (when a patch is justified, and why a Patina difference is never one).
+- **What is excluded, and what is patched:** `compat/EXCLUSIONS.scm` (a closed set of reasons; an excluded package still runs) and `compat/patches/README.md` (when a patch is justified, the two owner-approved upstream correctness exceptions, and why a Patina difference is never patched).
 - **Whose defect it is** is settled by measurement against chibi and Gauche, never by which of them accepts a program. `crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is where a difference is classified.
 - **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; four remain, all listed above.

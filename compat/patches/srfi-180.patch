@@ -1,0 +1,69 @@
+# srfi-180: validate JSON number syntax before conversion (#505)
+#
+# The upstream valid-number? calls string->number and returns #t unless it
+# raises, so Scheme numeric syntax such as 01 and 1/2 leaks into JSON. Both
+# Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce [01] -> #(1) with
+# the pinned package. Validate the ASCII grammar from RFC 8259 section 6;
+# leave tokenization, conversion and the existing JSON error path intact.
+# https://www.rfc-editor.org/rfc/rfc8259#section-6
+#
+# Owner-approved correctness exception to the behavior-preserving patch
+# policy (2026-09-27). compat/smoke/srfi-180.scm gates valid integers,
+# fractions and exponents, and rejects malformed and Scheme-only spellings.
+# The pristine extraction remains unchanged.
+# Measured after: all 18 smoke assertions pass on all four implementations.
+--- a/srfi/180.scm
++++ b/srfi/180.scm
+@@ -8,25 +8,33 @@
+              '(user read read-incomplete)) #t))
+ 
+ (define (valid-number? string)
+-  ;; Original begin
+-  ;; based on https://stackoverflow.com/a/13340826/140837
+-  ;(regexp-matches '(seq
+-  ;(? #\-)
+-  ;(or #\0 (seq (- numeric #\0)
+-  ;(* numeric)))
+-  ;(? (seq #\. (+ numeric)))
+-  ;(? (seq (or #\e #\E)
+-  ;(? (or #\- #\+))
+-  ;(+ numeric))))
+-  ;string)
+-  ;; Original end
+-  (call-with-current-continuation
+-    (lambda (k)
+-      (with-exception-handler
+-        (lambda (x) (k #f))
+-        (lambda ()
+-          (string->number string)
+-          #t)))))
++  ;; RFC 8259 number = [minus] int [frac] [exp]. Check ASCII syntax before
++  ;; string->number, which also accepts Scheme-only forms such as 01 or 1/2.
++  (define len (string-length string))
++  (define (at? i char)
++    (and (< i len) (char=? (string-ref string i) char)))
++  (define (digit? i)
++    (and (< i len) (char<=? #\0 (string-ref string i) #\9)))
++  (define (digits i)
++    (if (digit? i) (digits (+ i 1)) i))
++  (define (exponent i)
++    (if (or (at? i #\e) (at? i #\E))
++        (let* ((start (+ i 1))
++               (start (if (or (at? start #\+) (at? start #\-))
++                          (+ start 1)
++                          start)))
++          (and (digit? start) (= (digits start) len)))
++        (= i len)))
++  (define (fraction i)
++    (if (at? i #\.)
++        (let ((start (+ i 1)))
++          (and (digit? start) (exponent (digits start))))
++        (exponent i)))
++  (let ((start (if (at? 0 #\-) 1 0)))
++    (and (digit? start)
++         (fraction (if (at? start #\0)
++                       (+ start 1)
++                       (digits start))))))
+ 
+ ;; (srfi 180-helpers) end
+ 
