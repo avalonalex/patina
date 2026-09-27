@@ -1,0 +1,28 @@
+# Correctness overlay for #523, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/523
+# Preserve zero or multiple callback values across temporary-name cleanup.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: Gauche: 17/19 -> 19/19; both Patina backends and Chibi pass 19/19
+# before and after, tolerating the original nonportable single-value binding.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/filename.sld
++++ b/slib/filename.sld
+@@ -317,10 +317,12 @@
+     ;;returned.
+     (define (call-with-tmpnam proc . suffi)
+       (define (do-call paths)
+-        (let ((ans (apply proc paths)))
+-          (for-each (lambda (path) (if (file-exists? path) (delete-file path)))
+-                    paths)
+-          ans))
++        (call-with-values
++          (lambda () (apply proc paths))
++          (lambda results
++            (for-each (lambda (path) (if (file-exists? path) (delete-file path)))
++                      paths)
++            (apply values results))))
+       (cond ((null? suffi) (do-call (list (tmpnam))))
+             ((and (= 1 (length suffi)) (number? (car suffi)))
+              (do ((cnt (if (null? suffi) 0 (+ -1 (car suffi))) (+ -1 cnt))

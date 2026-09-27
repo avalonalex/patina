@@ -1,0 +1,28 @@
+# Correctness overlay for #523, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/523
+# Keep the authority marker for host-only tuples and allow absent port numbers.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: With batch overlays: 22/24 -> 24/24 assertions on all four.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/uri.sld
++++ b/slib/uri.sld
+@@ -92,7 +92,7 @@
+                                            host))
+                                 (port
+                                   (sprintf #f "//%s:%d" host port))
+-                                (else host)))
++                                (else (sprintf #f "//%s" host))))
+                         authority))
+                 (else (or authority "")))
+           (cond ((string? path) (uric:encode path "/$,;:@&=+"))
+@@ -242,7 +242,7 @@
+              (port (and cdx
+                         (string-copy hostport (+ 1 cdx) (string-length hostport)))))
+         (if (or userinfo port)
+-          (list userinfo host (or (string->number port) port))
++          (list userinfo host (and port (or (string->number port) port)))
+           host)))
+     ;;@args txt chr
+     ;;Returns a list of @1 split at each occurrence of @2.  @2 does not

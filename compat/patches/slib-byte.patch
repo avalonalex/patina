@@ -1,0 +1,57 @@
+# Correctness overlay for #522, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/522
+# Copy the supplied bytes; return consumed counts and stop either read direction at EOF.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: Before: reverse-EOF timeout on all four (14/22 preceding checks pass).
+# With batch overlays: 25/25 on all four.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/byte.sld
++++ b/slib/byte.sld
+@@ -131,7 +131,7 @@
+       (let ((new (make-bytes len)))
+         (do ((idx (- len 1) (+ -1 idx)))
+           ((negative? idx) new)
+-          (byte-set! new idx (byte-ref bytes idx)))))
++          (byte-set! new idx (byte-ref bts idx)))))
+ 
+     ;;@args bytes start end
+     ;;@1 must be a bytes, and @2 and @3
+@@ -258,22 +258,20 @@
+     ;;@4 may be omitted, in which case it defaults to the value returned
+     ;;by @code{current-input-port}.
+     (define (subbytes-read! bts start end . port)
+-      (if (>= end start)
+-        (do ((idx start (+ 1 idx)))
+-          ((>= idx end) idx)
+-          (let ((byt (apply read-byte port)))
+-            (cond ((eof-object? byt)
+-                   (set! idx (+ -1 idx))
+-                   (set! end idx))
+-                  (else (byte-set! bts idx byt)))))
+-        (do ((idx (+ -1 start) (+ -1 idx))
+-             (cnt 0 (+ 1 cnt)))
+-          ((< idx end) cnt)
+-          (let ((byt (apply read-byte port)))
+-            (cond ((eof-object? byt)
+-                   (set! idx start)
+-                   (set! cnt (+ -1 cnt)))
+-                  (else (byte-set! bts idx byt)))))))
++      (let ((forward? (>= end start)))
++        (let loop ((idx (if forward? start (+ -1 start)))
++                   (remaining (abs (- end start)))
++                   (count 0))
++          (if (zero? remaining)
++            count
++            (let ((byt (apply read-byte port)))
++              (if (eof-object? byt)
++                count
++                (begin
++                  (byte-set! bts idx byt)
++                  (loop (+ idx (if forward? 1 -1))
++                        (- remaining 1)
++                        (+ count 1)))))))))
+ 
+     ;;@args bts start end port
+     ;;@args bts start end

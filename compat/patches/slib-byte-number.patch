@@ -1,0 +1,21 @@
+# Correctness overlay for #522, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/522
+# Let infinities reach the exponent-only encoding, rather than the NaN branch.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: With batch overlays: Patina/Gauche 20/23 -> 23/23; Chibi 19/23 -> 22/23.
+# Chibi loses a double subnormal in native magnitude; keep the correct expectation.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/byte-number.sld
++++ b/slib/byte-number.sld
+@@ -236,8 +236,7 @@
+               (byte-set! byts idx val)))
+           (let ((mflt (magnitude flt)))
+             (cond ((zero? mflt) (if S (byte-set! byts 0 #x80)) byts)
+-                  ((or (infinite? mflt)
+-                       (not (real? mflt))
++                  ((or (not (real? mflt))
+                        (not (= mflt mflt)))
+                    (byte-set! byts 0 (if S #xFF #x7F))
+                    (byte-set! byts 1 #xC0)

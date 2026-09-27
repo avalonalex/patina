@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 61 drivers cover binary-record read/write round trips;
+assertion count. The 71 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -743,6 +743,8 @@ string search, string casing, string ports, line I/O, generic writing,
 printf, alists, queues, trees, common list functions and topological sorting;
 SLIB integer and real math, modular arithmetic, rational approximation,
 factorization, matrix operations, array iteration, interpolation and subarrays;
+SLIB byte arrays, byte/number encodings, coercions, chapter ordering, filename
+matching, soundex, formatted input, pretty printing and URI processing;
 SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
@@ -825,11 +827,29 @@ The numeric overlays (#519) repair negative unit powers, optional `atan`
 arguments, signed gcds, zero powers, singleton ratios, zero prime counts and
 singleton matrix inverses. The array overlays (#520) repair scalar traversal,
 copy bounds, low-edge interpolation and empty trimmed views.
+The byte/text batch adds 172 assertions across ten SLIB drivers: byte (25),
+byte-number (23), coerce (17), chapter-order (12), filename (19), soundex (10),
+scanf (24), pretty-print (10), pprint-file (8) and URI (24). Five more assertions
+extend the existing SRFI 63 driver from 6 to 11, for 177 new assertions total.
+Checks cover independent copies, byte order, short reads and consumed counts,
+integer and IEEE encodings, numeric collation, type conversions, chapter
+carries, glob captures, parsing, printed-data round trips and comments.
+Byte I/O uses ASCII string ports because the pinned adapter calls `read-char`
+and `write-char`; it does not establish binary-port or non-ASCII fidelity.
+Filename callbacks request zero temporary names, so they exercise return
+values without creating or deleting files. The file formatter is exercised
+with caller-owned string ports. SLIB scanf's explicit-whitespace rule is
+intentional: input whitespace is skipped only when the format contains it,
+as documented in the [SLIB manual](https://people.csail.mit.edu/jaffer/slib/Standard-Formatted-Input.html).
+The #522 overlays repair byte copies, offset counts, reverse-read EOF loops,
+single-precision infinity encoding and SRFI 63's empty/deep list conversion.
+The #523 overlays repair vector coercions, standalone and width-limited zero
+fields, URI authority markers and absent ports, and callback return values.
 The patch policy authorizes upstream correctness repairs discovered during
 #429 without further per-patch approval, with issue evidence, reference
 comparisons and CI regression assertions required.
 
-All 769 assertions were compared against both Patina backends, Chibi 0.12
+All 946 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -858,6 +878,18 @@ This compatibility driver is outside the `tests/scheme` oracle lane, so its
 divergence is recorded here rather than adding an unexecuted register row.
 The nine-package numeric/array batch passes 130/153 assertions on each of
 the four implementations before repair, and 153/153 with the overlays.
+The byte/text batch passes all 177 new assertions on both Patina backends and
+Gauche. Chibi passes 176/177: its native `(magnitude (expt 2.0 -1074))` returns
+zero although both the input and `abs` of the input are nonzero. The pinned
+double encoder uses `magnitude`, so Chibi loses the smallest subnormal. This
+is an **oracle defect**, not a passing comparison; the expected byte encoding
+is retained. Like the other compatibility-driver differences above, this is
+outside the `tests/scheme` oracle lane and is recorded here and in #522.
+Before repair, byte reverse reads at EOF time out on all four implementations;
+no complete before-repair assertion total is claimed. Gauche alone loses
+zero/multiple callback results in `call-with-tmpnam`: the original captures
+them in a single-value `let`, whose result arity is unspecified by R7RS.
+The overlay uses `call-with-values` and preserves every result on all four.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
@@ -887,6 +919,12 @@ The SLIB numeric/array comparisons isolate the selected SLIB libraries and
 preserve array-record identity. All four comparisons use the same isolated
 portable SRFI 60 facade over native SRFI 151. Only library declarations and
 imports are renamed; the implementation bodies match the patched corpus.
+The byte/text comparisons use the same SRFI isolation and also rename every
+transitive SLIB dependency. The common/directory adapters retain their native
+conditional branches; URI's absolute-path test performs no filesystem calls.
+Patina receives `test-lib` and the corpus Chibi pathname dependency, while the
+references use their native directory support. No implementation body is
+adapted for these reference comparisons beyond the documented overlays.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

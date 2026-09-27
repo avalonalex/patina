@@ -1,0 +1,19 @@
+# Correctness overlay for #522, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/522
+# Infer dimensions by descending through the current row, including empty rows.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: With batch overlays: 9/11 -> 11/11 assertions on all four.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/srfi/63.sld
++++ b/srfi/63.sld
+@@ -269,7 +269,7 @@
+     (define (list->array rank proto lst)
+       (define dimensions
+         (do ((shp '() (cons (length row) shp))
+-             (row lst (car lst))
++             (row lst (if (pair? row) (car row) '()))
+              (rnk (+ -1 rank) (+ -1 rnk)))
+           ((negative? rnk) (reverse shp))))
+       (let ((nra (apply make-array proto dimensions)))

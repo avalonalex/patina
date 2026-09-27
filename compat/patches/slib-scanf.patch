@@ -1,0 +1,25 @@
+# Correctness overlay for #523, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/523
+# Retain a consumed leading zero as an integer and respect an exhausted field width.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: With batch overlays: 21/24 -> 24/24 assertions on all four.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/scanf.sld
++++ b/slib/scanf.sld
+@@ -84,9 +84,11 @@
+         (case c
+           ((#\0) (read-input-char) (width--)
+                  (set! c (peek-char input-port))
+-                 (case c
+-                   ((#\x #\X) (read-input-char) (width--) (read-x input-port read-input-char get-width width--))
+-                   (else (read-o input-port read-input-char get-width width--))))
++                 (if (and (get-width) (zero? (get-width)))
++                   0
++                   (case c
++                     ((#\x #\X) (read-input-char) (width--) (read-x input-port read-input-char get-width width--))
++                     (else (or (read-o input-port read-input-char get-width width--) 0)))))
+           (else (read-u input-port read-input-char get-width width--)))))
+ 
+     (define (read-u input-port read-input-char get-width width--)
