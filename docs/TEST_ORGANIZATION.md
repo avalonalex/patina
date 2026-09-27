@@ -737,8 +737,12 @@ a probe pass establishes loading without calling exported procedures.
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
 assertion count. The first batch covers binary-record read/write round trips,
 PFDS queues and heaps, SLIB formatting, SRFI 63 arrays, and MacDuffie JSON.
-The 33 assertions were compared against both Patina backends, Chibi 0.12 and
-Gauche 0.9.15 using the pinned corpus libraries. Drivers and their test-only
+The second adds six SLIB text libraries: string search, string casing, string
+ports, line I/O, generic writing, and printf. Its 43 assertions exercise
+search boundaries, mutation, callback results, port state, formatting and
+bounded output. All 76 assertions across the 12 drivers were compared against
+both Patina backends, Chibi 0.12 and Gauche 0.9.15 using the pinned corpus
+libraries. Drivers and their test-only
 `(patina compat smoke)` helper live outside `compat/vendor/`; nothing is
 bundled or added to the upstream extractions.
 

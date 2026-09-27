@@ -1,0 +1,21 @@
+(import (scheme base) (slib printf) (patina compat smoke))
+(check-equal "integer radices and literal percent" "42 2a 52 %"
+  (sprintf #f "%d %x %o %%" 42 42 42))
+(check-equal "width, alignment and string precision" "[00042][hi   ][sch]"
+  (sprintf #f "[%05d][%-5s][%.3s]" 42 "hi" "scheme"))
+(check-equal "fixed floating-point precision" "1.25" (sprintf #f "%.2f" 1.25))
+(define buffer (make-string 5 #\.))
+(define written (sprintf buffer "%s" "abcdefg"))
+(check-equal "bounded output truncates and reports stored characters" '(5 "abcde")
+  (list written buffer))
+(define output (open-output-string))
+(define count (fprintf output "%s:%d" "item" 7))
+(check-equal "explicit output port and character count" '(6 "item:7")
+  (list count (get-output-string output)))
+(define current (open-output-string))
+(define current-count
+  (parameterize ((current-output-port current)) (printf "%c:%d" #\x 9)))
+(check-equal "printf uses the current output port" '(3 "x:9")
+  (list current-count (get-output-string current)))
+(check-error "missing conversion argument is an error" (sprintf #f "%d"))
+(smoke-finish)
