@@ -1,0 +1,24 @@
+# Correctness overlay for #523, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/523
+# Use the string type symbol and vector->list for vector coercions.
+# Compared before/after on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Smoke regressions exercise the contract; issue evidence records host differences.
+# Measured 2026-09-27: With batch overlays: 14/17 -> 17/17 assertions on all four.
+# Reference staging isolates SLIB dependencies and SRFI 63, using a portable
+# SRFI 60 facade over native SRFI 151. Pristine vendor files remain unchanged.
+--- a/slib/coerce.sld
++++ b/slib/coerce.sld
+@@ -108,10 +108,10 @@
+                                     (vector-ref obj 0)
+                                     (err)))
+                         ((number integer)
+-                         (or (string->number (coerce obj string)) (err)))
++                         (or (string->number (coerce obj 'string)) (err)))
+                         ((string) (list->string (vector->list obj)))
+-                        ((symbol) (string->symbol (coerce obj string)))
+-                        ((list)   (list->vector obj))
++                        ((symbol) (string->symbol (coerce obj 'string)))
++                        ((list)   (vector->list obj))
+                         (else     (err))))
+             (else (err))))))
+ 

@@ -194,11 +194,25 @@ the broader #429 authorization):
   with explicit dimensions and offsets so empty axes remain empty. The
   drivers check callback counts, untouched destination cells and shared
   mutation as well as the repaired boundaries.
+- [#522](https://github.com/avalonalex/patina/issues/522), `slib-byte.patch`,
+  `slib-byte-number.patch` and `srfi-63.patch`: copy the supplied byte array,
+  return consumed counts for offset reads and stop reverse reads at EOF;
+  encode single-precision infinities with zero mantissas; infer nested array
+  dimensions by descending through the current row, including empty rows.
+  The existing SRFI 63 driver gains direct empty/deep conversion regressions.
+- [#523](https://github.com/avalonalex/patina/issues/523), `slib-coerce.patch`,
+  `slib-scanf.patch`, `slib-uri.patch` and `slib-filename.patch`: use the correct
+  vector conversions and type symbols, retain standalone zero integer fields
+  without exceeding their width, preserve authority markers and absent ports,
+  and pass callback results through `call-with-values` during name cleanup.
+  Scanf's documented explicit-whitespace behavior is unchanged. Filename
+  tests request zero names and assert zero/multiple return values without
+  creating or deleting files.
 
-These patches deliberately correct upstream behavior. All defects were
-reproduced with the pinned libraries on Patina's two backends, Chibi and
-Gauche; all corrections are checked on those same implementations, and their
-regressions are asserted by the CI smoke drivers. SRFI 38's comparisons select
+These patches deliberately correct upstream behavior. Before/after behavior
+is compared with the pinned libraries on Patina's two backends, Chibi and
+Gauche; host differences are recorded explicitly, and regression expectations
+are asserted by the CI smoke drivers. SRFI 38's comparisons select
 the portable `38.scm` branch on all four; the separate `38.chibi.scm` branch
 is unchanged and is not the subject of those comparisons. SRFI 42's reference
 staging removes the inert `#f` library declaration rejected by Gauche; its
@@ -211,6 +225,15 @@ The SLIB numeric/array comparisons isolate SLIB names and pinned SRFI 63,
 and supply a portable SRFI 60 facade over native SRFI 151 on all four hosts;
 their implementation bodies match the patched corpus. The nine new drivers
 pass 130/153 before repair and 153/153 afterward on each implementation.
+The byte/text batch uses the same SRFI isolation and renames transitive SLIB
+dependencies, retaining native common/directory adapters without exercising
+filesystem operations. Its 177 new assertions pass on both Patina backends
+and Gauche; Chibi passes 176. Chibi's native `magnitude` loses the smallest
+double subnormal, and the correct encoding expectation is retained (#522).
+Gauche alone loses callback result arity before the filename repair; the
+other hosts tolerate the original single-value binding. The repaired callback
+preserves all values on every host (#523). The byte driver times out on all
+four before repair because reverse reads do not terminate at EOF.
 These patches do not weaken an assertion or hide a Patina difference. The
 corpus now measures these packages with the documented corrections, not the
 pristine upstream behavior.
