@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T07:36:05Z
+**Measured:** 2026-09-27T07:50:21Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **12 passed smoke checks**, and **94 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **18 passed smoke checks**, and **88 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -129,18 +129,18 @@ These packages still run on every pass — exclusion decides whether a result co
 | pfds-alist | probe | pass | in scope |
 | pfds-bitwise | probe | pass | in scope |
 | pfds-bounded-balance-tree | probe | pass | in scope |
-| pfds-deque | probe | pass | in scope |
-| pfds-difference-list | probe | pass | in scope |
-| pfds-fector | probe | pass | in scope |
+| pfds-deque | smoke | pass | in scope |
+| pfds-difference-list | smoke | pass | in scope |
+| pfds-fector | smoke | pass | in scope |
 | pfds-fingertree | probe | pass | in scope |
 | pfds-hash-array-mapped-trie | probe | pass | in scope |
 | pfds-heap | smoke | pass | in scope |
-| pfds-lazy-list | probe | pass | in scope |
+| pfds-lazy-list | smoke | pass | in scope |
 | pfds-list-helpers | probe | pass | in scope |
 | pfds-priority-search-queue | probe | pass | in scope |
 | pfds-queue | smoke | pass | in scope |
-| pfds-sequence | probe | pass | in scope |
-| pfds-set | probe | pass | in scope |
+| pfds-sequence | smoke | pass | in scope |
+| pfds-set | smoke | pass | in scope |
 | pfds-vector | probe | pass | in scope |
 | postgresql | probe | out-of-scope | ffi |
 | rebottled-cl-pdf | probe | missing-library | dependency-not-vendored |
