@@ -62,6 +62,19 @@ jobs:
       run: ./scripts/run_chibi_tests.sh
     - name: Run chibi r7rs-tests, tree-walker backend
       run: ./scripts/run_chibi_tests_tree_walker.sh
+    # Discover the smoke manifest on every run so new drivers join the gate.
+    # Unlike corpus measurement, check-smoke exits nonzero for any failure.
+    - name: Check corpus smoke drivers, VM backend
+      run: >-
+        ./target/release/patina-compat check-smoke
+        --results "$RUNNER_TEMP/compat-smoke-vm.scm"
+        --report "$RUNNER_TEMP/compat-smoke-vm.txt"
+    - name: Check corpus smoke drivers, tree-walker backend
+      if: ${{ !cancelled() }}
+      run: >-
+        ./target/release/patina-compat check-smoke --tree-walker
+        --results "$RUNNER_TEMP/compat-smoke-tree-walker.scm"
+        --report "$RUNNER_TEMP/compat-smoke-tree-walker.txt"
 
   # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
   # be byte-identical with GC off, under stress, and under the adaptive mode,
