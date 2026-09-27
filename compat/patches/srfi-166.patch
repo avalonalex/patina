@@ -1,0 +1,65 @@
+# Correctness overlay for #516, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/516
+# Admit exact-width word lines; preserve explicit newlines and stream character
+# chunks without adding a final newline. Keep cursor movement within the input
+# when tokenizing words and grouping digits.
+# Both Patina backends and Chibi reproduce the wrapping failures; Gauche also
+# rejects out-of-range cursor movement tolerated by their integer cursors.
+# The smoke driver enforces those boundaries for two maintained CI regressions.
+# Reference staging renames library identities, selects portable optional-arg
+# macros, and supplies SRFI 165 with vector-collected defaults to avoid Gauche's
+# multiple-value limit. SRFI 166 implementation files are otherwise identical.
+--- a/srfi/166/column.scm
++++ b/srfi/166/column.scm
+@@ -11,7 +11,7 @@
+         (reverse res))
+        (else
+         (let ((sc2 (string-index str separator? sc)))
+-          (lp (string-cursor-next str sc2)
++          (lp (if (string-cursor>=? sc2 end) end (string-cursor-next str sc2))
+               (if (string-cursor=? sc sc2)
+                   res
+                   (cons (substring/cursors str sc sc2) res)))))))))
+@@ -320,8 +320,10 @@
+           (cond
+            ((equal? "" str)
+             nothing)
+-           ((or (<= len space) (not (positive? space)))
+-            (each (orig-output str) (orig-output "\n")))
++           ((or (<= len space) (not (positive? width)))
++            (orig-output str))
++           ((not (positive? space))
++            (each (orig-output "\n") (fn () (kons-in-line str))))
+            (else
+             (each
+              ;; TODO: when splitting by string-width, substring needs
+@@ -342,6 +344,7 @@
+                      (else
+                       (each
+                        (fn () (kons-in-line (substring/cursors str i nli)))
++                       (orig-output "\n")
+                        (fn () (lp (string-cursor-next str nli))))))))))))
+       (each-in-list ls))))
+ 
+@@ -363,7 +366,7 @@
+       (let lp ((j (+ i 1)) (width (vector-ref widths i)))
+         (let ((width (+ width 1 (vector-ref widths j))))
+           (cond
+-            ((>= width max-width) (- j 1))
++            ((> width max-width) (- j 1))
+             ((>= j len-1) len-1)
+             (else (lp (+ j 1) width))))))
+     (define (min-penalty! i)
+--- a/srfi/166/write.scm
++++ b/srfi/166/write.scm
+@@ -22,7 +22,9 @@
+              (rule rule)
+              (res '()))
+       (let* ((offset (if (pair? rule) (car rule) rule))
+-             (i2 (if offset (string-cursor-back str i offset) start)))
++             (i2 (if (and offset (< offset (string-cursor->index str i)))
++                     (string-cursor-back str i offset)
++                     start)))
+         (if (string-cursor<=? i2 start)
+             (apply string-append (cons (substring/cursors str start i) res))
+             (lp i2

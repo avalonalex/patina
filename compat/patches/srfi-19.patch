@@ -1,0 +1,127 @@
+# srfi-19: repair arithmetic, calendar and clock sampling defects (#515)
+#
+# Preserve signed duration fractions and compute differences before mutating
+# reused inputs. Count the first full week as week one, subtract zone offsets
+# before converting seconds to days, and convert TAI-based monotonic dates
+# through TAI. Sample the host clock once for seconds and nanoseconds, and
+# retain the requested thread-clock type.
+# Authorized correctness repairs under the #429 workflow. Both Patina
+# backends, Chibi 0.12 and Gauche 0.9.15 reproduce the seven regressions in
+# the pinned body. The smoke driver uses fixed dates and a restored clock
+# binding; no timing thresholds or sleeps are needed.
+# The process/thread clock source remains the upstream wall-clock surrogate.
+# The pristine vendor extraction stays unchanged.
+--- a/srfi/19.scm
++++ b/srfi/19.scm
+@@ -287,17 +287,20 @@
+ ;;
+ 
+ (define (tm:get-time-of-day)
+-  (values (current-seconds)
+-          (abs (remainder (current-milliseconds) 1000))))
++  ;; Sample once so the fractional part belongs to the same second.
++  (let* ((now (current-second))
++         (seconds (exact (floor now)))
++         (nanoseconds (exact (floor (* (- now seconds) tm:nano)))))
++    (values seconds nanoseconds)))
+ 
+ (define (tm:current-time-utc)
+-  (receive (seconds ms) (tm:get-time-of-day)
+-           (make-time  time-utc (* ms 10000) seconds )))
++  (receive (seconds nanos) (tm:get-time-of-day)
++           (make-time time-utc nanos seconds)))
+ 
+ (define (tm:current-time-tai)
+-  (receive (seconds ms) (tm:get-time-of-day)
++  (receive (seconds nanos) (tm:get-time-of-day)
+            (make-time time-tai
+-                      (* ms 10000)
++                      nanos
+                       (+ seconds (tm:leap-second-delta seconds)))))
+ 
+ (define (tm:current-time-ms-time time-type proc)
+@@ -312,13 +315,13 @@
+ ;;    of course.
+ 
+ (define (tm:current-time-monotonic)
+-  (receive (seconds ms) (tm:get-time-of-day)
++  (receive (seconds nanos) (tm:get-time-of-day)
+            (make-time time-monotonic
+-                      (* ms 10000)
++                      nanos
+                       (+ seconds (tm:leap-second-delta seconds)))))
+ 
+ (define (tm:current-time-thread)
+-  (tm:current-time-ms-time time-process current-process-milliseconds))
++  (tm:current-time-ms-time time-thread current-process-milliseconds))
+ 
+ (define (tm:current-time-process)
+   (tm:current-time-ms-time time-process current-process-milliseconds))
+@@ -404,22 +407,18 @@
+              (quotient nanoseconds tm:nano)))
+ 
+ (define (tm:nanoseconds->values nanoseconds)
+-  (values (abs (remainder nanoseconds tm:nano))
++  (values (remainder nanoseconds tm:nano)
+           (quotient nanoseconds tm:nano)))
+ 
+ (define (tm:time-difference time1 time2 time3)
+   (if (or (not (and (time? time1) (time? time2)))
+           (not (eq? (time-type time1) (time-type time2))))
+     (tm:time-error 'time-difference 'incompatible-time-types #f))
+-  (set-time-type! time3 time-duration)
+-  (if (time=? time1 time2)
+-    (begin
+-      (set-time-second! time3 0)
+-      (set-time-nanosecond! time3 0))
+-    (receive
+-      (nanos secs)
+-      (tm:nanoseconds->values (- (tm:time->nanoseconds time1)
+-                                 (tm:time->nanoseconds time2)))
++  ;; Compute before mutating: time3 can be the same object as either input.
++  (let ((difference (- (tm:time->nanoseconds time1)
++                       (tm:time->nanoseconds time2))))
++    (set-time-type! time3 time-duration)
++    (receive (nanos secs) (tm:nanoseconds->values difference)
+       (set-time-second! time3 secs)
+       (set-time-nanosecond! time3 nanos)))
+   time3)
+@@ -735,7 +734,8 @@
+ 
+ ;; again, time-monotonic is the same as time tai
+ (define (time-monotonic->date time . tz-offset)
+-  (tm:time->date time tz-offset time-monotonic))
++  (time-tai->date (time-monotonic->time-tai time)
++                  (optional tz-offset (tm:local-tz-offset))))
+ 
+ (define (date->time-utc date)
+   (let ((nanosecond (date-nanosecond date))
+@@ -813,9 +813,11 @@
+             7)))
+ 
+ (define (date-week-number date day-of-week-starting-week)
+-  (quotient (- (date-year-day date)
+-               (tm:days-before-first-week  date day-of-week-starting-week))
+-            7))
++  (+ 1 (floor-quotient
++         (- (date-year-day date)
++            (tm:days-before-first-week date day-of-week-starting-week)
++            1)
++         7)))
+ 
+ (define (tm:date-week-number-iso date)
+   ;; The week with the year's first Thursday is week 01.
+@@ -865,9 +867,10 @@
+         (offset (date-zone-offset date)) )
+     (+ (tm:encode-julian-day-number day month year)
+        (- (/ 1 2))
+-       (+ (/ (/ (+ (* hour 60 60)
+-                   (* minute 60) second (/ nanosecond tm:nano)) tm:sid)
+-             (- offset))))))
++       (/ (- (+ (* hour 60 60)
++                (* minute 60) second (/ nanosecond tm:nano))
++             offset)
++          tm:sid))))
+ 
+ (define (date->modified-julian-day date)
+   (- (date->julian-day date)

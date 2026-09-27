@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T20:15:30Z
+**Measured:** 2026-09-27T21:04:50Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **45 passed smoke checks**, and **61 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **52 passed smoke checks**, and **54 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -146,7 +146,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | rebottled-cl-pdf | probe | missing-library | dependency-not-vendored |
 | rebottled-pstk | probe | pass | in scope |
 | retropikzel-pstk | probe | missing-library | dependency-not-vendored |
-| slib-alist | probe | pass | in scope |
+| slib-alist | smoke | pass | in scope |
 | slib-array-for-each | probe | pass | in scope |
 | slib-array-interpolate | probe | pass | in scope |
 | slib-byte | probe | pass | in scope |
@@ -158,7 +158,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-color-space | probe | pass | in scope |
 | slib-common | probe | pass | in scope |
 | slib-common-lisp-time | probe | pass | in scope |
-| slib-common-list-functions | probe | pass | in scope |
+| slib-common-list-functions | smoke | pass | in scope |
 | slib-daylight | probe | pass | in scope |
 | slib-determinant | probe | pass | in scope |
 | slib-directory | probe | pass | in scope |
@@ -178,7 +178,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-pprint-file | probe | pass | in scope |
 | slib-pretty-print | probe | pass | in scope |
 | slib-printf | smoke | pass | in scope |
-| slib-queue | probe | pass | in scope |
+| slib-queue | smoke | pass | in scope |
 | slib-random-inexact | probe | pass | in scope |
 | slib-rationalize | probe | pass | in scope |
 | slib-resene | probe | pass | in scope |
@@ -192,8 +192,8 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-subarray | probe | pass | in scope |
 | slib-time-core | probe | pass | in scope |
 | slib-time-zone | probe | pass | in scope |
-| slib-topological-sort | probe | pass | in scope |
-| slib-tree | probe | pass | in scope |
+| slib-topological-sort | smoke | pass | in scope |
+| slib-tree | smoke | pass | in scope |
 | slib-tzfile | probe | pass | in scope |
 | slib-uri | probe | pass | in scope |
 | slib-xml-parse | probe | pass | in scope |
@@ -202,12 +202,12 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-145 | smoke | pass | in scope |
 | srfi-156 | test | pass | in scope |
 | srfi-16 | smoke | pass | in scope |
-| srfi-166 | probe | pass | in scope |
+| srfi-166 | smoke | pass | in scope |
 | srfi-170 | probe | out-of-scope | ffi |
 | srfi-175 | test | pass | in scope |
 | srfi-179 | test | parse-error | upstream-source-defect |
 | srfi-180 | smoke | pass | in scope |
-| srfi-19 | probe | pass | in scope |
+| srfi-19 | smoke | pass | in scope |
 | srfi-197 | test | runtime-error | upstream-test-defect |
 | srfi-2 | smoke | pass | in scope |
 | srfi-227 | smoke | pass | in scope |

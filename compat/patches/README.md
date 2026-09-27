@@ -162,6 +162,24 @@ the broader #429 authorization):
   generator when multiple vectors are enumerated with an index variable.
   The drivers cover indexed concatenation, empty vectors and use through
   SRFI 78's `check-ec`.
+- [#515](https://github.com/avalonalex/patina/issues/515), `srfi-19.patch`:
+  preserve negative duration fractions, calculate destructive differences
+  before mutation, correct week numbering and Julian timezone arithmetic,
+  convert monotonic dates through TAI, sample UTC seconds and fractions
+  together, and preserve the requested thread-clock type. The driver uses
+  fixed dates, explicit offsets and a temporarily replaced clock binding.
+  Process/thread clocks still use the upstream wall-clock surrogate; this
+  patch does not provide CPU-time measurement.
+- [#516](https://github.com/avalonalex/patina/issues/516), `srfi-166.patch`:
+  admit exact-width word lines, preserve explicit newlines and stream
+  character chunks without adding a final newline. Keep digit grouping and
+  word tokenization within cursor bounds. The smoke driver temporarily
+  enforces checked cursor movement so CI detects the invalid movement that
+  Gauche rejects but integer-cursor implementations tolerate.
+- [#517](https://github.com/avalonalex/patina/issues/517), `slib-alist.patch`:
+  remove the `=` shortcut through `assv`, which uses `eqv?`. The existing
+  predicate scan correctly handles exact/inexact equivalents for lookup,
+  inquiring and replacement.
 
 These patches deliberately correct upstream behavior. All defects were
 reproduced with the pinned libraries on Patina's two backends, Chibi and
@@ -170,8 +188,12 @@ regressions are asserted by the CI smoke drivers. SRFI 38's comparisons select
 the portable `38.scm` branch on all four; the separate `38.chibi.scm` branch
 is unchanged and is not the subject of those comparisons. SRFI 42's reference
 staging removes the inert `#f` library declaration rejected by Gauche; its
-implementation body is identical to the patched corpus. They do not weaken an
-assertion or hide a Patina difference. The corpus now measures these packages
+implementation body is identical to the patched corpus. SRFI 166's reference
+staging selects portable optional-argument macros and supplies an isolated
+SRFI 165 dependency. That staged dependency collects environment defaults in
+a vector instead of multiple values, avoiding Gauche's multiple-value limit;
+the SRFI 166 implementation bodies remain identical to the patched corpus.
+They do not weaken an assertion or hide a Patina difference. The corpus now measures these packages
 with the documented corrections, not the pristine upstream behavior.
 
 Each patch begins with a `#` comment block — `patch(1)` skips it as leading
