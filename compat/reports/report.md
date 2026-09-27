@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T18:01:11Z
+**Measured:** 2026-09-27T18:41:53Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **28 passed smoke checks**, and **78 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **34 passed smoke checks**, and **72 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -126,22 +126,22 @@ These packages still run on every pass — exclusion decides whether a result co
 | lightweight-testing | probe | pass | in scope |
 | macduffie-json | smoke | pass | in scope |
 | okmij-ssax | test | pass | in scope |
-| pfds-alist | probe | pass | in scope |
-| pfds-bitwise | probe | pass | in scope |
-| pfds-bounded-balance-tree | probe | pass | in scope |
+| pfds-alist | smoke | pass | in scope |
+| pfds-bitwise | smoke | pass | in scope |
+| pfds-bounded-balance-tree | smoke | pass | in scope |
 | pfds-deque | smoke | pass | in scope |
 | pfds-difference-list | smoke | pass | in scope |
 | pfds-fector | smoke | pass | in scope |
 | pfds-fingertree | probe | pass | in scope |
-| pfds-hash-array-mapped-trie | probe | pass | in scope |
+| pfds-hash-array-mapped-trie | smoke | pass | in scope |
 | pfds-heap | smoke | pass | in scope |
 | pfds-lazy-list | smoke | pass | in scope |
-| pfds-list-helpers | probe | pass | in scope |
+| pfds-list-helpers | smoke | pass | in scope |
 | pfds-priority-search-queue | probe | pass | in scope |
 | pfds-queue | smoke | pass | in scope |
 | pfds-sequence | smoke | pass | in scope |
 | pfds-set | smoke | pass | in scope |
-| pfds-vector | probe | pass | in scope |
+| pfds-vector | smoke | pass | in scope |
 | postgresql | probe | out-of-scope | ffi |
 | rebottled-cl-pdf | probe | missing-library | dependency-not-vendored |
 | rebottled-pstk | probe | pass | in scope |
