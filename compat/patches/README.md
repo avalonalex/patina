@@ -15,8 +15,10 @@ record of every difference.
 A patch is **not** a way to make a failure go away. The test is the same for
 every one of them: **the rewrite is the one the package's author would make to
 run on a conforming R7RS implementation, and it changes no behaviour being
-measured.** If a patch would paper over a real incompatibility, the package
-belongs in `compat/EXCLUSIONS.scm` with a reason, or should simply fail.
+measured.** The two named owner-approved correctness exceptions below are
+the only departures from that rule. Otherwise, if a patch would paper over a
+real incompatibility, the package belongs in `compat/EXCLUSIONS.scm` with a
+reason, or should simply fail.
 
 Whose incompatibility it is gets *measured*, not assumed. Where the package
 relies on something chibi allows, ask Gauche: if Gauche rejects it as Patina
@@ -99,6 +101,27 @@ of 4 with its test's chibi names rewritten, and the fourth cannot pass off
 chibi — Gauche fails it identically. Its status would read `wrong-result`
 whether three assertions passed or none, so the patch would buy no regression
 signal; the finding goes in its exclusion note instead.
+
+### Named correctness exceptions
+
+On 2026-09-27 the owner authorized local corrections for two upstream defects
+found while adding the #429 SRFI smoke batch:
+
+- [#504](https://github.com/avalonalex/patina/issues/504), `srfi-95.patch`:
+  make `sorted?` compare the elements of a two-element array.
+- [#505](https://github.com/avalonalex/patina/issues/505), `srfi-180.patch`:
+  validate JSON number syntax before calling Scheme's `string->number`.
+
+These patches deliberately correct upstream behavior. Both defects were
+reproduced with the pinned libraries on Patina's two backends, Chibi and
+Gauche; both corrections are checked on those same implementations, and their
+regressions are asserted by the CI smoke drivers. They do not weaken an
+assertion or hide a Patina difference. The corpus now measures these packages
+with the documented corrections, not the pristine upstream behavior.
+
+This is a named exception, not general permission to repair upstream packages
+to raise the corpus score. Further correctness patches need their own owner
+decision and recorded evidence. Pristine extractions still stay unchanged.
 
 Each patch begins with a `#` comment block — `patch(1)` skips it as leading
 garbage — stating what is rewritten, why the old name is wrong, why the new
