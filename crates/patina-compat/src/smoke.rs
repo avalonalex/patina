@@ -205,12 +205,26 @@ mod tests {
     }
 
     #[test]
-    fn committed_smoke_manifest_keeps_all_six_drivers_registered() {
+    fn committed_smoke_manifest_keeps_all_drivers_registered() {
         let vendor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../compat/vendor");
         let heap = patina_core::new_shared_heap();
         let packages = crate::corpus::discover(&vendor, &heap).unwrap();
         let registered: Vec<_> = packages.iter().filter(|p| p.smoke.is_some()).collect();
-        assert_eq!(registered.len(), 6);
+        let mut drivers: Vec<_> = std::fs::read_dir(vendor.join("../smoke"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "scm")
+                    && path.file_stem().unwrap() != "manifest"
+            })
+            .map(|path| path.file_stem().unwrap().to_str().unwrap().to_owned())
+            .collect();
+        drivers.sort();
+        assert!(!drivers.is_empty());
+        assert_eq!(
+            registered.iter().map(|p| &p.slug).collect::<Vec<_>>(),
+            drivers.iter().collect::<Vec<_>>()
+        );
         for package in registered {
             let smoke = package.smoke.as_ref().unwrap();
             let generated = source(package, smoke);

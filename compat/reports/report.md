@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-27T07:05:08Z
+**Measured:** 2026-09-27T07:36:05Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **6 passed smoke checks**, and **100 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **12 passed smoke checks**, and **94 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -167,8 +167,8 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-filename | probe | pass | in scope |
 | slib-format | smoke | pass | in scope |
 | slib-fourier-transform | probe | pass | in scope |
-| slib-generic-write | probe | pass | in scope |
-| slib-line-io | probe | pass | in scope |
+| slib-generic-write | smoke | pass | in scope |
+| slib-line-io | smoke | pass | in scope |
 | slib-math-integer | probe | pass | in scope |
 | slib-math-real | probe | pass | in scope |
 | slib-minimize | probe | pass | in scope |
@@ -177,7 +177,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-posix-time | probe | pass | in scope |
 | slib-pprint-file | probe | pass | in scope |
 | slib-pretty-print | probe | pass | in scope |
-| slib-printf | probe | pass | in scope |
+| slib-printf | smoke | pass | in scope |
 | slib-queue | probe | pass | in scope |
 | slib-random-inexact | probe | pass | in scope |
 | slib-rationalize | probe | pass | in scope |
@@ -186,9 +186,9 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-saturate | probe | pass | in scope |
 | slib-scanf | probe | pass | in scope |
 | slib-soundex | probe | pass | in scope |
-| slib-string-case | probe | pass | in scope |
-| slib-string-port | probe | pass | in scope |
-| slib-string-search | probe | pass | in scope |
+| slib-string-case | smoke | pass | in scope |
+| slib-string-port | smoke | pass | in scope |
+| slib-string-search | smoke | pass | in scope |
 | slib-subarray | probe | pass | in scope |
 | slib-time-core | probe | pass | in scope |
 | slib-time-zone | probe | pass | in scope |
