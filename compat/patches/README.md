@@ -12,19 +12,26 @@ record of every difference.
 
 ## When a patch is justified
 
-A patch is **not** a way to make a failure go away. The test is the same for
-every one of them: **the rewrite is the one the package's author would make to
-run on a conforming R7RS implementation, and it changes no behaviour being
-measured.** The four named owner-approved correctness exceptions below are
-the only departures from that rule. Otherwise, if a patch would paper over a
-real incompatibility, the package belongs in `compat/EXCLUSIONS.scm` with a
-reason, or should simply fail.
+There are two authorized uses of package overlays:
+
+- **Portability patches** make the rewrite the package's author would make to
+  run on a conforming R7RS implementation, preserving the behavior measured.
+- **Correctness patches found while expanding execution coverage for #429**
+  repair demonstrated upstream defects, with an issue, reference measurements
+  and regression assertions as described below. The owner authorized this
+  workflow on 2026-09-27; qualifying patches need no further per-patch approval.
+
+Neither use permits hiding a Patina defect or weakening a test to make a
+package pass. Other incompatibilities belong in `compat/EXCLUSIONS.scm` with
+a reason, or should simply fail.
 
 Whose incompatibility it is gets *measured*, not assumed. Where the package
 relies on something chibi allows, ask Gauche: if Gauche rejects it as Patina
 does, it is the package's non-portability and a patch may spell it portably.
 If Gauche accepts it, it may be **a difference in Patina, and that is never
 patched** — see the end of this section.
+
+### Portability patches
 
 What has been admitted so far, each with the patch that needed it. The list is
 here so a new patch is argued against it rather than beside it; a shape that is
@@ -67,8 +74,8 @@ not on it needs its own argument, added here.
 - **Dead code that other implementations reject is removed, not repaired.**
   `chibi-app` has a `case` clause after its `else`, which chibi never reaches;
   the patch deletes the clause rather than moving `else` below it, because
-  moving it would change what the program does. A patch measures upstream's
-  code, not an improvement on it.
+  moving it would change what the program does. This portability rewrite
+  preserves the behavior being measured.
 
 **In a package's test program** — admitted because the alternative is that
 assertions which could run never do (#428). Each has a limit, and the limit is
@@ -96,16 +103,44 @@ patches also sat in Patina's *own* bundled `(srfi 115)`, where it was fixed in
 the library rather than excluded around. A patched package that then shows a
 Patina defect is the mechanism working.
 
-**A package that would still fail is not patched.** `chibi-assert` reaches 3
+**A portability patch must add regression signal.** `chibi-assert` reaches 3
 of 4 with its test's chibi names rewritten, and the fourth cannot pass off
 chibi — Gauche fails it identically. Its status would read `wrong-result`
 whether three assertions passed or none, so the patch would buy no regression
 signal; the finding goes in its exclusion note instead.
 
-### Named correctness exceptions
+### Correctness patches during #429
 
-On 2026-09-27 the owner authorized local corrections for upstream defects
-found while adding the #429 SRFI and PFDS smoke batches:
+The owner authorizes upstream correctness repairs discovered while working
+on [#429](https://github.com/avalonalex/patina/issues/429), including defects
+in dependencies exercised by a new driver. Proceed without a separate owner
+decision for each repair when the following evidence and checks are in place:
+
+1. Search the issues and Track L archive, then file or update an issue before
+   fixing the defect. Record a minimal reproduction, the expected behavior
+   and its basis, and why the defect belongs to the upstream package.
+2. Compare the pinned implementation before and after the repair on both
+   Patina backends, Chibi and Gauche. Record any library renaming, branch
+   selection or declaration adaptation needed to exercise the same code.
+   Document unavailable comparisons or reference differences explicitly;
+   they are not passing comparisons or grounds for changing the expected
+   answer. The evidence must distinguish an upstream defect from a Patina
+   incompatibility.
+3. Add assertions for the repaired behavior to a maintained CI smoke driver.
+   Keep existing assertions and their expected results intact. Use the
+   smallest repair that implements the documented behavior.
+4. Keep the pristine vendor extraction unchanged. Put the correction in a
+   named overlay here, link its issue in the patch header and this record,
+   run the patch-application guard and both backend smoke gates, and refresh
+   the full corpus measurement when coverage or results change.
+
+This authorization is scoped to #429 execution-coverage work. It does not
+authorize masking Patina differences or changing bundling policy. Outside
+that scope, correctness changes still need an owner decision; portability
+patches continue to follow the rules above.
+
+Corrections recorded so far (the first four were approved individually before
+the broader #429 authorization):
 
 - [#504](https://github.com/avalonalex/patina/issues/504), `srfi-95.patch`:
   make `sorted?` compare the elements of a two-element array.
@@ -122,24 +157,27 @@ found while adding the #429 SRFI and PFDS smoke batches:
   the portable `38.scm` implementation. Copy each decoded string to preserve
   its mutability, including through shared labels. The smoke driver checks
   control characters, hexadecimal escapes and mutation through aliases.
+- [#513](https://github.com/avalonalex/patina/issues/513), `srfi-42.patch`:
+  remove the extra continuation argument passed to the inner `:vector`
+  generator when multiple vectors are enumerated with an index variable.
+  The drivers cover indexed concatenation, empty vectors and use through
+  SRFI 78's `check-ec`.
 
 These patches deliberately correct upstream behavior. All defects were
 reproduced with the pinned libraries on Patina's two backends, Chibi and
 Gauche; all corrections are checked on those same implementations, and their
 regressions are asserted by the CI smoke drivers. SRFI 38's comparisons select
 the portable `38.scm` branch on all four; the separate `38.chibi.scm` branch
-is unchanged and is not the subject of those comparisons. They do not weaken an
+is unchanged and is not the subject of those comparisons. SRFI 42's reference
+staging removes the inert `#f` library declaration rejected by Gauche; its
+implementation body is identical to the patched corpus. They do not weaken an
 assertion or hide a Patina difference. The corpus now measures these packages
 with the documented corrections, not the pristine upstream behavior.
 
-These are named exceptions, not general permission to repair upstream packages
-to raise the corpus score. Further correctness patches need their own owner
-decision and recorded evidence. Pristine extractions still stay unchanged.
-
 Each patch begins with a `#` comment block — `patch(1)` skips it as leading
-garbage — stating what is rewritten, why the old name is wrong, why the new
-one is faithful, and what was measured afterwards. That block is the argument;
-the diff is just its consequence.
+garbage — stating what is rewritten, why it is justified, its issue and
+regression coverage, and what was measured before and after. That block is the
+argument; the diff is just its consequence.
 
 ## How it runs
 
