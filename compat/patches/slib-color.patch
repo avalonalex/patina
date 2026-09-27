@@ -1,0 +1,80 @@
+# Correctness overlay for #429; issue #525:
+# https://github.com/avalonalex/patina/issues/525
+# Match folded parser tags, measure hexadecimal strings, and construct whitepoints from lists.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the defects.
+# Driver comparison on all four hosts: 21/27 before; 27/27 after.
+# Maintained slib-color smoke assertions cover the repaired behavior.
+# Reference staging isolates transitive SLIB and SRFI dependencies; see
+# docs/TEST_ORGANIZATION.md. The pinned vendor extraction is unchanged.
+--- a/slib/color.sld
++++ b/slib/color.sld
+@@ -570,9 +570,9 @@
+     (if (not (color:color? color))
+       (error 'color-white-point ': 'not 'color? color))
+     (case (color:encoding color)
+-      ((L*a*b*) (color:CIEXYZ (color:white-point color)))
+-      ((L*u*v*) (color:CIEXYZ (color:white-point color)))
+-      ((L*C*h)  (color:CIEXYZ (color:white-point color)))
++      ((L*a*b*) (CIEXYZ->color (color:white-point color)))
++      ((L*u*v*) (CIEXYZ->color (color:white-point color)))
++      ((L*C*h)  (CIEXYZ->color (color:white-point color)))
+       ((RGB709) D65)
+       ((sRGB)   D65)
+       ((e-sRGB) D65)
+@@ -636,12 +636,12 @@
+               (y (list-ref case1 2))
+               (z (list-ref case1 3)))
+           (case (string-ci->symbol coding)
+-            ((CIEXYZ) (color:CIEXYZ x y z))
+-            ((CIELab) (color:L*a*b* x y z))
+-            ((CIELuv) (color:L*u*v* x y z))
+-            ((CIELCh) (color:L*C*h  x y z))
+-            ((RGBi		       ; Xlib - C Language X Interface
+-               RGB709) (color:RGB709 x y z))
++            ((ciexyz) (color:CIEXYZ x y z))
++            ((cielab) (color:L*a*b* x y z))
++            ((cieluv) (color:L*u*v* x y z))
++            ((cielch) (color:L*C*h  x y z))
++            ((rgbi		       ; Xlib - C Language X Interface
++               rgb709) (color:RGB709 x y z))
+             (else #f)))
+         (let ((case2 (scanf-read-list " %[sRGBSrgb]:%d/%d/%d" str)))
+           (if (= 4 (length case2))
+@@ -650,7 +650,7 @@
+                   (y (list-ref case2 2))
+                   (z (list-ref case2 3)))
+               (case (string-ci->symbol coding)
+-                ((sRGB)   (color:sRGB x y z))
++                ((srgb)   (color:sRGB x y z))
+                 (else #f)))
+             (let ((case3 (scanf-read-list " %[-esRGBESrgb]%d:%d/%d/%d" str)))
+               (if (= 5 (length case3))
+@@ -660,23 +660,23 @@
+                       (y (list-ref case3 3))
+                       (z (list-ref case3 4)))
+                   (case (string-ci->symbol coding)
+-                    ((e-sRGB) (color:e-sRGB prec x y z))
++                    ((e-srgb) (color:e-sRGB prec x y z))
+                     (else #f)))
+                 (let ((case4 (scanf-read-list " %[sRGBxXXRGB]:%6x%[/0-9a-fA-F]" str)))
+                   (if (= 2 (length case4))
+                     (let ((coding (list-ref case4 0))
+                           (x (list-ref case4 1)))
+                       (case (string-ci->symbol coding)
+-                        ((sRGB
+-                           xRGB
+-                           sRGBx)  (xRGB->color x))
++                        ((srgb
++                           xrgb
++                           srgbx)  (xRGB->color x))
+                         (else #f)))
+                     (let ((case5 (scanf-read-list " #%6[0-9a-fA-F]%[0-9a-fA-F]" str)))
+                       (if (and (= 1 (length case5)) (= 6 (string-length (car case5))))
+                         (xRGB->color (string->number (car case5) 16))
+                         (let ((case6 (scanf-read-list " %[#0xX]%6[0-9a-fA-F]%[0-9a-fA-F]" str)))
+                           (if (and (= 2 (length case6)) 
+-                                   (= 6 (length (cadr case6)))
++                                   (= 6 (string-length (cadr case6)))
+                                    (member (car case6) '("#" "0x" "#X" "0X")))
+                             (xRGB->color (string->number (cadr case6) 16))
+                             #f)))))))))))))

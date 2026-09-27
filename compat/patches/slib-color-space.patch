@@ -1,0 +1,73 @@
+# Correctness overlay for #429; issue #525:
+# https://github.com/avalonalex/patina/issues/525
+# Handle scalar metric factors, square CIE94 scales, include the last spectral row, and traverse reversed samples.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the defects.
+# Driver comparison on all four hosts: 35/43 before; 43/43 after.
+# Maintained slib-color-space smoke assertions cover the repaired behavior.
+# Reference staging isolates transitive SLIB and SRFI dependencies; see
+# docs/TEST_ORGANIZATION.md. The pinned vendor extraction is unchanged.
+--- a/slib/color-space.sld
++++ b/slib/color-space.sld
+@@ -346,8 +346,8 @@
+       (define ans
+         (case (length parametric-factors)
+           ((0) #f)
+-          ((1) (if (list? parametric-factors)
+-                 (apply color:process-params parametric-factors)
++          ((1) (if (list? (car parametric-factors))
++                 (color:process-params (car parametric-factors))
+                  (append parametric-factors '(1 1))))
+           ((2) (append parametric-factors '(1)))
+           ((3) parametric-factors)
+@@ -365,7 +365,8 @@
+       (let ((C1 (sqrt (apply + (map square (cdr lab1)))))
+             (C2 (sqrt (apply + (map square (cdr lab2))))))
+         (define dC^2 (square (- C1 C2)))
+-        (sqrt (apply + (map /
++        (sqrt (apply + (map (lambda (delta2 scale factor)
++                              (/ delta2 (square (* scale factor))))
+                             (list (square (- (car lab1) (car lab2)))
+                                   dC^2
+                                   (- (apply + (map square
+@@ -480,13 +481,13 @@
+     (define cie:z-bar #f)
+     ;@
+     (define (setup-ciexyz)
+-      (set! cie:x-bar (make-vector 80))
+-      (set! cie:y-bar (make-vector 80))
+-      (set! cie:z-bar (make-vector 80))
++      (set! cie:x-bar (make-vector 81))
++      (set! cie:y-bar (make-vector 81))
++      (set! cie:z-bar (make-vector 81))
+       (do ((wlen 380 (+ 5 wlen))
+            (idx 0 (+ 1 idx))
+            (data *cie1931* (cdr data)))
+-        ((>= wlen 780) )
++        ((> wlen 780) )
+         (when (not (eqv? wlen (caar data)))
+           (error *cie1931* 'expected wlen 'not (caar data)))
+         (vector-set! cie:x-bar idx (list-ref (car data) 1))
+@@ -520,12 +521,12 @@
+     (define (wavelength->XYZ wl)
+       (if (not cie:y-bar) (setup-ciexyz))
+       (set! wl (- (/ wl 5.e-9) 380/5))
+-      (if (<= 0 wl (+ -1 400/5))
++      (if (<= 0 wl 400/5)
+         (let* ((wlf (exact (floor wl)))
+                (res (- wl wlf)))
+           (define (interpolate vect idx res)
+             (+ (* (- 1 res) (vector-ref vect idx))
+-               (* res (vector-ref vect (+ 1 idx)))))
++               (* res (vector-ref vect (min 80 (+ 1 idx))))))
+           (list (interpolate cie:x-bar wlf res)
+                 (interpolate cie:y-bar wlf res)
+                 (interpolate cie:z-bar wlf res)))
+@@ -566,7 +567,7 @@
+            (if (<= (abs xinc) 5.e-9)
+              (do ((wvln (j->x (x->j xlo)) (+ wvln (abs xinc)))
+                   (jdx (x->j xlo) (+ jdx jinc)))
+-               ((>= jdx jhi)
++               (((if (positive? jinc) >= <=) jdx jhi)
+                 (let ((nsmps (abs (- jhi (x->j xlo)))))
+                   (map (lambda (x) (/ x nsmps)) (list x y z))))
+                (let ((ciedex (min 79 (x->k wvln)))

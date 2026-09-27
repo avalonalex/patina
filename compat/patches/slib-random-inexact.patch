@@ -1,0 +1,19 @@
+# Correctness overlay for #429; issue #525:
+# https://github.com/avalonalex/patina/issues/525
+# Return the documented squared norm from random:solid-sphere!, preserving generated coordinates.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the defects.
+# Driver comparison on all four hosts: 12/13 before; 13/13 after.
+# Maintained slib-random-inexact smoke assertions cover the repaired behavior.
+# Reference staging isolates transitive SLIB and SRFI dependencies; see
+# docs/TEST_ORGANIZATION.md. The pinned vendor extraction is unchanged.
+--- a/slib/random-inexact.sld
++++ b/slib/random-inexact.sld
+@@ -134,7 +134,7 @@
+       (let ((r (expt (random-real)
+                      (/ (vector-length vect)))))
+         (do ((n (- (vector-length vect) 1) (- n 1)))
+-          ((negative? n) r)
++          ((negative? n) (* r r))
+           (vector-set! vect n (* r (vector-ref vect n))))))
+ 
+     ))

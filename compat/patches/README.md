@@ -208,6 +208,13 @@ the broader #429 authorization):
   Scanf's documented explicit-whitespace behavior is unchanged. Filename
   tests request zero names and assert zero/multiple return values without
   creating or deleting files.
+- [#525](https://github.com/avalonalex/patina/issues/525), `slib-color.patch`,
+  `slib-color-space.patch` and `slib-random-inexact.patch`: match folded parser
+  tags, use string lengths for hexadecimal text, construct whitepoints from
+  coordinate lists, accept scalar metric factors, square CIE94 scaling terms,
+  initialize and interpolate the final spectral row, traverse descending
+  spectrum samples and return the solid-sphere sampler's squared norm.
+  Direct regressions and palette serialization exercise the repairs.
 
 These patches deliberately correct upstream behavior. Before/after behavior
 is compared with the pinned libraries on Patina's two backends, Chibi and
@@ -234,6 +241,13 @@ Gauche alone loses callback result arity before the filename repair; the
 other hosts tolerate the original single-value binding. The repaired callback
 preserves all values on every host (#523). The byte driver times out on all
 four before repair because reverse reads do not terminate at EOF.
+The color/scientific batch isolates SRFI 95 and the portable SRFI 27 dependency
+as well. It passes 137/155 before repair and 155/155 afterward on both Patina
+backends and Gauche; Chibi passes 136/155 and 154/155 respectively. A direct
+primitive reproduction shows Chibi's real-minus-complex subtraction changing
+an earlier sum's imaginary component, which breaks the retained Fourier
+round-trip assertion. This oracle defect and the complete staging method are
+recorded in `docs/TEST_ORGANIZATION.md` and #525.
 These patches do not weaken an assertion or hide a Patina difference. The
 corpus now measures these packages with the documented corrections, not the
 pristine upstream behavior.
