@@ -17,6 +17,8 @@
   ((slug "pfds-vector") (assertions 10))
   ((slug "pfds-bounded-balance-tree") (assertions 17))
   ((slug "pfds-hash-array-mapped-trie") (assertions 23))
+  ((slug "pfds-fingertree") (assertions 21))
+  ((slug "pfds-priority-search-queue") (assertions 23))
   ((slug "slib-format") (assertions 4))
   ((slug "slib-string-search") (assertions 9))
   ((slug "slib-string-case") (assertions 7))
