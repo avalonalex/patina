@@ -1,0 +1,41 @@
+(import (scheme base) (scheme char) (prefix (slib topological-sort) t:)
+        (patina compat smoke))
+;; Check the ordering constraints, without choosing an order for unrelated nodes.
+(define (index item items same?)
+  (let loop ((items items) (i 0))
+    (cond ((null? items) #f) ((same? item (car items)) i)
+          (else (loop (cdr items) (+ i 1))))))
+(define (all? predicate items)
+  (or (null? items) (and (predicate (car items)) (all? predicate (cdr items)))))
+(define (valid-order? vertices edges order same?)
+  (and (= (length vertices) (length order))
+       (all? (lambda (v) (index v order same?)) vertices)
+       (all? (lambda (edge)
+               (let ((a (index (car edge) order same?)) (b (index (cdr edge) order same?)))
+                 (and a b (< a b)))) edges)))
+(check-equal "an empty graph has an empty ordering" '() (t:topological-sort '() eq?))
+(check-equal "a singleton graph keeps its vertex" '(a) (t:topological-sort '((a)) eq?))
+(check-equal "a chain is ordered from source to sink" '(a b c d)
+  (t:topological-sort '((c d) (b c) (a b) (d)) eq?))
+(check-equal "vertices named only as neighbors are included" '(a b c)
+  (t:topological-sort '((a b) (b c)) eq?))
+(check-equal "a diamond obeys every edge and emits each vertex once" #t
+  (valid-order? '(a b c d) '((a . b) (a . c) (b . d) (c . d))
+    (t:topological-sort '((a b c) (b d) (c d) (d)) eq?) eq?))
+(check-equal "disconnected components and isolated nodes are retained" #t
+  (valid-order? '(a b c d e) '((a . b) (c . d))
+    (t:topological-sort '((e) (a b) (b) (c d) (d)) eq?) eq?))
+(check-equal "repeated edges do not duplicate vertices" '(a b c)
+  (t:topological-sort '((a b b) (b c c)) eq?))
+;; Chibi/Gauche can choose an incompatible default SRFI 69 hash for this
+;; predicate. Keep the required answer; see docs/TEST_ORGANIZATION.md.
+(check-equal "case-insensitive vertex equality is honored" #t
+  (valid-order? '("a" "b" "c") '(("a" . "b") ("b" . "c"))
+    (t:topological-sort '(("A" "b") ("B" "c") ("C")) string-ci=?) string-ci=?))
+(check-equal "the documented clothing graph satisfies its dependencies" #t
+  (valid-order? '(shirt tie belt jacket watch pants shoes undershorts socks)
+    '((shirt . tie) (shirt . belt) (tie . jacket) (belt . jacket)
+      (pants . shoes) (pants . belt) (undershorts . pants) (undershorts . shoes) (socks . shoes))
+    (t:topological-sort '((shirt tie belt) (tie jacket) (belt jacket) (watch)
+                          (pants shoes belt) (undershorts pants shoes) (socks shoes)) eq?) eq?))
+(smoke-finish)

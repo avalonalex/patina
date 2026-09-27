@@ -735,16 +735,18 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 45 drivers cover binary-record read/write round trips;
+assertion count. The 52 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
-string search, string casing, string ports, line I/O, generic writing and
-printf; SRFI 63 arrays, SRFI 95 sorting, SRFI 43
+string search, string casing, string ports, line I/O, generic writing,
+printf, alists, queues, trees, common list functions and topological sorting;
+SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
 SRFI 39 parameters, SRFI 51 rest arguments and checks, SRFI 145 assumptions;
 SRFI 25 shared arrays, SRFI 42 comprehensions and SRFI 78 lightweight testing;
+SRFI 19 times and dates, all five SRFI 166 formatter modules;
 and SRFI 180 and MacDuffie JSON.
 The PFDS checks exercise branching updates that preserve older versions,
 deque rebalancing, lazy-tail memoization, sequence splits and set operations.
@@ -791,11 +793,29 @@ Its indexed multi-vector regression gates `compat/patches/srfi-42.patch`
 failures and reports to assert evaluation order, accumulated counts, reporting
 modes, disabled checks and the first counterexample. It tests the four exports
 of the pinned library; `check-reset!` and `check-passed?` are not exported there.
+The time and formatting batch adds 131 assertions across seven packages:
+SRFI 19 (31), SRFI 166 (45), SLIB alist (14), queue (11), tree (11), common
+list functions (10) and topological sort (9). Dates use fixed instants and
+explicit zones; one clock check temporarily replaces and restores the shared
+`current-second` binding. No timing thresholds or sleeps are used. These
+checks gate the arithmetic, calendar and clock-adapter overlay (#515), but
+do not establish process/thread CPU-clock accuracy: the pinned library still
+uses a wall-clock surrogate for those sources.
+Formatter checks cover state restoration, numeric output, joining, padding,
+trimming, row/column tracking, shared and cyclic writing, Unicode display
+width, colors, wrapping and columnar output. The #516 overlay repairs word
+and character wrapping and cursor boundaries; two assertions temporarily
+install checked cursor movement so both Patina backends detect the invalid
+movement that Gauche rejects. All temporary bindings are restored with
+`dynamic-wind`. SLIB checks cover supplied equality, mutations, callback
+arguments, copying and sharing, fold direction and graph ordering constraints.
+The alist overlay (#517) makes numeric `=` lookup honor exact/inexact
+equivalence instead of substituting `eqv?`.
 The patch policy authorizes upstream correctness repairs discovered during
 #429 without further per-patch approval, with issue evidence, reference
 comparisons and CI regression assertions required.
 
-All 485 assertions were compared against both Patina backends, Chibi 0.12
+All 616 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -810,6 +830,18 @@ The six SRFI utility drivers add 76 assertions, all passing on both backends
 and both references with the SRFI 38 overlay.
 The SRFI 25/42/78 batch adds 63 assertions (20/28/15), all passing on both
 backends and both references with the SRFI 42 overlay.
+The seven-package time/formatting/collections batch passes all 131 assertions
+on both Patina backends. Each reference passes 130/131; the topological-sort
+case-insensitive-key assertion is classified here as an **oracle defect**.
+Both references can select an incompatible default hash for the R7RS
+`string-ci=?` predicate: inserting `"B"` into `(make-hash-table string-ci=?)`
+and querying `"b"` can miss, while explicitly passing `string-ci-hash` succeeds.
+Gauche's failures depend on hash collisions, so an occasional passing run is
+not evidence of correctness. [SRFI 69](https://srfi.schemers.org/srfi-69/srfi-69.html#make-hash-table)
+explicitly guarantees an appropriate default for `string-ci=?`; Patina passes
+and the assertion is retained.
+This compatibility driver is outside the `tests/scheme` oracle lane, so its
+divergence is recorded here rather than adding an unexecuted register row.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
@@ -823,6 +855,15 @@ SRFI 42's staged `.sld` also replaces its inert `(else #f)` library declaration
 with `(else)` because Gauche rejects that declaration. This staging-only
 adaptation also applies to the dependency used by SRFI 78; the `.scm`
 implementation bodies remain identical to the patched corpus.
+For SRFI 166, all five sublibraries and the included `(chibi show shared)`
+helper are isolated as well. Staged declarations select the portable
+optional-argument branches, and all four comparisons stage isolated copies
+of `lib/srfi/165` and `test-lib/chibi/optional`. Gauche lacks SRFI 165 and cannot
+initialize the formatter's 21 defaults with its multiple-value limit. The
+staged SRFI 165 macro therefore collects defaults in a vector and binds each
+temporary by index, preserving simultaneous evaluation; the SRFI 166
+implementation bodies remain identical. The normal Patina corpus runs use
+the existing dependencies without this reference adaptation.
 Chibi lacks SRFI 60, so its JSON and PFDS runs used the portable `lib/srfi/60.sld`
 facade over its native SRFI 151; Gauche used its native SRFI 60.
 

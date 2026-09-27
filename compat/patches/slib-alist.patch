@@ -1,0 +1,16 @@
+# Correctness overlay for #517, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/517
+# Numeric = must not use assv's eqv? semantics: 1 and 1.0 compare = but not eqv?.
+# Both Patina backends, Chibi and Gauche reproduce the failed lookup on the
+# pinned body; removing the shortcut uses the existing generic predicate scan.
+# The smoke driver covers lookup, inquiring and replacement with mixed exactness.
+--- a/slib/alist.sld
++++ b/slib/alist.sld
+@@ -51,7 +51,6 @@
+     ;;first argument.
+     (define (predicate->asso pred)
+       (cond ((eq? eq? pred) assq)
+-            ((eq? = pred) assv)
+             ((eq? eqv? pred) assv)
+             ((eq? char=? pred) assv)
+             ((eq? equal? pred) assoc)
