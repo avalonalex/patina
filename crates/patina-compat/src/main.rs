@@ -14,6 +14,7 @@ mod exclusions;
 mod report;
 mod run;
 mod sexp;
+mod smoke;
 
 use run::RunConfig;
 use std::path::PathBuf;

@@ -34,8 +34,10 @@ its date (#381), and the archive's status line went stale twice.
   passes the same 143 and reads 143 of 144, because one excluded package files
   its failure in a different bucket there (#382).
   `cargo run --release -p patina-compat -- run`.
-- **What that does not say:** 106 of the 143 are *probe-mode* — imported, never
-  called. 37 run a suite. The headline means "loads", not "works" (#429).
+- **Execution coverage (#429, measured 2026-09-27):** the first smoke batch
+  exercises six packages with 33 assertions. Of the 143 passes, 37 run upstream suites, 6 run maintained
+  smoke checks, and 100 remain import-only probes. A pass means only what that
+  package's mode measured.
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
   backends. Of the 22 failures, 17 are not ours or are by decision, 3 wait on
   #422 and 2 are ours (#418, #423). `./scripts/run_larceny_tests.sh`.
@@ -51,7 +53,7 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #429 — expand execution coverage beyond import-only probes.
+- #429 — expand execution coverage beyond the first six smoke drivers; 100 passing packages remain import-only.
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #384 — two upstream SRFI 160 defects, quarantined.
 

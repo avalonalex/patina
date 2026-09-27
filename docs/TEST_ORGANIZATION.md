@@ -728,11 +728,44 @@ to `compat/reports/results.scm` and their rendering to
 `compat/reports/report.md`. Use `--tree-walker` for that backend, with explicit
 `--results` and `--report` paths to preserve the canonical VM artifacts.
 
-The pass headline is followed by the number of passing packages that ran
-test suites and the number that only passed import probes. Both counts come
+The pass headline splits successful packages into **upstream test suites**,
+**maintained smoke checks**, and **import-only probes**. All three counts come
 from the snapshot's per-package `mode` and `status`; failed packages do not
-contribute to either count. Probe mode imports libraries without calling
-their exported procedures, so a probe pass establishes loading only.
+contribute. A smoke pass establishes only the assertions its driver makes;
+a probe pass establishes loading without calling exported procedures.
+
+`compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
+assertion count. The first batch covers binary-record read/write round trips,
+PFDS queues and heaps, SLIB formatting, SRFI 63 arrays, and MacDuffie JSON.
+The 33 assertions were compared against both Patina backends, Chibi 0.12 and
+Gauche 0.9.15 using the pinned corpus libraries. Drivers and their test-only
+`(patina compat smoke)` helper live outside `compat/vendor/`; nothing is
+bundled or added to the upstream extractions.
+
+Execution prefers the package's own test program, then a registered smoke
+driver, then the import probe. Smoke mode retains the probe's imports of every
+provided library under unused prefixes before evaluating the driver's own
+forms. It uses the same patched/off-path package staging, dependency closure,
+isolated library paths, scratch working directory and timeout as other modes.
+Driver imports contribute test-only dependencies. The smoke directory is an
+explicit library root for the assertion helper.
+
+Each driver imports `(patina compat smoke)`, calls `check-equal` or
+`check-error` with a label, and ends with `(smoke-finish)`. The helper emits
+`(patina-compat-smoke PASSED FAILED)`. A run passes only if it exits cleanly,
+reports no interpreter errors, and emits exactly one tally with zero failures
+and the manifest's positive assertion count. Missing, duplicate or truncated
+tallies fail, including an early successful exit. An assertion mismatch is
+`wrong-result`; an incomplete run is `runtime-error`.
+
+To add coverage, add `<slug>.scm` and its count to the manifest, compare the
+assertions with the reference implementations against the same package
+version, and run both Patina backends with `--filter <slug>` and explicit
+output paths. Then remeasure the corpus. A custom `--vendor` directory uses
+its sibling `smoke/` directory when present, just as patches live in its
+sibling `patches/`; once present, the smoke manifest and registered drivers
+must be valid. Missing drivers, duplicate or stale slugs, and nonpositive
+counts stop discovery rather than silently dropping to probe mode.
 
 New snapshots carry `(measured-at "2026-09-19T08:09:10Z")`: the UTC start time
 of the corpus run, in RFC 3339 format at second precision. The report prints

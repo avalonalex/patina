@@ -17,7 +17,7 @@ pub struct Package {
     /// Library names its libraries/programs import (all cond-expand branches
     /// pooled — an over-approximation is harmless, it only widens `-A`).
     pub depends: Vec<String>,
-    /// Library names only the package's *test* program imports: the
+    /// Library names only the package's test or smoke driver imports: the
     /// package-level `(test-depends ...)` clause, plus whatever the test
     /// script's own `(import ...)` forms name — upstream metadata routinely
     /// omits the clause (srfi-235 imports `(srfi 64)` and declares nothing),
@@ -29,6 +29,8 @@ pub struct Package {
     pub test_depends: Vec<String>,
     /// The package's own test program, when it ships one.
     pub test_script: Option<PathBuf>,
+    /// Maintained assertion driver, used only when no upstream suite exists.
+    pub smoke: Option<crate::smoke::Smoke>,
     /// Libraries whose `.sld` does not sit where its name says it should.
     pub off_path_libraries: Vec<OffPathLibrary>,
 }
@@ -80,6 +82,7 @@ pub fn discover(vendor: &Path, heap: &SharedHeap) -> Result<Vec<Package>, String
         let slug = entry.file_name().to_string_lossy().into_owned();
         packages.push(parse_package(&slug, &root, &package_scm, heap)?);
     }
+    crate::smoke::attach(&mut packages, vendor, heap)?;
     packages.sort_by(|a, b| a.slug.cmp(&b.slug));
     Ok(packages)
 }
@@ -167,6 +170,7 @@ fn parse_package(
         depends,
         test_depends,
         test_script,
+        smoke: None,
         off_path_libraries,
     })
 }
@@ -204,7 +208,11 @@ fn test_script_imports(script: &Path, heap: &SharedHeap) -> Vec<String> {
 
 /// Collect the library names of every `(import ...)` in `form`, descending
 /// into `cond-expand` clause bodies (conditions ignored).
-fn collect_imports(form: patina_core::TaggedValue, found: &mut Vec<String>, heap: &SharedHeap) {
+pub(crate) fn collect_imports(
+    form: patina_core::TaggedValue,
+    found: &mut Vec<String>,
+    heap: &SharedHeap,
+) {
     if let Some(specs) = sexp::tagged_form(form, "import", heap) {
         for spec in specs {
             if let Some(name) = import_spec_library(spec, heap) {

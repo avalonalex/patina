@@ -123,10 +123,11 @@ fn parse_result_row(
     let fields = sexp::list_elements(row, heap).ok_or("malformed result row")?;
 
     let slug = sexp::row_string(&fields, "slug", heap).ok_or("result row without slug")?;
-    let mode = if sexp::row_symbol(&fields, "mode", heap).as_deref() == Some("test") {
-        "test"
-    } else {
-        "probe"
+    let mode = match sexp::row_symbol(&fields, "mode", heap).as_deref() {
+        Some("test") => "test",
+        Some("smoke") => "smoke",
+        Some("probe") | None => "probe",
+        other => return Err(format!("unknown mode {other:?}")),
     };
     // The detail list is variadic, so it is the one field that reads the
     // whole clause rather than its first argument.
@@ -245,9 +246,10 @@ pub fn render(
     let _ = writeln!(out, "**{} of {} packages pass.**\n", pass, total);
     let _ = writeln!(
         out,
-        "Of these passes, **{} ran test suites** and **{} passed import-only probes**. \
+        "Of these passes, **{} ran test suites**, **{} passed smoke checks**, and **{} passed import-only probes**. \
          The harness does not call exported procedures in probe mode.\n",
         passing_mode("test"),
+        passing_mode("smoke"),
         passing_mode("probe"),
     );
     if !applied.is_empty() {
@@ -483,7 +485,7 @@ mod tests {
             },
             PackageResult {
                 slug: "c".into(),
-                mode: "probe",
+                mode: "smoke",
                 status: Status::UnboundIdentifier(vec!["string-index".into()]),
             },
             PackageResult {
@@ -510,6 +512,7 @@ mod tests {
         assert_eq!(parsed.len(), 5);
         assert_eq!(parsed[0].slug, "a");
         assert_eq!(parsed[0].mode, "test");
+        assert_eq!(parsed[2].mode, "smoke");
         assert_eq!(parsed[0].status, Status::Pass);
         assert_eq!(
             parsed[1].status,
@@ -526,6 +529,18 @@ mod tests {
         assert_eq!(
             parsed[4].status,
             Status::LoadError(vec!["Exported identifier 'f' not defined".into()])
+        );
+    }
+
+    #[test]
+    fn unknown_modes_cannot_silently_become_probes() {
+        let heap = patina_core::new_shared_heap();
+        let source = "(patina-compat-results (results ((slug \"x\") (mode smok) (status pass))))";
+        assert!(
+            from_sexp(source, &heap)
+                .err()
+                .unwrap()
+                .contains("unknown mode")
         );
     }
 
@@ -605,14 +620,24 @@ mod tests {
                 mode: "probe",
                 status: Status::Timeout,
             },
+            PackageResult {
+                slug: "smoke-pass".into(),
+                mode: "smoke",
+                status: Status::Pass,
+            },
+            PackageResult {
+                slug: "smoke-fail".into(),
+                mode: "smoke",
+                status: Status::WrongResult,
+            },
         ];
         let mut exclusions = excluding("suite-fail", "wrong-result");
         exclusions.extend(excluding("probe-pass", "out-of-scope"));
         let report = render(&results, "vm", None, &exclusions, true);
-        assert!(report.contains("**2 of 4 packages pass.**"), "{report}");
-        let split = "Of these passes, **1 ran test suites** and **1 passed import-only probes**.";
+        assert!(report.contains("**3 of 6 packages pass.**"), "{report}");
+        let split = "Of these passes, **1 ran test suites**, **1 passed smoke checks**, and **1 passed import-only probes**.";
         assert!(report.contains(split), "{report}");
-        assert!(report.contains("**2 of 3 in scope**"), "{report}");
+        assert!(report.contains("**3 of 5 in scope**"), "{report}");
         assert!(report.find(split).unwrap() < report.find("in scope**").unwrap());
     }
 
@@ -621,11 +646,15 @@ mod tests {
         for (mode, split) in [
             (
                 "test",
-                "**1 ran test suites** and **0 passed import-only probes**",
+                "**1 ran test suites**, **0 passed smoke checks**, and **0 passed import-only probes**",
+            ),
+            (
+                "smoke",
+                "**0 ran test suites**, **1 passed smoke checks**, and **0 passed import-only probes**",
             ),
             (
                 "probe",
-                "**0 ran test suites** and **1 passed import-only probes**",
+                "**0 ran test suites**, **0 passed smoke checks**, and **1 passed import-only probes**",
             ),
         ] {
             let results = vec![PackageResult {
