@@ -1,0 +1,43 @@
+# Correctness overlay for #520, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/520
+# Visit scalar arrays once and copy source indices into a possibly larger destination.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 11/18 before repair and 18/18 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/array-for-each.sld
++++ b/slib/array-for-each.sld
+@@ -57,7 +57,9 @@
+             (do ((i (+ -1 (car rdims)) (+ -1 i)))
+               ((negative? i))
+               (ramap crdims (cons i inds))))))
+-      (ramap (reverse (array-dimensions ra0)) '()))
++      (if (zero? (array-rank ra0))
++        (array-set! ra0 (apply proc (map array-ref ras)))
++        (ramap (reverse (array-dimensions ra0)) '())))
+ 
+     ;;@args prototype proc array1 array2 @dots{}
+     ;;@var{array2}, @dots{} must have the same number of dimensions as
+@@ -89,7 +91,9 @@
+             (do ((i 0 (+ 1 i)))
+               ((> i ll))
+               (rafe crdims (cons i inds))))))
+-      (rafe (array-dimensions (car ras)) '()))
++      (if (zero? (array-rank (car ras)))
++        (apply proc (map array-ref ras))
++        (rafe (array-dimensions (car ras)) '())))
+ 
+     ;;@args array
+     ;;Returns an array of lists of indexes for @var{array} such that, if
+@@ -158,7 +162,9 @@
+     ;;have the same rank as @var{source}, and be at least as large in each
+     ;;dimension.  The order of copying is unspecified.
+     (define (array:copy! dest source)
+-      (array-map! dest identity source))
++      (array-index-for-each source
++        (lambda indices
++          (apply array-set! dest (apply array-ref source indices) indices))))
+ 
+     ))
+ 

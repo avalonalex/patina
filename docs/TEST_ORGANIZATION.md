@@ -735,12 +735,14 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 52 drivers cover binary-record read/write round trips;
+assertion count. The 61 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
 string search, string casing, string ports, line I/O, generic writing,
 printf, alists, queues, trees, common list functions and topological sorting;
+SLIB integer and real math, modular arithmetic, rational approximation,
+factorization, matrix operations, array iteration, interpolation and subarrays;
 SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
@@ -811,11 +813,23 @@ movement that Gauche rejects. All temporary bindings are restored with
 arguments, copying and sharing, fold direction and graph ordering constraints.
 The alist overlay (#517) makes numeric `=` lookup honor exact/inexact
 equivalence instead of substituting `eqv?`.
+The numeric and array batch adds 153 assertions across nine SLIB packages:
+math-integer (18), math-real (20), modular (17), rationalize (12), factor (16),
+determinant (17), array-for-each (18), array-interpolate (16) and subarray (19).
+Checks cover exact arithmetic and domain errors, signed modular operations,
+integer numerator/denominator pairs, factor reconstruction, matrix inversion,
+scalar and empty arrays, source-sized copying, interpolation boundaries and
+mutation through shared views. Prime checks use deterministic small cases and
+a known large prime; no composite is expected to pass a probabilistic test.
+The numeric overlays (#519) repair negative unit powers, optional `atan`
+arguments, signed gcds, zero powers, singleton ratios, zero prime counts and
+singleton matrix inverses. The array overlays (#520) repair scalar traversal,
+copy bounds, low-edge interpolation and empty trimmed views.
 The patch policy authorizes upstream correctness repairs discovered during
 #429 without further per-patch approval, with issue evidence, reference
 comparisons and CI regression assertions required.
 
-All 616 assertions were compared against both Patina backends, Chibi 0.12
+All 769 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -842,6 +856,8 @@ explicitly guarantees an appropriate default for `string-ci=?`; Patina passes
 and the assertion is retained.
 This compatibility driver is outside the `tests/scheme` oracle lane, so its
 divergence is recorded here rather than adding an unexecuted register row.
+The nine-package numeric/array batch passes 130/153 assertions on each of
+the four implementations before repair, and 153/153 with the overlays.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
@@ -866,6 +882,11 @@ implementation bodies remain identical. The normal Patina corpus runs use
 the existing dependencies without this reference adaptation.
 Chibi lacks SRFI 60, so its JSON and PFDS runs used the portable `lib/srfi/60.sld`
 facade over its native SRFI 151; Gauche used its native SRFI 60.
+The SLIB numeric/array comparisons isolate the selected SLIB libraries and
+`(slib common)`, plus the pinned SRFI 63 declaration and all its imports to
+preserve array-record identity. All four comparisons use the same isolated
+portable SRFI 60 facade over native SRFI 151. Only library declarations and
+imports are renamed; the implementation bodies match the patched corpus.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

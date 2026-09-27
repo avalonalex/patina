@@ -1,0 +1,20 @@
+# Correctness overlay for #519, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/519
+# Permit negative integer powers of unit bases, whose results are exact integers.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 17/18 before repair and 18/18 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/math-integer.sld
++++ b/slib/math-integer.sld
+@@ -49,8 +49,7 @@
+     (define (integer-expt n1 n2)
+       (cond ((and (exact? n1) (integer? n1)
+                   (exact? n2) (integer? n2)
+-                  (not (negative? n2))
+-                  (not (and (not (<= -1 n1 1)) (negative? n2))))
++                  (or (not (negative? n2)) (= (abs n1) 1)))
+              (expt n1 n2))
+             (else (error 'integer-expt n1 n2))))
+ 

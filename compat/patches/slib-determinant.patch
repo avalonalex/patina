@@ -1,0 +1,20 @@
+# Correctness overlay for #519, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/519
+# Use the empty minor's unit determinant when inverting a singleton matrix.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 15/17 before repair and 17/17 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/determinant.sld
++++ b/slib/determinant.sld
+@@ -94,7 +94,8 @@
+       (define (minor matrix i j)
+         (map (lambda (x) (butnth j x)) (butnth i mat)))
+       (coerce-like-arg
+-        (* (if (odd? (+ i j)) -1 1) (determinant (minor mat i j)))
++        (* (if (odd? (+ i j)) -1 1)
++           (if (null? (cdr mat)) 1 (determinant (minor mat i j))))
+         matrix))
+ 
+     ;;@body

@@ -1,0 +1,48 @@
+# Correctness overlay for #519, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/519
+# Do not compute or return a prime when the requested count is zero.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 15/16 before repair and 16/16 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/factor.sld
++++ b/slib/factor.sld
+@@ -145,11 +145,13 @@
+     ;;less than @var{start}, then the returned list will have fewer than
+     ;;@var{start} elements.
+     (define (primes< start count)
+-      (do ((cnt (+ -2 count) (+ -1 cnt))
+-           (lst '() (cons prime lst))
+-           (prime (prime:prime< start) (prime:prime< prime)))
+-        ((or (not prime) (negative? cnt))
+-         (if prime (cons prime lst) lst))))
++      (if (zero? count)
++        '()
++        (do ((cnt (+ -2 count) (+ -1 cnt))
++             (lst '() (cons prime lst))
++             (prime (prime:prime< start) (prime:prime< prime)))
++          ((or (not prime) (negative? cnt))
++           (if prime (cons prime lst) lst)))))
+ 
+     (define (prime:prime> start)
+       (do ((nbr (+ 1 start) (+ 1 nbr)))
+@@ -159,11 +161,13 @@
+     ;;Returns a list of the first @2 prime numbers greater than @1.
+     (define (primes> start count)
+       (set! start (max 0 start))
+-      (do ((cnt (+ -2 count) (+ -1 cnt))
+-           (lst '() (cons prime lst))
+-           (prime (prime:prime> start) (prime:prime> prime)))
+-        ((negative? cnt)
+-         (reverse (cons prime lst)))))
++      (if (zero? count)
++        '()
++        (do ((cnt (+ -2 count) (+ -1 cnt))
++             (lst '() (cons prime lst))
++             (prime (prime:prime> start) (prime:prime> prime)))
++          ((negative? cnt)
++           (reverse (cons prime lst))))))
+ 
+     ;;;;Lankinen's recursive factoring algorithm:
+     ;From: ld231782@longs.LANCE.ColoState.EDU (L. Detweiler)

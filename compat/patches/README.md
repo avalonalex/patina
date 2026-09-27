@@ -180,6 +180,20 @@ the broader #429 authorization):
   remove the `=` shortcut through `assv`, which uses `eqv?`. The existing
   predicate scan correctly handles exact/inexact equivalents for lookup,
   inquiring and replacement.
+- [#519](https://github.com/avalonalex/patina/issues/519),
+  `slib-math-integer.patch`, `slib-math-real.patch`, `slib-modular.patch`,
+  `slib-rationalize.patch`, `slib-factor.patch` and `slib-determinant.patch`:
+  permit negative integer powers of unit bases, forward `atan`'s optional
+  argument with `apply`, normalize gcd signs and modular zero powers, return
+  integer numerator/denominator pairs for singleton intervals, honor zero
+  prime counts and use a unit cofactor for singleton matrix inverses.
+- [#520](https://github.com/avalonalex/patina/issues/520),
+  `slib-array-for-each.patch`, `slib-array-interpolate.patch` and
+  `slib-subarray.patch`: visit scalar arrays once, copy using source bounds,
+  clamp low multidimensional coordinates to zero and construct trimmed views
+  with explicit dimensions and offsets so empty axes remain empty. The
+  drivers check callback counts, untouched destination cells and shared
+  mutation as well as the repaired boundaries.
 
 These patches deliberately correct upstream behavior. All defects were
 reproduced with the pinned libraries on Patina's two backends, Chibi and
@@ -193,8 +207,13 @@ staging selects portable optional-argument macros and supplies an isolated
 SRFI 165 dependency. That staged dependency collects environment defaults in
 a vector instead of multiple values, avoiding Gauche's multiple-value limit;
 the SRFI 166 implementation bodies remain identical to the patched corpus.
-They do not weaken an assertion or hide a Patina difference. The corpus now measures these packages
-with the documented corrections, not the pristine upstream behavior.
+The SLIB numeric/array comparisons isolate SLIB names and pinned SRFI 63,
+and supply a portable SRFI 60 facade over native SRFI 151 on all four hosts;
+their implementation bodies match the patched corpus. The nine new drivers
+pass 130/153 before repair and 153/153 afterward on each implementation.
+These patches do not weaken an assertion or hide a Patina difference. The
+corpus now measures these packages with the documented corrections, not the
+pristine upstream behavior.
 
 Each patch begins with a `#` comment block — `patch(1)` skips it as leading
 garbage — stating what is rewritten, why it is justified, its issue and

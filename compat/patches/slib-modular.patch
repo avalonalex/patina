@@ -1,0 +1,28 @@
+# Correctness overlay for #519, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/519
+# Return a nonnegative gcd and handle zero exponents before zero bases.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 15/17 before repair and 17/17 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/modular.sld
++++ b/slib/modular.sld
+@@ -48,7 +48,8 @@
+       (do ((r0 x r1) (r1 y (remainder r0 r1))
+                      (u0 1 u1) (u1 0 (- u0 (* q u1)))
+                      (v0 0 v1) (v1 1 (- v0 (* q v1))))
+-        ((zero? r1) (list r0 u0 v0))
++        ((zero? r1)
++         (if (negative? r0) (list (- r0) (- u0) (- v0)) (list r0 u0 v0)))
+         (set! q (quotient r0 r1))))
+ 
+     (define modular:extended-euclid extended-euclid)
+@@ -241,6 +242,7 @@
+     ;;Returns (@var{n2} ^ @var{n3}) mod @var{modulus}.
+     (define (modular:expt m base xpn)
+       (cond ((zero? m) (expt base xpn))
++            ((zero? xpn) (modular:normalize m 1))
+             ((= base 1) 1)
+             ((if (negative? m) (= -1 base) (= (- m 1) base))
+              (if (odd? xpn) base 1))

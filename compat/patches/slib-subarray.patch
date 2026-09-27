@@ -1,0 +1,51 @@
+# Correctness overlay for #520, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/520
+# Represent trimmed views by dimensions and offsets, including empty axes.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 14/19 before repair and 19/19 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/subarray.sld
++++ b/slib/subarray.sld
+@@ -135,24 +135,22 @@
+     ;;  @result{} #(1 2 2 4 13)
+     ;;@end example
+     (define (array-trim array . trims)
+-      (define (loop dims trims shps)
+-        (cond ((null? trims)
+-               (if (null? dims)
+-                 (reverse shps)
+-                 (loop (cdr dims)
+-                       '()
+-                       (cons (list 0 (+ -1 (car dims))) shps))))
+-              ((null? dims)
+-               (error 'array-trim 'too 'many 'trims trims))
+-              ((negative? (car trims))
+-               (loop (cdr dims)
+-                     (cdr trims)
+-                     (cons (list 0 (+ (car trims) (car dims) -1)) shps)))
+-              (else
+-                (loop (cdr dims)
+-                      (cdr trims)
+-                      (cons (list (car trims) (+ -1 (car dims))) shps)))))
+-      (apply subarray array (loop (array-dimensions array) trims '())))
++      (let ((dims (array-dimensions array)))
++        (if (> (length trims) (length dims))
++          (error 'array-trim 'too 'many 'trims trims))
++        (let* ((cuts (append trims (make-list (- (length dims) (length trims)) 0)))
++               (sizes
++                 (map (lambda (dim cut)
++                        (if (not (and (integer? cut) (exact? cut) (<= (abs cut) dim)))
++                          (error 'array-trim 'invalid 'trim cut))
++                        (- dim (abs cut)))
++                      dims cuts))
++               (offsets (map (lambda (cut) (max 0 cut)) cuts)))
++          ;; Inclusive ranges cannot represent an empty trim without looking
++          ;; like a reflection. Pass dimensions directly to the shared view.
++          (apply make-shared-array array
++                 (lambda indices (map + offsets indices))
++                 sizes))))
+ 
+     ))
+ 

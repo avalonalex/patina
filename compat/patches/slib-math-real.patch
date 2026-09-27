@@ -1,0 +1,19 @@
+# Correctness overlay for #519, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/519
+# Forward real-atan's optional coordinate with apply, not as a list operand.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 18/20 before repair and 20/20 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/math-real.sld
++++ b/slib/math-real.sld
+@@ -111,7 +111,7 @@
+                       (or (null? x)
+                           (and (= 1 (length x))
+                                (real? (car x)))))
+-               (atan y x)
++               (apply atan y x)
+                (error 'real-atan y x)))))
+ 
+     ))
