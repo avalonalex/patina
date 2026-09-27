@@ -1,0 +1,51 @@
+# srfi-38: decode the string escapes emitted by the host writer (#511)
+#
+# The portable reader strips backslashes without decoding R7RS escapes,
+# losing newlines, tabs, carriage returns and hexadecimal character escapes.
+# Delegate string parsing to the host reader, then copy its result to retain
+# the mutable strings this reader previously returned. Shared labels still
+# refer to that one copied string.
+# https://srfi.schemers.org/srfi-38/srfi-38.html
+#
+# Owner-approved correctness exception to the behavior-preserving patch
+# policy (2026-09-27). The pristine extraction remains unchanged.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the three
+# escape failures in the pinned portable 38.scm. With this correction all
+# 17 assertions in compat/smoke/srfi-38.scm pass on all four. The reference
+# comparisons select the portable branch; 38.chibi.scm is not changed.
+--- a/srfi/38.sld
++++ b/srfi/38.sld
+@@ -5,7 +5,8 @@
+     (else (import (scheme base)
+                   (scheme char)
+                   (scheme cxr)
+-                  (scheme write))))
++                  (scheme write)
++                  (only (scheme read) read))))
+   (cond-expand
+     (chibi (export write-with-shared-structure
+                    write/ss
+--- a/srfi/38.scm
++++ b/srfi/38.scm
+@@ -115,16 +115,12 @@
+          ((or (eof-object? c) (char=? c #\newline))))
+      (eat-intertoken-space))))
+ 
++  ;; The host writer emits R7RS string escapes. Let the host reader decode
++  ;; the same syntax; the port is still at the opening quote. Copy to keep
++  ;; the mutable strings this reader has always returned, even on hosts
++  ;; whose read procedure returns immutable strings.
+   (define (read-string)
+-    (read-char*)
+-    (let read-it ((chars '()))
+-      (let ((c (read-char*)))
+-  (if (eof-object? c)
+-      (error "EOF inside a string")
+-      (case c
+-        ((#\") (list->string (reverse chars)))
+-        ((#\\) (read-it (cons (read-char*) chars)))
+-        (else (read-it (cons c chars))))))))
++    (string-copy (read port)))
+ 
+   ;; reads chars that match PRED and returns them as a string.
+   (define (read-some-chars pred)

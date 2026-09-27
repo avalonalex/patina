@@ -15,7 +15,7 @@ record of every difference.
 A patch is **not** a way to make a failure go away. The test is the same for
 every one of them: **the rewrite is the one the package's author would make to
 run on a conforming R7RS implementation, and it changes no behaviour being
-measured.** The three named owner-approved correctness exceptions below are
+measured.** The four named owner-approved correctness exceptions below are
 the only departures from that rule. Otherwise, if a patch would paper over a
 real incompatibility, the package belongs in `compat/EXCLUSIONS.scm` with a
 reason, or should simply fail.
@@ -117,11 +117,18 @@ found while adding the #429 SRFI and PFDS smoke batches:
   collision nodes retain full hashes, and bitmap positions are translated to
   compact child-vector indices. The smoke driver also checks 480 mixed
   operations against an alist model, preserving earlier map versions.
+- [#511](https://github.com/avalonalex/patina/issues/511), `srfi-38.patch`:
+  let the host reader decode string escapes emitted by the host writer in
+  the portable `38.scm` implementation. Copy each decoded string to preserve
+  its mutability, including through shared labels. The smoke driver checks
+  control characters, hexadecimal escapes and mutation through aliases.
 
 These patches deliberately correct upstream behavior. All defects were
 reproduced with the pinned libraries on Patina's two backends, Chibi and
 Gauche; all corrections are checked on those same implementations, and their
-regressions are asserted by the CI smoke drivers. They do not weaken an
+regressions are asserted by the CI smoke drivers. SRFI 38's comparisons select
+the portable `38.scm` branch on all four; the separate `38.chibi.scm` branch
+is unchanged and is not the subject of those comparisons. They do not weaken an
 assertion or hide a Patina difference. The corpus now measures these packages
 with the documented corrections, not the pristine upstream behavior.
 
