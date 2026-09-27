@@ -1,0 +1,22 @@
+(import (scheme base) (pfds fector) (patina compat smoke))
+(check-equal "filled constructor" '(x x x) (fector->list (make-fector 3 'x)))
+(check-equal "build calls the index function" '(0 1 4 9)
+  (fector->list (build-fector 4 (lambda (i) (* i i)))))
+(define original (fector 'a 'b 'c))
+(check-equal "predicate and length" '(#t 3)
+  (list (fector? original) (fector-length original)))
+(define changed (fector-set original 1 'new))
+(define branch (fector-set original 2 'branch))
+;; Reading older versions reroots shared storage; revisit every branch.
+(check-equal "branching updates preserve all versions"
+  '((a new c) (a b c) (a b branch) (a new c) (a b c))
+  (let* ((a (fector->list changed)) (b (fector->list original))
+         (c (fector->list branch)) (d (fector->list changed))
+         (e (fector->list original)))
+    (list a b c d e)))
+(check-equal "list conversion and indexed read" 'middle
+  (fector-ref (list->fector '(left middle right)) 1))
+(check-error "read beyond the end" (fector-ref original 3))
+(check-error "negative update index" (fector-set original -1 'bad))
+(check-error "update beyond the end" (fector-set original 3 'bad))
+(smoke-finish)
