@@ -34,10 +34,10 @@ its date (#381), and the archive's status line went stale twice.
   passes the same 143 and reads 143 of 144, because one excluded package files
   its failure in a different bucket there (#382).
   `cargo run --release -p patina-compat -- run`.
-- **Execution coverage (#429, measured 2026-09-27):** ten smoke batches
-  exercise 52 packages with 616 assertions, including all 16 PFDS packages.
-  Of the 143 passes, 37 run upstream suites, 52 run maintained smoke checks,
-  and 54 remain import-only probes.
+- **Execution coverage (#429, measured 2026-09-27):** eleven smoke batches
+  exercise 61 packages with 769 assertions, including all 16 PFDS packages.
+  Of the 143 passes, 37 run upstream suites, 61 run maintained smoke checks,
+  and 45 remain import-only probes.
   The smoke drivers are gated in CI on both backends. A pass means only what
   that package's mode measured.
 - **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
@@ -55,7 +55,7 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #429 — expand execution coverage beyond the first 52 smoke drivers; 54 passing packages remain import-only (39 SLIB, 9 Chibi, 6 other).
+- #429 — expand execution coverage beyond the first 61 smoke drivers; 45 passing packages remain import-only (30 SLIB, 9 Chibi, 6 other).
 - #382 — the classifier keys on error prose no producer knows is parsed.
 - #384 — two upstream SRFI 160 defects, quarantined.
 

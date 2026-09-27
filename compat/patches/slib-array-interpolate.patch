@@ -1,0 +1,19 @@
+# Correctness overlay for #520, authorized by the #429 patch policy.
+# https://github.com/avalonalex/patina/issues/520
+# Clamp a low multidimensional coordinate to zero before selecting its subarray.
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failures
+# on the pinned body. The maintained smoke driver gates the corrected behavior.
+# This driver passes 14/16 before repair and 16/16 afterward on all four.
+# Comparisons isolate SLIB library names and pinned SRFI 63; a portable SRFI 60
+# facade over native SRFI 151 supplies the missing dependency on Chibi.
+--- a/slib/array-interpolate.sld
++++ b/slib/array-interpolate.sld
+@@ -53,7 +53,7 @@
+         (define dims (cdr dims-in))
+         (cond ((<= x1 0) (if (null? xs)
+                            (array-ref ra 0)
+-                           (iar (subarray ra idx) xs dims)))
++                           (iar (subarray ra 0) xs dims)))
+               ((>= x1 dim-1) (if (null? xs)
+                                (array-ref ra dim-1)
+                                (iar (subarray ra dim-1) xs dims)))
