@@ -43,4 +43,7 @@
   ((slug "srfi-39") (assertions 12))
   ((slug "srfi-51") (assertions 20))
   ((slug "srfi-145") (assertions 8))
+  ((slug "srfi-25") (assertions 20))
+  ((slug "srfi-42") (assertions 28))
+  ((slug "srfi-78") (assertions 15))
   ((slug "macduffie-json") (assertions 6))))

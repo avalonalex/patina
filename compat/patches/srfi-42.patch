@@ -1,0 +1,26 @@
+# srfi-42: repair indexed enumeration of multiple vectors (#513)
+#
+# :parallel supplies each inner generator's continuation. Passing cc again
+# makes the indexed multi-vector branch bind a continuation form as a variable.
+# Remove that extra argument, as in the indexed :list and :range rules.
+# https://srfi.schemers.org/srfi-42/srfi-42.html
+#
+# Authorized correctness repair under the #429 patch workflow (2026-09-27).
+# Both Patina backends, Chibi 0.12 and Gauche 0.9.15 reproduce the failure
+# with the pinned implementation. With this correction all 28 SRFI 42 and
+# 15 SRFI 78 smoke assertions pass on all four, including indexed vector
+# concatenation, empty inputs and the dependent check-ec expansion.
+# Reference staging removes only the inert #f library declaration rejected
+# by Gauche; implementation bodies match the patched corpus. The pristine
+# vendor extraction stays unchanged.
+--- a/srfi/42.scm
++++ b/srfi/42.scm
+@@ -438,7 +438,7 @@
+           ((+ i 1))))
+ 
+     ((_ cc var (index i) arg1 arg2 arg ...)
+-     (:parallel cc (:vector cc var arg1 arg2 arg ...) (:integers i)))
++     (:parallel cc (:vector var arg1 arg2 arg ...) (:integers i)))
+     ((_ cc var arg1 arg2 arg ...)
+      (:do cc
+           (let ((vec #f)

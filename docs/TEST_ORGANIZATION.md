@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 42 drivers cover binary-record read/write round trips;
+assertion count. The 45 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -744,6 +744,7 @@ printf; SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
 SRFI 39 parameters, SRFI 51 rest arguments and checks, SRFI 145 assumptions;
+SRFI 25 shared arrays, SRFI 42 comprehensions and SRFI 78 lightweight testing;
 and SRFI 180 and MacDuffie JSON.
 The PFDS checks exercise branching updates that preserve older versions,
 deque rebalancing, lazy-tail memoization, sequence splits and set operations.
@@ -756,15 +757,15 @@ The map checks cover hash collisions, sparse and deep branches, tree ranks
 and indexed lookups, callback counts, ordered folds and map combinations.
 The HAMT driver gates the upstream correction in `compat/patches/` (#508),
 including 480 mixed operations checked against an alist model with five
-hash functions. Its named correctness exception is recorded alongside the
-SRFI exceptions in `compat/patches/README.md`.
+hash functions. Its correctness overlay is recorded alongside the
+SRFI corrections in `compat/patches/README.md`.
 The text checks exercise search boundaries, mutation, callback results, port
 state, formatting and bounded output.
 The SRFI procedure checks cover stable keyed sorting and destructive operations,
 indexed vector callbacks and slices, argument-parser callback seeds, JSON
 round trips and error records. The SRFI 95 and 180 drivers also gate the
 two-element sortedness and JSON number grammar corrections in
-`compat/patches/`; their named policy exceptions are recorded in
+`compat/patches/`; their correctness overlays are recorded in
 `compat/patches/README.md` (#504, #505).
 The syntax drivers exercise short-circuit evaluation, parallel and sequential
 multiple-value bindings, arity dispatch, `cut` versus `cute` evaluation timing,
@@ -779,10 +780,22 @@ implementation's explicit error path; the SRFI permits implementations not to
 signal false assumptions. The SRFI 38 driver gates the string-escape correction
 in `compat/patches/srfi-38.patch` (#511): the portable reader delegates string
 decoding to the host reader and copies the result to preserve mutable strings,
-including through shared labels. Its owner-approved exception is recorded in
+including through shared labels. Its correctness overlay is recorded in
 `compat/patches/README.md`.
+The SRFI 25 driver checks nonzero bounds, rank-zero and empty arrays, all index
+forms, shape independence, and shared mutation through transposes, diagonals
+and composed affine views. SRFI 42 covers nested and parallel generators,
+indices, empty inputs, reductions, short-circuiting and evaluation counts.
+Its indexed multi-vector regression gates `compat/patches/srfi-42.patch`
+(#513), also exercised through SRFI 78's `check-ec`. SRFI 78 captures deliberate
+failures and reports to assert evaluation order, accumulated counts, reporting
+modes, disabled checks and the first counterexample. It tests the four exports
+of the pinned library; `check-reset!` and `check-passed?` are not exported there.
+The patch policy authorizes upstream correctness repairs discovered during
+#429 without further per-patch approval, with issue evidence, reference
+comparisons and CI regression assertions required.
 
-All 422 assertions were compared against both Patina backends, Chibi 0.12
+All 485 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -795,6 +808,8 @@ The final two PFDS drivers add 44 assertions, all passing on both backends
 and both references with the pinned libraries and no additional patches.
 The six SRFI utility drivers add 76 assertions, all passing on both backends
 and both references with the SRFI 38 overlay.
+The SRFI 25/42/78 batch adds 63 assertions (20/28/15), all passing on both
+backends and both references with the SRFI 42 overlay.
 Drivers and their test-only `(patina compat smoke)` helper live outside `compat/vendor/`;
 nothing is bundled or added to the upstream extractions.
 For the SRFI comparisons, temporary library declarations and imports
@@ -804,6 +819,10 @@ libraries interfere.
 For SRFI 38, the staged declarations also select the portable `38.scm` branch
 on Chibi, so all four comparisons exercise the same implementation. The
 separate `38.chibi.scm` branch is unchanged and was not tested by this batch.
+SRFI 42's staged `.sld` also replaces its inert `(else #f)` library declaration
+with `(else)` because Gauche rejects that declaration. This staging-only
+adaptation also applies to the dependency used by SRFI 78; the `.scm`
+implementation bodies remain identical to the patched corpus.
 Chibi lacks SRFI 60, so its JSON and PFDS runs used the portable `lib/srfi/60.sld`
 facade over its native SRFI 151; Gauche used its native SRFI 60.
 
