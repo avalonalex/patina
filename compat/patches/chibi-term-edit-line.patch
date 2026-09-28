@@ -1,0 +1,21 @@
+# Correctness/portability overlay for #429: https://github.com/avalonalex/patina/issues/536
+# Maintained wrapper driver and reference methodology: docs/TEST_ORGANIZATION.md.
+# Vendor files remain pristine.
+# The portable with-stty definition needs a library begin and must accept the
+# optional port passed by with-raw-io. Gauche rejects the old declaration;
+# Patina warns and ignores it. Native Chibi is unchanged. After: 16/16 on all
+# four hosts, including the portable setup path on Patina and Gauche.
+--- a/chibi/term/edit-line.sld
++++ b/chibi/term/edit-line.sld
+@@ -18,8 +18,9 @@
+    (chicken
+     (import stty))
+    (else
+-    (define (with-stty spec thunk)
+-      (thunk))))
++    (begin
++      (define (with-stty spec thunk . ports)
++        (thunk)))))
+   (cond-expand
+    (chibi
+     (import (only (chibi) protect print-exception)

@@ -1,0 +1,36 @@
+# Correctness/portability overlay for #429: https://github.com/avalonalex/patina/issues/536
+# Maintained wrapper driver and reference methodology: docs/TEST_ORGANIZATION.md.
+# Vendor files remain pristine.
+# Preserve a literal pathname prefix: directory*-for-each removes that many
+# characters from its glob. Also replace Gauche's accidental chdir with mkdir.
+# Before: 9/11 on VM/TW/Chibi; Gauche reaches 1 pass and 3 failures before its
+# failed mkdir prevents the remaining rows. After: 11/11 on all four hosts.
+--- a/slib/directory.sld
++++ b/slib/directory.sld
+@@ -44,17 +44,22 @@
+        ; current-directory exported
+        (define make-directory create-directory*)
+        (define (pathname->dirname path)
+-         (string-append (path-directory path) "/"))
++         (let loop ((i (string-length path)))
++           (cond ((zero? i) "")
++                 ((char=? #\/ (string-ref path (- i 1))) (substring path 0 i))
++                 (else (loop (- i 1))))))
+        (define list-directory-files directory-files)))
+ 
+     (gauche
+       (import (file util))
+       (begin
+         ; current-directory exported
+-        (define (make-directory str) (current-directory str))
++        (define (make-directory str) (make-directory* str))
+         (define (pathname->dirname path)
+-          (let-values (((dir name ext) (decompose-path path)))
+-                      dir))
++         (let loop ((i (string-length path)))
++           (cond ((zero? i) "")
++                 ((char=? #\/ (string-ref path (- i 1))) (substring path 0 i))
++                 (else (loop (- i 1))))))
+         (define list-directory-files directory-list)))
+ 
+     (kawa

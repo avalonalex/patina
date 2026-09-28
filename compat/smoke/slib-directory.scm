@@ -1,0 +1,37 @@
+(import (scheme base) (scheme file) (scheme write) (prefix (slib directory) d:) (patina compat smoke))
+(cond-expand
+  ((or chibi patina) (import (only (chibi filesystem) delete-file-hierarchy with-directory)))
+  (gauche (import (only (file util) remove-directory* current-directory))
+          (define delete-file-hierarchy remove-directory*)
+          (define (with-directory path thunk)
+            (let ((old (current-directory)))
+              (dynamic-wind (lambda () (current-directory path)) thunk
+                            (lambda () (current-directory old)))))))
+;; Every created path is inside this runner-owned fixture. Never reuse an existing tree.
+(define root "patina-smoke-directory")
+(if (file-exists? root) (error "fixture already exists" root))
+(define (names thunk)
+  (let ((xs '())) (thunk (lambda (x) (set! xs (cons x xs)))) xs))
+(define (same-members? a b) (and (= (length a) (length b)) (let loop ((xs a)) (or (null? xs) (and (member (car xs) b) (loop (cdr xs)))))))
+(check-equal "pathname directory prefix" "a/b/" (d:pathname->dirname "a/b/file.scm"))
+(check-equal "bare filename has no directory prefix" "" (d:pathname->dirname "file.scm"))
+(check-equal "current directory is a string" #t (string? (d:current-directory)))
+(define initial-directory (d:current-directory))
+(define created (guard (ex (else #f)) (d:make-directory root) (file-exists? root)))
+(check-equal "make-directory creates without changing cwd" #t (and created (equal? initial-directory (d:current-directory))))
+(if created
+  (dynamic-wind
+    (lambda ()
+      (call-with-output-file (string-append root "/a.scm") (lambda (p) (display "a" p)))
+      (call-with-output-file (string-append root "/b.txt") (lambda (p) (display "b" p))))
+    (lambda ()
+      (check-equal "enumeration visits each file once" #t
+        (same-members? '("a.scm" "b.txt") (names (lambda (f) (d:directory-for-each f root (lambda (x) (not (member x '("." "..")))))))))
+      (check-equal "string selector filters filenames" '("a.scm") (names (lambda (f) (d:directory-for-each f root "*.scm"))))
+      (check-equal "procedure selector filters filenames" '("b.txt") (names (lambda (f) (d:directory-for-each f root (lambda (x) (equal? x "b.txt"))))))
+      (check-equal "glob traverses an explicit directory" '("a.scm") (names (lambda (f) (d:directory*-for-each f (string-append root "/*.scm")))))
+      (check-equal "glob traverses the current directory" '("a.scm") (with-directory root (lambda () (names (lambda (f) (d:directory*-for-each f "*.scm"))))))
+      (check-equal "unmatched selector calls nothing" '() (names (lambda (f) (d:directory-for-each f root "*.none"))))
+      (check-error "invalid selector is rejected" (d:directory-for-each (lambda (x) #f) root 42)))
+    (lambda () (delete-file-hierarchy root))))
+(smoke-finish)

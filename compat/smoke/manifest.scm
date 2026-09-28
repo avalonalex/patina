@@ -2,6 +2,10 @@
 ;; Counts are checked by the runner: an empty or truncated driver cannot pass.
 (patina-compat-smokes
  (tests
+  ((slug "slib-directory") (assertions 11))
+  ((slug "chibi-temp-file") (assertions 8))
+  ((slug "chibi-term-edit-line") (assertions 16))
+  ((slug "rebottled-pstk") (assertions 23))
   ((slug "chibi-config") (assertions 30))
   ((slug "chibi-monad-environment") (assertions 10))
   ((slug "generators") (assertions 35))

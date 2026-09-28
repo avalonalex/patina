@@ -238,6 +238,20 @@ the broader #429 authorization):
   close optional-end-tag children at their parent's end, omit attributes from
   text rendering, and propagate recursive duplicate-attribute failure.
 
+- [#534](https://github.com/avalonalex/patina/issues/534), `chibi-config.patch`,
+  `generators.patch`, `lassik-trivial-tar-writer.patch`: flatten specialized
+  config sections, chain includes as configs, validate list elements and
+  alternate types correctly; follow the pinned SRFI 121 exhaustion/witness
+  contract; omit padding for already aligned tar payloads. The tar driver
+  also exposed Patina's omitted binary-port defect (#533), repaired in the
+  shared primitives rather than hidden by a package overlay.
+- [#536](https://github.com/avalonalex/patina/issues/536),
+  `slib-directory.patch`, `chibi-term-edit-line.patch`, `rebottled-pstk.patch`:
+  preserve literal directory prefixes for glob slicing and create directories
+  on Gauche; put the editor's fallback definition in a library `begin` and
+  accept its optional port; compare Tcl false strings by content and let PSTk
+  property lookup reach its fallback after a final nonmatching pair.
+
 These patches deliberately correct upstream behavior. Before/after behavior
 is compared with the pinned libraries on Patina's two backends, Chibi and
 Gauche; host differences are recorded explicitly, and regression expectations
@@ -322,11 +336,3 @@ fresh copy of its package and fails the build if one does not, or if one
 applies but changes nothing. A patch goes stale the moment its package is
 re-vendored, and this is where that is cheap to notice — rather than during a
 corpus run, where it looks like the package's own regression.
-
-- [#534](https://github.com/avalonalex/patina/issues/534), `chibi-config.patch`,
-  `generators.patch`, `lassik-trivial-tar-writer.patch`: flatten specialized
-  config sections, chain includes as configs, validate list elements and
-  alternate types correctly; follow the pinned SRFI 121 exhaustion/witness
-  contract; omit padding for already aligned tar payloads. The tar driver
-  also exposed Patina's omitted binary-port defect (#533), repaired in the
-  shared primitives rather than hidden by a package overlay.
