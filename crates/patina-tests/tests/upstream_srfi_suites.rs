@@ -300,6 +300,11 @@ suite_tests! {
      "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
       (srfi 165 test) (srfi 64)",
      SRFI_64_BODY),
+    // SRFI 188's own reference suite, verbatim, reporting through SRFI 64.
+    (srfi_188_splicing_syntax, "srfi 188", "(srfi 188 test)", 0, 11,
+     "(except (chibi test) test-begin test-end test-assert test-equal test-eqv) \
+      (srfi 188 test) (srfi 64)",
+     SRFI_64_BODY),
     // chibi's own suite for its own implementation, verbatim. Two expected
     // failures, neither ours, and both recorded because a bare "2" would be
     // unreadable later.

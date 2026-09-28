@@ -447,7 +447,7 @@ impl Derivation<'_> {
     /// form — the whole of #445. A nested template inside it is desugared
     /// into a `Quasiquote` of its own on the way.
     fn unquoted(&self, expr: TaggedValue) -> Result<QuasiTemplate> {
-        let expr = self.desugarer.desugar_form(expr, self.heap)?;
+        let expr = self.desugarer.desugar_expression(expr, self.heap)?;
         Ok(QuasiTemplate::Unquoted(Rc::new(expr)))
     }
 }

@@ -49,9 +49,11 @@ twice.
   other 27 are not ours or are by decision, including three symbol-spelling
   expectations retained by decision in #422.
   `./scripts/run_larceny_tests.sh`.
-- **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 4467 of
-  4474 assertions, on both backends. Seven `io/simple` port-predicate checks
-  differ by decision (#412); `base` still cannot load (#424).
+- **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 6493 of
+  6509 assertions, on both backends. `base` now runs all 2035 assertions
+  after #424; its nine remaining numeric expectations differ from the R7RS
+  procedures the facade supplies. Seven `io/simple` port-predicate checks
+  differ by decision (#412).
 - **chibi's R7RS suite:** 1226 of 1226 on both backends, the routine gate.
 
 ## What is left
@@ -67,13 +69,6 @@ One recorded debt has no issue because it has no known symptom: on the VM,
 records by *depth*, an assumption that continuation identity was introduced to
 retire (archive §6, "Still open next door"). File it when it produces one.
 
-## Decisions waiting on the owner
-
-These are not defects. Each is a choice R7RS leaves open, where the references
-split or where matching them has a cost, and none should be taken in passing.
-
-- #424 — whether `(r6rs base)` gets R6RS's splicing `let-syntax`. It is all that blocks ~2000 assertions of the R6RS `base` suite.
-
 ## Standing rules the track leaves behind
 
 - **Self-contained.** No build-, test- or CI-time dependency on another Scheme or a package manager. The corpus is data pinned by checksum.
@@ -84,4 +79,5 @@ split or where matching them has a cost, and none should be taken in passing.
 - **Reader boundaries (#421):** quote prefixes and vertical bars end unescaped tokens, following Gauche; Chibi 0.12's narrower boundaries are recorded in the oracle divergence register. Names containing those delimiters use vertical bars.
 - **Symbol output (#422):** retain standard R7RS escaping (`@` writes as `|@|`), even for names accepted bare as reader extensions; `symbol->string` returns the unescaped name, and name conversion and writer/reader round trips preserve it.
 - **Square-root policy (#418):** negative real inputs produce an exact zero real component, following Chibi and preserving the reader/writer round trip; infinity and inexact imaginary components remain inexact.
-- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; two remain, both listed above.
+- **Local syntax (#424):** `(srfi 188)` supplies splicing forms, reused under the R6RS names by the R6RS facade; `(scheme base)` retains ordinary R7RS forms. The facade accepts SRFI 188's mixed-definition/expression extension.
+- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; the remaining VM GC item is listed above.

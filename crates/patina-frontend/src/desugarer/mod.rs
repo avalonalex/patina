@@ -82,7 +82,7 @@ use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail_tagged;
 use patina_runtime::{Environment, ScopeId, ScopeSet};
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -289,6 +289,15 @@ impl EarlyBinding {
     }
 }
 
+/// Where definitions in a splicing syntax form belong. Its keyword scopes
+/// distinguish local macros, but are not part of the enclosing definitions.
+#[derive(Clone)]
+struct SplicingContext {
+    env: Rc<Environment>,
+    scopes: ScopeSet,
+    keyword_scopes: Vec<ScopeId>,
+}
+
 pub struct Desugarer {
     /// The environment head symbols resolve in.
     ///
@@ -325,6 +334,10 @@ pub struct Desugarer {
     /// desugarers made for nested scopes, like `early`, since a form's
     /// elements are desugared by them.
     open_forms: Rc<RefCell<OpenNodes>>,
+
+    splicing: Option<Rc<SplicingContext>>,
+    /// Splicing forms behave as ordinary local syntax in operand positions.
+    definition_context: Cell<bool>,
 }
 
 impl Desugarer {
@@ -359,6 +372,8 @@ impl Desugarer {
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
             open_forms: Rc::default(),
+            splicing: None,
+            definition_context: Cell::new(true),
         }
     }
 
@@ -378,6 +393,8 @@ impl Desugarer {
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
             open_forms: Rc::default(),
+            splicing: None,
+            definition_context: Cell::new(true),
         }
     }
 
@@ -418,6 +435,8 @@ impl Desugarer {
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
             open_forms: Rc::default(),
+            splicing: None,
+            definition_context: Cell::new(true),
         }
     }
 
@@ -441,6 +460,8 @@ impl Desugarer {
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
             open_forms: Rc::clone(&self.open_forms),
+            splicing: self.splicing.clone(),
+            definition_context: Cell::new(self.definition_context.get()),
         };
         (desugarer, scope)
     }
@@ -525,6 +546,8 @@ impl Desugarer {
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
             open_forms: Rc::clone(&self.open_forms),
+            splicing: None,
+            definition_context: Cell::new(true),
         }
     }
 
@@ -593,8 +616,9 @@ impl Desugarer {
     /// desugared from its original text, and expanded again, with every name
     /// found here bound. That is one extra expansion per macro use at a body's
     /// top level, and it keeps this a pre-pass — nothing it does is visible
-    /// except the names. Relinking and source stamping are skipped for the
-    /// same reason, and an expansion that fails is ignored, since the dispatch
+    /// except the names. Source stamping is skipped; relinking stays in the
+    /// scan's isolated environment so library-private syntax is recognized.
+    /// An expansion that fails is ignored, since the dispatch
     /// that desugars the form expands it again and reports the failure.
     ///
     /// Only names from the use site are kept. A name the expansion introduced
@@ -610,9 +634,23 @@ impl Desugarer {
         body_tvs: &[TaggedValue],
         shared_heap: &SharedHeap,
     ) -> Vec<(Rc<str>, ScopeSet)> {
+        // The scan may bind a splice's private keywords and define-syntax
+        // forms to discover later definitions. None of those speculative
+        // bindings should escape into the real expansion environment.
+        let mut probe = self.with_new_env(
+            Rc::new(Environment::with_parent(self.env.clone())),
+            self.current_scopes.clone(),
+        );
+        probe.early = Rc::default();
         let mut names = Vec::new();
         for tv in body_tvs {
-            self.collect_produced_names(*tv, shared_heap, &mut names, 0, &mut OpenNodes::default());
+            probe.collect_produced_names(
+                *tv,
+                shared_heap,
+                &mut names,
+                0,
+                &mut OpenNodes::default(),
+            );
         }
         names
     }
@@ -657,6 +695,34 @@ impl Desugarer {
             return;
         };
         match self.resolve_syntax(&head_name, &head_scopes).ok().flatten() {
+            Some(SyntaxRef::CoreSyntax(CoreForm::DefineSyntax)) if self.splicing.is_some() => {
+                // A splice can define a macro that generates a later variable
+                // definition. Compile only in this scan's isolated environment;
+                // real desugaring still reports any error with source context.
+                let _ = self.desugar_define_syntax_tagged(cdr, shared_heap);
+            }
+            Some(SyntaxRef::CoreSyntax(
+                form @ (CoreForm::SplicingLetSyntax | CoreForm::SplicingLetrecSyntax),
+            )) => {
+                let Ok((body, forms)) = self.prepare_local_syntax(
+                    cdr,
+                    shared_heap,
+                    form == CoreForm::SplicingLetrecSyntax,
+                    true,
+                ) else {
+                    return;
+                };
+                let mut found = Vec::new();
+                for form in forms {
+                    body.collect_definition_names(form, shared_heap, &mut found, open);
+                    body.collect_produced_names(form, shared_heap, &mut found, depth + 1, open);
+                }
+                out.extend(
+                    found
+                        .into_iter()
+                        .map(|(name, scopes)| (name, body.spliced_definition_scopes(scopes))),
+                );
+            }
             Some(SyntaxRef::CoreSyntax(CoreForm::Begin)) => {
                 let (forms, _) = shared_heap.borrow().spine(cdr);
                 for form in forms {
@@ -675,15 +741,16 @@ impl Desugarer {
                 ) else {
                     return;
                 };
-                let mut found = Vec::new();
-                self.collect_definition_names(expansion.form, shared_heap, &mut found, open);
-                self.collect_produced_names(
+                let expanded = self.link_definition_env_refs(
                     expansion.form,
+                    expansion.scope,
+                    &compiled_macro,
+                    Some(&self.env),
                     shared_heap,
-                    &mut found,
-                    depth + 1,
-                    open,
                 );
+                let mut found = Vec::new();
+                self.collect_definition_names(expanded, shared_heap, &mut found, open);
+                self.collect_produced_names(expanded, shared_heap, &mut found, depth + 1, open);
                 out.extend(
                     found
                         .into_iter()
@@ -919,6 +986,8 @@ impl Desugarer {
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
             open_forms: Rc::clone(&self.open_forms),
+            splicing: self.splicing.clone(),
+            definition_context: Cell::new(self.definition_context.get()),
         }
     }
 
@@ -954,6 +1023,7 @@ impl Desugarer {
         expanded: TaggedValue,
         expansion_scope: ScopeId,
         compiled_macro: &patina_core::CompiledMacro,
+        scan_env: Option<&Rc<Environment>>,
         shared_heap: &SharedHeap,
     ) -> TaggedValue {
         // A macro a foreign generator defined carries that generator's
@@ -998,8 +1068,10 @@ impl Desugarer {
         // Aliases must land in the environment the code will actually be
         // resolved in. `self.env` may be a transient child created for a
         // `let-syntax` or internal-define body and dropped when desugaring
-        // ends, so walk to the root of the chain.
-        let target_env = self.env.root();
+        // ends, so walk to the root of the chain. The preliminary definition
+        // scan instead supplies its private environment: no speculative alias
+        // or expansion identity may reach the real program.
+        let target_env = scan_env.cloned().unwrap_or_else(|| self.env.root());
         let mut renames: HashMap<Rc<str>, Aliases> = HashMap::new();
         // Each name once: the written ones, then those only an enclosing
         // expansion put here. A name can be both.
@@ -1041,14 +1113,16 @@ impl Desugarer {
             // every mention of it is the name. A generated macro can also
             // mention it under scopes that select another definition of the
             // spelling — one its generator introduced (#408, below) — and
-            // those are decided one by one. That takes the library to *have*
-            // an introduced definition of the spelling, which for `list`,
-            // `if` and the rest it does not, so they still stop here.
+            // those are decided one by one. A locally defined transformer can
+            // also mention a scoped keyword, including a splice's private
+            // helper (#424), so nonempty definition scopes require that check
+            // even for written template symbols.
             let def_location = def_env.binding_location(name);
             let same_by_name =
                 def_location.is_some() && self.env.binding_location(name) == def_location;
-            let may_mean_another =
-                inherited_identifiers.contains_key(name) && def_env.has_introduced_definition(name);
+            let may_mean_another = !definition_scopes.is_empty()
+                || (inherited_identifiers.contains_key(name)
+                    && def_env.has_introduced_definition(name));
             if !may_mean_another && (def_location.is_none() || same_by_name) {
                 continue;
             }
@@ -1135,6 +1209,20 @@ impl Desugarer {
             // reason above.
             let mut made: Vec<(ScopeSet, TaggedValue)> = Vec::new();
             for identity in identities {
+                // A macro exported from a splice can refer to a private local
+                // keyword. Its scopes identify a real expansion-time binding,
+                // even when the bare name has no binding at either site.
+                if let Some((home, scopes)) = def_env.scoped_macro_binding(name, identity) {
+                    if self.env.scoped_binding_of(name, identity).ok().flatten()
+                        != Some(scopes.clone())
+                    {
+                        let alias = alias_name(name);
+                        let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
+                        target_env.define_scoped_alias(alias, home, name.clone(), scopes);
+                        made.push((identity.clone(), symbol));
+                    }
+                    continue;
+                }
                 let alias_to = match def_env.name_reaches_binding_of(name, identity) {
                     // The name is the binding. Nothing to do where the use
                     // site's is the same one, or where it reaches nothing.
@@ -1659,6 +1747,19 @@ impl Desugarer {
         result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 
+    /// An operand is not a definition context. Restore the caller's context
+    /// even when expansion fails; nested body desugarers start a new context.
+    fn desugar_expression(
+        &self,
+        tagged: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
+        let previous = self.definition_context.replace(false);
+        let result = self.desugar_form(tagged, shared_heap);
+        self.definition_context.set(previous);
+        result
+    }
+
     /// One form, and what every form recurses through. Internal recursion
     /// comes here rather than through `desugar_tagged`, whose bookkeeping is
     /// per top-level form and was a measurable cost per *node*.
@@ -1882,6 +1983,7 @@ impl Desugarer {
                 expanded_tagged,
                 expansion_scope,
                 &compiled_macro,
+                None,
                 shared_heap,
             );
 
@@ -1950,6 +2052,12 @@ impl Desugarer {
             CoreForm::DefineSyntax => self.desugar_define_syntax_tagged(cdr, shared_heap),
             CoreForm::LetSyntax => self.desugar_let_syntax_tagged(cdr, shared_heap),
             CoreForm::LetrecSyntax => self.desugar_letrec_syntax_tagged(cdr, shared_heap),
+            CoreForm::SplicingLetSyntax => {
+                self.desugar_let_syntax_impl_tagged(cdr, shared_heap, false, true)
+            }
+            CoreForm::SplicingLetrecSyntax => {
+                self.desugar_let_syntax_impl_tagged(cdr, shared_heap, true, true)
+            }
             CoreForm::Begin => self.desugar_begin_tagged(cdr, shared_heap),
             CoreForm::Import => self.desugar_import_tagged(cdr, shared_heap),
             CoreForm::CondExpand => self.desugar_cond_expand_tagged(cdr, shared_heap),
@@ -2178,8 +2286,8 @@ impl Desugarer {
 
         match args_vec.len() {
             2 => {
-                let test = self.desugar_form(args_vec[0], shared_heap)?;
-                let then = self.desugar_form(args_vec[1], shared_heap)?;
+                let test = self.desugar_expression(args_vec[0], shared_heap)?;
+                let then = self.desugar_expression(args_vec[1], shared_heap)?;
                 Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
@@ -2187,9 +2295,9 @@ impl Desugarer {
                 }))
             }
             3 => {
-                let test = self.desugar_form(args_vec[0], shared_heap)?;
-                let then = self.desugar_form(args_vec[1], shared_heap)?;
-                let else_ = self.desugar_form(args_vec[2], shared_heap)?;
+                let test = self.desugar_expression(args_vec[0], shared_heap)?;
+                let then = self.desugar_expression(args_vec[1], shared_heap)?;
+                let else_ = self.desugar_expression(args_vec[2], shared_heap)?;
                 Ok(CoreExpr::new(CoreExprKind::If {
                     test: Rc::new(test),
                     then: Rc::new(then),
@@ -2242,7 +2350,7 @@ impl Desugarer {
         let by_name = self.checked_reference(&name, &scopes)?;
         let name = self.early_bound(&name, &scopes, by_name).unwrap_or(name);
 
-        let value = self.desugar_form(args_vec[1], shared_heap)?;
+        let value = self.desugar_expression(args_vec[1], shared_heap)?;
 
         Ok(CoreExpr::new(CoreExprKind::Set {
             var: name,
@@ -2271,6 +2379,7 @@ impl Desugarer {
         if first.is_pair() {
             let (name, name_scopes, formals_tv) =
                 utils::parse_define_function_tagged(first, shared_heap)?;
+            let name_scopes = self.spliced_definition_scopes(name_scopes);
             let body_tvs: Vec<_> = args_vec[1..].to_vec();
 
             if body_tvs.is_empty() {
@@ -2332,6 +2441,8 @@ impl Desugarer {
             DesugarError::InvalidSyntax("define requires a symbol as first argument".to_string())
         })?;
 
+        let name_scopes = self.spliced_definition_scopes(name_scopes);
+
         if args_vec.len() != 2 {
             return Err(DesugarError::WrongArgCount {
                 form: "define".to_string(),
@@ -2341,7 +2452,7 @@ impl Desugarer {
         }
 
         let value_tv = args_vec[1];
-        let value = self.desugar_form(value_tv, shared_heap)?;
+        let value = self.desugar_expression(value_tv, shared_heap)?;
 
         self.note_introduced_definition(&name, &name_scopes);
         Ok(CoreExpr::new(CoreExprKind::Define {
@@ -2414,10 +2525,10 @@ impl Desugarer {
             return self.desugar_app_tagged(list, shared_heap);
         }
 
-        let func = self.desugar_form(args_vec[0], shared_heap)?;
+        let func = self.desugar_expression(args_vec[0], shared_heap)?;
         let operands: Vec<CoreExpr> = args_vec[1..]
             .iter()
-            .map(|tv| self.desugar_form(*tv, shared_heap))
+            .map(|tv| self.desugar_expression(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::Apply {
@@ -2434,10 +2545,10 @@ impl Desugarer {
             return Err(DesugarError::InvalidSyntax("Empty application".to_string()));
         }
 
-        let func = self.desugar_form(exprs[0], shared_heap)?;
+        let func = self.desugar_expression(exprs[0], shared_heap)?;
         let operands: Vec<CoreExpr> = exprs[1..]
             .iter()
-            .map(|tv| self.desugar_form(*tv, shared_heap))
+            .map(|tv| self.desugar_expression(*tv, shared_heap))
             .collect::<Result<Vec<_>>>()?;
 
         Ok(CoreExpr::new(CoreExprKind::App {
@@ -2541,16 +2652,30 @@ impl Desugarer {
         binder_scopes: ScopeSet,
         value: TaggedValue,
     ) {
-        if self.current_scopes.is_empty() {
+        let (env, current_scopes) = match &self.splicing {
+            Some(context) => (context.env.as_ref(), &context.scopes),
+            None => (env, &self.current_scopes),
+        };
+        let binder_scopes = self.spliced_definition_scopes(binder_scopes);
+        if current_scopes.is_empty() {
             env.define(name, value);
         } else {
             let scopes = if binder_scopes.is_empty() {
-                self.current_scopes.clone()
+                current_scopes.clone()
             } else {
                 binder_scopes
             };
             env.define_with_scopes(name, scopes, value);
         }
+    }
+
+    fn spliced_definition_scopes(&self, mut scopes: ScopeSet) -> ScopeSet {
+        if let Some(context) = &self.splicing {
+            for scope in &context.keyword_scopes {
+                scopes = scopes.without_scope(*scope);
+            }
+        }
+        scopes
     }
 
     /// Desugar import using TaggedValue: (import import-set ...) → Import { import_sets }
@@ -2596,7 +2721,7 @@ impl Desugarer {
         args: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
-        self.desugar_let_syntax_impl_tagged(args, shared_heap, false)
+        self.desugar_let_syntax_impl_tagged(args, shared_heap, false, false)
     }
 
     /// Desugar letrec-syntax using TaggedValue
@@ -2605,16 +2730,17 @@ impl Desugarer {
         args: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
-        self.desugar_let_syntax_impl_tagged(args, shared_heap, true)
+        self.desugar_let_syntax_impl_tagged(args, shared_heap, true, false)
     }
 
-    /// Common implementation for let-syntax and letrec-syntax using TaggedValue
-    fn desugar_let_syntax_impl_tagged(
+    /// Bind local keywords, shared by ordinary and splicing syntax forms.
+    fn prepare_local_syntax(
         &self,
         args: TaggedValue,
         shared_heap: &SharedHeap,
         is_letrec: bool,
-    ) -> Result<CoreExpr> {
+        splicing: bool,
+    ) -> Result<(Self, Vec<TaggedValue>)> {
         let env = &self.env;
 
         let let_syntax_scope = ScopeId::fresh();
@@ -2622,16 +2748,21 @@ impl Desugarer {
 
         let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
 
-        let form_name = if is_letrec {
-            "letrec-syntax"
-        } else {
-            "let-syntax"
+        let form_name = match (splicing, is_letrec) {
+            (true, true) => "splicing-letrec-syntax",
+            (true, false) => "splicing-let-syntax",
+            (false, true) => "letrec-syntax",
+            (false, false) => "let-syntax",
         };
 
-        if args_vec.len() < 2 {
+        if args_vec.is_empty() || (!splicing && args_vec.len() < 2) {
+            let required = if splicing {
+                "a binding list"
+            } else {
+                "bindings and at least one body expression"
+            };
             return Err(DesugarError::InvalidSyntax(format!(
-                "{} requires bindings and at least one body expression",
-                form_name
+                "{form_name} requires {required}"
             )));
         }
 
@@ -2734,7 +2865,16 @@ impl Desugarer {
         // `let-syntax` win over an outer `(let ((f …)) …)`, which is R7RS
         // §4.3.1 and what `let_syntax_body_definitions_and_transformer_scope`
         // pins.
-        let body_env = Rc::new(Environment::with_parent(env.clone()));
+        // A splice leaves definitions (including macros) in this environment.
+        // Keep its private keywords here too, under the fresh scope only:
+        // an escaping transformer retains access to its helpers, whereas a
+        // surrounding source reference cannot see them. A child environment
+        // would strand those scoped helpers once the splice has ended.
+        let body_env = if splicing {
+            env.clone()
+        } else {
+            Rc::new(Environment::with_parent(env.clone()))
+        };
         for (name, binder_scopes, compiled_macro) in macro_bindings {
             let tv = body_env
                 .heap()
@@ -2777,7 +2917,23 @@ impl Desugarer {
             );
         }
 
-        let body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
+        let mut body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
+        body_desugarer.definition_context.set(true);
+        body_desugarer.splicing = if splicing {
+            let mut context =
+                self.splicing
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_else(|| SplicingContext {
+                        env: self.env.clone(),
+                        scopes: self.current_scopes.clone(),
+                        keyword_scopes: Vec::new(),
+                    });
+            context.keyword_scopes.push(let_syntax_scope);
+            Some(Rc::new(context))
+        } else {
+            None
+        };
 
         // The body as written gets this form's scope on every identifier that
         // carries scopes of its own — what Racket does on entering a binding
@@ -2791,8 +2947,33 @@ impl Desugarer {
             })
             .collect();
 
-        let desugared_body =
-            self.desugar_body_tagged(&body_desugarer, &body_tvs, shared_heap, &definition_scopes)?;
+        Ok((body_desugarer, body_tvs))
+    }
+
+    fn desugar_let_syntax_impl_tagged(
+        &self,
+        args: TaggedValue,
+        shared_heap: &SharedHeap,
+        is_letrec: bool,
+        splicing: bool,
+    ) -> Result<CoreExpr> {
+        let splicing = splicing && self.definition_context.get();
+        let (body_desugarer, body_tvs) =
+            self.prepare_local_syntax(args, shared_heap, is_letrec, splicing)?;
+        if splicing {
+            let body = body_tvs
+                .into_iter()
+                .map(|form| body_desugarer.desugar_form(form, shared_heap))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(CoreExpr::new(CoreExprKind::Begin(body)));
+        }
+
+        let desugared_body = self.desugar_body_tagged(
+            &body_desugarer,
+            &body_tvs,
+            shared_heap,
+            &body_desugarer.current_scopes,
+        )?;
 
         // R7RS §4.3.1: the body of `let-syntax` is a ⟨body⟩, so a definition in
         // it is local to it and does not reach the enclosing body.
@@ -2817,7 +2998,7 @@ impl Desugarer {
                     // The set this body was desugared with. Nothing reads it
                     // while the wrapper takes no parameters, but it is the
                     // answer that stays right if one is ever added.
-                    binding_scopes: Rc::new(definition_scopes.clone()),
+                    binding_scopes: Rc::new(body_desugarer.current_scopes.clone()),
                 }),
                 args: vec![],
             }))

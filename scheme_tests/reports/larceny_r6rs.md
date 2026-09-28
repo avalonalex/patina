@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-27 23:50:48\
+**Generated:** 2026-09-28 15:38:11\
 **Backend:** VM\
 **Lane:** tests/r6rs ((r6rs …) emulation libraries)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -10,23 +10,27 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 | | |
 |---|---|
 | Suites fully passing | 14 of 16 |
-| Assertions passed | 4467 of 4474 (99.8%) |
+| Assertions passed | 6493 of 6509 (99.8%) |
 | Suites cut short by a top-level error | 0 |
-| Suites not reaching a tally | 1 |
+| Suites not reaching a tally | 0 |
 
 A suite that cannot load reaches no tally, and one cut short by a top-level error reaches only part of one, so the assertion total under-reports exactly as much as is broken; the suite line is the one to watch.
 
-## Failed to load (1)
-
-The suite's library did not compile, so nothing in it ran. Patina's message:
-
-| Suite | Message |
-|---|---|
-| base | `Error: Error loading library in tests/r6rs/base.sld: desugar error: Invalid syntax: let-syntax requires bindings and at least one body expression` |
-
-## Assertion failures (7 in 1 suites)
+## Assertion failures (16 in 2 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
+
+### base — 9 of 2035 failed
+
+- [base.sld:1374](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L1374) — `#t` `log`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
+- [base.sld:970](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/r6rs/base.sld#L970) — `string->number` `number->string`
 
 ### io/simple — 7 of 56 failed
 
@@ -43,7 +47,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | Suite | Status | Passed | Total |
 |---|---|---|---|
 | arithmetic/fixnums | pass | 3379 | 3379 |
-| base | load-error | 0 | 0 |
+| base | fail | 2026 | 2035 |
 | bytevectors | pass | 469 | 469 |
 | control | pass | 11 | 11 |
 | enums | pass | 26 | 26 |
