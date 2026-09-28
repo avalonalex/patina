@@ -184,10 +184,9 @@ pub(super) fn output_port_p(
 /// a port cannot coherently call it non-textual. chibi 0.12 and Gauche 0.9.15
 /// both answer `#t` for bytevector ports and for binary file ports (#404).
 ///
-/// `binary-port?` is *not* the mirror image. The byte operations are still
-/// refused on a port opened as textual, so it keeps answering from the kind.
-/// (For string ports chibi refuses them as we do and Gauche does not; for
-/// textual file ports both allow them and we do not, which is unaddressed.)
+/// `binary-port?` also accepts file and standard ports regardless of opening
+/// mode (#412), matching both references. String ports remain textual-only,
+/// matching chibi where the references differ.
 pub(super) fn textual_port_p(
     heap: &SharedHeap,
     args: &[TaggedValue],

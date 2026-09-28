@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-18 22:10:13\
+**Generated:** 2026-09-27 23:49:42\
 **Backend:** tree-walker\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 24 of 33 |
-| Assertions passed | 8512 of 8534 (99.7%) |
+| Suites fully passing | 23 of 33 |
+| Assertions passed | 8507 of 8536 (99.7%) |
 | Suites cut short by a top-level error | 1 |
 | Suites not reaching a tally | 0 |
 
@@ -24,22 +24,32 @@ A top-level form of the suite's run program raised, and the program carried on t
 |---|---|---|
 | set | 16 of 16 passed | `Error: Type error: %record-ref: expected record, got procedure` |
 
-## Assertion failures (22 in 8 suites)
+## Assertion failures (29 in 9 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
-### base — 6 of 1092 failed
+### base — 8 of 1094 failed
 
 - [base.sld:2301](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2301) — `vector-copy!`
 - (not located) — `a`
+- [base.sld:2949](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2949) — `closed-profile`
 - [base.sld:2961](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2961) — `closed-profile`
 - [base.sld:2965](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2965) — `closed-profile`
 - [base.sld:2980](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2980) — `closed-profile`
+- [base.sld:2989](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2989) — `closed-profile`
 - [base.sld:2997](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/base.sld#L2997) — `closed-profile`
 
 ### complex — 1 of 69 failed
 
 - [complex.body.scm:89](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/complex.body.scm#L89) — `log`
+
+### file — 5 of 75 failed
+
+- [file.sld:185](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L185) — `binary-port?`
+- [file.sld:197](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L197) — `binary-port?`
+- [file.sld:216](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L216) — `binary-port?`
+- [file.sld:223](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L223) — `binary-port?`
+- [file.sld:254](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/file.sld#L254) — `binary-port?` `current-input-port`
 
 ### flonum — 1 of 1280 failed
 
@@ -78,7 +88,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 
 | Suite | Status | Passed | Total |
 |---|---|---|---|
-| base | fail | 1086 | 1092 |
+| base | fail | 1086 | 1094 |
 | box | pass | 10 | 10 |
 | case-lambda | pass | 5 | 5 |
 | char | pass | 139 | 139 |
@@ -88,7 +98,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | cxr | pass | 28 | 28 |
 | ephemeron | pass | 6 | 6 |
 | eval | pass | 5 | 5 |
-| file | pass | 75 | 75 |
+| file | fail | 70 | 75 |
 | flonum | fail | 1279 | 1280 |
 | generator | pass | 49 | 49 |
 | hash-table | pass | 82 | 82 |
