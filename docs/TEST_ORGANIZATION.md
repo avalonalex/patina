@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 95 drivers cover binary-record read/write round trips;
+assertion count. The 102 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -906,7 +906,20 @@ in `tests/scheme/srfi/regex-graphemes.scm`. Native Chibi passes two and Gauche
 five; the four missing-data/LV cases and Gauche's merged-LV case are classified
 in `DIVERGENCES.tsv`. Both Patina backends pass all six.
 
-All 1338 assertions were compared against both Patina backends, Chibi 0.12
+The utility batch adds 126 assertions across Chibi config (30), environment
+monad (10), generators (35), association unpacking (18), trivial tar writer
+(15), Chris Oei test (8), and lightweight-testing (10). These cover config
+precedence, persistence, schemas and file includes; monad binding/restoration;
+generator construction, coroutine traversal, consumers and exhaustion;
+unpack validation; tar headers, checksum and block alignment; and both
+successful and deliberately failing test-helper calls. All 126 pass on both
+backends, Chibi and Gauche. Three overlays fix the upstream defects in #534.
+The tar writer also exposed #533: Patina binary I/O now honors the current
+port when the optional port is omitted. Ten added public Scheme port rows
+pass on both backends. Chibi's bytevector `u8-ready?` limitation is recorded
+in the oracle register; the other new rows agree with both references.
+
+All 1464 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -1032,6 +1045,18 @@ elsewhere, preserving #431. Before-repair runs retain all previously merged
 overlays, including #431 and the regexp suite's missing-data guard, and omit
 only the new #530/#531 corrections. The pinned implementation bodies match
 the normal corpus runs.
+
+The utility reference runs use the same renamed corpus namespace. The
+`chrisoei-test` and `lightweight-testing` drivers additionally stage the pinned
+`test-lib/chibi` test framework with diff, optional and terminal-color support
+under its ordinary names on all hosts; only reporter output is captured,
+while real assertion evaluation and failure accounting remain active.
+Before overlays, config reaches 22/26, generators 31/35, and tar 12/15 on
+all four hosts; the other four drivers pass unchanged. The config cascade
+raises on Patina/Gauche but loses outer precedence on Chibi. Tar was measured
+on Patina after #533's runtime repair, independently of its padding overlay.
+Four further config regression assertions bring its final count to 30.
+No vendor file or reference interpreter was modified.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

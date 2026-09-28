@@ -1,0 +1,62 @@
+# Correctness overlay for #429: https://github.com/avalonalex/patina/issues/534
+# Reproduced on VM, tree-walker, Chibi and Gauche using the pinned code.
+# Covered by compat/smoke/chibi-config.scm; vendor files remain pristine.
+--- a/chibi/config.scm
++++ b/chibi/config.scm
+@@ -213,10 +213,10 @@
+   (let ((include-keyword (if (pair? o) (car o) 'include)))
+     (let load ((ls (list (cons file (and (pair? o) (pair? (cdr o)) (cadr o)))))
+                (seen '())
+-               (res '()))
++               (res #f))
+       (cond
+        ((null? ls)
+-        res)
++        (or res (make-conf '() #f #f (current-second))))
+        (else
+         (let ((file (if (symbol? (caar ls))
+                         (symbol->string (caar ls))
+@@ -236,7 +236,7 @@
+                                          (and (number? depth) (- depth 1))))
+                                  includes))
+                     (cons file seen)
+-                    (append res config)))))))))))
++                    (if res (conf-append res config) config)))))))))))
+ 
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ 
+@@ -351,12 +351,12 @@
+ (define (conf-specialize config key name)
+   (let lp ((cfg config) (res '()))
+     (if (not cfg)
+-        (make-conf (reverse res) config #f (current-second))
++        (make-conf res config #f (current-second))
+         (let* ((specialized (assq key (conf-alist cfg)))
+                (named (and specialized (assq name (cdr specialized))))
+                (next (conf-parent cfg)))
+           (if named
+-              (lp next (cons (cdr named) res))
++              (lp next (append res (cdr named)))
+               (lp next res))))))
+ 
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+@@ -451,8 +451,8 @@
+       ((list)
+        (and (list? (cell-list))
+             (every* (lambda (x)
+-                      ;; (cons `(list ,(car cell)) x)
+-                      (conf-verify-match (cadr def) x warn))
++                      (conf-verify-match
++                       (cadr def) (list (car cell) x) warn))
+                     (cell-list))))
+       ((alist)
+        (let ((key-def (cadr def))
+@@ -467,7 +467,7 @@
+        (and (alist? (cell-list))
+             (conf-verify (cdr def) (list (cell-list)) warn)))
+       ((or)
+-       (or (any (lambda (x) (conf-verify-match x cell (lambda (x) x)))
++       (or (any (lambda (x) (conf-verify-match x cell (lambda args #f)))
+                 (cdr def))
+            (warn "bad spec value for " (car cell)
+                  ": expected " def " but got " (cell-value))))
