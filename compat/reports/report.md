@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-28T00:31:45Z
+**Measured:** 2026-09-28T00:46:31Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **95 passed smoke checks**, and **11 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **102 passed smoke checks**, and **4 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -75,7 +75,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-bytevector | test | pass | in scope |
 | chibi-char-set | smoke | pass | in scope |
 | chibi-char-set-boundary | smoke | pass | in scope |
-| chibi-config | probe | pass | in scope |
+| chibi-config | smoke | pass | in scope |
 | chibi-crypto-md5 | test | pass | in scope |
 | chibi-crypto-rsa | test | pass | in scope |
 | chibi-crypto-sha2 | test | pass | in scope |
@@ -90,7 +90,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-math-stats | test | pass | in scope |
 | chibi-mecab | test | out-of-scope | ffi |
 | chibi-mime | test | pass | in scope |
-| chibi-monad-environment | probe | pass | in scope |
+| chibi-monad-environment | smoke | pass | in scope |
 | chibi-net-dns | test | out-of-scope | ffi |
 | chibi-net-smtp | test | out-of-scope | ffi |
 | chibi-parse | test | pass | in scope |
@@ -110,10 +110,10 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-xgboost | test | out-of-scope | ffi |
 | chibi-xlib | probe | out-of-scope | ffi |
 | chrisoei-cint | test | pass | in scope |
-| chrisoei-test | probe | pass | in scope |
+| chrisoei-test | smoke | pass | in scope |
 | comparators | test | pass | in scope |
 | edn | test | parse-error | upstream-source-defect |
-| generators | probe | pass | in scope |
+| generators | smoke | pass | in scope |
 | in-progress-hash-bimaps | test | pass | in scope |
 | in-progress-hash-tables | test | pass | in scope |
 | independentresearch-xattr | probe | out-of-scope | ffi |
@@ -121,9 +121,9 @@ These packages still run on every pass — exclusion decides whether a result co
 | lassik-dockerfile | test | pass | in scope |
 | lassik-shell-quote | test | pass | in scope |
 | lassik-string-inflection | test | pass | in scope |
-| lassik-trivial-tar-writer | probe | pass | in scope |
-| lassik-unpack-assoc | probe | pass | in scope |
-| lightweight-testing | probe | pass | in scope |
+| lassik-trivial-tar-writer | smoke | pass | in scope |
+| lassik-unpack-assoc | smoke | pass | in scope |
+| lightweight-testing | smoke | pass | in scope |
 | macduffie-json | smoke | pass | in scope |
 | okmij-ssax | test | pass | in scope |
 | pfds-alist | smoke | pass | in scope |

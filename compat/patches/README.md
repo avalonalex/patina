@@ -322,3 +322,11 @@ fresh copy of its package and fails the build if one does not, or if one
 applies but changes nothing. A patch goes stale the moment its package is
 re-vendored, and this is where that is cheap to notice — rather than during a
 corpus run, where it looks like the package's own regression.
+
+- [#534](https://github.com/avalonalex/patina/issues/534), `chibi-config.patch`,
+  `generators.patch`, `lassik-trivial-tar-writer.patch`: flatten specialized
+  config sections, chain includes as configs, validate list elements and
+  alternate types correctly; follow the pinned SRFI 121 exhaustion/witness
+  contract; omit padding for already aligned tar payloads. The tar driver
+  also exposed Patina's omitted binary-port defect (#533), repaired in the
+  shared primitives rather than hidden by a package overlay.

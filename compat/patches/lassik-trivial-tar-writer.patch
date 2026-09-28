@@ -1,0 +1,14 @@
+# Correctness overlay for #429: https://github.com/avalonalex/patina/issues/534
+# Reproduced on VM, tree-walker, Chibi and Gauche using the pinned code.
+# Covered by compat/smoke/lassik-trivial-tar-writer.scm; vendor files remain pristine.
+--- a/lassik/trivial-tar-writer.sld
++++ b/lassik/trivial-tar-writer.sld
+@@ -40,7 +40,7 @@
+ 
+     (define (tar-write-file fake-path bytes)
+       (let* ((nbyte (bytevector-length bytes))
+-             (nnull (- 512 (truncate-remainder nbyte 512)))
++             (nnull (modulo (- nbyte) 512))
+              (header-before-checksum
+               (bytevector-append
+                (tar-string 100 fake-path)

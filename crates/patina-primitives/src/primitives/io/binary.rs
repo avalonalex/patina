@@ -6,7 +6,7 @@
 //! - read-bytevector, read-bytevector!
 //! - write-bytevector
 
-use super::ports::get_port_tv;
+use super::ports::{get_input_port_tagged, get_output_port_tagged};
 use patina_core::TaggedValue;
 use patina_runtime::Port;
 use patina_runtime::{EvalError, SharedHeap};
@@ -18,52 +18,24 @@ fn get_binary_input_port_tagged(
     idx: usize,
     heap: &std::cell::Ref<'_, patina_core::Heap>,
 ) -> Result<Rc<Port>, EvalError> {
-    if args.len() > idx {
-        match get_port_tv(args[idx], heap) {
-            Some(p) => {
-                if !p.is_input() {
-                    return Err(EvalError::TypeError("expected input port".to_string()));
-                }
-                if !p.is_binary() {
-                    return Err(EvalError::TypeError("expected binary port".to_string()));
-                }
-                Ok(p.clone())
-            }
-            None => Err(EvalError::TypeError("expected port".to_string())),
-        }
-    } else {
-        // No port specified - for binary operations, we need an explicit port
-        Err(EvalError::TypeError(
-            "binary I/O operations require an explicit port".to_string(),
-        ))
+    let port = get_input_port_tagged(args, idx, heap)?;
+    if !port.is_binary() {
+        return Err(EvalError::TypeError("expected binary port".to_string()));
     }
+    Ok(port)
 }
 
-/// Helper to get a binary output port from tagged args
+/// Get an explicit binary output port, or the dynamically current one (#533).
 fn get_binary_output_port_tagged(
     args: &[TaggedValue],
     idx: usize,
     heap: &std::cell::Ref<'_, patina_core::Heap>,
 ) -> Result<Rc<Port>, EvalError> {
-    if args.len() > idx {
-        match get_port_tv(args[idx], heap) {
-            Some(p) => {
-                if !p.is_output() {
-                    return Err(EvalError::TypeError("expected output port".to_string()));
-                }
-                if !p.is_binary() {
-                    return Err(EvalError::TypeError("expected binary port".to_string()));
-                }
-                Ok(p.clone())
-            }
-            None => Err(EvalError::TypeError("expected port".to_string())),
-        }
-    } else {
-        // No port specified - for binary operations, we need an explicit port
-        Err(EvalError::TypeError(
-            "binary I/O operations require an explicit port".to_string(),
-        ))
+    let port = get_output_port_tagged(args, idx, heap)?;
+    if !port.is_binary() {
+        return Err(EvalError::TypeError("expected binary port".to_string()));
     }
+    Ok(port)
 }
 
 /// (read-u8 [port]) - Read a single byte from a binary input port
@@ -223,25 +195,9 @@ pub(super) fn read_bytevector_bang(
         })?
     };
 
-    // Get port
-    let port = if args.len() > 1 {
+    let port = {
         let heap_ref = heap.borrow();
-        match get_port_tv(args[1], &heap_ref) {
-            Some(p) => {
-                if !p.is_input() {
-                    return Err(EvalError::TypeError("expected input port".to_string()));
-                }
-                if !p.is_binary() {
-                    return Err(EvalError::TypeError("expected binary port".to_string()));
-                }
-                p.clone()
-            }
-            None => return Err(EvalError::TypeError("expected port".to_string())),
-        }
-    } else {
-        return Err(EvalError::TypeError(
-            "read-bytevector!: port argument required".to_string(),
-        ));
+        get_binary_input_port_tagged(args, 1, &heap_ref)?
     };
 
     // Parse start/end from TaggedValue directly
@@ -317,25 +273,9 @@ pub(super) fn write_bytevector(
         })?
     };
 
-    // Get port
-    let port = if args.len() > 1 {
+    let port = {
         let heap_ref = heap.borrow();
-        match get_port_tv(args[1], &heap_ref) {
-            Some(p) => {
-                if !p.is_output() {
-                    return Err(EvalError::TypeError("expected output port".to_string()));
-                }
-                if !p.is_binary() {
-                    return Err(EvalError::TypeError("expected binary port".to_string()));
-                }
-                p.clone()
-            }
-            None => return Err(EvalError::TypeError("expected port".to_string())),
-        }
-    } else {
-        return Err(EvalError::TypeError(
-            "write-bytevector: port argument required".to_string(),
-        ));
+        get_binary_output_port_tagged(args, 1, &heap_ref)?
     };
 
     let bv_len = bytes.len();

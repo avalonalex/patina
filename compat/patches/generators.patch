@@ -1,0 +1,49 @@
+# Correctness overlay for #429: https://github.com/avalonalex/patina/issues/534
+# Reproduced on VM, tree-walker, Chibi and Gauche using the pinned code.
+# Covered by compat/smoke/generators.scm; vendor files remain pristine.
+--- a/generators-impl.scm
++++ b/generators-impl.scm
+@@ -374,10 +374,9 @@
+ ;; generator-find
+ (define (generator-find pred g)
+   (let loop ((v (g)))
+-   ; A literal interpretation might say it only terminates on #eof if (pred #eof) but I think this makes more sense...
+-   (if (or (pred v) (eof-object? v))
+-     v
+-     (loop (g)))))
++    (cond ((eof-object? v) #f)
++          ((pred v) v)
++          (else (loop (g))))))
+ 
+ 
+ ;; generator-count
+@@ -388,22 +387,16 @@
+ ;; generator-any
+ (define (generator-any pred g)
+   (let loop ((v (g)))
+-   (if (eof-object? v)
+-     #f
+-     (if (pred v)
+-       #t
+-       (loop (g))))))
+-
++    (and (not (eof-object? v))
++         (or (pred v) (loop (g))))))
+ 
+ ;; generator-every
+ (define (generator-every pred g)
+-  (let loop ((v (g)))
+-   (if (eof-object? v)
+-     #t
+-     (if (pred v)
+-       (loop (g))
+-       #f ; the spec would have me return #f, but I think it must simply be wrong...
+-       ))))
++  (let loop ((v (g)) (last #t))
++    (if (eof-object? v)
++        last
++        (let ((result (pred v)))
++          (and result (loop (g) result))))))
+ 
+ 
+ ;; generator-unfold

@@ -2,6 +2,13 @@
 ;; Counts are checked by the runner: an empty or truncated driver cannot pass.
 (patina-compat-smokes
  (tests
+  ((slug "chibi-config") (assertions 30))
+  ((slug "chibi-monad-environment") (assertions 10))
+  ((slug "generators") (assertions 35))
+  ((slug "lassik-unpack-assoc") (assertions 18))
+  ((slug "lassik-trivial-tar-writer") (assertions 15))
+  ((slug "chrisoei-test") (assertions 8))
+  ((slug "lightweight-testing") (assertions 10))
   ((slug "chibi-char-set") (assertions 19))
   ((slug "chibi-char-set-boundary") (assertions 11))
   ((slug "chibi-html-parser") (assertions 17))
