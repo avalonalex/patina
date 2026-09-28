@@ -337,6 +337,53 @@
   (map inexact? (list (sqrt 4.0) (sqrt 0.0) (sqrt -1.0)
                       (sqrt 2) (sqrt 2+2i))))
 
+;; #418: a negative real has a purely imaginary principal root. Its known
+;; zero real component is exact, as in Chibi; the imaginary component can
+;; still be inexact. This agrees with the reader's implicit zero in +inf.0i.
+;; Gauche uses inexact components throughout, so only the exact-zero row
+;; below differs. Infinity itself is inexact in all three implementations.
+(test-equal "sqrt of negative infinity agrees with its imaginary literal" #t
+  (equal? (sqrt -inf.0) +inf.0i))
+
+(define negative-real-root-inputs '(-inf.0 -4.0 -2 -2.0 -0.25))
+
+(test-equal "sqrt of negative reals has an exact zero real part"
+  '(#t #t #t #t #t)
+  (map (lambda (x) (eqv? (real-part (sqrt x)) 0)) negative-real-root-inputs))
+
+(test-equal "negative-real roots retain inexact imaginary parts"
+  '((#t #t #t) (#t #t #t) (#t #t #t) (#t #t #t) (#t #t #t))
+  (map (lambda (x)
+         (let ((root (sqrt x)))
+           (list (inexact? root) (inexact? (imag-part root))
+                 (> (imag-part root) 0))))
+       negative-real-root-inputs))
+
+(test-equal "negative-real roots round-trip through both writers"
+  '((#t #t) (#t #t) (#t #t) (#t #t) (#t #t))
+  (map (lambda (x)
+         (let ((root (sqrt x)))
+           (list (equal? root (read (open-input-string (written root))))
+                 (equal? root (string->number (number->string root))))))
+       negative-real-root-inputs))
+
+(test-equal "sqrt preserves signed real zero and positive infinity"
+  '("-0.0" "0.0" "+inf.0")
+  (map (lambda (x) (number->string (sqrt x))) '(-0.0 0.0 +inf.0)))
+
+(test-equal "infinity and its square roots remain inexact"
+  '(#t #t #t #t)
+  (map inexact? (list +inf.0 -inf.0 (sqrt +inf.0) (imag-part (sqrt -inf.0)))))
+
+;; An explicitly complex input stays on the complex path, including both
+;; signs of zero at the branch cut. Chibi and Gauche agree on these results.
+(test-equal "sqrt keeps explicit complex zero real parts inexact"
+  '((#t #t #t) (#t #t #t))
+  (map (lambda (x)
+         (let ((root (sqrt x)))
+           (list (= root +2.0i) (inexact? (real-part root)) (inexact? root))))
+       '(-4.0+0.0i -4.0-0.0i)))
+
 (test-equal "expt, including a negative exponent giving a ratio"
   '("8" "25" "1" "1/10" "8.0" "8.0" "1" "1")
   (map written (list (expt 2 3) (expt 5 2) (expt 2 0) (expt 10 -1)

@@ -1,6 +1,6 @@
 # Patina vs Larceny's R7RS test suite — by kind of problem
 
-**Generated:** 2026-09-27 23:42:18\
+**Generated:** 2026-09-28 08:12:02\
 **Backend:** VM\
 **Lane:** tests/scheme (R7RS-small + Red edition)\
 **Suite:** larcenists/larceny @ `fef550c7d392` — not vendored (LGPL); see `scripts/run_larceny_tests.sh`
@@ -9,8 +9,8 @@ This report quotes nothing from the suite. Each failing assertion is a permalink
 
 | | |
 |---|---|
-| Suites fully passing | 23 of 33 |
-| Assertions passed | 8507 of 8536 (99.7%) |
+| Suites fully passing | 24 of 33 |
+| Assertions passed | 8508 of 8536 (99.7%) |
 | Suites cut short by a top-level error | 1 |
 | Suites not reaching a tally | 0 |
 
@@ -24,7 +24,7 @@ A top-level form of the suite's run program raised, and the program carried on t
 |---|---|---|
 | set | 16 of 16 passed | `Error: runtime error: Type error: %record-ref: expected record, got procedure` |
 
-## Assertion failures (29 in 9 suites)
+## Assertion failures (28 in 8 suites)
 
 Each entry links to the test case; the name after it is the procedure the assertion exercises.
 
@@ -70,10 +70,6 @@ Each entry links to the test case; the name after it is the procedure the assert
 - [ilist.sld:1039](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L1039) — `comparator-compare` `iq`
 - [ilist.sld:1043](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/ilist.sld#L1043) — `comparator-compare` `iq`
 
-### inexact — 1 of 592 failed
-
-- [inexact.sld:361](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/inexact.sld#L361) — `sqrt`
-
 ### list — 1 of 172 failed
 
 - [list.sld:589](https://github.com/larcenists/larceny/blob/fef550c7d3923deb7a5a1ccd5a628e54cf231c75/test/R7RS/Lib/tests/scheme/list.sld#L589) — `list` `cells`
@@ -104,7 +100,7 @@ Each entry links to the test case; the name after it is the procedure the assert
 | hash-table | pass | 82 | 82 |
 | ideque | pass | 114 | 114 |
 | ilist | fail | 337 | 345 |
-| inexact | fail | 591 | 592 |
+| inexact | pass | 592 | 592 |
 | lazy | pass | 33 | 33 |
 | list-queue | pass | 40 | 40 |
 | list | fail | 171 | 172 |

@@ -43,9 +43,11 @@ twice.
   that package's mode measured. #429's import-only gap is closed; descriptor,
   terminal and GUI integration limits remain explicit in the drivers and
   `docs/TEST_ORGANIZATION.md`.
-- **Larceny, R7RS (measured 2026-09-28):** 23 of 33 suites clean, 8507 of
-  8536 assertions, on both backends. Of the 29 failures, 24 are not ours or are by decision, 3 wait on
-  #422 and 2 are ours (#418, #423). `./scripts/run_larceny_tests.sh`.
+- **Larceny, R7RS (measured 2026-09-28):** 24 of 33 suites clean, 8508 of
+  8536 assertions, on both backends. Of the 28 failures, 3 wait on #422;
+  the VM has one GC failure (#423), where the tree-walker instead has a
+  timing failure. The other 24 are not ours or are by decision.
+  `./scripts/run_larceny_tests.sh`.
 - **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 4467 of
   4474 assertions, on both backends. Seven `io/simple` port-predicate checks
   differ by decision (#412); `base` still cannot load (#424).
@@ -70,7 +72,6 @@ These are not defects. Each is a choice R7RS leaves open, where the references
 split or where matching them has a cost, and none should be taken in passing.
 
 - #422 — whether `write` spells the symbol `@` as `|@|`. chibi and Gauche split.
-- #418 — `(sqrt -inf.0)`: an exact or an inexact zero real part. Tied to how the writer elides one.
 - #424 — whether `(r6rs base)` gets R6RS's splicing `let-syntax`. It is all that blocks ~2000 assertions of the R6RS `base` suite.
 
 ## Standing rules the track leaves behind
@@ -81,4 +82,5 @@ split or where matching them has a cost, and none should be taken in passing.
 - **Whose defect it is** is settled by measurement against chibi and Gauche, never by which of them accepts a program. `crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is where a difference is classified.
 - **Port policy (#412):** file and standard ports support both characters and bytes, as chibi and Gauche do; string ports remain textual-only, as in chibi.
 - **Reader boundaries (#421):** quote prefixes and vertical bars end unescaped tokens, following Gauche; Chibi 0.12's narrower boundaries are recorded in the oracle divergence register. Names containing those delimiters use vertical bars.
-- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; four remain, all listed above.
+- **Square-root policy (#418):** negative real inputs produce an exact zero real component, following Chibi and preserving the reader/writer round trip; infinity and inexact imaginary components remain inexact.
+- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; three remain, all listed above.
