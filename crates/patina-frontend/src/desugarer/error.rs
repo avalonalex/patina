@@ -6,6 +6,11 @@ use std::fmt;
 /// Errors that can occur during desugaring
 #[derive(Debug, Clone)]
 pub enum DesugarError {
+    WithDiagnostic {
+        error: Box<DesugarError>,
+        diagnostic: Box<patina_runtime::Diagnostic>,
+    },
+
     /// Invalid syntax for a special form
     InvalidSyntax(String),
 
@@ -58,6 +63,13 @@ pub enum DesugarError {
 }
 
 impl DesugarError {
+    pub fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {
+        Self::WithDiagnostic {
+            error: Box::new(self),
+            diagnostic: Box::new(diagnostic),
+        }
+    }
+
     /// Place this error at `location`, unless it already has a position — the
     /// innermost form that knows its place is the more precise answer.
     pub fn at_opt(self, location: Option<SourceLocation>) -> Self {
@@ -74,6 +86,7 @@ impl DesugarError {
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
             DesugarError::WithLocation { location, .. } => Some(location),
+            DesugarError::WithDiagnostic { error, .. } => error.source_location(),
             _ => None,
         }
     }
@@ -90,7 +103,8 @@ impl DesugarError {
             DesugarError::InvalidFormals(_) => ErrorKind::Syntax,
             DesugarError::AmbiguousReference(_) => ErrorKind::Syntax,
             DesugarError::Other(_) => ErrorKind::Internal,
-            DesugarError::WithLocation { error, .. } => error.to_error_kind(),
+            DesugarError::WithLocation { error, .. }
+            | DesugarError::WithDiagnostic { error, .. } => error.to_error_kind(),
         }
     }
 
@@ -138,7 +152,8 @@ impl fmt::Display for DesugarError {
                 write!(f, "Invalid formal parameters: {}", msg)
             }
             DesugarError::Other(msg) => write!(f, "{}", msg),
-            DesugarError::WithLocation { error, .. } => write!(f, "{}", error),
+            DesugarError::WithLocation { error, .. }
+            | DesugarError::WithDiagnostic { error, .. } => write!(f, "{}", error),
         }
     }
 }
@@ -154,3 +169,16 @@ impl From<DesugarError> for ErrorDetail {
 
 /// Convenience result type
 pub type Result<T> = std::result::Result<T, DesugarError>;
+
+impl patina_runtime::HasDiagnostic for DesugarError {
+    fn diagnostic(&self) -> patina_runtime::Diagnostic {
+        match self {
+            Self::WithDiagnostic { diagnostic, .. } => (**diagnostic).clone(),
+            Self::WithLocation { error, .. } => error.diagnostic(),
+            _ => patina_runtime::Diagnostic::new(
+                patina_runtime::DiagnosticKind::Syntax,
+                self.to_string(),
+            ),
+        }
+    }
+}

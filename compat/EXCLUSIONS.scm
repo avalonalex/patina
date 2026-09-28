@@ -146,8 +146,10 @@
   ;; the three-part name either) and why each rename is faithful.
 
   ;; Reached only since #383 bundled `(srfi 160 base)`; before that it stopped
-  ;; at the missing library and this was invisible.
-  ((slug "srfi-179") (reason upstream-source-defect) (expect parse-error)
+  ;; at the missing library and this was invisible. Structured diagnostics
+  ;; (#382) identify this as initialization failure on both backends, rather
+  ;; than the VM's former parse-error / tree-walker's unbound-identifier split.
+  ((slug "srfi-179") (reason upstream-source-defect) (expect load-error)
    (note "srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8"))
 
   ;; chibi-app sat here for an `else` clause mid-`case` (app.scm:467). It now

@@ -3047,6 +3047,13 @@ impl Desugarer {
                     path.display(),
                     e
                 ))
+                .with_diagnostic(
+                    patina_runtime::Diagnostic::new(
+                        patina_runtime::DiagnosticKind::Io,
+                        e.to_string(),
+                    )
+                    .at_path(path.display().to_string()),
+                )
             })?;
 
             // Parse the file contents
@@ -3061,6 +3068,13 @@ impl Desugarer {
                     path.display(),
                     e
                 ))
+                .with_diagnostic(
+                    patina_runtime::Diagnostic::new(
+                        patina_runtime::DiagnosticKind::Parse,
+                        e.to_string(),
+                    )
+                    .at_path(path.display().to_string()),
+                )
             })?;
 
             let parsed_exprs = parser.parse_all().map_err(|e| {
@@ -3069,6 +3083,13 @@ impl Desugarer {
                     path.display(),
                     e
                 ))
+                .with_diagnostic(
+                    patina_runtime::Diagnostic::new(
+                        patina_runtime::DiagnosticKind::Parse,
+                        e.to_string(),
+                    )
+                    .at_path(path.display().to_string()),
+                )
             })?;
 
             // Desugar each expression from the included file, with that

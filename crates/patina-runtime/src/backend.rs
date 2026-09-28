@@ -35,7 +35,7 @@ pub trait Backend {
     ///
     /// Should implement `std::error::Error` and ideally wrap or convert
     /// `RuntimeError` for common semantic errors.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: std::error::Error + crate::HasDiagnostic + Send + Sync + 'static;
 
     /// Evaluate a TaggedValue expression in the given environment
     ///

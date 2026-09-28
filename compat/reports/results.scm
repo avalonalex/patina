@@ -2,7 +2,7 @@
 (patina-compat-results
  (version 1)
  (backend "vm")
- (measured-at "2026-09-28T00:57:36Z")
+ (measured-at "2026-09-28T05:25:41Z")
  (results
   ((slug "arvyy-interface") (mode test) (status pass))
   ((slug "arvyy-mustache") (mode test) (status pass))
@@ -50,7 +50,7 @@
   ((slug "chrisoei-cint") (mode test) (status pass))
   ((slug "chrisoei-test") (mode smoke) (status pass))
   ((slug "comparators") (mode test) (status pass))
-  ((slug "edn") (mode test) (status parse-error) (errors "Failed to compile macro new-symbol?: Invalid syntax: Duplicate pattern variable: ch"))
+  ((slug "edn") (mode test) (status parse-error) (errors "Invalid syntax: Failed to compile macro new-symbol?: Invalid syntax: Duplicate pattern variable: ch"))
   ((slug "generators") (mode smoke) (status pass))
   ((slug "in-progress-hash-bimaps") (mode test) (status pass))
   ((slug "in-progress-hash-tables") (mode test) (status pass))
@@ -143,7 +143,7 @@
   ((slug "srfi-166") (mode smoke) (status pass))
   ((slug "srfi-170") (mode probe) (status out-of-scope) (needs "foreign c"))
   ((slug "srfi-175") (mode test) (status pass))
-  ((slug "srfi-179") (mode test) (status parse-error) (errors "unbound variable: `u1vector-ref`"))
+  ((slug "srfi-179") (mode test) (status load-error) (errors "unbound variable: `u1vector-ref`"))
   ((slug "srfi-180") (mode smoke) (status pass))
   ((slug "srfi-19") (mode smoke) (status pass))
   ((slug "srfi-197") (mode test) (status runtime-error))

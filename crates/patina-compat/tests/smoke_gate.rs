@@ -40,9 +40,14 @@ impl Fixture {
             &patina,
             r#"#!/bin/sh
 backend=vm
+previous=
 for arg do
+    if [ "$previous" = --diagnostics-file ]; then
+        printf '%s\n' '{"protocol":"patina-diagnostics","version":1}' > "$arg"
+    fi
     [ "$arg" != --tree-walker ] || backend=tree-walker
     program=$arg
+    previous=$arg
 done
 [ "$backend" = "$SMOKE_TEST_BACKEND" ] || exit 90
 case "$program" in
@@ -208,4 +213,16 @@ fn ordinary_measurement_keeps_its_non_gating_exit_status() {
         .unwrap();
     assert_exit(&output, 0);
     assert!(String::from_utf8_lossy(&output.stdout).contains("| beta | smoke | wrong-result |"));
+}
+
+#[test]
+fn a_binary_without_the_diagnostic_protocol_cannot_score_the_corpus() {
+    let fixture = Fixture::new();
+    fs::write(&fixture.patina, "#!/bin/sh\nexit 0\n").unwrap();
+    for command in ["run", "check-smoke"] {
+        let output = fixture.command(command, false).output().unwrap();
+        assert_exit(&output, 2);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("diagnostic stream"));
+        assert!(!fixture.dir.path().join("results.scm").exists());
+    }
 }

@@ -728,6 +728,33 @@ to `compat/reports/results.scm` and their rendering to
 `compat/reports/report.md`. Use `--tree-walker` for that backend, with explicit
 `--results` and `--report` paths to preserve the canonical VM artifacts.
 
+The harness requests `patina --diagnostics-file <path>` for every child
+(#382). This opt-in mode writes a separate JSON-lines file alongside ordinary
+stderr, for scripts, stdin programs and `-p`; interactive and dump modes reject
+it. The first line is `{"protocol":"patina-diagnostics","version":1}`, even
+on success. Subsequent records have a `kind` and human-readable `message`,
+with `path`, `library` (an array of name components), `identifier` or
+`extension` where relevant. Names and paths are JSON strings, including
+whitespace, quotes and Unicode; they are never recovered from printed prose.
+Only uncaught, reported errors produce records. Under `-k` each reported error
+gets one, and a later `(exit 0)` cannot erase the failed status.
+
+Kinds are `parse`, `syntax`, `missing-library`, `unbound-identifier`, `load`,
+`native-extension`, `runtime` and `io`. The corpus groups `parse` and `syntax`
+into its existing `parse-error` bucket. An initialization or export failure
+is `load-error`; a nested missing library or reader failure retains its more
+specific cause. This makes SRFI 179's missing `u1vector-ref` a `load-error` on
+both backends, without changing why it is excluded. Classification uses tags
+and payloads; `message` supplies readable histogram detail only.
+
+The empty-package self-check requires the protocol header, so an old binary
+cannot silently fall back to prose classification. Missing, malformed or
+unsupported streams fail classification. Timeout and suite-tally precedence
+remain enforced. Third-party test frameworks still report their own tallies
+as text, and the deliberately emitted Scheme FFI-stub marker
+`requires FFI, unavailable in Patina:` remains an explicit protocol of
+`test-lib/chibi/filesystem.sld`; it is not an interpreter error-message match.
+
 The pass headline splits successful packages into **upstream test suites**,
 **maintained smoke checks**, and **import-only probes**. All three counts come
 from the snapshot's per-package `mode` and `status`; failed packages do not

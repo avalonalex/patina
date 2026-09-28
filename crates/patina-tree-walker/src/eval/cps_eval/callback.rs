@@ -14,6 +14,7 @@ use super::types::{ExceptionHandler, PromptFrame};
 use crate::eval::error::EvalError;
 use patina_core::{DynamicWindRecord, Environment, FileSystem, Library, SharedHeap, TaggedValue};
 use patina_primitives::ApplyContext;
+use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -60,7 +61,10 @@ impl<'a> CallbackContext<'_, 'a, '_> {
                 *import_set,
                 self.heap(),
             )
-            .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {e}")))?;
+            .map_err(|e| {
+                EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
+                    .with_diagnostic(e.diagnostic())
+            })?;
             self.cps
                 .evaluator
                 .process_import_for_eval_with(&import_set, env, self)?;
@@ -159,6 +163,9 @@ pub(super) fn expand_for_eval(
         patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
     let core_expr = desugarer
         .desugar_tagged(expr, evaluator.heap())
-        .map_err(|e| EvalError::InvalidSyntax(format!("eval: desugar error: {}", e)))?;
+        .map_err(|e| {
+            EvalError::InvalidSyntax(format!("eval: desugar error: {}", e))
+                .with_diagnostic(e.diagnostic())
+        })?;
     super::lower_quasiquotes_for(&core_expr, evaluator)
 }

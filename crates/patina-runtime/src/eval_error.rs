@@ -24,6 +24,14 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum EvalError {
+    /// Reporting metadata only; the inner error still determines catchability
+    /// and the Scheme condition delivered to an exception handler.
+    #[error("{error}")]
+    WithDiagnostic {
+        error: Box<EvalError>,
+        diagnostic: Box<crate::Diagnostic>,
+    },
+
     #[error("Undefined variable: {}", patina_core::escape_invisible(_0))]
     UndefinedVariable(String),
 
@@ -97,6 +105,23 @@ pub enum EvalError {
 }
 
 impl EvalError {
+    pub fn with_diagnostic(self, diagnostic: crate::Diagnostic) -> Self {
+        if self.to_error_kind() == ErrorKind::ControlFlow {
+            return self;
+        }
+        Self::WithDiagnostic {
+            error: Box::new(self),
+            diagnostic: Box::new(diagnostic),
+        }
+    }
+
+    pub fn without_diagnostic(&self) -> &Self {
+        match self {
+            Self::WithDiagnostic { error, .. } => error.without_diagnostic(),
+            _ => self,
+        }
+    }
+
     /// Wrap this error with a source location.
     pub fn at(self, loc: SourceLocation) -> Self {
         EvalError::WithLocation {
@@ -117,6 +142,7 @@ impl EvalError {
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
             EvalError::WithLocation { location, .. } => Some(location),
+            EvalError::WithDiagnostic { error, .. } => error.source_location(),
             _ => None,
         }
     }
@@ -133,7 +159,9 @@ impl patina_core::error::HasSourceLocation for EvalError {
     /// it, since a located error can be located again on its way out.
     fn message_without_location(&self) -> String {
         match self {
-            EvalError::WithLocation { error, .. } => error.message_without_location(),
+            EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
+                error.message_without_location()
+            }
             other => other.to_string(),
         }
     }
@@ -143,7 +171,9 @@ impl EvalError {
     /// Check if this error can be caught by Scheme exception handlers
     pub fn is_catchable(&self) -> bool {
         match self {
-            EvalError::WithLocation { error, .. } => error.is_catchable(),
+            EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
+                error.is_catchable()
+            }
             _ => !matches!(
                 self,
                 EvalError::InternalError(_)
@@ -175,12 +205,17 @@ impl EvalError {
                 ExceptionKind::ReadError => ErrorKind::Read,
                 _ => ErrorKind::User,
             },
-            EvalError::WithLocation { error, .. } => error.to_error_kind(),
+            EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
+                error.to_error_kind()
+            }
         }
     }
 
     /// Convert to ErrorDetail for rich error reporting
     pub fn to_error_detail(&self) -> ErrorDetail {
+        if let Self::WithDiagnostic { error, .. } = self {
+            return error.to_error_detail();
+        }
         let kind = self.to_error_kind();
         match self {
             EvalError::UndefinedVariable(name) => ErrorDetail::lookup_error(name),
@@ -249,6 +284,23 @@ impl From<ErrorDetail> for EvalError {
             }
             ErrorKind::Internal => EvalError::InternalError(detail.message),
             ErrorKind::ControlFlow => EvalError::ContinuationEscape,
+        }
+    }
+}
+
+impl crate::HasDiagnostic for EvalError {
+    fn diagnostic(&self) -> crate::Diagnostic {
+        use crate::{Diagnostic, DiagnosticKind as K};
+        match self {
+            Self::WithDiagnostic { diagnostic, .. } => (**diagnostic).clone(),
+            Self::WithLocation { error, .. } => error.diagnostic(),
+            Self::UndefinedVariable(name) => {
+                let mut d = Diagnostic::new(K::UnboundIdentifier, self.to_string());
+                d.identifier = Some(name.clone());
+                d
+            }
+            Self::DesugarError(_) => Diagnostic::new(K::Syntax, self.to_string()),
+            _ => Diagnostic::new(K::Runtime, self.to_string()),
         }
     }
 }

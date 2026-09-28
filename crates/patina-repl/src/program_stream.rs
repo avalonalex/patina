@@ -24,7 +24,7 @@ use patina_frontend::{Reader, ReaderState, dialect};
 use patina_interpreter::{
     ParseError, ProgramOutcome, SourceMap, format_parse_error_with_source, prune_freed_locations,
 };
-use patina_runtime::Port;
+use patina_runtime::{Diagnostic, DiagnosticKind, HasDiagnostic, Port};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -218,6 +218,7 @@ where
     }
 
     fn read_failed(&self, error: &ParseError) -> ProgramOutcome {
+        patina_runtime::diagnostic::emit(error.diagnostic().at_path(self.source_name.to_string()));
         eprintln!(
             "Error: {}",
             format_parse_error_with_source(error, &self.source_map.borrow())
@@ -227,6 +228,10 @@ where
     }
 
     fn input_failed(&self, error: &std::io::Error) -> ProgramOutcome {
+        patina_runtime::diagnostic::emit(
+            Diagnostic::new(DiagnosticKind::Io, error.to_string())
+                .at_path(self.source_name.to_string()),
+        );
         eprintln!(
             "Error reading {} after line {}: {}",
             self.source_name, self.lines, error

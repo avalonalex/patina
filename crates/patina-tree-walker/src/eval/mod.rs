@@ -16,6 +16,7 @@ pub use patina_primitives::primitives::io::datum_writer::{
 };
 
 use debug::DebugConfig;
+use patina_runtime::HasDiagnostic;
 use patina_runtime::environment::Environment;
 use patina_runtime::library_loader::LibraryLoaderRegistry;
 use patina_runtime::library_registry::LibraryRegistry;
@@ -786,14 +787,11 @@ impl Evaluator {
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
             let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                patina_runtime::LibraryError::ParseError {
-                    file: parsed
-                        .source
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                    message: format!("Failed to desugar expression: {}", e),
-                }
+                patina_runtime::LibraryError::processing(
+                    parsed.source.as_deref(),
+                    format!("Failed to desugar expression: {}", e),
+                    e.diagnostic(),
+                )
             })?;
 
             // Initialization runs under the importing program's dynamic
@@ -851,7 +849,7 @@ impl Evaluator {
                 // Then import only the specified identifiers
                 for id in identifiers {
                     if !lib_env.copy_binding(id.as_str(), &temp_env, id) {
-                        return Err(patina_runtime::LibraryError::parse(
+                        return Err(patina_runtime::LibraryError::load(
                             None,
                             format!("Identifier '{}' not found in import set", id),
                         ));
@@ -914,10 +912,10 @@ impl Evaluator {
                 // right; only the library-loading path did not.
                 for (old_name, _) in renames {
                     if temp_env.get(old_name).is_none() {
-                        return Err(patina_runtime::LibraryError::ParseError {
-                            file: String::new(),
-                            message: format!("Identifier '{}' not found for rename", old_name),
-                        });
+                        return Err(patina_runtime::LibraryError::load(
+                            None,
+                            format!("Identifier '{}' not found for rename", old_name),
+                        ));
                     }
                 }
                 let rename_map: std::collections::HashMap<_, _> = renames.iter().cloned().collect();
@@ -986,10 +984,11 @@ impl Evaluator {
                 // silently (#485).
                 for id in identifiers {
                     if !env.copy_binding(id.as_str(), &temp_env, id) {
-                        return Err(EvalError::InvalidSyntax(format!(
-                            "Identifier '{}' not found in import set",
-                            id
-                        )));
+                        return Err(patina_runtime::LibraryError::load(
+                            None,
+                            format!("Identifier '{}' not found in import set", id),
+                        )
+                        .into_eval_error());
                     }
                 }
                 Ok(())
@@ -1041,10 +1040,11 @@ impl Evaluator {
                 // in a library's imports above and on the VM (#489).
                 for (old_name, _) in renames {
                     if temp_env.local_slot(old_name).is_none() {
-                        return Err(EvalError::InvalidSyntax(format!(
-                            "Identifier '{}' not found for rename",
-                            old_name
-                        )));
+                        return Err(patina_runtime::LibraryError::load(
+                            None,
+                            format!("Identifier '{}' not found for rename", old_name),
+                        )
+                        .into_eval_error());
                     }
                 }
 
