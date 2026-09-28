@@ -17,6 +17,9 @@ num-complex = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [lib]
 name = "patina_runtime"
 path = "src/lib.rs"

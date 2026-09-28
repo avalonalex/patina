@@ -18,6 +18,7 @@ use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
+use patina_runtime::HasDiagnostic;
 use patina_runtime::library_loader::{ImportSet, build_library};
 use patina_runtime::library_registry::LibraryError;
 use patina_runtime::{
@@ -37,6 +38,12 @@ use std::rc::Rc;
 /// Source locations are preserved for error formatting with caret context.
 #[derive(Debug, thiserror::Error)]
 pub enum VmBackendError {
+    #[error("{error}")]
+    WithDiagnostic {
+        error: Box<VmBackendError>,
+        diagnostic: Box<patina_runtime::Diagnostic>,
+    },
+
     #[error("compile error: {0}")]
     Compile(String),
 
@@ -56,6 +63,13 @@ pub enum VmBackendError {
 }
 
 impl VmBackendError {
+    fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {
+        Self::WithDiagnostic {
+            error: Box::new(self),
+            diagnostic: Box::new(diagnostic),
+        }
+    }
+
     /// Return the source location attached to this error, if any.
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
@@ -63,6 +77,7 @@ impl VmBackendError {
                 location.as_ref()
             }
             VmBackendError::Compile(_) => None,
+            VmBackendError::WithDiagnostic { error, .. } => error.source_location(),
         }
     }
 }
@@ -80,6 +95,7 @@ impl From<VmError> for VmBackendError {
             message: e.to_string(),
             location,
         }
+        .with_diagnostic(e.diagnostic())
     }
 }
 
@@ -89,12 +105,13 @@ impl From<patina_frontend::DesugarError> for VmBackendError {
             message: e.to_string(),
             location: e.source_location().cloned(),
         }
+        .with_diagnostic(e.diagnostic())
     }
 }
 
 impl From<crate::error::CompileError> for VmBackendError {
     fn from(e: crate::error::CompileError) -> Self {
-        VmBackendError::Compile(e.to_string())
+        VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic())
     }
 }
 
@@ -223,11 +240,13 @@ impl VmBackend {
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
         if patina_frontend::is_define_library_form(expr, &heap) {
-            self.eval_inline_define_library(expr)
-                .map_err(|e| VmBackendError::Runtime {
+            self.eval_inline_define_library(expr).map_err(|e| {
+                VmBackendError::Runtime {
                     message: e.to_string(),
                     location: None,
-                })?;
+                }
+                .with_diagnostic(e.diagnostic())
+            })?;
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
@@ -250,14 +269,20 @@ impl VmBackend {
                     *import_set_tv,
                     &heap,
                 )
-                .map_err(|e| VmBackendError::Runtime {
-                    message: format!("Invalid import set: {}", e),
-                    location: None,
+                .map_err(|e| {
+                    VmBackendError::Runtime {
+                        message: format!("Invalid import set: {}", e),
+                        location: None,
+                    }
+                    .with_diagnostic(e.diagnostic())
                 })?;
                 self.process_import_set(&import_set, &self.global_env)
-                    .map_err(|e| VmBackendError::Runtime {
-                        message: e.to_string(),
-                        location: None,
+                    .map_err(|e| {
+                        VmBackendError::Runtime {
+                            message: e.to_string(),
+                            location: None,
+                        }
+                        .with_diagnostic(e.diagnostic())
                     })?;
             }
             return Ok(TaggedValue::UNSPECIFIED);
@@ -473,9 +498,9 @@ impl VmBackend {
 
         let heap = self.global_env.heap().clone();
         let parsed = Parser::new_with_heap(source, heap.clone())
-            .map_err(|e| VmBackendError::Compile(e.to_string()))?
+            .map_err(|e| VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic()))?
             .parse_all()
-            .map_err(|e| VmBackendError::Compile(e.to_string()))?;
+            .map_err(|e| VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic()))?;
 
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
             .with_fs(self.state.borrow().fs.clone());
@@ -596,14 +621,11 @@ impl VmBackend {
             let body_result = (|| -> Result<(), LibraryError> {
                 for tv in &parsed.body {
                     let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                        LibraryError::ParseError {
-                            file: parsed
-                                .source
-                                .as_ref()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_default(),
-                            message: format!("desugar error: {}", e),
-                        }
+                        patina_runtime::LibraryError::processing(
+                            parsed.source.as_deref(),
+                            format!("desugar error: {}", e),
+                            e.diagnostic(),
+                        )
                     })?;
 
                     let (top, nested) = compile_with_qq_resolving(
@@ -612,26 +634,24 @@ impl VmBackend {
                         &lib_env,
                         &state.primitive_registry,
                     )
-                    .map_err(|e| LibraryError::ParseError {
-                        file: parsed
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("compile error: {}", e),
+                    .map_err(|e| {
+                        patina_runtime::LibraryError::processing(
+                            parsed.source.as_deref(),
+                            format!("compile error: {}", e),
+                            e.diagnostic(),
+                        )
                     })?;
 
                     let top_id = state.load_unit(top, nested);
                     let result = execute(&mut state, top_id);
                     state.release_unit_if_unused(top_id);
 
-                    result.map_err(|e| LibraryError::ParseError {
-                        file: parsed
-                            .source
-                            .as_ref()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        message: format!("runtime error: {}", e),
+                    result.map_err(|e| {
+                        patina_runtime::LibraryError::processing(
+                            parsed.source.as_deref(),
+                            format!("runtime error: {}", e),
+                            e.diagnostic(),
+                        )
                     })?;
                 }
                 Ok(())
@@ -675,7 +695,7 @@ impl VmBackend {
                 let mut state = self.state.borrow_mut();
                 for id in identifiers {
                     if temp_env.local_slot(id).is_none() {
-                        return Err(LibraryError::parse(
+                        return Err(LibraryError::load(
                             None,
                             format!("Identifier '{}' not found in import set", id),
                         ));
@@ -721,7 +741,7 @@ impl VmBackend {
                 // and the old one imported, a typo found far from itself (#489).
                 for (old_name, _) in renames {
                     if temp_env.local_slot(old_name).is_none() {
-                        return Err(LibraryError::parse(
+                        return Err(LibraryError::load(
                             None,
                             format!("Identifier '{}' not found for rename", old_name),
                         ));
@@ -775,6 +795,21 @@ impl Backend for VmBackend {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
+
+impl patina_runtime::HasDiagnostic for VmBackendError {
+    fn diagnostic(&self) -> patina_runtime::Diagnostic {
+        match self {
+            Self::WithDiagnostic { diagnostic, .. } => (**diagnostic).clone(),
+            Self::Desugar { message, .. } => {
+                patina_runtime::Diagnostic::new(patina_runtime::DiagnosticKind::Syntax, message)
+            }
+            _ => patina_runtime::Diagnostic::new(
+                patina_runtime::DiagnosticKind::Runtime,
+                self.to_string(),
+            ),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

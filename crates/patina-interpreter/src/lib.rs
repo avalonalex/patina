@@ -61,6 +61,7 @@ pub use patina_frontend::{
 };
 pub use patina_ir::CoreExpr;
 pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
+use patina_runtime::HasDiagnostic;
 pub use patina_runtime::{Arity, Backend, Environment, Procedure};
 pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
 use std::cell::RefCell;
@@ -451,12 +452,18 @@ impl<B: Backend> Interpreter<B> {
         let (value, end, source_map) = self.run_forms(input, source_name, |error, source_map| {
             eval_errors += 1;
             patina_runtime::exit_status::note_error_reported();
+            let mut diagnostic = error.diagnostic();
+            if diagnostic.path.is_none() {
+                diagnostic.path = Some(source_name.into());
+            }
+            patina_runtime::diagnostic::emit(diagnostic);
             eprintln!("Error: {}", format_error_with_source(&error, source_map));
             // The program asked to exit, so it does not carry on; the caller
             // ends the process.
             patina_runtime::exit_status::exit_interrupted().then_some(error)
         });
         if let FormsEnd::Unreadable(error) = &end {
+            patina_runtime::diagnostic::emit(error.diagnostic().at_path(source_name));
             eprintln!(
                 "Error: {}",
                 format_parse_error_with_source(error, &source_map.borrow())
@@ -655,6 +662,22 @@ impl<E: std::error::Error> From<LexError> for InterpreterError<E> {
 impl<E: std::error::Error> From<DesugarError> for InterpreterError<E> {
     fn from(e: DesugarError) -> Self {
         InterpreterError::Desugar(e)
+    }
+}
+
+impl<E: std::error::Error + patina_runtime::HasDiagnostic> patina_runtime::HasDiagnostic
+    for InterpreterError<E>
+{
+    fn diagnostic(&self) -> patina_runtime::Diagnostic {
+        match self {
+            Self::Parse(error) => error.diagnostic(),
+            Self::Lex(error) => patina_runtime::Diagnostic::new(
+                patina_runtime::DiagnosticKind::Parse,
+                error.to_string(),
+            ),
+            Self::Desugar(error) => error.diagnostic(),
+            Self::Backend(error) => error.diagnostic(),
+        }
     }
 }
 

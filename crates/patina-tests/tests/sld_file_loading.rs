@@ -1307,10 +1307,13 @@ fn test_sld_with_include_shared_names_the_extension() {
         .load_library(&["test".to_string(), "native".to_string()])
         .expect_err("a library that is a shared object must not load silently");
     let message = err.to_string();
-    assert!(
-        message.contains(patina_runtime::NATIVE_EXTENSION_MARKER),
-        "the error must carry the marker the compat harness classifies on, got: {message}"
+    use patina_runtime::HasDiagnostic;
+    let diagnostic = err.diagnostic();
+    assert_eq!(
+        diagnostic.kind,
+        patina_runtime::DiagnosticKind::NativeExtension
     );
+    assert_eq!(diagnostic.extension.as_deref(), Some("somelib"));
     assert!(
         message.contains("somelib"),
         "the error must name the shared object, got: {message}"

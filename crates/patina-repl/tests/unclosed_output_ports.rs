@@ -178,7 +178,7 @@ fn output_that_cannot_be_written_at_the_end_is_reported() {
             );
             std::fs::write(dir.path().join("p.scm"), program).unwrap();
             let mut args = backend.to_vec();
-            args.push("p.scm");
+            args.extend(["--diagnostics-file", "errors.jsonl", "p.scm"]);
             let output = patina_command(dir.path(), &args, &[])
                 .stdin(std::process::Stdio::null())
                 .stdout(writer.try_clone().unwrap())
@@ -194,6 +194,13 @@ fn output_that_cannot_be_written_at_the_end_is_reported() {
                 stderr.contains("could not write the output to /dev/stdout"),
                 "{backend:?} {ending}: {stderr}"
             );
+            let diagnostics = patina_runtime::diagnostic::read_stream(
+                &std::fs::read_to_string(dir.path().join("errors.jsonl")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].kind, patina_runtime::DiagnosticKind::Io);
+            assert_eq!(diagnostics[0].path.as_deref(), Some("/dev/stdout"));
         }
     }
 }

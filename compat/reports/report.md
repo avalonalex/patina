@@ -1,6 +1,6 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-28T00:57:36Z
+**Measured:** 2026-09-28T05:25:41Z
 
 **143 of 161 packages pass.**
 
@@ -12,8 +12,8 @@ Of these passes, **37 ran test suites**, **106 passed smoke checks**, and **0 pa
 |---|---|---|
 | pass | 143 | 143 |
 | missing-library | 4 | 0 |
-| parse-error | 2 | 0 |
-| load-error | 0 | 0 |
+| parse-error | 1 | 0 |
+| load-error | 1 | 0 |
 | unbound-identifier | 0 | 0 |
 | wrong-result | 1 | 0 |
 | runtime-error | 1 | 0 |
@@ -52,7 +52,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | Package | Status | Why |
 |---|---|---|
 | edn | parse-error | (chibi parse) parse.sld:66 — the fallback grammar-bind generates a pattern with `ch` twice; duplicate pattern variables are an error (R7RS 4.3.2) and Gauche fails edn end-to-end as we do |
-| srfi-179 | parse-error | srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8 |
+| srfi-179 | load-error | srfi/179/transforms.scm:34 builds u1-storage-class from u1vector-ref and friends, which nothing defines: they are a chibi C extension (lib/srfi/160/uvprims.c), not part of SRFI 160, whose own reference implementation starts at u8 |
 
 ### Upstream test defect (3)
 
@@ -205,7 +205,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | srfi-166 | smoke | pass | in scope |
 | srfi-170 | probe | out-of-scope | ffi |
 | srfi-175 | test | pass | in scope |
-| srfi-179 | test | parse-error | upstream-source-defect |
+| srfi-179 | test | load-error | upstream-source-defect |
 | srfi-180 | smoke | pass | in scope |
 | srfi-19 | smoke | pass | in scope |
 | srfi-197 | test | runtime-error | upstream-test-defect |

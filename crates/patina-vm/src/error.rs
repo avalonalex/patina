@@ -32,6 +32,14 @@ pub enum CompileError {
 /// Errors produced during VM execution.
 #[derive(Debug, Error)]
 pub enum VmError {
+    /// Reporting metadata only; the inner error still determines catchability
+    /// and the Scheme condition delivered to an exception handler.
+    #[error("{error}")]
+    WithDiagnostic {
+        error: Box<VmError>,
+        diagnostic: Box<patina_runtime::Diagnostic>,
+    },
+
     #[error("unbound variable: `{}`", patina_core::escape_invisible(name))]
     UnboundVariable { name: Symbol },
 
@@ -81,6 +89,13 @@ pub enum VmError {
 }
 
 impl VmError {
+    pub fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {
+        Self::WithDiagnostic {
+            error: Box::new(self),
+            diagnostic: Box::new(diagnostic),
+        }
+    }
+
     /// Wrap this error with a source location.
     pub fn at(self, loc: SourceLocation) -> Self {
         VmError::WithLocation {
@@ -101,6 +116,7 @@ impl VmError {
     pub fn source_location(&self) -> Option<&SourceLocation> {
         match self {
             VmError::WithLocation { location, .. } => Some(location),
+            VmError::WithDiagnostic { error, .. } => error.source_location(),
             _ => None,
         }
     }
@@ -108,8 +124,43 @@ impl VmError {
     /// Get the innermost error, stripping any location wrappers.
     pub fn inner(&self) -> &VmError {
         match self {
-            VmError::WithLocation { error, .. } => error.inner(),
+            VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
+                error.inner()
+            }
             other => other,
+        }
+    }
+}
+
+impl patina_runtime::HasDiagnostic for CompileError {
+    fn diagnostic(&self) -> patina_runtime::Diagnostic {
+        use patina_runtime::{Diagnostic, DiagnosticKind as K};
+        let mut d = Diagnostic::new(K::Runtime, self.to_string());
+        match self {
+            Self::UnboundVariable { name } => {
+                d.kind = K::UnboundIdentifier;
+                d.identifier = Some(name.to_string());
+            }
+            Self::InvalidSyntax { .. } | Self::AmbiguousReference(_) => d.kind = K::Syntax,
+            _ => {}
+        }
+        d
+    }
+}
+
+impl patina_runtime::HasDiagnostic for VmError {
+    fn diagnostic(&self) -> patina_runtime::Diagnostic {
+        use patina_runtime::{Diagnostic, DiagnosticKind as K};
+        match self {
+            Self::WithDiagnostic { diagnostic, .. } => (**diagnostic).clone(),
+            Self::WithLocation { error, .. } => error.diagnostic(),
+            Self::Compile(error) => error.diagnostic(),
+            Self::UnboundVariable { name } => {
+                let mut d = Diagnostic::new(K::UnboundIdentifier, self.to_string());
+                d.identifier = Some(name.to_string());
+                d
+            }
+            _ => Diagnostic::new(K::Runtime, self.to_string()),
         }
     }
 }

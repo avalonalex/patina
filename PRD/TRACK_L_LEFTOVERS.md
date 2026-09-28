@@ -24,15 +24,16 @@ a GitHub issue**, and the reasoning behind a past decision is in the archive.
 
 ## The numbers, and how to read them
 
-Measured 2026-09-19. **Re-measure rather than quote** — a corpus number carries
-its date (#381), and the archive's status line went stale twice.
+Measured 2026-09-19 unless dated below. **Re-measure rather than quote** — a
+corpus number carries its date (#381), and the archive's status line went stale
+twice.
 
-- **Corpus:** 143 of 161 packages pass, which is **143 of 143 in scope**; 18 are
-  excluded by `compat/EXCLUSIONS.scm` with a reason apiece (11 FFI, 2 licence,
+- **Corpus (measured 2026-09-28):** 143 of 161 packages pass, which is
+  **143 of 143 in scope**; 18 are excluded by `compat/EXCLUSIONS.scm` with a reason apiece (11 FFI, 2 licence,
   5 upstream defects no faithful patch reaches). Nine came back in under
-  `compat/patches/` on 2026-09-19. That is the VM's reading; the tree-walker
-  passes the same 143 and reads 143 of 144, because one excluded package files
-  its failure in a different bucket there (#382).
+  `compat/patches/` on 2026-09-19. Both backends now agree on every package's
+  bucket and the 143-of-143 scoped score; structured diagnostics remove the
+  prose-classification mismatch (#382).
   `cargo run --release -p patina-compat -- run`.
 - **Execution coverage (#429, measured 2026-09-28):** seventeen smoke batches
   exercise 106 packages with 1522 assertions, including all 16 PFDS packages.
@@ -57,7 +58,6 @@ empty, archive this page.
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
 **The corpus and its harness**
-- #382 — the classifier keys on error prose no producer knows is parsed.
 - #384 — two upstream SRFI 160 defects, quarantined.
 
 One recorded debt has no issue because it has no known symptom: on the VM,

@@ -59,6 +59,13 @@ pub enum LibraryError {
     /// Parse error in library file
     ParseError { file: String, message: String },
 
+    /// A post-reader failure with its original machine-readable category.
+    ProcessingError {
+        file: String,
+        message: String,
+        diagnostic: Box<crate::Diagnostic>,
+    },
+
     /// Evaluation failed after parsing. Keep the error typed: a continuation
     /// escaping a library load must reach its trampoline, not become prose.
     EvaluationError {
@@ -71,27 +78,40 @@ pub enum LibraryError {
     ///
     /// Distinct from `ParseError` because it is not a defect in the library
     /// or in Patina's reader: the source is well-formed and the library is
-    /// simply out of reach until there is an FFI. Track L's harness reads
-    /// `NATIVE_EXTENSION_MARKER` to classify such a package as out-of-scope
-    /// rather than counting it against the compatibility score.
+    /// simply out of reach until there is an FFI. The structured diagnostic
+    /// records that fact independently of the human-readable wording.
     NativeExtensionRequired { file: String, extension: String },
 }
-
-/// The stable substring of `LibraryError::NativeExtensionRequired`'s message.
-///
-/// Exported so the compatibility harness can match on a constant it links
-/// against rather than on wording it hopes nobody edits — the "unenforced
-/// prose contract" Track L §L3 records as debt, paid off for this one marker.
-pub const NATIVE_EXTENSION_MARKER: &str = "requires the native extension";
 
 impl LibraryError {
     /// Leave a running library load without wrapping an evaluation error or
     /// control transfer in a new Scheme condition (#425).
     pub fn into_eval_error(self) -> crate::EvalError {
+        use crate::HasDiagnostic;
+        let diagnostic = self.diagnostic();
         match self {
-            Self::EvaluationError { error, .. } => *error,
-            other => crate::EvalError::InvalidSyntax(format!("Failed to load library: {other}")),
+            Self::EvaluationError { error, .. } => error.with_diagnostic(diagnostic),
+            other => crate::EvalError::InvalidSyntax(format!("Failed to load library: {other}"))
+                .with_diagnostic(diagnostic),
         }
+    }
+
+    pub fn processing(
+        source: Option<&std::path::Path>,
+        message: impl Into<String>,
+        diagnostic: crate::Diagnostic,
+    ) -> Self {
+        Self::ProcessingError {
+            file: source.map(|p| p.display().to_string()).unwrap_or_default(),
+            message: message.into(),
+            diagnostic: Box::new(diagnostic.in_library(source)),
+        }
+    }
+
+    pub fn load(source: Option<&std::path::Path>, message: impl Into<String>) -> Self {
+        let message = message.into();
+        let diagnostic = crate::Diagnostic::new(crate::DiagnosticKind::Load, message.clone());
+        Self::processing(source, message, diagnostic)
     }
 
     /// A library that is not loaded, looked up by `name`.
@@ -110,7 +130,7 @@ impl LibraryError {
         }
     }
 
-    /// A failure while reading or installing a library, attributed to the file
+    /// A failure while reading a library, attributed to the file
     /// it came from. `None` covers an inline `define-library`, which has no
     /// file — the empty string the callers used to write by hand.
     pub fn parse(source: Option<&std::path::Path>, message: impl Into<String>) -> Self {
@@ -125,9 +145,6 @@ impl std::fmt::Display for LibraryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LibraryError::NotFound { name, searched } => {
-                // The corpus harness reads the name out of "Library (…) not
-                // found" (`extract_missing_libraries`), so the directories
-                // come after it.
                 write!(f, "Library {} not found", format_library_name(name))?;
                 if !searched.is_empty() {
                     let dirs: Vec<String> =
@@ -155,6 +172,9 @@ impl std::fmt::Display for LibraryError {
             LibraryError::ParseError { file, message } => {
                 write!(f, "Parse error in {}: {}", file, message)
             }
+            LibraryError::ProcessingError { file, message, .. } => {
+                write!(f, "Error loading library in {file}: {message}")
+            }
             LibraryError::EvaluationError { file, error } => {
                 if file.is_empty() {
                     write!(f, "Error evaluating library body: {error}")
@@ -165,9 +185,9 @@ impl std::fmt::Display for LibraryError {
             LibraryError::NativeExtensionRequired { file, extension } => {
                 write!(
                     f,
-                    "Library in {} {} \"{}\" (include-shared), which Patina cannot load — \
+                    "Library in {} requires the native extension \"{}\" (include-shared), which Patina cannot load — \
                      it needs a foreign-function interface",
-                    file, NATIVE_EXTENSION_MARKER, extension
+                    file, extension
                 )
             }
         }
@@ -551,6 +571,30 @@ impl LibraryRegistry {
         match registry {
             Some(cell) => cell.try_borrow().map(Some).map_err(|_| ()),
             None => Ok(None),
+        }
+    }
+}
+
+impl crate::HasDiagnostic for LibraryError {
+    fn diagnostic(&self) -> crate::Diagnostic {
+        use crate::{Diagnostic, DiagnosticKind as K};
+        match self {
+            Self::NotFound { name, .. } => {
+                let mut d = Diagnostic::new(K::MissingLibrary, self.to_string());
+                d.library = Some(name.clone());
+                d
+            }
+            Self::ParseError { file, message } => Diagnostic::new(K::Parse, message).at_path(file),
+            Self::ProcessingError { diagnostic, .. } => (**diagnostic).clone(),
+            Self::EvaluationError { file, error } => error
+                .diagnostic()
+                .in_library(Some(std::path::Path::new(file))),
+            Self::NativeExtensionRequired { file, extension } => {
+                let mut d = Diagnostic::new(K::NativeExtension, self.to_string()).at_path(file);
+                d.extension = Some(extension.clone());
+                d
+            }
+            _ => Diagnostic::new(K::Load, self.to_string()),
         }
     }
 }

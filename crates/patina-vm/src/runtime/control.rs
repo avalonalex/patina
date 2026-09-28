@@ -125,6 +125,7 @@ use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_primitives::{CallArgs, Step};
+use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -1046,7 +1047,9 @@ pub(super) fn vm_raise_value(
 pub(super) fn is_catchable(err: &VmError) -> bool {
     match err {
         VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => false,
-        VmError::WithLocation { error, .. } => is_catchable(error),
+        VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
+            is_catchable(error)
+        }
         _ => true,
     }
 }
@@ -1110,7 +1113,9 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
         }
         VmError::SchemeException { message } => (ExceptionKind::Error, message.clone()),
         // Unwrap location wrapper and classify the inner error.
-        VmError::WithLocation { error, .. } => classify_error(error),
+        VmError::WithLocation { error, .. } | VmError::WithDiagnostic { error, .. } => {
+            classify_error(error)
+        }
         // Non-catchable (shouldn't reach here due to is_catchable check)
         VmError::StackOverflow | VmError::Compile(_) | VmError::ContinuationEscape => {
             (ExceptionKind::Error, err.to_string())
@@ -1863,6 +1868,7 @@ fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
     VmError::Runtime {
         message: e.to_string(),
     }
+    .with_diagnostic(e.diagnostic())
 }
 
 /// A resumable primitive's step as this machine takes it: a value, or a call
@@ -2319,7 +2325,8 @@ impl Reentry {
     fn into_eval_error(self) -> patina_primitives::EvalError {
         match self {
             Reentry::Escaped => patina_primitives::EvalError::ContinuationEscape,
-            Reentry::Failed(e) => patina_primitives::EvalError::InternalError(e.to_string()),
+            Reentry::Failed(e) => patina_primitives::EvalError::InternalError(e.to_string())
+                .with_diagnostic(e.diagnostic()),
         }
     }
 }
@@ -2375,8 +2382,11 @@ impl patina_primitives::ApplyContext for VmApplyContext {
             state,
             depth_before,
             |s| {
-                vm_load_library(s, name).map_err(|e| VmError::Runtime {
-                    message: e.to_string(),
+                vm_load_library(s, name).map_err(|e| {
+                    VmError::Runtime {
+                        message: e.to_string(),
+                    }
+                    .with_diagnostic(e.diagnostic())
                 })
             },
             |_| TaggedValue::UNSPECIFIED,

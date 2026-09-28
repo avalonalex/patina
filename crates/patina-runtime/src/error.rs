@@ -24,3 +24,14 @@ pub enum RuntimeError {
     #[error("Runtime error: {0}")]
     General(String),
 }
+
+impl crate::HasDiagnostic for RuntimeError {
+    fn diagnostic(&self) -> crate::Diagnostic {
+        let mut d = crate::Diagnostic::new(crate::DiagnosticKind::Runtime, self.to_string());
+        if let Self::UndefinedVariable(name) = self {
+            d.kind = crate::DiagnosticKind::UnboundIdentifier;
+            d.identifier = Some(name.clone());
+        }
+        d
+    }
+}

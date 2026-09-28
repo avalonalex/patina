@@ -79,6 +79,7 @@ use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::{GcController, GcDeferGuard};
+use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use tracing::debug;
 
@@ -361,7 +362,9 @@ impl<'a> CpsEvaluator<'a> {
 fn is_continuation_escape(e: &EvalError) -> bool {
     match e {
         EvalError::ContinuationEscape => true,
-        EvalError::WithLocation { error, .. } => is_continuation_escape(error),
+        EvalError::WithLocation { error, .. } | EvalError::WithDiagnostic { error, .. } => {
+            is_continuation_escape(error)
+        }
         _ => false,
     }
 }
@@ -456,7 +459,10 @@ pub fn eval_cps(
         for import_set in import_sets {
             let import_set =
                 patina_frontend::LibraryDefinition::parse_import_set_tagged(*import_set, heap)
-                    .map_err(|e| EvalError::InvalidSyntax(format!("Invalid import set: {}", e)))?;
+                    .map_err(|e| {
+                        EvalError::InvalidSyntax(format!("Invalid import set: {}", e))
+                            .with_diagnostic(e.diagnostic())
+                    })?;
             evaluator.process_import_for_eval(&import_set, &env)?;
         }
         return Ok(TaggedValue::UNSPECIFIED);

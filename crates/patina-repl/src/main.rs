@@ -5,6 +5,7 @@ use patina_interpreter::{
 };
 use patina_repl::repl::needs_more_input;
 use patina_repl::{Repl, run_program_stream, run_repl_loop, session_lines};
+use patina_runtime::{Diagnostic, DiagnosticKind, HasDiagnostic};
 use patina_vm::VmBackend;
 use patina_vm::tracer::StepTracer;
 use std::cell::RefCell;
@@ -15,6 +16,7 @@ use std::rc::Rc;
 
 /// Parsed command-line options.
 struct CliOptions {
+    diagnostics_file: Option<String>,
     filename: Option<String>,
     use_tree_walker: bool,
     /// `-i`: take the interactive session even though standard input is not
@@ -36,6 +38,7 @@ struct CliOptions {
 
 fn parse_args(args: &[String]) -> CliOptions {
     let mut opts = CliOptions {
+        diagnostics_file: None,
         filename: None,
         use_tree_walker: false,
         interactive: false,
@@ -57,6 +60,10 @@ fn parse_args(args: &[String]) -> CliOptions {
             "--version" => {
                 println!("patina {}", env!("CARGO_PKG_VERSION"));
                 process::exit(0);
+            }
+            "--diagnostics-file" => {
+                opts.diagnostics_file =
+                    Some(require_value(&mut iter, "--diagnostics-file", "a path"))
             }
             "--tree-walker" => opts.use_tree_walker = true,
             "--interactive" | "-i" => opts.interactive = true,
@@ -109,7 +116,7 @@ fn require_value(iter: &mut std::slice::Iter<'_, String>, flag: &str, what: &str
 trait LibraryPaths {
     fn prepend(&self, dir: std::path::PathBuf);
     fn append(&self, dir: std::path::PathBuf);
-    fn bootstrap_error(&self) -> Option<String>;
+    fn bootstrap_error(&self) -> Option<patina_runtime::LibraryError>;
 }
 
 impl LibraryPaths for VmBackend {
@@ -119,8 +126,8 @@ impl LibraryPaths for VmBackend {
     fn append(&self, dir: std::path::PathBuf) {
         self.add_library_search_path(dir);
     }
-    fn bootstrap_error(&self) -> Option<String> {
-        VmBackend::bootstrap_error(self).map(ToString::to_string)
+    fn bootstrap_error(&self) -> Option<patina_runtime::LibraryError> {
+        VmBackend::bootstrap_error(self).cloned()
     }
 }
 
@@ -131,8 +138,8 @@ impl LibraryPaths for patina_tree_walker::TreeWalker {
     fn append(&self, dir: std::path::PathBuf) {
         self.add_library_search_path(dir);
     }
-    fn bootstrap_error(&self) -> Option<String> {
-        patina_tree_walker::TreeWalker::bootstrap_error(self).map(ToString::to_string)
+    fn bootstrap_error(&self) -> Option<patina_runtime::LibraryError> {
+        patina_tree_walker::TreeWalker::bootstrap_error(self).cloned()
     }
 }
 
@@ -146,6 +153,7 @@ impl LibraryPaths for patina_tree_walker::TreeWalker {
 /// one to report, once, before anything runs (#436).
 fn prepare_backend(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option<&str>) {
     if let Some(e) = backend.bootstrap_error() {
+        patina_runtime::diagnostic::emit(e.diagnostic());
         eprintln!(
             "Error: cannot load the base library: {e}\n\
              Set PATINA_LIBRARY_PATH to the directory holding scheme/base.sld."
@@ -182,6 +190,7 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
                 }
             }
             Err(e) => {
+                patina_runtime::diagnostic::emit(e.diagnostic());
                 eprintln!("Error: {}", e);
                 patina_runtime::exit_status::exit_if_interrupted();
                 patina_runtime::exit_status::end_process(1);
@@ -194,6 +203,21 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
 fn main() {
     let args: Vec<String> = env::args().collect();
     let opts = parse_args(&args[1..]);
+    if let Some(path) = &opts.diagnostics_file {
+        if opts.dump
+            || opts.interactive
+            || (opts.filename.is_none()
+                && opts.eval_exprs.is_empty()
+                && std::io::IsTerminal::is_terminal(&std::io::stdin()))
+        {
+            eprintln!("Error: --diagnostics-file requires a script, stdin program, or -p");
+            process::exit(1);
+        }
+        if let Err(error) = patina_runtime::diagnostic::start(std::path::Path::new(path)) {
+            eprintln!("Error opening diagnostics file '{path}': {error}");
+            process::exit(1);
+        }
+    }
 
     // Tracing is a VM instrument (`patina_vm::tracer`), so the two flags
     // together cannot both be honoured. Saying so beats running the other
@@ -316,6 +340,11 @@ where
             match result {
                 Ok(_) => true,
                 Err(e) => {
+                    let mut diagnostic = e.diagnostic();
+                    if diagnostic.path.is_none() {
+                        diagnostic.path = Some(filename.into());
+                    }
+                    patina_runtime::diagnostic::emit(diagnostic);
                     eprintln!(
                         "Error: {}",
                         format_backend_error_with_source(&e, &source_map.borrow())
@@ -357,7 +386,10 @@ where
         backend
             .eval_with_source_map(datum, backend.global_env(), source_map)
             .map(|_| ())
-            .map_err(|e| format_error_with_source(&e, &source_map.borrow()))
+            .map_err(|e| {
+                patina_runtime::diagnostic::emit(e.diagnostic());
+                format_error_with_source(&e, &source_map.borrow())
+            })
     })
 }
 
@@ -379,6 +411,9 @@ fn read_source_file(filename: &str) -> String {
     match fs::read_to_string(filename) {
         Ok(content) => content,
         Err(e) => {
+            patina_runtime::diagnostic::emit(
+                Diagnostic::new(DiagnosticKind::Io, e.to_string()).at_path(filename),
+            );
             eprintln!("Error reading file '{}': {}", filename, e);
             process::exit(1);
         }
@@ -412,6 +447,9 @@ fn print_help() {
     eprintln!("Options:");
     eprintln!("  --help, -h     Show this help message");
     eprintln!("  --version      Print the version and exit");
+    eprintln!(
+        "  --diagnostics-file <path>  Write versioned JSON-lines diagnostics alongside stderr"
+    );
     eprintln!("  --tree-walker  Use the tree-walking backend instead of the VM");
     eprintln!("  -i, --interactive  Start the REPL even when stdin is not a terminal");
     eprintln!("  --allow-r6rs   Also read the R6RS syntax R7RS reserves: [ ], #vu8(,");

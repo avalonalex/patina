@@ -27,6 +27,7 @@ use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{GcController, GcDeferGuard};
 use patina_primitives::PrimitiveRegistry;
+use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 use rustc_hash::FxHashMap;
 
@@ -755,14 +756,11 @@ fn vm_evaluate_parsed_library(
     let body_result = (|| -> Result<(), LibraryError> {
         for tv in &parsed.body {
             let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                LibraryError::ParseError {
-                    file: parsed
-                        .source
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                    message: format!("desugar error: {}", e),
-                }
+                patina_runtime::LibraryError::processing(
+                    parsed.source.as_deref(),
+                    format!("desugar error: {}", e),
+                    e.diagnostic(),
+                )
             })?;
 
             let (top, nested) = compile_with_qq_resolving(
@@ -771,13 +769,12 @@ fn vm_evaluate_parsed_library(
                 &lib_env,
                 &state.primitive_registry,
             )
-            .map_err(|e| LibraryError::ParseError {
-                file: parsed
-                    .source
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                message: format!("compile error: {}", e),
+            .map_err(|e| {
+                patina_runtime::LibraryError::processing(
+                    parsed.source.as_deref(),
+                    format!("compile error: {}", e),
+                    e.diagnostic(),
+                )
             })?;
 
             // Each body form is a re-entry boundary: a raise in it can reach
@@ -791,13 +788,12 @@ fn vm_evaluate_parsed_library(
                 .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
 
-            result.map_err(|e| LibraryError::ParseError {
-                file: parsed
-                    .source
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-                message: format!("runtime error: {}", e),
+            result.map_err(|e| {
+                patina_runtime::LibraryError::processing(
+                    parsed.source.as_deref(),
+                    format!("runtime error: {}", e),
+                    e.diagnostic(),
+                )
             })?;
         }
         Ok(())
@@ -833,7 +829,7 @@ fn vm_process_import_set(
             vm_process_import_set(state, import_set, &temp_env)?;
             for id in identifiers {
                 if temp_env.local_slot(id).is_none() {
-                    return Err(LibraryError::parse(
+                    return Err(LibraryError::load(
                         None,
                         format!("Identifier '{}' not found in import set", id),
                     ));
@@ -879,7 +875,7 @@ fn vm_process_import_set(
             // Refused, as by the backend's resolver: see there (#489).
             for (old_name, _) in renames {
                 if temp_env.local_slot(old_name).is_none() {
-                    return Err(LibraryError::parse(
+                    return Err(LibraryError::load(
                         None,
                         format!("Identifier '{}' not found for rename", old_name),
                     ));
@@ -959,21 +955,28 @@ fn compile_for_eval(
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
-    let mut core_expr = desugarer
-        .desugar_tagged(expr, &heap)
-        .map_err(|e| VmError::Runtime {
+    let mut core_expr = desugarer.desugar_tagged(expr, &heap).map_err(|e| {
+        VmError::Runtime {
             message: format!("eval: desugar error: {}", e),
-        })?;
+        }
+        .with_diagnostic(e.diagnostic())
+    })?;
 
     if let CoreExprKind::Import { import_sets } = &core_expr.kind {
         for &import_set in import_sets {
             let import_set =
                 patina_frontend::LibraryDefinition::parse_import_set_tagged(import_set, &heap)
-                    .map_err(|e| VmError::Runtime {
-                        message: format!("Invalid import set: {}", e),
+                    .map_err(|e| {
+                        VmError::Runtime {
+                            message: format!("Invalid import set: {}", e),
+                        }
+                        .with_diagnostic(e.diagnostic())
                     })?;
-            vm_process_import_set(state, &import_set, env).map_err(|e| VmError::Runtime {
-                message: e.to_string(),
+            vm_process_import_set(state, &import_set, env).map_err(|e| {
+                VmError::Runtime {
+                    message: e.to_string(),
+                }
+                .with_diagnostic(e.diagnostic())
             })?;
         }
         core_expr = CoreExpr::new(CoreExprKind::Literal(TaggedValue::UNSPECIFIED));
@@ -983,6 +986,7 @@ fn compile_for_eval(
         VmError::Runtime {
             message: format!("eval: compile error: {}", e),
         }
+        .with_diagnostic(e.diagnostic())
     })
 }
 

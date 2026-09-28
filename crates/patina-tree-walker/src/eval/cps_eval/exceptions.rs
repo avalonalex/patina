@@ -44,7 +44,7 @@ impl<'a> CpsEvaluator<'a> {
 
         // Convert EvalError to exception kind and message
         // Note: irritants are not used for runtime errors but kept for API compatibility
-        let (exception_kind, message): (ExceptionKind, String) = match &err {
+        let (exception_kind, message): (ExceptionKind, String) = match err.without_diagnostic() {
             // Lookup errors
             EvalError::UndefinedVariable(name) => (
                 ExceptionKind::Error,
@@ -116,7 +116,8 @@ impl<'a> CpsEvaluator<'a> {
 
             // Internal errors, continuation escapes, and desugar rejections
             // are not catchable (handled by is_catchable() check above)
-            EvalError::InternalError(_)
+            EvalError::WithDiagnostic { .. }
+            | EvalError::InternalError(_)
             | EvalError::ContinuationEscape
             | EvalError::DesugarError(_) => {
                 unreachable!("Non-catchable errors should have been filtered")

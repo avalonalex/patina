@@ -86,7 +86,7 @@ pub fn build_library(
     }
     let file = library.source.clone();
     let reject = |name: &str, detail: &str| {
-        LibraryError::parse(
+        LibraryError::load(
             file.as_deref(),
             format!("Exported identifier '{}' {}", name, detail),
         )

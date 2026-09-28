@@ -14,7 +14,9 @@ use patina_core::{CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
 use patina_frontend::{Desugarer, ImportSet, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
+use patina_runtime::HasDiagnostic;
 use patina_runtime::environment::Environment;
+use patina_runtime::{Diagnostic, DiagnosticKind};
 use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
@@ -84,9 +86,11 @@ fn environment_imports(
         .map(|name| (name.to_string(), name.to_string()))
         .collect();
     let missing = |name: &str| {
-        EvalError::InvalidSyntax(format!(
-            "environment: identifier '{name}' not found in import set"
-        ))
+        patina_runtime::LibraryError::load(
+            None,
+            format!("environment: identifier '{name}' not found in import set"),
+        )
+        .into_eval_error()
     };
     for modifier in modifiers.into_iter().rev() {
         match modifier {
@@ -147,8 +151,10 @@ fn primitive_environment(
         .into_iter()
         .map(|arg| {
             check_import_datum(arg, &heap.borrow())?;
-            LibraryDefinition::parse_import_set_tagged(arg, heap)
-                .map_err(|e| EvalError::InvalidSyntax(format!("environment: {e}")))
+            LibraryDefinition::parse_import_set_tagged(arg, heap).map_err(|e| {
+                EvalError::InvalidSyntax(format!("environment: {e}"))
+                    .with_diagnostic(e.diagnostic())
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -234,6 +240,7 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
     let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
         EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {}", e))
+            .with_diagnostic(e.diagnostic())
     })?;
 
     if !mutable && has_top_level_definition(&core_expr) {
@@ -680,6 +687,7 @@ fn primitive_scheme_report_environment(
 /// after the one that re-entered it — the position of the port chibi's
 /// `load` reads from, and what `escape_from_primitive.rs` checks.
 mod load_state {
+    pub const PATH: usize = 3;
     pub(super) const FORMS: usize = 0;
     pub(super) const ERROR: usize = 1;
     pub(super) const ENV: usize = 2;
@@ -736,11 +744,19 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
     let content = ctx
         .fs()
         .read_to_string(std::path::Path::new(&filename))
-        .map_err(|e| EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)))?;
+        .map_err(|e| {
+            EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)).with_diagnostic(
+                Diagnostic::new(DiagnosticKind::Io, e.to_string()).at_path(&filename),
+            )
+        })?;
 
     let parse_error = |e: &dyn std::fmt::Display| format!("load: parse error in '{filename}': {e}");
-    let mut parser = patina_frontend::Parser::new_with_heap(&content, heap.clone())
-        .map_err(|e| EvalError::InvalidSyntax(parse_error(&e)))?;
+    let mut parser =
+        patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
+            EvalError::InvalidSyntax(parse_error(&e)).with_diagnostic(
+                Diagnostic::new(DiagnosticKind::Parse, e.to_string()).at_path(&filename),
+            )
+        })?;
     let mut forms = Vec::new();
     let error = loop {
         match parser.parse_next() {
@@ -757,7 +773,8 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
             Some(message) => heap.alloc_string(message),
             None => TaggedValue::FALSE,
         };
-        heap.alloc_vector(vec![forms, error, env_spec])
+        let path = heap.alloc_string(filename);
+        heap.alloc_vector(vec![forms, error, env_spec, path])
     };
     load_next(ctx, state, TaggedValue::UNSPECIFIED)
 }
@@ -789,7 +806,12 @@ fn load_next(
         return Ok(Step::Eval { expr, env, state });
     }
     if let Some(message) = heap.borrow().get_string_contents(error) {
-        return Err(EvalError::InvalidSyntax(message));
+        let path = heap
+            .borrow()
+            .get_string_contents(heap.borrow().vector_ref(state, load_state::PATH))
+            .unwrap();
+        let diagnostic = Diagnostic::new(DiagnosticKind::Parse, &message).at_path(path);
+        return Err(EvalError::InvalidSyntax(message).with_diagnostic(diagnostic));
     }
     Ok(Step::Done(TaggedValue::UNSPECIFIED))
 }

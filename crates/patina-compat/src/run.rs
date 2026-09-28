@@ -12,6 +12,7 @@
 //!   it and the exit status says so.
 
 use crate::corpus::{self, Package};
+use patina_runtime::{Diagnostic, DiagnosticKind as Kind};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,11 +31,8 @@ pub enum Status {
     /// unbound, which would mask the real cause.
     ParseError(Vec<String>),
     /// A library loaded and parsed but failed while being installed —
-    /// export resolution, library-body evaluation. The interpreter wraps
-    /// these in the same "Parse error in ..." prefix as real parse errors
-    /// (`LibraryError::ParseError` is overloaded — recorded as debt in the
-    /// Track L PRD), so the split happens here to keep the parser work
-    /// queue honest.
+    /// export resolution, library-body evaluation. The producer records this
+    /// separately from reader/expansion failures in the diagnostic stream.
     LoadError(Vec<String>),
     /// Libraries resolve but an identifier does not.
     UnboundIdentifier(Vec<String>),
@@ -227,7 +225,12 @@ fn run_package(
     // A user's installed packages must neither shadow the corpus nor fill a
     // missing dependency and turn a failure into a pass. This also isolates
     // bootstrap; clearing environment variables after startup is too late.
-    cmd.arg("--isolated-libraries");
+    let diagnostics_path = scratch.join("diagnostics.jsonl");
+    // Do not accept a previous run's stream if the child cannot start.
+    let _ = std::fs::remove_file(&diagnostics_path);
+    cmd.arg("--isolated-libraries")
+        .arg("--diagnostics-file")
+        .arg(&diagnostics_path);
     for root in &search_roots {
         cmd.arg("-A").arg(root);
     }
@@ -245,7 +248,18 @@ fn run_package(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let outcome = spawn_with_timeout(cmd, config.timeout);
+    let outcome = spawn_with_timeout(cmd, config.timeout).map(|mut out| {
+        out.diagnostics = std::fs::read_to_string(&diagnostics_path)
+            .map_err(|e| format!("cannot read diagnostic stream: {e}"))
+            .and_then(|text| patina_runtime::diagnostic::read_stream(&text));
+        if let Err(error) = &out.diagnostics {
+            eprintln!(
+                "{}: {error}; rebuild the Patina binary before scoring",
+                package.slug
+            );
+        }
+        out
+    });
     let _ = std::fs::remove_dir_all(&scratch);
     let status = match outcome {
         Err(e) => {
@@ -604,6 +618,7 @@ fn self_check_package(config: &RunConfig) -> Package {
 }
 
 struct Captured {
+    diagnostics: Result<Vec<Diagnostic>, String>,
     stdout: String,
     stderr: String,
     exit_ok: bool,
@@ -645,6 +660,7 @@ fn spawn_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Captured, S
     let stdout = String::from_utf8_lossy(&stdout_thread.join().unwrap()).into_owned();
     let stderr = String::from_utf8_lossy(&stderr_thread.join().unwrap()).into_owned();
     Ok(Captured {
+        diagnostics: Err("diagnostic stream not read".into()),
         stdout,
         stderr,
         exit_ok,
@@ -666,9 +682,22 @@ fn classify(out: &Captured, mode: &str) -> Status {
         return Status::Timeout;
     }
 
-    let parts = [out.stdout.as_str(), out.stderr.as_str()];
-
-    let missing = extract_missing_libraries(parts);
+    let Ok(diagnostics) = &out.diagnostics else {
+        return Status::RuntimeError;
+    };
+    let payloads = |kind, payload: fn(&Diagnostic) -> Option<String>| {
+        let mut values: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.kind == kind)
+            .filter_map(payload)
+            .collect();
+        values.sort();
+        values.dedup();
+        values
+    };
+    let missing = payloads(Kind::MissingLibrary, |d| {
+        d.library.as_ref().map(|n| n.join(" "))
+    });
     if !missing.is_empty() {
         return if missing.iter().all(|l| FFI_BOUND.contains(&l.as_str())) {
             Status::OutOfScope(missing)
@@ -677,17 +706,16 @@ fn classify(out: &Captured, mode: &str) -> Status {
         };
     }
 
-    // The interpreter wraps genuine parse errors and load-stage failures
-    // (export resolution, library-body evaluation) in the same "Parse error
-    // in ..." message; split them so the parser queue stays honest. A real
-    // parse error wins when both appear — it is the deeper cause.
-    let (load_errors, parse_errors): (Vec<_>, Vec<_>) =
-        extract_parse_errors(parts).into_iter().partition(|d| {
-            d.starts_with("Exported identifier") || d.contains("evaluating library body")
-        });
+    // Reader/expansion failures outrank downstream loading symptoms. The
+    // producer names the stage; no human-readable prefix participates.
+    let mut parse_errors = payloads(Kind::Parse, |d| Some(d.message.clone()));
+    parse_errors.extend(payloads(Kind::Syntax, |d| Some(d.message.clone())));
+    parse_errors.sort();
+    parse_errors.dedup();
     if !parse_errors.is_empty() {
         return Status::ParseError(parse_errors);
     }
+    let load_errors = payloads(Kind::Load, |d| Some(d.message.clone()));
     if !load_errors.is_empty() {
         return Status::LoadError(load_errors);
     }
@@ -712,14 +740,12 @@ fn classify(out: &Captured, mode: &str) -> Status {
     // difference is what each proves. A stub marker is raised at run time, so
     // the suite did run and its verdict is real evidence to weigh. This
     // refusal happens before anything runs at all.
-    //
-    // Matched on a constant this crate links against rather than on wording —
-    // see `patina_runtime::NATIVE_EXTENSION_MARKER`.
-    if let Some(extensions) = extract_native_extensions(parts) {
+    let extensions = payloads(Kind::NativeExtension, |d| d.extension.clone());
+    if !extensions.is_empty() {
         return Status::OutOfScope(extensions);
     }
 
-    let unbound = extract_unbound_identifiers(parts);
+    let unbound = payloads(Kind::UnboundIdentifier, |d| d.identifier.clone());
     if !unbound.is_empty() {
         return Status::UnboundIdentifier(unbound);
     }
@@ -741,15 +767,15 @@ fn classify(out: &Captured, mode: &str) -> Status {
     // is FFI-bound in exactly the sense FFI_BOUND means — it just proved it by
     // running instead of by failing to import. Without this it would be filed
     // as a runtime-error, i.e. as our defect.
-    if let Some(stubs) = extract_ffi_stubs(parts) {
+    if let Some(stubs) = extract_ffi_stubs([out.stdout.as_str(), out.stderr.as_str()]) {
         return Status::OutOfScope(stubs);
     }
 
     // A test run under `-k` and a probe both exit non-zero once an error is
-    // reported. The stderr check stays beside the status, so the verdict does
+    // reported. The diagnostic check stays beside the status, so the verdict does
     // not rest on one signal: a suite that reached its own `(test-exit)` is
     // judged by what it printed as well as by how it ended.
-    if out.stderr.contains("Error") || !out.exit_ok {
+    if !diagnostics.is_empty() || !out.exit_ok {
         return Status::RuntimeError;
     }
 
@@ -778,27 +804,6 @@ fn extract_after_marker(
     found
 }
 
-/// Names of the shared objects an `include-shared` declaration asked for.
-///
-/// Patina refuses that declaration deliberately (`LibraryError::
-/// NativeExtensionRequired`), so this reads a marker the interpreter emits on
-/// purpose rather than wording that could be reworded.
-///
-/// What the shared constant actually buys, stated precisely because it is
-/// easy to overstate: rewording the message in *this tree* fails to compile
-/// here. It says nothing about the binary under test, which `--patina` may
-/// point anywhere — against an older or stale build the marker is simply
-/// absent and the package classifies on whatever that build said instead.
-/// The `expect` field in `compat/EXCLUSIONS.scm` is what surfaces that, as
-/// drift on every affected row at once.
-fn extract_native_extensions(parts: [&str; 2]) -> Option<Vec<String>> {
-    let found = extract_after_marker(parts, patina_runtime::NATIVE_EXTENSION_MARKER, |rest| {
-        let (name, _) = rest.trim().strip_prefix('"')?.split_once('"')?;
-        Some(name.to_string())
-    });
-    (!found.is_empty()).then_some(found)
-}
-
 /// Names of the FFI-stub procedures a run actually reached, if any.
 ///
 /// The marker is raised by `define-unimplemented` in a bundled library, so it
@@ -808,78 +813,6 @@ fn extract_ffi_stubs(parts: [&str; 2]) -> Option<Vec<String>> {
         Some(rest.trim().trim_matches(['"', '\'']).to_string())
     });
     (!found.is_empty()).then_some(found)
-}
-
-/// Pull `(lib name)` out of every "Library (lib name) not found" message.
-fn extract_missing_libraries(parts: [&str; 2]) -> Vec<String> {
-    extract_after_marker(parts, "Library (", |rest| {
-        rest.split_once(") not found")
-            .map(|(lib, _)| lib.to_string())
-    })
-}
-
-/// Pull the error description out of a parse failure — the detail alone, so
-/// the histogram groups by error kind, not by file.
-///
-/// Two wordings, because failing to parse an *included* file is reported by
-/// `include`/`load` rather than by the library loader: "Parse error in
-/// <path>: <detail>" and "include: parse error in '<path>': <detail>". The
-/// second is just as much a parse error, and without it a package whose
-/// included source cannot be lexed lands in `runtime-error`, i.e. filed as a
-/// failure of something that never ran.
-fn extract_parse_errors(parts: [&str; 2]) -> Vec<String> {
-    fn from_loader(line: &str) -> Option<String> {
-        let (_, rest) = line.split_once("Parse error in ")?;
-        // First ": " ends the path; the detail may itself contain colons —
-        // see `a_multi_colon_detail_is_not_truncated`. The constant layer
-        // tags are then stripped so the histogram keys stay short and
-        // stable against rewording: the section header already says "Parse
-        // errors", so they carry no information there.
-        let (_, detail) = rest.split_once(": ")?;
-        let detail = detail
-            .trim_start_matches("desugar error: ")
-            .trim_start_matches("runtime error: ");
-        let detail = detail.strip_prefix("Invalid syntax: ").unwrap_or(detail);
-        Some(detail.trim().to_string())
-    }
-    fn from_include(line: &str) -> Option<String> {
-        let (_, rest) = line.split_once("parse error in '")?;
-        let (_, detail) = rest.split_once("': ")?;
-        Some(detail.trim().to_string())
-    }
-    let mut found: Vec<String> = parts
-        .iter()
-        .flat_map(|s| s.lines())
-        .filter_map(|line| from_loader(line).or_else(|| from_include(line)))
-        .collect();
-    found.sort();
-    found.dedup();
-    found
-}
-
-/// Pull the identifier out of "Undefined variable: x" / "unbound variable: x"
-/// (the two backends word it differently).
-///
-/// Not on `extract_after_marker`, and neither is `extract_parse_errors`: both
-/// read *two* markers per line — this one because the backends disagree on
-/// the wording, that one because an included file's failure is reported by
-/// `include` rather than by the loader. Threading a marker list through the
-/// helper to absorb them would cost more than the five lines it saves.
-fn extract_unbound_identifiers(parts: [&str; 2]) -> Vec<String> {
-    let mut found: Vec<String> = ["Undefined variable: ", "unbound variable: "]
-        .iter()
-        .flat_map(|marker| {
-            parts.iter().flat_map(move |part| {
-                part.split(marker)
-                    .skip(1)
-                    .filter_map(|rest| rest.split_whitespace().next())
-                    .map(str::to_string)
-            })
-        })
-        .collect();
-    found.sort();
-    found.dedup();
-    found
 }
 
 /// Did the suite report failures?
@@ -1250,6 +1183,7 @@ mod tests {
 
     fn captured(stdout: &str, stderr: &str, exit_ok: bool) -> Captured {
         Captured {
+            diagnostics: Ok(Vec::new()),
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
             exit_ok,
@@ -1268,10 +1202,9 @@ mod tests {
             classify_smoke(&captured(complete, "", false), 3),
             Status::RuntimeError
         );
-        assert_eq!(
-            classify_smoke(&captured(complete, "Error: late failure", true), 3),
-            Status::RuntimeError
-        );
+        let mut late_error = captured(complete, "wording changed", true);
+        late_error.diagnostics = Ok(vec![Diagnostic::new(Kind::Runtime, "late failure")]);
+        assert_eq!(classify_smoke(&late_error, 3), Status::RuntimeError);
         let mut timeout = captured(complete, "", true);
         timeout.timed_out = true;
         assert_eq!(classify_smoke(&timeout, 3), Status::Timeout);
@@ -1285,234 +1218,130 @@ mod tests {
         );
     }
 
-    #[test]
-    fn classifies_missing_library() {
-        let out = captured("", "Error: Library (foo bar) not found", false);
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::MissingLibrary(vec!["foo bar".to_string()])
-        );
-    }
-
-    #[test]
-    fn classifies_ffi_bound_as_out_of_scope() {
-        let out = captured("", "Error: Library (chibi ast) not found", false);
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::OutOfScope(vec!["chibi ast".to_string()])
-        );
-    }
-
-    /// The excusing bucket must not swallow a real failure — the rule the
-    /// FFI-stub check states as audit E3. A package that needs a `.so` and
-    /// also trips a genuine parse error reports the parse error, so it still
-    /// reaches the work queue.
-    #[test]
-    fn a_parse_error_outranks_a_native_extension() {
-        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
-            file: "chibi/ssl.sld".to_string(),
-            extension: "ssl".to_string(),
+    fn diagnosed(diagnostics: Vec<Diagnostic>) -> Captured {
+        Captured {
+            diagnostics: Ok(diagnostics),
+            ..captured("", "prose can say anything", false)
         }
-        .to_string();
-        let out = captured(
-            "",
-            &format!("Error: Parse error in other.sld: bad macro\nError: {rendered}"),
-            false,
-        );
-        assert_eq!(
-            classify(&out, "test"),
-            Status::ParseError(vec!["bad macro".to_string()])
-        );
     }
 
-    /// ...but a downstream symptom must not. The test program's entry point
-    /// is undefined *because* the library never loaded, so the refusal is the
-    /// cause and the unbound name is its consequence.
+    fn missing(name: &[&str]) -> Diagnostic {
+        let mut d = Diagnostic::new(Kind::MissingLibrary, "arbitrary library error wording");
+        d.library = Some(name.iter().map(|s| s.to_string()).collect());
+        d
+    }
+
+    fn unbound(name: &str) -> Diagnostic {
+        let mut d = Diagnostic::new(Kind::UnboundIdentifier, "arbitrary lookup wording");
+        d.identifier = Some(name.into());
+        d
+    }
+
+    fn native() -> Diagnostic {
+        let mut d = Diagnostic::new(Kind::NativeExtension, "arbitrary native extension wording");
+        d.extension = Some("mecab".into());
+        d
+    }
+
     #[test]
-    fn a_native_extension_outranks_the_unbound_symptom_it_causes() {
-        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
-            file: "chibi/mecab.sld".to_string(),
-            extension: "mecab".to_string(),
+    fn classifications_use_typed_payloads_despite_misleading_prose() {
+        for (diagnostic, expected) in [
+            (
+                missing(&["foo", "bar"]),
+                Status::MissingLibrary(vec!["foo bar".into()]),
+            ),
+            (
+                missing(&["chibi", "ast"]),
+                Status::OutOfScope(vec!["chibi ast".into()]),
+            ),
+            (
+                missing(&["foreign", "c"]),
+                Status::OutOfScope(vec!["foreign c".into()]),
+            ),
+            (
+                unbound("odd name: `λ`"),
+                Status::UnboundIdentifier(vec!["odd name: `λ`".into()]),
+            ),
+            (native(), Status::OutOfScope(vec!["mecab".into()])),
+            (
+                Diagnostic::new(Kind::Load, "Export missing: x: y"),
+                Status::LoadError(vec!["Export missing: x: y".into()]),
+            ),
+            (
+                Diagnostic::new(Kind::Parse, "reader: detail: λ"),
+                Status::ParseError(vec!["reader: detail: λ".into()]),
+            ),
+            (
+                Diagnostic::new(Kind::Syntax, "bad macro"),
+                Status::ParseError(vec!["bad macro".into()]),
+            ),
+        ] {
+            let mut out = diagnosed(vec![diagnostic]);
+            out.stderr =
+                "Error: Library (misleading) not found\nError: Undefined variable: wrong".into();
+            out.stdout = "Parse error in /fake: wrong".into();
+            assert_eq!(classify(&out, "probe"), expected);
         }
-        .to_string();
-        let out = captured(
-            "",
-            &format!("Error: {rendered}\nError: unbound variable: `run-chibi-mecab-test-tests`"),
-            false,
-        );
-        assert_eq!(
-            classify(&out, "test"),
-            Status::OutOfScope(vec!["mecab".to_string()])
-        );
     }
 
     #[test]
-    fn classifies_foreign_c_as_out_of_scope() {
-        let out = captured("", "Error: Library (foreign c) not found", false);
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::OutOfScope(vec!["foreign c".to_string()])
-        );
-    }
-
-    /// A library whose implementation is a shared object is out of scope, and
-    /// says so at the cause. Before Patina recognised `include-shared` this
-    /// arrived as `Exported identifier 'mecab?' not defined` — a load error
-    /// naming a symptom two steps downstream.
-    ///
-    /// The message is *rendered from the real error* rather than pasted in as
-    /// a literal, so the whole shape this extractor depends on — the marker,
-    /// and the quoted name after it — is checked against the producing site.
-    /// A pasted literal would only have pinned the copy in this file, leaving
-    /// a Display reformat free to reclassify chibi-mecab with a green build.
-    #[test]
-    fn classifies_a_native_extension_as_out_of_scope() {
-        let rendered = patina_runtime::LibraryError::NativeExtensionRequired {
-            file: "chibi/mecab.sld".to_string(),
-            extension: "mecab".to_string(),
+    fn causal_failure_precedence_is_preserved() {
+        let parse = Diagnostic::new(Kind::Parse, "bad datum");
+        let load = Diagnostic::new(Kind::Load, "bad export");
+        for (ds, expected) in [
+            (
+                vec![native(), parse.clone(), load.clone(), unbound("entry")],
+                Status::ParseError(vec!["bad datum".into()]),
+            ),
+            (
+                vec![native(), load, unbound("entry")],
+                Status::LoadError(vec!["bad export".into()]),
+            ),
+            (
+                vec![native(), unbound("entry")],
+                Status::OutOfScope(vec!["mecab".into()]),
+            ),
+            (
+                vec![missing(&["chibi", "ast"]), missing(&["foo"])],
+                Status::MissingLibrary(vec!["chibi ast".into(), "foo".into()]),
+            ),
+            (
+                vec![unbound("z"), unbound("a"), unbound("z")],
+                Status::UnboundIdentifier(vec!["a".into(), "z".into()]),
+            ),
+        ] {
+            assert_eq!(classify(&diagnosed(ds), "test"), expected);
         }
-        .to_string();
-        let out = captured("", &format!("Error: {rendered}"), false);
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::OutOfScope(vec!["mecab".to_string()])
-        );
     }
 
-    /// Reaching a bundled library's FFI stub is out-of-scope, not a defect —
-    /// the package got far enough to run, which a missing-import check cannot
-    /// see.
     #[test]
-    fn classifies_reached_ffi_stub_as_out_of_scope() {
-        let out = captured(
+    fn ordinary_output_cannot_impersonate_an_interpreter_error() {
+        let text = "Error: Library (foo) not found\nError: Undefined variable: x\nParse error in x: broken";
+        assert_eq!(classify(&captured(text, text, true), "probe"), Status::Pass);
+    }
+
+    #[test]
+    fn invalid_diagnostic_stream_cannot_pass_or_excuse_a_package() {
+        let mut out = captured("", "requires FFI, unavailable in Patina: open", true);
+        out.diagnostics = Err("unsupported version".into());
+        assert_eq!(classify(&out, "probe"), Status::RuntimeError);
+    }
+
+    #[test]
+    fn reached_ffi_stub_remains_an_explicit_scheme_protocol() {
+        let mut out = captured(
             "",
-            "Error: requires FFI, unavailable in Patina: duplicate-file-descriptor",
+            "Error: requires FFI, unavailable in Patina: open",
             false,
         );
         assert_eq!(
             classify(&out, "probe"),
-            Status::OutOfScope(vec!["duplicate-file-descriptor".to_string()])
+            Status::OutOfScope(vec!["open".into()])
         );
-    }
-
-    /// The stub check must not outrank a real failure that happened first.
-    #[test]
-    fn unbound_identifier_beats_a_later_ffi_stub() {
-        let out = captured(
-            "",
-            "Error: Undefined variable: frobnicate\n\
-             Error: requires FFI, unavailable in Patina: open",
-            false,
-        );
+        out.diagnostics = Ok(vec![unbound("frobnicate")]);
         assert_eq!(
             classify(&out, "probe"),
-            Status::UnboundIdentifier(vec!["frobnicate".to_string()])
-        );
-    }
-
-    #[test]
-    fn mixed_missing_stays_missing() {
-        let out = captured(
-            "",
-            "Error: Library (chibi ast) not found\nError: Library (foo) not found",
-            false,
-        );
-        assert!(matches!(classify(&out, "probe"), Status::MissingLibrary(_)));
-    }
-
-    #[test]
-    fn parse_error_beats_downstream_unbound() {
-        // A library that fails to parse leaves its importers unbound; the
-        // parse error is the cause and must win.
-        let out = captured(
-            "",
-            "Error: Parse error in /x/chibi/match-test.sld: LexError(UnexpectedChar('@'))\n\
-             Error: unbound variable: `run-tests`",
-            false,
-        );
-        assert_eq!(
-            classify(&out, "test"),
-            Status::ParseError(vec!["LexError(UnexpectedChar('@'))".to_string()])
-        );
-    }
-
-    #[test]
-    fn export_failure_is_load_error_not_parse_error() {
-        // The interpreter wraps export-resolution failures in the same
-        // "Parse error in ..." prefix; they must not inflate the parser
-        // work queue.
-        let out = captured(
-            "",
-            "Error: Parse error in /x/lib.sld: Exported identifier 'my-helper' not defined",
-            false,
-        );
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::LoadError(vec![
-                "Exported identifier 'my-helper' not defined".to_string()
-            ])
-        );
-    }
-
-    #[test]
-    fn real_parse_error_wins_over_load_error() {
-        let out = captured(
-            "",
-            "Error: Parse error in /x/a.sld: LexError(UnexpectedChar('@'))\n\
-             Error: Parse error in /x/b.sld: Exported identifier 'f' not defined",
-            false,
-        );
-        assert!(matches!(classify(&out, "probe"), Status::ParseError(_)));
-    }
-
-    /// A detail that itself contains colons must survive whole — splitting on
-    /// the last one reported edn's duplicate-pattern-variable failure as the
-    /// two-letter histogram row `ch` — while the constant layer tags
-    /// ("desugar error: ", one "Invalid syntax: ") are stripped from the key.
-    #[test]
-    fn a_multi_colon_detail_is_not_truncated() {
-        let out = captured(
-            "",
-            "Error: Parse error in /x/edn.sld: desugar error: Invalid syntax: \
-             Failed to compile macro new-symbol?: Invalid syntax: \
-             Duplicate pattern variable: ch",
-            false,
-        );
-        assert_eq!(
-            classify(&out, "test"),
-            Status::ParseError(vec![
-                "Failed to compile macro new-symbol?: \
-                 Invalid syntax: Duplicate pattern variable: ch"
-                    .to_string()
-            ])
-        );
-    }
-
-    /// `include` words a parse failure its own way and quotes the path. It is
-    /// still a parse error, and belongs in the queue that drives parser work
-    /// rather than in `runtime-error`.
-    #[test]
-    fn an_included_file_that_will_not_lex_is_a_parse_error() {
-        let out = captured(
-            "",
-            "Error: desugar error: Invalid syntax: include: parse error in \
-             '/x/srfi-197.scm': Lexer error: Unexpected character: \u{2026}",
-            false,
-        );
-        assert_eq!(
-            classify(&out, "test"),
-            Status::ParseError(vec![
-                "Lexer error: Unexpected character: \u{2026}".to_string()
-            ])
-        );
-    }
-
-    #[test]
-    fn classifies_unbound_identifier() {
-        let out = captured("", "Error: Undefined variable: string-index", false);
-        assert_eq!(
-            classify(&out, "probe"),
-            Status::UnboundIdentifier(vec!["string-index".to_string()])
+            Status::UnboundIdentifier(vec!["frobnicate".into()])
         );
     }
 
@@ -1628,6 +1457,7 @@ mod tests {
     #[test]
     fn timeout_wins() {
         let out = Captured {
+            diagnostics: Ok(Vec::new()),
             stdout: String::new(),
             stderr: "Error: Library (foo) not found".to_string(),
             exit_ok: false,

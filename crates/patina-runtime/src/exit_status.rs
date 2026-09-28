@@ -61,6 +61,10 @@ pub fn status_for_exit(requested: i32) -> i32 {
 /// program has then reported an error, so a success it asked for is withheld.
 pub fn end_process(requested: i32) -> ! {
     for (path, error) in patina_core::port::flush_open_output_files() {
+        crate::diagnostic::emit(
+            crate::Diagnostic::new(crate::DiagnosticKind::Io, error.to_string())
+                .at_path(path.display().to_string()),
+        );
         eprintln!(
             "Error: could not write the output to {}: {}",
             path.display(),

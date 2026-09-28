@@ -14,6 +14,7 @@
 use crate::eval::{EvalError, Evaluator, eval_cps};
 use patina_core::TaggedValue;
 use patina_frontend::SourceMap;
+use patina_runtime::HasDiagnostic;
 use patina_runtime::{Backend, Environment};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -113,7 +114,10 @@ impl TreeWalker {
         if patina_frontend::is_define_library_form(expr, internal_heap) {
             self.evaluator
                 .eval_inline_define_library(expr)
-                .map_err(|e| EvalError::InvalidSyntax(format!("define-library failed: {}", e)))?;
+                .map_err(|e| {
+                    EvalError::InvalidSyntax(format!("define-library failed: {}", e))
+                        .with_diagnostic(e.diagnostic())
+                })?;
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
@@ -125,7 +129,9 @@ impl TreeWalker {
 
         let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
             let location = e.source_location().cloned();
-            EvalError::DesugarError(e.to_string()).at_opt(location)
+            EvalError::DesugarError(e.to_string())
+                .with_diagnostic(e.diagnostic())
+                .at_opt(location)
         })?;
 
         eval_cps(&core_expr, env.clone(), &self.evaluator)

@@ -668,6 +668,8 @@ dependencies = [
  "num-rational",
  "num-traits",
  "patina-core",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

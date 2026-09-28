@@ -303,7 +303,7 @@ impl ClassifyError for patina_runtime::EvalError {
     fn class(&self) -> ErrorClass {
         use patina_runtime::EvalError::*;
         match self {
-            WithLocation { error, .. } => error.class(),
+            WithLocation { error, .. } | WithDiagnostic { error, .. } => error.class(),
             DesugarError(_) => ErrorClass::BeforeRun,
             UndefinedVariable(_)
             | NotAProcedure(_)
@@ -327,6 +327,7 @@ impl ClassifyError for patina_vm::VmBackendError {
                 ErrorClass::BeforeRun
             }
             patina_vm::VmBackendError::Runtime { .. } => ErrorClass::AtRuntime,
+            patina_vm::VmBackendError::WithDiagnostic { error, .. } => error.class(),
         }
     }
 }
