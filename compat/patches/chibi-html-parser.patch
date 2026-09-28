@@ -1,0 +1,18 @@
+# Correctness overlay for #429, issue #531: https://github.com/avalonalex/patina/issues/531
+# Reproduced with the pinned package on VM, tree-walker, Chibi and Gauche.
+# Maintained text/parsing smoke drivers assert the corrected behavior.
+# Reference namespaces and before/after measurements: docs/TEST_ORGANIZATION.md.
+--- a/chibi/html-parser.scm
++++ b/chibi/html-parser.scm
+@@ -563,7 +563,10 @@
+                           (tag-level tag-levels (caar tags))
+                           -1)))
+                  (cond
+-                  ((< this-level expected-level)
++                  ((or (< this-level expected-level)
++                       (and (pair? tags) (memq (caar tags) unnestables)
++                            (assq (cdr tok) (cdr tags))))
++                   ;; A closing ancestor also ends an optional-end-tag child.
+                    ;; higher-level tag, forcefully close preceding tags
+                    (lp tok
+                        (end (caar tags) (fix-attrs (cadar tags) seed)

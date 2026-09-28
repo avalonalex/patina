@@ -2,6 +2,12 @@
 ;; Counts are checked by the runner: an empty or truncated driver cannot pass.
 (patina-compat-smokes
  (tests
+  ((slug "chibi-char-set") (assertions 19))
+  ((slug "chibi-char-set-boundary") (assertions 11))
+  ((slug "chibi-html-parser") (assertions 17))
+  ((slug "chibi-irregex") (assertions 17))
+  ((slug "chibi-sxml") (assertions 15))
+  ((slug "slib-xml-parse") (assertions 18))
   ((slug "chibi-binary-record") (assertions 5))
   ((slug "pfds-queue") (assertions 6))
   ((slug "pfds-heap") (assertions 6))

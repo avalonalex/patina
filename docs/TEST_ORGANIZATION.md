@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 89 drivers cover binary-record read/write round trips;
+assertion count. The 95 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -894,7 +894,19 @@ and continuation exit/reentry, overlapping string moves and bounded fills.
 The six correctness overlays are tracked in #527 (calendar, timezone and
 time conversion) and #528 (common helper uniqueness and value forwarding).
 
-All 1241 assertions were compared against both Patina backends, Chibi 0.12
+The text/parsing batch adds 97 assertions across six drivers: Chibi char-set
+(19), char-set-boundary (11), html-parser (17), irregex (17), sxml (15), and
+SLIB xml-parse (18). They cover set algebra and mutation, all 11,172 Hangul
+syllables' LV/LVT partition, grapheme matching, HTML callback/recovery behavior,
+SXML escaping/rendering, regex capture/replacement/folding, XML namespaces and
+duplicate attributes. Four-host results are 88/97 before and 97/97 after the
+#530/#531 corrections. Tests retain the pinned Unicode 6.3 data version.
+#530 also repairs the bundled SRFI 115 copy, with six public-API regressions
+in `tests/scheme/srfi/regex-graphemes.scm`. Native Chibi passes two and Gauche
+five; the four missing-data/LV cases and Gauche's merged-LV case are classified
+in `DIVERGENCES.tsv`. Both Patina backends pass all six.
+
+All 1338 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -1009,6 +1021,17 @@ backends and Chibi, and 105/140 on Gauche; all four pass 140/140 afterward.
 Gauche alone exposes the single-value binding in `call-with-open-ports`;
 the other hosts tolerate it. The repaired wrapper forwards every value on
 all four while retaining the upstream normal-return port closure contract.
+
+The text/parsing reference runs rename all transitive pinned libraries into
+`(patina-corpus ...)`, including off-path irregex and the Chibi iset/char-set
+record types. Chibi's native full/ascii support tables are copied under the
+same namespace with imports renamed so their records share that identity;
+these support tables are unchanged. Native conditional branches remain
+selected. Boundary consumers choose Chibi char-sets on Chibi and SRFI 14
+elsewhere, preserving #431. Before-repair runs retain all previously merged
+overlays, including #431 and the regexp suite's missing-data guard, and omit
+only the new #530/#531 corrections. The pinned implementation bodies match
+the normal corpus runs.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

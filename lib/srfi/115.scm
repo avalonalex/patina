@@ -783,7 +783,8 @@
          (->rx
           `(or (: (* ,char-set:hangul-l) (+ ,char-set:hangul-v)
                   (* ,char-set:hangul-t))
-               (: (* ,char-set:hangul-l) ,char-set:hangul-v
+               ;; PATINA DEVIATION (#530): precomposed LV, not another V.
+               (: (* ,char-set:hangul-l) ,char-set:hangul-lv
                   (* ,char-set:hangul-v) (* ,char-set:hangul-t))
                (: (* ,char-set:hangul-l) ,char-set:hangul-lvt
                   (* ,char-set:hangul-t))

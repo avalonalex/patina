@@ -443,11 +443,11 @@ asking carefully; it is not why the answer came out this way. Had the URL
 failed to resolve, or resolved to something other than a permissive licence,
 the size would not have made bundling acceptable.
 
-**SRFI 115 is byte-identical but for one marked line, and is the clean case
+**SRFI 115 retains its upstream code with marked corrections, and is the clean case
 the two beside it are not.**
 
 `lib/srfi/115.*` and `lib/srfi/115/boundary.*` are `contrib/duy-nguyen/` from
-the SRFI's own distribution. Three of the four files are unedited.
+the SRFI's own distribution. `115.sld` remains unedited.
 `115/boundary.sld` carries one `PATINA DEVIATION` (#431, 2026-09-19): upstream
 chooses its char-set library with `(library (chibi char-set))`, by
 *availability*, while `115.sld` — the only client of the sets it defines —
@@ -464,6 +464,17 @@ As first bundled it needed no adaptation at all: its own
 `cond-expand` already reaches for `(chibi test)` on anything that is not
 Larceny, and its non-chibi branch asks only for libraries Patina already
 ships. Upstream's suite passes **85 of 85 on both backends**.
+
+The #530 correction (2026-09-28) restores singleton rows omitted from the
+Unicode 6.3 boundary tables: 13 Control, 133 Extend/SpacingMark and all 399
+Hangul LV entries. Existing ranges match the authoritative
+[Unicode 6.3 data](https://www.unicode.org/Public/6.3.0/ucd/auxiliary/GraphemeBreakProperty.txt)
+exactly; this is a repair within that version. It also changes the grapheme
+compiler's second Hangul alternative from V to LV. Both changes carry
+`PATINA DEVIATION` comments and updated post-edit hashes. The six Scheme
+regressions exercise the public matching API on both backends; Chibi's four
+native failures are registered as oracle defects. Gauche passes five of six;
+its remaining native defect merges two LV syllables into one grapheme.
 
 **Every file carries an explicit `SPDX-License-Identifier`** — BSD-3-Clause for
 the implementation, CC0-1.0 for `boundary.*`, which is generated Unicode

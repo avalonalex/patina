@@ -48,3 +48,19 @@ diff -ruN a/chibi/regexp-test.sld b/chibi/regexp-test.sld
 +                      (lp))))))))
  
        (test-end))))
+
+# Correctness overlay for #429, issue #530: https://github.com/avalonalex/patina/issues/530
+# Reproduced with the pinned package on VM, tree-walker, Chibi and Gauche.
+# Maintained text/parsing smoke drivers assert the corrected behavior.
+# Reference namespaces and before/after measurements: docs/TEST_ORGANIZATION.md.
+--- a/chibi/regexp.scm
++++ b/chibi/regexp.scm
+@@ -784,7 +784,7 @@
+          (->rx
+           `(or (: (* ,char-set:hangul-l) (+ ,char-set:hangul-v)
+                   (* ,char-set:hangul-t))
+-               (: (* ,char-set:hangul-l) ,char-set:hangul-v
++               (: (* ,char-set:hangul-l) ,char-set:hangul-lv
+                   (* ,char-set:hangul-v) (* ,char-set:hangul-t))
+                (: (* ,char-set:hangul-l) ,char-set:hangul-lvt
+                   (* ,char-set:hangul-t))
