@@ -139,7 +139,7 @@ const SUITE: &[(&str, i64)] = &[
     ("srfi/char-sets.scm", 87),
     ("srfi/regex-graphemes.scm", 6),
     ("srfi/fixnums.scm", 54),
-    ("srfi/homogeneous-vectors.scm", 60),
+    ("srfi/homogeneous-vectors.scm", 111),
     ("srfi/sets.scm", 4),
     ("srfi/sorting.scm", 5),
     ("srfi/string-cursors.scm", 15),

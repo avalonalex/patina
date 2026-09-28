@@ -557,11 +557,14 @@
     ((vec port) (write-c64vector* vec port))))
 
 
+;; PATINA LOCAL EDIT: #384, handle an empty vector before reading element zero.
 (define (write-c64vector* vec port)
   (display "#c64(" port)  ; c64-expansion is blind, so will expand this too
   (let ((last (- (c64vector-length vec) 1)))
     (let loop ((i 0))
       (cond
+        ((> i last)
+         (display ")" port))
         ((= i last)
          (write (c64vector-ref vec i) port)
          (display ")" port))
@@ -590,12 +593,19 @@
            (else
              (loop (+ i 1)))))))))
 
+;; PATINA LOCAL EDIT: #384, hash real components before adding, so infinities
+;; and finite sums that overflow never reach inexact->exact. Keep upstream's
+;; 256-element limit; hash values are implementation-defined. Splitting complex
+;; elements also keeps them out of number-hash's real-only infinity branches.
 (define (c64vector-hash vec)
   (let ((len (min 256 (c64vector-length vec))))
     (let loop ((i 0) (r 0))
       (if (= i len)
-        (abs (floor (real-part (inexact->exact r))))
-        (loop (+ i 1) (+ r (c64vector-ref vec i)))))))
+        r
+        (let ((x (c64vector-ref vec i)))
+          (loop (+ i 1)
+                (+ r (number-hash (real-part x))
+                     (number-hash (imag-part x)))))))))
 
 (define c64vector-comparator
   (make-comparator c64vector? c64vector= c64vector< c64vector-hash))

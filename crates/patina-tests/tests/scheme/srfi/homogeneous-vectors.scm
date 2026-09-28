@@ -35,7 +35,8 @@
 (import (scheme base) (scheme write) (scheme complex) (srfi 64)
         (srfi 4)
         (srfi 160 base)
-        (srfi 160 u8) (srfi 160 s8) (srfi 160 u16) (srfi 160 u32)
+        (srfi 160 u8) (srfi 160 s8) (srfi 160 u16) (srfi 160 s16)
+        (srfi 160 u32)
         (srfi 160 s32) (srfi 160 u64) (srfi 160 s64)
         (srfi 160 f32) (srfi 160 f64) (srfi 128)
         ;; The two complex types have no SRFI 4 layer under them — they wrap
@@ -231,32 +232,172 @@
     (real-part (c64vector-ref v 0))))
 
 ;; ---------------------------------------------------------------------------
-;; Two upstream defects, quarantined
+;; SRFI 160 writer and hash regressions (#384)
 ;; ---------------------------------------------------------------------------
-;; Both are in SRFI 160's reference implementation, bundled verbatim, and both
-;; are invisible to the only registered upstream suite — which tests `s16`, on
-;; the stated grounds that the twelve types are one template. That argument
-;; holds for the template and says nothing about per-type parameters: an s16
-;; element can be neither an infinity nor a NaN. Reported as #384.
-;;
-;; `test-expect-fail` rather than a comment, so they retire themselves: if
-;; upstream fixes either, the row becomes an xpass and the driver fails on it.
+;; The upstream writer read element zero of an empty vector after emitting
+;; its prefix. Check complete output, not just that it returns normally.
+(define (vector-written writer vec)
+  (let ((port (open-output-string)))
+    (writer vec port)
+    (get-output-string port)))
 
-;; `write-@vector*` computes `last` as `(- length 1)`, which is -1 when the
-;; vector is empty, so the loop never matches and reads element 0 of a
-;; zero-length vector — after `#u8(` has already reached the port.
-(test-expect-fail 1)
-(test-assert "write-u8vector handles an empty vector"
-  (not (refuses? (lambda () (write-u8vector (u8vector))))))
+(test-equal "write-u8vector handles an empty vector" "#u8()"
+  (vector-written write-u8vector (u8vector)))
+(test-equal "write-s8vector handles an empty vector" "#s8()"
+  (vector-written write-s8vector (s8vector)))
+(test-equal "write-u16vector handles an empty vector" "#u16()"
+  (vector-written write-u16vector (u16vector)))
+(test-equal "write-s16vector handles an empty vector" "#s16()"
+  (vector-written write-s16vector (s16vector)))
+(test-equal "write-u32vector handles an empty vector" "#u32()"
+  (vector-written write-u32vector (u32vector)))
+(test-equal "write-s32vector handles an empty vector" "#s32()"
+  (vector-written write-s32vector (s32vector)))
+(test-equal "write-u64vector handles an empty vector" "#u64()"
+  (vector-written write-u64vector (u64vector)))
+(test-equal "write-s64vector handles an empty vector" "#s64()"
+  (vector-written write-s64vector (s64vector)))
+(test-equal "write-f32vector handles an empty vector" "#f32()"
+  (vector-written write-f32vector (f32vector)))
+(test-equal "write-f64vector handles an empty vector" "#f64()"
+  (vector-written write-f64vector (f64vector)))
+(test-equal "write-c64vector handles an empty vector" "#c64()"
+  (vector-written write-c64vector (c64vector)))
+(test-equal "write-c128vector handles an empty vector" "#c128()"
+  (vector-written write-c128vector (c128vector)))
+(test-equal "write-u8vector writes a singleton without a space" "#u8(7)"
+  (vector-written write-u8vector (u8vector 7)))
+(test-equal "write-u8vector separates elements without a trailing space" "#u8(7 8)"
+  (vector-written write-u8vector (u8vector 7 8)))
+(test-equal "write-u8vector defaults to the current output port" "#u8()"
+  (let ((port (open-output-string)))
+    (parameterize ((current-output-port port))
+      (write-u8vector (u8vector)))
+    (get-output-string port)))
 
-;; `@vector-hash` calls `inexact->exact` on the element sum, which has no
-;; exact equivalent for an infinity. So the comparator whose purpose is to key
-;; a hash table fails on the values an f64vector exists to hold.
-(test-expect-fail 1)
+;; Hashes are nonnegative exact integers, and equal vectors hash alike.
+;; Their numeric values are implementation-defined. The old element sum
+;; became nonfinite for infinity inputs, infinity cancellation, and even
+;; finite f64/c128 inputs that overflowed when added.
+(define (valid-vector-hash? comparator vec)
+  (let ((h ((comparator-hash-function comparator) vec)))
+    (and (exact-integer? h) (>= h 0))))
+
+(define (equal-vector-hashes? comparator left right)
+  (and ((comparator-equality-predicate comparator) left right)
+       (let ((hash (comparator-hash-function comparator)))
+         (= (hash left) (hash right)))))
+
+(test-assert "u8vector-comparator hashes ordinary elements"
+  (valid-vector-hash? u8vector-comparator (u8vector 0 255)))
+(test-assert "s8vector-comparator hashes ordinary elements"
+  (valid-vector-hash? s8vector-comparator (s8vector -128 127)))
+(test-assert "u16vector-comparator hashes ordinary elements"
+  (valid-vector-hash? u16vector-comparator (u16vector 0 65535)))
+(test-assert "s16vector-comparator hashes ordinary elements"
+  (valid-vector-hash? s16vector-comparator (s16vector -32768 32767)))
+(test-assert "u32vector-comparator hashes ordinary elements"
+  (valid-vector-hash? u32vector-comparator (u32vector 0 4294967295)))
+(test-assert "s32vector-comparator hashes ordinary elements"
+  (valid-vector-hash? s32vector-comparator (s32vector -2147483648 2147483647)))
+(test-assert "u64vector-comparator hashes ordinary elements"
+  (valid-vector-hash? u64vector-comparator (u64vector 0 18446744073709551615)))
+(test-assert "s64vector-comparator hashes ordinary elements"
+  (valid-vector-hash? s64vector-comparator
+                      (s64vector -9223372036854775808 9223372036854775807)))
+(test-assert "f32vector-comparator hashes ordinary elements"
+  (valid-vector-hash? f32vector-comparator (f32vector -1.5 2.25)))
+(test-assert "f64vector-comparator hashes ordinary elements"
+  (valid-vector-hash? f64vector-comparator (f64vector -1.5 2.25)))
+(test-assert "c64vector-comparator hashes ordinary elements"
+  (valid-vector-hash? c64vector-comparator (c64vector -1.5+2.25i)))
+(test-assert "c128vector-comparator hashes ordinary elements"
+  (valid-vector-hash? c128vector-comparator (c128vector -1.5+2.25i)))
+
+(test-assert "f32vector-comparator hashes an empty vector"
+  (valid-vector-hash? f32vector-comparator (f32vector)))
+(test-assert "f64vector-comparator hashes an empty vector"
+  (valid-vector-hash? f64vector-comparator (f64vector)))
+(test-assert "c64vector-comparator hashes an empty vector"
+  (valid-vector-hash? c64vector-comparator (c64vector)))
+(test-assert "c128vector-comparator hashes an empty vector"
+  (valid-vector-hash? c128vector-comparator (c128vector)))
+
+(test-assert "f32vector-comparator hashes an infinity"
+  (valid-vector-hash? f32vector-comparator (f32vector +inf.0)))
 (test-assert "f64vector-comparator hashes an infinity"
-  (not (refuses?
-        (lambda ()
-          ((comparator-hash-function f64vector-comparator)
-           (f64vector (/ 1.0 0.0)))))))
+  (valid-vector-hash? f64vector-comparator (f64vector +inf.0)))
+(test-assert "f32vector-comparator hashes a negative infinity"
+  (valid-vector-hash? f32vector-comparator (f32vector -inf.0)))
+(test-assert "f64vector-comparator hashes a negative infinity"
+  (valid-vector-hash? f64vector-comparator (f64vector -inf.0)))
+(test-assert "c64vector-comparator hashes an infinite real component"
+  (valid-vector-hash? c64vector-comparator
+                      (c64vector (make-rectangular +inf.0 1.0))))
+(test-assert "c128vector-comparator hashes an infinite real component"
+  (valid-vector-hash? c128vector-comparator
+                      (c128vector (make-rectangular -inf.0 1.0))))
+(test-assert "c64vector-comparator hashes an infinite imaginary component"
+  (valid-vector-hash? c64vector-comparator
+                      (c64vector (make-rectangular 1.0 -inf.0))))
+(test-assert "c128vector-comparator hashes an infinite imaginary component"
+  (valid-vector-hash? c128vector-comparator
+                      (c128vector (make-rectangular 1.0 +inf.0))))
+
+(test-assert "f32vector-comparator hashes mixed infinities"
+  (valid-vector-hash? f32vector-comparator (f32vector +inf.0 -inf.0)))
+(test-assert "f64vector-comparator hashes mixed infinities"
+  (valid-vector-hash? f64vector-comparator (f64vector +inf.0 -inf.0)))
+(test-assert "c64vector-comparator hashes mixed infinities"
+  (valid-vector-hash? c64vector-comparator
+    (c64vector (make-rectangular +inf.0 -inf.0)
+               (make-rectangular -inf.0 +inf.0))))
+(test-assert "c128vector-comparator hashes mixed infinities"
+  (valid-vector-hash? c128vector-comparator
+    (c128vector (make-rectangular +inf.0 -inf.0)
+                (make-rectangular -inf.0 +inf.0))))
+(test-assert "f64vector-comparator hashes finite elements whose sum overflows"
+  (valid-vector-hash? f64vector-comparator (f64vector 1e308 1e308)))
+(test-assert "c128vector-comparator hashes finite elements whose sum overflows"
+  (valid-vector-hash? c128vector-comparator
+    (c128vector (make-rectangular 1e308 1e308)
+                (make-rectangular 1e308 1e308))))
+
+;; Numerically equal elements, including signed zeros and infinities, must
+;; still produce equal hashes when the vectors are separate allocations.
+(test-assert "equal f32vectors hash alike with signed zeros and infinities"
+  (equal-vector-hashes? f32vector-comparator
+    (f32vector 0.0 1.5 +inf.0 -inf.0)
+    (f32vector -0.0 1.5 +inf.0 -inf.0)))
+(test-assert "equal f64vectors hash alike with signed zeros and infinities"
+  (equal-vector-hashes? f64vector-comparator
+    (f64vector 0.0 1.5 +inf.0 -inf.0)
+    (f64vector -0.0 1.5 +inf.0 -inf.0)))
+(test-assert "equal c64vectors hash alike with signed zeros and infinities"
+  (equal-vector-hashes? c64vector-comparator
+    (c64vector (make-rectangular 0.0 -0.0) (make-rectangular +inf.0 -inf.0))
+    (c64vector (make-rectangular -0.0 0.0) (make-rectangular +inf.0 -inf.0))))
+(test-assert "equal c128vectors hash alike with signed zeros and infinities"
+  (equal-vector-hashes? c128vector-comparator
+    (c128vector (make-rectangular 0.0 -0.0) (make-rectangular +inf.0 -inf.0))
+    (c128vector (make-rectangular -0.0 0.0) (make-rectangular +inf.0 -inf.0))))
+
+;; SRFI 128 excludes NaNs from its comparator guarantees. Patina's existing
+;; number-hash also handles them; these rows preserve that extra robustness
+;; for the vector hash procedure without requiring equality/ordering of NaNs.
+(test-assert "f32vector-comparator hash accepts NaN as an extension"
+  (valid-vector-hash? f32vector-comparator (f32vector +nan.0)))
+(test-assert "f64vector-comparator hash accepts NaN as an extension"
+  (valid-vector-hash? f64vector-comparator (f64vector +nan.0)))
+(test-assert "c64vector-comparator hash accepts NaN components as an extension"
+  (and (valid-vector-hash? c64vector-comparator
+         (c64vector (make-rectangular +nan.0 1.0)))
+       (valid-vector-hash? c64vector-comparator
+         (c64vector (make-rectangular 1.0 +nan.0)))))
+(test-assert "c128vector-comparator hash accepts NaN components as an extension"
+  (and (valid-vector-hash? c128vector-comparator
+         (c128vector (make-rectangular +nan.0 1.0)))
+       (valid-vector-hash? c128vector-comparator
+         (c128vector (make-rectangular 1.0 +nan.0)))))
 
 (test-end)
