@@ -1,0 +1,24 @@
+# Correctness overlay for #429, issue #531: https://github.com/avalonalex/patina/issues/531
+# Reproduced with the pinned package on VM, tree-walker, Chibi and Gauche.
+# Maintained text/parsing smoke drivers assert the corrected behavior.
+# Reference namespaces and before/after measurements: docs/TEST_ORGANIZATION.md.
+--- a/chibi/sxml.scm
++++ b/chibi/sxml.scm
+@@ -120,7 +120,7 @@
+          ((pair? x)
+           (for-each
+            strip
+-           (if (and (pair? (cdr x)) (eq? '@ (cadr x))) (cddr x) (cdr x))))
++           (if (and (pair? (cdr x)) (pair? (cadr x)) (eq? '@ (car (cadr x)))) (cddr x) (cdr x))))
+          ((string? x)
+           (display x out)))))))
+ 
+@@ -143,7 +143,7 @@
+            ((symbol? tag)
+             (for-each
+              lp
+-             (if (and (pair? (cdr sxml)) (eq? '@ (cadr sxml)))
++             (if (and (pair? (cdr sxml)) (pair? (cadr sxml)) (eq? '@ (car (cadr sxml))))
+                  (cddr sxml)
+                  (cdr sxml)))
+             (if (memq tag '(p li br h1 h2 h3 h4 h5 h6))

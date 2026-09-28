@@ -149,20 +149,21 @@ const PINNED: &[(&str, u64)] = &[
     // nothing about its licence had to be established.
     ("lib/srfi/165.sld", 0x68089aac5cdd7be9),
     ("lib/srfi/165.scm", 0x18c17bf9dedb0cd3),
-    // SRFI 115, byte-identical to the tarball recorded in
+    // SRFI 115, pinned with documented deviations from the tarball recorded in
     // lib/srfi/PROVENANCE.md. Unlike its neighbours here — SRFI 159 above,
     // whose licence took three checks to establish, and SRFI 160 below, whose
     // (srfi 4) layer had none at all — nothing about its licence had to be
     // established: every file carries an explicit SPDX identifier.
     ("lib/srfi/115.sld", 0x57df407358c44250),
-    ("lib/srfi/115.scm", 0xf0378e3a7f03501f),
+    ("lib/srfi/115.scm", 0xfaa8aff09bcfe272),
     // Re-pinned 2026-09-19 (#431): one marked `PATINA DEVIATION`, the only
-    // edit in this tree. Its `cond-expand` chose the char-set library by
+    // declaration edit. Its `cond-expand` chose the char-set library by
     // availability where `115.sld` chooses by feature, so a reachable
     // `(chibi char-set)` stopped `(srfi 115)` loading. Recorded in
-    // lib/srfi/PROVENANCE.md; the other three files are still byte-identical.
+    // lib/srfi/PROVENANCE.md. #530 also restores omitted Unicode singletons
+    // in boundary.scm and selects LV in 115.scm; both hashes pin those repairs.
     ("lib/srfi/115/boundary.sld", 0xe66973e2f0c815de),
-    ("lib/srfi/115/boundary.scm", 0xa5f518ae15abaf21),
+    ("lib/srfi/115/boundary.scm", 0x2918f63b2bf9ca17),
     // SRFI 160, from the tarball recorded in lib/srfi/PROVENANCE.md.
     // `(srfi 4)` is deliberately absent: it is Patina-authored, not
     // third-party, because the SRFI's own contrib port carries no licence

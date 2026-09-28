@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-28T00:05:48Z
+**Measured:** 2026-09-28T00:31:45Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **89 passed smoke checks**, and **17 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **95 passed smoke checks**, and **11 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -73,15 +73,15 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-base64 | test | pass | in scope |
 | chibi-binary-record | smoke | pass | in scope |
 | chibi-bytevector | test | pass | in scope |
-| chibi-char-set | probe | pass | in scope |
-| chibi-char-set-boundary | probe | pass | in scope |
+| chibi-char-set | smoke | pass | in scope |
+| chibi-char-set-boundary | smoke | pass | in scope |
 | chibi-config | probe | pass | in scope |
 | chibi-crypto-md5 | test | pass | in scope |
 | chibi-crypto-rsa | test | pass | in scope |
 | chibi-crypto-sha2 | test | pass | in scope |
 | chibi-edit-distance | test | pass | in scope |
-| chibi-html-parser | probe | pass | in scope |
-| chibi-irregex | probe | pass | in scope |
+| chibi-html-parser | smoke | pass | in scope |
+| chibi-irregex | smoke | pass | in scope |
 | chibi-iset | test | pass | in scope |
 | chibi-locale | test | pass | in scope |
 | chibi-match | test | pass | in scope |
@@ -101,7 +101,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-show | test | pass | in scope |
 | chibi-snow-commands | probe | missing-library | ffi |
 | chibi-ssl | test | out-of-scope | ffi |
-| chibi-sxml | probe | pass | in scope |
+| chibi-sxml | smoke | pass | in scope |
 | chibi-tar | test | pass | in scope |
 | chibi-temp-file | probe | pass | in scope |
 | chibi-term-edit-line | probe | pass | in scope |
@@ -196,7 +196,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-tree | smoke | pass | in scope |
 | slib-tzfile | smoke | pass | in scope |
 | slib-uri | smoke | pass | in scope |
-| slib-xml-parse | probe | pass | in scope |
+| slib-xml-parse | smoke | pass | in scope |
 | srfi-106 | probe | out-of-scope | ffi |
 | srfi-11 | smoke | pass | in scope |
 | srfi-145 | smoke | pass | in scope |

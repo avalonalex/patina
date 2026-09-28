@@ -227,6 +227,17 @@ the broader #429 authorization):
   values after closing supplied ports. Nonlocal-exit cleanup semantics remain
   the upstream contract; the driver asserts normal-return closure.
 
+- [#530](https://github.com/avalonalex/patina/issues/530),
+  `chibi-char-set-boundary.patch` and `chibi-regexp.patch`: restore the Unicode
+  6.3 singleton entries omitted from generated boundary data and use the LV
+  set in the Hangul grapheme alternative. Existing portability/test guards
+  remain in these overlays. The same corrections are made in bundled SRFI
+  115, with provenance hashes and Scheme regressions updated.
+- [#531](https://github.com/avalonalex/patina/issues/531),
+  `chibi-html-parser.patch`, `chibi-sxml.patch` and `slib-xml-parse.patch`:
+  close optional-end-tag children at their parent's end, omit attributes from
+  text rendering, and propagate recursive duplicate-attribute failure.
+
 These patches deliberately correct upstream behavior. Before/after behavior
 is compared with the pinned libraries on Patina's two backends, Chibi and
 Gauche; host differences are recorded explicitly, and regression expectations
@@ -266,6 +277,9 @@ pass 107/140 before repair on both Patina backends and Chibi, and 105/140 on
 Gauche; all four pass 140/140 afterward. Gauche alone exposes the common
 helper's callback arity defect. Full staging details and scope limits are in
 `docs/TEST_ORGANIZATION.md`; #527 and #528 record the reproductions.
+The text/parsing batch passes 88/97 before and 97/97 after on all four hosts.
+Reference staging isolates transitive Chibi/SLIB names and record identities;
+`docs/TEST_ORGANIZATION.md` records the unchanged native support tables.
 These patches do not weaken an assertion or hide a Patina difference. The
 corpus now measures these packages with the documented corrections, not the
 pristine upstream behavior.
