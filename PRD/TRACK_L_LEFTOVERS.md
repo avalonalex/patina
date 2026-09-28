@@ -43,10 +43,12 @@ twice.
   that package's mode measured. #429's import-only gap is closed; descriptor,
   terminal and GUI integration limits remain explicit in the drivers and
   `docs/TEST_ORGANIZATION.md`.
-- **Larceny, R7RS:** 24 of 33 suites clean, 8512 of 8534 assertions, on both
-  backends. Of the 22 failures, 17 are not ours or are by decision, 3 wait on
+- **Larceny, R7RS (measured 2026-09-28):** 23 of 33 suites clean, 8507 of
+  8536 assertions, on both backends. Of the 29 failures, 24 are not ours or are by decision, 3 wait on
   #422 and 2 are ours (#418, #423). `./scripts/run_larceny_tests.sh`.
-- **Larceny, R6RS:** 15 of 16 suites, 4474 of 4474; the sixteenth is #424.
+- **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 4467 of
+  4474 assertions, on both backends. Seven `io/simple` port-predicate checks
+  differ by decision (#412); `base` still cannot load (#424).
 - **chibi's R7RS suite:** 1226 of 1226 on both backends, the routine gate.
 
 ## What is left
@@ -67,7 +69,6 @@ retire (archive §6, "Still open next door"). File it when it produces one.
 These are not defects. Each is a choice R7RS leaves open, where the references
 split or where matching them has a cost, and none should be taken in passing.
 
-- #412 — byte operations on textual file ports. Both references allow them; costs two Larceny assertions.
 - #421 — identifier delimiters: `(length '(a'b))` is 1 here and 2 in both references. The one reader widening that can change a working program.
 - #422 — whether `write` spells the symbol `@` as `|@|`. chibi and Gauche split.
 - #418 — `(sqrt -inf.0)`: an exact or an inexact zero real part. Tied to how the writer elides one.
@@ -79,4 +80,5 @@ split or where matching them has a cost, and none should be taken in passing.
 - **What ships:** `PRD/phase2/R7RS_LARGE_STATUS.md` is the bundling policy — R7RS-large libraries and SRFIs, never another implementation's namespace.
 - **What is excluded, and what is patched:** `compat/EXCLUSIONS.scm` (a closed set of reasons; an excluded package still runs) and `compat/patches/README.md` (portability patches, the authorized upstream correctness-patch workflow during #429, and why a Patina difference is never patched).
 - **Whose defect it is** is settled by measurement against chibi and Gauche, never by which of them accepts a program. `crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is where a difference is classified.
+- **Port policy (#412):** file and standard ports support both characters and bytes, as chibi and Gauche do; string ports remain textual-only, as in chibi.
 - **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; four remain, all listed above.

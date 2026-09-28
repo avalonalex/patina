@@ -8,10 +8,9 @@ use patina_core::TaggedValue;
 use patina_core::port::{FileHandle, WholeCharReader, utf8_prefix};
 use patina_frontend::{Parser, Reader};
 use patina_runtime::EvalError;
+use patina_runtime::PortData;
 use patina_runtime::SharedHeap;
-use patina_runtime::{Port, PortData};
-use std::io::{self, BufRead};
-use std::rc::Rc;
+use std::io::BufRead;
 
 /// (read [port]) - Read a Scheme expression from an input port
 /// Returns the parsed value, or eof-object if at end of input
@@ -64,15 +63,7 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     };
 
     if is_stdin {
-        return read_buffered(&port, heap, || {
-            let stdin = io::stdin();
-            let mut line = String::new();
-            match stdin.lock().read_line(&mut line) {
-                Ok(0) => Ok(None),
-                Ok(_) => Ok(Some(line)),
-                Err(e) => Err(EvalError::IOError(e.to_string())),
-            }
-        });
+        return port.with_stdin_reader(|input| read_stream(input, heap));
     }
 
     if is_file {
@@ -83,7 +74,7 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         let FileHandle::Input(input) = &mut file.handle else {
             return Err(EvalError::TypeError("not an input file port".to_string()));
         };
-        return read_file(input, heap);
+        return read_stream(input, heap);
     }
 
     let remaining = remaining.unwrap();
@@ -141,12 +132,15 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 }
 
 /// Feed raw lines to the incremental reader, decoding only their valid UTF-8
-/// prefix. Return every byte after the datum to the file reader, where both
-/// character and byte operations can reach it (#411).
+/// prefix. Return every byte after the datum to the shared stream reader,
+/// where character and byte operations can reach it (#411 files, #412 stdin).
 ///
 /// Keep the line-fed parser (#341): a large multiline datum is read once,
 /// and a long atom is not repeatedly re-lexed at arbitrary byte boundaries.
-fn read_file(input: &mut WholeCharReader, heap: &SharedHeap) -> Result<TaggedValue, EvalError> {
+fn read_stream<R: BufRead>(
+    input: &mut WholeCharReader<R>,
+    heap: &SharedHeap,
+) -> Result<TaggedValue, EvalError> {
     let mut reader = Reader::new(patina_frontend::dialect::allow_r6rs());
     let mut consumed_chars = 0;
     let mut bytes = Vec::new();
@@ -216,55 +210,6 @@ fn ran_out_of_text(e: &patina_frontend::ParseError) -> bool {
     }
 }
 
-/// Read one datum from a line-oriented source (stdin).
-///
-/// Lines are read until they hold a complete datum, each fed to a [`Reader`]
-/// as it arrives: the datum is read once, rather than the text being read
-/// again after every line, which cost time proportional to the square of a
-/// datum's length (#341).
-///
-/// Any text after the datum is stored in the port's pushback buffer so the
-/// next textual read — `read`, `read-char`, `read-line`, ... — continues from
-/// it instead of it being lost with the local buffer.
-fn read_buffered(
-    port: &Rc<Port>,
-    heap: &SharedHeap,
-    mut next_line: impl FnMut() -> Result<Option<String>, EvalError>,
-) -> Result<TaggedValue, EvalError> {
-    let mut text = port.take_pushback();
-    let mut reader = Reader::new(patina_frontend::dialect::allow_r6rs());
-    reader.feed(&text);
-
-    loop {
-        if let Some(datum) = reader.next_datum(heap, |parser| parser) {
-            let value = datum.map_err(|e| read_error(&e))?;
-            port.set_pushback(remainder_after(&text, reader.take_consumed()));
-            return Ok(value);
-        }
-
-        match next_line()? {
-            Some(line) => {
-                reader.feed(&line);
-                text.push_str(&line);
-            }
-            None => {
-                // Nothing more is coming, so what is left is read as it
-                // stands: a trailing datum is returned, and one that is
-                // unfinished is reported rather than waited for.
-                reader.no_more_text();
-                return match reader.next_datum(heap, |parser| parser) {
-                    Some(Ok(value)) => {
-                        port.set_pushback(remainder_after(&text, reader.take_consumed()));
-                        Ok(value)
-                    }
-                    Some(Err(e)) => Err(read_error(&e)),
-                    None => Ok(TaggedValue::EOF),
-                };
-            }
-        }
-    }
-}
-
 /// Render a parse error for `read`.
 ///
 /// `IncompleteDatum` drops its line and column on the way out: the parser
@@ -278,9 +223,4 @@ fn read_error(e: &patina_frontend::ParseError) -> EvalError {
         );
     }
     EvalError::InvalidSyntax(format!("read: {}", e))
-}
-
-/// Text after the first `consumed_chars` characters of `buffer`
-fn remainder_after(buffer: &str, consumed_chars: usize) -> String {
-    buffer.chars().skip(consumed_chars).collect()
 }

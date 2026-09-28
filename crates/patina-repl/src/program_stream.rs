@@ -155,6 +155,9 @@ where
                 }
             }
             if self.input.unread_version() != version {
+                if let Err(error) = self.input.resume_stdin_text() {
+                    return Some(self.input_failed(&error));
+                }
                 self.resync(&unread);
             }
         }

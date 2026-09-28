@@ -132,14 +132,13 @@ pub struct PipedLines {
 
 impl PipedLines {
     fn readline(&mut self) -> Result<String, ReadlineError> {
-        use std::io::BufRead;
-
         let mut form = String::new();
         loop {
-            let mut line = String::new();
-            if std::io::stdin().lock().read_line(&mut line)? == 0 {
+            // Scheme reads and peeks may have left bytes buffered on stdin.
+            // Read through the same port so a piped session sees them (#412).
+            let Some(mut line) = patina_runtime::Port::stdin().read_line()? else {
                 return Err(ReadlineError::Eof);
-            }
+            };
             let ended_with_newline = line.ends_with('\n');
             let mut ended_with_return = false;
             if ended_with_newline {

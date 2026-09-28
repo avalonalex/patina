@@ -177,12 +177,59 @@ fn a_read_inside_the_program_continues_right_after_its_form() {
             "(import (scheme base) (scheme write))\n(begin (read-char) (write (peek-char)))\n(display 42)\n",
             "#\\(42",
         ),
+        // #412: bytes can consume part of a UTF-8 character from the source
+        // reader's unread text, and execution resumes after those bytes.
+        (
+            "(import (scheme base) (scheme write))\n(begin (write (read-u8)) (write (read-u8)))λ(display 42)\n",
+            "20618742",
+        ),
+        // The datum reader leaves the rest of the line in shared byte
+        // lookahead; consuming one byte must not swallow the next form.
+        (
+            "(import (scheme base) (scheme read) (scheme write))\n(begin (write (read)) (write (read-u8)))\nx (display 42)\n",
+            "x3242",
+        ),
     ] {
         for backend in BOTH_BACKENDS {
             let (stdout, stderr, ok) = run_with_deadline(dir.path(), backend, Some(program));
             assert!(ok, "{backend:?} {program:?}: {stderr}");
             assert_eq!(stdout, expected, "{backend:?} {program:?}");
         }
+    }
+}
+
+#[test]
+fn reading_bytes_preserves_the_next_forms_source_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let line = "(begin (read-u8) (read-u8))λ(no-such-procedure)";
+    let program = format!("(import (scheme base))\n{line}\n");
+    for backend in BOTH_BACKENDS {
+        let (_, stderr, ok) = run_with_deadline(dir.path(), backend, Some(&program));
+        assert!(!ok, "{backend:?}");
+        assert!(
+            stderr.contains("no-such-procedure"),
+            "{backend:?}: {stderr}"
+        );
+        assert!(stderr.contains("<stdin>:2:29"), "{backend:?}: {stderr}");
+        assert!(stderr.contains(line), "{backend:?}: {stderr}");
+    }
+}
+
+#[test]
+fn a_piped_session_resumes_from_lookahead_left_by_its_own_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = "(import (scheme base) (scheme read) (scheme write))\n\
+                   (begin (read) (read-u8))\n\
+                   ignored (display \"continued-from-lookahead\")\n";
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("-i");
+        let (stdout, stderr, ok) = run_with_deadline(dir.path(), &args, Some(program));
+        assert!(ok, "{backend:?}: {stderr}");
+        assert!(
+            stdout.contains("continued-from-lookahead"),
+            "{backend:?}: {stdout}"
+        );
     }
 }
 

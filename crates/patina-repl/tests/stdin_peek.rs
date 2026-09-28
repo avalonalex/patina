@@ -2,6 +2,7 @@
 //! Real stdin is process-wide, so these run Scheme fixtures in child processes
 //! on both backends. Redirected files make the 8 KiB boundary reproducible;
 //! pipes also exercise the same operations with source-dependent read sizes.
+//! #412 extends that shared position to byte operations and datum lookahead.
 
 mod common;
 
@@ -81,4 +82,78 @@ fn stdin_peek_leaves_text_for_string_line_and_datum_reads() {
         input.as_bytes(),
         "(#\\λ \"λab\" #\\€ \"€cd\" #\\( (1 2) #\\z #\\z #t)\n",
     );
+}
+
+#[test]
+fn stdin_datum_character_and_byte_reads_share_one_position() {
+    check_input(
+        include_str!("fixtures/stdin-mixed-byte-reads.scm"),
+        "x λyz\nrest".as_bytes(),
+        "(x #t 32 32 #u8() 32 #u8(206) 2 #u8(0 187 121 0) #\\z #\\z \"\" rest #t)\n",
+    );
+}
+
+#[test]
+fn stdin_datum_read_leaves_undecodable_bytes_for_byte_reads() {
+    let program = r#"
+        (import (scheme base) (scheme read) (scheme write))
+        (let* ((datum (read)) (peek (peek-u8)) (bytes (read-bytevector 99))
+               (end (eof-object? (read))))
+          (write (list datum peek bytes end)))
+        "#;
+    for (input, expected) in [
+        (
+            b"x \xff\nrest".as_slice(),
+            "(x 32 #u8(32 255 10 114 101 115 116) #t)",
+        ),
+        (b"(1)\xff", "((1) 255 #u8(255) #t)"),
+        (b"\"a\"\xff", "(\"a\" 255 #u8(255) #t)"),
+        (b"|a|\xff", "(a 255 #u8(255) #t)"),
+    ] {
+        check_input(program, input, expected);
+    }
+}
+
+#[test]
+fn stdin_peek_across_a_buffer_boundary_leaves_bytes_for_binary_reads() {
+    check_input(
+        r#"
+        (import (scheme base) (scheme write))
+        (do ((i 0 (+ i 1))) ((= i 8191)) (read-char))
+        (define target (bytevector 0 0))
+        (let* ((ch (peek-char)) (peek (peek-u8)) (lead (read-bytevector 1))
+               (count (read-bytevector! target)) (next (read-char))
+               (end (eof-object? (read-u8))))
+          (write (list (char->integer ch) peek lead count target next end)))
+        "#,
+        format!("{}λzw", "a".repeat(8191)).as_bytes(),
+        "(955 206 #u8(206) 2 #u8(187 122) #\\w #t)",
+    );
+}
+
+#[test]
+fn standard_output_and_error_accept_mixed_byte_and_text_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("output.scm"),
+        r#"
+        (import (scheme base) (scheme write))
+        (write-u8 65)
+        (write-char #\λ)
+        (write-bytevector (bytevector 66))
+        (write-u8 67 (current-error-port))
+        (write-bytevector (bytevector 68) (current-error-port))
+        (close-port (current-error-port))
+        (write (binary-port? (current-error-port)))
+    "#,
+    )
+    .unwrap();
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("output.scm");
+        let (stdout, stderr, status) = run_with_deadline_bytes(dir.path(), &args, b"");
+        assert!(status.success(), "{backend:?}: {stderr}");
+        assert_eq!(stdout, "AλB#t", "{backend:?}");
+        assert_eq!(stderr, "CD", "{backend:?}");
+    }
 }

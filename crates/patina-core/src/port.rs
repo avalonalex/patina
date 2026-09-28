@@ -17,8 +17,11 @@ use std::rc::{Rc, Weak};
 /// A Scheme port for I/O operations
 #[derive(Debug, Clone)]
 pub struct Port {
-    /// Textual or binary
+    /// The mode used to open the port (not disjoint Scheme port predicates).
     pub kind: PortKind,
+    /// Byte operations are supported by every backing store except strings.
+    /// Kept after closing, like the direction and opening mode.
+    supports_binary: bool,
     /// Input or output
     pub direction: PortDirection,
     /// The actual port data (shared, mutable)
@@ -94,6 +97,10 @@ thread_local! {
     /// and the program's own reads take their text from the one stream.
     static STDIN_UNREAD: Rc<RefCell<Unread>> = Rc::new(RefCell::new(Unread::default()));
 
+    /// Raw lookahead shared by all stdin ports. Keep the consumed offset too,
+    /// so reading a long buffered line byte by byte does not copy its tail.
+    static STDIN_CARRY: RefCell<(Vec<u8>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+
     /// The file output ports opened on this thread, so that what a program left
     /// in them can be written out when it ends ([`flush_open_output_files`]).
     static OUTPUT_FILES: RefCell<OutputFiles> = const {
@@ -158,7 +165,7 @@ pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
     failures
 }
 
-/// Whether a port operates on characters (textual) or bytes (binary)
+/// The opening mode, independent of whether the port supports both kinds of I/O.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortKind {
     Textual,
@@ -267,7 +274,7 @@ fn utf8_char_len(first: u8) -> usize {
     }
 }
 
-/// A file port's reader, which can show the whole of the next character
+/// A stream reader, which can show the whole of the next character
 /// without consuming any of it, wherever the chunks under it end.
 ///
 /// `peek-char` has to look at a whole character without consuming any of it,
@@ -301,9 +308,10 @@ fn utf8_char_len(first: u8) -> usize {
 ///
 /// It is a concrete type in [`FileHandle::Input`], not one more boxed
 /// `ReadPort`, so that a file input port cannot be built without it and
-/// `peek-char` need not take it on trust.
-pub struct WholeCharReader {
-    inner: Box<dyn ReadPort>,
+/// `peek-char` need not take it on trust. Stdin uses the same reader over its
+/// borrowed lock, with lookahead shared between operations (#412).
+pub struct WholeCharReader<R = Box<dyn ReadPort>> {
+    inner: R,
     /// A character that straddled a chunk, or the unused tail of a line the
     /// datum reader returned. Empty means every call goes to `inner`.
     carry: Vec<u8>,
@@ -311,8 +319,8 @@ pub struct WholeCharReader {
     carry_pos: usize,
 }
 
-impl WholeCharReader {
-    pub fn new(inner: Box<dyn ReadPort>) -> Self {
+impl<R: BufRead> WholeCharReader<R> {
+    pub fn new(inner: R) -> Self {
         WholeCharReader {
             inner,
             carry: Vec::new(),
@@ -389,7 +397,7 @@ impl WholeCharReader {
     }
 }
 
-impl Read for WholeCharReader {
+impl<R: BufRead> Read for WholeCharReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.carried().is_empty() {
             return self.inner.read(buf);
@@ -403,7 +411,7 @@ impl Read for WholeCharReader {
     }
 }
 
-impl BufRead for WholeCharReader {
+impl<R: BufRead> BufRead for WholeCharReader<R> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         if self.carried().is_empty() {
             return self.inner.fill_buf();
@@ -422,6 +430,22 @@ impl BufRead for WholeCharReader {
             self.carry_pos = 0;
         }
     }
+}
+
+/// Borrow Rust's existing stdin buffer rather than adding a second buffer
+/// that could hide future REPL input. Only our lookahead survives the lock.
+fn with_stdin_reader<T>(f: impl FnOnce(&mut WholeCharReader<io::StdinLock<'_>>) -> T) -> T {
+    STDIN_CARRY.with(|carry| {
+        let (bytes, position) = std::mem::take(&mut *carry.borrow_mut());
+        let mut reader = WholeCharReader {
+            inner: io::stdin().lock(),
+            carry: bytes,
+            carry_pos: position,
+        };
+        let result = f(&mut reader);
+        *carry.borrow_mut() = (reader.carry, reader.carry_pos);
+        result
+    })
 }
 
 /// Fill `target` from `reader`, stopping short only where the source ends.
@@ -473,6 +497,7 @@ impl Port {
     fn new_port(kind: PortKind, direction: PortDirection, data: PortData) -> Rc<Port> {
         Rc::new(Port {
             kind,
+            supports_binary: !matches!(data, PortData::String(_)),
             direction,
             data: Rc::new(RefCell::new(data)),
             pushback: Rc::new(RefCell::new(Unread::default())),
@@ -532,6 +557,7 @@ impl Port {
     pub fn stdin() -> Rc<Port> {
         Rc::new(Port {
             kind: PortKind::Textual,
+            supports_binary: true,
             direction: PortDirection::Input,
             data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
             pushback: STDIN_UNREAD.with(Rc::clone),
@@ -554,6 +580,44 @@ impl Port {
             PortDirection::Output,
             PortData::Stdio(StdioKind::Stderr),
         )
+    }
+
+    /// Read from stdin, including text the program reader left after its
+    /// current form. The caller has checked that this is an open stdin port.
+    /// Moving that text into the byte buffer makes partial UTF-8 byte reads
+    /// safe and keeps datum, character and byte reads at one position (#412).
+    pub fn with_stdin_reader<T>(
+        &self,
+        f: impl FnOnce(&mut WholeCharReader<io::StdinLock<'_>>) -> T,
+    ) -> T {
+        with_stdin_reader(|reader| {
+            // Taking even an empty buffer changes its version: a datum read
+            // can leave lookahead from a later line, which the program reader
+            // must see when it resumes after this form.
+            reader.unread(self.take_pushback().into_bytes());
+            f(reader)
+        })
+    }
+
+    /// Resume reading program text after Scheme code has used stdin as bytes.
+    /// This conversion happens once per executed form, never per byte read.
+    /// It preserves the program reader's source positions and its cached
+    /// tokens when the unread bytes are the tail of a line it already saw.
+    pub fn resume_stdin_text(&self) -> io::Result<()> {
+        if matches!(*self.data.borrow(), PortData::Stdio(StdioKind::Stdin)) {
+            STDIN_CARRY.with(|carry| -> io::Result<()> {
+                let mut carry = carry.borrow_mut();
+                let text = std::str::from_utf8(&carry.0[carry.1..])
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                if !text.is_empty() {
+                    self.pushback.borrow_mut().push_str(text);
+                    carry.0.clear();
+                    carry.1 = 0;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     /// Open a file for reading via the given filesystem.
@@ -682,16 +746,15 @@ impl Port {
     ///
     /// Not what `textual-port?` answers: the textual operations work on a
     /// binary port too, in both directions, so to Scheme every port is
-    /// textual (see `textual_port_p`). The kind still decides what
-    /// [`is_binary`](Self::is_binary) says, and so where the byte operations
-    /// are refused.
+    /// textual (see `textual_port_p`). Byte support depends on the backing
+    /// store instead: only string ports refuse byte operations (#412).
     pub fn is_textual(&self) -> bool {
         self.kind == PortKind::Textual
     }
 
-    /// Check if this is a binary port
+    /// Whether the backing store supports bytes, including after closing.
     pub fn is_binary(&self) -> bool {
-        self.kind == PortKind::Binary
+        self.supports_binary
     }
 
     /// Close the port. For file output ports, finalizes (flushes) the writer first.
@@ -741,25 +804,15 @@ impl Port {
                     Ok(None)
                 }
             }
-            PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
-                let mut buf = [0u8; 4]; // Max UTF-8 char size
-                match handle.read(&mut buf[..1]) {
-                    Ok(0) => Ok(None), // EOF
-                    Ok(_) => {
-                        // Try to read a complete UTF-8 character
-                        let char_len = utf8_char_len(buf[0]);
-                        if char_len > 1 {
-                            handle.read_exact(&mut buf[1..char_len])?;
-                        }
-                        let s = std::str::from_utf8(&buf[..char_len])
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                        Ok(s.chars().next())
-                    }
-                    Err(e) => Err(e),
+            PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
+                let mut buf = [0u8; 4];
+                if reader.read(&mut buf[..1])? == 0 {
+                    return Ok(None);
                 }
-            }
+                let len = utf8_char_len(buf[0]);
+                reader.read_exact(&mut buf[1..len])?;
+                decode_utf8_at(&buf[..len], 0).map(|ch| ch.map(|(ch, _)| ch))
+            }),
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
@@ -824,16 +877,13 @@ impl Port {
                 b.position += 1;
                 Ok(Some(byte))
             }
-            PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
+            PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
                 let mut buf = [0u8; 1];
-                match handle.read(&mut buf) {
-                    Ok(0) => Ok(None), // EOF
-                    Ok(_) => Ok(Some(buf[0])),
-                    Err(e) => Err(e),
+                match reader.read(&mut buf)? {
+                    0 => Ok(None),
+                    _ => Ok(Some(buf[0])),
                 }
-            }
+            }),
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
@@ -882,13 +932,7 @@ impl Port {
                 Ok(Some(b.content[b.position]))
             }
             PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
-                let buf = handle.fill_buf()?;
-                if buf.is_empty() {
-                    return Ok(None);
-                }
-                Ok(Some(buf[0]))
+                self.with_stdin_reader(|reader| Ok(reader.fill_buf()?.first().copied()))
             }
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1033,22 +1077,9 @@ impl Port {
                 let remaining = &s.content[s.position..];
                 Ok(remaining.chars().next())
             }
-            PortData::Stdio(StdioKind::Stdin) => {
-                // A stdin chunk can end inside a character, or contain invalid
-                // bytes after it (#416). Read just one complete character and
-                // leave it in the unread text shared by every stdin port.
-                // All textual reads see it there; stdin's byte operations are
-                // rejected by the Scheme primitives (the policy in #412).
-                drop(data); // read_char borrows the port again.
-                let ch = self.read_char()?;
-                if let Some(ch) = ch {
-                    let mut bytes = [0; 4];
-                    self.pushback
-                        .borrow_mut()
-                        .push_str(ch.encode_utf8(&mut bytes));
-                }
-                Ok(ch)
-            }
+            PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
+                decode_utf8_at(reader.fill_char()?, 0).map(|ch| ch.map(|(ch, _)| ch))
+            }),
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
@@ -1294,19 +1325,13 @@ impl Port {
                 b.position += to_read;
                 Ok(Some(result))
             }
-            PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
-                let mut buf = vec![0u8; k];
-                match handle.read(&mut buf) {
-                    Ok(0) => Ok(None), // EOF
-                    Ok(n) => {
-                        buf.truncate(n);
-                        Ok(Some(buf))
-                    }
-                    Err(e) => Err(e),
+            PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
+                let mut buf = Vec::new();
+                match reader.take(k as u64).read_to_end(&mut buf)? {
+                    0 => Ok(None),
+                    _ => Ok(Some(buf)),
                 }
-            }
+            }),
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
@@ -1374,13 +1399,10 @@ impl Port {
                 Ok(Some(to_read))
             }
             PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
-                let mut handle = stdin.lock();
-                match handle.read(target) {
-                    Ok(0) => Ok(None), // EOF
-                    Ok(n) => Ok(Some(n)),
-                    Err(e) => Err(e),
-                }
+                self.with_stdin_reader(|reader| match read_until_full_or_eof(reader, target)? {
+                    0 => Ok(None),
+                    n => Ok(Some(n)),
+                })
             }
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1509,15 +1531,13 @@ impl Port {
                     Ok(Some(line))
                 }
             }
-            PortData::Stdio(StdioKind::Stdin) => {
-                let stdin = io::stdin();
+            PortData::Stdio(StdioKind::Stdin) => with_stdin_reader(|reader| {
                 let mut line = String::new();
-                match stdin.lock().read_line(&mut line) {
-                    Ok(0) => Ok(None), // EOF
-                    Ok(_) => Ok(Some(line)),
-                    Err(e) => Err(e),
+                match reader.read_line(&mut line)? {
+                    0 => Ok(None),
+                    _ => Ok(Some(line)),
                 }
-            }
+            }),
             PortData::Stdio(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
@@ -1734,6 +1754,37 @@ mod tests {
         assert_eq!(program.read_char().unwrap(), Some('('));
         assert_eq!(reader.unread_text(), "a) (b)\n");
         assert_eq!(program.take_pushback(), "a) (b)\n");
+    }
+
+    #[test]
+    fn stdin_ports_share_bytes_left_by_the_program_reader() {
+        let reader = Port::stdin();
+        let program = Port::stdin();
+        reader.set_pushback("λz".to_string());
+        let version = reader.unread_version();
+        assert_eq!(program.peek_u8().unwrap(), Some(0xCE));
+        assert_ne!(reader.unread_version(), version);
+        assert_eq!(reader.read_u8().unwrap(), Some(0xCE));
+        assert_eq!(program.read_u8().unwrap(), Some(0xBB));
+        assert_eq!(reader.read_char().unwrap(), Some('z'));
+    }
+
+    #[test]
+    fn closed_standard_ports_keep_their_binary_capability() {
+        for port in [Port::stdin(), Port::stdout(), Port::stderr()] {
+            assert!(port.is_binary());
+            port.close();
+            assert!(port.is_binary());
+            assert!(!port.is_open());
+        }
+        for port in [
+            Port::new_input_string(String::new()),
+            Port::new_output_string(),
+        ] {
+            assert!(!port.is_binary());
+            port.close();
+            assert!(!port.is_binary());
+        }
     }
 
     /// A reader that pulls lines onto the unread text and consumes it from
@@ -2229,13 +2280,18 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_operations_on_textual_port_fail() {
+    fn test_binary_operations_on_string_port_fail() {
         let port = Port::new_input_string("hello".to_string());
 
-        // Binary operations should fail on textual port
+        // String ports remain textual-only; file and standard ports do not.
         assert!(port.read_u8().is_err());
         assert!(port.peek_u8().is_err());
         assert!(port.u8_ready().is_err());
+        assert!(port.read_bytevector(1).is_err());
+        assert!(port.read_bytevector_into(&mut [0], 0, 1).is_err());
+        let output = Port::new_output_string();
+        assert!(output.write_u8(65).is_err());
+        assert!(output.write_bytevector(b"A").is_err());
     }
 
     #[test]

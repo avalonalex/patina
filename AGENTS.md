@@ -126,7 +126,7 @@ issues and the archive before filing**, for the same reason.
 **Active planning docs:**
 - `PRD/TRACK_L_LEFTOVERS.md` — **what is left of Track L** (third-party library
   compatibility): where the track stopped, how to read the corpus and Larceny
-  numbers, and the open work as a list of GitHub issues, with the five
+  numbers, and the open work as a list of GitHub issues, with the remaining
   decisions that wait on the owner. The working record it replaced is
   `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` — history, not to be updated.
 - `scheme_tests/reports/larceny_triage.md` — **the open defect queue.** Start here

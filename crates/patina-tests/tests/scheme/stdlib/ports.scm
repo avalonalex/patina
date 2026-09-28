@@ -19,8 +19,10 @@
 ;; extension it is. Gauche's `read-line` takes a different second argument.
 ;; The binary-port rows need no scoping: chibi and Gauche both answer them as
 ;; written. The other direction — bytes on a *string* port — is where the two
-;; part ways (chibi refuses, Gauche allows), Patina refuses with chibi, and
-;; nothing here asserts it.
+;; part ways (chibi refuses, Gauche allows), and Patina refuses with chibi.
+;; Since #412, byte operations also work on textual files and standard ports.
+;; The file and piped-stdin operations are tested by Rust fixtures; the
+;; standard-port predicates below are portable oracle rows.
 ;;
 ;; Every row that reads more than once sequences its reads with `let*`. The
 ;; Rust originals wrote them as arguments to `list`, whose evaluation order is
@@ -196,6 +198,10 @@
 (test-equal "a string port is textual" '(#t #t)
   (list (textual-port? (open-input-string "x"))
         (textual-port? (open-output-string))))
+
+(test-equal "standard ports support both text and bytes" '(#t #t #t #t #t #t)
+  (let ((ports (list (current-input-port) (current-output-port) (current-error-port))))
+    (append (map textual-port? ports) (map binary-port? ports))))
 
 ;; ─── The standard ports are parameter objects (R7RS §6.13.1) ───────────────
 

@@ -51,6 +51,15 @@ impl Drop for TempFile {
 // File ports
 // =============================================================================
 
+// #412: both opening procedures use the same underlying byte stream.
+fn assert_both_file_modes(program: &str, expected: &str) {
+    assert_program_eval_to(program, expected);
+    assert_program_eval_to(
+        &program.replace("open-binary-input-file", "open-input-file"),
+        expected,
+    );
+}
+
 /// #411: byte and character operations must share the position left by
 /// `read`. File rows live here because the Scheme suites cannot create files.
 /// Chibi 0.12 and Gauche 0.9.15 agree on these results (2026-09-26).
@@ -78,7 +87,7 @@ fn test_file_read_leaves_the_remainder_for_every_byte_operation() {
         "#,
         file.path()
     );
-    assert_program_eval_to(
+    assert_both_file_modes(
         &code,
         r#"(x #t 32 32 #u8() 32 #u8(206) 2 #u8(0 187 121 0) #\z #\z "" rest #t)"#,
     );
@@ -95,7 +104,7 @@ fn test_file_read_leaves_the_remainder_for_every_byte_operation() {
         "#,
         file.path()
     );
-    assert_program_eval_to(&code, "(x #t #u8(32) #t)");
+    assert_both_file_modes(&code, "(x #t #u8(32) #t)");
 }
 
 /// A finished datum does not require the rest of its line to be UTF-8.
@@ -126,7 +135,7 @@ fn test_file_read_leaves_undecodable_bytes_after_a_finished_datum() {
             "#,
             file.path()
         );
-        assert_program_eval_to(&code, expected);
+        assert_both_file_modes(&code, expected);
     }
 }
 
@@ -164,7 +173,7 @@ fn test_file_read_preserves_bytes_across_buffer_boundaries() {
             "#,
             file.path()
         );
-        assert_program_eval_to(&code, "(#t 32 255 #u8(255 122))");
+        assert_both_file_modes(&code, "(#t 32 255 #u8(255 122))");
     }
 }
 

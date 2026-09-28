@@ -132,6 +132,11 @@ fn test_peek_char_at_a_buffer_boundary_leaves_the_bytes_for_the_byte_operations(
         &code,
         "((955 206 187) (955 955 206) (955 #u8(206 187 206)) (955 905))",
     );
+    // #412: the opening procedure does not change the shared byte position.
+    assert_program_eval_to(
+        &code.replace("open-binary-input-file", "open-input-file"),
+        "((955 206 187) (955 955 206) (955 #u8(206 187 206)) (955 905))",
+    );
 }
 
 /// The same defect from the other side: the first character is fine and a
@@ -463,7 +468,39 @@ fn test_file_port_predicates() {
         "#,
         path = f.path()
     );
-    assert_program_eval_to(&code, "(#t #t #f #t #f #t)");
+    assert_program_eval_to(&code, "(#t #t #f #t #t #t)");
+}
+
+/// #412: a textual file accepts mixed byte/text writes, including arbitrary
+/// bytes, and retains its kind predicates after closing. Both references
+/// permit this; string ports deliberately keep chibi's textual-only policy.
+#[test]
+fn test_textual_file_ports_accept_bytes_and_preserve_predicates_when_closed() {
+    let f = TempFile::new("textual_bytes");
+    let code = format!(
+        r#"
+        (import (scheme base) (scheme file))
+        (define out (open-output-file "{path}"))
+        (parameterize ((current-output-port out))
+          (write-u8 65)
+          (write-string "λ")
+          (write-bytevector (bytevector 66 255 0)))
+        (close-port out)
+        (define in (open-input-file "{path}"))
+        (define bytes (parameterize ((current-input-port in)) (read-bytevector 99)))
+        (close-port in)
+        (list bytes (binary-port? in) (binary-port? out)
+              (textual-port? in) (textual-port? out)
+              (input-port-open? in) (output-port-open? out)
+              (guard (e (else 'closed)) (read-u8 in))
+              (guard (e (else 'closed)) (write-u8 1 out)))
+        "#,
+        path = f.path()
+    );
+    assert_program_eval_to(
+        &code,
+        "(#u8(65 206 187 66 255 0) #t #t #t #t #f #f closed closed)",
+    );
 }
 
 #[test]
