@@ -1877,7 +1877,14 @@ impl Heap {
             Ok(self.alloc_real(x.sqrt()))
         } else {
             let abs_sqrt = (-x).sqrt();
-            let rv = self.alloc_real(0.0);
+            // A negative real's principal root has a known exact zero real
+            // component, as Chibi returns and imaginary literals read (#418).
+            // NaN also reaches this arm, but has no known exact component.
+            let rv = if x < 0.0 {
+                TaggedValue::fixnum(0)
+            } else {
+                self.alloc_real(0.0)
+            };
             let iv = self.alloc_real(abs_sqrt);
             Ok(self.alloc_complex(rv, iv))
         }
