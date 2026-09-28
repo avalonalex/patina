@@ -858,31 +858,21 @@ impl Lexer {
 
     /// Where a token ends.
     ///
-    /// Narrower than R7RS 7.1.1's <delimiter>, which also lists `|`, and
-    /// narrower than what Gauche and chibi stop at (`'`, `` ` ``, `,`). So
-    /// `a'b` and `a,b` still read as one symbol here and as two tokens there.
-    /// That divergence is deliberately left alone — widening this set can only
-    /// *split* tokens that used to be whole, which is the one kind of lexer
-    /// change that can alter an existing program's meaning, so it wants its
-    /// own decision and its own cross-check.
+    /// Include R7RS's vertical bar and the quote prefixes, as Gauche does
+    /// (#421). Chibi 0.12 agrees on apostrophes and commas after identifiers,
+    /// but keeps backticks and bars in the name; its other token readers also
+    /// have narrower boundaries. The Scheme delimiter suite records the split.
+    /// Names containing these characters can still be written inside `|...|`.
     ///
-    /// **`[` and `]` are the one such widening taken so far**, forced by
-    /// reading them as list delimiters: without it `[x 1]` ends at the `1]`,
-    /// which the number reader then rejects. It is safe in the direction the
-    /// warning above is about, because a bracket is not an `<initial>` or
-    /// `<subsequent>` in R7RS 7.1.1 — no conforming identifier contains one,
-    /// so nothing conforming is being split. Cross-checked against the whole
-    /// `compat/vendor/` corpus and `lib/`, where every occurrence outside a
-    /// string or comment is `#\[` or `#\]`, and those are unaffected:
-    /// `read_character` takes a delimiter first character as a complete
-    /// one-character literal, which is already how `#\(` is read. A symbol
-    /// that genuinely needs a bracket can still be written `|a[b]|`.
-    ///
-    /// What this function is for is making that decision live in one place:
-    /// the set was written out seven times before, which is why the question
-    /// had no home.
+    /// Brackets end tokens even in R7RS mode so the next token reports the
+    /// reserved-character error; in R6RS mode they delimit lists. Keep all
+    /// token scanners on this shared set, including the incremental reader.
     pub(crate) fn is_delimiter(ch: char) -> bool {
-        ch.is_whitespace() || matches!(ch, '(' | ')' | '[' | ']' | '"' | ';')
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '(' | ')' | '[' | ']' | '"' | ';' | '|' | '\'' | '`' | ','
+            )
     }
 
     fn is_delimiter_next(&self) -> bool {
@@ -1313,7 +1303,10 @@ impl Lexer {
         let start = self.position;
         let first = self.current_char();
         self.advance();
-        if !Self::is_delimiter(first) {
+        // The quote prefixes end preceding tokens, but as character literals
+        // they still need a delimiter after them: #\'a is not #\' then a.
+        // Both Chibi and Gauche reject it (#421).
+        if !Self::is_delimiter(first) || matches!(first, '\'' | '`' | ',') {
             while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
                 self.advance();
             }

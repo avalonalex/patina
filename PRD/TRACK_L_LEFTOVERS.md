@@ -69,7 +69,6 @@ retire (archive §6, "Still open next door"). File it when it produces one.
 These are not defects. Each is a choice R7RS leaves open, where the references
 split or where matching them has a cost, and none should be taken in passing.
 
-- #421 — identifier delimiters: `(length '(a'b))` is 1 here and 2 in both references. The one reader widening that can change a working program.
 - #422 — whether `write` spells the symbol `@` as `|@|`. chibi and Gauche split.
 - #418 — `(sqrt -inf.0)`: an exact or an inexact zero real part. Tied to how the writer elides one.
 - #424 — whether `(r6rs base)` gets R6RS's splicing `let-syntax`. It is all that blocks ~2000 assertions of the R6RS `base` suite.
@@ -81,4 +80,5 @@ split or where matching them has a cost, and none should be taken in passing.
 - **What is excluded, and what is patched:** `compat/EXCLUSIONS.scm` (a closed set of reasons; an excluded package still runs) and `compat/patches/README.md` (portability patches, the authorized upstream correctness-patch workflow during #429, and why a Patina difference is never patched).
 - **Whose defect it is** is settled by measurement against chibi and Gauche, never by which of them accepts a program. `crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is where a difference is classified.
 - **Port policy (#412):** file and standard ports support both characters and bytes, as chibi and Gauche do; string ports remain textual-only, as in chibi.
+- **Reader boundaries (#421):** quote prefixes and vertical bars end unescaped tokens, following Gauche; Chibi 0.12's narrower boundaries are recorded in the oracle divergence register. Names containing those delimiters use vertical bars.
 - **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; four remain, all listed above.
