@@ -1,8 +1,8 @@
 # Provenance of `lib/r6rs/`
 
 William D Clinger's R7RS ports of the R6RS libraries, from snow-fort. The
-bundled files are **byte-identical to the vendored tarballs**, with one
-documented exception noted below, so there is no per-file note to carry — the
+bundled files are **byte-identical to the vendored tarballs**, with two
+documented exceptions noted below, so there is no per-file note to carry — the
 model is `lib/srfi/PROVENANCE.md`.
 
 `lib/rnrs/` sits on top of these: one `.sld` per library that imports the
@@ -30,7 +30,7 @@ close a cycle. Defining the marker is upstream's own way of saying "what you
 can see is not a host implementation", and it sends every guard to the
 portable R7RS branch — which is why the rest of the tree needs no edit.
 
-## The one deviation
+## Documented deviations
 
 `hashtables.sld`'s first `cond-expand` guards on `(library (rnrs hashtables))`
 **alone**, where the two others in the same file, and every guard in every
@@ -40,6 +40,16 @@ neighbours are never defined, so every non-fixnum key fails at the *caller*
 with `unbound variable: inexact-hash`. Measured: without the shim a float,
 rational and symbol key all work; with it, none do. The edit restores the
 missing conjunct and nothing else, and is marked `PATINA DEVIATION` in place.
+
+`base.sld` imports `let-syntax` and `letrec-syntax` from Patina's `(srfi 188)`
+under their R6RS names instead of re-exporting the R7RS forms (#424). Their
+bodies splice definitions into the enclosing definition context and may be
+empty; ordinary `(scheme base)` forms retain their separate bodies. This is
+the same frontend implementation exposed as `splicing-let-syntax` and
+`splicing-letrec-syntax`, including SRFI 188's extension allowing a mixture
+of definitions and expressions. R6RS §11.18 is stricter about that mixture;
+the facade deliberately accepts the extension. The import change is marked
+`PATINA DEVIATION`; `base.body.scm` remains upstream's original file.
 
 ## Files
 

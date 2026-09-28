@@ -1875,6 +1875,25 @@ impl Environment {
         Ok(chosen.map(|index| candidates.swap_remove(index).0))
     }
 
+    /// Locate a scoped macro's binding for a transformer that escapes its
+    /// local syntax region (#424). Unlike a runtime lexical variable, this
+    /// binding lives in the expansion environment and can be shared by alias.
+    pub fn scoped_macro_binding(
+        self: &Rc<Self>,
+        name: &str,
+        scopes: &ScopeSet,
+    ) -> Option<(Rc<Self>, ScopeSet)> {
+        let identity = self.scoped_binding_of(name, scopes).ok()??;
+        let mut home = self.clone();
+        loop {
+            if let Some(value) = home.scoped_definition_value(name, &identity) {
+                let is_macro = home.heap.borrow().get_macro(value).is_some();
+                return is_macro.then_some((home, identity));
+            }
+            home = home.parent.clone()?;
+        }
+    }
+
     /// Whether the name-only view of `name` — what [`get`] answers, and so
     /// what an alias to `name` in this environment forwards to — is the
     /// *binding* a reference at `scopes` denotes.

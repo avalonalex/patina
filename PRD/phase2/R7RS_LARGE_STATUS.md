@@ -132,8 +132,15 @@ This is part of the new "Foundations" volume approach (named after Greek deities
 - Syntax parameters
 - Identifier properties
 - Procedural syntax object destructuring
+- Splicing local syntax bindings (SRFI 188)
 
-**Target:** December 2025 (Scheme's 50th birthday)
+**Patina (2026-09-28):** `(srfi 188)` provides `splicing-let-syntax` and
+`splicing-letrec-syntax` through the shared frontend (#424). `(r6rs base)`
+and `(rnrs base)` reuse them under the R6RS names; `(scheme base)` keeps
+R7RS-small's ordinary local syntax forms. This implements the splicing
+constructs in the draft's [syntax transformation chapter](https://r7rs.org/large/fascicles/macro/1/syntax-transformation.html),
+not the procedural macro facilities listed above. The stable SRFI library
+name avoids anticipating the fascicle's final library organization.
 
 See: https://r7rs.org/large/fascicles/macro/1/
 

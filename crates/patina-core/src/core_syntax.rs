@@ -37,6 +37,8 @@ pub enum CoreForm {
     DefineSyntax,
     LetSyntax,
     LetrecSyntax,
+    SplicingLetSyntax,
+    SplicingLetrecSyntax,
     Begin,
     Import,
     CondExpand,
@@ -73,6 +75,8 @@ pub const ALL_CORE_FORMS: &[CoreForm] = &[
     CoreForm::DefineSyntax,
     CoreForm::LetSyntax,
     CoreForm::LetrecSyntax,
+    CoreForm::SplicingLetSyntax,
+    CoreForm::SplicingLetrecSyntax,
     CoreForm::Begin,
     CoreForm::Import,
     CoreForm::CondExpand,
@@ -107,6 +111,8 @@ impl CoreForm {
             CoreForm::DefineSyntax => "define-syntax",
             CoreForm::LetSyntax => "let-syntax",
             CoreForm::LetrecSyntax => "letrec-syntax",
+            CoreForm::SplicingLetSyntax => "splicing-let-syntax",
+            CoreForm::SplicingLetrecSyntax => "splicing-letrec-syntax",
             CoreForm::Begin => "begin",
             CoreForm::Import => "import",
             CoreForm::CondExpand => "cond-expand",
@@ -166,7 +172,7 @@ mod tests {
     fn all_core_forms_is_complete() {
         assert_eq!(
             ALL_CORE_FORMS.len(),
-            23,
+            25,
             "a CoreForm variant was added or removed; add it to ALL_CORE_FORMS \
              (and to lib/scheme/base.sld's export list if R7RS puts it in (scheme base)) \
              before updating this count"

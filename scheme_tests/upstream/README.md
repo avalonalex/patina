@@ -12,12 +12,14 @@ is 145 assertions against the few dozen hand-written SRFI 151 rows in
 `crates/patina-tests/tests/scheme/srfi/bitwise.scm`.
 
 The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
-from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`); the `chibi/`
+from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`), and
+`srfi/188/`, whose source is recorded below; the `chibi/`
 suites are from the same sha256-pinned snowballs the libraries themselves
 came from (`test-lib/chibi/PROVENANCE.md`), so each
 suite is version-matched to the code it tests. Copied unmodified except where the table's note column says otherwise —
-every adaptation is described under the table. All of them report through
-`(chibi test)`, taken verbatim from the snow-fort 0.9.0 snowball (sha256-pinned
+every adaptation is described under the table. Most report through
+`(chibi test)`; the SRFI 64 suites use their own counters as noted below.
+`(chibi test)` is taken verbatim from the snow-fort 0.9.0 snowball (sha256-pinned
 in `test-lib/chibi/PROVENANCE.md`, guarded by `bundled_provenance.rs`). Patina
 supplies it from `test-lib/` rather than bundling it (#197) — the shared test
 helpers put that root on the search path, exactly as the shell lanes pass
@@ -51,11 +53,21 @@ that adoption, since the hand-written subset it replaced could not express
 | `srfi/159/test.sld` | 316 | 0 | imports lifted into the wrapper |
 | `srfi/160/test.sld` | 110 | 0 | wrapper shadows `test-exit`; body verbatim — see below |
 | `srfi/165/test.sld` | 43 | 0 | verbatim — reports through `(srfi 64)`, so its row uses `SRFI_64_BODY` |
+| `srfi/188/test.sld` | 11 | 0 | verbatim — reports through `(srfi 64)` |
 | `srfi/231/test.sld` | 579 | 2 | verbatim — both failures are upstream's, not ours; see `upstream_srfi_suites.rs` |
 | `chibi/string-test.sld` | 52 | 0 | verbatim |
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
 | `chibi/term/ansi-test.sld` | 234 | 0 | framework shim |
+
+**SRFI 188** comes directly from the specification author's
+[reference repository](https://github.com/scheme-requests-for-implementation/srfi-188/blob/7fed7187f640c75d83543b852afac176b5ab4ae1/srfi/188/test.sld),
+commit `7fed7187f640c75d83543b852afac176b5ab4ae1`. Its MIT notice is retained
+verbatim, as is the entire file (SHA-256
+`19343575e73abab2b46494cc7a557e7f2b00b525655ffd2f3b4c372ff710f8fc`).
+The harness uses `SRFI_64_BODY`; the two original `expansion/splicing-*.scm`
+regression files additionally cover empty bodies, expression contexts and
+escaping library helpers (#424).
 
 **`srfi/160/test.sld` shadows `test-exit`, and the reason is worth keeping.**
 `shared-tests.scm` — verbatim upstream, and it stays that way — ends with

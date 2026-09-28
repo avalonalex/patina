@@ -97,8 +97,14 @@
     (import (rnrs base)))
    (else
     (import
-     (rename (scheme base)
+     ;; PATINA DEVIATION (#424): R6RS local syntax bindings splice their
+     ;; definitions into the enclosing body. Share SRFI 188's implementation;
+     ;; this also accepts its extension allowing mixed definitions/expressions.
+     (rename (except (scheme base) let-syntax letrec-syntax)
              (error r7rs:error))
+     (rename (srfi 188)
+             (splicing-let-syntax let-syntax)
+             (splicing-letrec-syntax letrec-syntax))
      (scheme cxr))))
 
   ;; Stubs and workarounds.

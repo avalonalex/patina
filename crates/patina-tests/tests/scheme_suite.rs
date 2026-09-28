@@ -123,6 +123,8 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/introduced-definitions.scm", 18),
     ("expansion/keyword-bindings.scm", 14),
     ("expansion/let-syntax.scm", 35),
+    ("expansion/splicing-syntax.scm", 45),
+    ("expansion/splicing-libraries.scm", 12),
     ("expansion/let-values.scm", 1),
     ("expansion/quasiquote.scm", 1),
     ("expansion/quasiquote-templates.scm", 75),
