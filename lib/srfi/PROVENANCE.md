@@ -21,7 +21,7 @@ its own record. One home per tree.
 | `(srfi 231)` | chibi 0.12 | `231.sld`, `231/base.sld`, `231/base.scm`, `231/transforms.scm` | chibi-scheme's own implementation (Alex Shinn, BSD 3-Clause via chibi's `COPYING`), pinned post-edit — two local substitutions, four markers, below | source `~/Project/reference/chibi-scheme/lib/srfi/231/` |
 | `(srfi 165)` | — | `165.sld`, `165.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-165/srfi-165.tgz` (Marc Nieper-Wißkirchen, MIT, full text inline in both files) | tarball sha256 `e3bd69078fa4946e623b4e1ff554195d5dd200ab20a234663a436f735488c5fa` |
 | `(srfi 115)` | — | `115.sld`, `115.scm`, `115/boundary.sld`, `115/boundary.scm` | the SRFI's own distribution, `https://srfi.schemers.org/srfi-115/srfi-115.tgz`, `contrib/duy-nguyen/` (Alex Shinn; BSD-3-Clause, the boundary data CC0-1.0) | tarball sha256 `e8e7294adfb695518ef5ac6d59989048e2143dafbb3d87588458ab76bfe715c2` |
-| `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); the per-type files are its `atexpander.sh` output, see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
+| `(srfi 160)` | — | `160/base.sld`, `160/base/*.scm`, and `160/<type>.sld` + `160/<type>-impl.scm` for twelve types | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-160/srfi-160.tgz` (John Cowan, MIT); `atexpander.sh` output with two template repairs in `160/fixes.patch` (#384), see below | tarball sha256 `5e86da759a2b2060d38480813af5f9d5333c3c7df4b5cdefdc96762103f63796` |
 | `(srfi 146)` | — | `146.sld`, `146.scm`, `146/hash.sld`, `146/hash.scm`, and its own supporting libraries at `lib/nieper/rbtree.{sld,scm}` and `lib/gleckler/{hamt,hamt-map,hamt-misc,vector-edit}.{sld,scm}` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-146/srfi-146.tgz` (Marc Nieper-Wißkirchen, with Arthur A. Gleckler's HAMT, MIT) | tarball sha256 `52b10ba6f113407b095c582f98dd55947a7e984f7e629bae64467fb474ae28ad` |
 | `(srfi 135)` | — | `135.sld`, `135.body.scm`, `135/kernel8.sld`, `135/kernel8.body.scm` | the SRFI's own reference implementation, `https://srfi.schemers.org/srfi-135/srfi-135.tgz` (William D Clinger, MIT) | tarball sha256 `f8e9cbcdfcd757ed5dc5835e152bedd621e0933dfed16c5cb815253900fb2735` |
 | `(srfi 101)` | — | `101.sld`, `101.scm` | chibi-scheme's R7RS adaptation (Alex Shinn, 2018) of the SRFI's own reference implementation (David Van Horn, MIT), byte-identical | source `~/Project/reference/chibi-scheme/lib/srfi/101.{sld,scm}` |
@@ -540,17 +540,49 @@ Upstream ships *templates*, not sources. `atexpander.sh` runs
 `sed "s/@/$at/g"` over three files — `srfi/160/at.sld`, `at-impl.scm` and
 `base/at-vector2list.scm` — once per type, for twelve types: the ten SRFI 4
 has plus `c64` and `c128`, which `(srfi 160 base)` exports and SRFI 4 has no
-equivalent of. What is bundled here is that script's output, run unmodified
-against the pinned tarball.
+equivalent of. What is bundled here is that script's output from the pinned
+tarball, with two marked `PATINA LOCAL EDIT`s applied to `at-impl.scm` before
+expansion (#384). The generator and all other inputs remain unmodified.
 
 **So the pinned artifact is the generator's output rather than the tarball's
 content**, which is a real departure from the rule the rest of this file
 states, and is recorded rather than hidden. The alternative — running the
 expander at build time — would put a shell script on the critical path of
 every build to save committing 36 files that change only when the tarball
-does. Regenerating is one command against the recorded sha256, and
-`bundled_provenance.rs` pins every generated file, so an edit to one is still
-a deliberate act.
+does. `bundled_provenance.rs` pins every generated file, including the twelve
+implementation files after repair, so an edit to one is still a deliberate
+act.
+
+The two repairs are preserved in [`160/fixes.patch`](160/fixes.patch), against
+the upstream template rather than twelve independent copies:
+
+- The writer closes an empty vector before trying to read element zero.
+- The hash sums SRFI 128 `number-hash` results for each element's real and
+  imaginary components, rather than summing floating-point elements before
+  converting to exact. Thus infinities, opposing infinities and finite sums
+  that would overflow still produce nonnegative exact integers. Hashing the
+  components separately also avoids passing a complex infinity to the
+  scalar infinity branches in the bundled `number-hash`. The existing limit
+  of 256 elements stays in place. Numeric hash values may change; the
+  comparator contract requires equal vectors to hash alike, not a particular
+  hash value. The existing scalar hash also handles NaNs, which the vector
+  hash inherits as an extension: SRFI 128 excludes NaN-containing values
+  from its comparator guarantees.
+
+To regenerate, extract the tarball and verify its sha256 against the table
+above. From the extracted `srfi-160/` directory, run the following with
+`PATINA_REPO` set to the absolute path of this checkout:
+
+```sh
+patch -p1 --fuzz=0 < "$PATINA_REPO/lib/srfi/160/fixes.patch"
+sh atexpander.sh
+```
+
+Copy back the twelve `srfi/160/<type>-impl.scm` files to `lib/srfi/160/`.
+The other 28 bundled files remain identical to the unmodified generation.
+The Scheme regressions cover empty writers for all twelve types, finite and
+nonfinite hashes, signed-zero equality, complex components and overflow on
+both backends. They replace the two quarantines recorded by #384.
 
 SRFI 160's `s16` suite passes with no adaptation, 110 of 110 on both
 backends, and is registered. Upstream tests `s16` alone and says why — "if one
@@ -789,9 +821,9 @@ each expansion carries `<cowanu8ccil.org>`, `<cowans16ccil.org>`,
 touch — keep the real address.
 
 This is upstream's own behaviour, reproduced here deliberately: re-running
-`atexpander.sh` against the tarball whose sha256 is recorded above yields
-bytes identical to what is bundled, mangled address included, and changing it
-would make 36 files diverge from the generator for a cosmetic repair. The
+`atexpander.sh` against the tarball whose sha256 is recorded above reproduces
+these headers, including after the #384 template patch. Changing the address
+would introduce another deviation in 36 files for a cosmetic repair. The
 licence grant is unaffected — the identifier, the year and the name are
 intact, and only the contact address is damaged — but a REUSE or SPDX linter
 reads `SPDX-FileCopyrightText` and will flag those 36, which is worth knowing

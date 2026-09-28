@@ -171,7 +171,9 @@ const PINNED: &[(&str, u64)] = &[
     // per-type files are its own atexpander.sh output rather than tarball
     // content — the one generated tree in lib/ — so pinning them is what
     // makes an edit to one deliberate rather than indistinguishable from a
-    // re-expansion.
+    // re-expansion. The twelve impl files are pinned after applying
+    // lib/srfi/160/fixes.patch to the upstream template (#384): empty writers
+    // and hashes of nonfinite elements or overflowing finite sums.
     ("lib/srfi/160/base.sld", 0xf8374cb34d7140b3),
     ("lib/srfi/160/base/c128-vector2list.scm", 0x1e32dda0a66cc5dd),
     ("lib/srfi/160/base/c64-vector2list.scm", 0x8e4a73d497c7a45f),
@@ -188,29 +190,29 @@ const PINNED: &[(&str, u64)] = &[
     ("lib/srfi/160/base/u64-vector2list.scm", 0xdeb59b1b9aa19e8f),
     ("lib/srfi/160/base/u8-vector2list.scm", 0x154f7f645b84146d),
     ("lib/srfi/160/base/valid.scm", 0xa8af6691189e2679),
-    ("lib/srfi/160/c128-impl.scm", 0xcdb6f1657c75bd91),
+    ("lib/srfi/160/c128-impl.scm", 0x4e034f970d9e4ae7),
     ("lib/srfi/160/c128.sld", 0xb366d2e0e47048a5),
-    ("lib/srfi/160/c64-impl.scm", 0x6a6a0dc399de19da),
+    ("lib/srfi/160/c64-impl.scm", 0x27af5e94a7738c34),
     ("lib/srfi/160/c64.sld", 0xe130ef5c2376b32b),
-    ("lib/srfi/160/f32-impl.scm", 0xd7dc9fad3c9853e2),
+    ("lib/srfi/160/f32-impl.scm", 0x7101363d7a064f70),
     ("lib/srfi/160/f32.sld", 0x2f784b291e6ce963),
-    ("lib/srfi/160/f64-impl.scm", 0x5421368c8a7c489b),
+    ("lib/srfi/160/f64-impl.scm", 0x2c35162895e4fe9d),
     ("lib/srfi/160/f64.sld", 0x417bd6fdcf1719bb),
-    ("lib/srfi/160/s16-impl.scm", 0xb0fdca8ab0b8074d),
+    ("lib/srfi/160/s16-impl.scm", 0x3fb7d76315f41dbb),
     ("lib/srfi/160/s16.sld", 0x50239b383a538d03),
-    ("lib/srfi/160/s32-impl.scm", 0x25532fac70be0473),
+    ("lib/srfi/160/s32-impl.scm", 0xeb84bb0699fd8109),
     ("lib/srfi/160/s32.sld", 0xaa756488e4c7eaeb),
-    ("lib/srfi/160/s64-impl.scm", 0x4ecf0636f94f96ea),
+    ("lib/srfi/160/s64-impl.scm", 0x5ccac4be1021d184),
     ("lib/srfi/160/s64.sld", 0xf5afa7711af2226b),
-    ("lib/srfi/160/s8-impl.scm", 0x0ef0673ffb615ca4),
+    ("lib/srfi/160/s8-impl.scm", 0xee830cf75a563626),
     ("lib/srfi/160/s8.sld", 0xbfb80ce5c382c081),
-    ("lib/srfi/160/u16-impl.scm", 0x793efa933d2c395b),
+    ("lib/srfi/160/u16-impl.scm", 0x196d6ceda62b9a79),
     ("lib/srfi/160/u16.sld", 0xda1c86e8766ff507),
-    ("lib/srfi/160/u32-impl.scm", 0x14d703ad5517d705),
+    ("lib/srfi/160/u32-impl.scm", 0x611f63c96a4a66bb),
     ("lib/srfi/160/u32.sld", 0xeed897eb0dd77df7),
-    ("lib/srfi/160/u64-impl.scm", 0x216f048fdf07cf2c),
+    ("lib/srfi/160/u64-impl.scm", 0x8f172fbac620fe7e),
     ("lib/srfi/160/u64.sld", 0xb457b197757e74cf),
-    ("lib/srfi/160/u8-impl.scm", 0xfa6b5e350ce2676e),
+    ("lib/srfi/160/u8-impl.scm", 0x0de750213ecd7560),
     ("lib/srfi/160/u8.sld", 0x0f3a12ffa6b8d63d),
     // SRFI 146, byte-identical to the tarball recorded in
     // lib/srfi/PROVENANCE.md, together with the supporting libraries it ships

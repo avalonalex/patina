@@ -557,11 +557,14 @@
     ((vec port) (write-f32vector* vec port))))
 
 
+;; PATINA LOCAL EDIT: #384, handle an empty vector before reading element zero.
 (define (write-f32vector* vec port)
   (display "#f32(" port)  ; f32-expansion is blind, so will expand this too
   (let ((last (- (f32vector-length vec) 1)))
     (let loop ((i 0))
       (cond
+        ((> i last)
+         (display ")" port))
         ((= i last)
          (write (f32vector-ref vec i) port)
          (display ")" port))
@@ -590,12 +593,19 @@
            (else
              (loop (+ i 1)))))))))
 
+;; PATINA LOCAL EDIT: #384, hash real components before adding, so infinities
+;; and finite sums that overflow never reach inexact->exact. Keep upstream's
+;; 256-element limit; hash values are implementation-defined. Splitting complex
+;; elements also keeps them out of number-hash's real-only infinity branches.
 (define (f32vector-hash vec)
   (let ((len (min 256 (f32vector-length vec))))
     (let loop ((i 0) (r 0))
       (if (= i len)
-        (abs (floor (real-part (inexact->exact r))))
-        (loop (+ i 1) (+ r (f32vector-ref vec i)))))))
+        r
+        (let ((x (f32vector-ref vec i)))
+          (loop (+ i 1)
+                (+ r (number-hash (real-part x))
+                     (number-hash (imag-part x)))))))))
 
 (define f32vector-comparator
   (make-comparator f32vector? f32vector= f32vector< f32vector-hash))

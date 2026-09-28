@@ -557,11 +557,14 @@
     ((vec port) (write-u16vector* vec port))))
 
 
+;; PATINA LOCAL EDIT: #384, handle an empty vector before reading element zero.
 (define (write-u16vector* vec port)
   (display "#u16(" port)  ; u16-expansion is blind, so will expand this too
   (let ((last (- (u16vector-length vec) 1)))
     (let loop ((i 0))
       (cond
+        ((> i last)
+         (display ")" port))
         ((= i last)
          (write (u16vector-ref vec i) port)
          (display ")" port))
@@ -590,12 +593,19 @@
            (else
              (loop (+ i 1)))))))))
 
+;; PATINA LOCAL EDIT: #384, hash real components before adding, so infinities
+;; and finite sums that overflow never reach inexact->exact. Keep upstream's
+;; 256-element limit; hash values are implementation-defined. Splitting complex
+;; elements also keeps them out of number-hash's real-only infinity branches.
 (define (u16vector-hash vec)
   (let ((len (min 256 (u16vector-length vec))))
     (let loop ((i 0) (r 0))
       (if (= i len)
-        (abs (floor (real-part (inexact->exact r))))
-        (loop (+ i 1) (+ r (u16vector-ref vec i)))))))
+        r
+        (let ((x (u16vector-ref vec i)))
+          (loop (+ i 1)
+                (+ r (number-hash (real-part x))
+                     (number-hash (imag-part x)))))))))
 
 (define u16vector-comparator
   (make-comparator u16vector? u16vector= u16vector< u16vector-hash))

@@ -57,9 +57,6 @@ empty, archive this page.
 **Backends**
 - #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
 
-**The corpus and its harness**
-- #384 — two upstream SRFI 160 defects, quarantined.
-
 One recorded debt has no issue because it has no known symptom: on the VM,
 `vm_raise_value`, the two prompt paths and the value-form arm still locate wind
 records by *depth*, an assumption that continuation identity was introduced to
