@@ -1,0 +1,35 @@
+# Correctness overlay for #429; issue #528:
+# https://github.com/avalonalex/patina/issues/528
+# Advance gentemp and forward every callback result after closing its ports.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# common's callback arity defect is exposed by Gauche's single-value binding.
+# Driver comparison: 17/18 before on Patina/Chibi, 15/18 on Gauche; 18/18 after on all.
+# Maintained slib-common smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/common.sld
++++ b/slib/common.sld
+@@ -75,6 +75,7 @@
+     (define gentemp
+       (let ((c 100))
+         (lambda ()
++          (set! c (+ c 1))
+           (string->symbol (string-append "slib_" (number->string c))))))
+ 
+     (define (identity x) x)
+@@ -110,9 +111,11 @@
+               (else (set! ports (reverse ports))
+                     (set! proc (car ports))
+                     (set! ports (reverse (cdr ports)))))
+-        (let ((ans (apply proc ports)))
+-          (for-each close-port ports)
+-          ans)))
++        (call-with-values
++          (lambda () (apply proc ports))
++          (lambda results
++            (for-each close-port ports)
++            (apply values results)))))
+ 
+     ;; TODO: These features must be varied based on implementation - use cond-expand
+     (define (provided? feature)

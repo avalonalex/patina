@@ -1,0 +1,132 @@
+# Correctness overlay for #429; issue #527:
+# https://github.com/avalonalex/patina/issues/527
+# Parse Julian and ordinal rules; reject incomplete, invalid and empty TZ strings.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Driver comparison on all four hosts: 13/23 before; 23/23 after.
+# Maintained slib-time-zone smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/time-zone.sld
++++ b/slib/time-zone.sld
+@@ -91,36 +91,16 @@
+     ;;; Parse Posix TZ string.
+ 
+     (define (string->transition-day-time str)
+-      (let ((month 0) (week 0) (day #f) (junk #f))
+-        (or (let ((scan (scanf-read-list "J%u%s" str)))
+-              (if (> (length scan) 0)
+-                (set! day (car scan))
+-                (if (> (length scan) 1)
+-                  (set! junk (cadr scan))))
+-              (case (length scan)
+-                ((1) (and (<= 1 day 365)
+-                          (list #f #f day)))
+-                (else #f))
+-              (let ((scan (scanf-read-list "J%u%s" str)))
+-                (if (> (length scan) 0)
+-                  (set! day (car scan))
+-                  (if (> (length scan) 1)
+-                    (set! junk (cadr scan))))
+-                (case (length scan)
+-                  ((1) (and (<= 0 day 365)
+-                            (list #f #t day)))
+-                  (else #f)))
+-              (let ((scan (scanf-read-list "M%u.%u.%u%s" str)))
+-                (set! month (car scan)) ;; assumes three values always retrieved
+-                (set! week (cadr scan))
+-                (set! day (caddr scan)) 
+-                (when (= 4 (length scan)) (set! junk (cadddr scan)))
+-                (case (length scan)
+-                  ((3) (and (<= 1 month 12)
+-                            (<= 1 week 5)
+-                            (<= 0 day 6)
+-                            (list month week day)))
+-                  (else #f)))))))
++      (or (let ((scan (scanf-read-list "J%u%s" str)))
++            (and (= 1 (length scan)) (<= 1 (car scan) 365)
++                 (list #f #f (car scan))))
++          (let ((scan (scanf-read-list "%u%s" str)))
++            (and (= 1 (length scan)) (<= 0 (car scan) 365)
++                 (list #f #t (car scan))))
++          (let ((scan (scanf-read-list "M%u.%u.%u%s" str)))
++            (and (= 3 (length scan))
++                 (<= 1 (car scan) 12) (<= 1 (cadr scan) 5)
++                 (<= 0 (caddr scan) 6) scan))))
+ 
+     (define (string->transition-time str)
+       (define (mk-transition date time)
+@@ -131,26 +111,33 @@
+       (let ((case1 (scanf-read-list "%[JM.0-9]/%[:0-9]%s" str)))
+         (if (= 2 (length case1))
+           (mk-transition (car case1) (cadr case1))
+-          (let ((case2 (scanf-read-list "%[JM.0-9]" str)))
++          (let ((case2 (scanf-read-list "%[JM.0-9]%s" str)))
+             (if (= 1 (length case2))
+               (mk-transition (car case2) "2")
+               #f)))))
+ 
+     (define (string->time-offset str)
+-      (and str (string? str) (positive? (string-length str))
+-           (let ((hh #f) (mm 0) (ss 0) (junk #f))
+-             (let ((scan (scanf-read-list "%u:%u:%u%s" (if (memv (string-ref str 0) '(#\+ #\-))
+-                                                         (string-copy str 1 (string-length str))
+-                                                         str))))
+-               (when (> (length scan) 0) (set! hh (car scan)))
+-               (when (> (length scan) 1) (set! mm (cadr scan)))
+-               (when (> (length scan) 2) (set! ss (caddr scan)))
+-               (when (> (length scan) 3) (set! junk (cadddr scan)))
+-               (and (<= 1 (length scan)
+-                        3)
+-                    (number? hh) (<= 0 hh 23) (<= 0 mm 59) (<= 0 ss 59)
+-                    (* (if (char=? #\- (string-ref str 0)) -1 1)
+-                       (+ ss (* 60 (+ mm (* hh 60))))))))))
++      (and (string? str) (positive? (string-length str))
++           (let* ((first (string-ref str 0))
++                  (sign (if (char=? first #\-) -1 1))
++                  (start (if (memv first '(#\+ #\-)) 1 0)))
++             ;; Consume every digit/colon: scanf alone accepts partial fields.
++             (let loop ((i start) (value 0) (digits 0) (fields '()))
++               (cond
++                 ((or (= i (string-length str))
++                      (char=? (string-ref str i) #\:))
++                  (and (positive? digits) (< (length fields) 3)
++                       (<= value (if (null? fields) 23 59))
++                       (if (= i (string-length str))
++                         (* sign
++                            (let sum ((rest (reverse (cons value fields))) (n 0))
++                              (if (null? rest) n (sum (cdr rest) (+ (* n 60) (car rest)))))
++                            (list-ref '(3600 60 1) (length fields)))
++                         (loop (+ i 1) 0 0 (cons value fields)))))
++                 ((char<=? #\0 (string-ref str i) #\9)
++                  (loop (+ i 1) (+ (* value 10) (- (char->integer (string-ref str i)) 48))
++                        (+ digits 1) fields))
++                 (else #f))))))
+ 
+     (define (string->time-zone tz)
+       (let* ((case1 (scanf-read-list "%[^0-9,+-]%[-:+0-9]%[^0-9,+-]%[-:+0-9],%[JM.0-9/:],%[JM.0-9/:]%s" tz))
+@@ -175,18 +162,20 @@
+             (when (>= found2 6) (set! junk (list-ref case2 5)))
+             (set! offset (string->time-offset offset))))
+         (case found
+-          ((2) (vector 'tz:fixed tz tzname offset))
+-          ((4) (vector 'tz:rule tz tzname dtzname offset doffset
+-                       (list 4 1 0 7200) (list 10 5 0 7200)))
++          ((2) (and offset (vector 'tz:fixed tz tzname offset)))
++          ((4) (and offset doffset
++                    (vector 'tz:rule tz tzname dtzname offset doffset
++                            (list 4 1 0 7200) (list 10 5 0 7200))))
+           ((6) (let ((start (string->transition-time start-str))
+                      (end   (string->transition-time   end-str)))
+                  (and
+-                   start end
++                   offset doffset start end
+                    (vector 'tz:rule tz tzname dtzname offset doffset start end))))
+           (else #f))))
+     ;@
+     (define (time-zone tz)
+       (cond ((vector? tz) tz)
++            ((and (string? tz) (zero? (string-length tz))) #f)
+             ((or (not tz)
+                  (eqv? #\: (string-ref tz 0)))
+              (let ()

@@ -1,0 +1,62 @@
+# Correctness overlay for #429; issue #527:
+# https://github.com/avalonalex/patina/issues/527
+# Honor tm_isdst in mktime, infer unknown DST, and select active file-zone offsets.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Driver comparison on all four hosts: 10/17 before; 17/17 after.
+# Maintained slib-posix-time smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/posix-time.sld
++++ b/slib/posix-time.sld
+@@ -41,27 +41,38 @@
+   (begin
+ 
+     ;@
+-    (define (tz:std-offset zone)
++    (define (tz:offset zone isdst local-gmt)
+       (case (vector-ref zone 0)
+         ((tz:fixed) (vector-ref zone 3))
+-        ((tz:rule) (vector-ref zone 4))
++        ((tz:rule) (vector-ref zone (if (positive? isdst) 5 4)))
+         ((tz:file)
+-         (let ((mode-table (vector-ref zone 2)))
+-           (do ((type-idx 0 (+ 1 type-idx)))
+-             ((or (>= type-idx (vector-length mode-table))
+-                  (not (vector-ref (vector-ref mode-table type-idx) 2)))
+-              (if (>= type-idx (vector-length mode-table))
+-                (vector-ref (vector-ref mode-table 0) 1)
+-                (- (vector-ref (vector-ref mode-table type-idx) 1)))))))
+-        (else (error 'tz:std-offset "unknown timezone type" zone))))
++         (let ((modes (vector-ref zone 2)) (dst? (positive? isdst)))
++           ;; Historical records can share a DST flag but have different offsets.
++           ;; Prefer a candidate whose offset and flag are active at that instant.
++           (let loop ((i 0) (fallback #f))
++             (if (= i (vector-length modes))
++               (or fallback (- (vector-ref (tzfile:get-std-spec modes) 1)))
++               (let* ((rec (vector-ref modes i)) (offset (- (vector-ref rec 1))))
++                 (if (eqv? dst? (vector-ref rec 2))
++                   (let ((params (tz:params (offset-time local-gmt offset) zone)))
++                     (if (and (= (car params) (if dst? 1 0)) (= (cadr params) offset))
++                       offset
++                       (loop (+ i 1) (or fallback offset))))
++                   (loop (+ i 1) fallback)))))))
++        (else (error 'tz:offset "unknown timezone type" zone))))
+     ;@
+     (define (localtime caltime . tz-in)
+       (let ((tz (if (null? tz-in) (tzset) (car tz-in))))
+         (apply time:split caltime (tz:params caltime tz))))
+     ;@
+     (define (mktime univtime . tz-in)
+-      (let ((tz (if (null? tz-in) (tzset) (car tz-in))))
+-        (offset-time (gmktime univtime) (tz:std-offset tz))))
++      (let ((tz (if (null? tz-in) (tzset) (car tz-in)))
++            (isdst (if (> (vector-length univtime) 8) (vector-ref univtime 8) -1)))
++        (if (negative? isdst)
++          (time:invert (lambda (time) (localtime time tz)) univtime)
++          (let ((local-gmt (gmktime univtime)))
++            (and local-gmt
++                 (offset-time local-gmt (tz:offset tz isdst local-gmt)))))))
+     ;@
+     (define (gmktime univtime)
+       (time:invert time:gmtime univtime))

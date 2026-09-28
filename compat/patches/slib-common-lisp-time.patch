@@ -1,0 +1,35 @@
+# Correctness overlay for #429; issue #527:
+# https://github.com/avalonalex/patina/issues/527
+# Use calendar seconds for DST lookup and preserve fractional explicit zones.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Driver comparison on all four hosts: 11/14 before; 14/14 after.
+# Maintained slib-common-lisp-time smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/common-lisp-time.sld
++++ b/slib/common-lisp-time.sld
+@@ -47,7 +47,8 @@
+       (let ((tv (apply time:split
+                        (offset-time time:1900 utime)
+                        (if (null? tzarg)
+-                         (tz:params utime (time-zone (get-environment-variable "TZ")))
++                         (tz:params (offset-time time:1900 utime)
++                                    (time-zone (get-environment-variable "TZ")))
+                          (list 0 (* 3600 (car tzarg)) "???")))))
+         (values
+           (vector-ref tv 0)			;second	[0..59]
+@@ -64,10 +65,9 @@
+           )))
+     ;@
+     (define (encode-universal-time second minute hour date month year . tzarg)
+-      (let* ((tz (time-zone
+-                   (if (null? tzarg)
+-                     (get-environment-variable "TZ")
+-                     (string-append "???" (number->string (car tzarg))))))
++      (let* ((tz (if (null? tzarg)
++                     (time-zone (get-environment-variable "TZ"))
++                     (vector 'tz:fixed #f "???" (* 3600 (car tzarg)))))
+              (tv (vector second
+                          minute
+                          hour

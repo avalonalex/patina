@@ -1,0 +1,87 @@
+# Correctness overlay for #429; issue #527:
+# https://github.com/avalonalex/patina/issues/527
+# Correct backward leap years, rule dates, southern DST and transition search.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Driver comparison on all four hosts: 21/31 before; 31/31 after.
+# Maintained slib-time-core smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/time-core.sld
++++ b/slib/time-core.sld
+@@ -79,7 +79,9 @@
+                      (tm_yday days))
+             (let ((diy (if (leap-year? tm_year) 366 365)))
+               (cond
+-                ((negative? tm_yday) (loop (+ -1 tm_year) (+ tm_yday diy)))
++                ((negative? tm_yday)
++                 (loop (- tm_year 1)
++                       (+ tm_yday (if (leap-year? (- tm_year 1)) 366 365))))
+                 ((>= tm_yday diy) (loop (+ 1 tm_year) (- tm_yday diy)))
+                 (else
+                   (let ((mv (vector-ref time:days/month (- diy 365))))
+@@ -150,7 +152,7 @@
+ 
+     (define (tzrule->caltime year previous-gmt-offset
+                              tr-month tr-week tr-day tr-time)
+-      (define leap? (leap-year? year))
++      (define leap? (leap-year? (+ year 1900)))
+       (define gmmt
+         (time:invert time:gmtime
+                      (vector 0 0 0 1 (if tr-month (+ -1 tr-month) 0) year #f #f 0)))
+@@ -171,9 +173,10 @@
+                        ((>= d mmax) (+ -7 d))))
+                     (else (error 'tzrule->caltime
+                                       "week out of range" tr-week))))
+-                (+ tr-day
+-                   (if (and (not tr-week) (>= tr-day 60) (leap-year? year))
+-                     1 0)))))))
++                (if tr-week
++                  tr-day                    ; zero-based, including leap day
++                  (+ (- tr-day 1)            ; J1 is January 1, omitting leap day
++                     (if (and (>= tr-day 60) leap?) 1 0))))))))
+     ;@
+     (define (tz:params caltime tz)
+       (case (vector-ref tz 0)
+@@ -184,8 +187,11 @@
+                                year (vector-ref tz 4) (vector-ref tz 6)))
+                 (ttime1 (apply tzrule->caltime
+                                year (vector-ref tz 5) (vector-ref tz 7)))
+-                (dst (if (and (not (negative? (difftime caltime ttime0)))
+-                              (negative? (difftime caltime ttime1)))
++                (after-start (not (negative? (difftime caltime ttime0))))
++                (before-end (negative? (difftime caltime ttime1)))
++                (dst (if (if (negative? (difftime ttime0 ttime1))
++                           (and after-start before-end)
++                           (or after-start before-end))
+                        1 0)))
+            (list dst (vector-ref tz (+ 4 dst)) (vector-ref tz (+ 2 dst)))
+            ;;(for-each display (list (gtime ttime0) (gtime caltime) (gtime ttime1)))
+@@ -201,20 +207,13 @@
+       (and zone
+            (apply
+              (lambda (path mode-table leap-seconds transition-times transition-types)
+-               (let ((ntrns (vector-length transition-times)))
+-                 (if (zero? ntrns) -1
+-                   (let loop ((lidx (quotient (+ 1 ntrns) 2))
+-                              (jmp (quotient (+ 1 ntrns) 4)))
+-                     (let* ((idx (max 0 (min lidx (+ -1 ntrns))))
+-                            (idx-time (vector-ref transition-times idx)))
+-                       (cond ((<= jmp 0)
+-                              (+ idx (if (>= times idx-time) 0 -1)))
+-                             ((= times idx-time) idx)
+-                             ((and (zero? idx) (< times idx-time)) -1)
+-                             ((and (not (= idx lidx)) (not (< times idx-time))) idx)
+-                             (else
+-                               (loop ((if (< times idx-time) - +) idx jmp)
+-                                     (if (= 1 jmp) 0 (quotient (+ 1 jmp) 2))))))))))
++               ;; Find the first transition after TIME; its predecessor is active.
++               (let loop ((lo 0) (hi (vector-length transition-times)))
++                 (if (= lo hi) (- lo 1)
++                   (let ((mid (quotient (+ lo hi) 2)))
++                     (if (<= (vector-ref transition-times mid) times)
++                       (loop (+ mid 1) hi)
++                       (loop lo mid))))))
+              (cdr (vector->list zone)))))
+     (define (tzfile:get-std-spec mode-table)
+       (do ((type-idx 0 (+ 1 type-idx)))
