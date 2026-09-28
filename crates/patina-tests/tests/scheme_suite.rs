@@ -130,6 +130,7 @@ const SUITE: &[(&str, i64)] = &[
     ("expansion/syntax-rules-literals.scm", 30),
     ("expansion/template-references.scm", 25),
     ("reader/at-identifiers.scm", 11),
+    ("reader/identifier-delimiters.scm", 23),
     ("reader/line-endings.scm", 4),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),

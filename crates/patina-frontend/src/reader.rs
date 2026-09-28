@@ -423,6 +423,12 @@ mod tests {
             "#| a #| b |# c |# (d)",
             "#\\a #\\space #\\( 42 #xff",
             "#(1 2) #u8(1 2) `(a ,b ,@c)",
+            // #421: every split, including inside ,@ and a barred name,
+            // must keep the new boundaries used by the whole-input reader.
+            "(a'b c`d e,f g,@h λ|β|γ)",
+            "12'a #x10,b #\\space`c (d .'e) (f .|g|)",
+            "|a'b| |a`b| |a,b| |a\\|b| #\\' #\\` #\\, #\\|",
+            "#!fold-case'A #!no-fold-case|B|",
             "#0=(1 2) #0# (a . b)",
             "; a comment\n(after)\n",
             "#!fold-case ABC (DEF)",
