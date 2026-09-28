@@ -44,9 +44,10 @@ twice.
   terminal and GUI integration limits remain explicit in the drivers and
   `docs/TEST_ORGANIZATION.md`.
 - **Larceny, R7RS (measured 2026-09-28):** 24 of 33 suites clean, 8508 of
-  8536 assertions, on both backends. Of the 28 failures, 3 wait on #422;
-  the VM has one GC failure (#423), where the tree-walker instead has a
-  timing failure. The other 24 are not ours or are by decision.
+  8536 assertions, on both backends. Of the 28 failures, the VM has one GC
+  failure (#423), where the tree-walker instead has a timing failure. The
+  other 27 are not ours or are by decision, including three symbol-spelling
+  expectations retained by decision in #422.
   `./scripts/run_larceny_tests.sh`.
 - **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 4467 of
   4474 assertions, on both backends. Seven `io/simple` port-predicate checks
@@ -71,7 +72,6 @@ retire (archive §6, "Still open next door"). File it when it produces one.
 These are not defects. Each is a choice R7RS leaves open, where the references
 split or where matching them has a cost, and none should be taken in passing.
 
-- #422 — whether `write` spells the symbol `@` as `|@|`. chibi and Gauche split.
 - #424 — whether `(r6rs base)` gets R6RS's splicing `let-syntax`. It is all that blocks ~2000 assertions of the R6RS `base` suite.
 
 ## Standing rules the track leaves behind
@@ -82,5 +82,6 @@ split or where matching them has a cost, and none should be taken in passing.
 - **Whose defect it is** is settled by measurement against chibi and Gauche, never by which of them accepts a program. `crates/patina-tests/tests/scheme/DIVERGENCES.tsv` is where a difference is classified.
 - **Port policy (#412):** file and standard ports support both characters and bytes, as chibi and Gauche do; string ports remain textual-only, as in chibi.
 - **Reader boundaries (#421):** quote prefixes and vertical bars end unescaped tokens, following Gauche; Chibi 0.12's narrower boundaries are recorded in the oracle divergence register. Names containing those delimiters use vertical bars.
+- **Symbol output (#422):** retain standard R7RS escaping (`@` writes as `|@|`), even for names accepted bare as reader extensions; `symbol->string` returns the unescaped name, and name conversion and writer/reader round trips preserve it.
 - **Square-root policy (#418):** negative real inputs produce an exact zero real component, following Chibi and preserving the reader/writer round trip; infinity and inexact imaginary components remain inexact.
-- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; three remain, all listed above.
+- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; two remain, both listed above.

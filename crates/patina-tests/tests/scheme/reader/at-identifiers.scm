@@ -5,8 +5,15 @@
 ;; program can contain a bare `@` token, so accepting it only widens the
 ;; accepted language, and the third-party ecosystem depends on it — SXML's `@`
 ;; attribute marker and `@raw` tag, `(chibi match)`'s `@` record pattern. Chez,
-;; Gauche and chibi all read it; Chez and Gauche still *write* it escaped, as we
-;; do.
+;; Gauche and chibi all read it. Patina and Gauche write `|@|`; Chez 10.3.0
+;; writes the R6RS hex escape `\x40;`, while chibi writes `@` bare.
+;;
+;; Owner decision #422 (2026-09-28): retain this R7RS writer spelling. The
+;; bars belong to the printed syntax, not the name: `symbol->string` returns
+;; "@". Its counterpart `string->symbol` takes the name literally, without
+;; interpreting escapes; name conversion and writer/reader round trips are
+;; separate invariants. Accepting more input syntax does not require emitting
+;; that extension in output.
 ;;
 ;; Migrated whole from `crates/patina-tests/tests/at_identifiers.rs` (#193
 ;; Phase 1). 11 assertions there, 11 rows here.
