@@ -1,10 +1,10 @@
 # Patina third-party compatibility (vm backend)
 
-**Measured:** 2026-09-28T00:46:31Z
+**Measured:** 2026-09-28T00:57:36Z
 
 **143 of 161 packages pass.**
 
-Of these passes, **37 ran test suites**, **102 passed smoke checks**, and **4 passed import-only probes**. The harness does not call exported procedures in probe mode.
+Of these passes, **37 ran test suites**, **106 passed smoke checks**, and **0 passed import-only probes**. The harness does not call exported procedures in probe mode.
 
 **143 of 143 in scope** — 18 packages are excluded from the score by `compat/EXCLUSIONS.scm`, each for a reason that is not a measurement of Patina. The raw number above never moves because of that file.
 
@@ -103,8 +103,8 @@ These packages still run on every pass — exclusion decides whether a result co
 | chibi-ssl | test | out-of-scope | ffi |
 | chibi-sxml | smoke | pass | in scope |
 | chibi-tar | test | pass | in scope |
-| chibi-temp-file | probe | pass | in scope |
-| chibi-term-edit-line | probe | pass | in scope |
+| chibi-temp-file | smoke | pass | in scope |
+| chibi-term-edit-line | smoke | pass | in scope |
 | chibi-uri | test | pass | in scope |
 | chibi-voting | test | wrong-result | upstream-test-defect |
 | chibi-xgboost | test | out-of-scope | ffi |
@@ -144,7 +144,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | pfds-vector | smoke | pass | in scope |
 | postgresql | probe | out-of-scope | ffi |
 | rebottled-cl-pdf | probe | missing-library | dependency-not-vendored |
-| rebottled-pstk | probe | pass | in scope |
+| rebottled-pstk | smoke | pass | in scope |
 | retropikzel-pstk | probe | missing-library | dependency-not-vendored |
 | slib-alist | smoke | pass | in scope |
 | slib-array-for-each | smoke | pass | in scope |
@@ -161,7 +161,7 @@ These packages still run on every pass — exclusion decides whether a result co
 | slib-common-list-functions | smoke | pass | in scope |
 | slib-daylight | smoke | pass | in scope |
 | slib-determinant | smoke | pass | in scope |
-| slib-directory | probe | pass | in scope |
+| slib-directory | smoke | pass | in scope |
 | slib-dynamic | smoke | pass | in scope |
 | slib-factor | smoke | pass | in scope |
 | slib-filename | smoke | pass | in scope |

@@ -1,0 +1,28 @@
+# Correctness/portability overlay for #429: https://github.com/avalonalex/patina/issues/536
+# Maintained wrapper driver and reference methodology: docs/TEST_ORGANIZATION.md.
+# Vendor files remain pristine.
+# Compare Tcl false replies by string content, and exhaust a valid property
+# list before invoking its fallback instead of reporting a spurious error.
+# All four hosts first fabricate a widget for "0", then fail the next lookup.
+# After: 23/23 with only tk-eval replaced by a deterministic transport recorder;
+# command builders and widget/cache code are the pinned implementation.
+--- a/rebottled/pstk.sld
++++ b/rebottled/pstk.sld
+@@ -418,15 +418,14 @@
+               ((eq? key (car args)) 
+                (cond ((pair? (cdr args)) (cadr args)) 
+                      (else (report-error (list 'get-property key args))))) 
+-              ((or (not (pair? (cdr args))) 
+-                   (not (pair? (cddr args)))) 
++              ((not (pair? (cdr args)))
+                (report-error (list 'get-property key args))) 
+               (else (apply get-property key (cddr args) thunk))))) 
+ 
+     (define tcl-true? 
+       (let ((false-values 
+               `(0 "0" 'false "false" ,(string->symbol "0")))) 
+-        (lambda (obj) (not (memv obj false-values))))) 
++        (lambda (obj) (not (member obj false-values)))))
+ 
+     (define widget? 
+       (lambda (x) 

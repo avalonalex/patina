@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 102 drivers cover binary-record read/write round trips;
+assertion count. The 106 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -919,7 +919,18 @@ port when the optional port is omitted. Ten added public Scheme port rows
 pass on both backends. Chibi's bytevector `u8-ready?` limitation is recorded
 in the oracle register; the other new rows agree with both references.
 
-All 1464 assertions were compared against both Patina backends, Chibi 0.12
+The final wrapper batch adds 58 assertions: SLIB directory (11), Chibi
+temporary directories (8), Chibi line editor (16), and rebottled PSTk (23).
+They cover filesystem traversal/globs and cleanup, bounded history and text
+editing with string ports, and Tcl command serialization/widget caching.
+All pass on both Patina backends, Chibi and Gauche with the reference setup
+below. Three overlays repair #536. The corpus now has **37 upstream suites,
+106 smoke packages and zero passing import-only probes**. The Rust guard
+`every_in_scope_package_has_execution_coverage` prevents an in-scope package
+from losing both its driver and manifest entry and silently reverting to a
+probe; the existing registration and execution-count guards remain active.
+
+All 1522 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -1057,6 +1068,59 @@ raises on Patina/Gauche but loses outer precedence on Chibi. Tar was measured
 on Patina after #533's runtime repair, independently of its padding overlay.
 Four further config regression assertions bring its final count to 30.
 No vendor file or reference interpreter was modified.
+
+The final wrapper references retain native host branches. Directory's
+initial 11-row driver passes nine rows on Patina/Chibi; Gauche reaches one
+pass and three failures before failed directory creation prevents the rest.
+The line editor's portable library declaration fails on Gauche and is warned
+and ignored on Patina; Chibi passes its initial 15 rows. PSTk reproduces a
+false-widget result and then cannot construct a second widget on all four
+hosts. The repaired drivers pass 11/16/23 rows respectively. The final editor
+row exercises the portable no-op terminal setup on Patina/Gauche and bypasses
+native Chibi stty explicitly; no actual terminal mode is changed.
+
+The temporary-directory driver passes eight rows unchanged on Patina and
+Chibi. Gauche lacks `(chibi filesystem)`, so its separate reference staging
+maps only directory creation, directory predicates and recursive removal to
+Gauche's `sys-mkdir`, `file-is-directory?` and `remove-directory*`, and stages
+the pinned `test-lib/chibi/string` dependency. The pinned temp-file body and
+pathname dependency remain unchanged; descriptor entry points in that adapter
+raise and are never called. All eight directory rows then pass on Gauche.
+This adapter is a reference-only comparison of the directory wrapper, not a
+claim that Gauche natively supplies the Chibi library.
+
+**Coverage boundaries after #429:** `call-with-temp-file` still needs raw
+POSIX descriptors unavailable in Patina; temporary-directory tests cover
+normal-return cleanup and preservation, not cleanup on arbitrary escapes.
+Filesystem mode arguments are accepted but Patina's VFS does not implement
+permissions. The line editor runs with string ports and an explicit width;
+live tty behavior remains unmeasured. PSTk's driver temporarily replaces its
+exported `tk-eval` transport binding, restores it afterward, and measures real
+command builders/cache behavior; it does not launch Tcl/Tk, exercise pipes,
+or claim GUI integration. These packages' smoke passes are deliberately
+narrower than full API support.
+
+**Optional Chibi-suite audit (2026-09-28):** the pinned corpus already holds
+29 Chibi `*-test.sld` modules: 22 run and pass as package suites; seven are
+covered by the existing exclusions (assert, voting, mecab, DNS, SMTP, SSL and
+XGBoost). Separately, four version-matched Chibi suites (string, optional,
+diff and terminal ANSI) run in `upstream_srfi_suites.rs`; the fifth staged
+suite, filesystem, is explicitly disabled because it opens a raw descriptor
+before reaching its portable directory assertions. Its existing rationale
+is in `scheme_tests/upstream/README.md`.
+
+The external Chibi checkout at `bb9b3215e52bd29cecdfa3ce37cd97721f0c2cc0`
+contains 43 `*-test.sld` modules (excluding `(chibi test)`, the framework),
+rather than treating the old roughly-50 estimate as a current count. Nineteen
+match corpus suite names, five match the separately staged suites, and 19
+are additional: binary-record, csv, doc, generic, io, json, log, loop, memoize,
+numeric, process, pty, shell, show/c, sxml, syntax-case, system, text and weak.
+Those additional files are not version-matched tests from the pinned
+snowballs. This audit does not import a moving external checkout into CI.
+Future conformance expansion can pin and evaluate them separately, starting
+with overlapping smoke subjects such as binary-record and sxml. #429 closes
+the current corpus's import-only coverage gap; it does not assert complete
+conformance or remove the existing FFI/licence/upstream exclusions.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

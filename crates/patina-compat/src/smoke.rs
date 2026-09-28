@@ -204,6 +204,27 @@ mod tests {
         assert_eq!(packages[0].test_depends, ["scheme base"]);
     }
 
+    /// #429 is complete only while every in-scope package executes assertions.
+    /// This guards additions as well as deletion of a driver AND its manifest row,
+    /// which the registration-consistency check alone cannot detect.
+    #[test]
+    fn every_in_scope_package_has_execution_coverage() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../compat");
+        let heap = patina_core::new_shared_heap();
+        let packages = crate::corpus::discover(&root.join("vendor"), &heap).unwrap();
+        let exclusions = crate::exclusions::load(&root.join("EXCLUSIONS.scm"), &heap).unwrap();
+        let probes: Vec<_> = packages
+            .iter()
+            .filter(|p| p.test_script.is_none() && p.smoke.is_none())
+            .filter(|p| !exclusions.iter().any(|e| e.slug == p.slug))
+            .map(|p| &p.slug)
+            .collect();
+        assert!(
+            probes.is_empty(),
+            "in-scope packages without assertions: {probes:?}"
+        );
+    }
+
     #[test]
     fn committed_smoke_manifest_keeps_all_drivers_registered() {
         let vendor = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../compat/vendor");
