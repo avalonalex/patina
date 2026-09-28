@@ -1,0 +1,28 @@
+# Correctness overlay for #429; issue #527:
+# https://github.com/avalonalex/patina/issues/527
+# Resolve every mode abbreviation to a string, with or without optional flags.
+# Reproduced on both Patina backends, Chibi 0.12 and Gauche 0.9.15.
+# Driver comparison on all four hosts: 10/12 before; 12/12 after.
+# Maintained slib-tzfile smoke assertions cover the repaired behavior.
+# Reference staging isolates SLIB dependencies and pinned SRFI 63, using the
+# portable SRFI 60 facade; see docs/TEST_ORGANIZATION.md for measurements.
+# The pinned vendor extraction is unchanged.
+--- a/slib/tzfile.sld
++++ b/slib/tzfile.sld
+@@ -94,14 +94,14 @@
+               (vector-set! (vector-ref mode-table idx) 4 (tzfile:read-bool port)))
+             ;;(cond ((not (eof-object? (peek-char port))) (slib:warn 'tzfile:read "bytes left at end of" path (peek-char port))))
+             (do ((idx 0 (+ 1 idx)))
+-              ((>= idx ttisstdcnt))
++              ((>= idx typecnt))
+               (let ((rec (vector-ref mode-table idx)))
+                 (vector-set!
+                   rec 0 (let loop ((pos (vector-ref rec 0)))
+                           (cond ((>= pos (bytes-length abbrevs))
+                                  (slib:warn 'tzfile:read "format error" abbrevs) #f)
+                                 ((zero? (byte-ref abbrevs pos))
+-                                 (subbytes abbrevs (vector-ref rec 0) pos))
++                                 (bytes->string (subbytes abbrevs (vector-ref rec 0) pos)))
+                                 (else (loop (+ 1 pos))))))))
+             (list path mode-table leap-seconds transition-times transition-types)))))
+ 

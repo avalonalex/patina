@@ -735,7 +735,7 @@ contribute. A smoke pass establishes only the assertions its driver makes;
 a probe pass establishes loading without calling exported procedures.
 
 `compat/smoke/manifest.scm` registers smoke drivers by package slug and expected
-assertion count. The 81 drivers cover binary-record read/write round trips;
+assertion count. The 89 drivers cover binary-record read/write round trips;
 PFDS queues, heaps, deques, difference lists, fectors, lazy lists, sequences
 and sets, HAMTs, bounded-balance trees, finger trees and priority search
 queues, and their alist, bitwise, vector and list helpers; SLIB formatting,
@@ -747,6 +747,8 @@ SLIB byte arrays, byte/number encodings, coercions, chapter ordering, filename
 matching, soundex, formatted input, pretty printing and URI processing;
 SLIB color spaces, palette dictionaries, daylight models, character plotting,
 Fourier transforms, minimization and random sampling;
+SLIB calendar arithmetic, TZ rules and binary timezone records, POSIX and
+Common Lisp time APIs, common helpers, dynamic bindings and substring moves;
 SRFI 63 arrays, SRFI 95 sorting, SRFI 43
 vectors, SRFI 37 argument parsing; SRFI 2, 11, 16, 26, 31 and 227 syntax;
 SRFI 28 formatting, SRFI 29 localization, SRFI 38 shared-structure I/O,
@@ -871,7 +873,28 @@ whitepoint construction, scalar metric factors, squared CIE94 scales, the
 last spectral table row, descending spectrum traversal and the solid-sphere
 sampler's documented squared-norm return value.
 
-All 1101 assertions were compared against both Patina backends, Chibi 0.12
+The SLIB time/helper batch adds 140 assertions across eight drivers:
+time-core (31), tzfile (12), time-zone (23), posix-time (17), common-lisp-time
+(14), common (18), dynamic (13) and rev2-procedures (12). Fixed Gregorian
+dates cover pre-epoch leap years and century exceptions; zone cases exercise
+northern/southern DST boundaries, Julian versus ordinal rules, exact binary
+transition lookup, repeated local hours and historical offset changes.
+Calendar seconds are compared numerically without requiring exactness.
+The test-only `(patina compat time-fixtures)` helper creates and removes
+small binary files in the runner's per-package scratch directory. They cover
+signed TZif v1 fields, mode abbreviations, optional flags and leap records,
+plus binary/text file opening. These checks do not claim TZif v2/v3 support,
+leap-second application, or a policy for nonexistent spring-forward times.
+Clock-dependent Common Lisp entry points temporarily replace and restore the
+shared Scheme clock and zone-resolver bindings; no expected result depends
+on the host clock, environment or timezone database.
+The helper checks also exercise port closure after normal return, all callback
+result arities, symbol uniqueness, dynamic binding restoration on exceptions
+and continuation exit/reentry, overlapping string moves and bounded fills.
+The six correctness overlays are tracked in #527 (calendar, timezone and
+time conversion) and #528 (common helper uniqueness and value forwarding).
+
+All 1241 assertions were compared against both Patina backends, Chibi 0.12
 and Gauche 0.9.15 using the pinned corpus libraries with their patch overlays.
 The six-driver PFDS maps batch adds 72 assertions: all pass on both Patina
 backends and Gauche, while Chibi passes 71. Its one difference is the known
@@ -974,6 +997,18 @@ measure the SLIB transformations over the same portable SRFI 27 dependency
 used by Patina. All SLIB implementation bodies match the corpus with its
 named overlays. Before-repair measurements retain previously merged dependency
 overlays and omit only the three #525 overlays.
+
+The SLIB time/helper comparisons isolate all transitive SLIB dependencies and
+pinned SRFI 63, using the same portable SRFI 60 facade over native SRFI 151
+as the earlier SLIB batches. Native common/directory conditional branches
+remain selected without launching processes. Only declarations/imports are
+renamed; implementation bodies match the corpus overlays. Before-repair runs
+retain prior dependency repairs and omit only the six #527/#528 overlays.
+The eight drivers pass 107/140 assertions before repair on both Patina
+backends and Chibi, and 105/140 on Gauche; all four pass 140/140 afterward.
+Gauche alone exposes the single-value binding in `call-with-open-ports`;
+the other hosts tolerate it. The repaired wrapper forwards every value on
+all four while retaining the upstream normal-return port closure contract.
 
 CI runs all active smoke drivers on both backends, using the release build
 from the R7RS compliance job. The same gates can be run locally:

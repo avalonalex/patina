@@ -215,6 +215,17 @@ the broader #429 authorization):
   initialize and interpolate the final spectral row, traverse descending
   spectrum samples and return the solid-sphere sampler's squared norm.
   Direct regressions and palette serialization exercise the repairs.
+- [#527](https://github.com/avalonalex/patina/issues/527),
+  `slib-time-core.patch`, `slib-tzfile.patch`, `slib-time-zone.patch`,
+  `slib-posix-time.patch` and `slib-common-lisp-time.patch`: correct backward
+  leap-year traversal, Julian dates, southern DST and transition search;
+  resolve every TZif mode abbreviation to a string; parse and validate TZ
+  offsets/rules; honor or infer `tm_isdst`, including historical file offsets;
+  and use calendar seconds and fractional zones in the Common Lisp API.
+- [#528](https://github.com/avalonalex/patina/issues/528), `slib-common.patch`:
+  advance the temporary-symbol counter and forward all callback return
+  values after closing supplied ports. Nonlocal-exit cleanup semantics remain
+  the upstream contract; the driver asserts normal-return closure.
 
 These patches deliberately correct upstream behavior. Before/after behavior
 is compared with the pinned libraries on Patina's two backends, Chibi and
@@ -248,6 +259,13 @@ primitive reproduction shows Chibi's real-minus-complex subtraction changing
 an earlier sum's imaginary component, which breaks the retained Fourier
 round-trip assertion. This oracle defect and the complete staging method are
 recorded in `docs/TEST_ORGANIZATION.md` and #525.
+The time/helper batch uses the same SLIB/SRFI 63 isolation and portable SRFI 60
+facade. Fixed clocks, explicit rules and generated TZif v1 fixtures avoid
+host clock, environment and timezone-database dependencies. Its 140 assertions
+pass 107/140 before repair on both Patina backends and Chibi, and 105/140 on
+Gauche; all four pass 140/140 afterward. Gauche alone exposes the common
+helper's callback arity defect. Full staging details and scope limits are in
+`docs/TEST_ORGANIZATION.md`; #527 and #528 record the reproductions.
 These patches do not weaken an assertion or hide a Patina difference. The
 corpus now measures these packages with the documented corrections, not the
 pristine upstream behavior.
