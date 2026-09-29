@@ -1508,6 +1508,7 @@ fn runtime_stub(
         num_regs,
         arity: Arity::Fixed(0),
         source_map: Vec::new(),
+        register_roots: None,
     });
     set_slot(state, id);
     state.code_object(id)

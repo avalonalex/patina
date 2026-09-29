@@ -41,6 +41,9 @@ struct Codegen {
     /// time; `App`s on these emit `CallPrimitive` instead of `LoadGlobal` +
     /// `Call`. Empty when compiling without an environment.
     prim_calls: Rc<PrimitiveCallMap>,
+    /// Expression lifetime ends at instruction boundaries; these generate
+    /// GC metadata, not instructions on the execution path (#423).
+    retirements: Vec<(usize, std::ops::Range<u16>)>,
 }
 
 impl Codegen {
@@ -52,6 +55,7 @@ impl Codegen {
             nested: Vec::new(),
             source_map: Vec::new(),
             prim_calls,
+            retirements: Vec::new(),
         }
     }
 
@@ -135,6 +139,7 @@ impl Pass5Codegen {
         // Top-level: emit a Return of the expression's result.
         cg.emit(Instruction::Return { val: expr.dst });
         let global_cache = finalize_instructions(&mut cg.instructions);
+        let register_roots = register_root_maps(&cg, allocated.num_regs.max(1), 0);
         let nested = cg.nested;
         let code = CodeObject {
             id,
@@ -147,6 +152,7 @@ impl Pass5Codegen {
             num_regs: allocated.num_regs.max(1),
             arity: Arity::Fixed(0),
             source_map: cg.source_map,
+            register_roots: Some(register_roots),
         };
         Ok((code, nested))
     }
@@ -206,6 +212,145 @@ fn finalize_instructions(
 ) -> Vec<std::cell::Cell<GlobalCacheEntry>> {
     thread_returns(instructions);
     GlobalCacheEntry::table(instructions)
+}
+
+/// Forward may-root analysis over the final bytecode. A write makes its slot
+/// a possible root; an expression's lifetime end retires its temporaries.
+/// Union at joins preserves a value needed on either path. This deliberately
+/// keeps local bindings through the frame's lifetime, rather than predicting
+/// their last use. No instructions are added to the normal execution path.
+fn register_root_maps(cg: &Codegen, num_regs: u16, num_params: u16) -> Vec<Vec<u64>> {
+    use std::collections::VecDeque;
+    let len = cg.instructions.len();
+    let mut retire = vec![Vec::new(); len + 1];
+    for (pc, range) in &cg.retirements {
+        retire[*pc].push(range.clone());
+    }
+    let mut incoming = vec![vec![0u64; (num_regs as usize).div_ceil(64)]; len + 1];
+    for reg in 0..num_params as usize {
+        incoming[0][reg / 64] |= 1 << (reg % 64);
+    }
+    let mut reached = vec![false; len + 1];
+    reached[0] = true;
+    let mut queue = VecDeque::from([0]);
+    while let Some(pc) = queue.pop_front() {
+        let mut roots = incoming[pc].clone();
+        for range in &retire[pc] {
+            retire_root_range(&mut roots, range);
+        }
+        let Some(instruction) = cg.instructions.get(pc) else {
+            continue;
+        };
+        if let Some(dst) = written_register(instruction) {
+            roots[dst as usize / 64] |= 1 << (dst % 64);
+        }
+        // A fused predicate has three successors: fast true skips the kept
+        // branch, fast false jumps, and a slow/deopt result uses that branch.
+        let successors: &[usize] = match *instruction {
+            Instruction::Jump { target } => &[target],
+            Instruction::JumpIf { target, .. }
+            | Instruction::JumpUnless { target, .. }
+            | Instruction::JumpUnlessShadowed { target, .. } => &[pc + 1, target],
+            Instruction::TestJumpUnless { target, .. } => &[pc + 1, pc + 2, target],
+            Instruction::Return { .. }
+            | Instruction::TailCall { .. }
+            | Instruction::TailApply { .. }
+            | Instruction::TailCallWithValues { .. } => &[],
+            _ => &[pc + 1],
+        };
+        for &next in successors {
+            let mut changed = !reached[next];
+            reached[next] = true;
+            for (dest, &root) in incoming[next].iter_mut().zip(&roots) {
+                changed |= root & !*dest != 0;
+                *dest |= root;
+            }
+            if changed {
+                queue.push_back(next);
+            }
+        }
+    }
+    for (pc, roots) in incoming.iter_mut().enumerate() {
+        if !reached[pc] {
+            // Runtime-created control landings are not compiler CFG edges.
+            // Be conservative if a future one lands in otherwise dead code.
+            roots.fill(u64::MAX);
+        } else {
+            for range in &retire[pc] {
+                retire_root_range(roots, range);
+            }
+        }
+    }
+    incoming
+}
+
+fn retire_root_range(roots: &mut [u64], range: &std::ops::Range<u16>) {
+    for reg in range.clone() {
+        roots[reg as usize / 64] &= !(1 << (reg % 64));
+    }
+}
+
+/// Exhaustive so a new destination-bearing opcode cannot silently lose a
+/// root. Calls mark their result even while waiting for the callee: its old
+/// slot is conservative until the result (or continuation value) arrives.
+fn written_register(instruction: &Instruction) -> Option<u16> {
+    use Instruction::*;
+    match *instruction {
+        LoadConst { dst, .. }
+        | LoadImmediate { dst, .. }
+        | Move { dst, .. }
+        | LoadClosure { dst, .. }
+        | LoadGlobal { dst, .. }
+        | AllocCell { dst, .. }
+        | ReadCell { dst, .. }
+        | MakeClosure { dst, .. }
+        | Call { dst, .. }
+        | Apply { dst, .. }
+        | CallPrimitive { dst, .. }
+        | CallPrimitiveDirect { dst, .. }
+        | Add { dst, .. }
+        | Sub { dst, .. }
+        | Mul { dst, .. }
+        | Lt { dst, .. }
+        | NumEq { dst, .. }
+        | Eq { dst, .. }
+        | Cons { dst, .. }
+        | Car { dst, .. }
+        | Cdr { dst, .. }
+        | Not { dst, .. }
+        | TestJumpUnless { dst, .. }
+        | AddImm { dst, .. }
+        | SubImm { dst, .. }
+        | LtImm { dst, .. }
+        | NumEqImm { dst, .. }
+        | NullP { dst, .. }
+        | PairP { dst, .. }
+        | VectorP { dst, .. }
+        | VectorRef { dst, .. }
+        | VectorSet { dst, .. }
+        | CallWithValues { dst, .. }
+        | AbortToPrompt { dst, .. }
+        | CaptureComposable { dst, .. } => Some(dst),
+        StoreClosure { .. }
+        | StoreGlobal { .. }
+        | WriteCell { .. }
+        | Jump { .. }
+        | JumpIf { .. }
+        | JumpUnless { .. }
+        | JumpUnlessShadowed { .. }
+        | TailCall { .. }
+        | TailApply { .. }
+        | Return { .. }
+        | TailCallWithValues { .. }
+        | PushWind { .. }
+        | PopWind
+        | Define { .. }
+        | InvokeContinuation { .. }
+        | Nop => None,
+        ResumeWindJump | ResumeComposableInvoke | ResumeRaise | ResumeForce | ResumePrimitive => {
+            unreachable!("runtime stubs use conservative register roots")
+        }
+    }
 }
 
 /// Fold a just-emitted predicate opcode into a fused test+branch
@@ -518,6 +663,32 @@ fn writes_only_dst(kind: &RegExprKind) -> bool {
 
 /// Generate instructions for `expr` into `cg`.
 fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+    gen_expr_value(expr, cg)?;
+    // Tail transfers replace the frame. Its callee starts with only the
+    // parameter slots live, so no caller retirement point is needed.
+    if !matches!(
+        expr.kind,
+        RegExprKind::App { is_tail: true, .. } | RegExprKind::Apply { is_tail: true, .. }
+    ) {
+        retire_temporaries(expr.dst + 1, expr.temp_end, cg);
+    }
+    Ok(())
+}
+
+fn retire_temporaries(start: u16, end: u16, cg: &mut Codegen) {
+    if start < end {
+        cg.retirements.push((cg.current_pc(), start..end));
+    }
+}
+
+/// A sequence discards the expression's result as well as its temporaries.
+fn gen_discarded_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+    gen_expr_value(expr, cg)?;
+    retire_temporaries(expr.dst, expr.temp_end, cg);
+    Ok(())
+}
+
+fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
     // Record source location before emitting instructions for this expression.
     cg.record_source(&expr.source);
 
@@ -575,7 +746,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
 
         RegExprKind::If { test, then, else_ } => {
             // Evaluate test.
-            gen_expr(test, cg)?;
+            gen_expr_value(test, cg)?;
             // A predicate feeding the branch fuses into `TestJumpUnless`,
             // which branches directly on the fast path (Track P P5). The
             // plain `JumpUnless` is still emitted right after it: the fused
@@ -586,6 +757,9 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             let fused = fuse_test_into_branch(test.dst, cg);
             // Jump to else if false.
             let jump_else = cg.emit_jump_unless_placeholder(test.dst);
+            // The test is consumed on either edge. Keep the predicate and
+            // branch adjacent so fused tests retain their deopt landing.
+            retire_temporaries(test.dst, test.temp_end, cg);
             // Then branch.
             gen_expr(then, cg)?;
             // Jump over else.
@@ -596,6 +770,7 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
             if let Some(idx) = fused {
                 cg.patch_jump(idx, else_start);
             }
+            retire_temporaries(test.dst, test.temp_end, cg);
             gen_expr(else_, cg)?;
             let end = cg.current_pc();
             cg.patch_jump(jump_end, end);
@@ -675,8 +850,12 @@ fn gen_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
         }
 
         RegExprKind::Begin(exprs) => {
-            for e in exprs {
-                gen_expr(e, cg)?;
+            for (i, e) in exprs.iter().enumerate() {
+                if i + 1 == exprs.len() {
+                    gen_expr(e, cg)?;
+                } else {
+                    gen_discarded_expr(e, cg)?;
+                }
             }
         }
 
@@ -973,10 +1152,12 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     // Generate body instructions for the child.
     let body_len = lam.body.len();
     for (i, e) in lam.body.iter().enumerate() {
-        gen_expr(e, &mut child_cg)?;
         if i == body_len - 1 {
+            gen_expr(e, &mut child_cg)?;
             // Return last result.
             child_cg.emit(Instruction::Return { val: e.dst });
+        } else {
+            gen_discarded_expr(e, &mut child_cg)?;
         }
     }
 
@@ -987,6 +1168,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
     };
 
     let global_cache = finalize_instructions(&mut child_cg.instructions);
+    let register_roots = register_root_maps(&child_cg, lam.num_regs, lam.num_params);
     let child_code = CodeObject {
         id: child_id,
         name: None,
@@ -997,6 +1179,7 @@ fn gen_lambda(lam: &RegLambda, dst: u16, cg: &mut Codegen) -> Result<(), Compile
         num_regs: lam.num_regs,
         arity,
         source_map: child_cg.source_map,
+        register_roots: Some(register_roots),
     };
 
     // Collect nested from child.

@@ -113,3 +113,72 @@ fn multiple_values_survive_collection() {
         "6",
     );
 }
+
+// This pins VM register retirement, not a guarantee about exactly when the
+// tree-walker releases discarded CPS results.
+#[test]
+fn discarded_results_and_both_branch_tests_release_the_key() {
+    for condition in ["#t", "#f"] {
+        assert_gc_eval_to(
+            &format!(
+                "(import (scheme base) (scheme ephemeron) (patina debug))
+                 (define key (list 'key))
+                 (define e (make-ephemeron key 'datum))
+                 (define (drop!)
+                   key
+                   (if (begin key {condition}) key key)
+                   (reference-barrier key)
+                   (set! key #f)
+                   (gc)
+                   (ephemeron-broken? e))
+                 (drop!)"
+            ),
+            "#t",
+        );
+    }
+}
+
+#[test]
+fn replacing_a_captured_local_releases_its_previous_value() {
+    assert_gc_eval_to(
+        "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define (drop!)
+           (define keys (list (list 'dead) (list 'live)))
+           (define current (lambda () keys))
+           (define e (make-ephemeron (car keys) 'datum))
+           (set! keys (reverse (reverse (cdr keys))))
+           (gc)
+           (list (ephemeron-broken? e) (current)))
+         (drop!)",
+        "(#t ((live)))",
+    );
+}
+
+#[test]
+fn wide_pending_operands_survive_collection() {
+    let operands = (0..80).map(|n| format!("(list {n}) ")).collect::<String>();
+    assert_gc_eval_to(
+        &format!(
+            "(import (patina debug))
+             (map car (list {operands} (begin (gc) (list 80))))"
+        ),
+        &format!(
+            "({})",
+            (0..81).map(|n| n.to_string()).collect::<Vec<_>>().join(" ")
+        ),
+    );
+}
+
+#[test]
+fn rebound_control_operator_keeps_operands_after_a_larger_expression() {
+    assert_gc_eval_to(
+        "(import (patina debug))
+         (define (run)
+           (list (list 1 2 3 4 5) (list 6 7 8 9 10))
+           (call-with-values (lambda () (list 'alive)) (lambda (x) x)))
+         (set! call-with-values (lambda (producer consumer)
+                                  (gc) (consumer (producer))))
+         (run)",
+        "(alive)",
+    );
+}

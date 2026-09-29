@@ -45,6 +45,10 @@ pub struct RegExpr {
     pub kind: RegExprKind,
     /// The register that will hold this expression's result after it executes.
     pub dst: u16,
+    /// Exclusive upper bound of this expression's temporary registers. All
+    /// registers above `dst` and below this bound can be cleared once its
+    /// result is produced; bindings and preceding operands live below `dst`.
+    pub temp_end: u16,
     /// Source location from the original `CoreExpr`, for error reporting.
     pub source: Option<SourceLocation>,
 }
@@ -250,6 +254,11 @@ fn allocate_ctx(
     alloc: &mut RegAlloc,
     own_captures: &[Symbol],
 ) -> RegExpr {
+    // Track this expression's peak separately from earlier expressions. The
+    // frame-wide peak can include registers that a later sibling will use:
+    // codegen sometimes loads a control operator after its operands (#442).
+    let previous_peak = alloc.num_regs;
+    alloc.num_regs = alloc.next;
     let source = expr.source.clone();
     let kind = match &expr.kind {
         TailedExprKind::Literal(v) => RegExprKind::Literal(*v),
@@ -423,7 +432,14 @@ fn allocate_ctx(
         }
     };
 
-    RegExpr { kind, dst, source }
+    let temp_end = alloc.num_regs;
+    alloc.num_regs = previous_peak.max(temp_end);
+    RegExpr {
+        kind,
+        dst,
+        temp_end,
+        source,
+    }
 }
 
 /// Allocate registers for a lambda, starting a fresh frame.

@@ -34,14 +34,44 @@ use crate::types::CallFrame;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
+use patina_core::TaggedValue;
 
 use super::vm_state::VmState;
 
+/// Clear finished compiler temporaries before collection or snapshotting.
+/// Keeping the full-vector tracing contract means no captured snapshot or
+/// tracer can later expose an untraced pointer to an already swept slot.
+/// Delimited snapshots use absolute frame bases but store only their slice.
+#[cold]
+#[inline(never)]
+pub(super) fn retire_registers(
+    registers: &mut [TaggedValue],
+    frames: &[CallFrame],
+    base_at_capture: usize,
+) {
+    for frame in frames {
+        let Some(maps) = &frame.code.register_roots else {
+            continue;
+        };
+        let Some(roots) = maps.get(frame.pc) else {
+            continue;
+        };
+        let base = frame.register_base - base_at_capture;
+        let window = &mut registers[base..base + frame.num_regs as usize];
+        for (reg, value) in window.iter_mut().enumerate() {
+            // A tail call can reuse a window larger than the new code needs.
+            if roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) == 0 {
+                *value = TaggedValue::UNSPECIFIED;
+            }
+        }
+    }
+}
+
 impl GcRoots for VmState {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-        // The register file is rooted in full, including slots past a frame's
-        // live range: they hold `NULL` or stale-but-valid values, and marking
-        // a dead-but-valid slot only delays its reclamation by one cycle.
+        // Trace the whole register file after the safe point has retired
+        // completed expression temporaries (#423). Continuation snapshots
+        // are retired at capture, so they obey the same full-vector contract.
         visitor.visit_slice(&self.registers);
         visitor.visit_slice(&self.scratch_args);
 

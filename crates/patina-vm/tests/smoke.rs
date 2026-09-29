@@ -15,6 +15,7 @@ fn code_object_constructs() {
         num_regs: 4,
         arity: Arity::Fixed(2),
         source_map: vec![],
+        register_roots: None,
         global_cache: GlobalCacheEntry::table(&[]),
         live_closures: std::cell::Cell::new(0),
     };
@@ -43,6 +44,7 @@ fn call_frame_is_clone() {
         num_regs: 8,
         arity: Arity::Fixed(0),
         source_map: vec![],
+        register_roots: None,
         global_cache: GlobalCacheEntry::table(&[]),
         live_closures: std::cell::Cell::new(0),
     });

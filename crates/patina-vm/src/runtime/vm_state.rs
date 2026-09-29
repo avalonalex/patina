@@ -259,6 +259,7 @@ impl VmState {
                 num_regs: 0,
                 arity: Arity::Fixed(0),
                 source_map: Vec::new(),
+                register_roots: None,
                 global_cache: Vec::new(),
                 live_closures: Cell::new(0),
             }),
@@ -583,7 +584,8 @@ impl VmState {
     /// The ref object (which mints the id) and the store entry are created
     /// back-to-back within one instruction dispatch, so no safe point can
     /// observe one without the other — required for the weak-table protocol.
-    pub fn alloc_vm_continuation(&mut self, cont: VmContinuation) -> TaggedValue {
+    pub fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
+        super::gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref();
         self.continuation_store
             .borrow_mut()
@@ -594,8 +596,9 @@ impl VmState {
     /// Allocate a delimited VM continuation, returning its heap `TaggedValue` handle.
     pub fn alloc_vm_delimited_continuation(
         &mut self,
-        cont: VmDelimitedContinuation,
+        mut cont: VmDelimitedContinuation,
     ) -> TaggedValue {
+        super::gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_delimited_continuation_ref();
         self.delimited_continuation_store
             .borrow_mut()
@@ -1327,7 +1330,11 @@ pub(super) fn run_loop_until_outcome(
 /// collects, one borrow spans the collection — lives in
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
-fn maybe_collect(state: &VmState, is_outermost: bool) {
+fn maybe_collect(state: &mut VmState, is_outermost: bool) {
+    if !state.gc_pending.get() || !is_outermost {
+        return;
+    }
+    super::gc_roots::retire_registers(&mut state.registers, &state.frames, 0);
     GcController::safe_point(
         &state.gc,
         &state.heap,
@@ -2609,6 +2616,7 @@ mod tests {
             num_regs: 1,
             arity: Arity::Fixed(0),
             source_map: Vec::new(),
+            register_roots: None,
             live_closures: Cell::new(0),
         }
     }
