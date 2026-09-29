@@ -571,10 +571,14 @@ impl LibraryDefinition {
             return Err(ParseError::InvalidSyntax("Empty import set".to_string()));
         }
 
-        // Check if first element is a modifier keyword
+        // Import-set keywords and operands are names in the import grammar,
+        // not variable references. Macro expansion can wrap them in scoped
+        // identifiers (#546); accept those just as library-name parsing does.
+        // The enclosing `import` form is still recognized by its binding.
         let first_sym = {
             let h = heap.borrow();
-            h.get_symbol_name(list[0]).map(|s| s.to_string())
+            h.get_symbol_or_identifier_name(list[0])
+                .map(|s| s.to_string())
         };
 
         if let Some(ref first) = first_sym {
@@ -607,7 +611,7 @@ impl LibraryDefinition {
         let mut identifiers = Vec::new();
 
         for &id_tv in &list[2..] {
-            if let Some(name) = h.get_symbol_name(id_tv) {
+            if let Some(name) = h.get_symbol_or_identifier_name(id_tv) {
                 identifiers.push(name.to_string());
             } else {
                 return Err(ParseError::InvalidSyntax(
@@ -638,7 +642,7 @@ impl LibraryDefinition {
         let mut identifiers = Vec::new();
 
         for &id_tv in &list[2..] {
-            if let Some(name) = h.get_symbol_name(id_tv) {
+            if let Some(name) = h.get_symbol_or_identifier_name(id_tv) {
                 identifiers.push(name.to_string());
             } else {
                 return Err(ParseError::InvalidSyntax(
@@ -667,7 +671,7 @@ impl LibraryDefinition {
         let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
         let prefix = {
             let h = heap.borrow();
-            h.get_symbol_name(list[2])
+            h.get_symbol_or_identifier_name(list[2])
                 .ok_or_else(|| ParseError::InvalidSyntax("prefix must be a symbol".to_string()))?
                 .to_string()
         };
@@ -700,14 +704,14 @@ impl LibraryDefinition {
 
             let h = heap.borrow();
             let old = h
-                .get_symbol_name(pair[0])
+                .get_symbol_or_identifier_name(pair[0])
                 .ok_or_else(|| {
                     ParseError::InvalidSyntax("rename old name must be a symbol".to_string())
                 })?
                 .to_string();
 
             let new = h
-                .get_symbol_name(pair[1])
+                .get_symbol_or_identifier_name(pair[1])
                 .ok_or_else(|| {
                     ParseError::InvalidSyntax("rename new name must be a symbol".to_string())
                 })?

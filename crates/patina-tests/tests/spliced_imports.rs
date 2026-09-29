@@ -5,6 +5,136 @@ mod common;
 
 use common::{assert_program_eval_error, assert_program_eval_to};
 
+// #546: keep the same import set as written, passed through a pattern variable,
+// and introduced by a template. Every call below gets a fresh interpreter.
+fn import_forms(set: &str) -> [String; 3] {
+    [
+        format!("(import {set})"),
+        format!(
+            "(define-syntax splice (syntax-rules () ((_ form) form)))
+             (splice (import {set}))"
+        ),
+        format!(
+            "(define-syntax introduce (syntax-rules () ((_) (import {set}))))
+             (introduce)"
+        ),
+    ]
+}
+
+#[test]
+fn macro_import_modifiers_select_only_the_requested_bindings() {
+    for (set, present, absent) in [
+        (
+            "(only (srfi 151) bitwise-and)",
+            "bitwise-and",
+            "bitwise-ior",
+        ),
+        (
+            "(except (srfi 151) bitwise-ior)",
+            "bitwise-and",
+            "bitwise-ior",
+        ),
+        ("(prefix (srfi 151) p:)", "p:bitwise-and", "bitwise-and"),
+        (
+            "(rename (srfi 151) (bitwise-and and-bits))",
+            "and-bits",
+            "bitwise-and",
+        ),
+        (
+            "(rename (prefix (except (only (srfi 151) bitwise-and bitwise-ior) bitwise-ior) p:)
+                     (p:bitwise-and and-bits))",
+            "and-bits",
+            "p:bitwise-ior",
+        ),
+    ] {
+        for form in import_forms(set) {
+            let program = format!("(import (scheme base)) {form}");
+            assert_program_eval_to(&format!("{program} ({present} 12 10)"), "8");
+            assert_program_eval_error(&format!("{program} {absent}"));
+        }
+    }
+}
+
+#[test]
+fn macro_import_modifiers_preserve_shared_library_locations() {
+    let library = "(define-library (audit mutable-import)
+                     (import (scheme base))
+                     (export value update!)
+                     (begin (define value 1)
+                            (define (update! n) (set! value n))))";
+    for (set, name) in [
+        ("(only (audit mutable-import) value)", "value"),
+        ("(except (audit mutable-import) update!)", "value"),
+        ("(prefix (audit mutable-import) p:)", "p:value"),
+        ("(rename (audit mutable-import) (value renamed))", "renamed"),
+        (
+            "(rename (prefix (except (only (audit mutable-import) value update!)
+                                     update!) p:)
+                     (p:value renamed))",
+            "renamed",
+        ),
+    ] {
+        for form in import_forms(set) {
+            assert_program_eval_to(
+                &format!(
+                    "(import (scheme base)) {library}
+                     (import (only (audit mutable-import) update!))
+                     {form} (update! 42) {name}"
+                ),
+                "42",
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_macro_import_modifiers_report_the_offending_grammar() {
+    for (set, message) in [
+        ("(only)", "only requires an import set"),
+        ("(except)", "except requires an import set"),
+        (
+            "(prefix (scheme cxr))",
+            "prefix requires exactly 2 arguments",
+        ),
+        ("(rename)", "rename requires an import set"),
+        ("(only (scheme cxr) 42)", "only identifiers must be symbols"),
+        (
+            "(except (scheme cxr) 42)",
+            "except identifiers must be symbols",
+        ),
+        ("(prefix (scheme cxr) 42)", "prefix must be a symbol"),
+        (
+            "(rename (scheme cxr) (42 third))",
+            "rename old name must be a symbol",
+        ),
+        (
+            "(rename (scheme cxr) (caddr 42))",
+            "rename new name must be a symbol",
+        ),
+        (
+            "(rename (scheme cxr) (caddr third extra))",
+            "rename pair must have exactly 2 elements",
+        ),
+    ] {
+        for form in import_forms(set) {
+            let program = format!("(import (scheme base)) {form}");
+            for (backend, result) in [
+                ("VM", common::try_eval_program_vm(&program)),
+                (
+                    "tree-walker",
+                    common::try_eval_program_tree_walker(&program),
+                ),
+            ] {
+                let error = result.expect_err(&program);
+                assert!(
+                    error.contains(message),
+                    "{backend}: expected {message:?}, got {error:?}\n{program}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn top_level_sequences_install_imports() {
     for form in [
