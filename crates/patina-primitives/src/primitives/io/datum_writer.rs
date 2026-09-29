@@ -1113,3 +1113,81 @@ fn format_simple_list_tail(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use patina_frontend::Parser;
+    use proptest::prelude::*;
+
+    // Arbitrary Unicode exercises escaping; ASCII names and number-like
+    // prefixes exercise the narrower set the writer actually leaves bare.
+    fn symbol_names() -> impl Strategy<Value = String> {
+        prop_oneof![
+            proptest::collection::vec(any::<char>(), 0..80)
+                .prop_map(|chars| chars.into_iter().collect()),
+            "[a-zA-Z0-9!$%&*/:<=>?^_~+@.-]{0,80}",
+            (
+                prop::sample::select(vec!["+i", "-i", "+I", "-I", "+nan.0", "-inf.0"]),
+                "[a-zA-Z0-9+@./_-]{0,40}",
+            )
+                .prop_map(|(prefix, suffix)| format!("{prefix}{suffix}")),
+        ]
+    }
+
+    fn assert_symbol_round_trip(name: &str) {
+        let heap = patina_core::new_shared_heap();
+        let symbol = heap.borrow_mut().intern_symbol(name);
+        for writer in [
+            format_write_tagged,
+            format_write_simple_tagged,
+            format_write_shared_tagged,
+        ] {
+            let text = writer(symbol, &heap);
+            let mut parser = Parser::new_with_heap(&text, heap.clone()).unwrap();
+            let value = parser.parse_next().unwrap_or_else(|e| {
+                panic!("symbol {name:?} written as {text:?} failed to read: {e}")
+            });
+            assert_eq!(value, Some(symbol), "symbol {name:?} written as {text:?}");
+            assert_eq!(
+                parser.parse_next().unwrap(),
+                None,
+                "extra datum in {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_looking_symbols_round_trip() {
+        for name in [
+            "",
+            "+inf",
+            "+id",
+            "-in",
+            "+nan.0abc",
+            "+INF",
+            "+i",
+            "-i",
+            "+inf.0",
+            "+inf.0i",
+            "+nan.0",
+            ".5",
+            "@",
+            "a|b",
+            "a\\b",
+            "a\0b",
+            "λ",
+        ] {
+            assert_symbol_round_trip(name);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1024))]
+
+        #[test]
+        fn every_written_symbol_reads_back(name in symbol_names()) {
+            assert_symbol_round_trip(&name);
+        }
+    }
+}

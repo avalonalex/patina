@@ -633,6 +633,7 @@ dependencies = [
  "patina-frontend",
  "patina-ir",
  "patina-runtime",
+ "proptest",
  "smallvec",
  "thiserror",
  "tracing",

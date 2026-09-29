@@ -432,6 +432,10 @@ mod tests {
             "#0=(1 2) #0# (a . b)",
             "; a comment\n(after)\n",
             "#!fold-case ABC (DEF)",
+            // #358: numeric prefixes are provisional until the whole token
+            // decides between a number and a peculiar identifier.
+            "+inf +id -in +nan.0abc +inf.0i +nan.0 +i -i",
+            "#!fold-case +INC #!no-fold-case +INC +NaN.0abc",
             "\"a\nb\" |c\nd| #| e\nf |# g",
             "(a) #\\bogus",
             "(unfinished",
