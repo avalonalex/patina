@@ -352,8 +352,11 @@ expressions. A library initializer therefore runs before an earlier `display`
 in the same `begin`, matching Gauche; Chibi interleaves those operations.
 Imports in operands, branches, lambda bodies, or ordinary local-syntax bodies
 are syntax errors. An import in quoted data or an unselected `cond-expand`
-branch does nothing. The separate scoped import-modifier parsing defect is
-tracked in #546.
+branch does nothing. Import-set modifiers (`only`, `except`, `prefix`, and
+`rename`) and their operands accept both plain symbols and scoped identifiers
+from macro expansion (#546). These are names in the import grammar, rather
+than variable references; recognizing the enclosing `import` still follows
+its binding. Modified imports retain the exporting library's shared locations.
 
 Import callbacks preserve backend errors and the importing evaluation's dynamic
 context. Collection is deferred while expansion holds unfinished datums and IR
