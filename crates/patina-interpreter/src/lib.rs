@@ -92,9 +92,8 @@ impl ProgramOutcome {
 /// Format any `InterpreterError` with source context.
 ///
 /// The tree-walker's name for [`format_backend_error_with_source`]: an
-/// evaluation error, and a parse error that carries a position, get caret
-/// context; lex/desugar errors, and parse errors that do not name a position,
-/// fall back to `Display`.
+/// evaluation error or reader error that carries a position gets caret
+/// context; errors without a position fall back to `Display`.
 pub fn format_interpreter_error(
     error: &InterpreterError<EvalError>,
     source_map: &SourceMap,
@@ -104,33 +103,11 @@ pub fn format_interpreter_error(
 
 /// Format a `ParseError` with the same caret context an evaluation error gets.
 ///
-/// A truncated file is found by the form it cut short, so the position
-/// `IncompleteDatum` carries is worth as much as an evaluation error's — and
-/// worth as little on its own, in a long file across several includes. The
-/// source map already holds the text and the name it came from, which is all
-/// `format_context` needs.
+/// Reader errors carry their own spans, including errors deferred by
+/// lookahead. The source map supplies the source name and text, without
+/// needing a successfully parsed value to look up.
 pub fn format_parse_error_with_source(error: &ParseError, source_map: &SourceMap) -> String {
-    let Some((line, column)) = parse_error_position(error) else {
-        return error.to_string();
-    };
-    let loc = SourceLocation::new(
-        source_map.primary_source().unwrap_or("<unknown>"),
-        line,
-        column,
-    );
-    let mut parts = vec![error.to_string(), format!("  at {}", loc)];
-    if let Some(ctx) = source_map.format_context(&loc) {
-        parts.push(ctx);
-    }
-    parts.join("\n")
-}
-
-/// Where a parse error points, for the errors that say.
-fn parse_error_position(error: &ParseError) -> Option<(u32, u32)> {
-    match error {
-        ParseError::IncompleteDatum { line, column } => Some((*line, *column)),
-        _ => None,
-    }
+    error.format_with_source(source_map)
 }
 
 /// Format an evaluation error, from any backend, with source context from a

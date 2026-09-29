@@ -1,6 +1,8 @@
 mod datum;
+mod error;
+pub use error::ParseError;
 
-use crate::lexer::{LexError, Lexer, ReaderState, Spanned, Token};
+use crate::lexer::{LexError, Lexer, ReadSpan, ReaderState, Spanned, Token};
 use crate::source_map::SourceMap;
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -13,69 +15,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::str::FromStr;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum ParseError {
-    #[error("Lexer error: {0}")]
-    LexError(#[from] LexError),
-
-    /// The input ended where a datum was required: `parse` was called with
-    /// nothing left but whitespace and comments. `parse_next` reports that
-    /// case as `Ok(None)` instead, so a caller reading forms until the end
-    /// of the input never sees this.
-    #[error("Unexpected end of input")]
-    UnexpectedEof,
-
-    /// The input ended inside a datum. `line` and `column` are where that
-    /// datum — the outermost one being read — began: the end of the input
-    /// is where the reader stopped, not where the problem is, and a
-    /// truncated file is found by the form it cut short.
-    #[error("Unexpected end of input inside the datum beginning at line {line}, column {column}")]
-    IncompleteDatum { line: u32, column: u32 },
-
-    #[error("Unexpected token: {0:?}")]
-    UnexpectedToken(Token),
-
-    #[error("Invalid syntax: {0}")]
-    InvalidSyntax(String),
-
-    #[error("Undefined datum label: #{0}#")]
-    UndefinedLabel(usize),
-
-    #[error("Duplicate datum label: #{0}=")]
-    DuplicateLabel(usize),
-
-    /// A `define-library` reached an `include-shared` declaration: its
-    /// implementation is a compiled shared object, which Patina cannot load.
-    ///
-    /// Its own variant rather than an `InvalidSyntax` string because the
-    /// compatibility harness classifies on it — the library is out of scope
-    /// pending FFI, not broken — and because a caller that wants to say so in
-    /// its own words needs to be able to tell it apart. See
-    /// `LibraryError::NativeExtensionRequired`.
-    #[error("include-shared \"{0}\"")]
-    NativeExtensionRequired(String),
-}
-
-impl ParseError {
-    /// Whether the input ran out part-way through something, as opposed to
-    /// text that stays wrong however much more follows.
-    ///
-    /// A reader fed one line at a time — `read` on a file or on stdin, and a
-    /// REPL deciding whether to keep taking lines — needs more input for
-    /// these and must report every other error where it stands. The lexer's
-    /// unterminated constructs belong here beside `IncompleteDatum`: a string
-    /// and a block comment may both span lines, so an unterminated one at the
-    /// end of the buffer says only that the datum is not finished yet.
-    pub fn is_incomplete(&self) -> bool {
-        match self {
-            ParseError::IncompleteDatum { .. } => true,
-            ParseError::LexError(error) => error.is_incomplete(),
-            _ => false,
-        }
-    }
-}
 
 /// Where a parser takes its tokens from.
 ///
@@ -137,6 +76,7 @@ pub struct Parser {
     current_token_column: u32,
     /// Where the current token begins, with the reader state there.
     current_token_start: ReaderState,
+    current_token_end: ReaderState,
     /// The folding mode after lexing this token, also carried by token replay.
     current_token_fold_case: bool,
     /// Shared heap for allocating pairs, vectors, strings, etc.
@@ -147,14 +87,14 @@ pub struct Parser {
     /// Labels referenced by `#n#` before (or without) their `#n=`. Checked
     /// once the outermost datum is complete: one still undefined then is an
     /// error, not a placeholder left in the datum.
-    pending_refs: Vec<usize>,
+    pending_refs: Vec<(usize, ReadSpan)>,
     /// Optional source map for recording source positions of parsed forms
     source_map: Option<Rc<RefCell<SourceMap>>>,
     /// Name of the source being parsed (e.g., file path, "<repl>", "<eval>")
     source_name: Rc<str>,
     /// Where the outermost datum being read began, so that running out of
     /// input however deep inside it reports that position.
-    datum_start: (u32, u32),
+    datum_start: ReaderState,
     /// How many lists, vectors and bytevectors the datum being read is inside.
     nesting: usize,
     /// A lexical error met in the token after a finished outermost datum,
@@ -199,8 +139,9 @@ impl Parser {
             current_token_line: spanned.line,
             current_token_column: spanned.column,
             current_token_start: spanned.start,
+            current_token_end: spanned.end,
             current_token_fold_case: spanned.end.fold_case,
-            datum_start: (spanned.line, spanned.column),
+            datum_start: spanned.start,
             heap,
             labels: HashMap::new(),
             pending_refs: Vec::new(),
@@ -318,7 +259,15 @@ impl Parser {
         self.current_token_line = spanned.line;
         self.current_token_column = spanned.column;
         self.current_token_start = spanned.start;
+        self.current_token_end = spanned.end;
         self.current_token_fold_case = spanned.end.fold_case;
+    }
+
+    fn current_span(&self) -> ReadSpan {
+        ReadSpan {
+            start: self.current_token_start,
+            end: self.current_token_end,
+        }
     }
 
     /// Move past the last token of a datum.
@@ -371,7 +320,7 @@ impl Parser {
             return Err(error);
         }
         loop {
-            self.datum_start = (self.current_token_line, self.current_token_column);
+            self.datum_start = self.current_token_start;
             if self.current_token != Token::DatumComment {
                 return Ok(self.current_token != Token::Eof);
             }
@@ -382,8 +331,8 @@ impl Parser {
 
     /// The error for input that ran out inside the datum being read.
     fn incomplete_datum(&self) -> ParseError {
-        let (line, column) = self.datum_start;
-        ParseError::IncompleteDatum { line, column }
+        let ReaderState { line, column, .. } = self.datum_start;
+        ParseError::IncompleteDatum { line, column }.at(ReadSpan::point(self.datum_start))
     }
 
     /// Parse one datum, which must be there: `UnexpectedEof` when only
@@ -404,7 +353,7 @@ impl Parser {
 
     fn parse_one_datum(&mut self) -> Result<TaggedValue, ParseError> {
         if !self.at_datum()? {
-            return Err(ParseError::UnexpectedEof);
+            return Err(ParseError::UnexpectedEof.at(self.current_span()));
         }
         self.parse_expr().and_then(|tv| self.finish_datum(tv))
     }
@@ -420,12 +369,12 @@ impl Parser {
         if self.pending_refs.is_empty() {
             return Ok(tv);
         }
-        if let Some(&n) = self
+        if let Some(&(n, span)) = self
             .pending_refs
             .iter()
-            .find(|n| !self.labels.contains_key(n))
+            .find(|(n, _)| !self.labels.contains_key(n))
         {
-            return Err(ParseError::UndefinedLabel(n));
+            return Err(ParseError::UndefinedLabel(n).at(span));
         }
         Ok(self.resolve_labels(tv))
     }
@@ -1295,7 +1244,10 @@ mod tests {
         ] {
             let mut parser = Parser::new(input).unwrap();
             assert!(
-                matches!(parser.parse_next(), Err(ParseError::IncompleteDatum { .. })),
+                matches!(
+                    parser.parse_next().as_ref().map_err(ParseError::kind),
+                    Err(ParseError::IncompleteDatum { .. })
+                ),
                 "{input:?}"
             );
         }
@@ -1315,7 +1267,7 @@ mod tests {
             1
         );
         assert!(matches!(
-            parser.parse_next(),
+            parser.parse_next().as_ref().map_err(ParseError::kind),
             Err(ParseError::IncompleteDatum { line: 1, column: 3 })
         ));
     }
@@ -1342,7 +1294,7 @@ mod tests {
                 }
             };
             assert!(
-                matches!(err, ParseError::IncompleteDatum { line: l, column: c } if (l, c) == (line, column)),
+                matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
                 "{input:?}: {err}"
             );
         }
@@ -1353,7 +1305,11 @@ mod tests {
         for input in ["", "   ", "; a comment", "#|block|#", "#;(1) ", "#; #; 1 2"] {
             assert!(
                 matches!(
-                    Parser::new(input).unwrap().parse(),
+                    Parser::new(input)
+                        .unwrap()
+                        .parse()
+                        .as_ref()
+                        .map_err(ParseError::kind),
                     Err(ParseError::UnexpectedEof)
                 ),
                 "{input:?}"
@@ -1381,7 +1337,7 @@ mod tests {
         ] {
             let err = Parser::new(input).unwrap().parse_next().unwrap_err();
             assert!(
-                matches!(err, ParseError::IncompleteDatum { .. }),
+                matches!(err.kind(), ParseError::IncompleteDatum { .. }),
                 "{input:?}: {err}"
             );
         }
@@ -1422,7 +1378,7 @@ mod tests {
         for (input, line, column) in [("1 2 (3", 1, 5), ("(1)\n(2\n", 2, 1), ("1 #;", 1, 3)] {
             let err = Parser::new(input).unwrap().parse_all().unwrap_err();
             assert!(
-                matches!(err, ParseError::IncompleteDatum { line: l, column: c } if (l, c) == (line, column)),
+                matches!(err.kind(), ParseError::IncompleteDatum { line: l, column: c } if (*l, *c) == (line, column)),
                 "{input:?}: {err}"
             );
         }
@@ -2292,7 +2248,10 @@ mod tests {
         let mut parser = Parser::new("(#0=a #0=b)").unwrap();
         let result = parser.parse();
         assert!(
-            matches!(result, Err(ParseError::DuplicateLabel(0))),
+            matches!(
+                result.as_ref().map_err(ParseError::kind),
+                Err(ParseError::DuplicateLabel(0))
+            ),
             "Expected DuplicateLabel error, got {:?}",
             result
         );
@@ -2305,7 +2264,7 @@ mod tests {
         // placeholder object left in the data would be garbage to every
         // consumer. It is an error at the end of the datum.
         let mut parser = Parser::new("(a #99# b)").unwrap();
-        match parser.parse() {
+        match parser.parse().as_ref().map_err(ParseError::kind) {
             Err(ParseError::UndefinedLabel(99)) => {}
             other => panic!("expected UndefinedLabel(99), got {other:?}"),
         }
@@ -2392,7 +2351,10 @@ mod tests {
         ] {
             let mut parser = Parser::new(source).unwrap();
             assert!(
-                matches!(parser.parse(), Err(ParseError::UnexpectedToken(_))),
+                matches!(
+                    parser.parse().as_ref().map_err(ParseError::kind),
+                    Err(ParseError::UnexpectedToken(_))
+                ),
                 "{source}"
             );
         }

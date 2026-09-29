@@ -185,3 +185,177 @@ fn read_failures_in_stdin_and_eval_print_are_structured() {
         assert_eq!(ds[0].path.as_deref(), Some("nonexistent.scm"));
     }
 }
+
+#[test]
+fn reader_errors_show_scheme_tokens_and_caret_context() {
+    let dir = tempfile::tempdir().unwrap();
+    // Exact diagnostic snapshots, shared by scripts, stdin, and both backends.
+    for (program, stdout, message, line, column, width, text, opening) in [
+        (
+            "(import (scheme base) (scheme write))\n(display 1)\n(display 2))\n",
+            "12",
+            "Unexpected token: )",
+            3,
+            12,
+            1,
+            "(display 2))",
+            None,
+        ),
+        (
+            "(quote (1 . 2 3))\n",
+            "",
+            "Unexpected token: 3",
+            1,
+            15,
+            1,
+            "(quote (1 . 2 3))",
+            Some((1, 8)),
+        ),
+        (
+            "#(1 2 . 3)\n",
+            "",
+            "Unexpected token: .",
+            1,
+            7,
+            1,
+            "#(1 2 . 3)",
+            Some((1, 1)),
+        ),
+        (
+            "\"a\\q\"\n",
+            "",
+            "Invalid escape sequence in string: \\q",
+            1,
+            3,
+            2,
+            "\"a\\q\"",
+            None,
+        ),
+        (
+            "(display 12abc)\n",
+            "",
+            "Invalid syntax: Invalid number: 12abc",
+            1,
+            10,
+            5,
+            "(display 12abc)",
+            None,
+        ),
+        (
+            "(foo #\\bogus)\n",
+            "",
+            "Invalid character literal",
+            1,
+            6,
+            7,
+            "(foo #\\bogus)",
+            None,
+        ),
+        (
+            "{\n",
+            "",
+            "Reserved character (R7RS): {. Reserved for future extensions",
+            1,
+            1,
+            1,
+            "{",
+            None,
+        ),
+        (
+            "(quote (1\n #99#))\n",
+            "",
+            "Undefined datum label: #99#",
+            2,
+            2,
+            4,
+            " #99#))",
+            None,
+        ),
+        (
+            "(#0=a\n #0=b)\n",
+            "",
+            "Duplicate datum label: #0=",
+            2,
+            2,
+            3,
+            " #0=b)",
+            None,
+        ),
+        (
+            "#!fold-case\n  )\n",
+            "",
+            "Unexpected token: )",
+            2,
+            3,
+            1,
+            "  )",
+            None,
+        ),
+    ] {
+        fs::write(dir.path().join("program.scm"), program).unwrap();
+        for backend in BOTH_BACKENDS {
+            for (args, input, source) in [
+                (&["program.scm"][..], None, "program.scm"),
+                (&[][..], Some(program), "<stdin>"),
+            ] {
+                let (ds, output, stderr, ok) = run(dir.path(), backend, args, input);
+                let mut expected = format!(
+                    "Error: {message}\n  at {source}:{line}:{column}\n{line:>4} | {text}\n{}{}\n",
+                    " ".repeat(7 + column - 1),
+                    "^".repeat(width),
+                );
+                if let Some((line, column)) = opening {
+                    expected.push_str(&format!("  opened at {source}:{line}:{column}\n"));
+                }
+                assert!(!ok, "{program}");
+                assert_eq!(output, stdout, "{backend:?}, {source}, {program}");
+                assert_eq!(stderr, expected, "{backend:?}, {source}, {program}");
+                assert_eq!(ds.len(), 1);
+                assert_eq!(ds[0].kind, K::Parse);
+                assert_eq!(ds[0].path.as_deref(), Some(source));
+            }
+        }
+    }
+}
+
+#[test]
+fn loading_errors_point_into_the_file_being_read() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("bad.scm"), "; first line\n  #\\bogus\n").unwrap();
+    fs::write(dir.path().join("broken.sld"), "; first line\n  #\\bogus\n").unwrap();
+    for (name, declaration) in [
+        ("included", "include"),
+        ("folded", "include-ci"),
+        ("declarations", "include-library-declarations"),
+    ] {
+        fs::write(
+            dir.path().join(format!("{name}.sld")),
+            format!("(define-library ({name}) (import (scheme base)) ({declaration} \"bad.scm\"))"),
+        )
+        .unwrap();
+    }
+    for backend in BOTH_BACKENDS {
+        for (program, file) in [
+            ("(include \"bad.scm\")", "bad.scm"),
+            ("(include-ci \"bad.scm\")", "bad.scm"),
+            ("(import (scheme load)) (load \"bad.scm\")", "bad.scm"),
+            ("(import (broken))", "broken.sld"),
+            ("(import (included))", "bad.scm"),
+            ("(import (folded))", "bad.scm"),
+            ("(import (declarations))", "bad.scm"),
+        ] {
+            fs::write(dir.path().join("program.scm"), program).unwrap();
+            let (ds, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+            assert!(!ok, "{backend:?}: {program}");
+            assert!(stderr.contains("Invalid character literal"), "{stderr}");
+            assert!(
+                stderr.contains(&format!("{file}:2:3\n   2 |   #\\bogus\n         ^^^^^^^")),
+                "{backend:?}: {program}: {stderr}"
+            );
+            assert!(!stderr.contains("Lexer error:"), "{stderr}");
+            assert_eq!(ds.len(), 1);
+            assert_eq!(ds[0].kind, K::Parse);
+            assert!(ds[0].path.as_ref().unwrap().ends_with(file), "{:?}", ds[0]);
+        }
+    }
+}

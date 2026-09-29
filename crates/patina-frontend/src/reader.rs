@@ -388,6 +388,68 @@ mod tests {
         assert_eq!(read(&["(a) { "]), vec!["(a)", "error"]);
     }
 
+    #[test]
+    fn errors_keep_their_positions_across_feeds_and_deferred_lookahead() {
+        let texts = [
+            "(a)\n  #\\bogus ",
+            "(λ)\n  \"β\\q\" ",
+            "\u{feff}(a)\n  { ",
+            "#!fold-case\n  #(1 . 2)",
+            "(a . b c)",
+            "(#0=a #0=b)",
+            "(a #99#)",
+            "(a)\n  #| unfinished",
+            "(a)\n  \"unfinished",
+            "(a)\n  |unfinished",
+            "(a)\n  (unfinished",
+        ];
+        for text in texts {
+            let whole = (|| {
+                let mut parser = Parser::new(text)?;
+                while parser.parse_next()?.is_some() {}
+                Ok::<(), ParseError>(())
+            })()
+            .unwrap_err();
+            for piece in 1..=4 {
+                let heap = patina_core::new_shared_heap();
+                let mut reader = Reader::new(false);
+                let take = |reader: &mut Reader| {
+                    while let Some(result) = reader.next_datum(&heap, |p| p) {
+                        if let Err(error) = result {
+                            return Some(error);
+                        }
+                        // Exercise compaction as the stdin runner does.
+                        reader.take_consumed();
+                    }
+                    None
+                };
+                let mut error = None;
+                let chars: Vec<char> = text.chars().collect();
+                for chunk in chars.chunks(piece) {
+                    reader.feed(&chunk.iter().collect::<String>());
+                    error = take(&mut reader);
+                    if error.is_some() {
+                        break;
+                    }
+                }
+                if error.is_none() {
+                    reader.no_more_text();
+                    error = take(&mut reader);
+                }
+                let error = error.expect("malformed input must fail");
+                // Offsets restart when consumed input is discarded, but
+                // source coordinates and rendered diagnostics must not.
+                assert_eq!(
+                    error.format_in_source("test.scm", text),
+                    whole.format_in_source("test.scm", text),
+                    "{text:?}, {piece} characters per feed"
+                );
+                assert_eq!(error.is_incomplete(), whole.is_incomplete());
+                assert!(error.span().is_some());
+            }
+        }
+    }
+
     /// The end of the text finishes the last datum, or reports it unfinished.
     #[test]
     fn the_end_of_the_text_finishes_or_reports_what_is_left() {

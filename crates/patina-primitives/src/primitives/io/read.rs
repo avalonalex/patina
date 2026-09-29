@@ -203,7 +203,7 @@ fn undecodable_bytes() -> EvalError {
 /// `#\bogus` is wrong whatever follows it.
 fn ran_out_of_text(e: &patina_frontend::ParseError) -> bool {
     use patina_frontend::ParseError;
-    match e {
+    match e.kind() {
         ParseError::IncompleteDatum { .. } | ParseError::UnexpectedEof => true,
         ParseError::LexError(lex) => lex.is_incomplete(),
         _ => false,
@@ -217,7 +217,10 @@ fn ran_out_of_text(e: &patina_frontend::ParseError) -> bool {
 /// whatever the port has not read yet, so they would name a position in a
 /// slice the caller cannot see rather than one in the file.
 fn read_error(e: &patina_frontend::ParseError) -> EvalError {
-    if matches!(e, patina_frontend::ParseError::IncompleteDatum { .. }) {
+    if matches!(
+        e.kind(),
+        patina_frontend::ParseError::IncompleteDatum { .. }
+    ) {
         return EvalError::InvalidSyntax(
             "read: unexpected end of input inside a datum".to_string(),
         );
