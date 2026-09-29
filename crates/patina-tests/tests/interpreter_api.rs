@@ -223,7 +223,7 @@ const CLEANLY_ENDED: &[&str] = &[
 fn is_cut_short<E: std::error::Error>(err: &InterpreterError<E>) -> bool {
     matches!(
         err,
-        InterpreterError::Parse(ParseError::IncompleteDatum { .. })
+        InterpreterError::Parse(error) if matches!(error.kind(), ParseError::IncompleteDatum { .. })
     )
 }
 
@@ -267,7 +267,7 @@ fn eval_program_names_where_the_unfinished_datum_began() {
     assert!(
         matches!(
             err,
-            InterpreterError::Parse(ParseError::IncompleteDatum { line: 2, column: 1 })
+            InterpreterError::Parse(ref error) if matches!(error.kind(), ParseError::IncompleteDatum { line: 2, column: 1 })
         ),
         "{err}"
     );
@@ -283,7 +283,7 @@ fn eval_str_requires_a_datum() {
     for input in ["", "  ", "; only a comment", "#;(only a datum comment)"] {
         let err = interp.eval_str(input).expect_err(input);
         assert!(
-            matches!(err, InterpreterError::Parse(ParseError::UnexpectedEof)),
+            matches!(err, InterpreterError::Parse(ref error) if matches!(error.kind(), ParseError::UnexpectedEof)),
             "{input:?}: {err}"
         );
     }

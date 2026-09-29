@@ -21,7 +21,7 @@ enum Frame {
         elements: Vec<TaggedValue>,
         at: (u32, u32),
     },
-    Bytes(Vec<u8>),
+    Bytes(Vec<u8>, (u32, u32)),
     Prefix {
         name: &'static str,
         at: (u32, u32),
@@ -32,8 +32,20 @@ enum Frame {
     },
     // Discarded datums need their structure checked, but allocate no Scheme
     // values and neither define nor reference labels in the surrounding datum.
-    SkippedList(Tail),
+    SkippedList(Tail, (u32, u32)),
     SkippedPrefix,
+}
+
+impl Frame {
+    fn opening(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::List { at, .. }
+            | Self::Vector { at, .. }
+            | Self::Bytes(_, at)
+            | Self::SkippedList(_, at) => Some(*at),
+            _ => None,
+        }
+    }
 }
 
 impl Parser {
@@ -45,8 +57,21 @@ impl Parser {
         self.read_datum(true).map(|_| ())
     }
 
-    fn read_datum(&mut self, mut discarding: bool) -> Result<TaggedValue, ParseError> {
+    fn read_datum(&mut self, discarding: bool) -> Result<TaggedValue, ParseError> {
         let mut frames = Vec::new();
+        self.read_with_frames(discarding, &mut frames)
+            .map_err(|error| {
+                error
+                    .at(self.current_span())
+                    .within(frames.iter().rev().find_map(Frame::opening))
+            })
+    }
+
+    fn read_with_frames(
+        &mut self,
+        mut discarding: bool,
+        frames: &mut Vec<Frame>,
+    ) -> Result<TaggedValue, ParseError> {
         'tokens: loop {
             if self.current_token == Token::DatumComment {
                 frames.push(Frame::Comment {
@@ -67,7 +92,7 @@ impl Parser {
                         Frame::List {
                             tail: Tail::Complete(_),
                             ..
-                        } | Frame::SkippedList(Tail::Complete(_))
+                        } | Frame::SkippedList(Tail::Complete(_), _)
                     )
                 )
             {
@@ -75,7 +100,7 @@ impl Parser {
             }
             // Bytevectors accept numeric tokens only, not arbitrary datums
             // that happen to produce numbers (labels or quote prefixes).
-            if let Some(Frame::Bytes(bytes)) = frames.last_mut()
+            if let Some(Frame::Bytes(bytes, _)) = frames.last_mut()
                 && self.current_token != Token::RightParen
             {
                 let Token::Number(number) = &self.current_token else {
@@ -103,7 +128,7 @@ impl Parser {
             let mut value = match self.current_token.clone() {
                 Token::LeftParen | Token::VectorOpen | Token::BytevectorOpen => {
                     let frame = if discarding {
-                        Frame::SkippedList(Tail::Elements)
+                        Frame::SkippedList(Tail::Elements, at)
                     } else {
                         match self.current_token {
                             Token::LeftParen => Frame::List {
@@ -115,7 +140,7 @@ impl Parser {
                                 elements: Vec::new(),
                                 at,
                             },
-                            _ => Frame::Bytes(Vec::new()),
+                            _ => Frame::Bytes(Vec::new(), at),
                         }
                     };
                     self.advance()?;
@@ -126,6 +151,17 @@ impl Parser {
                     continue;
                 }
                 Token::RightParen => {
+                    if matches!(
+                        frames.last(),
+                        Some(
+                            Frame::List {
+                                tail: Tail::Needed,
+                                ..
+                            } | Frame::SkippedList(Tail::Needed, _)
+                        )
+                    ) {
+                        return Err(ParseError::UnexpectedToken(Token::RightParen));
+                    }
                     let value = match frames.pop() {
                         Some(Frame::List { elements, tail, at }) => {
                             let tail = match tail {
@@ -147,8 +183,10 @@ impl Parser {
                             self.record_source(value, at.0, at.1);
                             value
                         }
-                        Some(Frame::Bytes(bytes)) => self.heap.borrow_mut().alloc_bytevector(bytes),
-                        Some(Frame::SkippedList(Tail::Elements | Tail::Complete(_))) => {
+                        Some(Frame::Bytes(bytes, _)) => {
+                            self.heap.borrow_mut().alloc_bytevector(bytes)
+                        }
+                        Some(Frame::SkippedList(Tail::Elements | Tail::Complete(_), _)) => {
                             TaggedValue::UNSPECIFIED
                         }
                         _ => return Err(ParseError::UnexpectedToken(Token::RightParen)),
@@ -167,7 +205,7 @@ impl Parser {
                         }
                         // Keep the existing skip reader's structural-only
                         // treatment of lists, vectors and bytevectors.
-                        Some(Frame::SkippedList(tail)) if matches!(tail, Tail::Elements) => {
+                        Some(Frame::SkippedList(tail, _)) if matches!(tail, Tail::Elements) => {
                             *tail = Tail::Needed;
                         }
                         _ => return Err(ParseError::UnexpectedToken(Token::Dot)),
@@ -191,12 +229,13 @@ impl Parser {
                     continue;
                 }
                 Token::DatumLabel(label) => {
+                    let span = self.current_span();
                     self.advance()?;
                     if discarding {
                         frames.push(Frame::SkippedPrefix);
                     } else {
                         if self.labels.contains_key(&label) {
-                            return Err(ParseError::DuplicateLabel(label));
+                            return Err(ParseError::DuplicateLabel(label).at(span));
                         }
                         frames.push(Frame::Label(label));
                     }
@@ -226,7 +265,7 @@ impl Parser {
                     if let Some(value) = self.labels.get(&label) {
                         *value
                     } else {
-                        self.pending_refs.push(label);
+                        self.pending_refs.push((label, self.current_span()));
                         self.heap.borrow_mut().alloc_label_placeholder(label)
                     }
                 }
@@ -255,7 +294,7 @@ impl Parser {
                         elements.push(value);
                         continue 'tokens;
                     }
-                    Some(Frame::SkippedList(tail)) => {
+                    Some(Frame::SkippedList(tail, _)) => {
                         if matches!(tail, Tail::Needed) {
                             *tail = Tail::Complete(value);
                         }

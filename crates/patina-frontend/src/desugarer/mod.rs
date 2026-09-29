@@ -3352,7 +3352,7 @@ impl<'a> Desugarer<'a> {
                 DesugarError::InvalidSyntax(format!(
                     "include: parse error in '{}': {}",
                     path.display(),
-                    e
+                    e.format_in_source(&path.display().to_string(), &content)
                 ))
                 .with_diagnostic(
                     patina_runtime::Diagnostic::new(
@@ -3367,7 +3367,7 @@ impl<'a> Desugarer<'a> {
                 DesugarError::InvalidSyntax(format!(
                     "include: parse error in '{}': {}",
                     path.display(),
-                    e
+                    e.format_in_source(&path.display().to_string(), &content)
                 ))
                 .with_diagnostic(
                     patina_runtime::Diagnostic::new(

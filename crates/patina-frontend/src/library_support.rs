@@ -224,13 +224,13 @@ impl SchemeLibraryLoader {
         let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
             LibraryError::ParseError {
                 file: path.display().to_string(),
-                message: e.to_string(),
+                message: e.format_in_source(&path.display().to_string(), &content),
             }
         })?;
 
         let parse_error = |e: crate::ParseError| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: e.to_string(),
+            message: e.format_in_source(&path.display().to_string(), &content),
         };
         let lib_form = parser.parse().map_err(parse_error)?;
         // The file is its `define-library` form, so nothing should follow;
@@ -411,13 +411,13 @@ impl SchemeLibraryLoader {
         let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
             LibraryError::ParseError {
                 file: path.display().to_string(),
-                message: e.to_string(),
+                message: e.format_in_source(&path.display().to_string(), &content),
             }
         })?;
 
         let declarations = parser.parse_all().map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: e.to_string(),
+            message: e.format_in_source(&path.display().to_string(), &content),
         })?;
 
         // Parse each declaration using LibraryDefinition's parsing logic
@@ -550,12 +550,12 @@ impl SchemeLibraryLoader {
         }
         .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: e.to_string(),
+            message: e.format_in_source(&path.display().to_string(), &content),
         })?;
 
         parser.parse_all().map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
-            message: e.to_string(),
+            message: e.format_in_source(&path.display().to_string(), &content),
         })
     }
 }

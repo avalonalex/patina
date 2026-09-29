@@ -1,3 +1,4 @@
+use std::fmt;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,13 @@ pub enum Token {
 
 #[derive(Error, Debug)]
 pub enum LexError {
+    #[error("{error}")]
+    Located {
+        #[source]
+        error: Box<LexError>,
+        span: ReadSpan,
+        opening: Option<(u32, u32)>,
+    },
     /// Formatted through [`describe_char`], because the characters that reach
     /// here are largely ones with no visible glyph: `'\0'` is also the
     /// end-of-input sentinel `current_char` returns past the end, and above
@@ -120,6 +128,93 @@ impl ReaderState {
     };
 }
 
+/// A half-open range in reader coordinates. Offsets count characters, as
+/// ReaderState does; line and column remain valid after streamed text is freed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadSpan {
+    pub start: ReaderState,
+    pub end: ReaderState,
+}
+
+impl ReadSpan {
+    pub fn point(at: ReaderState) -> Self {
+        Self { start: at, end: at }
+    }
+
+    pub fn location(self, source: &str) -> patina_core::error::SourceLocation {
+        // A multiline token is anchored at its start. Never draw a range
+        // spanning other lines as thousands of carets on the first one.
+        let width = if self.start.line == self.end.line {
+            self.end.column.saturating_sub(self.start.column).max(1)
+        } else {
+            1
+        };
+        patina_core::error::SourceLocation::with_length(
+            source,
+            self.start.line,
+            self.start.column,
+            width,
+        )
+    }
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LeftParen => f.write_str("("),
+            Self::RightParen => f.write_str(")"),
+            Self::VectorOpen => f.write_str("#("),
+            Self::BytevectorOpen => f.write_str("#u8("),
+            Self::Boolean(value) => f.write_str(if *value { "#t" } else { "#f" }),
+            Self::Number(value) => f.write_str(value),
+            Self::Identifier(value)
+                if !value.is_empty()
+                    && value
+                        .chars()
+                        .all(|c| !Self::needs_escape(c) && !Lexer::is_delimiter(c)) =>
+            {
+                f.write_str(value)
+            }
+            Self::Identifier(value) => Self::write_quoted(f, value, '|'),
+            Self::String(value) => Self::write_quoted(f, value, '"'),
+            Self::Character(value) if value.is_whitespace() || value.is_control() => {
+                write!(f, "#\\x{:x}", *value as u32)
+            }
+            Self::Character(value) => write!(f, "#\\{value}"),
+            Self::Quote => f.write_str("'"),
+            Self::Quasiquote => f.write_str("`"),
+            Self::Unquote => f.write_str(","),
+            Self::UnquoteSplicing => f.write_str(",@"),
+            Self::Dot => f.write_str("."),
+            Self::DatumComment => f.write_str("#;"),
+            Self::DatumLabel(n) => write!(f, "#{n}="),
+            Self::DatumRef(n) => write!(f, "#{n}#"),
+            Self::Eof => f.write_str("end of input"),
+        }
+    }
+}
+
+impl Token {
+    fn needs_escape(c: char) -> bool {
+        c.is_control() || c == '\\'
+    }
+
+    fn write_quoted(f: &mut fmt::Formatter<'_>, value: &str, quote: char) -> fmt::Result {
+        write!(f, "{quote}")?;
+        for c in value.chars() {
+            match c {
+                c if c == quote || c == '\\' => write!(f, "\\{c}")?,
+                '\n' => f.write_str("\\n")?,
+                '\r' => f.write_str("\\r")?,
+                '\t' => f.write_str("\\t")?,
+                c if c.is_control() => write!(f, "\\x{:x};", c as u32)?,
+                c => write!(f, "{c}")?,
+            }
+        }
+        write!(f, "{quote}")
+    }
+}
+
 /// A token with its source position
 #[derive(Debug, Clone)]
 pub struct Spanned {
@@ -132,6 +227,12 @@ pub struct Spanned {
     /// a reader replaying tokens can say how much text they consumed without
     /// the lexer that produced them.
     pub end: ReaderState,
+}
+
+#[derive(Clone, Copy)]
+struct OpenDelimiter {
+    expected: char,
+    at: (u32, u32),
 }
 
 pub struct Lexer {
@@ -164,7 +265,7 @@ pub struct Lexer {
     /// *input* is not this stack's business: a closer with nothing open pops
     /// nothing and reaches the parser as a plain `)`, which is what the REPL
     /// needs while a form is still being typed.
-    open_delimiters: Vec<char>,
+    open_delimiters: Vec<OpenDelimiter>,
     /// Whether more text may still arrive ([`Lexer::feed`]), which makes a
     /// token that runs to the end of what is here provisional. See
     /// [`Lexer::next_fed_token`].
@@ -185,6 +286,38 @@ pub struct Lexer {
 }
 
 impl LexError {
+    /// The category without its source annotation.
+    pub fn kind(&self) -> &Self {
+        match self {
+            Self::Located { error, .. } => error.kind(),
+            other => other,
+        }
+    }
+
+    pub fn span(&self) -> Option<ReadSpan> {
+        match self {
+            Self::Located { span, .. } => Some(*span),
+            _ => None,
+        }
+    }
+
+    pub fn opening(&self) -> Option<(u32, u32)> {
+        match self {
+            Self::Located { opening, .. } => *opening,
+            _ => None,
+        }
+    }
+
+    fn at(self, span: ReadSpan) -> Self {
+        if matches!(self, Self::Located { .. }) {
+            return self;
+        }
+        Self::Located {
+            error: Box::new(self),
+            span,
+            opening: None,
+        }
+    }
     /// Whether the text ran out part-way through a token, as opposed to text
     /// that stays wrong however much more follows.
     ///
@@ -230,7 +363,7 @@ impl Looking {
     /// What the scanner was reading, from the error it gave when the text ran
     /// out inside it. Every other error is one more text cannot finish.
     fn of(error: &LexError) -> Option<Looking> {
-        match error {
+        match error.kind() {
             LexError::UnterminatedString => Some(Looking::Closer {
                 closer: '"',
                 escaped: false,
@@ -257,7 +390,7 @@ impl Looking {
 pub struct LexerMark {
     at: ReaderState,
     prev_token_end: ReaderState,
-    open_delimiters: Vec<char>,
+    open_delimiters: Vec<OpenDelimiter>,
     more_may_come: bool,
     token_start: ReaderState,
     partial: Option<Partial>,
@@ -541,7 +674,7 @@ impl Lexer {
     /// `#!fold-case` travels in the state. The open-delimiter stack is put
     /// back by hand, since the token may have pushed one (`(`) or popped one
     /// (`)`).
-    fn rewind_to(&mut self, at: ReaderState, delimiters: (usize, Option<char>)) {
+    fn rewind_to(&mut self, at: ReaderState, delimiters: (usize, Option<OpenDelimiter>)) {
         self.position = at.offset;
         self.line = at.line;
         self.column = at.column;
@@ -589,6 +722,40 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Result<Spanned, LexError> {
+        self.scan_token().map_err(|error| {
+            let include_current = matches!(
+                error.kind(),
+                LexError::UnexpectedChar(_)
+                    | LexError::ReservedCharacter(_)
+                    | LexError::R6rsSyntax { .. }
+                    | LexError::InvalidEscapeInString(_)
+                    | LexError::InvalidEscapeInIdentifier(_)
+            );
+            error.at(self.span_from(self.token_start, include_current))
+        })
+    }
+
+    fn span_from(&self, start: ReaderState, include_current: bool) -> ReadSpan {
+        let mut end = self.state();
+        if include_current && !self.is_at_end() {
+            end.offset += 1;
+            if self.current_char() == '\n' {
+                end.line = end.line.saturating_add(1);
+                end.column = 1;
+            } else {
+                end.column = end.column.saturating_add(1);
+            }
+        }
+        ReadSpan {
+            start: ReaderState {
+                offset: start.offset + self.bom_offset,
+                ..start
+            },
+            end,
+        }
+    }
+
+    fn scan_token(&mut self) -> Result<Spanned, LexError> {
         // The current position is exactly the end of the previously
         // returned token — record it before skipping whitespace so callers
         // can tell how much input the previous tokens consumed
@@ -675,7 +842,10 @@ impl Lexer {
             return Err(LexError::UnexpectedChar(self.current_char()));
         }
         self.advance();
-        self.open_delimiters.push(')');
+        self.open_delimiters.push(OpenDelimiter {
+            expected: ')',
+            at: (self.token_start.line, self.token_start.column),
+        });
         Ok(Token::BytevectorOpen)
     }
 
@@ -686,9 +856,11 @@ impl Lexer {
     /// path depends on partial text lexing without complaint.
     fn close_delimiter(&mut self, closed: char) -> Result<(), LexError> {
         match self.open_delimiters.pop() {
-            Some(expected) if expected != closed => {
-                Err(LexError::MismatchedDelimiter { expected, closed })
-            }
+            Some(OpenDelimiter { expected, at }) if expected != closed => Err(LexError::Located {
+                error: Box::new(LexError::MismatchedDelimiter { expected, closed }),
+                span: self.span_from(self.token_start, false),
+                opening: Some(at),
+            }),
             _ => Ok(()),
         }
     }
@@ -712,7 +884,10 @@ impl Lexer {
             }),
             '(' | '[' => {
                 self.advance();
-                self.open_delimiters.push(if ch == '[' { ']' } else { ')' });
+                self.open_delimiters.push(OpenDelimiter {
+                    expected: if ch == '[' { ']' } else { ')' },
+                    at: (self.token_start.line, self.token_start.column),
+                });
                 Ok(Token::LeftParen)
             }
             ')' | ']' => {
@@ -955,6 +1130,7 @@ impl Lexer {
 
         while !self.is_at_end() && self.current_char() != '"' {
             if self.current_char() == '\\' {
+                let escape_start = self.raw_state();
                 self.advance();
                 if self.is_at_end() {
                     return Err(LexError::UnterminatedString);
@@ -981,7 +1157,8 @@ impl Lexer {
                             return Err(LexError::InvalidEscapeInString(format!(
                                 "\\x{} (missing semicolon)",
                                 hex_str
-                            )));
+                            ))
+                            .at(self.span_from(escape_start, true)));
                         }
                         // Don't advance past ';' here - done at end of loop
                         match u32::from_str_radix(&hex_str, 16) {
@@ -991,14 +1168,16 @@ impl Lexer {
                                     return Err(LexError::InvalidEscapeInString(format!(
                                         "\\x{}; (invalid Unicode code point)",
                                         hex_str
-                                    )));
+                                    ))
+                                    .at(self.span_from(escape_start, true)));
                                 }
                             },
                             Err(_) => {
                                 return Err(LexError::InvalidEscapeInString(format!(
                                     "\\x{}; (invalid hex)",
                                     hex_str
-                                )));
+                                ))
+                                .at(self.span_from(escape_start, true)));
                             }
                         }
                     }
@@ -1041,11 +1220,14 @@ impl Lexer {
                         } else {
                             return Err(LexError::InvalidEscapeInString(
                                 "backslash-space not followed by line ending".to_string(),
-                            ));
+                            )
+                            .at(self.span_from(escape_start, true)));
                         }
                     }
                     c => {
-                        return Err(LexError::InvalidEscapeInString(format!("\\{}", c)));
+                        return Err(LexError::InvalidEscapeInString(format!("\\{}", c))
+                            .at(self.span_from(escape_start, true))
+                            .at(self.span_from(escape_start, true)));
                     }
                 };
                 result.push(escaped);
@@ -1069,6 +1251,7 @@ impl Lexer {
 
         while !self.is_at_end() && self.current_char() != '|' {
             if self.current_char() == '\\' {
+                let escape_start = self.raw_state();
                 self.advance();
                 if self.is_at_end() {
                     return Err(LexError::UnterminatedVerticalBarIdentifier);
@@ -1095,7 +1278,8 @@ impl Lexer {
                             return Err(LexError::InvalidEscapeInIdentifier(format!(
                                 "x{} (missing semicolon)",
                                 hex_str
-                            )));
+                            ))
+                            .at(self.span_from(escape_start, true)));
                         }
                         match u32::from_str_radix(&hex_str, 16) {
                             Ok(code) => match char::from_u32(code) {
@@ -1104,19 +1288,22 @@ impl Lexer {
                                     return Err(LexError::InvalidEscapeInIdentifier(format!(
                                         "x{};",
                                         hex_str
-                                    )));
+                                    ))
+                                    .at(self.span_from(escape_start, true)));
                                 }
                             },
                             Err(_) => {
                                 return Err(LexError::InvalidEscapeInIdentifier(format!(
                                     "x{};",
                                     hex_str
-                                )));
+                                ))
+                                .at(self.span_from(escape_start, true)));
                             }
                         }
                     }
                     c => {
-                        return Err(LexError::InvalidEscapeInIdentifier(c.to_string()));
+                        return Err(LexError::InvalidEscapeInIdentifier(c.to_string())
+                            .at(self.span_from(escape_start, true)));
                     }
                 };
                 result.push(escaped);
@@ -1153,7 +1340,10 @@ impl Lexer {
             '\\' => self.read_character(),
             '(' => {
                 self.advance();
-                self.open_delimiters.push(')');
+                self.open_delimiters.push(OpenDelimiter {
+                    expected: ')',
+                    at: (self.token_start.line, self.token_start.column),
+                });
                 Ok(Token::VectorOpen)
             }
             // `#u8(` is R7RS; `#vu8(` is R6RS's spelling of the same thing.
@@ -1472,6 +1662,64 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lexical_error_spans_count_characters_and_end_after_the_bad_text() {
+        for (text, start, end) in [
+            ("\u{feff}\"λ\\q\"", (3, 1, 3), (5, 1, 5)),
+            ("\"λ\\xD800;\"", (2, 1, 3), (9, 1, 10)),
+            ("|λ\\xGG;|", (2, 1, 3), (7, 1, 8)),
+            ("\n  #\\bogus", (3, 2, 3), (10, 2, 10)),
+            ("\n  #| unfinished", (3, 2, 3), (16, 2, 16)),
+        ] {
+            let error = Lexer::new(text).next_token().unwrap_err();
+            let span = error.span().unwrap();
+            assert_eq!(
+                (span.start.offset, span.start.line, span.start.column),
+                start,
+                "{text:?}"
+            );
+            assert_eq!(
+                (span.end.offset, span.end.line, span.end.column),
+                end,
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_delimiters_keep_both_positions_after_a_feed_rewind() {
+        let mut lexer = Lexer::feedable(true);
+        lexer.feed("\n [a)");
+        assert_eq!(
+            lexer.next_fed_token().unwrap().unwrap().token,
+            Token::LeftParen
+        );
+        assert_eq!(
+            lexer.next_fed_token().unwrap().unwrap().token,
+            Token::Identifier("a".into())
+        );
+        assert!(lexer.next_fed_token().unwrap().is_none());
+        lexer.feed(" ");
+        let error = lexer.next_fed_token().unwrap_err();
+        assert_eq!(error.opening(), Some((2, 2)));
+        let span = error.span().unwrap();
+        assert_eq!(
+            (span.start.line, span.start.column, span.end.column),
+            (2, 4, 5)
+        );
+        assert_eq!(error.to_string(), "Mismatched delimiter: expected ], got )");
+    }
+
+    #[test]
+    fn token_messages_use_scheme_escapes() {
+        assert_eq!(
+            Token::String("a\n\u{7}".into()).to_string(),
+            "\"a\\n\\x7;\""
+        );
+        assert_eq!(Token::Identifier("a b".into()).to_string(), "|a b|");
+        assert_eq!(Token::Character('\n').to_string(), "#\\xa");
+    }
 
     /// The token kinds a fed lexer produces, once it has them.
     fn fed(pieces: &[&str]) -> Vec<Token> {
@@ -1796,13 +2044,13 @@ mod tests {
         // cases use to opt in without touching a process-wide variable.
         let mut lexer = Lexer::new("[a]");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::R6rsSyntax { .. })
         ));
 
         let mut lexer = Lexer::new("#vu8(1)");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::R6rsSyntax { .. })
         ));
     }
@@ -1847,7 +2095,7 @@ mod tests {
             Token::Identifier("a".to_string())
         );
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::MismatchedDelimiter {
                 expected: ']',
                 closed: ')'
@@ -1861,7 +2109,7 @@ mod tests {
             Token::Identifier("a".to_string())
         );
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::MismatchedDelimiter {
                 expected: ')',
                 closed: ']'
@@ -1879,7 +2127,7 @@ mod tests {
             lexer.next_token_kind().unwrap();
             assert!(
                 matches!(
-                    lexer.next_token_kind(),
+                    lexer.next_token_kind().as_ref().map_err(LexError::kind),
                     Err(LexError::MismatchedDelimiter { closed: ']', .. })
                 ),
                 "{src} should not accept a bracket as its closer"
@@ -1930,13 +2178,13 @@ mod tests {
         // parentheses — see test_square_brackets_read_as_parentheses.
         let mut lexer = Lexer::new("{");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::ReservedCharacter('{'))
         ));
 
         let mut lexer = Lexer::new("}");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::ReservedCharacter('}'))
         ));
     }
@@ -2053,7 +2301,7 @@ mod tests {
     fn test_vertical_bar_identifier_unterminated() {
         let mut lexer = Lexer::new("|hello");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::UnterminatedVerticalBarIdentifier)
         ));
     }
@@ -2062,7 +2310,7 @@ mod tests {
     fn test_vertical_bar_identifier_invalid_escape() {
         let mut lexer = Lexer::new("|foo\\q|");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInIdentifier(_))
         ));
     }
@@ -2132,7 +2380,7 @@ mod tests {
     fn test_block_comment_unterminated() {
         let mut lexer = Lexer::new("#| this is unterminated");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::UnterminatedBlockComment)
         ));
     }
@@ -2141,7 +2389,7 @@ mod tests {
     fn test_block_comment_unterminated_nested() {
         let mut lexer = Lexer::new("#| outer #| inner |# outer");
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::UnterminatedBlockComment)
         ));
     }
@@ -2342,7 +2590,7 @@ mod tests {
     fn test_string_hex_escape_missing_semicolon() {
         let mut lexer = Lexer::new(r#""\x41""#);
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -2351,7 +2599,7 @@ mod tests {
     fn test_string_hex_escape_invalid_hex() {
         let mut lexer = Lexer::new(r#""\xGG;""#);
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -2361,7 +2609,7 @@ mod tests {
         // U+D800 is a surrogate, not a valid Unicode scalar value
         let mut lexer = Lexer::new(r#""\xD800;""#);
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }
@@ -2382,7 +2630,7 @@ mod tests {
         // \q is not a valid escape sequence
         let mut lexer = Lexer::new(r#""\q""#);
         assert!(matches!(
-            lexer.next_token_kind(),
+            lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInString(_))
         ));
     }

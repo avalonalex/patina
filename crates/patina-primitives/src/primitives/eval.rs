@@ -754,7 +754,12 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
             )
         })?;
 
-    let parse_error = |e: &dyn std::fmt::Display| format!("load: parse error in '{filename}': {e}");
+    let parse_error = |e: &patina_frontend::ParseError| {
+        format!(
+            "load: parse error in '{filename}': {}",
+            e.format_in_source(&filename, &content)
+        )
+    };
     let mut parser =
         patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
             EvalError::InvalidSyntax(parse_error(&e)).with_diagnostic(

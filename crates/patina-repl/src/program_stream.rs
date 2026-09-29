@@ -50,6 +50,9 @@ where
     E: FnMut(TaggedValue, &Rc<RefCell<SourceMap>>) -> Result<(), String>,
 {
     let r6rs = dialect::allow_r6rs();
+    let source_map = Rc::new(RefCell::new(SourceMap::new()));
+    // A lexical error may arrive before the first parser is constructed.
+    source_map.borrow_mut().set_primary_source(source_name);
     let mut run = Run {
         input,
         heap,
@@ -57,7 +60,7 @@ where
         keep_going,
         eval_form,
         eval_errors: 0,
-        source_map: Rc::new(RefCell::new(SourceMap::new())),
+        source_map,
         r6rs,
         reader: Reader::new(r6rs),
         at: ReaderState::START,
