@@ -391,6 +391,9 @@ mod tests {
     #[test]
     fn errors_keep_their_positions_across_feeds_and_deferred_lookahead() {
         let texts = [
+            "(a)\n  1__000 ",
+            "(a)\n  #x#e_ff ",
+            "(a)\n  1_000abc ",
             "(a)\n  #tfoo ",
             "(a)\n  #true1 ",
             "(a)\n  #fasle ",
@@ -486,6 +489,9 @@ mod tests {
     fn feeding_text_in_pieces_reads_what_parsing_it_whole_does() {
         let texts = [
             "(a b) 'c #;(d) e",
+            // #364: all numeric paths share separator validation even when
+            // a feed splits a digit group or a radix/exactness prefix.
+            "1_000 #xAB_CD #e1.2_5 1e1_0 #e1_0+2_0i 1_0@0_0",
             "\"a b\" \"c\\\"d\" |a b| |c\\|d|",
             "#| a #| b |# c |# (d)",
             "#\\a #\\space #\\( 42 #xff",

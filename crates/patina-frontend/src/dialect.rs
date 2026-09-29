@@ -7,13 +7,17 @@
 //! language without changing what any conforming program means, and it is what
 //! lets R6RS source be read at all.
 //!
-//! It is nonetheless **off by default**. Patina is a teaching implementation of
-//! R7RS, and a learner who writes `(let ([x 1]) …)`, watches it work, and
+//! This R6RS compatibility syntax is **off by default**. Patina is a teaching
+//! implementation of R7RS, and a learner who writes `(let ([x 1]) …)`, watches it work, and
 //! concludes brackets are standard has been taught something false — they will
-//! find out from a different implementation instead of from us. So the reader
-//! is R7RS unless asked otherwise, and a program that runs without
-//! `PATINA_ALLOW_R6RS` is one whose *syntax* another R7RS implementation will
-//! also accept.
+//! find out from a different implementation instead of from us.
+//!
+//! Other documented reader extensions do not depend on this switch. Numeric
+//! underscores follow SRFI 169 and Gauche's placement rule (#364): one `_`
+//! between digits in the same numeric component, including fractional and
+//! exponent digits. They are enabled by default in programs, `read`, and
+//! `string->number`; ordinary number output has no separators. Thus accepting
+//! a program without `PATINA_ALLOW_R6RS` does not guarantee portable syntax.
 //!
 //! This is deliberately one switch and not an inferred dialect mode. A mode
 //! would have to be triggered by something, and every candidate is unreliable:
@@ -43,8 +47,8 @@
 
 /// Whether the R6RS surface syntax R7RS reserves is read.
 ///
-/// Default is R7RS-only. Set `PATINA_ALLOW_R6RS=1` to read it; `=0` is
-/// explicitly off, matching [`crate::library_parser`]'s
+/// R6RS compatibility syntax is off by default. Set `PATINA_ALLOW_R6RS=1` to
+/// read it; `=0` is explicitly off, matching [`crate::library_parser`]'s
 /// `PATINA_STRICT_LIBRARY_SYNTAX`.
 ///
 /// Read once per [`crate::Lexer`] rather than per token, and per call at the

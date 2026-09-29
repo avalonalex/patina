@@ -242,6 +242,36 @@ fn reader_errors_show_scheme_tokens_and_caret_context() {
             None,
         ),
         (
+            "(list 1__000)\n",
+            "",
+            "Invalid syntax: Invalid numeric separator in: 1__000",
+            1,
+            7,
+            6,
+            "(list 1__000)",
+            None,
+        ),
+        (
+            "(list #x#e_ff)\n",
+            "",
+            "Invalid syntax: Invalid numeric separator in: #x#e_ff",
+            1,
+            7,
+            7,
+            "(list #x#e_ff)",
+            None,
+        ),
+        (
+            "(list 1_000abc)\n",
+            "",
+            "Invalid syntax: Invalid number: 1_000abc",
+            1,
+            7,
+            8,
+            "(list 1_000abc)",
+            None,
+        ),
+        (
             "(foo #\\bogus)\n",
             "",
             "Invalid character literal",
@@ -400,6 +430,39 @@ fn malformed_booleans_are_read_errors_in_programs_and_ports() {
             let (ds, stdout, stderr, ok) = run(dir.path(), backend, &["read.scm"], None);
             assert!(ok, "{backend:?}: {text}: {stderr}");
             assert_eq!(stdout, "#t#t", "{backend:?}: {text}: {stderr}");
+            assert!(ds.is_empty());
+        }
+    }
+}
+
+#[test]
+fn numeric_separators_work_in_source_without_r6rs_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut program = "(import (scheme base) (scheme write))\n".to_owned();
+    let cases = [
+        ("1_000", "1000"),
+        ("#xAB_CD", "43981"),
+        ("#e1.2_5", "5/4"),
+        ("1e1_0", "1e10"),
+        ("#e1_0+2_0i", "#e10+20i"),
+        ("#e+1_0i", "#e+10i"),
+        ("#e1.2_5+2_0i", "#e1.25+20i"),
+        ("1_0@0_0", "10@0"),
+    ];
+    for (text, ordinary) in cases {
+        program.push_str(&format!(
+            "(let ((n {text})) (write (and (= n {ordinary}) (eq? (exact? n) (exact? {ordinary})))))\n"
+        ));
+    }
+    fs::write(dir.path().join("program.scm"), &program).unwrap();
+    for backend in BOTH_BACKENDS {
+        for (args, input) in [
+            (&["program.scm"][..], None),
+            (&[][..], Some(program.as_str())),
+        ] {
+            let (ds, stdout, stderr, ok) = run(dir.path(), backend, args, input);
+            assert!(ok, "{backend:?}: {stderr}");
+            assert_eq!(stdout, "#t".repeat(cases.len()));
             assert!(ds.is_empty());
         }
     }
