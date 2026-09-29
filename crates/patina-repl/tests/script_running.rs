@@ -202,15 +202,30 @@ fn a_binary_without_its_library_says_so_up_front() {
 
     for extra in BOTH_BACKENDS {
         for script in ["q.scm", "p.scm"] {
-            let output = std::process::Command::new(&binary)
+            let mut command = std::process::Command::new(&binary);
+            command
                 .args(extra.iter().copied().chain([script]))
                 .env_remove("PATINA_LIBRARY_PATH")
                 .env_remove("PATINA_HOME")
                 .env_remove("PATINA_ISOLATED_LIBRARIES")
                 .env("HOME", temp.path())
-                .current_dir(temp.path())
-                .output()
-                .unwrap();
+                .current_dir(temp.path());
+            // #549: a sibling test's fork can briefly retain the copy's
+            // writable descriptor, so Linux refuses exec with ETXTBSY until
+            // that child execs. Retry only this launch error, for at most one
+            // second; an actual child exit (including failure) is never retried.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            let output = loop {
+                match command.output() {
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    result => break result.expect("failed to launch copied patina binary"),
+                }
+            };
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
