@@ -177,6 +177,27 @@ pub trait ExprVisitor {
     }
 }
 
+/// Refuse declarations/debug forms left in executable IR. Frontends normally
+/// consume these, but a missed entry point must not silently discard them in
+/// the VM or reach the CPS transform's internal assertions (#435).
+pub fn validate_executable(expr: &CoreExpr) -> Result<(), String> {
+    #[derive(Default)]
+    struct Check(Option<&'static str>);
+    impl ExprVisitor for Check {
+        fn visit_import(&mut self, _sets: &[TaggedValue]) {
+            self.0
+                .get_or_insert("import must be handled during top-level expansion");
+        }
+        fn visit_expand(&mut self, _expr: &CoreExpr) {
+            self.0
+                .get_or_insert("expand is not supported in executable code");
+        }
+    }
+    let mut check = Check::default();
+    check.visit_expr(expr);
+    check.0.map_or(Ok(()), |message| Err(message.into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

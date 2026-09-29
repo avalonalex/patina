@@ -401,6 +401,7 @@ pub(super) fn lower_quasiquotes_for(
     expr: &patina_core::CoreExpr,
     evaluator: &super::Evaluator,
 ) -> Result<patina_core::CoreExpr, EvalError> {
+    patina_ir::validate_executable(expr).map_err(EvalError::InvalidSyntax)?;
     let heap = evaluator.global_env.heap();
     let registry = evaluator.primitive_registry();
     let constructors = |name: &str| {

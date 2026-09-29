@@ -359,8 +359,8 @@ impl Evaluator {
             }
         }
 
-        // `import` and `expand` work at the top level but are not
-        // `(scheme base)` exports, so nothing above binds them.
+        // `import` and the reserved `expand` keyword are not `(scheme base)`
+        // exports. Seed them so the frontend can handle or diagnose them.
         patina_runtime::stdlib::seed_top_level_syntax(&self.global_env);
 
         // Import (patina debug) into global environment for REPL convenience
@@ -497,7 +497,12 @@ impl Evaluator {
             match parser.parse_next() {
                 Ok(Some(tagged)) => {
                     // Desugar TaggedValue to CoreExpr - desugar_tagged manages heap borrows internally
-                    let core_expr = match desugarer.desugar_tagged(tagged, heap) {
+                    let core_expr = match desugarer.desugar_with_imports(
+                        tagged,
+                        heap,
+                        |set, env| self.process_import_for_eval(set, env),
+                        |e| EvalError::DesugarError(e.to_string()).with_diagnostic(e.diagnostic()),
+                    ) {
                         Ok(ce) => ce,
                         Err(e) => {
                             tracing::warn!(
@@ -786,13 +791,18 @@ impl Evaluator {
         // `ParsedLibrary`.
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
-            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                patina_runtime::LibraryError::processing(
-                    parsed.source.as_deref(),
-                    format!("Failed to desugar expression: {}", e),
-                    e.diagnostic(),
-                )
-            })?;
+            let core_expr = desugarer.desugar_with_imports(
+                *tv,
+                &shared_heap,
+                |set, env| self.process_import_set(set, env, context),
+                |e| {
+                    patina_runtime::LibraryError::processing(
+                        parsed.source.as_deref(),
+                        format!("Failed to desugar expression: {e}"),
+                        e.diagnostic(),
+                    )
+                },
+            )?;
 
             // Initialization runs under the importing program's dynamic
             // context. A guard can leave the load here: preserve that escape
@@ -932,7 +942,7 @@ impl Evaluator {
     ///
     /// This imports library identifiers into a regular environment (not building a library).
     /// Used by the `import` special form.
-    pub(crate) fn process_import_for_eval(
+    pub fn process_import_for_eval(
         &self,
         import_set: &patina_frontend::ImportSet,
         env: &Rc<Environment>,

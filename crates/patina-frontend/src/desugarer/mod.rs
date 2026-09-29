@@ -80,7 +80,7 @@ use patina_core::{CoreForm, SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
 use patina_macros::IdentifierKey;
 use patina_macros::macro_expander::utils::list_to_vec_with_tail_tagged;
-use patina_runtime::{Environment, ScopeId, ScopeSet};
+use patina_runtime::{Environment, HasDiagnostic, ScopeId, ScopeSet};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -298,7 +298,9 @@ struct SplicingContext {
     keyword_scopes: Vec<ScopeId>,
 }
 
-pub struct Desugarer {
+type ImportHandler<'a> = dyn Fn(&[TaggedValue], &Rc<Environment>) -> Result<()> + 'a;
+
+pub struct Desugarer<'a> {
     /// The environment head symbols resolve in.
     ///
     /// Not optional: since core syntactic keywords became bindings and the
@@ -338,9 +340,13 @@ pub struct Desugarer {
     splicing: Option<Rc<SplicingContext>>,
     /// Splicing forms behave as ordinary local syntax in operand positions.
     definition_context: Cell<bool>,
+    /// Imports are declarations only at top level, including spliced forms.
+    /// A lambda body is a definition context but is not an import context.
+    top_level: Cell<bool>,
+    import_handler: Option<&'a ImportHandler<'a>>,
 }
 
-impl Desugarer {
+impl<'a> Desugarer<'a> {
     /// Create a desugarer whose environment holds the syntactic keywords and
     /// nothing else.
     ///
@@ -374,6 +380,8 @@ impl Desugarer {
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
+            top_level: Cell::new(true),
+            import_handler: None,
         }
     }
 
@@ -395,6 +403,8 @@ impl Desugarer {
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
+            top_level: Cell::new(true),
+            import_handler: None,
         }
     }
 
@@ -437,6 +447,8 @@ impl Desugarer {
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
+            top_level: Cell::new(true),
+            import_handler: None,
         }
     }
 
@@ -462,6 +474,8 @@ impl Desugarer {
             open_forms: Rc::clone(&self.open_forms),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
+            top_level: Cell::new(self.top_level.get()),
+            import_handler: self.import_handler,
         };
         (desugarer, scope)
     }
@@ -548,6 +562,8 @@ impl Desugarer {
             open_forms: Rc::clone(&self.open_forms),
             splicing: None,
             definition_context: Cell::new(true),
+            top_level: Cell::new(false),
+            import_handler: self.import_handler,
         }
     }
 
@@ -988,6 +1004,8 @@ impl Desugarer {
             open_forms: Rc::clone(&self.open_forms),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
+            top_level: Cell::new(self.top_level.get()),
+            import_handler: self.import_handler,
         }
     }
 
@@ -1747,6 +1765,58 @@ impl Desugarer {
         result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 
+    /// Expand a form while installing its imports in source order. Both
+    /// backends, including their eval/load and library paths, use this entry.
+    /// The callback retains its own error type: a library initializer can
+    /// raise or escape, which must not become a string-only syntax error.
+    pub fn desugar_with_imports<E>(
+        &self,
+        tagged: TaggedValue,
+        shared_heap: &SharedHeap,
+        import: impl FnMut(&crate::ImportSet, &Rc<Environment>) -> std::result::Result<(), E>,
+        syntax_error: impl FnOnce(DesugarError) -> E,
+    ) -> std::result::Result<CoreExpr, E> {
+        // Loading an import can execute Scheme. The unfinished input, include
+        // datums, and partially built IR live in this Rust stack until we
+        // return; none is yet a machine root.
+        let _gc_defer = patina_core::GcDeferGuard::new(shared_heap);
+        let import = RefCell::new(import);
+        let failure = RefCell::new(None);
+        let handler = |sets: &[TaggedValue], env: &Rc<Environment>| {
+            for &set in sets {
+                let set = crate::LibraryDefinition::parse_import_set_tagged(set, shared_heap)
+                    .map_err(|e| {
+                        DesugarError::InvalidSyntax(format!("Invalid import set: {e}"))
+                            .with_diagnostic(e.diagnostic())
+                    })?;
+                if let Err(error) = import.borrow_mut()(&set, env) {
+                    *failure.borrow_mut() = Some(error);
+                    return Err(DesugarError::Other("import failed".into()));
+                }
+            }
+            Ok(())
+        };
+        let desugarer = Desugarer {
+            env: self.env.clone(),
+            current_scopes: self.current_scopes.clone(),
+            source_map: self.source_map.clone(),
+            fs: self.fs.clone(),
+            include_dirs: self.include_dirs.clone(),
+            early: self.early.clone(),
+            open_forms: self.open_forms.clone(),
+            splicing: self.splicing.clone(),
+            definition_context: Cell::new(self.definition_context.get()),
+            top_level: Cell::new(self.top_level.get()),
+            import_handler: Some(&handler),
+        };
+        let result = desugarer.desugar_tagged(tagged, shared_heap);
+        if let Some(error) = failure.into_inner() {
+            Err(error)
+        } else {
+            result.map_err(syntax_error)
+        }
+    }
+
     /// An operand is not a definition context. Restore the caller's context
     /// even when expansion fails; nested body desugarers start a new context.
     fn desugar_expression(
@@ -1755,8 +1825,10 @@ impl Desugarer {
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
         let previous = self.definition_context.replace(false);
+        let top_level = self.top_level.replace(false);
         let result = self.desugar_form(tagged, shared_heap);
         self.definition_context.set(previous);
+        self.top_level.set(top_level);
         result
     }
 
@@ -2684,6 +2756,11 @@ impl Desugarer {
         args: TaggedValue,
         shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
+        if !self.top_level.get() {
+            return Err(DesugarError::InvalidSyntax(
+                "import is only allowed at top level".into(),
+            ));
+        }
         let import_sets = utils::list_to_vec_tagged(args, shared_heap)?;
 
         if import_sets.is_empty() {
@@ -2692,27 +2769,29 @@ impl Desugarer {
             ));
         }
 
+        if let Some(import) = self.import_handler {
+            import(&import_sets, &self.env)?;
+            // A later macro reference may now reach a different imported
+            // location. Keep already-emitted aliases, but refresh lookups.
+            self.early.imports.borrow_mut().clear();
+            return Ok(CoreExpr::new(CoreExprKind::Literal(
+                TaggedValue::UNSPECIFIED,
+            )));
+        }
         Ok(CoreExpr::new(CoreExprKind::Import { import_sets }))
     }
 
-    /// Desugar expand using TaggedValue: (expand expr) → Expand { expr }
+    /// `expand` never had executable semantics: the VM discarded it and the
+    /// CPS transform panicked. Refuse it consistently until a debugging API
+    /// is designed, without expanding (or importing from) its operand.
     fn desugar_expand_tagged(
         &self,
-        args: TaggedValue,
-        shared_heap: &SharedHeap,
+        _args: TaggedValue,
+        _shared_heap: &SharedHeap,
     ) -> Result<CoreExpr> {
-        let args_vec = utils::list_to_vec_tagged(args, shared_heap)?;
-        if args_vec.len() != 1 {
-            return Err(DesugarError::WrongArgCount {
-                form: "expand".to_string(),
-                expected: "1".to_string(),
-                got: args_vec.len(),
-            });
-        }
-
-        Ok(CoreExpr::new(CoreExprKind::Expand {
-            expr: Rc::new(self.desugar_form(args_vec[0], shared_heap)?),
-        }))
+        Err(DesugarError::InvalidSyntax(
+            "expand is not supported in executable code".into(),
+        ))
     }
 
     /// Desugar let-syntax using TaggedValue
@@ -2919,6 +2998,9 @@ impl Desugarer {
 
         let mut body_desugarer = self.with_new_env(body_env, definition_scopes.clone());
         body_desugarer.definition_context.set(true);
+        body_desugarer
+            .top_level
+            .set(splicing && self.top_level.get());
         body_desugarer.splicing = if splicing {
             let mut context =
                 self.splicing
@@ -3515,7 +3597,7 @@ impl Desugarer {
     }
 }
 
-impl Default for Desugarer {
+impl Default for Desugarer<'_> {
     fn default() -> Self {
         Self::new()
     }

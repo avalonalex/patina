@@ -62,9 +62,16 @@ impl Pipeline for StandardPipeline {
         // Step 2: Desugar (with macro expansion) using TaggedValue directly
         // desugar_tagged manages heap borrows internally
         let desugarer = Desugarer::with_env(env.clone());
-        let core_expr = desugarer
-            .desugar_tagged(expr, heap)
-            .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
+        let core_expr = desugarer.desugar_with_imports(
+            expr,
+            heap,
+            |set, env| {
+                self.evaluator
+                    .process_import_for_eval(set, env)
+                    .map_err(|e| PipelineError::Evaluation(e.to_string()))
+            },
+            |e| PipelineError::Desugaring(e.to_string()),
+        )?;
 
         // Step 3: CPS evaluation (may mutate heap via define/set!)
         let result_tagged = eval_cps(&core_expr, env.clone(), &self.evaluator)
@@ -94,9 +101,16 @@ impl Pipeline for StandardPipeline {
             // Step 3: Desugar (with macro expansion) using TaggedValue directly
             // desugar_tagged manages heap borrows internally
             let desugarer = Desugarer::with_env(env.clone());
-            let core_expr = desugarer
-                .desugar_tagged(expr, heap)
-                .map_err(|e| PipelineError::Desugaring(e.to_string()))?;
+            let core_expr = desugarer.desugar_with_imports(
+                expr,
+                heap,
+                |set, env| {
+                    self.evaluator
+                        .process_import_for_eval(set, env)
+                        .map_err(|e| PipelineError::Evaluation(e.to_string()))
+                },
+                |e| PipelineError::Desugaring(e.to_string()),
+            )?;
 
             // Step 4: CPS evaluation (may mutate heap via define/set!)
             last_result = eval_cps(&core_expr, env.clone(), &self.evaluator)
@@ -114,6 +128,19 @@ impl Pipeline for StandardPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spliced_import_supplies_syntax_before_later_forms_expand() {
+        let pipeline = StandardPipeline::new();
+        let env = pipeline.evaluator().global_env.clone();
+        let result = pipeline
+            .eval_program(
+                "(begin (import (srfi 8)) (receive (a b) (values 1 2) (+ a b)))",
+                &env,
+            )
+            .unwrap();
+        assert_eq!(result.as_fixnum(), Some(3));
+    }
 
     #[test]
     fn test_basic_evaluation() {

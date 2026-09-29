@@ -125,7 +125,7 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         let evaluator = self.cps.evaluator;
-        let core_expr = expand_for_eval(evaluator, expr, env)?;
+        let core_expr = expand_for_eval(evaluator, expr, env, self)?;
 
         self.eval_core(&core_expr, env)
     }
@@ -158,14 +158,18 @@ pub(super) fn expand_for_eval(
     evaluator: &crate::eval::Evaluator,
     expr: TaggedValue,
     env: &Rc<Environment>,
+    context: &CallbackContext<'_, '_, '_>,
 ) -> Result<patina_core::CoreExpr, EvalError> {
     let desugarer =
         patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
-    let core_expr = desugarer
-        .desugar_tagged(expr, evaluator.heap())
-        .map_err(|e| {
-            EvalError::InvalidSyntax(format!("eval: desugar error: {}", e))
+    let core_expr = desugarer.desugar_with_imports(
+        expr,
+        evaluator.heap(),
+        |set, env| evaluator.process_import_for_eval_with(set, env, context),
+        |e| {
+            EvalError::InvalidSyntax(format!("eval: desugar error: {e}"))
                 .with_diagnostic(e.diagnostic())
-        })?;
+        },
+    )?;
     super::lower_quasiquotes_for(&core_expr, evaluator)
 }
