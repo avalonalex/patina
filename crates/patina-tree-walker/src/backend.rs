@@ -127,12 +127,17 @@ impl TreeWalker {
             None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
         };
 
-        let core_expr = desugarer.desugar_tagged(expr, internal_heap).map_err(|e| {
-            let location = e.source_location().cloned();
-            EvalError::DesugarError(e.to_string())
-                .with_diagnostic(e.diagnostic())
-                .at_opt(location)
-        })?;
+        let core_expr = desugarer.desugar_with_imports(
+            expr,
+            internal_heap,
+            |set, env| self.evaluator.process_import_for_eval(set, env),
+            |e| {
+                let location = e.source_location().cloned();
+                EvalError::DesugarError(e.to_string())
+                    .with_diagnostic(e.diagnostic())
+                    .at_opt(location)
+            },
+        )?;
 
         eval_cps(&core_expr, env.clone(), &self.evaluator)
     }

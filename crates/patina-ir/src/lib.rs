@@ -20,4 +20,4 @@ pub use patina_core::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive, PromptTag};
 
 // Local types
 pub use cps_transform::CpsTransformer;
-pub use visitor::ExprVisitor;
+pub use visitor::{ExprVisitor, validate_executable};

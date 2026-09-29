@@ -29,14 +29,6 @@ use std::rc::Rc;
 /// the transform's gensyms (`k_N`) can take.
 const EVAL_K: &str = "%eval-k";
 
-/// What [`CpsEvaluator::eval_step`] made of a datum.
-enum EvalStep {
-    /// A CPS expression to run, delivering to [`EVAL_K`].
-    Run(Rc<patina_core::CpsExpr>),
-    /// Already evaluated.
-    Value(TaggedValue),
-}
-
 impl<'a> CpsEvaluator<'a> {
     /// Apply a CPS procedure (returns StepResult for trampolining)
     #[allow(clippy::too_many_arguments)]
@@ -1093,19 +1085,10 @@ impl<'a> CpsEvaluator<'a> {
                 match evaluated {
                     // On this trampoline, under a continuation environment
                     // of its own that binds only where its value goes.
-                    Ok(EvalStep::Run(expr)) => Ok(StepResult::Continue {
+                    Ok(expr) => Ok(StepResult::Continue {
                         expr,
                         env,
                         cont_env: ContEnv::new().insert(EVAL_K.into(), resume(cont)),
-                        prompt_stack,
-                        dynamic_winds,
-                        exception_handlers,
-                    }),
-                    Ok(EvalStep::Value(value)) => Ok(StepResult::InvokeContinuation {
-                        cont: resume(cont),
-                        value,
-                        env: self.evaluator.global_env.clone(),
-                        cont_env,
                         prompt_stack,
                         dynamic_winds,
                         exception_handlers,
@@ -1143,23 +1126,17 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
-    /// A `Step::Eval`'s datum made ready for this trampoline: expanded, and
-    /// transformed to deliver its value to [`EVAL_K`] — or, for an `import`,
-    /// which the transform does not take, done here and its value.
+    /// A `Step::Eval`'s datum made ready for this trampoline: imports installed
+    /// during expansion, then transformed to deliver its value to [`EVAL_K`].
     fn eval_step(
         &self,
         expr: TaggedValue,
         env: &Rc<Environment>,
         context: &super::callback::CallbackContext<'_, '_, '_>,
-    ) -> Result<EvalStep, EvalError> {
-        let core = super::callback::expand_for_eval(self.evaluator, expr, env)?;
-        if let patina_core::CoreExprKind::Import { .. } = &core.kind {
-            // An import can initialize a library and call the program's
-            // handlers. It inherits the same context as other evaluated forms.
-            return context.eval_import(&core, env).map(EvalStep::Value);
-        }
+    ) -> Result<Rc<patina_core::CpsExpr>, EvalError> {
+        let core = super::callback::expand_for_eval(self.evaluator, expr, env, context)?;
         let cps = patina_ir::CpsTransformer::new().transform(&core, &EVAL_K.into());
-        Ok(EvalStep::Run(Rc::new(cps)))
+        Ok(Rc::new(cps))
     }
 
     #[allow(clippy::too_many_arguments)]

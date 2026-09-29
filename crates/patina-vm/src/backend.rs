@@ -257,36 +257,20 @@ impl VmBackend {
             None => Desugarer::with_env(Rc::clone(&self.global_env))
                 .with_fs(self.state.borrow().fs.clone()),
         };
-        let core_expr = desugarer
-            .desugar_tagged(expr, &heap)
-            .map_err(VmBackendError::from)?;
-
-        // Handle Import specially — it's a side-effect that modifies the global
-        // environment and doesn't need compilation/execution.
-        if let patina_core::core_expr::CoreExprKind::Import { import_sets } = &core_expr.kind {
-            for import_set_tv in import_sets {
-                let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
-                    *import_set_tv,
-                    &heap,
-                )
-                .map_err(|e| {
+        let core_expr = desugarer.desugar_with_imports(
+            expr,
+            &heap,
+            |set, env| {
+                self.process_import_set(set, env).map_err(|e| {
                     VmBackendError::Runtime {
-                        message: format!("Invalid import set: {}", e),
+                        message: e.to_string(),
                         location: None,
                     }
                     .with_diagnostic(e.diagnostic())
-                })?;
-                self.process_import_set(&import_set, &self.global_env)
-                    .map_err(|e| {
-                        VmBackendError::Runtime {
-                            message: e.to_string(),
-                            location: None,
-                        }
-                        .with_diagnostic(e.diagnostic())
-                    })?;
-            }
-            return Ok(TaggedValue::UNSPECIFIED);
-        }
+                })
+            },
+            VmBackendError::from,
+        )?;
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(&self.state.borrow().primitive_registry);
@@ -429,8 +413,8 @@ impl VmBackend {
             }
         }
 
-        // `import` and `expand` work at the top level but are not
-        // `(scheme base)` exports, so nothing above binds them.
+        // `import` and the reserved `expand` keyword are not `(scheme base)`
+        // exports. Seed them so the frontend can handle or diagnose them.
         stdlib::seed_top_level_syntax(&self.global_env);
         base
     }
@@ -620,13 +604,20 @@ impl VmBackend {
 
             let body_result = (|| -> Result<(), LibraryError> {
                 for tv in &parsed.body {
-                    let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                        patina_runtime::LibraryError::processing(
-                            parsed.source.as_deref(),
-                            format!("desugar error: {}", e),
-                            e.diagnostic(),
-                        )
-                    })?;
+                    let core_expr = desugarer.desugar_with_imports(
+                        *tv,
+                        &shared_heap,
+                        |set, env| {
+                            crate::runtime::vm_state::vm_process_import_set(&mut state, set, env)
+                        },
+                        |e| {
+                            patina_runtime::LibraryError::processing(
+                                parsed.source.as_deref(),
+                                format!("desugar error: {e}"),
+                                e.diagnostic(),
+                            )
+                        },
+                    )?;
 
                     let (top, nested) = compile_with_qq_resolving(
                         &core_expr,

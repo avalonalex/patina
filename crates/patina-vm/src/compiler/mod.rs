@@ -68,6 +68,7 @@ fn compile_pipeline(
     expr: &CoreExpr,
     resolver: PrimitiveResolver<'_>,
 ) -> Result<(CodeObject, Vec<CodeObject>), CompileError> {
+    patina_ir::validate_executable(expr).map_err(CompileError::Internal)?;
     let alpha_rename::Renamed {
         expr: renamed,
         introduced_globals,

@@ -20,7 +20,6 @@ use crate::types::continuation::{
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
 use crate::types::{CallFrame, CodeObjectId};
-use patina_core::core_expr::{CoreExpr, CoreExprKind};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -755,13 +754,18 @@ fn vm_evaluate_parsed_library(
 
     let body_result = (|| -> Result<(), LibraryError> {
         for tv in &parsed.body {
-            let core_expr = desugarer.desugar_tagged(*tv, &shared_heap).map_err(|e| {
-                patina_runtime::LibraryError::processing(
-                    parsed.source.as_deref(),
-                    format!("desugar error: {}", e),
-                    e.diagnostic(),
-                )
-            })?;
+            let core_expr = desugarer.desugar_with_imports(
+                *tv,
+                &shared_heap,
+                |set, env| vm_process_import_set(state, set, env),
+                |e| {
+                    patina_runtime::LibraryError::processing(
+                        parsed.source.as_deref(),
+                        format!("desugar error: {e}"),
+                        e.diagnostic(),
+                    )
+                },
+            )?;
 
             let (top, nested) = compile_with_qq_resolving(
                 &core_expr,
@@ -808,7 +812,7 @@ fn vm_evaluate_parsed_library(
 }
 
 /// Resolve an import set into the given environment.
-fn vm_process_import_set(
+pub(crate) fn vm_process_import_set(
     state: &mut VmState,
     import_set: &ImportSet,
     lib_env: &Rc<Environment>,
@@ -955,32 +959,24 @@ fn compile_for_eval(
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
-    let mut core_expr = desugarer.desugar_tagged(expr, &heap).map_err(|e| {
-        VmError::Runtime {
-            message: format!("eval: desugar error: {}", e),
-        }
-        .with_diagnostic(e.diagnostic())
-    })?;
-
-    if let CoreExprKind::Import { import_sets } = &core_expr.kind {
-        for &import_set in import_sets {
-            let import_set =
-                patina_frontend::LibraryDefinition::parse_import_set_tagged(import_set, &heap)
-                    .map_err(|e| {
-                        VmError::Runtime {
-                            message: format!("Invalid import set: {}", e),
-                        }
-                        .with_diagnostic(e.diagnostic())
-                    })?;
-            vm_process_import_set(state, &import_set, env).map_err(|e| {
+    let core_expr = desugarer.desugar_with_imports(
+        expr,
+        &heap,
+        |set, env| {
+            vm_process_import_set(state, set, env).map_err(|e| {
                 VmError::Runtime {
                     message: e.to_string(),
                 }
                 .with_diagnostic(e.diagnostic())
-            })?;
-        }
-        core_expr = CoreExpr::new(CoreExprKind::Literal(TaggedValue::UNSPECIFIED));
-    }
+            })
+        },
+        |e| {
+            VmError::Runtime {
+                message: format!("eval: desugar error: {e}"),
+            }
+            .with_diagnostic(e.diagnostic())
+        },
+    )?;
 
     compile_with_qq_resolving(&core_expr, &heap, env, &state.primitive_registry).map_err(|e| {
         VmError::Runtime {

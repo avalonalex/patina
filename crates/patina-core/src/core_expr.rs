@@ -239,9 +239,9 @@ pub enum CoreExprKind {
 
     // Note: Parameterize is now a macro using dynamic-wind (lib/scheme/base/parameters.scm)
     // The CoreExpr::Parameterize variant has been removed.
-    /// Expand: show macro expansion without evaluating
-    /// Example: (expand '(let ((x 1)) x)) => ((lambda (x) x) 1)
-    /// This is a Patina debugging extension, not part of R7RS
+    /// Reserved macro-expansion debug IR. Execution semantics are not
+    /// implemented: the frontend rejects `expand`, and executable-IR
+    /// validation rejects a hand-built node rather than discarding it.
     Expand { expr: Rc<CoreExpr> },
 
     /// Function application

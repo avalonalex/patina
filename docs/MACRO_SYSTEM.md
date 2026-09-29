@@ -338,6 +338,30 @@ and `letrec-syntax`, accepting SRFI 188's mixed-form extension; `(scheme base)`
 retains R7RS-small behavior. The two `expansion/splicing-*.scm` suites pin
 these boundaries on both backends.
 
+**Spliced imports (#435).** All evaluation entry points expand with an import
+handler: scripts, the shared pipeline, `eval`/`load`, and both library-loading
+paths. At top level, `begin`, selected `cond-expand` bodies, `include`/`include-ci`,
+and SRFI 188 splices can contain imports. The handler installs bindings before
+expanding the following form, including macros that form needs. Recognition
+follows the keyword binding, including renamed keywords and macro output.
+Library declaration imports still use the declaration parser; a library-body
+import requires the keyword to be bound explicitly.
+
+Imports run during expansion of the enclosing form, before its runtime
+expressions. A library initializer therefore runs before an earlier `display`
+in the same `begin`, matching Gauche; Chibi interleaves those operations.
+Imports in operands, branches, lambda bodies, or ordinary local-syntax bodies
+are syntax errors. An import in quoted data or an unselected `cond-expand`
+branch does nothing. The separate scoped import-modifier parsing defect is
+tracked in #546.
+
+Import callbacks preserve backend errors and the importing evaluation's dynamic
+context. Collection is deferred while expansion holds unfinished datums and IR
+outside the machine's roots. Executable IR is checked for unhandled imports
+before compilation/CPS lowering. The reserved `expand` form has no implemented
+execution semantics and now reports a syntax error on both backends, rather
+than being discarded on the VM or panicking on the tree-walker.
+
 **A macro-introduced top-level definition is private to its binding identity.**
 The VM renames it to a global no source mentions, derived from its scope set,
 and records that identity in the environment. A later form can resolve it at

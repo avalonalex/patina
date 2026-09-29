@@ -236,17 +236,21 @@ fn primitive_eval(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         ));
     }
 
-    // Desugar the expression with macro-aware desugarer (tagged path)
-    let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
-    let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
-        EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {}", e))
-            .with_diagnostic(e.diagnostic())
-    })?;
-
-    if !mutable && has_top_level_definition(&core_expr) {
-        return Err(EvalError::InvalidSyntax(
-            "eval: cannot define in immutable environment".to_string(),
-        ));
+    // Only immutable environments need a preliminary definition check. In
+    // the mutable case expansion belongs to the machine: an import earlier
+    // in a spliced form can provide syntax needed to expand its later forms
+    // (#435), and expanding twice can also install a transformer twice.
+    if !mutable {
+        let desugarer = Desugarer::with_env(env.clone()).with_fs(ctx.fs().clone());
+        let core_expr = desugarer.desugar_tagged(args[0], heap).map_err(|e| {
+            EvalError::InvalidSyntax(format!("eval: failed to desugar expression: {e}"))
+                .with_diagnostic(e.diagnostic())
+        })?;
+        if has_top_level_definition(&core_expr) {
+            return Err(EvalError::InvalidSyntax(
+                "eval: cannot define in immutable environment".to_string(),
+            ));
+        }
     }
 
     Ok(Step::Eval {

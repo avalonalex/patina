@@ -24,7 +24,7 @@ use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-impl Desugarer {
+impl Desugarer<'_> {
     /// The structure `template` builds, with its unquoted expressions
     /// desugared here.
     pub(super) fn derive_quasi_template(
@@ -44,7 +44,7 @@ impl Desugarer {
 /// What one template is derived through.
 struct Derivation<'a> {
     /// For the unquoted sub-expressions, which are ordinary code.
-    desugarer: &'a Desugarer,
+    desugarer: &'a Desugarer<'a>,
     heap: &'a SharedHeap,
     /// The pairs and vectors being derived, innermost last — so that one
     /// reached again inside itself is refused (`within`).

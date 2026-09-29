@@ -390,7 +390,7 @@ fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
         },
 
         CoreExprKind::Import { .. } | CoreExprKind::Expand { .. } => {
-            ClosedExprKind::Literal(TaggedValue::UNSPECIFIED)
+            unreachable!("compile_pipeline validates executable IR before closure conversion")
         }
     };
     ClosedExpr::with_source(kind, source)
