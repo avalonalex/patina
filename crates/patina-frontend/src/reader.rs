@@ -505,6 +505,8 @@ mod tests {
             "#0=(1 2) #0# (a . b)",
             "; a comment\n(after)\n",
             "#!fold-case ABC (DEF)",
+            // #359: split Unicode folds, character names and directive flips.
+            "#!fold-case Straße ΟΔΟΣ +IStraße #\\NEWLINE #\\X41 #\\ẞ |Straße| #!no-fold-case Straße",
             // #356: directive scanning loops, including when the next feed
             // continues a directive name or a shebang rather than a token.
             "#!fold-case #!no-fold-case ABC #!fold-case DEF",

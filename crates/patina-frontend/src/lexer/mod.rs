@@ -1,5 +1,6 @@
 use std::fmt;
 use thiserror::Error;
+use unicode_casefold::UnicodeCaseFold;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -241,7 +242,7 @@ struct OpenDelimiter {
 pub struct Lexer {
     input: Vec<char>,
     position: usize,
-    /// Whether to fold identifiers to lowercase (R7RS #!fold-case directive)
+    /// Whether to case-fold identifiers and character names (R7RS #!fold-case).
     fold_case: bool,
     /// Current line number (1-based)
     line: u32,
@@ -696,7 +697,7 @@ impl Lexer {
     /// Create a lexer with case-folding enabled from the start.
     ///
     /// This is used for `include-ci` which reads files in case-insensitive mode.
-    /// Identifiers will be folded to lowercase, matching R7RS `#!fold-case` behavior.
+    /// Identifiers and character names fold as if by `string-foldcase`.
     pub fn new_case_insensitive(input: &str) -> Self {
         Lexer {
             fold_case: true,
@@ -1515,6 +1516,13 @@ impl Lexer {
 
         let char_str: String = self.input[start..self.position].iter().collect();
 
+        // #359: folding applies to names, not literal characters. In
+        // particular, #\A stays A, and #\ẞ must not expand into "ss".
+        if char_str.chars().count() == 1 {
+            return Ok(Token::Character(first));
+        }
+        let char_str = Self::identifier_name(char_str, self.fold_case);
+
         let ch = match char_str.as_str() {
             "space" => ' ',
             "newline" => '\n',
@@ -1526,8 +1534,6 @@ impl Lexer {
             "escape" => '\u{001B}',
             "null" => '\u{0000}',
             "return" => '\r',
-            // Check for single character (use char count, not byte length!)
-            s if s.chars().count() == 1 => s.chars().next().unwrap(),
             // Check for hex scalar value: #\x03BB (lambda)
             s if s.starts_with('x') => {
                 let hex_str = &s[1..];
@@ -1653,7 +1659,13 @@ impl Lexer {
     /// The identifier spelling used by both ordinary tokens and ambiguous
     /// numeric candidates that the parser resolves to identifiers.
     pub(crate) fn identifier_name(text: String, fold_case: bool) -> String {
-        if fold_case { text.to_lowercase() } else { text }
+        if fold_case {
+            // R7RS 2.1: as if by string-foldcase. Use the same full Unicode
+            // folding as the primitive: ß -> ss, and both Σ and ς -> σ.
+            text.case_fold().collect()
+        } else {
+            text
+        }
     }
 
     fn read_identifier(&mut self) -> Result<Token, LexError> {
@@ -2735,7 +2747,7 @@ mod tests {
 
     #[test]
     fn test_fold_case_directive() {
-        // #!fold-case causes identifiers to be lowercased
+        // ASCII folding agrees with lowercasing.
         let mut lexer = Lexer::new("#!fold-case ABC");
         let token = lexer.next_token_kind().unwrap();
         assert_eq!(token, Token::Identifier("abc".to_string()));

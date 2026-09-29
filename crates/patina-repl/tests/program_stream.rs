@@ -330,14 +330,27 @@ fn a_session_whose_input_ends_between_forms_succeeds() {
 /// `#!fold-case` holds for the rest of a program, not only for the form it was
 /// read with, from standard input as through a file.
 #[test]
-fn fold_case_holds_for_the_rest_of_a_program_on_standard_input() {
+fn fold_case_holds_for_the_rest_of_a_program_from_files_and_standard_input() {
     let dir = tempfile::tempdir().unwrap();
-    let program = "#!fold-case\n(IMPORT (SCHEME BASE) (SCHEME WRITE))\n\
-                   (DEFINE GREETING \"hi\")\n(DISPLAY GREETING)\n";
+    let program = r#"#!fold-case
+(IMPORT (SCHEME BASE) (SCHEME WRITE))
+(DEFINE Straße "Straße")
+(DEFINE ΟΔΟΣ "ΟΔΟΣ")
+(DISPLAY STRASSE)
+(DISPLAY οδοσ)
+(WRITE (EQUAL? (LIST #\NEWLINE #\Space #\X41 #\A #\ẞ)
+               (LIST #\newline #\space #\A #\A #\ẞ)))
+(WRITE (SYMBOL->STRING '|Straße|))
+"#;
+    std::fs::write(dir.path().join("folded.scm"), program).unwrap();
     for backend in BOTH_BACKENDS {
-        let (stdout, stderr, ok) = run_with_deadline(dir.path(), backend, Some(program));
-        assert!(ok, "{backend:?}: {stderr}");
-        assert_eq!(stdout, "hi", "{backend:?}");
+        let mut file_args = backend.to_vec();
+        file_args.push("folded.scm");
+        for (args, input) in [(backend, Some(program)), (&file_args[..], None)] {
+            let (stdout, stderr, ok) = run_with_deadline(dir.path(), args, input);
+            assert!(ok, "{args:?}: {stderr}");
+            assert_eq!(stdout, "StraßeΟΔΟΣ#t\"Straße\"", "{args:?}");
+        }
     }
 }
 

@@ -575,6 +575,7 @@ dependencies = [
  "patina-runtime",
  "rustc-hash",
  "thiserror",
+ "unicode-casefold",
 ]
 
 [[package]]

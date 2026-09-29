@@ -103,6 +103,48 @@ fn test_include_ci_procedure() {
     assert_program_eval_to(&code, "\"test-ok\"");
 }
 
+#[test]
+fn include_ci_folds_unicode_and_character_names_in_both_include_forms() {
+    let dir = TempDir::new().unwrap();
+    let first = dir.path().join("first.scm");
+    let second = dir.path().join("second.scm");
+    std::fs::write(
+        &first,
+        r#"
+        (DEFINE Straße 1)
+        (DEFINE ΟΔΟΣ 2)
+        (DEFINE +IStraße 3)
+        (DEFINE CHARACTERS (LIST #\NEWLINE #\Space #\X41 #\A #\ẞ))
+        (DEFINE PRESERVED (LIST "Straße" '|Straße|))
+        #!no-fold-case
+        (define MiXeD 4)
+        "#,
+    )
+    .unwrap();
+    // Each file starts with folding enabled, even if the first switched it off.
+    std::fs::write(&second, "(DEFINE SECOND Straße)").unwrap();
+    let include = format!("(include-ci {:?} {:?})", first, second);
+    for form in [
+        include.clone(),
+        format!(
+            "(define-library (folded) (import (scheme base))
+               (export strasse οδοσ +istrasse characters preserved MiXeD second)
+               {include})
+             (import (folded))"
+        ),
+    ] {
+        // The including source keeps its default spelling after include-ci.
+        let program = format!(
+            r#"(import (scheme base))
+                {form}
+                (define Straße 99)
+                (equal? (list strasse οδοσ +istrasse characters preserved MiXeD second Straße)
+                        '(1 2 3 (#\newline #\space #\A #\A #\ẞ) ("Straße" Straße) 4 1 99))"#
+        );
+        assert_program_eval_to(&program, "#t");
+    }
+}
+
 // =============================================================================
 // syntax-error — compile-time error signaling
 // =============================================================================
