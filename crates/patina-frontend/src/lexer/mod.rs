@@ -54,6 +54,9 @@ pub enum LexError {
     #[error("Invalid character literal")]
     InvalidCharacter,
 
+    #[error("Invalid boolean literal: {0}")]
+    InvalidBoolean(String),
+
     #[error("Reserved character (R7RS): {0}. Reserved for future extensions")]
     ReservedCharacter(char),
 
@@ -1325,18 +1328,8 @@ impl Lexer {
         self.advance(); // consume #
 
         match self.current_char() {
-            't' | 'T' => {
-                self.advance();
-                // R7RS long form #true
-                self.consume_ascii_suffix("rue");
-                Ok(Token::Boolean(true))
-            }
-            'f' | 'F' => {
-                self.advance();
-                // R7RS long form #false
-                self.consume_ascii_suffix("alse");
-                Ok(Token::Boolean(false))
-            }
+            't' | 'T' => self.read_boolean(true),
+            'f' | 'F' => self.read_boolean(false),
             '\\' => self.read_character(),
             '(' => {
                 self.advance();
@@ -1372,6 +1365,26 @@ impl Lexer {
             '0'..='9' => self.read_datum_label(),
             _ => Err(LexError::UnexpectedChar(self.current_char())),
         }
+    }
+
+    fn read_boolean(&mut self, value: bool) -> Result<Token, LexError> {
+        self.advance(); // t or f
+        self.consume_ascii_suffix(if value { "rue" } else { "alse" });
+        if !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
+            // Keep the whole malformed token for the diagnostic. In
+            // particular #t#f is one invalid token, not two booleans (#361).
+            while !self.is_at_end() && !Self::is_delimiter(self.current_char()) {
+                self.advance();
+            }
+            return Err(LexError::InvalidBoolean(
+                self.input[self.token_start.offset..self.position]
+                    .iter()
+                    .collect(),
+            ));
+        }
+        // next_fed_token still treats the buffer's end as provisional: #t
+        // may yet become #true, and even #true may become invalid #true1.
+        Ok(Token::Boolean(value))
     }
 
     /// Do the characters at `offset` from here spell `text`, ASCII
@@ -2205,6 +2218,89 @@ mod tests {
         let mut lexer = Lexer::new("#t #f");
         assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(true));
         assert_eq!(lexer.next_token_kind().unwrap(), Token::Boolean(false));
+    }
+
+    #[test]
+    fn boolean_tokens_require_a_delimiter() {
+        // # is not a delimiter: follow R7RS and Chibi for #t#f (#361).
+        for text in ["#tfoo", "#true1", "#fasle", "#false-x", "#t#f", "#TRUE1"] {
+            for ending in ["", " ", ")", ";comment"] {
+                let source = format!("\n  {text}{ending}");
+                let error = Lexer::new(&source).next_token().unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("Invalid boolean literal: {text}")
+                );
+                assert!(!error.is_incomplete());
+                let span = error.span().unwrap();
+                assert_eq!((span.start.line, span.start.column), (2, 3));
+                assert_eq!(span.end.column, 3 + text.len() as u32);
+            }
+        }
+    }
+
+    #[test]
+    fn boolean_tokens_keep_existing_delimiters_and_case_variants() {
+        for (text, value) in [
+            ("#t", true),
+            ("#true", true),
+            ("#T", true),
+            ("#TrUe", true),
+            ("#f", false),
+            ("#false", false),
+            ("#F", false),
+            ("#FaLsE", false),
+        ] {
+            // Include the quote syntax and brackets accepted by the shared
+            // delimiter policy (#421), as well as R7RS's delimiters.
+            for ending in [
+                "", " ", "\t", "\n", "\r", "(", ")", "[", "]", "\"", ";", "|", "'", "`", ",",
+            ] {
+                let mut lexer = Lexer::new(&format!("{text}{ending}"));
+                assert_eq!(
+                    lexer.next_token_kind().unwrap(),
+                    Token::Boolean(value),
+                    "{text}{ending}"
+                );
+                assert_eq!(lexer.state().offset, text.len());
+            }
+        }
+    }
+
+    #[test]
+    fn fed_boolean_tokens_wait_for_their_boundary_or_eof() {
+        for text in [
+            "#t", "#true", "#FaLsE", "#tfoo", "#true1", "#fasle", "#false-x", "#t#f",
+        ] {
+            let expected = Lexer::new(text)
+                .next_token_kind()
+                .map_err(|e| e.to_string());
+            for split in 0..=text.len() {
+                for eof in [false, true] {
+                    let mut lexer = Lexer::feedable(false);
+                    lexer.feed(&text[..split]);
+                    assert!(
+                        lexer.next_fed_token().unwrap().is_none(),
+                        "{text}, split at {split}"
+                    );
+                    lexer.feed(&text[split..]);
+                    assert!(
+                        lexer.next_fed_token().unwrap().is_none(),
+                        "{text}, without boundary"
+                    );
+                    if eof {
+                        lexer.no_more_text();
+                    } else {
+                        lexer.feed(" ");
+                    }
+                    let result = lexer
+                        .next_fed_token()
+                        .map(|s| s.unwrap().token)
+                        .map_err(|e| e.to_string());
+                    assert_eq!(result, expected, "{text}, split at {split}, eof={eof}");
+                }
+            }
+        }
     }
 
     #[test]
