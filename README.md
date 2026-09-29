@@ -39,6 +39,14 @@ Patina is an educational and experimental Scheme interpreter with ambitious goal
 
 Our primary focus is complete conformance to the R7RS-small specification. We validate against the comprehensive [Chibi Scheme](https://github.com/ashinn/chibi-scheme) test suite maintained by Alex Shinn, chairman of the R7RS Small Language committee.
 
+Patina also accepts numeric underscores as a default-enabled extension, following
+[SRFI 169](https://srfi.schemers.org/srfi-169/srfi-169.html) and Gauche's placement
+rule: one underscore between digits in a numeric component. For example,
+`1_000`, `#xAB_CD`, `1.2_5`, and `1e1_0` work in source, `read`, and
+`string->number`; `1__000`, `1000_`, and `1e_2` are invalid numeric spellings.
+This extension is independent of `--allow-r6rs`. Printed numbers use ordinary
+spellings without separators; portable R7RS code should omit numeric underscores.
+
 **Current status**: 100% of chibi r7rs-tests.scm passing (1226/1226 tests) on both backends.
 
 ### Modular Architecture

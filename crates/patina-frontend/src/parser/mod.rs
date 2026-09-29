@@ -421,6 +421,14 @@ impl Parser {
 
     /// Parse a number string and return a TaggedValue
     fn parse_number(&self, s: &str) -> Result<TaggedValue, ParseError> {
+        if s.contains('_') {
+            let normalized = Self::normalize_numeric_separators(s)?;
+            // All conversion paths see the same validated digits. Preserve
+            // the original spelling if the remaining number syntax is bad.
+            return self
+                .parse_number(&normalized)
+                .map_err(|_| ParseError::InvalidSyntax(format!("Invalid number: {s}")));
+        }
         // Parse numbers following the R7RS numeric tower
 
         // Handle R7RS numeric prefixes: #e #i #b #o #d #x
@@ -471,6 +479,38 @@ impl Parser {
 
         // Nothing worked - invalid number
         Err(ParseError::InvalidSyntax(format!("Invalid number: {}", s)))
+    }
+
+    /// SRFI 169 / #364: one underscore between digits in a numeric component.
+    /// Determine the radix before checking digits: e/f are digits in hex,
+    /// but exponent markers in decimal. Prefix letters are never digits here.
+    /// The existing number parser still validates the complete grammar.
+    fn normalize_numeric_separators(s: &str) -> Result<String, ParseError> {
+        let bytes = s.as_bytes();
+        let mut radix = 10;
+        let mut body = 0;
+        while let [b'#', prefix, ..] = &bytes[body..] {
+            match prefix.to_ascii_lowercase() {
+                b'b' => radix = 2,
+                b'o' => radix = 8,
+                b'd' => radix = 10,
+                b'x' => radix = 16,
+                b'e' | b'i' => {}
+                _ => break,
+            }
+            body += 2;
+        }
+        let digit = |byte: u8| char::from(byte).is_digit(radix);
+        for (i, byte) in bytes.iter().enumerate() {
+            if *byte == b'_'
+                && !(i > body && i + 1 < bytes.len() && digit(bytes[i - 1]) && digit(bytes[i + 1]))
+            {
+                return Err(ParseError::InvalidSyntax(format!(
+                    "Invalid numeric separator in: {s}"
+                )));
+            }
+        }
+        Ok(s.replace('_', ""))
     }
 
     /// Normalize R7RS alternate exponent markers to standard 'e'
