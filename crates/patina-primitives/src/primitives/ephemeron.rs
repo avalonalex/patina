@@ -121,10 +121,10 @@ fn ephemeron_datum(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 /// reachable at the call.
 ///
 /// Passing the argument through a primitive is the barrier: it is in the live
-/// argument vector across the call, which the collector traces. That is enough
-/// today for a second reason too — the VM over-retains stale registers — so
-/// this should be re-examined when `GC_STAGE5_PRD.md`'s Priority 2b lands,
-/// rather than assumed to keep holding.
+/// argument registers until dispatch consumes them; no collection runs inside
+/// this primitive. The VM's temporary retirement (#423) happens after the
+/// call, and never clears the local binding before the argument is loaded.
+/// The tree-walker likewise roots the argument while evaluating the call.
 fn reference_barrier(_heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     expect_arity(args, 1)?;
     Ok(TaggedValue::UNSPECIFIED)

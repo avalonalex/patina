@@ -288,6 +288,7 @@ Annotates every `App` and `Apply` node with `is_tail: bool`.
 pub struct RegExpr {
     pub kind: RegExprKind,  // 20+ variants with register indices
     pub dst: u16,           // destination register for this expression
+    pub temp_end: u16,      // exclusive end of this expression's temporaries
 }
 
 pub struct RegLambda {
@@ -317,6 +318,13 @@ Linear scan per function:
 - `num_regs = high_water_mark`
 
 `SetLocal` / `WriteLocalCell` in `RegExprKind` embed `value: Box<RegExpr>`.
+
+Each expression records its own temporary high-water mark (`temp_end`),
+separately from the frame's `num_regs`. Bindings and earlier operands are
+below its destination; slots above the destination can be retired when the
+expression finishes. A discarded expression also retires its destination.
+The separate peak matters when a guarded control call loads its operator
+after its operands: the operator's range must not include those operands.
 
 ---
 
@@ -349,6 +357,23 @@ Internal defines (letrec* semantics) use no new instructions:
 - Registers allocated after params
 - Initialized to `UNSPECIFIED` (boxed ones get `AllocCell` too)
 - `Define` in lambda body → `SetLocal` / `WriteLocalCell`
+
+### 10.4 Temporary roots (#423)
+
+Codegen records retirement ranges at instruction boundaries, including both
+edges out of an `if` test. After return threading, a forward analysis builds
+`CodeObject::register_roots`: per-PC bitsets of possible roots. Parameters
+start live, writes add their destinations, expression boundaries remove
+finished temporaries, and control-flow joins take the union. Fused predicates
+include their fast true/false edges and their deoptimization fallthrough.
+
+These are GC metadata, with no extra bytecode instructions. The VM clears
+excluded slots just before collection and in full/delimited continuation
+snapshots at capture, then traces the complete register vectors as before.
+The entry map also retires stale slots in a reused tail-call window. Pending
+earlier operands and local bindings remain roots; this is expression lifetime
+tracking, not last-use analysis of local variables. Runtime-built stubs keep
+conservative maps because their register protocols are not compiler output.
 
 ---
 

@@ -149,6 +149,14 @@ pub struct CodeObject {
     /// Sorted by pc; binary-search to resolve.
     pub source_map: Vec<(usize, SourceLocation)>,
 
+    /// Bitsets of possible register roots before each instruction, after completed
+    /// expression temporaries have been retired. Locals stay conservative.
+    /// Register `r` uses bit `r % 64` in word `r / 64`.
+    /// The collector and continuation capture clear excluded slots before
+    /// tracing; normal dispatch does no work for these maps (#423).
+    /// Runtime stubs and hand-built code use `None` to retain every slot.
+    pub register_roots: Option<Vec<Vec<u64>>>,
+
     /// Per-site inline caches for `LoadGlobal`/`StoreGlobal`, indexed by pc
     /// (Track P P4). Built by [`GlobalCacheEntry::table`]: the same length
     /// as `instructions` (entries for non-global instructions stay empty),

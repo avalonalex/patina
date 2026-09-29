@@ -356,7 +356,7 @@ which makes `impl GcRoots for VmState` natural:
 
 | Field | Root? | Notes |
 |-------|-------|-------|
-| `registers` | **yes** | Whole vector, conservatively — including slots past a frame's live range (they hold `NULL` or stale-but-valid values) |
+| `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
 | `frames[*].closure` | **yes** | **Bare `Option<HeapIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
 | `value_buffer` | **yes** | Multi-value side channel |
 | `scratch_args` | yes | Empty at safe points (`mem::take`n during primitive calls), but rooting it is free and future-proof |
@@ -367,6 +367,17 @@ which makes `impl GcRoots for VmState` natural:
 | `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
+
+**Temporary retirement (#423):** the compiler records possible-root bitsets at
+instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
+collection, the VM replaces excluded slots with `UNSPECIFIED`, including
+excess capacity in reused tail-call windows. Full and delimited continuation
+snapshots receive the same cleanup at capture, with the delimited base offset
+accounted for. Tracing still visits complete vectors, so snapshots and tracer
+register views never carry deliberately untraced pointers to swept objects.
+Runtime stubs without maps remain conservative. Local bindings are not
+retired at their last textual use: `reference-barrier` still roots its
+argument through the call, and a focused test pins that contract.
 
 Rust-stack temporaries (continuation-capture register clones, the
 `saved_globals` swap windows, primitive args in `VmApplyContext` callbacks):

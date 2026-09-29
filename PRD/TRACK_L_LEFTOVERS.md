@@ -48,7 +48,8 @@ twice.
   failure (#423), where the tree-walker instead has a timing failure. The
   other 27 are not ours or are by decision, including three symbol-spelling
   expectations retained by decision in #422.
-  `./scripts/run_larceny_tests.sh`.
+  A focused VM rerun after #423 passes `ephemeron` 6 of 6; the full-lane
+  totals above predate that fix. `./scripts/run_larceny_tests.sh`.
 - **Larceny, R6RS (measured 2026-09-28):** 14 of 16 suites clean, 6493 of
   6509 assertions, on both backends. `base` now runs all 2035 assertions
   after #424; its nine remaining numeric expectations differ from the R7RS

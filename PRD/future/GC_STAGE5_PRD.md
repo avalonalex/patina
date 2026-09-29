@@ -63,32 +63,24 @@ unreclaimed. Fix: root the re-entrancy boundary explicitly (the suspended
 **Acceptance:** a nested-map churn workload shows collections > 0 *during* the
 map and a bounded arena; the defer-guard tests keep passing.
 
-## Priority 2b — VM register precision (triage family 32)
+## Priority 2b — VM register precision (triage family 32) — completed
 
-A value replaced by `set!` stays reachable if the frame that computed the
-replacement is still live and a register still holds it:
+Completed 2026-09-28 ([#423](https://github.com/avalonalex/patina/issues/423)).
+Compiler maps record expression temporary lifetimes; collection and
+continuation capture retire the finished slots. Local bindings and runtime
+stubs remain conservative. No clearing instructions run in the normal VM
+loop. See `docs/VM_COMPILER.md` §10.4 and `docs/GC_DESIGN.md` §5.2.
 
-```scheme
-(define (drop!) (set! keys (reverse (reverse (list-tail keys 5)))))
-```
+**Acceptance:** the inline replacement collects in its own frame; Larceny's
+`ephemeron` suite passes 6 of 6 on the VM; the regression no longer hides the
+replacement in a helper that returns. `reference-barrier` was re-audited and
+has a collection test. Full/delimited continuation and release/debug GC
+checks cover the same register-vector tracing contract.
 
-collects the dropped half, while the identical `set!` written inline in a
-procedure that then triggers a collection does not — the old list is still in
-one of that frame's registers. `(set! keys 'gone)` collects either way. The
-tree-walker is unaffected.
-
-Found by SRFI 124: ephemerons are the only thing in the language that reports
-whether a particular object was collected, which is why this went unseen. It
-is why Larceny's `ephemeron` suite is 5 of 6 on the VM.
-
-Two things depend on this landing. `reference-barrier` currently holds for a
-second, accidental reason — the over-retention itself — so its comment in
-`crates/patina-primitives/src/primitives/ephemeron.rs` says to re-examine it
-here. And `crates/patina-tests/tests/ephemerons.rs` routes one `set!` through
-a helper that returns, purely to avoid this.
-
-**Acceptance:** the inline form collects; Larceny's `ephemeron` suite is 6 of
-6 on the VM; the ephemeron test no longer needs the helper indirection.
+Interleaved main/change/main measurements against `0f1cd12`, five measured
+rounds after warmup on the development machine: `fib(35)` +0.9%, a 20-million
+iteration tail sum +1.1%, and 10-million-pair churn −0.1% (wall time,
+including startup). These small workloads do not measure GC pause tails.
 
 ## Priority 3 — Collector upgrades (behind `Collector`)
 
