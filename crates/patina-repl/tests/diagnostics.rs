@@ -359,3 +359,48 @@ fn loading_errors_point_into_the_file_being_read() {
         }
     }
 }
+
+#[test]
+fn malformed_booleans_are_read_errors_in_programs_and_ports() {
+    let dir = tempfile::tempdir().unwrap();
+    for text in ["#tfoo", "#true1", "#fasle", "#false-x", "#t#f", "#TRUE1"] {
+        let program = format!("(import (scheme write))\n(display \"before\")\n(list {text})\n");
+        fs::write(dir.path().join("program.scm"), &program).unwrap();
+        fs::write(dir.path().join("datum.dat"), text).unwrap();
+        // The Scheme read procedure must raise a read-error object before
+        // returning any boolean prefix, for string ports and file ports.
+        let reader = format!(
+            r#"(import (scheme base) (scheme read) (scheme write) (scheme file))
+(for-each
+ (lambda (port)
+   (write (guard (e (else (read-error? e))) (read port) #f))
+   (close-input-port port))
+ (list (open-input-string "{text}") (open-input-file "datum.dat")))
+"#
+        );
+        fs::write(dir.path().join("read.scm"), reader).unwrap();
+        for backend in BOTH_BACKENDS {
+            for (args, input, source) in [
+                (&["program.scm"][..], None, "program.scm"),
+                (&[][..], Some(program.as_str()), "<stdin>"),
+            ] {
+                let (ds, stdout, stderr, ok) = run(dir.path(), backend, args, input);
+                assert!(!ok, "{backend:?}: {text}");
+                assert_eq!(stdout, "before");
+                assert_eq!(
+                    stderr,
+                    format!(
+                        "Error: Invalid boolean literal: {text}\n  at {source}:3:7\n   3 | (list {text})\n             {}\n",
+                        "^".repeat(text.len())
+                    )
+                );
+                assert_eq!(ds.len(), 1);
+                assert_eq!(ds[0].kind, K::Parse);
+            }
+            let (ds, stdout, stderr, ok) = run(dir.path(), backend, &["read.scm"], None);
+            assert!(ok, "{backend:?}: {text}: {stderr}");
+            assert_eq!(stdout, "#t#t", "{backend:?}: {text}: {stderr}");
+            assert!(ds.is_empty());
+        }
+    }
+}

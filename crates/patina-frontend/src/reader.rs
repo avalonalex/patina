@@ -391,6 +391,11 @@ mod tests {
     #[test]
     fn errors_keep_their_positions_across_feeds_and_deferred_lookahead() {
         let texts = [
+            "(a)\n  #tfoo ",
+            "(a)\n  #true1 ",
+            "(a)\n  #fasle ",
+            "(a)\n  #false-x ",
+            "(a)\n  (#t#f)",
             "(a)\n  #\\bogus ",
             "(λ)\n  \"β\\q\" ",
             "\u{feff}(a)\n  { ",
