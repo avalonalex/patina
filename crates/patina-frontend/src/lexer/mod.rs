@@ -597,18 +597,32 @@ impl Lexer {
         // since running out inside one of those is also running out inside
         // something, and then the token itself. See `next_fed_token`.
         self.token_start = self.raw_state();
-        self.skip_whitespace_and_comments()?;
-
-        let start = self.state();
-        self.token_start = self.raw_state();
-        let token = self.lex_token()?;
-        Ok(Spanned {
-            token,
-            line: start.line,
-            column: start.column,
-            start,
-            end: self.state(),
-        })
+        loop {
+            self.skip_whitespace_and_comments()?;
+            let start = self.state();
+            self.token_start = self.raw_state();
+            let token = if self.matches_ascii_at(0, "#!") {
+                self.advance(); // #
+                self.advance(); // !
+                self.read_reader_directive();
+                if !self.is_at_end() {
+                    continue;
+                }
+                // Keep token_start at the directive if it meets the buffer's
+                // end: a fed lexer must replay a possibly unfinished name or
+                // shebang when more text arrives.
+                Token::Eof
+            } else {
+                self.lex_token()?
+            };
+            return Ok(Spanned {
+                token,
+                line: start.line,
+                column: start.column,
+                start,
+                end: self.state(),
+            });
+        }
     }
 
     fn raw_state(&self) -> ReaderState {
@@ -1164,11 +1178,6 @@ impl Lexer {
                 self.advance(); // consume ;
                 Ok(Token::DatumComment)
             }
-            // R7RS reader directives: #!fold-case, #!no-fold-case
-            '!' => {
-                self.advance(); // consume !
-                self.read_reader_directive()
-            }
             // R7RS datum labels: #n= (definition) and #n# (reference)
             '0'..='9' => self.read_datum_label(),
             _ => Err(LexError::UnexpectedChar(self.current_char())),
@@ -1248,15 +1257,14 @@ impl Lexer {
 
     /// Read a reader directive like #!fold-case or #!no-fold-case
     /// These directives affect subsequent lexing but don't produce tokens themselves
-    fn read_reader_directive(&mut self) -> Result<Token, LexError> {
+    fn read_reader_directive(&mut self) {
         // A shebang (`#!/usr/bin/env patina`) is not a reader directive:
         // `#!` followed by `/` or a space comments out the rest of the line,
         // so an installed script runs. `#!fold-case` is unaffected — a
         // directive name follows its `#!` immediately.
         if !self.is_at_end() && matches!(self.current_char(), '/' | ' ') {
             self.skip_to_line_ending();
-            self.skip_whitespace_and_comments()?;
-            return self.lex_token();
+            return;
         }
 
         // Read the directive name (until whitespace or delimiter)
@@ -1268,23 +1276,11 @@ impl Lexer {
         let directive: String = self.input[start..self.position].iter().collect();
 
         match directive.to_lowercase().as_str() {
-            "fold-case" => {
-                self.fold_case = true;
-                // Directive consumed, skip whitespace and get next token
-                self.skip_whitespace_and_comments()?;
-                self.lex_token()
-            }
-            "no-fold-case" => {
-                self.fold_case = false;
-                // Directive consumed, skip whitespace and get next token
-                self.skip_whitespace_and_comments()?;
-                self.lex_token()
-            }
+            "fold-case" => self.fold_case = true,
+            "no-fold-case" => self.fold_case = false,
             _ => {
                 // Unknown directive - R7RS says implementations may support others
                 // For now, just ignore unknown directives and continue
-                self.skip_whitespace_and_comments()?;
-                self.lex_token()
             }
         }
     }

@@ -166,83 +166,107 @@ pub fn get_identifier_info(tv: TaggedValue, heap: &Heap) -> Option<(Rc<str>, Sco
 /// Identifier scopes are only needed during desugaring for binding resolution,
 /// not in quoted output data.
 pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> TaggedValue {
-    let mut seen = std::collections::HashSet::new();
-    strip_identifiers_impl(tv, shared_heap, &mut seen)
-}
-
-fn strip_identifiers_impl(
-    tv: TaggedValue,
-    shared_heap: &SharedHeap,
-    seen: &mut std::collections::HashSet<u64>,
-) -> TaggedValue {
-    let heap = shared_heap.borrow();
-
-    // Check if it's an identifier (native or boxed) — replace with symbol
-    if let Some((name, _)) = heap.get_identifier_data_any(tv) {
-        drop(heap);
-        return shared_heap.borrow_mut().intern_symbol(&name);
+    // Postorder traversal with explicit return frames: both nested elements
+    // (#356) and long list spines (#355) must be independent of Rust's stack.
+    // Retain the old visitation order and copy only changed containers.
+    enum Work {
+        Visit(TaggedValue),
+        Car {
+            original: TaggedValue,
+            car: TaggedValue,
+            cdr: TaggedValue,
+        },
+        Cdr {
+            original: TaggedValue,
+            car: TaggedValue,
+            cdr: TaggedValue,
+            new_car: TaggedValue,
+        },
+        Vector {
+            original: TaggedValue,
+            elements: Vec<TaggedValue>,
+            index: usize,
+            changed: bool,
+        },
     }
-
-    // Walk a list's spine iteratively: its length must not become Rust stack
-    // depth (#355). Retain the original pairs so rebuilding on the way back
-    // still copies only the part whose identifiers actually changed.
-    if tv.is_pair() {
-        drop(heap);
-        let mut spine = Vec::new();
-        let mut tail = tv;
-        while tail.is_pair() {
-            if !seen.insert(tail.raw_bits()) {
-                break;
-            }
-            let (car, cdr) = shared_heap.borrow().get_pair(tail);
-            let new_car = strip_identifiers_impl(car, shared_heap, seen);
-            spine.push((tail, car, cdr, new_car));
-            tail = cdr;
-        }
-        if !tail.is_pair() {
-            tail = strip_identifiers_impl(tail, shared_heap, seen);
-        }
-        for (original, car, cdr, new_car) in spine.into_iter().rev() {
-            tail = if new_car == car && tail == cdr {
-                original
-            } else {
-                shared_heap.borrow_mut().alloc_pair(new_car, tail)
-            };
-        }
-        return tail;
-    }
-
-    // Check if it's a vector — recursively strip elements
-    if tv.is_vector() {
-        if !seen.insert(tv.raw_bits()) {
-            return tv;
-        }
-
-        let len = heap.vector_len(tv);
-        let elements: Vec<TaggedValue> = (0..len).map(|i| heap.vector_ref(tv, i)).collect();
-        drop(heap);
-
-        let mut changed = false;
-        let new_elements: Vec<TaggedValue> = elements
-            .iter()
-            .map(|elem| {
-                let new_elem = strip_identifiers_impl(*elem, shared_heap, seen);
-                if new_elem != *elem {
-                    changed = true;
+    let mut seen = HashSet::new();
+    let mut work = vec![Work::Visit(tv)];
+    let mut value = tv;
+    while let Some(next) = work.pop() {
+        match next {
+            Work::Visit(original) => {
+                value = original;
+                let heap = shared_heap.borrow();
+                if let Some((name, _)) = heap.get_identifier_data_any(original) {
+                    drop(heap);
+                    value = shared_heap.borrow_mut().intern_symbol(&name);
+                } else if original.is_pair() && seen.insert(original.raw_bits()) {
+                    let (car, cdr) = heap.get_pair(original);
+                    work.push(Work::Car { original, car, cdr });
+                    work.push(Work::Visit(car));
+                } else if original.is_vector() && seen.insert(original.raw_bits()) {
+                    let elements = (0..heap.vector_len(original))
+                        .map(|i| heap.vector_ref(original, i))
+                        .collect::<Vec<_>>();
+                    if let Some(&first) = elements.first() {
+                        work.push(Work::Vector {
+                            original,
+                            elements,
+                            index: 0,
+                            changed: false,
+                        });
+                        work.push(Work::Visit(first));
+                    }
                 }
-                new_elem
-            })
-            .collect();
-
-        if !changed {
-            return tv;
+            }
+            Work::Car { original, car, cdr } => {
+                work.push(Work::Cdr {
+                    original,
+                    car,
+                    cdr,
+                    new_car: value,
+                });
+                work.push(Work::Visit(cdr));
+            }
+            Work::Cdr {
+                original,
+                car,
+                cdr,
+                new_car,
+            } => {
+                value = if new_car == car && value == cdr {
+                    original
+                } else {
+                    shared_heap.borrow_mut().alloc_pair(new_car, value)
+                };
+            }
+            Work::Vector {
+                original,
+                mut elements,
+                index,
+                mut changed,
+            } => {
+                changed |= elements[index] != value;
+                elements[index] = value;
+                if let Some(&next) = elements.get(index + 1) {
+                    work.push(Work::Vector {
+                        original,
+                        elements,
+                        index: index + 1,
+                        changed,
+                    });
+                    work.push(Work::Visit(next));
+                } else {
+                    value = if changed {
+                        shared_heap.borrow_mut().alloc_vector(elements)
+                    } else {
+                        original
+                    };
+                }
+            }
         }
-
-        return shared_heap.borrow_mut().alloc_vector(new_elements);
     }
-
-    // Everything else (symbols, numbers, strings, etc.) passes through
-    tv
+    value
 }
 
 /// Parse define function syntax from TaggedValue
@@ -380,5 +404,32 @@ mod tests {
         let heap = heap.borrow();
         assert_eq!(heap.get_symbol_name(heap.cdr(stripped)), Some("tail"));
         assert_eq!(heap.cdr(original), identifier);
+    }
+
+    #[test]
+    fn stripping_nested_pairs_and_vectors_preserves_unchanged_cycles() {
+        let heap = patina_core::new_shared_heap();
+        let (original, cycle, identifier) = {
+            let mut heap = heap.borrow_mut();
+            let identifier = heap.alloc_identifier(Rc::from("nested"), ScopeSet::new());
+            let cycle = heap.alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
+            heap.set_cdr(cycle, cycle);
+            let pair = heap.alloc_pair(identifier, cycle);
+            let vector = heap.alloc_vector(vec![pair, cycle]);
+            (heap.alloc_pair(vector, cycle), cycle, identifier)
+        };
+        let stripped = strip_identifiers_tagged(original, &heap);
+        let heap = heap.borrow();
+        let vector = heap.car(stripped);
+        assert_ne!(vector, heap.car(original));
+        assert_eq!(
+            heap.get_symbol_name(heap.car(heap.vector_ref(vector, 0))),
+            Some("nested")
+        );
+        assert_eq!(heap.cdr(heap.vector_ref(vector, 0)), cycle);
+        assert_eq!(heap.vector_ref(vector, 1), cycle);
+        assert_eq!(heap.cdr(stripped), cycle);
+        assert_eq!(heap.cdr(cycle), cycle);
+        assert_eq!(heap.car(heap.vector_ref(heap.car(original), 0)), identifier);
     }
 }

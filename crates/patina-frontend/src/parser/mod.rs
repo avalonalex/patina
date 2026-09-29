@@ -1,3 +1,5 @@
+mod datum;
+
 use crate::lexer::{LexError, Lexer, ReaderState, Spanned, Token};
 use crate::source_map::SourceMap;
 use num_bigint::BigInt;
@@ -135,9 +137,7 @@ pub struct Parser {
     current_token_column: u32,
     /// Where the current token begins, with the reader state there.
     current_token_start: ReaderState,
-    /// The folding mode after lexing this token. A directive and the token
-    /// following it can be returned by one lexer call, so its start state
-    /// can still carry the old mode.
+    /// The folding mode after lexing this token, also carried by token replay.
     current_token_fold_case: bool,
     /// Shared heap for allocating pairs, vectors, strings, etc.
     heap: SharedHeap,
@@ -457,359 +457,6 @@ impl Parser {
             self.skip_datum()?;
         }
         Ok(())
-    }
-
-    /// Consume any run of `#;` datum comments, skipping each commented datum.
-    ///
-    /// Datum comments may appear anywhere a datum may — including
-    /// immediately before a closing delimiter, the position the previously
-    /// scattered inline copies of this loop missed. Every datum-position
-    /// loop calls this rather than open-coding the skip.
-    fn skip_datum_comments(&mut self) -> Result<(), ParseError> {
-        while self.current_token == Token::DatumComment {
-            self.advance()?; // consume #;
-            self.skip_datum()?; // skip the commented datum
-        }
-        Ok(())
-    }
-
-    fn parse_expr(&mut self) -> Result<TaggedValue, ParseError> {
-        self.skip_datum_comments()?;
-
-        match &self.current_token.clone() {
-            Token::Boolean(b) => {
-                let val = if *b {
-                    TaggedValue::TRUE
-                } else {
-                    TaggedValue::FALSE
-                };
-                self.advance_past_datum()?;
-                Ok(val)
-            }
-            Token::Number(s) => {
-                // The lexer recognizes numeric *prefixes*. Decide from the
-                // whole token here, using the same numeric parser as
-                // string->number, before falling back to a valid peculiar
-                // identifier (#358). This keeps +inf.0i numeric and +inc a
-                // symbol without accepting malformed numbers like 12abc.
-                let val = match self.parse_number(s) {
-                    Ok(value) => value,
-                    Err(_) if Lexer::is_peculiar_identifier(s) => {
-                        let name = Lexer::identifier_name(s.clone(), self.current_token_fold_case);
-                        self.heap.borrow_mut().intern_symbol(&name)
-                    }
-                    Err(error) => return Err(error),
-                };
-                self.advance_past_datum()?;
-                Ok(val)
-            }
-            Token::Character(c) => {
-                let val = TaggedValue::character(*c);
-                self.advance_past_datum()?;
-                Ok(val)
-            }
-            Token::String(s) => {
-                // Allocate string on heap
-                let val = self.heap.borrow_mut().alloc_string(s.clone());
-                self.advance_past_datum()?;
-                Ok(val)
-            }
-            Token::Identifier(s) => {
-                // Intern symbol in heap
-                let val = self.heap.borrow_mut().intern_symbol(s);
-                self.advance_past_datum()?;
-                Ok(val)
-            }
-            Token::Quote => {
-                let abbr_line = self.current_token_line;
-                let abbr_col = self.current_token_column;
-                self.advance()?;
-                let quoted = self.parse_expr()?;
-                let quote_sym = self.heap.borrow_mut().intern_symbol("quote");
-                let result = self.make_list(vec![quote_sym, quoted]);
-                self.record_source(result, abbr_line, abbr_col);
-                Ok(result)
-            }
-            Token::Quasiquote => {
-                let abbr_line = self.current_token_line;
-                let abbr_col = self.current_token_column;
-                self.advance()?;
-                let quoted = self.parse_expr()?;
-                let sym = self.heap.borrow_mut().intern_symbol("quasiquote");
-                let result = self.make_list(vec![sym, quoted]);
-                self.record_source(result, abbr_line, abbr_col);
-                Ok(result)
-            }
-            Token::Unquote => {
-                let abbr_line = self.current_token_line;
-                let abbr_col = self.current_token_column;
-                self.advance()?;
-                let quoted = self.parse_expr()?;
-                let sym = self.heap.borrow_mut().intern_symbol("unquote");
-                let result = self.make_list(vec![sym, quoted]);
-                self.record_source(result, abbr_line, abbr_col);
-                Ok(result)
-            }
-            Token::UnquoteSplicing => {
-                let abbr_line = self.current_token_line;
-                let abbr_col = self.current_token_column;
-                self.advance()?;
-                let quoted = self.parse_expr()?;
-                let sym = self.heap.borrow_mut().intern_symbol("unquote-splicing");
-                let result = self.make_list(vec![sym, quoted]);
-                self.record_source(result, abbr_line, abbr_col);
-                Ok(result)
-            }
-            Token::LeftParen => self.parse_list(),
-            Token::VectorOpen => self.parse_vector(),
-            Token::BytevectorOpen => self.parse_bytevector(),
-            // R7RS datum labels: #n= defines a label, #n# references it
-            Token::DatumLabel(n) => {
-                let label = *n;
-                self.advance()?; // consume #n=
-
-                // Check for duplicate label
-                if self.labels.contains_key(&label) {
-                    return Err(ParseError::DuplicateLabel(label));
-                }
-
-                // Parse the datum being labelled
-                let datum = self.parse_expr()?;
-
-                // Store the labelled datum
-                self.labels.insert(label, datum);
-
-                Ok(datum)
-            }
-            Token::DatumRef(n) => {
-                let label = *n;
-                self.advance_past_datum()?; // consume #n#
-
-                // If the label is already resolved, return a reference to it
-                // Otherwise, return a placeholder that will be resolved later
-                if let Some(value) = self.labels.get(&label) {
-                    Ok(*value)
-                } else {
-                    // Return a placeholder - will be resolved after parsing
-                    // completes (or reported by `finish_datum` if it never can be)
-                    self.pending_refs.push(label);
-                    Ok(self.heap.borrow_mut().alloc_label_placeholder(label))
-                }
-            }
-            Token::Eof => Err(self.incomplete_datum()),
-            token => Err(ParseError::UnexpectedToken(token.clone())),
-        }
-    }
-
-    /// Skip a single datum (used for #; datum comments)
-    /// This parses the datum but discards the result
-    fn skip_datum(&mut self) -> Result<(), ParseError> {
-        // Handle nested datum comments within the skipped datum
-        self.skip_datum_comments()?;
-
-        match &self.current_token {
-            Token::Boolean(_)
-            | Token::Number(_)
-            | Token::Character(_)
-            | Token::String(_)
-            | Token::Identifier(_) => {
-                self.advance()?;
-                Ok(())
-            }
-            Token::Quote | Token::Quasiquote | Token::Unquote | Token::UnquoteSplicing => {
-                self.advance()?;
-                self.skip_datum()
-            }
-            Token::LeftParen => self.skip_list(),
-            Token::VectorOpen | Token::BytevectorOpen => self.skip_list(), // Same structure as list
-            // Datum labels: #n= followed by datum, #n# is just the reference
-            Token::DatumLabel(_) => {
-                self.advance()?; // consume #n=
-                self.skip_datum() // skip the labelled datum
-            }
-            Token::DatumRef(_) => {
-                self.advance()?; // consume #n#
-                Ok(())
-            }
-            Token::Eof => Err(self.incomplete_datum()),
-            token => Err(ParseError::UnexpectedToken(token.clone())),
-        }
-    }
-
-    /// Skip a list structure (used by skip_datum)
-    fn skip_list(&mut self) -> Result<(), ParseError> {
-        self.advance()?; // consume ( or #( or #u8(
-
-        while self.current_token != Token::RightParen {
-            if self.current_token == Token::Eof {
-                return Err(self.incomplete_datum());
-            }
-            // As in `parse_list`: a datum comment may sit right before the
-            // closer, and the list being skipped is still a list.
-            self.skip_datum_comments()?;
-            if self.current_token == Token::RightParen {
-                break;
-            }
-            if self.current_token == Token::Dot {
-                self.advance()?; // consume .
-                self.skip_datum()?; // skip tail
-                break;
-            }
-            self.skip_datum()?;
-        }
-
-        // A dotted list leaves the loop by `break`, so this guard is where
-        // `(1 . 2` — input that ran out after the tail — arrives.
-        if self.current_token == Token::Eof {
-            return Err(self.incomplete_datum());
-        }
-        if self.current_token != Token::RightParen {
-            return Err(ParseError::UnexpectedToken(self.current_token.clone()));
-        }
-        self.advance()?; // consume )
-        Ok(())
-    }
-
-    fn parse_list(&mut self) -> Result<TaggedValue, ParseError> {
-        // Capture position of the opening `(`
-        let open_line = self.current_token_line;
-        let open_col = self.current_token_column;
-        self.advance()?; // consume (
-        self.nesting += 1;
-
-        let mut elements = Vec::new();
-        let mut dotted_tail = None;
-
-        while self.current_token != Token::RightParen {
-            if self.current_token == Token::Eof {
-                return Err(self.incomplete_datum());
-            }
-
-            // A datum comment may sit immediately before the closing paren
-            // — `(a b #;c)` — so consume comments here rather than letting
-            // parse_expr skip them and then face the bare `)`.
-            self.skip_datum_comments()?;
-            if self.current_token == Token::RightParen {
-                break;
-            }
-
-            if self.current_token == Token::Dot {
-                // `( . b)` — including `(#;a . b)` after comment stripping —
-                // has no head and is not a valid dotted list.
-                if elements.is_empty() {
-                    return Err(ParseError::UnexpectedToken(Token::Dot));
-                }
-                self.advance()?;
-                dotted_tail = Some(self.parse_expr()?);
-                // After the tail, skip any datum comments before )
-                self.skip_datum_comments()?;
-                break;
-            }
-
-            elements.push(self.parse_expr()?);
-        }
-
-        // As in `skip_list`: the dotted branch breaks out of the loop, so
-        // `(1 . 2` reaches this guard with nothing left to read.
-        if self.current_token == Token::Eof {
-            return Err(self.incomplete_datum());
-        }
-        if self.current_token != Token::RightParen {
-            return Err(ParseError::UnexpectedToken(self.current_token.clone()));
-        }
-        self.nesting -= 1;
-        self.advance_past_datum()?; // consume )
-
-        let result = self
-            .heap
-            .borrow_mut()
-            .list_from_iter_with_tail(elements, dotted_tail.unwrap_or(TaggedValue::NULL));
-        self.record_source(result, open_line, open_col);
-        Ok(result)
-    }
-
-    fn parse_vector(&mut self) -> Result<TaggedValue, ParseError> {
-        // Capture position of the opening `#(`
-        let open_line = self.current_token_line;
-        let open_col = self.current_token_column;
-        self.advance()?; // consume #(
-        self.nesting += 1;
-
-        let mut elements = Vec::new();
-
-        while self.current_token != Token::RightParen {
-            if self.current_token == Token::Eof {
-                return Err(self.incomplete_datum());
-            }
-            // As in parse_list: `#(a #;b)` — a datum comment may precede `)`.
-            self.skip_datum_comments()?;
-            if self.current_token == Token::RightParen {
-                break;
-            }
-            elements.push(self.parse_expr()?);
-        }
-
-        self.nesting -= 1;
-        self.advance_past_datum()?; // consume )
-        // Allocate vector on heap
-        let result = self.heap.borrow_mut().alloc_vector(elements);
-        self.record_source(result, open_line, open_col);
-        Ok(result)
-    }
-
-    fn parse_bytevector(&mut self) -> Result<TaggedValue, ParseError> {
-        self.advance()?; // consume #u8(
-        self.nesting += 1;
-
-        let mut bytes = Vec::new();
-
-        while self.current_token != Token::RightParen {
-            if self.current_token == Token::Eof {
-                return Err(self.incomplete_datum());
-            }
-
-            // As in parse_list: a datum comment may appear between bytes.
-            self.skip_datum_comments()?;
-            if self.current_token == Token::RightParen {
-                break;
-            }
-
-            if let Token::Number(s) = &self.current_token.clone() {
-                // Parse the number (handles decimal, hex #x, binary #b, octal #o)
-                let tv = self.parse_number(s)?;
-
-                // Extract integer value and validate it's a valid byte (0-255)
-                let byte = if let Some(n) = tv.as_fixnum() {
-                    if (0..=255).contains(&n) {
-                        n as u8
-                    } else {
-                        return Err(ParseError::InvalidSyntax(format!(
-                            "Byte value out of range (0-255): {}",
-                            n
-                        )));
-                    }
-                } else {
-                    return Err(ParseError::InvalidSyntax(
-                        "Bytevector must contain only integer bytes (0-255)".to_string(),
-                    ));
-                };
-                bytes.push(byte);
-                self.advance()?;
-            } else if self.current_token == Token::Eof {
-                // Reachable once the datum comments above are stripped:
-                // `#u8(1 #;2` runs out here rather than at the loop's guard.
-                return Err(self.incomplete_datum());
-            } else {
-                return Err(ParseError::InvalidSyntax(
-                    "Bytevector must contain only bytes (0-255)".to_string(),
-                ));
-            }
-        }
-
-        self.nesting -= 1;
-        self.advance_past_datum()?; // consume )
-        // Allocate bytevector on heap
-        Ok(self.heap.borrow_mut().alloc_bytevector(bytes))
     }
 
     /// Create a TaggedValue integer from i64 (fixnum if it fits, BigInt otherwise)
@@ -2713,6 +2360,53 @@ mod tests {
             inner2.raw(),
             "Nested shared structure should use same heap pointer"
         );
+    }
+
+    #[test]
+    fn comments_inside_prefixes_do_not_define_or_reference_live_labels() {
+        let mut parser =
+            Parser::new("#(#0=#;#0=ignored '#;#99# (a . #;discard b) #0# #u8(1 #;#0# 255))")
+                .unwrap();
+        let value = parser.parse().unwrap();
+        let heap = parser.heap().borrow();
+        let quoted = heap.vector_ref(value, 0);
+        assert_eq!(heap.vector_ref(value, 1), quoted);
+        assert_eq!(heap.get_symbol_name(heap.car(quoted)), Some("quote"));
+        let pair = heap.car(heap.cdr(quoted));
+        assert_eq!(heap.get_symbol_name(heap.car(pair)), Some("a"));
+        assert_eq!(heap.get_symbol_name(heap.cdr(pair)), Some("b"));
+        assert!(heap.is_bytevector(heap.vector_ref(value, 2)));
+    }
+
+    #[test]
+    fn every_pending_prefix_requires_a_datum_before_a_closer() {
+        for source in [
+            "(')",
+            "(`)",
+            "(,)",
+            "(,@)",
+            "(#0=)",
+            "(#;)",
+            "(1 . #;2)",
+            "#(1 . 2)",
+        ] {
+            let mut parser = Parser::new(source).unwrap();
+            assert!(
+                matches!(parser.parse(), Err(ParseError::UnexpectedToken(_))),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_nested_data_leaves_the_next_datum_unconsumed() {
+        let source = format!("#;{}a{} 42", "'(#(".repeat(10_000), "))".repeat(10_000));
+        let mut parser = Parser::new(&source).unwrap();
+        assert_eq!(parser.parse().unwrap().as_fixnum(), Some(42));
+        assert!(parser.parse_next().unwrap().is_none());
+        let mut parser = Parser::new(&source).unwrap();
+        parser.skip_rest().unwrap();
+        assert!(parser.parse_next().unwrap().is_none());
     }
 
     #[test]

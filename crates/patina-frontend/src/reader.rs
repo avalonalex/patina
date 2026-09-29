@@ -432,6 +432,15 @@ mod tests {
             "#0=(1 2) #0# (a . b)",
             "; a comment\n(after)\n",
             "#!fold-case ABC (DEF)",
+            // #356: directive scanning loops, including when the next feed
+            // continues a directive name or a shebang rather than a token.
+            "#!fold-case #!no-fold-case ABC #!fold-case DEF",
+            "#!fold-case #!unknown #!no-fold-caseABC DEF",
+            "#!/usr/bin/env patina\n#!fold-case ABC",
+            "#! /a shebang with spaces\n#!no-fold-case ABC",
+            "#!fold-case #|block|# '\"text\" ABC",
+            "#;`#(#;a ,b ,@c .) 42",
+            "#;#1=(#;#2=x a . b #;c) #1=(d . #1#)",
             // #358: numeric prefixes are provisional until the whole token
             // decides between a number and a peculiar identifier.
             "+inf +id -in +nan.0abc +inf.0i +nan.0 +i -i",
