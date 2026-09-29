@@ -55,6 +55,273 @@ fn test_define_syntax_also_shadows_a_syntactic_keyword() {
     );
 }
 
+// #463: a begin is expanded before it executes, but definitions must already
+// affect subsequent expansion. Fresh programs keep these top-level keyword
+// redefinitions from poisoning unrelated Scheme suite rows. Chibi 0.12 and
+// Gauche 0.9.15 agree on the original three heads and recursive definitions.
+#[test]
+fn top_level_begin_definitions_shadow_heads_and_value_references() {
+    for (name, formals, call) in [
+        ("when", "x", "(when 1)"),
+        ("if", "a b c", "(if 1 2 3)"),
+        ("apply", "f xs", "(apply + '(1 2))"),
+    ] {
+        assert_program_eval_to(
+            &format!(
+                "(import (scheme base))
+                      (begin (define ({name} {formals}) 'mine)
+                             (list (procedure? {name}) {call}))"
+            ),
+            "(#t mine)",
+        );
+    }
+}
+
+#[test]
+fn top_level_definition_is_visible_in_its_own_body() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (apply f xs)
+                  (if (null? xs) 'mine (apply f (cdr xs))))
+                (apply + '(1 2)))",
+        "mine",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define when (lambda (n) (if (= n 0) 'mine (when (- n 1)))))
+                (when 2))",
+        "mine",
+    );
+}
+
+#[test]
+fn top_level_definitions_do_not_reexpand_earlier_function_bodies() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax k (syntax-rules () ((_) 'old)))
+         (begin (define (call-k) (k))
+                (define (k) 'new)
+                (call-k))",
+        "old",
+    );
+}
+
+#[test]
+fn top_level_declaration_does_not_overwrite_a_runtime_value() {
+    // Preserve Patina's existing value/assignment behavior (also Gauche's).
+    // Chibi instead exposes an uninitialized location in this initializer.
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define x 10)
+         (begin (define x (+ x 1)) (define x (+ x 1)) x)",
+        "12",
+    );
+}
+
+#[test]
+fn nested_and_generated_top_level_definitions_take_effect() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax def (syntax-rules () ((_ name) (define (name x) 'mine))))
+         (begin (begin (def when)) (when 1))",
+        "mine",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax run
+           (syntax-rules ()
+             ((_ result) (begin (define (when x) 'private)
+                                (define result (when 1))))))
+         (begin (run result) (list result (when #t 'public)))",
+        "(private public)",
+    );
+}
+
+#[test]
+fn top_level_variable_and_syntax_declarations_follow_source_order() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (k) 'variable)
+                (define-syntax k (syntax-rules () ((_) 'macro)))
+                (k))",
+        "macro",
+    );
+    // Chibi follows the later variable declaration. Gauche keeps expanding
+    // the macro in this same-begin syntax/variable redefinition case.
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define-syntax k (syntax-rules () ((_) 'macro)))
+                (define (k) 'variable)
+                (k))",
+        "variable",
+    );
+}
+
+#[test]
+fn top_level_declarations_participate_in_literal_matching() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define else #f) (cond (else 'wrong) (#t 'right)))",
+        "right",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define token #f)
+                (define-syntax m (syntax-rules (token)
+                  ((_ token) 'literal) ((_ x) 'other)))
+                (m token))",
+        "literal",
+    );
+}
+
+#[test]
+fn macro_compilation_sees_declared_variables_but_retains_the_live_environment() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define ... #f)
+                (define-syntax m (syntax-rules () ((_ x ...) (list ... x))))
+                (m 1 2))",
+        "(2 1)",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (when x) 'first)
+                (define-syntax m (syntax-rules () ((_) (when 1)))))
+         (set! when (lambda (x) 'later))
+         (m)",
+        "later",
+    );
+}
+
+#[test]
+fn top_level_declarations_preserve_imported_macro_bindings() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (if a b c) 'mine)
+                (list (if 1 2 3) (when #t 'library)))",
+        "(mine library)",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (when x) 'mine)
+                (let-syntax ((m (syntax-rules () ((_) (when 1))))) (m)))",
+        "mine",
+    );
+}
+
+#[test]
+fn top_level_declarations_work_in_libraries_and_eval() {
+    assert_program_eval_to(
+        "(define-library (test declarations)
+           (import (scheme base)) (export result)
+           (begin (begin (define (when x) 'library)
+                         (define result (when 1)))))
+         (import (test declarations)) result",
+        "library",
+    );
+    assert_program_eval_to(
+        "(import (scheme base) (scheme eval) (scheme repl))
+         (eval '(begin (define (when x) 'evaluated) (when 1))
+               (interaction-environment))",
+        "evaluated",
+    );
+}
+
+#[test]
+fn imports_supersede_only_the_declarations_they_install() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (when x) 'mine)
+                (import (only (scheme base) when))
+                (when #t 'imported))",
+        "imported",
+    );
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (when x) 'mine)
+                (import (only (scheme base) quote))
+                (when 1))",
+        "mine",
+    );
+    assert_program_eval_to(
+        "(define-library (test mutable-declaration)
+           (import (scheme base)) (export value change!)
+           (begin (define value 1) (define (change!) (set! value 42))))
+         (import (scheme base))
+         (begin (define pending #f)
+                (import (test mutable-declaration))
+                (change!) value)",
+        "42",
+    );
+}
+
+#[test]
+fn top_level_declarations_keep_lexical_syntax_and_splicing_scopes() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (begin (define (when x) 'global)
+                (list (let-syntax ((when (syntax-rules () ((_) 'local)))) (when))
+                      (when 1)))",
+        "(local global)",
+    );
+    assert_program_eval_to(
+        "(import (scheme base) (srfi 188))
+         (begin (splicing-let-syntax () (define (when x) 'spliced))
+                (when 1))",
+        "spliced",
+    );
+}
+
+#[test]
+fn failed_expansion_does_not_leave_variable_declarations_behind() {
+    fn check<B: patina_runtime::Backend>(interpreter: patina_interpreter::Interpreter<B>) {
+        interpreter
+            .eval_program("(import (scheme base)) (define x 10)")
+            .unwrap();
+        assert!(interpreter.eval_str(
+            "(begin (define x 99) (define (if a b c) 'mine) (syntax-error \"stop\"))",
+        ).is_err());
+        let value = interpreter.eval_str("(if #t x 0)").unwrap();
+        assert_eq!(value, patina_core::TaggedValue::fixnum(10));
+    }
+    check(common::tree_walker_interpreter());
+    check(common::vm_interpreter());
+}
+
+#[test]
+fn import_initializers_cannot_observe_expansion_placeholders() {
+    // File libraries initialize on import; inline define-library initializes
+    // eagerly, before the callback below has been installed.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("test")).unwrap();
+    std::fs::write(
+        dir.path().join("test/declaration-observer.sld"),
+        "(define-library (test declaration-observer)
+           (import (scheme base) (test declaration-callback)) (export observed)
+           (begin (define observed (read-value))))",
+    )
+    .unwrap();
+    let program = "(define-library (test declaration-callback)
+           (import (scheme base)) (export install! read-value)
+           (begin (define getter #f)
+                  (define (install! proc) (set! getter proc))
+                  (define (read-value) (getter))))
+         (import (scheme base) (test declaration-callback))
+         (define x 10)
+         (install! (lambda () x))
+         (begin (define x (+ x 1))
+                (import (test declaration-observer))
+                (+ x observed))";
+    let vm = common::vm_interpreter();
+    vm.backend()
+        .add_library_search_path(dir.path().to_path_buf());
+    assert_eq!(vm.eval_program(program).unwrap().as_fixnum(), Some(21));
+    let tw = common::tree_walker_interpreter();
+    tw.backend()
+        .add_library_search_path(dir.path().to_path_buf());
+    assert_eq!(tw.eval_program(program).unwrap().as_fixnum(), Some(21));
+}
+
 // ============================================================================
 // Auxiliary syntax
 // ============================================================================

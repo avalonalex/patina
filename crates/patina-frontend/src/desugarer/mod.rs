@@ -67,6 +67,7 @@
 //! - `lib/scheme/base-extras.scm` - Macro definitions for derived forms
 //! - `PRD/phase1/CORE_IR_MIGRATION.md` - Full architecture design
 
+mod declarations;
 mod error;
 mod quasiquote;
 mod utils;
@@ -331,6 +332,9 @@ pub struct Desugarer<'a> {
     /// See [`EarlyBinding`].
     early: Rc<EarlyBinding>,
 
+    /// Lookup-only declarations, shared across this form and discarded on exit.
+    declarations: Rc<RefCell<declarations::Declarations>>,
+
     /// The forms being desugared, outermost first — so that one met again
     /// inside itself is refused (`desugar_open_form`). Shared with the child
     /// desugarers made for nested scopes, like `early`, since a form's
@@ -377,6 +381,7 @@ impl<'a> Desugarer<'a> {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            declarations: Rc::default(),
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
@@ -400,6 +405,7 @@ impl<'a> Desugarer<'a> {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            declarations: Rc::default(),
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
@@ -444,6 +450,7 @@ impl<'a> Desugarer<'a> {
             fs: std::sync::Arc::new(patina_core::NativeFs),
             include_dirs: Rc::new(RefCell::new(Vec::new())),
             early: Rc::default(),
+            declarations: Rc::default(),
             open_forms: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
@@ -471,6 +478,7 @@ impl<'a> Desugarer<'a> {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
@@ -559,6 +567,7 @@ impl<'a> Desugarer<'a> {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             splicing: None,
             definition_context: Cell::new(true),
@@ -658,6 +667,7 @@ impl<'a> Desugarer<'a> {
             self.current_scopes.clone(),
         );
         probe.early = Rc::default();
+        probe.declarations = Rc::new(RefCell::new(self.declarations.borrow().clone()));
         let mut names = Vec::new();
         for tv in body_tvs {
             probe.collect_produced_names(
@@ -746,15 +756,7 @@ impl<'a> Desugarer<'a> {
                 }
             }
             Some(SyntaxRef::Macro(compiled_macro)) => {
-                let Ok(expansion) = patina_macros::expand_macro_with_scope(
-                    &compiled_macro,
-                    tv,
-                    shared_heap,
-                    Some(patina_macros::Site {
-                        env: &self.env,
-                        scopes: &self.current_scopes,
-                    }),
-                ) else {
+                let Ok(expansion) = self.expand_macro(&compiled_macro, tv, shared_heap) else {
                     return;
                 };
                 let expanded = self.link_definition_env_refs(
@@ -944,7 +946,7 @@ impl<'a> Desugarer<'a> {
             scopes
         };
         let (value, selected) = self
-            .env
+            .expansion_env(&self.env)
             .resolve_with_scopes(name, scopes)
             .map_err(|e| DesugarError::AmbiguousReference(e.to_string()))?;
         let by_name = !selected;
@@ -1001,6 +1003,7 @@ impl<'a> Desugarer<'a> {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: Rc::clone(&self.early),
+            declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
@@ -1098,6 +1101,8 @@ impl<'a> Desugarer<'a> {
                 .keys()
                 .filter(|name| !template_symbols.contains(*name)),
         );
+        let definition_lookup = self.expansion_env(def_env);
+        let use_lookup = self.expansion_env(&self.env);
         for name in names {
             // The cheap test first: it settles nearly every name — `list`,
             // `if` and the rest are one binding on both sides — and the
@@ -1135,9 +1140,9 @@ impl<'a> Desugarer<'a> {
             // also mention a scoped keyword, including a splice's private
             // helper (#424), so nonempty definition scopes require that check
             // even for written template symbols.
-            let def_location = def_env.binding_location(name);
+            let def_location = definition_lookup.binding_location(name);
             let same_by_name =
-                def_location.is_some() && self.env.binding_location(name) == def_location;
+                def_location.is_some() && use_lookup.binding_location(name) == def_location;
             let may_mean_another = !definition_scopes.is_empty()
                 || (inherited_identifiers.contains_key(name)
                     && def_env.has_introduced_definition(name));
@@ -1762,6 +1767,7 @@ impl<'a> Desugarer<'a> {
         );
         let result = self.desugar_form(tagged, shared_heap);
         let finished = self.early.finish_form();
+        *self.declarations.borrow_mut() = declarations::Declarations::default();
         result.map(|expr| Self::settle_early_bindings(expr, finished))
     }
 
@@ -1789,9 +1795,23 @@ impl<'a> Desugarer<'a> {
                         DesugarError::InvalidSyntax(format!("Invalid import set: {e}"))
                             .with_diagnostic(e.diagnostic())
                     })?;
-                if let Err(error) = import.borrow_mut()(&set, env) {
+                // When a variable has been declared earlier in this form, an
+                // import can supersede its expansion binding. Stage the import
+                // to learn exactly which names it installs, preserving shared
+                // locations when bringing them into the real environment.
+                let staged = (!self.declarations.borrow().is_empty())
+                    .then(|| Rc::new(Environment::with_parent(env.clone())));
+                if let Err(error) = import.borrow_mut()(&set, staged.as_ref().unwrap_or(env)) {
                     *failure.borrow_mut() = Some(error);
                     return Err(DesugarError::Other("import failed".into()));
+                }
+                if let Some(staged) = staged {
+                    for name in staged.local_names() {
+                        env.copy_binding(name.as_str(), &staged, &name);
+                        self.declarations
+                            .borrow_mut()
+                            .forget(env, &name, &ScopeSet::new());
+                    }
                 }
             }
             Ok(())
@@ -1803,6 +1823,7 @@ impl<'a> Desugarer<'a> {
             fs: self.fs.clone(),
             include_dirs: self.include_dirs.clone(),
             early: self.early.clone(),
+            declarations: self.declarations.clone(),
             open_forms: self.open_forms.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
@@ -2018,34 +2039,27 @@ impl<'a> Desugarer<'a> {
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
                 scope: expansion_scope,
-            } = patina_macros::expand_macro_with_scope(
-                &compiled_macro,
-                list, // Pass TaggedValue directly
-                shared_heap,
-                // Where an input identifier resolves when it meets a literal.
-                // R7RS §4.3.2 matches the two by binding, so the input is
-                // looked up here, standing in the scopes a reference written
-                // here stands in.
-                Some(patina_macros::Site {
-                    env: &self.env,
-                    scopes: &self.current_scopes,
-                }),
-            )
-            .map_err(|e| match e {
-                // Refused as every resolution the rule does not determine is,
-                // not reported as a failed expansion.
-                patina_macros::MacroError::AmbiguousReference(message) => {
-                    DesugarError::AmbiguousReference(message)
-                }
-                // Every `syntax-rules` rule refused the form. The expander's
-                // message says so; wrapping it as "Macro expansion failed:
-                // Invalid syntax: …" said "Invalid syntax" twice and nothing
-                // more (#432).
-                patina_macros::MacroError::NoMatchingPattern(name) => DesugarError::InvalidSyntax(
-                    format!("no `syntax-rules` pattern of `{name}` matches this use"),
-                ),
-                other => DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", other)),
-            })?;
+            } = self
+                .expand_macro(&compiled_macro, list, shared_heap)
+                .map_err(|e| match e {
+                    // Refused as every resolution the rule does not determine is,
+                    // not reported as a failed expansion.
+                    patina_macros::MacroError::AmbiguousReference(message) => {
+                        DesugarError::AmbiguousReference(message)
+                    }
+                    // Every `syntax-rules` rule refused the form. The expander's
+                    // message says so; wrapping it as "Macro expansion failed:
+                    // Invalid syntax: …" said "Invalid syntax" twice and nothing
+                    // more (#432).
+                    patina_macros::MacroError::NoMatchingPattern(name) => {
+                        DesugarError::InvalidSyntax(format!(
+                            "no `syntax-rules` pattern of `{name}` matches this use"
+                        ))
+                    }
+                    other => {
+                        DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", other))
+                    }
+                })?;
 
             // Referential transparency: a template's free identifiers denote what
             // they were bound to where the macro was *defined*. Link any that the
@@ -2459,6 +2473,7 @@ impl<'a> Desugarer<'a> {
             }
 
             let params = utils::convert_formals_tagged(formals_tv, shared_heap)?;
+            self.declare_top_level_variable(&name, &name_scopes);
 
             // Create a fresh binding scope for this lambda, and give the body
             // the scopes that include it.
@@ -2523,6 +2538,7 @@ impl<'a> Desugarer<'a> {
             });
         }
 
+        self.declare_top_level_variable(&name, &name_scopes);
         let value_tv = args_vec[1];
         let value = self.desugar_expression(value_tv, shared_heap)?;
 
@@ -2569,7 +2585,10 @@ impl<'a> Desugarer<'a> {
         } else {
             scopes
         };
-        let Ok((Some(value), _)) = self.env.resolve_with_scopes(name, scopes) else {
+        let Ok((Some(value), _)) = self
+            .expansion_env(&self.env)
+            .resolve_with_scopes(name, scopes)
+        else {
             return false;
         };
         let heap = self.env.heap().borrow();
@@ -2730,6 +2749,9 @@ impl<'a> Desugarer<'a> {
         };
         let binder_scopes = self.spliced_definition_scopes(binder_scopes);
         if current_scopes.is_empty() {
+            self.declarations
+                .borrow_mut()
+                .forget(env, &name, &ScopeSet::new());
             env.define(name, value);
         } else {
             let scopes = if binder_scopes.is_empty() {
@@ -2737,6 +2759,7 @@ impl<'a> Desugarer<'a> {
             } else {
                 binder_scopes
             };
+            self.declarations.borrow_mut().forget(env, &name, &scopes);
             env.define_with_scopes(name, scopes, value);
         }
     }
@@ -3497,7 +3520,7 @@ impl<'a> Desugarer<'a> {
         let mut compiler = Compiler::with_env_and_scopes(
             literals,
             custom_ellipsis,
-            env.clone(),
+            self.expansion_env(env),
             scopes.clone(),
             env.heap().clone(),
         );
@@ -3505,6 +3528,9 @@ impl<'a> Desugarer<'a> {
         let mut compiled = compiler.compile_macro(name, rules).map_err(|e| {
             DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}"))
         })?;
+        // Compilation consults declarations (notably a bound `...`), but an
+        // escaping transformer must retain the live environment, not its view.
+        compiled.definition_env = Some(env.clone());
         compiled.foreign_expansions = self.foreign_expansions_carried_by(&compiled);
         Ok(compiled)
     }

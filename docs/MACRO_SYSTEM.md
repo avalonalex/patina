@@ -311,6 +311,22 @@ as well, so that any reference of that spelling could reach it, is what let a
 `let-syntax ((quote …))` around a *call* capture the callee template's
 `quote` (Larceny triage family 33).
 
+**Top-level definition order (#463).** Within one top-level form, including
+nested `begin` and macro-generated definitions, a variable declaration affects
+expansion from its own initializer or procedure body onward. Earlier expressions
+and procedure bodies keep the expansion they already received. Internal bodies
+still use their whole-body definition scan for `letrec*` scope.
+
+`Desugarer` records pending declarations in temporary lookup environments using
+the ordinary scoped resolver. Head dispatch, syntax-as-value checks, `apply`
+lowering, and macro literal comparisons all see those declarations. Compiled
+transformers and runtime aliases retain the real environments: placeholders
+never overwrite runtime values or imported locations. A later `define-syntax`
+or import replaces the corresponding declaration for expansion. The temporary
+views are discarded on success or error; actual variable assignment remains
+the runtime's job. The isolated programs in `core_syntax_bindings.rs` exercise
+these cases on both backends.
+
 **Splicing local syntax (#424).** `(srfi 188)` exports
 `splicing-let-syntax` and `splicing-letrec-syntax`. They share keyword binding
 and transformer compilation with the ordinary forms, but in a definition

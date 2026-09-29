@@ -59,6 +59,7 @@ fn expand_macro_core_tagged(
     macro_scope: patina_runtime::ScopeId,
     original_args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
+    definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
@@ -82,13 +83,6 @@ fn expand_macro_core_tagged(
 
     // Create expander with macro scope for hygiene
     let expander = Expander::new_with_heap(macro_scope, shared_heap.clone());
-
-    // Borrowed rather than cloned into each rule's matcher: both sites are the
-    // same for every rule this expansion tries.
-    let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
-        env,
-        scopes: &compiled_macro.definition_scopes,
-    });
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
@@ -490,6 +484,23 @@ pub fn expand_macro_with_scope(
     shared_heap: &patina_core::SharedHeap,
     use_site: Option<Site<'_>>,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
+    let definition = compiled_macro.definition_env.as_ref().map(|env| Site {
+        env,
+        scopes: &compiled_macro.definition_scopes,
+    });
+    expand_macro_at_sites(compiled_macro, args, shared_heap, definition, use_site)
+}
+
+/// Expand using explicit lookup sites. The frontend supplies transient views of
+/// declarations encountered in the current form, without capturing those views
+/// in the compiled transformer or changing its runtime definition environment.
+pub fn expand_macro_at_sites(
+    compiled_macro: &CompiledMacro,
+    args: patina_core::TaggedValue,
+    shared_heap: &patina_core::SharedHeap,
+    definition: Option<Site<'_>>,
+    use_site: Option<Site<'_>>,
+) -> Result<MacroExpansion, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
     // Enter macro expansion (for depth tracking)
@@ -510,6 +521,7 @@ pub fn expand_macro_with_scope(
         macro_scope,
         args, // original args for debug logging
         shared_heap,
+        definition,
         use_site,
     );
 
