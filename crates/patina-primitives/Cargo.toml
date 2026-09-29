@@ -17,7 +17,7 @@ num-complex = { workspace = true }
 
 smallvec = { workspace = true }
 thiserror = { workspace = true }
-unicode-casefold = "0.2"
+unicode-casefold = { workspace = true }
 unicode-properties = { workspace = true }
 tracing = { workspace = true }
 

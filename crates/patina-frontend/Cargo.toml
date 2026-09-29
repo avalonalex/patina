@@ -22,6 +22,9 @@ thiserror = { workspace = true }
 # Per-form tables on the desugarer's reference path
 rustc-hash = { workspace = true }
 
+# R7RS reader folding must agree with string-foldcase.
+unicode-casefold = { workspace = true }
+
 [lib]
 name = "patina_frontend"
 path = "src/lib.rs"
