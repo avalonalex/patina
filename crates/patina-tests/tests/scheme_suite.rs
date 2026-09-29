@@ -135,6 +135,7 @@ const SUITE: &[(&str, i64)] = &[
     ("reader/at-identifiers.scm", 11),
     ("reader/identifier-delimiters.scm", 23),
     ("reader/line-endings.scm", 4),
+    ("reader/peculiar-identifiers.scm", 12),
     ("reader/unicode-identifiers.scm", 20),
     ("reader/vertical-bar-identifiers.scm", 32),
     ("srfi/and-let.scm", 21),

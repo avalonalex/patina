@@ -135,6 +135,10 @@ pub struct Parser {
     current_token_column: u32,
     /// Where the current token begins, with the reader state there.
     current_token_start: ReaderState,
+    /// The folding mode after lexing this token. A directive and the token
+    /// following it can be returned by one lexer call, so its start state
+    /// can still carry the old mode.
+    current_token_fold_case: bool,
     /// Shared heap for allocating pairs, vectors, strings, etc.
     heap: SharedHeap,
     /// Datum labels for shared/cyclic structure support (R7RS Section 2.4)
@@ -195,6 +199,7 @@ impl Parser {
             current_token_line: spanned.line,
             current_token_column: spanned.column,
             current_token_start: spanned.start,
+            current_token_fold_case: spanned.end.fold_case,
             datum_start: (spanned.line, spanned.column),
             heap,
             labels: HashMap::new(),
@@ -313,6 +318,7 @@ impl Parser {
         self.current_token_line = spanned.line;
         self.current_token_column = spanned.column;
         self.current_token_start = spanned.start;
+        self.current_token_fold_case = spanned.end.fold_case;
     }
 
     /// Move past the last token of a datum.
@@ -475,7 +481,19 @@ impl Parser {
                 Ok(val)
             }
             Token::Number(s) => {
-                let val = self.parse_number(s)?;
+                // The lexer recognizes numeric *prefixes*. Decide from the
+                // whole token here, using the same numeric parser as
+                // string->number, before falling back to a valid peculiar
+                // identifier (#358). This keeps +inf.0i numeric and +inc a
+                // symbol without accepting malformed numbers like 12abc.
+                let val = match self.parse_number(s) {
+                    Ok(value) => value,
+                    Err(_) if Lexer::is_peculiar_identifier(s) => {
+                        let name = Lexer::identifier_name(s.clone(), self.current_token_fold_case);
+                        self.heap.borrow_mut().intern_symbol(&name)
+                    }
+                    Err(error) => return Err(error),
+                };
                 self.advance_past_datum()?;
                 Ok(val)
             }
@@ -1596,6 +1614,37 @@ impl patina_runtime::HasDiagnostic for ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambiguous_numeric_tokens_follow_the_identifier_folding_mode() {
+        for name in ["+INC", "-INDEX", "+NaN.0abc", "+INF.0tail"] {
+            let mut parser = Parser::new_case_insensitive(name).unwrap();
+            let value = parser.parse().unwrap();
+            assert_eq!(
+                parser.heap.borrow().get_symbol_name(value),
+                Some(name.to_lowercase().as_str()),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_fallback_does_not_accept_malformed_numbers_or_bytes() {
+        for text in [
+            "12abc",
+            "+12abc",
+            "-.5abc",
+            "#d+id",
+            "#e+nan.0abc",
+            "+id#oops",
+            "+inf.0{tail",
+            "#u8(+id)",
+            "#u8(+inf.0)",
+        ] {
+            let mut parser = Parser::new(text).unwrap();
+            assert!(parser.parse_next().is_err(), "{text}");
+        }
+    }
 
     #[test]
     fn test_parse_next_distinguishes_clean_and_incomplete_eof() {

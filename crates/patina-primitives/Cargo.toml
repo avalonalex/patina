@@ -24,3 +24,6 @@ tracing = { workspace = true }
 [lib]
 name = "patina_primitives"
 path = "src/lib.rs"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

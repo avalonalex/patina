@@ -10,7 +10,9 @@ pub enum Token {
 
     // Data
     Boolean(bool),
-    Number(String), // Parse into actual number later
+    // A numeric candidate; the parser resolves ambiguous peculiar identifiers
+    // such as +inf and +nan.0abc after trying the whole token as a number.
+    Number(String),
     Character(char),
     String(String),
     Identifier(String),
@@ -1421,6 +1423,40 @@ impl Lexer {
             )
     }
 
+    /// R7RS 7.1.1's peculiar identifiers, with the same non-ASCII extension
+    /// as ordinary identifiers. Only these may fall back from a numeric
+    /// candidate to a symbol: `+inf.0abc` qualifies, `+12abc` and `#d+id` do
+    /// not. Check every character so malformed numeric text is not silently
+    /// accepted as an identifier.
+    pub(crate) fn is_peculiar_identifier(text: &str) -> bool {
+        let mut chars = text.chars();
+        match chars.next() {
+            Some('+' | '-') => match chars.next() {
+                None => return true,
+                Some('.') => {
+                    if !chars.next().is_some_and(Self::is_identifier_start) {
+                        return false;
+                    }
+                }
+                Some(ch) if Self::is_identifier_start(ch) => {}
+                _ => return false,
+            },
+            Some('.') => {
+                if !chars.next().is_some_and(Self::is_identifier_start) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        chars.all(|ch| Self::is_identifier_start(ch) || ch.is_ascii_digit())
+    }
+
+    /// The identifier spelling used by both ordinary tokens and ambiguous
+    /// numeric candidates that the parser resolves to identifiers.
+    pub(crate) fn identifier_name(text: String, fold_case: bool) -> String {
+        if fold_case { text.to_lowercase() } else { text }
+    }
+
     fn read_identifier(&mut self) -> Result<Token, LexError> {
         let start = self.position;
 
@@ -1430,14 +1466,10 @@ impl Lexer {
 
         let ident: String = self.input[start..self.position].iter().collect();
 
-        // Apply case folding if #!fold-case directive is active
-        let ident = if self.fold_case {
-            ident.to_lowercase()
-        } else {
-            ident
-        };
-
-        Ok(Token::Identifier(ident))
+        Ok(Token::Identifier(Self::identifier_name(
+            ident,
+            self.fold_case,
+        )))
     }
 }
 
