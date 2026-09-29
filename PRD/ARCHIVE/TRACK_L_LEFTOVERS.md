@@ -1,15 +1,18 @@
-# Track L — leftovers
+# Track L — completion record
 
 **Created:** 2026-09-19, when the track's working record was archived.
-**Archive:** [`ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`](ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md)
+**Completed and archived:** 2026-09-29, after [#551](https://github.com/avalonalex/patina/pull/551)
+closed the final backlog item, [#423](https://github.com/avalonalex/patina/issues/423).
+**Earlier records:** [`TRACK_L_SNOW_LIBRARIES_PRD.md`](TRACK_L_SNOW_LIBRARIES_PRD.md)
 (2,500 lines, 2026-06-20 → 2026-09-18) and
-[`ARCHIVE/TRACK_L_FIXED_DEFECTS.md`](ARCHIVE/TRACK_L_FIXED_DEFECTS.md).
+[`TRACK_L_FIXED_DEFECTS.md`](TRACK_L_FIXED_DEFECTS.md).
 
 Track L set out to run the third-party R7RS ecosystem — snow-fort packages and
 the libraries they lean on — and to know, as a number that regenerates on
-demand, how much of it works. Its loop has converged. This page says where it
-stopped and points at what is left. **It holds no narrative: every work item is
-a GitHub issue**, and the reasoning behind a past decision is in the archive.
+demand, how much of it works. The recorded backlog is complete. This archived
+ledger preserves the dated measurements, scope boundaries and standing rules;
+it is no longer an active queue. **New work belongs in GitHub issues**, and the
+reasoning behind past decisions remains in those issues and the earlier records.
 
 ## Where the track stopped
 
@@ -57,13 +60,22 @@ twice.
   differ by decision (#412).
 - **chibi's R7RS suite:** 1226 of 1226 on both backends, the routine gate.
 
-## What is left
+## Closure and follow-up work
 
-Each line is an issue. When one closes, delete its line; when this list is
-empty, archive this page.
+All issues in Track L's recorded backlog are closed. [#429](https://github.com/avalonalex/patina/issues/429)
+closed the import-only execution-coverage gap; #551 closed #423, the last
+remaining backend item. Completion is bounded by the corpus exclusions and
+the classified reference differences above, not a claim of universal compatibility.
 
-**Backends**
-- #423 — VM: a stale register keeps a replaced value alive (GC precision; `PRD/future/GC_STAGE5_PRD.md`).
+Separate work remains outside this completed backlog:
+
+- Reporting: retain evidence for compatibility failures
+  ([#379](https://github.com/avalonalex/patina/issues/379)) and remove timing-only
+  churn from committed chibi reports ([#380](https://github.com/avalonalex/patina/issues/380)).
+- Broader collection work remains in the [GC stage 5 PRD](../future/GC_STAGE5_PRD.md).
+- Package resolution and public distribution remain deferred, as does FFI;
+  see the [package-manager design](../future/PACKAGE_MANAGER_DESIGN.md) and
+  [FFI design](../FFI_DESIGN.md).
 
 One recorded debt has no issue because it has no known symptom: on the VM,
 `vm_raise_value`, the two prompt paths and the value-form arm still locate wind
@@ -81,4 +93,4 @@ retire (archive §6, "Still open next door"). File it when it produces one.
 - **Symbol output (#422):** retain standard R7RS escaping (`@` writes as `|@|`), even for names accepted bare as reader extensions; `symbol->string` returns the unescaped name, and name conversion and writer/reader round trips preserve it.
 - **Square-root policy (#418):** negative real inputs produce an exact zero real component, following Chibi and preserving the reader/writer round trip; infinity and inexact imaginary components remain inexact.
 - **Local syntax (#424):** `(srfi 188)` supplies splicing forms, reused under the R6RS names by the R6RS facade; `(scheme base)` retains ordinary R7RS forms. The facade accepts SRFI 188's mixed-definition/expression extension.
-- **The Larceny defect queue** is `scheme_tests/reports/larceny_triage.md`, which deletes itself when its families close; the remaining VM GC item is listed above.
+- **Larceny triage** remains in `scheme_tests/reports/larceny_triage.md`, including upstream and by-decision expectations. New Patina defects need their own issues; Track L's closed backlog does not erase those classifications.

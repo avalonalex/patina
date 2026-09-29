@@ -195,12 +195,13 @@ read off a signature rather than traced to a use, which is the same mistake a
 third time: it kept the fix filed as a Q2 item for three weeks, and the work
 turned out to be deleting the parameter.
 
-**Shared root cause with an open Track L defect.** `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
-§6 records that Rust registry primitives ignore the import set at top level.
-That is the same disagreement seen from the other side: the compiler's
-name-special-casing and the primitive registry do not share one answer to "what
-is this identifier bound to." Q2 and that Track L item should be designed
-together even if they land as separate PRs.
+**Historical connection to Track L.** `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
+§6 recorded Rust registry primitives ignoring the import set at top level.
+That exposed the same disagreement from the other side: the compiler's
+name-special-casing and the primitive registry did not share one answer to
+"what is this identifier bound to." Track L's backlog is now
+[closed](ARCHIVE/TRACK_L_LEFTOVERS.md); this remains background for Q2's
+binding discipline, not an open dependency.
 
 ## 2. Goals
 
@@ -319,8 +320,8 @@ Two sub-parts, both required:
    an unregistered one: it turns a clean unbound-variable error into an internal
    error, and it advertises support in the library's export list.
 
-Design alongside the Track L "primitives ignore the import set" defect — see
-§1.2. A grep for other registered-but-stubbed primitives is part of this item.
+Preserve the binding discipline illustrated by the historical Track L defect
+in §1.2. A search for other registered-but-stubbed primitives is part of this item.
 
 - **Acceptance:** every row of the §1.2 table passes on both backends via Q1's
   harness; no registered primitive has a body that unconditionally errors;

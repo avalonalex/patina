@@ -876,9 +876,11 @@ The #522 overlays repair byte copies, offset counts, reverse-read EOF loops,
 single-precision infinity encoding and SRFI 63's empty/deep list conversion.
 The #523 overlays repair vector coercions, standalone and width-limited zero
 fields, URI authority markers and absent ports, and callback return values.
-The patch policy authorizes upstream correctness repairs discovered during
-#429 without further per-patch approval, with issue evidence, reference
-comparisons and CI regression assertions required.
+The [patch policy](../compat/patches/README.md#correctness-patches-during-429)
+authorized upstream correctness repairs during the now-completed #429 work
+without further per-patch approval, with issue evidence, reference comparisons
+and CI regression assertions required. It records the rules for changes
+outside that scope as well.
 
 The color/scientific batch adds 155 assertions across ten SLIB drivers:
 color-space (43), color (27), daylight (15), nbs-iscc (8), resene (8),
