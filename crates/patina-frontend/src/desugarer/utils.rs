@@ -183,28 +183,33 @@ fn strip_identifiers_impl(
         return shared_heap.borrow_mut().intern_symbol(&name);
     }
 
-    // Check if it's a pair — recursively strip car and cdr
+    // Walk a list's spine iteratively: its length must not become Rust stack
+    // depth (#355). Retain the original pairs so rebuilding on the way back
+    // still copies only the part whose identifiers actually changed.
     if tv.is_pair() {
-        // Cycle detection: if we've already visited this pair, return as-is
-        if !seen.insert(tv.raw_bits()) {
-            return tv;
-        }
-
-        let (car, cdr) = match heap.try_pair(tv) {
-            Some(pair) => pair,
-            None => return tv,
-        };
         drop(heap);
-
-        let new_car = strip_identifiers_impl(car, shared_heap, seen);
-        let new_cdr = strip_identifiers_impl(cdr, shared_heap, seen);
-
-        // Only allocate a new pair if something changed
-        if new_car == car && new_cdr == cdr {
-            return tv;
+        let mut spine = Vec::new();
+        let mut tail = tv;
+        while tail.is_pair() {
+            if !seen.insert(tail.raw_bits()) {
+                break;
+            }
+            let (car, cdr) = shared_heap.borrow().get_pair(tail);
+            let new_car = strip_identifiers_impl(car, shared_heap, seen);
+            spine.push((tail, car, cdr, new_car));
+            tail = cdr;
         }
-
-        return shared_heap.borrow_mut().alloc_pair(new_car, new_cdr);
+        if !tail.is_pair() {
+            tail = strip_identifiers_impl(tail, shared_heap, seen);
+        }
+        for (original, car, cdr, new_car) in spine.into_iter().rev() {
+            tail = if new_car == car && tail == cdr {
+                original
+            } else {
+                shared_heap.borrow_mut().alloc_pair(new_car, tail)
+            };
+        }
+        return tail;
     }
 
     // Check if it's a vector — recursively strip elements
@@ -332,5 +337,48 @@ pub fn formals_to_binders(formals: &Formals) -> Vec<(Rc<str>, ScopeSet)> {
             binders.push(binder(rest));
             binders
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stripping_quoted_identifiers_copies_only_changed_pairs() {
+        let heap = patina_core::new_shared_heap();
+        let (original, identifier, unchanged_tail) = {
+            let mut heap = heap.borrow_mut();
+            let identifier = heap.alloc_identifier(Rc::from("x"), ScopeSet::new());
+            let unchanged_tail = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
+            let changed = heap.alloc_pair(identifier, unchanged_tail);
+            let original = heap.alloc_pair(TaggedValue::fixnum(1), changed);
+            (original, identifier, unchanged_tail)
+        };
+        let stripped = strip_identifiers_tagged(original, &heap);
+        let heap = heap.borrow();
+        assert_ne!(stripped, original);
+        assert_eq!(heap.car(stripped), TaggedValue::fixnum(1));
+        let changed = heap.cdr(stripped);
+        assert_eq!(heap.get_symbol_name(heap.car(changed)), Some("x"));
+        assert_eq!(heap.cdr(changed), unchanged_tail);
+        assert_eq!(heap.car(heap.cdr(original)), identifier);
+    }
+
+    #[test]
+    fn stripping_a_quoted_improper_tail_converts_its_identifier() {
+        let heap = patina_core::new_shared_heap();
+        let (original, identifier) = {
+            let mut heap = heap.borrow_mut();
+            let identifier = heap.alloc_identifier(Rc::from("tail"), ScopeSet::new());
+            (
+                heap.alloc_pair(TaggedValue::fixnum(1), identifier),
+                identifier,
+            )
+        };
+        let stripped = strip_identifiers_tagged(original, &heap);
+        let heap = heap.borrow();
+        assert_eq!(heap.get_symbol_name(heap.cdr(stripped)), Some("tail"));
+        assert_eq!(heap.cdr(original), identifier);
     }
 }

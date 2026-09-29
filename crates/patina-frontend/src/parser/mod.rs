@@ -414,6 +414,12 @@ impl Parser {
     /// so nothing later can define it, and a placeholder object left in the
     /// data would be garbage to every consumer.
     fn finish_datum(&mut self, tv: TaggedValue) -> Result<TaggedValue, ParseError> {
+        // Without a forward or self-reference, no placeholder was allocated.
+        // Walking ordinary data here is needless work and used to overflow
+        // the Rust stack on a long, flat list (#355).
+        if self.pending_refs.is_empty() {
+            return Ok(tv);
+        }
         if let Some(&n) = self
             .pending_refs
             .iter()
@@ -1529,78 +1535,56 @@ impl Parser {
     /// actual cycles (rather than copies).
     fn resolve_labels(&self, tv: TaggedValue) -> TaggedValue {
         use std::collections::HashSet;
-        let mut visited = HashSet::new();
-        self.resolve_labels_inner(tv, &mut visited)
-    }
 
-    fn resolve_labels_inner(
-        &self,
-        tv: TaggedValue,
-        visited: &mut std::collections::HashSet<u64>,
-    ) -> TaggedValue {
-        // Check for LabelPlaceholder
-        if tv.is_object() {
-            let heap = self.heap.borrow();
-            if let HeapObjectData::LabelPlaceholder(n) = heap.get_object(tv) {
-                let n = *n;
-                drop(heap);
-                if let Some(&resolved) = self.labels.get(&n) {
-                    return resolved;
-                }
-                return tv;
-            }
-        }
-
-        // Handle native heap pairs
-        if tv.is_pair() {
-            let addr = tv.raw();
-            if visited.contains(&addr) {
-                // Already visited - return as-is to avoid infinite loop
-                return tv;
-            }
-            visited.insert(addr);
-
-            // Resolve car and cdr
-            let (car, cdr) = {
-                let heap = self.heap.borrow();
-                (heap.car(tv), heap.cdr(tv))
-            };
-
-            let new_car = self.resolve_labels_inner(car, visited);
-            let new_cdr = self.resolve_labels_inner(cdr, visited);
-
-            // Mutate in place to preserve identity
+        let resolve = |value: TaggedValue, heap: &patina_core::Heap| {
+            if value.is_object()
+                && let HeapObjectData::LabelPlaceholder(label) = heap.get_object(value)
             {
-                let mut heap = self.heap.borrow_mut();
-                heap.set_car(tv, new_car);
-                heap.set_cdr(tv, new_cdr);
+                // finish_datum checked that every pending label is defined.
+                self.labels[label]
+            } else {
+                value
             }
+        };
 
-            return tv;
-        }
-
-        // Handle native heap vectors
-        if tv.is_vector() {
-            let addr = tv.raw();
-            if visited.contains(&addr) {
-                return tv;
+        // Only heap accessors below: no Scheme allocation, callback or GC
+        // safe point occurs while this borrow and the worklist are live.
+        // Patch existing containers in place to preserve sharing and cycles.
+        let mut heap = self.heap.borrow_mut();
+        let tv = resolve(tv, &heap);
+        let mut pending = vec![tv];
+        let mut visited = HashSet::new();
+        while let Some(container) = pending.pop() {
+            if !(container.is_pair() || container.is_vector()) || !visited.insert(container.raw()) {
+                continue;
             }
-            visited.insert(addr);
-
-            // Get vector length and resolve all elements
-            let len = self.heap.borrow().vector_len(tv);
-            for i in 0..len {
-                let elem = self.heap.borrow().vector_ref(tv, i);
-                let resolved = self.resolve_labels_inner(elem, visited);
-                if resolved.raw() != elem.raw() {
-                    self.heap.borrow_mut().vector_set(tv, i, resolved);
+            if container.is_pair() {
+                let car = heap.car(container);
+                let cdr = heap.cdr(container);
+                let new_car = resolve(car, &heap);
+                let new_cdr = resolve(cdr, &heap);
+                if new_car != car {
+                    heap.set_car(container, new_car);
+                }
+                if new_cdr != cdr {
+                    heap.set_cdr(container, new_cdr);
+                }
+                // Visit the car first, leaving just the next cdr pending
+                // for a flat list, regardless of the length of its spine.
+                pending.extend([new_cdr, new_car]);
+            } else {
+                for i in 0..heap.vector_len(container) {
+                    let element = heap.vector_ref(container, i);
+                    let resolved = resolve(element, &heap);
+                    if resolved != element {
+                        heap.vector_set(container, i, resolved);
+                    }
+                    if resolved.is_pair() || resolved.is_vector() {
+                        pending.push(resolved);
+                    }
                 }
             }
-
-            return tv;
         }
-
-        // Other value types don't contain nested values that could be placeholders
         tv
     }
 }
@@ -2615,6 +2599,23 @@ mod tests {
             second.raw(),
             "Forward reference should resolve to same object"
         );
+    }
+
+    #[test]
+    fn label_patching_preserves_a_shared_pair_vector_cycle() {
+        // Exercise a placeholder in every kind of slot, with sharing that
+        // reaches the same containers along several paths through the worklist.
+        let mut parser = Parser::new("(#0# . #0=#(#1# #1=(x . #0#)))").unwrap();
+        let root = parser.parse().unwrap();
+        let heap = parser.heap().borrow();
+        let vector = heap.car(root);
+        assert!(vector.is_vector());
+        assert_eq!(heap.cdr(root), vector);
+        let pair = heap.vector_ref(vector, 0);
+        assert!(pair.is_pair());
+        assert_eq!(heap.vector_ref(vector, 1), pair);
+        assert_eq!(heap.get_symbol_name(heap.car(pair)), Some("x"));
+        assert_eq!(heap.cdr(pair), vector);
     }
 
     #[test]
