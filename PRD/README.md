@@ -4,12 +4,16 @@ Strategic planning, design documents, and roadmaps for Patina's development phas
 
 ## Current Status
 
-**Phase 1 (R7RS-small tree-walker interpreter) — COMPLETE ✅**
-- 1159/1159 chibi r7rs-tests.scm passing (100%)
-- ~1400 internal tests passing
-- All 15 R7RS-small libraries implemented (14 fully, `(scheme load)` omitted by design)
+**Phase 1 and Phase 2A — complete.** The register VM is the default backend;
+the CPS tree-walker remains available. Both pass 1226 of 1226 chibi R7RS tests
+as of 2026-09-29. See the [Phase 2 overview](phase2/README.md).
 
-See `PRD/MILESTONES.md` for full history.
+**Track L — complete 2026-09-29.** #551 closed the last recorded item, #423.
+The [archived completion record](ARCHIVE/TRACK_L_LEFTOVERS.md) preserves the
+corpus measurements, standing rules and separate follow-ups. New work belongs
+in GitHub issues.
+
+See [MILESTONES.md](MILESTONES.md) for full history.
 
 ## Phase 1 Cleanup — COMPLETE ✅
 
@@ -23,10 +27,12 @@ All 5 priorities done. Archived at `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CL
 
 ## Development Phases
 
-### Phase 2: Bytecode VM Backend (Next)
-**Status**: Planning
+### Phase 2: Bytecode VM Backend
+**Status**: Phase 2A complete; further performance work tracked separately
 
-Compile `CoreExpr` IR to bytecode for 5–10× speedup. New `patina-vm/` crate implementing the `Backend` trait.
+`patina-vm` compiles `CoreExpr` IR to bytecode and implements the `Backend`
+trait. See the [VM decisions](../docs/VM_DECISIONS.md),
+[Track P](TRACK_P_PERFORMANCE_PRD.md) and [GC stage 5](future/GC_STAGE5_PRD.md).
 
 ### Phase 3: syntax-case (Procedural Macros)
 **Status**: Designed
@@ -56,7 +62,7 @@ miniKanren embedding.
 PRD/
 ├── MILESTONES.md                       # Achievement history
 ├── phase2/
-│   ├── VM_BACKEND_DESIGN.md            # (to be created) VM backend design
+│   ├── README.md                      # Phase 2A completion and follow-ons
 │   └── R7RS_LARGE_STATUS.md
 ├── macro/
 │   └── SYNTAX_CASE_DESIGN.md           # Includes deferred mechanization (H5)
@@ -65,6 +71,8 @@ PRD/
 ## Archive
 
 Completed research and historical documents in `PRD/ARCHIVE/`. Key references:
+
+- [Track L — Third-Party Library Compatibility](ARCHIVE/TRACK_L_LEFTOVERS.md) — completed backlog, dated measurements and standing rules
 - [Track H — Hygiene Assurance](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md) — H1–H3's bounded harnesses and H4's completed evaluation; runtime defects remain in their live issues and triage entries
 - `ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
 - `ARCHIVE/source_info_2026_03/SOURCE_INFO_PLAN.md` — source tracking implementation

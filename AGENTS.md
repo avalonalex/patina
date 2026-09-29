@@ -117,18 +117,13 @@ leaves behind. It does not hold the narrative of an individual defect: the
 repro, the measurement against the references, the diagnosis and the notes for
 a fix go in an issue, and the PRD carries one line linking to it. This is the
 written form of the issue-first habit — file the issue before the fix, and let
-the PR close it. `PRD/TRACK_L_LEFTOVERS.md` is the model: 96 lines where the
-record it replaced, now `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`, had grown
+the PR close it. `PRD/ARCHIVE/TRACK_L_LEFTOVERS.md` is the model: a short ledger
+where the record it replaced, now `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`, had grown
 past 2,500 and was carrying entries nobody could find — two defects were
 re-diagnosed from scratch in 2026-09 that it had already recorded. **Search the
 issues and the archive before filing**, for the same reason.
 
 **Active planning docs:**
-- `PRD/TRACK_L_LEFTOVERS.md` — **what is left of Track L** (third-party library
-  compatibility): where the track stopped, how to read the corpus and Larceny
-  numbers, and the open work as a list of GitHub issues, with the remaining
-  decisions that wait on the owner. The working record it replaced is
-  `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md` — history, not to be updated.
 - `scheme_tests/reports/larceny_triage.md` — **the open defect queue.** Start here
   for macro/hygiene work: the hygiene queue (families 36 and 38) closed
   2026-08-31 with the matrix at 28 of 28, but the doc still records what each
@@ -137,19 +132,27 @@ issues and the archive before filing**, for the same reason.
   skipping it.
 - `PRD/phase2/R7RS_LARGE_STATUS.md` — **the bundling policy and edition
   tracker.** The answer to "does Patina ship this library, and why (not)":
-  Red 16/17, Tangerine 4/8 as of 2026-09-01, with the policy (standard-track
+  it records edition coverage and the policy (standard-track
   + runtime-forced + demanded legacy aliases + the standard testing API —
   SRFI 64, added 2026-09-06 and not shipped until #193's Phase 0; other leaf
-  libraries stay out) that Track L's L1 defers to. Check it before bundling
+  libraries stay out) used by Track L's L1. Check it before bundling
   anything.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — archived Phase 1 cleanup tracker
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
 - `docs/GC_DESIGN.md` — garbage collection design for both backends (Collector/GcRoots traits, root inventory, staging); GC is always on since stage 4c
-- `PRD/future/GC_STAGE5_PRD.md` — remaining GC pause work (weak continuation tables, immortal roots, nested-loop collection, generational)
+- `PRD/future/GC_STAGE5_PRD.md` — GC pause work and collector upgrades; its item statuses distinguish completed work from remaining work
 - `PRD/macro/SYNTAX_CASE_DESIGN.md` — syntax-case design, and the
   resolve-once-before-the-backends decision recorded for that rewrite
 - `PRD/ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
+
+**Completed compatibility work:**
+
+- `PRD/ARCHIVE/TRACK_L_LEFTOVERS.md` — Track L completed 2026-09-29 with #551.
+  The final ledger preserves dated corpus and Larceny measurements, standing
+  rules and separate follow-ups. The earlier working record is
+  `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`; both are historical references,
+  not active queues. New findings belong in GitHub issues.
 
 **Feature docs:**
 - `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope

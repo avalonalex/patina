@@ -2,6 +2,25 @@
 
 Major accomplishments and project milestones.
 
+## 2026-09-29: Track L — Third-Party Library Compatibility Complete
+
+[#551](https://github.com/avalonalex/patina/pull/551) closed
+[#423](https://github.com/avalonalex/patina/issues/423), the final issue in the
+Track L ledger. The [completion record](ARCHIVE/TRACK_L_LEFTOVERS.md) is now
+archived with the track's standing rules and scope boundaries.
+
+The 2026-09-28 corpus measurement passes **143 of 143 in-scope packages** on
+both backends, with 18 of 161 excluded for recorded reasons. Closing #429
+gave every passing package execution coverage: 37 upstream suites and 106
+maintained smoke drivers with 1522 assertions. Chibi's R7RS suite passes
+1226 of 1226 on both backends. After #423, the focused VM Larceny `ephemeron`
+suite passes 6 of 6; the archived full-lane Larceny totals predate that fix.
+
+Reporting improvements [#379](https://github.com/avalonalex/patina/issues/379)
+and [#380](https://github.com/avalonalex/patina/issues/380), broader
+[GC work](future/GC_STAGE5_PRD.md), package distribution and FFI remain
+separate efforts.
+
 ## 2026-09-12: Track H's Initial Hygiene Assurance Deliverables Complete
 
 H1's binding-aware metamorphic tests (#292), H2's generated scope-resolution

@@ -18,8 +18,9 @@ byte-identical to a pinned upstream, enforced by
 [PROVENANCE.md](./PROVENANCE.md)) and `(srfi 132)` (recorded in its own
 `132.sld` header). The rest are adaptations; their known deviations are
 listed below, and reconciling each one to the byte-identical-or-marked
-standard was Track L's L4 (`PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`); new work on it
-is a GitHub issue, indexed from `PRD/TRACK_L_LEFTOVERS.md`.
+standard was Track L's completed L4. The
+[archived completion record](../../PRD/ARCHIVE/TRACK_L_LEFTOVERS.md) preserves
+the track's standing rules; new work belongs in GitHub issues.
 
 **The Patina project does not claim authorship of these implementations.**
 They are included here for convenience and compatibility. Bug reports

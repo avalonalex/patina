@@ -12,14 +12,16 @@ record of every difference.
 
 ## When a patch is justified
 
-There are two authorized uses of package overlays:
+Package overlays have been admitted under two policies:
 
 - **Portability patches** make the rewrite the package's author would make to
   run on a conforming R7RS implementation, preserving the behavior measured.
 - **Correctness patches found while expanding execution coverage for #429**
   repair demonstrated upstream defects, with an issue, reference measurements
   and regression assertions as described below. The owner authorized this
-  workflow on 2026-09-27; qualifying patches need no further per-patch approval.
+  workflow on 2026-09-27 without further per-patch approval. #429 is now
+  complete; its overlays and regression checks remain in place. The scope
+  and rules for future correctness changes are recorded below.
 
 Neither use permits hiding a Patina defect or weakening a test to make a
 package pass. Other incompatibilities belong in `compat/EXCLUSIONS.scm` with
@@ -111,10 +113,11 @@ signal; the finding goes in its exclusion note instead.
 
 ### Correctness patches during #429
 
-The owner authorizes upstream correctness repairs discovered while working
+The owner authorized upstream correctness repairs discovered while working
 on [#429](https://github.com/avalonalex/patina/issues/429), including defects
-in dependencies exercised by a new driver. Proceed without a separate owner
-decision for each repair when the following evidence and checks are in place:
+in dependencies exercised by a new driver. That completed work required no
+separate owner decision for each repair when the following evidence and
+checks were in place:
 
 1. Search the issues and Track L archive, then file or update an issue before
    fixing the defect. Record a minimal reproduction, the expected behavior
@@ -134,8 +137,8 @@ decision for each repair when the following evidence and checks are in place:
    run the patch-application guard and both backend smoke gates, and refresh
    the full corpus measurement when coverage or results change.
 
-This authorization is scoped to #429 execution-coverage work. It does not
-authorize masking Patina differences or changing bundling policy. Outside
+This authorization was scoped to #429 execution-coverage work, now complete.
+It does not authorize masking Patina differences or changing bundling policy. Outside
 that scope, correctness changes still need an owner decision; portability
 patches continue to follow the rules above.
 

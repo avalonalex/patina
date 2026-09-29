@@ -4,7 +4,10 @@
 non-empty; delete it when every family is closed and the lane reports say so.
 The durable record of each defect up to 2026-09-18 is §6 of the archived Track L PRD
 (`PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`); since then it is the defect's GitHub issue,
-indexed from `PRD/TRACK_L_LEFTOVERS.md`.
+with Track L's completed backlog summarized in the
+[archived completion record](../../PRD/ARCHIVE/TRACK_L_LEFTOVERS.md).
+New findings belong in GitHub issues; the upstream and by-decision families
+below remain classified even though Track L is complete.
 
 **Where our tests are.** They were all in
 `crates/patina-tests/tests/larceny_families.rs`. #193 Phase 1 moved them, family

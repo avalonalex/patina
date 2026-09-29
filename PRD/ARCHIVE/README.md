@@ -2,11 +2,26 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2026-09-14
+**Last Updated:** 2026-09-29
 
 ---
 
 ## Directory Structure
+
+### Track L — Third-Party Library Compatibility
+
+**Status:** Complete and archived 2026-09-29 after #551 closed #423.
+
+- [Completion record](TRACK_L_LEFTOVERS.md) — the final ledger, dated corpus
+  and Larceny measurements, standing rules and separate follow-ups.
+- [Working record](TRACK_L_SNOW_LIBRARIES_PRD.md) — the 2026-06-20 through
+  2026-09-18 investigation history, archived 2026-09-19.
+- [Fixed defects](TRACK_L_FIXED_DEFECTS.md) — earlier defect history.
+
+These records preserve the evidence behind decisions; new findings belong in
+GitHub issues, not in the completed track.
+
+---
 
 ### `completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md`
 

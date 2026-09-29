@@ -1,18 +1,26 @@
 # Snow Compatibility & Performance Roadmap (Umbrella)
 
 **Created:** 2026-06-19
-**Status:** Planning → ready to execute
+**Status:** Track L complete 2026-09-29; performance follow-ups remain in Track P and the GC stage 5 PRD
 **Owner decisions:** interleave both tracks · library-compat-first (defer the fetcher) · clarity-safe optimizations only
 
-This is the **cross-track overview**. Per-item detail lives in the two track PRDs:
-- **Track P — VM performance (clarity-safe):** `PRD/TRACK_P_PERFORMANCE_PRD.md`
-- **Track L — Snow library compatibility:** `PRD/TRACK_L_LEFTOVERS.md` — the track's loop converged
-  2026-09-18; what is left is a list of GitHub issues there, and the working record is archived as
-  `PRD/ARCHIVE/TRACK_L_SNOW_LIBRARIES_PRD.md`
+This is the **cross-track overview**. Current status and standing rules live in:
+
+- **Track P — VM performance:** [performance PRD](TRACK_P_PERFORMANCE_PRD.md)
+  and [GC stage 5 PRD](future/GC_STAGE5_PRD.md).
+- **Track L — Snow library compatibility:** [archived completion record](ARCHIVE/TRACK_L_LEFTOVERS.md).
+  #551 closed the last recorded item, #423. The 2026-09-28 corpus measurement
+  passes 143 of 143 in-scope packages on both backends; #429 removed all
+  import-only passes. Exclusions and classified reference differences remain
+  explicit in the completion record.
+
+The context, milestones and deferrals below preserve the **original June 2026
+plan**, not a current implementation inventory. In particular, GC is now
+always on, the VM's call paths have changed and Track L's library work is complete.
 
 ---
 
-## Context
+## Original context (2026-06-19)
 
 Patina's two backends (register VM default + CPS tree-walker) both pass 1226/1226 chibi R7RS tests. The next goals are to (1) **consume existing Snow libraries** and (2) **improve VM performance without sacrificing educational clarity too much**. These run as **parallel, interleaved tracks**.
 
@@ -27,7 +35,7 @@ Patina's two backends (register VM default + CPS tree-walker) both pass 1226/122
 
 ---
 
-## Interleaving plan (milestones)
+## Original interleaving plan (milestones)
 
 Tracks run in parallel; Track P's GC (P6) overlaps as a correctness sub-track.
 
@@ -42,7 +50,7 @@ GC (P6) is the cross-cutting unblocker: real Snow workloads run long enough that
 
 ---
 
-## Explicitly deferred (cross-cutting rationale)
+## Original deferrals (cross-cutting rationale)
 
 **Performance — clarity tradeoff too high for now** (`PRD/VM_OPTIMIZATION_ROADMAP.md` P2/P6/P7/P8/P9/P10): flat `Vec<u32>` bytecode, threaded dispatch, liveness register allocation, NaN-boxed inline floats, bytecode serialization, continuation stack-slicing, JIT. If revisited, keep the readable match-based loop as a documented reference path.
 
@@ -50,16 +58,32 @@ GC (P6) is the cross-cutting unblocker: real Snow workloads run long enough that
 
 ---
 
-## Housekeeping (fold in opportunistically)
-- ~~**Open bug:** `PRD/bugs/TREE_WALKER_CALLCC_MULTI_VALUES.md`~~ — **closed 2026-08-25.** The tree-walker delivers multiple values to a continuation now, which fixed the SRFI-1 abort pattern (`%cars+cdrs`) that entry named and with it the n-ary half of `(scheme list)` on that backend.
-- **Stale docs:** `PRD/phase2/R7RS_LARGE_STATUS.md` ("not started") contradicts `PRD/PARALLEL_TRACKS.md` (9 SRFIs done) — reconcile.
-- **CLAUDE.md link drift:** points to `PRD/phase1/GC_DESIGN.md` / `CLONE_OPTIMIZATION_ANALYSIS.md` / `PRD/phase2/SYNTAX_CASE_DESIGN.md`, now under `PRD/ARCHIVE/phase1_optimization_2026_02/` and `PRD/macro/`; `docs/VM_STEPPER.md` exists but isn't listed.
+## Follow-ups outside Track L's completed backlog
+
+- Reporting: retain failure evidence
+  ([#379](https://github.com/avalonalex/patina/issues/379)) and remove timing-only
+  churn from committed chibi reports ([#380](https://github.com/avalonalex/patina/issues/380)).
+- Package distribution and FFI remain separate, deferred efforts in their
+  designs linked above.
+- Use the [R7RS-large status](phase2/R7RS_LARGE_STATUS.md) for bundling policy,
+  [VM decisions](../docs/VM_DECISIONS.md) for the implemented architecture and
+  [GC design](../docs/GC_DESIGN.md) for collection rules. New defects belong
+  in GitHub issues.
 
 ---
 
-## Verification (end to end)
-- Routine: `cargo build --release && ./scripts/run_chibi_tests.sh` after every item (must stay 1226/1226).
-- Perf: `cargo bench -p patina-tests` (VM-backed after P0) vs baseline; `./scripts/bench_compare.sh` cross-check.
-- GC: dual CI lanes (`--no-default-features` vs `--features gc`) + `--gc-stress`.
-- Snow: the L3 integration tests load and exercise real packages.
-- Quality gate: `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt`.
+## Verification (current guidance)
+
+Use [AGENTS.md](../AGENTS.md) for checks appropriate to a change and
+[test organization](../docs/TEST_ORGANIZATION.md) for commands and coverage.
+
+- Routine code verification: `cargo build --release && ./scripts/run_chibi_tests.sh`
+  and affected Rust tests; backend semantics also run `./scripts/run_chibi_tests_tree_walker.sh`.
+- Performance: follow Track P's interleaved baseline/change/baseline protocol.
+- GC/rooting: `./scripts/run_gc_differential.sh` against release and debug
+  builds, the latter with poison assertions.
+- Corpus: `cargo run --release -p patina-compat -- run`; maintained smoke
+  drivers are gated in CI on both backends.
+- Full Rust gate: `cargo test --all --lib --tests`,
+  `cargo clippy --all-targets --all-features -- -D warnings` and
+  `cargo fmt --all -- --check`.

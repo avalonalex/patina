@@ -3,9 +3,9 @@
 > **Archived 2026-09-19.** This is the track's working record from 2026-06-20 to
 > 2026-09-18, kept whole because its entries record wrong first diagnoses
 > beside the right ones. It is history: **do not update it, and do not read its
-> numbers as current.** What is left of the track is in
-> [`PRD/TRACK_L_LEFTOVERS.md`](../TRACK_L_LEFTOVERS.md), and the work items are
-> GitHub issues, listed there. Its companion is
+> numbers as current.** Track L completed 2026-09-29; its final ledger is the
+> [archived completion record](TRACK_L_LEFTOVERS.md). Subsequent work belongs
+> in GitHub issues. This working record's companion is
 > [`TRACK_L_FIXED_DEFECTS.md`](TRACK_L_FIXED_DEFECTS.md).
 >
 > Three things in it were already stale when it was archived, so nobody
