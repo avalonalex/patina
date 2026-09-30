@@ -705,6 +705,12 @@ impl Lexer {
         }
     }
 
+    /// Seed a fresh reader before any input is tokenized.
+    pub(crate) fn set_initial_fold_case(&mut self, fold_case: bool) {
+        self.fold_case = fold_case;
+        self.prev_token_end.fold_case = fold_case;
+    }
+
     /// Read the R6RS syntax R7RS reserves or not, whatever the ambient
     /// setting says.
     ///

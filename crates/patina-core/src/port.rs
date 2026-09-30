@@ -9,7 +9,7 @@
 //! file ports, and (in the future) bytevector ports.
 
 use crate::vfs::{FileSystem, ReadPort, WritePort};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
@@ -32,6 +32,8 @@ pub struct Port {
     /// Shared behind `Rc` so cloned ports stay in sync, like `data`, and
     /// shared by every standard input port (see [`Port::stdin`]).
     pushback: Rc<RefCell<Unread>>,
+    /// Reader directives follow the input, including across cloned ports.
+    fold_case: Rc<Cell<bool>>,
 }
 
 /// Text a port has read from its source and not yet handed out.
@@ -96,6 +98,7 @@ thread_local! {
     /// standard input depends on it, because the reader running the program
     /// and the program's own reads take their text from the one stream.
     static STDIN_UNREAD: Rc<RefCell<Unread>> = Rc::new(RefCell::new(Unread::default()));
+    static STDIN_FOLD_CASE: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
     /// Raw lookahead shared by all stdin ports. Keep the consumed offset too,
     /// so reading a long buffered line byte by byte does not copy its tail.
@@ -501,6 +504,7 @@ impl Port {
             direction,
             data: Rc::new(RefCell::new(data)),
             pushback: Rc::new(RefCell::new(Unread::default())),
+            fold_case: Rc::new(Cell::new(false)),
         })
     }
 
@@ -561,7 +565,18 @@ impl Port {
             direction: PortDirection::Input,
             data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
             pushback: STDIN_UNREAD.with(Rc::clone),
+            fold_case: STDIN_FOLD_CASE.with(Rc::clone),
         })
+    }
+
+    /// Whether a preceding datum read enabled case folding on this input.
+    pub fn fold_case(&self) -> bool {
+        self.fold_case.get()
+    }
+
+    /// Save the mode at the consumed boundary, excluding unread lookahead.
+    pub fn set_fold_case(&self, fold_case: bool) {
+        self.fold_case.set(fold_case);
     }
 
     /// Create a stdout port

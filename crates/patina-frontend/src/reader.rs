@@ -86,6 +86,14 @@ impl Reader {
         }
     }
 
+    /// A fresh reader continuing a port's directive mode.
+    pub fn new_with_fold_case(r6rs: bool, fold_case: bool) -> Self {
+        let mut reader = Self::new(r6rs);
+        reader.lexer.set_initial_fold_case(fold_case);
+        reader.consumed.fold_case = fold_case;
+        reader
+    }
+
     /// A reader carrying on from `at`, a point an earlier reader of the same
     /// source stopped at: line, column and `#!fold-case` continue from there,
     /// so what a diagnostic reports is the source's own position.
@@ -215,7 +223,17 @@ impl Reader {
     ) -> Option<Result<TaggedValue, ParseError>> {
         loop {
             let Some(end) = self.datum_ends.pop_front() else {
-                return self.error.take().map(|error| Err(error.into()));
+                if let Some(error) = self.error.take() {
+                    if let Some(span) = error.span() {
+                        self.consumed = span.end;
+                    }
+                    return Some(Err(error.into()));
+                }
+                if self.ended {
+                    // A directive-only tail still changes the input's mode.
+                    self.consumed = self.lexer.state();
+                }
+                return None;
             };
             let tokens: Vec<Spanned> = self.tokens.drain(..end).collect();
             for later in &mut self.datum_ends {
@@ -618,6 +636,47 @@ mod tests {
     #[test]
     fn a_directive_holds_for_the_text_that_follows_it() {
         assert_eq!(read(&["#!fold-case\n", "HELLO\n"]), vec!["hello"]);
+    }
+
+    #[test]
+    fn directive_state_follows_consumed_data_and_reaches_the_eof_tail() {
+        let text = "A #!fold-case B #!no-fold-case C #!fold-case #;D";
+        let heap = patina_core::new_shared_heap();
+        let mut parser = Parser::new_with_heap(text, heap.clone()).unwrap();
+        let mut reader = Reader::new(false);
+        reader.feed(text);
+        // The validator's trial read must not commit the trailing directive.
+        reader.inside_datum();
+        assert!(!reader.position().fold_case);
+        reader.no_more_text();
+        for (expected, fold_case) in [("A", false), ("b", true), ("C", false)] {
+            let whole = parser.parse_next().unwrap().unwrap();
+            let fed = reader.next_datum(&heap, |p| p).unwrap().unwrap();
+            assert_eq!(format_tagged(whole, &heap.borrow()), expected);
+            assert_eq!(format_tagged(fed, &heap.borrow()), expected);
+            assert_eq!(parser.read_state().fold_case, fold_case);
+            assert_eq!(reader.position().fold_case, fold_case);
+        }
+        assert!(parser.parse_next().unwrap().is_none());
+        assert!(reader.next_datum(&heap, |p| p).is_none());
+        assert!(parser.read_state().fold_case);
+        assert!(reader.position().fold_case);
+        assert_eq!(parser.read_state().offset, text.chars().count());
+        assert_eq!(reader.position().offset, text.chars().count());
+    }
+
+    #[test]
+    fn error_locations_do_not_roll_back_consumed_directives() {
+        for text in [
+            "(#0# #!fold-case A) #!no-fold-case B",
+            "(A #!fold-case",
+            "(A #!fold-case #\\BOGUS)",
+            "(A #!fold-case \"unfinished",
+        ] {
+            let mut parser = Parser::new(text).unwrap();
+            assert!(parser.parse_next().is_err(), "{text}");
+            assert!(parser.read_state().fold_case, "{text}");
+        }
     }
 
     /// Text stopping inside a token is unfinished however balanced it is; a

@@ -40,6 +40,26 @@ fn check_input(program: &str, input: &[u8], expected: &str) {
 }
 
 #[test]
+fn stdin_reads_keep_directives_and_exclude_unread_lookahead() {
+    let program = r#"(import (scheme base) (scheme read) (scheme write))
+      (let* ((a (read)) (b (read)) (c (read)) (d (read))) (write (list a b c d)))"#;
+    for input in [
+        "#!fold-case ABC DEF #!no-fold-case GHI JKL",
+        "#!fold-case\nABC\nDEF\n#!no-fold-case\nGHI\nJKL",
+    ] {
+        check_input(program, input.as_bytes(), "(abc def GHI JKL)");
+    }
+    let program = r#"(import (scheme base) (scheme read) (scheme write))
+      (let* ((a (read)) (line (read-line)) (b (read)) (c (read))) (write (list a b c)))"#;
+    for (input, expected) in [
+        ("#!fold-case A #!no-fold-case\nB C", "(a b c)"),
+        ("A #!fold-case\nB C", "(A B C)"),
+    ] {
+        check_input(program, input.as_bytes(), expected);
+    }
+}
+
+#[test]
 fn stdin_peeks_preserve_characters_across_utf8_boundaries() {
     for ch in ['λ', '€', '𐀀'] {
         for split in 1..ch.len_utf8() {

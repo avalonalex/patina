@@ -178,6 +178,16 @@ fn erase_last_grapheme(form: &mut String) {
 }
 
 impl Lines {
+    fn begin_input(&self, fold_case: bool) {
+        match self {
+            Lines::Editing(editor) => {
+                if let Some(helper) = editor.helper() {
+                    helper.validator.begin_input(fold_case);
+                }
+            }
+            Lines::Piped(piped) => piped.validator.begin_input(fold_case),
+        }
+    }
     fn readline(&mut self, prompt: &str) -> Result<String, ReadlineError> {
         match self {
             Lines::Editing(editor) => editor.readline(prompt),
@@ -246,7 +256,8 @@ pub fn session_lines() -> rustyline::Result<Lines> {
 /// Run a generic REPL loop using a shared rustyline editor.
 ///
 /// `prompt` — the prompt string (e.g. `"patina> "` or `"patina/vm> "`).
-/// `eval`   — called with each non-empty, non-comment line; returns:
+/// `eval`   — called with each non-empty, non-comment line and the session's
+///            folding mode, which evaluation updates; returns:
 ///            - `None` to print nothing (e.g. for `#<unspecified>`)
 ///            - `Some(output)` to print a result or error
 ///
@@ -255,12 +266,14 @@ pub fn session_lines() -> rustyline::Result<Lines> {
 /// a form or the editor failed.
 pub fn run_repl_loop<F>(lines: &mut Lines, prompt: &str, mut eval: F) -> bool
 where
-    F: FnMut(&str) -> Option<String>,
+    F: FnMut(&str, &mut bool) -> Option<String>,
 {
     use std::io::Write;
 
+    let mut fold_case = false;
     let clean = loop {
         let _ = std::io::stdout().flush();
+        lines.begin_input(fold_case);
 
         match lines.readline(prompt) {
             Ok(line) => {
@@ -275,7 +288,7 @@ where
 
                 lines.remember(line);
 
-                if let Some(output) = eval(line) {
+                if let Some(output) = eval(line, &mut fold_case) {
                     println!("{}", output);
                     // An error that interrupted an `exit` still ends the
                     // session (`patina_runtime::exit_status`).
@@ -300,7 +313,7 @@ where
                 let pending = lines.take_pending_input();
                 match pending {
                     Some(pending) => {
-                        if let Some(output) = eval(&pending) {
+                        if let Some(output) = eval(&pending, &mut fold_case) {
                             eprintln!("{}", output);
                             patina_runtime::exit_status::exit_if_interrupted();
                         }
@@ -360,14 +373,14 @@ impl Repl {
         let interp = &self.interpreter;
         let counter = &mut self.expr_counter;
 
-        run_repl_loop(&mut self.lines, "patina> ", |line| {
+        run_repl_loop(&mut self.lines, "patina> ", |line, fold_case| {
             *counter += 1;
             let source_name = format!("<repl-{}>", counter);
             // Every form on the line, as the VM REPL does: reading only the
             // first left `(define a 1) (define b 2)` with `b` unbound, and
             // dropped a trailing datum the line cut short.
             let (eval_result, source_map) =
-                interp.eval_program_with_source_name(line, &source_name);
+                interp.eval_program_with_fold_case(line, &source_name, fold_case);
             match eval_result {
                 Ok(result) => {
                     if result != patina_core::TaggedValue::UNSPECIFIED {

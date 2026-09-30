@@ -1,9 +1,11 @@
 use patina_frontend::{Reader, dialect};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[derive(Default)]
 pub struct SchemeValidator {
+    /// The mode reached by evaluation of the preceding submission.
+    fold_case: Cell<bool>,
     /// The input last judged unfinished, kept until it is finished or taken.
     /// The editor throws a partly-typed form away when its input ends, so
     /// this is the only record a session has of one to report.
@@ -20,6 +22,12 @@ pub struct SchemeValidator {
 impl SchemeValidator {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn begin_input(&self, fold_case: bool) {
+        self.fold_case.set(fold_case);
+        *self.reading.borrow_mut() = None;
+        *self.pending.borrow_mut() = None;
     }
 
     /// Take the input that was still unfinished at the last line the editor
@@ -49,7 +57,10 @@ impl SchemeValidator {
             // reader of what was there carries on with what is new.
             Some((text, reader)) if input.starts_with(&text) => (text, reader),
             // Anything else is a line edited or a form abandoned: start again.
-            _ => (String::new(), Reader::new(dialect::allow_r6rs())),
+            _ => (
+                String::new(),
+                Reader::new_with_fold_case(dialect::allow_r6rs(), self.fold_case.get()),
+            ),
         };
         // Only what is new, and appended rather than copied: a line added to a
         // form should cost that line rather than the form (#341).

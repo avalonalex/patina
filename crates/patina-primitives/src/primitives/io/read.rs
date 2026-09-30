@@ -63,7 +63,7 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
     };
 
     if is_stdin {
-        return port.with_stdin_reader(|input| read_stream(input, heap));
+        return port.with_stdin_reader(|input| read_stream(input, heap, &port));
     }
 
     if is_file {
@@ -74,19 +74,26 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
         let FileHandle::Input(input) = &mut file.handle else {
             return Err(EvalError::TypeError("not an input file port".to_string()));
         };
-        return read_stream(input, heap);
+        return read_stream(input, heap, &port);
     }
 
     let remaining = remaining.unwrap();
     // Parse directly into the evaluator's heap. The parser reads its first
     // token here, so a string cut short by the undecodable bytes is met here.
-    let mut parser = match Parser::new_with_heap(&remaining, heap.clone()) {
+    let parsed = if port.fold_case() {
+        Parser::new_case_insensitive_with_heap(&remaining, heap.clone())
+    } else {
+        Parser::new_with_heap(&remaining, heap.clone())
+    };
+    let mut parser = match parsed {
         Ok(parser) => parser,
         Err(e) if undecodable_follows && ran_out_of_text(&e) => return Err(undecodable_bytes()),
         Err(e) => return Err(EvalError::InvalidSyntax(format!("read: {}", e))),
     };
 
-    match parser.parse_next() {
+    let datum = parser.parse_next();
+    port.set_fold_case(parser.read_state().fold_case);
+    match datum {
         Ok(Some(tv)) => {
             // Advance the port past exactly what the parser consumed
             let consumed_bytes: usize = remaining
@@ -140,8 +147,10 @@ pub(super) fn read(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValu
 fn read_stream<R: BufRead>(
     input: &mut WholeCharReader<R>,
     heap: &SharedHeap,
+    port: &patina_core::Port,
 ) -> Result<TaggedValue, EvalError> {
-    let mut reader = Reader::new(patina_frontend::dialect::allow_r6rs());
+    let mut reader =
+        Reader::new_with_fold_case(patina_frontend::dialect::allow_r6rs(), port.fold_case());
     let mut consumed_chars = 0;
     let mut bytes = Vec::new();
     loop {
@@ -157,6 +166,7 @@ fn read_stream<R: BufRead>(
             reader.no_more_text();
         }
         if let Some(datum) = reader.next_datum(heap, |parser| parser) {
+            port.set_fold_case(reader.position().fold_case);
             let value = match datum {
                 Ok(value) => value,
                 Err(e) if undecodable && ran_out_of_text(&e) => return Err(undecodable_bytes()),
@@ -177,6 +187,7 @@ fn read_stream<R: BufRead>(
             return Err(undecodable_bytes());
         }
         if bytes.is_empty() {
+            port.set_fold_case(reader.position().fold_case);
             return Ok(TaggedValue::EOF);
         }
         consumed_chars += text.chars().count();
