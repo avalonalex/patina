@@ -228,6 +228,35 @@ impl<B: Backend> Interpreter<B> {
         Interpreter { backend }
     }
 
+    /// Set the program name and arguments returned by Scheme's `(command-line)`.
+    ///
+    /// The default is `("patina")`; host process options are never inherited.
+    /// This setting belongs to this interpreter's heap and reaches library
+    /// bodies, `eval`, and `load` as well as top-level evaluation. Configure it
+    /// before evaluating the program. Each call to `(command-line)` returns
+    /// fresh Scheme strings and a fresh list.
+    ///
+    /// ```
+    /// use patina_interpreter::TreeWalkInterpreter;
+    /// let interp = TreeWalkInterpreter::new_tree_walker();
+    /// interp.set_command_line("embedded.scm", ["hello".to_owned()]);
+    /// ```
+    pub fn set_command_line(
+        &self,
+        program_name: impl Into<String>,
+        arguments: impl IntoIterator<Item = String>,
+    ) {
+        // User-provided conversions/iterators can call back into the interpreter.
+        // Consume them before borrowing its heap.
+        let program_name = program_name.into();
+        let arguments = arguments.into_iter().collect();
+        self.backend
+            .global_env()
+            .heap()
+            .borrow_mut()
+            .set_command_line(program_name, arguments);
+    }
+
     /// Evaluate a string containing one Scheme expression.
     ///
     /// Uses the backend's evaluation strategy. Text after that expression is

@@ -18,6 +18,8 @@ use std::rc::Rc;
 struct CliOptions {
     diagnostics_file: Option<String>,
     filename: Option<String>,
+    /// Everything after FILE belongs to the Scheme program, including flags.
+    script_args: Vec<String>,
     use_tree_walker: bool,
     /// `-i`: take the interactive session even though standard input is not
     /// a terminal.
@@ -40,6 +42,7 @@ fn parse_args(args: &[String]) -> CliOptions {
     let mut opts = CliOptions {
         diagnostics_file: None,
         filename: None,
+        script_args: Vec::new(),
         use_tree_walker: false,
         interactive: false,
         dump: false,
@@ -53,6 +56,11 @@ fn parse_args(args: &[String]) -> CliOptions {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--" => {
+                opts.filename = iter.next().cloned();
+                opts.script_args.extend(iter.cloned());
+                break;
+            }
             "--help" | "-h" => {
                 print_help();
                 process::exit(0);
@@ -91,7 +99,11 @@ fn parse_args(args: &[String]) -> CliOptions {
             "-p" => opts
                 .eval_exprs
                 .push(require_value(&mut iter, "-p", "an expression")),
-            _ if !arg.starts_with('-') => opts.filename = Some(arg.clone()),
+            _ if !arg.starts_with('-') => {
+                opts.filename = Some(arg.clone());
+                opts.script_args.extend(iter.cloned());
+                break;
+            }
             _ => {
                 eprintln!("Unknown option: {}", arg);
                 print_help();
@@ -151,7 +163,11 @@ impl LibraryPaths for patina_tree_walker::TreeWalker {
 /// it, and its first reference fails as an unbound variable, or its `import`
 /// of the base library as a cycle through itself. The loading failure is the
 /// one to report, once, before anything runs (#436).
-fn prepare_backend(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option<&str>) {
+fn prepare_backend<B: Backend + LibraryPaths>(
+    backend: &B,
+    opts: &CliOptions,
+    script: Option<&str>,
+) {
     if let Some(e) = backend.bootstrap_error() {
         patina_runtime::diagnostic::emit(e.diagnostic());
         eprintln!(
@@ -159,6 +175,13 @@ fn prepare_backend(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option
              Set PATINA_LIBRARY_PATH to the directory holding scheme/base.sld."
         );
         process::exit(1);
+    }
+    if let Some(filename) = script {
+        backend
+            .global_env()
+            .heap()
+            .borrow_mut()
+            .set_command_line(filename.to_owned(), opts.script_args.clone());
     }
     // Prepend in reverse so the first -I listed is searched first.
     for dir in opts.prepend_paths.iter().rev() {
@@ -451,7 +474,7 @@ fn script_dir(filename: &str) -> Option<std::path::PathBuf> {
 }
 
 fn print_help() {
-    eprintln!("Usage: patina [OPTIONS] [FILE]");
+    eprintln!("Usage: patina [OPTIONS] [--] [FILE [ARGUMENTS...]]");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --help, -h     Show this help message");
@@ -475,6 +498,7 @@ fn print_help() {
     );
     eprintln!("  -p <expr>      Evaluate an expression, print its result, and exit");
     eprintln!("                 (repeatable; evaluated in order)");
+    eprintln!("  --             End options; the next token is FILE, even if it starts with -");
     eprintln!();
     eprintln!("Environment:");
     eprintln!("  PATINA_LIBRARY_PATH  Colon-separated library directories, searched");
@@ -484,6 +508,9 @@ fn print_help() {
     eprintln!();
     eprintln!("If FILE is provided, run it as a script. A program that reports an error");
     eprintln!("exits non-zero, with or without -k, even if it later calls (exit 0).");
+    eprintln!("Put interpreter options before FILE. Every later token is a script argument.");
+    eprintln!("(command-line) returns FILE followed by ARGUMENTS, without interpreter flags.");
+    eprintln!("Without FILE, (command-line) is (\"patina\").");
     eprintln!("Otherwise, read a program from standard input, or start an");
     eprintln!("interactive REPL when standard input is a terminal or -i is given.");
     eprintln!("A program read from standard input runs each form as soon as the line");

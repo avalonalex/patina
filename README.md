@@ -133,6 +133,10 @@ cargo build --release
 # Run a Scheme script (uses VM backend by default)
 ./target/release/patina script.scm
 
+# Pass arguments to the script; interpreter options must precede its filename
+./target/release/patina --tree-walker script.scm hello "two words" --verbose
+./target/release/patina -- -script.scm hello
+
 # A program on standard input is a program, not a session: it is diagnosed
 # and the exit status says whether it ran. Each form runs as soon as the
 # line that ends it arrives, so a producer that waits on its output keeps
@@ -181,6 +185,20 @@ yes
 
 The default environment provides `(scheme base)`. Import `(scheme read)` for
 `read`, and `(scheme write)` for `write` and `display`, including in the REPL.
+
+Import `(scheme process-context)` to read `(command-line)`. In a script it
+returns the filename exactly as supplied, followed by all script arguments;
+for example, `patina script.scm hello --verbose` supplies
+`("script.scm" "hello" "--verbose")`. Every token after the filename is a
+script argument, even if it names a Patina option. Use `--` before the filename
+when the filename starts with `-`. Without a script (`-p`, stdin, or the REPL),
+the list is `("patina")`.
+
+Embedded interpreters also default to `("patina")`, without inheriting host
+process flags. Set a program name and arguments with
+`interp.set_command_line("embedded.scm", ["hello".to_owned()])` on
+`Interpreter<B>` before evaluation. The setting is independent for each
+interpreter and is shared with its libraries, `eval`, and `load`.
 
 The `examples/` directory contains complete programs in portable R7RS-small
 Scheme — a sudoku solver (reads puzzles in the [Project Euler problem 96](https://projecteuler.net/problem=96)

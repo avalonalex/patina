@@ -1,5 +1,4 @@
-//! End-to-end tests for the `patina` binary's library-path CLI surface
-//! (Track L, L0.5): `-A`, `-I`, `-p`, `--version`, and PATINA_LIBRARY_PATH.
+//! End-to-end tests for script arguments, options, and library search paths.
 
 mod common;
 
@@ -9,6 +8,98 @@ use common::{
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+
+const PRINT_COMMAND_LINE: &str = "(import (scheme base) (scheme write) (scheme process-context))
+                                 (write (command-line)) (newline)";
+
+/// The filename ends interpreter option parsing, including for options the
+/// interpreter itself recognizes. Chibi and Gauche preserve this same list.
+#[test]
+fn script_arguments_are_preserved_and_are_not_interpreter_options() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("args.scm"), PRINT_COMMAND_LINE).unwrap();
+    run_both_backends(
+        dir.path(),
+        &[
+            "--isolated-libraries",
+            "-A",
+            ".",
+            "args.scm",
+            "hello",
+            "",
+            "two words",
+            "λ",
+            "\"quoted\"",
+            "back\\slash",
+            "--help",
+            "--version",
+            "--tree-walker",
+            "--allow-r6rs",
+            "--isolated-libraries",
+            "--trace",
+            "--dump",
+            "-i",
+            "-k",
+            "-I",
+            "-A",
+            "-p",
+            "(exit 99)",
+            "--diagnostics-file",
+            "must-not-exist",
+            "--",
+        ],
+        r#"("args.scm" "hello" "" "two words" "λ" "\"quoted\"" "back\\slash" "--help" "--version" "--tree-walker" "--allow-r6rs" "--isolated-libraries" "--trace" "--dump" "-i" "-k" "-I" "-A" "-p" "(exit 99)" "--diagnostics-file" "must-not-exist" "--")"#,
+    );
+    assert!(!dir.path().join("must-not-exist").exists());
+}
+
+#[test]
+fn separator_allows_a_script_filename_starting_with_a_dash() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("-args.scm"), PRINT_COMMAND_LINE).unwrap();
+    run_both_backends(
+        dir.path(),
+        &["--", "-args.scm", "--", "-p", "hello"],
+        r#"("-args.scm" "--" "-p" "hello")"#,
+    );
+}
+
+#[test]
+fn script_without_arguments_sees_only_its_filename() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("args.scm"), PRINT_COMMAND_LINE).unwrap();
+    run_both_backends(dir.path(), &["args.scm"], r#"("args.scm")"#);
+    // Trace and keep-going are interpreter options only before the filename.
+    run_both_backends(dir.path(), &["-k", "args.scm"], r#"("args.scm")"#);
+    let (stdout, stderr, ok) = run_patina(dir.path(), &["--trace", "args.scm"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout.trim(), r#"("args.scm")"#);
+}
+
+#[test]
+fn modes_without_a_script_do_not_expose_interpreter_options() {
+    let dir = TempDir::new().unwrap();
+    run_both_backends(
+        dir.path(),
+        &[
+            "-p",
+            "(import (scheme process-context)) (command-line)",
+            "--",
+        ],
+        r#"("patina")"#,
+    );
+    for backend in common::BOTH_BACKENDS {
+        for mode in ["--", "-i"] {
+            let mut args = backend.to_vec();
+            args.push(mode);
+            let (stdout, stderr, ok) =
+                common::run_with_deadline(dir.path(), &args, Some(PRINT_COMMAND_LINE));
+            assert!(ok, "{args:?}: {stderr}");
+            // The interactive lane also prints its banner and prompts.
+            assert!(stdout.contains(r#"("patina")"#), "{args:?}: {stdout}");
+        }
+    }
+}
 
 /// Write a `(dup)` library exporting `v` bound to the given symbol.
 fn write_dup_lib(dir: &Path, value: &str) {
@@ -154,9 +245,11 @@ fn patina_library_path_env_resolves() {
 #[test]
 fn missing_flag_value_errors() {
     let temp = TempDir::new().unwrap();
-    let (_, stderr, ok) = run_patina(temp.path(), &["-A"]);
-    assert!(!ok);
-    assert!(stderr.contains("requires"), "stderr: {}", stderr);
+    for flag in ["-A", "-I", "-p", "--diagnostics-file"] {
+        expect_failure_on_both_backends(temp.path(), &[flag], |stderr| {
+            assert!(stderr.contains(&format!("{flag} requires")), "{stderr}");
+        });
+    }
 }
 
 #[test]
