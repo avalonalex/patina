@@ -2,6 +2,7 @@
 //! The manifest and drivers live beside the corpus, never inside vendor/.
 
 use crate::corpus::Package;
+use crate::evidence;
 use crate::run::Status;
 use crate::sexp;
 use patina_core::SharedHeap;
@@ -106,25 +107,47 @@ pub fn completion(stdout: &str, expected: usize) -> Status {
         .lines()
         .filter(|line| line.starts_with("(patina-compat-smoke"));
     let Some(line) = tallies.next() else {
-        return Status::RuntimeError;
+        return Status::RuntimeError(evidence::bounded(&format!(
+            "Missing smoke completion tally; expected {expected} assertions"
+        )));
     };
-    if tallies.next().is_some() || expected == 0 {
-        return Status::RuntimeError;
+    if let Some(duplicate) = tallies.next() {
+        return Status::RuntimeError(evidence::bounded(&format!(
+            "Duplicate smoke completion tallies; expected exactly one\n{line}\n{duplicate}"
+        )));
+    }
+    if expected == 0 {
+        return Status::RuntimeError(evidence::bounded(
+            "Expected smoke assertion count must be positive",
+        ));
     }
     let Some(body) = line
         .strip_prefix("(patina-compat-smoke ")
         .and_then(|s| s.strip_suffix(')'))
     else {
-        return Status::RuntimeError;
+        return Status::RuntimeError(evidence::bounded(&format!(
+            "Malformed smoke completion tally: {line}"
+        )));
     };
     let counts: Vec<_> = body.split_whitespace().map(str::parse::<usize>).collect();
     let [Ok(passed), Ok(failed)] = counts.as_slice() else {
-        return Status::RuntimeError;
+        return Status::RuntimeError(evidence::bounded(&format!(
+            "Invalid smoke completion counts: {line}"
+        )));
     };
     if passed.checked_add(*failed) != Some(expected) {
-        Status::RuntimeError
+        Status::RuntimeError(evidence::bounded(&format!(
+            "Smoke assertion count mismatch: expected {expected}, got {passed} passed and {failed} failed"
+        )))
     } else if *failed > 0 {
-        Status::WrongResult
+        let mut details = evidence::Evidence::default();
+        details.push(&format!(
+            "Smoke tally: {passed} passed, {failed} failed, {expected} expected"
+        ));
+        for line in crate::run::smoke_failure_evidence(stdout) {
+            details.push(&line);
+        }
+        Status::WrongResult(details.finish())
     } else {
         Status::Pass
     }
@@ -137,20 +160,45 @@ mod tests {
     #[test]
     fn completion_rejects_empty_truncated_duplicate_and_failed_runs() {
         assert_eq!(completion("(patina-compat-smoke 3 0)\n", 3), Status::Pass);
-        assert_eq!(
-            completion("FAIL: example\n(patina-compat-smoke 2 1)\n", 3),
-            Status::WrongResult
+        let Status::WrongResult(lines) =
+            completion("FAIL: example\n(patina-compat-smoke 2 1)\n", 3)
+        else {
+            panic!("failed smoke was not a wrong result");
+        };
+        assert!(lines.iter().any(|line| line == "FAIL: example"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "Smoke tally: 2 passed, 1 failed, 3 expected")
         );
-        for stdout in [
-            "",
-            "(patina-compat-smoke 0 0)\n",
-            "(patina-compat-smoke 2 0)\n",
-            "(patina-compat-smoke 3 0)\n(patina-compat-smoke 3 0)\n",
-            "(patina-compat-smoke 3",
-            "(patina-compat-smoke nope 0)",
-            "(patina-compat-smoke 3 0 extra)",
+        for (stdout, reason) in [
+            ("", "Missing smoke completion tally"),
+            (
+                "(patina-compat-smoke 0 0)\n",
+                "Smoke assertion count mismatch",
+            ),
+            (
+                "(patina-compat-smoke 2 0)\n",
+                "Smoke assertion count mismatch",
+            ),
+            (
+                "(patina-compat-smoke 3 0)\n(patina-compat-smoke 3 0)\n",
+                "Duplicate smoke completion tallies",
+            ),
+            ("(patina-compat-smoke 3", "Malformed smoke completion tally"),
+            (
+                "(patina-compat-smoke nope 0)",
+                "Invalid smoke completion counts",
+            ),
+            (
+                "(patina-compat-smoke 3 0 extra)",
+                "Invalid smoke completion counts",
+            ),
         ] {
-            assert_eq!(completion(stdout, 3), Status::RuntimeError, "{stdout}");
+            let Status::RuntimeError(lines) = completion(stdout, 3) else {
+                panic!("{stdout}");
+            };
+            assert!(lines[0].starts_with(reason), "{lines:?}");
         }
     }
 

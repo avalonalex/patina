@@ -11,6 +11,7 @@
 //!     cargo run -p patina-compat --release -- check-smoke
 
 mod corpus;
+mod evidence;
 mod exclusions;
 mod report;
 mod run;

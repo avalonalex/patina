@@ -12,6 +12,7 @@
 //!   it and the exit status says so.
 
 use crate::corpus::{self, Package};
+use crate::evidence::{self, Evidence};
 use patina_runtime::{Diagnostic, DiagnosticKind as Kind};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,9 +38,9 @@ pub enum Status {
     /// Libraries resolve but an identifier does not.
     UnboundIdentifier(Vec<String>),
     /// Loaded and ran, but its own test suite reports failures.
-    WrongResult,
+    WrongResult(Vec<String>),
     /// Errored at runtime in some other way.
-    RuntimeError,
+    RuntimeError(Vec<String>),
     /// Did not finish within the per-package budget.
     Timeout,
     /// The package needs a foreign-function interface, proved three ways:
@@ -78,8 +79,8 @@ impl Status {
             Status::ParseError(_) => "parse-error",
             Status::LoadError(_) => "load-error",
             Status::UnboundIdentifier(_) => "unbound-identifier",
-            Status::WrongResult => "wrong-result",
-            Status::RuntimeError => "runtime-error",
+            Status::WrongResult(_) => "wrong-result",
+            Status::RuntimeError(_) => "runtime-error",
             Status::Timeout => "timeout",
             Status::OutOfScope(_) => "out-of-scope",
         }
@@ -258,13 +259,19 @@ fn run_package(
                 package.slug
             );
         }
+        if mode == "test" && !out.timed_out && test_suite_failed(&out.stdout) {
+            out.test_details =
+                evidence::test_output(&out.stdout, Some(&scratch), test_suite_failed);
+        }
         out
     });
     let _ = std::fs::remove_dir_all(&scratch);
-    let status = match outcome {
+    let mut status = match outcome {
         Err(e) => {
             eprintln!("warning: {}: spawn failed: {}", package.slug, e);
-            Status::RuntimeError
+            Status::RuntimeError(evidence::bounded(&format!(
+                "Could not run child process: {e}"
+            )))
         }
         Ok(out) => {
             if mode == "smoke" {
@@ -282,6 +289,12 @@ fn run_package(
             }
         }
     };
+
+    if let Status::WrongResult(lines) | Status::RuntimeError(lines) = &mut status {
+        for line in lines {
+            *line = line.replace(scratch.to_string_lossy().as_ref(), "<scratch>");
+        }
+    }
 
     PackageResult {
         slug: package.slug.clone(),
@@ -621,6 +634,8 @@ struct Captured {
     diagnostics: Result<Vec<Diagnostic>, String>,
     stdout: String,
     stderr: String,
+    test_details: Vec<String>,
+    exit_status: Option<String>,
     exit_ok: bool,
     timed_out: bool,
 }
@@ -645,13 +660,13 @@ fn spawn_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Captured, S
     });
 
     let deadline = Instant::now() + timeout;
-    let (exit_ok, timed_out) = loop {
+    let (exit_ok, timed_out, exit_status) = loop {
         match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break (status.success(), false),
+            Some(status) => break (status.success(), false, Some(status.to_string())),
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break (false, true);
+                break (false, true, None);
             }
             None => std::thread::sleep(Duration::from_millis(25)),
         }
@@ -663,6 +678,8 @@ fn spawn_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Captured, S
         diagnostics: Err("diagnostic stream not read".into()),
         stdout,
         stderr,
+        test_details: Vec::new(),
+        exit_status,
         exit_ok,
         timed_out,
     })
@@ -683,7 +700,7 @@ fn classify(out: &Captured, mode: &str) -> Status {
     }
 
     let Ok(diagnostics) = &out.diagnostics else {
-        return Status::RuntimeError;
+        return Status::RuntimeError(runtime_evidence(out));
     };
     let payloads = |kind, payload: fn(&Diagnostic) -> Option<String>| {
         let mut values: Vec<_> = diagnostics
@@ -758,7 +775,11 @@ fn classify(out: &Captured, mode: &str) -> Status {
     // them creates false confidence, which is the thing this harness exists
     // not to produce (audit E3).
     if mode == "test" && test_suite_failed(&out.stdout) {
-        return Status::WrongResult;
+        return Status::WrongResult(if out.test_details.is_empty() {
+            evidence::test_output(&out.stdout, None, test_suite_failed)
+        } else {
+            out.test_details.clone()
+        });
     }
 
     // A supplied library can be honest about its own limits. `(chibi filesystem)`
@@ -776,10 +797,51 @@ fn classify(out: &Captured, mode: &str) -> Status {
     // not rest on one signal: a suite that reached its own `(test-exit)` is
     // judged by what it printed as well as by how it ended.
     if !diagnostics.is_empty() || !out.exit_ok {
-        return Status::RuntimeError;
+        return Status::RuntimeError(runtime_evidence(out));
     }
 
     Status::Pass
+}
+
+fn runtime_evidence(out: &Captured) -> Vec<String> {
+    let mut details = Evidence::default();
+    match &out.diagnostics {
+        Err(error) => details.push(&format!("Diagnostic stream error: {error}")),
+        Ok(diagnostics) => {
+            for diagnostic in diagnostics {
+                details.push(&diagnostic.message);
+                if let Some(path) = &diagnostic.path {
+                    details.push(&format!("path: {path}"));
+                }
+            }
+        }
+    }
+    if !out.exit_ok {
+        details.push(
+            out.exit_status
+                .as_deref()
+                .unwrap_or("Child process exited unsuccessfully"),
+        );
+    }
+    // Typed diagnostics take precedence over prose. Stderr (or stdout if
+    // stderr is empty) is still useful for a crash or an explicit exit.
+    if !out.diagnostics.as_ref().is_ok_and(|ds| !ds.is_empty()) {
+        details.push(if out.stderr.trim().is_empty() {
+            &out.stdout
+        } else {
+            &out.stderr
+        });
+    }
+    let lines = details.finish();
+    if lines.is_empty() {
+        evidence::bounded("Runtime diagnostic contained no message")
+    } else {
+        lines
+    }
+}
+
+pub(crate) fn smoke_failure_evidence(stdout: &str) -> Vec<String> {
+    evidence::test_output(stdout, None, test_suite_failed)
 }
 
 /// Every distinct, non-empty name `read_name` recovers from the text after
@@ -1186,8 +1248,128 @@ mod tests {
             diagnostics: Ok(Vec::new()),
             stdout: stdout.to_string(),
             stderr: stderr.to_string(),
+            test_details: Vec::new(),
+            exit_status: None,
             exit_ok,
             timed_out: false,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn suite_log_is_read_before_scratch_is_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let patina = temp.path().join("patina");
+        std::fs::write(
+            &patina,
+            r#"#!/bin/sh
+previous=
+for arg do
+    if [ "$previous" = --diagnostics-file ]; then
+        printf '%s\n' '{"protocol":"patina-diagnostics","version":1}' > "$arg"
+    fi
+    previous=$arg
+    program=$arg
+done
+pwd > "$program.scratch"
+cat > suite.log <<'LOG'
+Test begin:
+  test-name: logged failure
+  source-form: (+ 1 1)
+Test end:
+  result-kind: fail
+  actual-value: 2
+  expected-value: 3
+LOG
+printf '%s\n' '%%%% Starting test suite (Writing full log to "suite.log")' '# of failures      1'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&patina, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut package = package("failure-evidence", temp.path());
+        package.test_script = Some(temp.path().join("test.scm"));
+        let config = RunConfig {
+            patina,
+            tree_walker: false,
+            timeout: Duration::from_secs(10),
+            jobs: 1,
+            supplied_lib_root: temp.path().to_path_buf(),
+        };
+        let result = run_package(&package, &[], &BTreeMap::new(), &config);
+        let Status::WrongResult(lines) = result.status else {
+            panic!("{result:?}");
+        };
+        for expected in [
+            "test-name: logged failure",
+            "source-form: (+ 1 1)",
+            "actual-value: 2",
+            "expected-value: 3",
+        ] {
+            assert!(lines.iter().any(|line| line == expected), "{lines:?}");
+        }
+        let scratch = std::fs::read_to_string(temp.path().join("test.scm.scratch")).unwrap();
+        assert!(!Path::new(scratch.trim()).exists());
+    }
+
+    #[test]
+    fn runtime_evidence_prefers_diagnostics_and_explains_protocol_and_exit_failures() {
+        let mut out = captured("unrelated output", "duplicate prose", false);
+        out.exit_status = Some("exit status: 7".into());
+        out.diagnostics = Ok(vec![Diagnostic::new(Kind::Runtime, "division by zero: λ")]);
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::RuntimeError(vec!["division by zero: λ".into(), "exit status: 7".into()])
+        );
+        out.diagnostics = Err("unsupported version".into());
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::RuntimeError(vec![
+                "Diagnostic stream error: unsupported version".into(),
+                "exit status: 7".into(),
+                "duplicate prose".into()
+            ])
+        );
+        out.diagnostics = Ok(vec![]);
+        out.stderr.clear();
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::RuntimeError(vec!["exit status: 7".into(), "unrelated output".into()])
+        );
+        out.diagnostics = Ok(vec![
+            Diagnostic::new(Kind::Io, "No such file or directory").at_path("missing test.scm"),
+        ]);
+        assert_eq!(
+            classify(&out, "probe"),
+            Status::RuntimeError(vec![
+                "No such file or directory".into(),
+                "path: missing test.scm".into(),
+                "exit status: 7".into(),
+            ])
+        );
+    }
+
+    #[test]
+    fn suite_evidence_retains_tallies_and_context_without_durations() {
+        for (stdout, expected) in [
+            (
+                "\u{1b}[31mFAIL: add\u{1b}[0m\n  expected 3 but got 2\n  on line 4: (+ 1 1)\n52 out of 53 tests passed in 0.123 seconds.\n1 failure (1.9%).\n",
+                "expected 3 but got 2",
+            ),
+            (
+                "(+ 1 1) => 2\n; *** failed ***\n; expected result: 3\n; *** checks *** : 2 correct, 1 failed.\n",
+                "expected result: 3",
+            ),
+        ] {
+            let Status::WrongResult(lines) = classify(&captured(stdout, "", true), "test") else {
+                panic!("{stdout}");
+            };
+            let text = lines.join("\n");
+            assert!(text.contains(expected), "{text}");
+            assert!(
+                !text.contains("0.123") && !text.contains('\u{1b}'),
+                "{text}"
+            );
         }
     }
 
@@ -1198,24 +1380,27 @@ mod tests {
             classify_smoke(&captured(complete, "", true), 3),
             Status::Pass
         );
-        assert_eq!(
+        assert!(matches!(
             classify_smoke(&captured(complete, "", false), 3),
-            Status::RuntimeError
-        );
+            Status::RuntimeError(_)
+        ));
         let mut late_error = captured(complete, "wording changed", true);
         late_error.diagnostics = Ok(vec![Diagnostic::new(Kind::Runtime, "late failure")]);
-        assert_eq!(classify_smoke(&late_error, 3), Status::RuntimeError);
+        assert!(matches!(
+            classify_smoke(&late_error, 3),
+            Status::RuntimeError(_)
+        ));
         let mut timeout = captured(complete, "", true);
         timeout.timed_out = true;
         assert_eq!(classify_smoke(&timeout, 3), Status::Timeout);
-        assert_eq!(
+        assert!(matches!(
             classify_smoke(&captured("", "", true), 3),
-            Status::RuntimeError
-        );
-        assert_eq!(
+            Status::RuntimeError(_)
+        ));
+        assert!(matches!(
             classify_smoke(&captured("(patina-compat-smoke 2 1)\n", "", true), 3),
-            Status::WrongResult
-        );
+            Status::WrongResult(_)
+        ));
     }
 
     fn diagnosed(diagnostics: Vec<Diagnostic>) -> Captured {
@@ -1324,7 +1509,7 @@ mod tests {
     fn invalid_diagnostic_stream_cannot_pass_or_excuse_a_package() {
         let mut out = captured("", "requires FFI, unavailable in Patina: open", true);
         out.diagnostics = Err("unsupported version".into());
-        assert_eq!(classify(&out, "probe"), Status::RuntimeError);
+        assert!(matches!(classify(&out, "probe"), Status::RuntimeError(_)));
     }
 
     #[test]
@@ -1348,7 +1533,7 @@ mod tests {
     #[test]
     fn classifies_test_failures_despite_exit_zero() {
         let out = captured("52 out of 53 tests passed.\n1 failure (1.9%).\n", "", true);
-        assert_eq!(classify(&out, "test"), Status::WrongResult);
+        assert!(matches!(classify(&out, "test"), Status::WrongResult(_)));
     }
 
     #[test]
@@ -1377,7 +1562,7 @@ mod tests {
             "",
             true,
         );
-        assert_eq!(classify(&out, "test"), Status::WrongResult);
+        assert!(matches!(classify(&out, "test"), Status::WrongResult(_)));
     }
 
     /// The near-miss on either side of it. `# of expected failures` is an
@@ -1397,7 +1582,7 @@ mod tests {
             "",
             true,
         );
-        assert_eq!(classify(&xpass, "test"), Status::WrongResult);
+        assert!(matches!(classify(&xpass, "test"), Status::WrongResult(_)));
     }
 
     /// srfi-175's bespoke `want` macro: `Failed: wanted ...` per case, no
@@ -1410,7 +1595,7 @@ mod tests {
             "",
             true,
         );
-        assert_eq!(classify(&failing, "test"), Status::WrongResult);
+        assert!(matches!(classify(&failing, "test"), Status::WrongResult(_)));
 
         // Success prints nothing at all, which must still pass.
         let passing = captured("", "", true);
@@ -1422,7 +1607,7 @@ mod tests {
     #[test]
     fn classifies_srfi_78_failures() {
         let failing = captured("; *** checks *** : 9 correct, 1 failed.\n", "", true);
-        assert_eq!(classify(&failing, "test"), Status::WrongResult);
+        assert!(matches!(classify(&failing, "test"), Status::WrongResult(_)));
 
         let passing = captured("; *** checks *** : 10 correct, 0 failed.\n", "", true);
         assert_eq!(classify(&passing, "test"), Status::Pass);
@@ -1437,7 +1622,7 @@ mod tests {
             "Error: requires FFI, unavailable in Patina: file-owner",
             true,
         );
-        assert_eq!(classify(&out, "test"), Status::WrongResult);
+        assert!(matches!(classify(&out, "test"), Status::WrongResult(_)));
 
         // With no failure, the stub still classifies as out-of-scope.
         let stubbed = captured(
@@ -1451,7 +1636,7 @@ mod tests {
     #[test]
     fn strict_probe_failure_is_runtime_error() {
         let out = captured("", "Error: something else entirely", false);
-        assert_eq!(classify(&out, "probe"), Status::RuntimeError);
+        assert!(matches!(classify(&out, "probe"), Status::RuntimeError(_)));
     }
 
     #[test]
@@ -1460,6 +1645,8 @@ mod tests {
             diagnostics: Ok(Vec::new()),
             stdout: String::new(),
             stderr: "Error: Library (foo) not found".to_string(),
+            test_details: Vec::new(),
+            exit_status: None,
             exit_ok: false,
             timed_out: true,
         };
