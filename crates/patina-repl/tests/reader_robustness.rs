@@ -190,3 +190,49 @@ fn check_deep_input(temp: &TempDir, source: &str, expected: &str, case: &str) {
         assert_eq!(stdout.trim(), expected, "{case} {backend:?}: {stderr}");
     }
 }
+
+#[test]
+fn million_character_strings_with_escapes_survive_all_reader_routes() {
+    let temp = TempDir::new().unwrap();
+    let imports = "(import (scheme base) (scheme read) (scheme write) (scheme file))\n";
+    // Four decoded characters per piece: Unicode, a hex escape, an escaped
+    // backslash and a literal newline. Stdin feeds this token over many lines.
+    let body = "λ\\x41;\\\\\n".repeat(250_000);
+    let datum = format!("\"{body}\"");
+    fs::write(temp.path().join("datum.dat"), &datum).unwrap();
+    let inspect = "(write (list (string-length x)\n\
+        (char=? (string-ref x 0) #\\λ)\n\
+        (char=? (string-ref x 1) #\\A)\n\
+        (char=? (string-ref x 999998) #\\\\)\n\
+        (char=? (string-ref x 999999) #\\newline)))";
+    let expected = "(1000000 #t #t #t #t)";
+    check_deep_input(
+        &temp,
+        &format!("{imports}(define x (call-with-input-file \"datum.dat\" read)) {inspect}"),
+        expected,
+        "long string/file port",
+    );
+    let source = format!("{imports}(define x {datum}) {inspect}");
+    check_deep_input(&temp, &source, expected, "long string/program");
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("--isolated-libraries");
+        let (stdout, stderr, status) = run_with_deadline_status(temp.path(), &args, Some(&source));
+        assert!(
+            status.success(),
+            "long string/stdin {backend:?}: {status}\n{stderr}"
+        );
+        assert_eq!(stdout.trim(), expected, "{stderr}");
+    }
+
+    fs::write(temp.path().join("datum.dat"), format!("\"{body}\\x")).unwrap();
+    check_deep_input(
+        &temp,
+        &format!(
+            "{imports}(guard (e ((read-error? e) (display \"read-error\"))) \
+            (call-with-input-file \"datum.dat\" read))"
+        ),
+        "read-error",
+        "unterminated long string",
+    );
+}
