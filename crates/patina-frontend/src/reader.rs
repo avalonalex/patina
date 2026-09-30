@@ -417,6 +417,11 @@ mod tests {
             "(a)\n  #fasle ",
             "(a)\n  #false-x ",
             "(a)\n  (#t#f)",
+            "(a)\n  #!fold_case ABC",
+            "(a)\n  #!no-fold-caseABC DEF",
+            "(a)\n  #!unknown",
+            "(a)\n  #!",
+            "#!fold-case (A)\n  #!Fold_Case B",
             "(a)\n  #\\bogus ",
             "(a)\n; comment\n  #\\bogus ",
             "(λ)\n  \"β\\q\" ",
@@ -547,7 +552,7 @@ mod tests {
             // #356: directive scanning loops, including when the next feed
             // continues a directive name or a shebang rather than a token.
             "#!fold-case #!no-fold-case ABC #!fold-case DEF",
-            "#!fold-case #!unknown #!no-fold-caseABC DEF",
+            "#!fold-case #!r6rs #!r7rs #!no-fold-case DEF",
             "#!/usr/bin/env patina\n#!fold-case ABC",
             "#! /a shebang with spaces\n#!no-fold-case ABC",
             "#!fold-case #|block|# '\"text\" ABC",
@@ -656,6 +661,26 @@ mod tests {
     #[test]
     fn a_directive_holds_for_the_text_that_follows_it() {
         assert_eq!(read(&["#!fold-case\n", "HELLO\n"]), vec!["hello"]);
+    }
+
+    #[test]
+    fn unknown_directives_do_not_hide_earlier_data_or_wait_past_a_delimiter() {
+        assert_eq!(read(&["(a) #!fold_", "case "]), vec!["(a)", "error"]);
+        assert_eq!(read(&["#!fold-case #!r", "7rs ABC "]), vec!["abc"]);
+        assert_eq!(read(&["#!no-fold-case", "ABC "]), vec!["error"]);
+    }
+
+    #[test]
+    fn shebangs_keep_their_existing_comment_behavior() {
+        for text in [
+            "#!/usr/bin/env patina\n42 ",
+            "#! /usr/bin/env patina\r42 ",
+            "\u{feff}#!/usr/bin/env patina\r\n42 ",
+            " \n#!/usr/bin/env patina\n42 ",
+        ] {
+            assert_eq!(read(&[text]), vec!["42"]);
+        }
+        assert_eq!(read(&["1 #! /usr/bin/env patina\n42 "]), vec!["1", "42"]);
     }
 
     #[test]

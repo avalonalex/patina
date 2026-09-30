@@ -34,6 +34,12 @@
 //! reopen the objection above, because such a file is opting in about itself
 //! and the switch remains the escape hatch for one that does not.
 //!
+//! `#!r6rs` and `#!r7rs` are accepted compatibility markers, without changing
+//! the dialect or case-folding mode. The reader also recognizes `#!fold-case`
+//! and `#!no-fold-case`; unknown directive names are errors (#365). Shebangs
+//! (`#!` followed by `/` or a space) retain their line-comment behavior,
+//! including when they appear after the start of the input.
+//!
 //! The bundled R6RS libraries under `lib/r6rs/` need none of this: they are
 //! Clinger's R7RS ports, written in plain `define-library` with no bracket,
 //! `#vu8(` or version reference anywhere, so they load under the strict

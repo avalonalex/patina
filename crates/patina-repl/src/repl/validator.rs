@@ -206,6 +206,8 @@ mod tests {
             ")",
             "(1 . 2 3)",
             "#u8(300)",
+            "#!fold_case",
+            "(#!fold_case ABC",
             // Square brackets are R6RS, off by default: holding the line open
             // would wait for a `]` the reader would refuse anyway.
             "[vector 1",
