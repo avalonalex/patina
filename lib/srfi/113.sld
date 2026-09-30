@@ -3,6 +3,14 @@
 ;; Reference implementation from https://srfi.schemers.org/srfi-113/
 ;; Original author: John Cowan
 ;; License: MIT (see README.md in this directory)
+;;
+;; Local deviations in sets-impl.scm (#326): one-argument functional union,
+;; intersection, difference and bag-sum copy their input; zero bag products
+;; remove all entries. Product multipliers must be exact nonnegative integers,
+;; checked before mutation. SRFI 113 specifies multiplying counts but leaves
+;; invalid-argument diagnostics open; rejection is a deliberate Patina policy.
+;; Regression and oracle evidence: crates/patina-tests/tests/scheme/srfi/sets.scm
+;; and crates/patina-tests/tests/scheme/DIVERGENCES.tsv.
 
 (define-library (srfi 113)
   (import (scheme base)

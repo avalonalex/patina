@@ -148,7 +148,7 @@ const SUITE: &[(&str, i64)] = &[
     ("srfi/regex-graphemes.scm", 6),
     ("srfi/fixnums.scm", 54),
     ("srfi/homogeneous-vectors.scm", 111),
-    ("srfi/sets.scm", 4),
+    ("srfi/sets.scm", 22),
     ("srfi/sorting.scm", 5),
     ("srfi/string-cursors.scm", 15),
     ("stdlib/comparators.scm", 5),
