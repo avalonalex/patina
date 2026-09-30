@@ -7,6 +7,26 @@ The Patina test suite has grown significantly (~1,500 tests) and follows a clear
 1. **Unit Tests** - Component-level tests inline with source code
 2. **Integration Tests** - Full-stack tests in dedicated `patina-tests` crate
 
+## CI trigger scope
+
+[`ci.yml`](../.github/workflows/ci.yml) skips the full workflow when all changed
+paths are under `PRD/`, using `paths-ignore: ['PRD/**']` on both main-branch
+pushes and the existing pull-request targets. A change outside that tree
+triggers every job as before, including changes to other documentation,
+fixtures, tests, scripts, or the workflow itself. PRD-only reviews still need
+local link/path checks and `git diff --check`.
+
+This uses [GitHub's native path filtering](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons):
+pull requests compare against the merge base; pushes compare before and after.
+Diff timeouts or pushes of more than 1,000 commits run the workflow anyway;
+filtering considers only the first 3,000 changed files, so split unusually
+large mixed changes into smaller reviews.
+
+Main has no required status checks as of 2026-09-30. Before requiring these
+checks, revisit this opt-out: [GitHub leaves required checks pending when a
+whole workflow is filtered out](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks).
+Such a policy needs a check that runs for every PR and accounts for skipped jobs.
+
 ## Test Structure
 
 ```

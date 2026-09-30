@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [ main ]
+    paths-ignore: [ 'PRD/**' ]
   pull_request:
     branches: [ main, 'codex/429-*' ]
+    paths-ignore: [ 'PRD/**' ]
+
+# Skip only changes confined to PRD/. Any path outside it still runs every
+# job below. See docs/TEST_ORGANIZATION.md, "CI trigger scope", before making
+# these checks required or broadening the filter.
 
 env:
   CARGO_TERM_COLOR: always
