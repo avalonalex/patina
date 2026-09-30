@@ -6,6 +6,109 @@ use patina_interpreter::{Interpreter, TaggedValue, TreeWalkInterpreter};
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
 
+fn command_line<B: Backend>(interp: &Interpreter<B>) -> String {
+    let value = interp
+        .eval_program("(import (scheme process-context)) (command-line)")
+        .unwrap();
+    patina_primitives::primitives::io::datum_writer::format_write_tagged(
+        value,
+        interp.backend().global_env().heap(),
+    )
+}
+
+/// Same-backend instances must be independent too: a per-backend or
+/// thread-local setting would pass a test of only one instance of each kind.
+#[test]
+fn command_line_is_instance_local_and_does_not_inherit_host_arguments() {
+    fn check<A: Backend, B: Backend>(first: &Interpreter<A>, second: &Interpreter<B>) {
+        assert_eq!(command_line(first), r#"("patina")"#);
+        assert_eq!(command_line(second), r#"("patina")"#);
+        first.set_command_line("first.scm", ["".to_owned(), "λ --flag".to_owned()]);
+        assert_eq!(command_line(first), r#"("first.scm" "" "λ --flag")"#);
+        assert_eq!(command_line(second), r#"("patina")"#);
+        second.set_command_line("second.scm", std::iter::empty());
+        assert_eq!(command_line(first), r#"("first.scm" "" "λ --flag")"#);
+        assert_eq!(command_line(second), r#"("second.scm")"#);
+        first.set_command_line("replacement.scm", std::iter::empty());
+        assert_eq!(command_line(first), r#"("replacement.scm")"#);
+    }
+    check(
+        &Interpreter::new(VmBackend::new()),
+        &Interpreter::new(VmBackend::new()),
+    );
+    check(
+        &TreeWalkInterpreter::new_tree_walker(),
+        &TreeWalkInterpreter::new_tree_walker(),
+    );
+    check(
+        &Interpreter::new(VmBackend::new()),
+        &TreeWalkInterpreter::new_tree_walker(),
+    );
+}
+
+#[test]
+fn mutating_command_line_does_not_change_later_calls() {
+    fn check<B: Backend>(interp: &Interpreter<B>) {
+        interp.set_command_line("program.scm", ["hello".to_owned()]);
+        interp
+            .eval_program(
+                r#"
+            (import (scheme process-context) (patina debug))
+            (define argv (command-line))
+            (string-set! (car argv) 0 #\X)
+            (string-set! (cadr argv) 0 #\X)
+            (set-car! argv "changed")
+            (set-cdr! argv '())
+            (gc)
+        "#,
+            )
+            .unwrap();
+        assert_eq!(command_line(interp), r#"("program.scm" "hello")"#);
+    }
+    check(&Interpreter::new(VmBackend::new()));
+    check(&TreeWalkInterpreter::new_tree_walker());
+}
+
+#[test]
+fn configured_command_line_reaches_library_bodies_eval_and_load() {
+    fn check<B: Backend>(interp: &Interpreter<B>, file: &std::path::Path) {
+        interp.set_command_line("outer.scm", ["argument".to_owned()]);
+        let value = interp
+            .eval_program(&format!(
+                r#"
+            (define-library (argv probe)
+              (import (scheme base) (scheme process-context))
+              (export library-argv)
+              (begin (define library-argv (command-line))))
+            (import (argv probe) (scheme eval) (scheme load))
+            (load "{}")
+            (list library-argv
+                  (eval '(command-line) (environment '(scheme process-context)))
+                  loaded-argv)
+        "#,
+                file.display()
+            ))
+            .unwrap();
+        let result = patina_primitives::primitives::io::datum_writer::format_write_tagged(
+            value,
+            interp.backend().global_env().heap(),
+        );
+        assert_eq!(
+            result,
+            r#"(("outer.scm" "argument") ("outer.scm" "argument") ("outer.scm" "argument"))"#
+        );
+    }
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("loaded.scm");
+    std::fs::write(
+        &file,
+        "(import (scheme process-context)) (define loaded-argv (command-line))",
+    )
+    .unwrap();
+    check(&Interpreter::new(VmBackend::new()), &file);
+    check(&TreeWalkInterpreter::new_tree_walker(), &file);
+}
+
 #[test]
 fn test_interpreter_basic_arithmetic() {
     let interp = TreeWalkInterpreter::new_tree_walker();

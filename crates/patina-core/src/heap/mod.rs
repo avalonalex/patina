@@ -348,6 +348,11 @@ pub struct Heap {
     /// set; putting it here is what collapses those call sites to one place.
     features: crate::features::FeatureRegistry,
 
+    /// Scheme's command line, shared by all environments of this interpreter.
+    /// Like features, this is per-instance metadata, not process-global state.
+    /// Rust strings keep it independent of Scheme mutation and GC roots.
+    command_line: Vec<String>,
+
     /// Dynamic library catalogue for `cond-expand`, on the same per-instance
     /// seam as features so `eval`, unquote and library bodies see it too.
     /// This is not a Scheme value or GC root. The runtime implementation owns
@@ -443,6 +448,18 @@ fn real_eqv(a: f64, b: f64) -> bool {
 }
 
 impl Heap {
+    /// The configured program name followed by its arguments. A fresh
+    /// interpreter starts with just `"patina"`, never the host process's flags.
+    pub fn command_line(&self) -> &[String] {
+        &self.command_line
+    }
+
+    /// Configure `(command-line)`, keeping its required program-name element
+    /// separate so even a program with no arguments has a nonempty list.
+    pub fn set_command_line(&mut self, program_name: String, arguments: Vec<String>) {
+        self.command_line = std::iter::once(program_name).chain(arguments).collect();
+    }
+
     /// Install the runtime's non-loading library query before bootstrap.
     pub fn set_library_availability(
         &mut self,
@@ -511,6 +528,7 @@ impl Heap {
         Self {
             syntax_sources: std::collections::HashMap::new(),
             features: crate::features::FeatureRegistry::new(),
+            command_line: vec!["patina".to_owned()],
             library_availability: None,
             features_read: false,
             pairs: Vec::with_capacity(pairs),

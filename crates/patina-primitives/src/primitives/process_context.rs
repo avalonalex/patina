@@ -67,9 +67,14 @@ fn command_line(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, 
         });
     }
 
+    // Release the immutable borrow before allocating. Keep the configured
+    // Rust strings unchanged even if Scheme mutates this result (#593).
+    let command_line = heap.borrow().command_line().to_vec();
     let mut h = heap.borrow_mut();
-    // Allocate each arg string, then build the list
-    let arg_tvs: Vec<TaggedValue> = std::env::args().map(|s| h.alloc_string(s)).collect();
+    let arg_tvs: Vec<TaggedValue> = command_line
+        .into_iter()
+        .map(|s| h.alloc_string(s))
+        .collect();
     Ok(h.list_from_iter(arg_tvs))
 }
 
