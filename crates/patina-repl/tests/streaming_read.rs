@@ -172,7 +172,14 @@ fn later_parse_errors_use_file_coordinates_even_at_eof() {
     "#,
     )
     .unwrap();
-    for bad in ["(third", "12oops ", "'", "\"unfinished"] {
+    for (bad, column) in [
+        ("(third", 3),
+        ("12oops ", 5), // the 'o', not the start of the numeric token (#369)
+        ("1e", 5),      // missing exponent digit, at the end of the token/file
+        ("#x1fZ", 7),
+        ("'", 3),
+        ("\"unfinished", 3),
+    ] {
         std::fs::write(
             dir.path().join("data.scm"),
             format!("first\r\nsecond\r  {bad}"),
@@ -184,7 +191,7 @@ fn later_parse_errors_use_file_coordinates_even_at_eof() {
             let (out, err, ok) = run_with_deadline(dir.path(), &args, None);
             assert!(ok, "{backend:?}: {err}");
             assert!(
-                out.contains("data.scm:3:3:"),
+                out.contains(&format!("data.scm:3:{column}:")),
                 "{bad}, {backend:?}: {out} {err}"
             );
         }

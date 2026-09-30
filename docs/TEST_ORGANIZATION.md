@@ -104,6 +104,14 @@ stream compaction and GC slot reuse. Parser tests distinguish program identifier
 occurrences from ordinary interned read data; quoted pair/vector cycles check
 that annotations do not escape into Scheme values.
 
+`patina-frontend/tests/number_literals.rs` checks the shared number scanner
+(#369) through whole-text parsing, token replay, ports and `string->number`:
+prefix ordering, radices, SRFI 169 separators, exact decimal conversion limits,
+float rounding and error positions in the original spelling. The numeric Scheme
+suite checks complex exponent signs, polar exactness, non-decimal infinity/NaN
+and zero-denominator read errors on both backends; external differences are in
+`DIVERGENCES.tsv`. CLI diagnostic snapshots pin the single-character carets.
+
 `reader_robustness.rs` runs child processes with deadlines on both backends:
 million-element lists, million-level nesting, million-directive sequences and
 million-character strings with Unicode, escapes and an unterminated variant.

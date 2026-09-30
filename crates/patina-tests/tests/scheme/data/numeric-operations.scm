@@ -841,4 +841,83 @@
                      (* 1+1i 1+1i) (* 1-1i 1-1i) (* (+ 1+i 2+2i) (- 3+3i 1+1i))
                      8-2i (- 10+5i 10+5i) (* 3+4i 3-4i))))
 
+;; #369: one scanner records the grammar before any numeric conversion. The
+;; decimal exponent sign belongs to that real component, not to the split
+;; between real and imaginary parts. The frontend tests also cover positions,
+;; streamed tokens, conversion limits, and the SRFI 169 extension from #364.
+(test-equal "signed exponents belong to their complex components"
+  '(#t #t #t #t #t #t)
+  (let ((texts '("1e-2+3e+4i" "1E+2-2E-1i" "#i1e-2+i"))
+        (expected '(0.01+30000.0i 100.0-0.2i 0.01+1.0i)))
+    (append (map = (map string->number texts) expected)
+            (map = (map (lambda (s) (read (open-input-string s))) texts) expected))))
+
+(unless (exact? 1+2i) (test-skip 1))
+(test-equal "exact complex decimal components are converted from their digits"
+  '(#t #t #t #t)
+  (map (lambda (n) (and (exact? n) (= n 1/100+3/4i)))
+       (list (string->number "#e1e-2+0.75i")
+             (string->number "#e1e-2+7.5e-1i")
+             (read (open-input-string "#e1e-2+0.75i"))
+             (read (open-input-string "#e1e-2+7.5e-1i")))))
+
+;; R7RS 7.1.1 defines <infnan> and polar syntax for every radix. Chibi 0.12
+;; rejects the non-decimal forms; Gauche 0.9.15 accepts them (register below).
+(test-equal "infinity and NaN syntax works in every radix"
+  '(#t #t #t #t)
+  (map (lambda (radix)
+         (let ((p (string->number "+inf.0" radix))
+               (n (string->number "-inf.0" radix))
+               (nan (string->number "+NaN.0" radix)))
+           (and p n nan (infinite? p) (positive? p)
+                (infinite? n) (negative? n) (nan? nan))))
+       '(2 8 10 16)))
+(test-equal "non-decimal complex components accept infinity and NaN"
+  '(#t #t #t)
+  (let ((z (string->number "#x+inf.0+ai"))
+        (w (string->number "#b1+nan.0i"))
+        (v (read (open-input-string "#o+inf.0i"))))
+    (list (and z (infinite? (real-part z)) (= (imag-part z) 10))
+          (and w (= (real-part w) 1) (nan? (imag-part w)))
+          (infinite? (imag-part v)))))
+(test-equal "non-decimal polar literals share a radix"
+  '(#t #t #t)
+  (map (lambda (text expected)
+         (let ((n (string->number text))) (and n (close? n expected))))
+       '("#b10@1" "#o10@1" "#x10@1")
+       (list (make-polar 2 1) (make-polar 8 1) (make-polar 16 1))))
+
+;; Preserve a known exact zero angle before inexact coercion. This follows
+;; Chibi; Gauche instead makes all polar results inexact. An inexact zero
+;; angle retains the inexact imaginary zero, including its sign.
+(test-equal "an exact zero polar angle preserves the magnitude"
+  '(#t #t #t #t #t)
+  (map eqv? (map string->number '("1@0" "1/2@0" "1.0@0" "#i1@0" "-0.0@0"))
+       '(1 1/2 1.0 1.0 -0.0)))
+(test-equal "an inexact zero polar angle retains its imaginary zero"
+  '(#f #f -inf.0)
+  (list (real? (string->number "1@0.0"))
+        (real? (string->number "1@-0.0"))
+        (/ 1.0 (imag-part (string->number "1@-0.0")))))
+(unless (exact? 1+2i) (test-skip 1))
+(test-equal "polar exactness prefixes are honored"
+  '(#t #t #f)
+  (let ((n (string->number "#e1@2")))
+    (list (and n (exact? n) (close? n (make-polar 1 2)))
+          (eqv? 1 (string->number "#e1@0.0"))
+          (string->number "#e1@+inf.0"))))
+
+(test-equal "number grammar rejects signed denominators and duplicate prefixes"
+  '(#f #f #f #f #f #f)
+  (map string->number '("1/-2" "1/+2" "#x#x1" "#d#b1" "#e#i1" "#i#i1")))
+(test-equal "zero denominators in complex components return false"
+  '(#f #f #f #f #f #f)
+  (map string->number '("1/0" "1/0+2i" "1+2/0i" "+1/0i" "1@1/0" "1/0@1")))
+(test-equal "zero denominators in complex components raise read errors"
+  '(#t #t #t #t)
+  (map (lambda (text)
+         (guard (e ((read-error? e) #t) (else #f))
+           (read (open-input-string text)) #f))
+       '("#d1/0+2i" "#d1+2/0i" "#d1@1/0" "#d1/0@1")))
+
 (test-end)
