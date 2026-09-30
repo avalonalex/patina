@@ -852,6 +852,18 @@ as text, and the deliberately emitted Scheme FFI-stub marker
 `requires FFI, unavailable in Patina:` remains an explicit protocol of
 `test-lib/chibi/filesystem.sld`; it is not an interpreter error-message match.
 
+`wrong-result` snapshots retain a `(failures ...)` list with suite tallies,
+failure excerpts and, for SRFI 64, failed test records from the announced log
+inside the run's scratch directory. Logs are read before scratch cleanup;
+each log scan is limited to 1 MiB. `runtime-error` retains `(errors ...)` with
+diagnostic messages and paths, exit status and fallback output when no typed
+diagnostic is available. Smoke completion failures identify the missing, duplicate,
+malformed or mismatched tally. Evidence is capped at 32 lines and 8 KiB per
+package, with at most 512 bytes per line and an explicit truncation marker.
+The report displays it for excluded packages too. Older snapshots without
+these fields remain readable and show “Not recorded in this snapshot”.
+Evidence collection does not change classification precedence or the score.
+
 The pass headline splits successful packages into **upstream test suites**,
 **maintained smoke checks**, and **import-only probes**. All three counts come
 from the snapshot's per-package `mode` and `status`; failed packages do not

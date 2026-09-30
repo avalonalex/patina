@@ -41,7 +41,10 @@ fn status_detail(status: &Status) -> Option<(&'static str, &[String])> {
         // library name.
         Status::OutOfScope(l) => Some(("needs", l)),
         Status::UnboundIdentifier(l) => Some(("unbound", l)),
-        Status::ParseError(l) | Status::LoadError(l) => Some(("errors", l)),
+        Status::ParseError(l) | Status::LoadError(l) | Status::RuntimeError(l) => {
+            Some(("errors", l))
+        }
+        Status::WrongResult(l) => Some(("failures", l)),
         _ => None,
     }
 }
@@ -141,14 +144,34 @@ fn parse_result_row(
         })
         .unwrap_or_default();
 
+    // New evidence fields are optional for legacy snapshots. Reject duplicate
+    // clauses and non-string items instead of silently dropping their evidence.
+    let evidence = |key| -> Result<Vec<String>, String> {
+        let mut clauses = fields
+            .iter()
+            .filter_map(|f| sexp::tagged_form(*f, key, heap));
+        let Some(items) = clauses.next() else {
+            return Ok(Vec::new());
+        };
+        if clauses.next().is_some() {
+            return Err(format!("duplicate {key} in result row for {slug}"));
+        }
+        items
+            .into_iter()
+            .map(|v| {
+                sexp::string_value(v, heap)
+                    .ok_or_else(|| format!("{key} must contain strings in result row for {slug}"))
+            })
+            .collect()
+    };
     let status = match sexp::row_symbol(&fields, "status", heap).as_deref() {
         Some("pass") => Status::Pass,
         Some("missing-library") => Status::MissingLibrary(names),
         Some("parse-error") => Status::ParseError(names),
         Some("load-error") => Status::LoadError(names),
         Some("unbound-identifier") => Status::UnboundIdentifier(names),
-        Some("wrong-result") => Status::WrongResult,
-        Some("runtime-error") => Status::RuntimeError,
+        Some("wrong-result") => Status::WrongResult(evidence("failures")?),
+        Some("runtime-error") => Status::RuntimeError(evidence("errors")?),
         Some("timeout") => Status::Timeout,
         Some("out-of-scope") => Status::OutOfScope(names),
         other => return Err(format!("unknown status {:?}", other)),
@@ -365,6 +388,43 @@ pub fn render(
         |name| name.to_string(),
     );
 
+    for (key, title) in [
+        ("wrong-result", "Wrong results"),
+        ("runtime-error", "Runtime errors"),
+    ] {
+        let rows: Vec<_> = results.iter().filter(|r| r.status.key() == key).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "\n## {title}\n");
+        out.push_str("Failure evidence is retained for excluded packages too; scope only affects the score.\n\n");
+        out.push_str("| Package | Mode | Scope | Evidence |\n|---|---|---|---|\n");
+        for r in rows {
+            let (_, details) = status_detail(&r.status).expect("failure evidence");
+            let text = if details.is_empty() {
+                "Not recorded in this snapshot".into()
+            } else {
+                details
+                    .iter()
+                    .map(|line| evidence_cell(line))
+                    .collect::<Vec<_>>()
+                    .join("<br>")
+            };
+            let scope = excluded
+                .get(r.slug.as_str())
+                .filter(|_| !drifted_slugs.contains(r.slug.as_str()))
+                .map_or("in scope", |e| e.reason.key());
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} |",
+                cell(&r.slug),
+                r.mode,
+                scope,
+                text
+            );
+        }
+    }
+
     if !drifted.is_empty() {
         out.push_str("\n## Exclusions that have drifted\n\n");
         out.push_str(
@@ -431,6 +491,26 @@ pub fn render(
             r.status.key(),
             scope
         );
+    }
+    out
+}
+
+/// Evidence is arbitrary program output: render literal text, not Markdown
+/// links, emphasis, HTML, or extra table cells supplied by the test program.
+fn evidence_cell(text: &str) -> String {
+    let mut out = String::new();
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\\' | '|' | '`' | '*' | '_' | '[' | ']' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '\n' | '\r' | '\t' => out.push(' '),
+            _ => out.push(c),
+        }
     }
     out
 }
@@ -533,6 +613,61 @@ mod tests {
     }
 
     #[test]
+    fn failure_evidence_survives_snapshots_and_is_literal_even_when_excluded() {
+        let results = vec![
+            PackageResult {
+                slug: "suite".into(),
+                mode: "test",
+                status: Status::WrongResult(vec![
+                    "FAIL: λ | <script> & [link](url) `code`".into(),
+                    "expected \"x\"; got \\y\nnext line".into(),
+                ]),
+            },
+            PackageResult {
+                slug: "probe".into(),
+                mode: "probe",
+                status: Status::RuntimeError(vec!["division by zero".into()]),
+            },
+        ];
+        let heap = patina_core::new_shared_heap();
+        let text = to_sexp(&results, "vm", "2026-09-30T00:00:00Z");
+        let parsed = from_sexp(&text, &heap).unwrap();
+        for (before, after) in results.iter().zip(&parsed.results) {
+            assert_eq!(before.status, after.status);
+        }
+        let report = render(
+            &parsed.results,
+            "vm",
+            None,
+            &excluding("suite", "wrong-result"),
+            true,
+        );
+        assert!(report.contains("## Wrong results"));
+        assert!(report.contains("| suite | test | ffi | FAIL: λ \\| &lt;script&gt; &amp; \\[link\\](url) \\`code\\`<br>"), "{report}");
+        assert!(report.contains("## Runtime errors"));
+        assert!(report.contains("| probe | probe | in scope | division by zero |"));
+    }
+
+    #[test]
+    fn legacy_failure_rows_are_readable_but_malformed_evidence_is_rejected() {
+        let heap = patina_core::new_shared_heap();
+        for (status, key) in [("wrong-result", "failures"), ("runtime-error", "errors")] {
+            let row = format!("(slug \"x\") (mode test) (status {status})");
+            let old = format!("(patina-compat-results (results ({row})))");
+            let parsed = from_sexp(&old, &heap).unwrap();
+            let report = render(&parsed.results, "vm", None, &[], true);
+            assert!(report.contains("Not recorded in this snapshot"));
+            for field in [
+                format!("({key} 42)"),
+                format!("({key} \"a\") ({key} \"b\")"),
+            ] {
+                let source = format!("(patina-compat-results (results ({row} {field})))");
+                assert!(from_sexp(&source, &heap).is_err(), "{source}");
+            }
+        }
+    }
+
+    #[test]
     fn unknown_modes_cannot_silently_become_probes() {
         let heap = patina_core::new_shared_heap();
         let source = "(patina-compat-results (results ((slug \"x\") (mode smok) (status pass))))";
@@ -613,7 +748,7 @@ mod tests {
             PackageResult {
                 slug: "suite-fail".into(),
                 mode: "test",
-                status: Status::WrongResult,
+                status: Status::WrongResult(Vec::new()),
             },
             PackageResult {
                 slug: "probe-fail".into(),
@@ -628,7 +763,7 @@ mod tests {
             PackageResult {
                 slug: "smoke-fail".into(),
                 mode: "smoke",
-                status: Status::WrongResult,
+                status: Status::WrongResult(Vec::new()),
             },
         ];
         let mut exclusions = excluding("suite-fail", "wrong-result");

@@ -131,12 +131,21 @@ fn failed_or_incomplete_smoke_runs_fail_the_gate_and_still_write_diagnostics() {
     let fixture = Fixture::new();
     let snapshot = fixture.dir.path().join("results.scm");
     let report = fixture.dir.path().join("report.txt");
-    for (source, status) in [
-        (";; stdout: (patina-compat-smoke 0 1)\n", "wrong-result"),
-        (";; no completion tally\n", "runtime-error"),
+    for (source, status, evidence) in [
+        (
+            ";; stdout: FAIL: beta assertion\n;; stdout: (patina-compat-smoke 0 1)\n",
+            "wrong-result",
+            "FAIL: beta assertion",
+        ),
+        (
+            ";; no completion tally\n",
+            "runtime-error",
+            "Missing smoke completion tally; expected 1 assertions",
+        ),
         (
             ";; stdout: (patina-compat-smoke 1 0)\n;; exit: 1\n",
             "runtime-error",
+            "exit status: 1",
         ),
     ] {
         fixture.driver("beta", source);
@@ -152,12 +161,11 @@ fn failed_or_incomplete_smoke_runs_fail_the_gate_and_still_write_diagnostics() {
             assert_exit(&output, 1);
             let results = fs::read_to_string(&snapshot).unwrap();
             assert!(results.contains("((slug \"alpha\") (mode smoke) (status pass))"));
-            assert!(results.contains(&format!("((slug \"beta\") (mode smoke) (status {status}))")));
-            assert!(
-                fs::read_to_string(&report)
-                    .unwrap()
-                    .contains("**1 of 2 packages pass.**")
-            );
+            assert!(results.contains(&format!("((slug \"beta\") (mode smoke) (status {status}) ")));
+            assert!(results.contains(evidence), "{results}");
+            let report = fs::read_to_string(&report).unwrap();
+            assert!(report.contains("**1 of 2 packages pass.**"));
+            assert!(report.contains(evidence), "{report}");
         }
     }
 }
