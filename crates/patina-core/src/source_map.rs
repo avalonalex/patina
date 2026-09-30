@@ -1,13 +1,13 @@
-//! Source map for tracking source locations of parsed TaggedValues
-//!
-//! During parsing, each significant TaggedValue (lists, identifiers, etc.)
-//! is recorded with its source position. This allows the desugarer and
-//! evaluator to attach source locations to CoreExpr/CpsExpr nodes.
+//! Diagnostic documents and compatibility snapshots of parsed syntax nodes.
+//! The compiler reads provenance from the heap, where sweep removes it before
+//! a slot can be reused. Source locations retain their own document handles.
 
 use crate::error::SourceLocation;
+use crate::source_document::{SourceDocument, SourceSpan};
 use crate::{GcFreedBits, SharedHeap, TaggedValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A character-based source position using R7RS 7.1.1 line endings.
 /// Keep `after_cr` across input chunks: CRLF starts one line even when its
@@ -53,30 +53,18 @@ pub fn source_lines(mut text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Maps TaggedValue raw bits to their source locations.
-///
-/// Since TaggedValue is a NaN-boxed u64, we use the raw bits as keys.
-/// This is safe because equal TaggedValues have equal raw bits.
+/// Holds a primary source document and a snapshot of parsed node locations.
+/// Interned symbols cannot represent distinct occurrences. Program parsers
+/// use unique syntax identifiers, and heap provenance is authoritative.
 #[derive(Debug, Default)]
 pub struct SourceMap {
     locations: HashMap<u64, SourceLocation>,
-    /// The source text, used for pretty error formatting (caret display).
-    /// Populated by `Parser::new_with_source_map`, or a line at a time by
-    /// [`SourceMap::push_source_line`] for a source read as it arrives.
-    source_text: Option<String>,
-    /// How many lines of the source came before `source_text`'s first line:
-    /// zero for text that starts at the top of its source, more once a source
-    /// read a line at a time has had its oldest lines forgotten.
-    line_offset: u32,
+    document: Option<Arc<SourceDocument>>,
     /// The name the parser was given for that text — a file path when the
     /// program came from one, `<eval>`/`<repl>` otherwise. Populated with
     /// `source_text`; the desugarer resolves a top-level relative `include`
     /// beside it.
-    primary_source: Option<String>,
-    /// Macro expansion chain records, keyed by (line, column) of the call site.
-    /// Each entry is an ordered list of macro names expanded at that location
-    /// (outermost first, matching expansion sequence).
-    expansion_records: HashMap<(u32, u32), Vec<String>>,
+    primary_source: Option<Arc<str>>,
 }
 
 impl SourceMap {
@@ -84,75 +72,68 @@ impl SourceMap {
     pub fn new() -> Self {
         Self {
             locations: HashMap::new(),
-            source_text: None,
-            line_offset: 0,
+            document: None,
             primary_source: None,
-            expansion_records: HashMap::new(),
         }
     }
 
     /// Store the source text for caret-style error display.
     pub fn set_source_text(&mut self, text: String) {
-        self.source_text = Some(text);
-        self.line_offset = 0;
+        self.document = Some(Arc::new(SourceDocument::new(text)));
     }
 
-    /// Add line `line` of a source read a line at a time, with or without its
-    /// line ending. Lines come in order, one after another; the first one
-    /// added may be any line.
-    pub fn push_source_line(&mut self, line: u32, text: &str) {
-        let text = text.strip_suffix('\n').unwrap_or(text);
-        let text = text.strip_suffix('\r').unwrap_or(text);
-        if self.source_text.is_none() {
-            self.line_offset = line.saturating_sub(1);
-        }
-        let source = self.source_text.get_or_insert_with(String::new);
-        source.push_str(text);
-        source.push('\n');
-    }
-
-    /// Keep the source text within `max_bytes` by forgetting its oldest lines
-    /// — never `keep_from_line` or a line after it — together with the macro
-    /// expansion records located on them.
-    ///
-    /// For a source read as it arrives, whose text would otherwise grow with
-    /// the stream. A diagnostic located on a forgotten line still gives its
-    /// position, without the quoted line or the expansion chain. Once over the
-    /// budget it forgets down to half of it, so the forgetting is paid for by
-    /// half a budget of new text rather than by every line.
-    pub fn forget_old_source_lines(&mut self, max_bytes: usize, keep_from_line: u32) {
-        let Some(text) = &mut self.source_text else {
-            return;
+    /// Retain the input behind a location, including its exclusive end.
+    pub fn location(
+        &self,
+        source: &str,
+        line: u32,
+        column: u32,
+        end_line: u32,
+        end_column: u32,
+    ) -> SourceLocation {
+        let mut loc = SourceLocation {
+            source: self
+                .primary_source
+                .as_ref()
+                .filter(|name| name.as_ref() == source)
+                .cloned()
+                .unwrap_or_else(|| Arc::from(source)),
+            line,
+            column,
+            length: Some(if line == end_line {
+                end_column.saturating_sub(column).max(1)
+            } else {
+                1
+            }),
+            span: None,
         };
-        if text.len() <= max_bytes {
-            return;
+        loc.span = self.document.as_ref().map(|document| SourceSpan {
+            document: document.clone(),
+            end_line,
+            end_column,
+            expansion_chain: None,
+        });
+        loc
+    }
+
+    /// Append a physical source line without normalizing its line ending.
+    pub fn push_source_line(&mut self, line: u32, text: &str) {
+        self.document
+            .get_or_insert_with(|| Arc::new(SourceDocument::new(String::new())))
+            .push_line(line, text);
+    }
+
+    /// Bound streamed diagnostic text, preserving an unfinished datum's lines.
+    pub fn forget_old_source_lines(&mut self, max_bytes: usize, keep_from_line: u32) {
+        if let Some(document) = &self.document {
+            document.forget_old_lines(max_bytes, keep_from_line);
         }
-        let mut cut = 0;
-        let mut first_line = self.line_offset.saturating_add(1);
-        while text.len() - cut > max_bytes / 2 && first_line < keep_from_line {
-            let Some(line) = source_lines(&text[cut..]).next() else {
-                break;
-            };
-            // A final unterminated line cannot precede another source line.
-            if !line.ends_with(['\r', '\n']) {
-                break;
-            }
-            cut += line.len();
-            first_line += 1;
-        }
-        if cut == 0 {
-            return;
-        }
-        text.drain(..cut);
-        self.line_offset = first_line - 1;
-        self.expansion_records
-            .retain(|&(line, _), _| line >= first_line);
     }
 
     /// Record where the source text came from (see `primary_source`).
     pub fn set_primary_source(&mut self, name: &str) {
         if self.primary_source.as_deref() != Some(name) {
-            self.primary_source = Some(name.to_string());
+            self.primary_source = Some(Arc::from(name));
         }
     }
 
@@ -162,14 +143,8 @@ impl SourceMap {
     }
 
     /// Return the (1-indexed) line from the stored source text, if available.
-    pub fn get_line(&self, line: u32) -> Option<&str> {
-        let text = self.source_text.as_deref()?;
-        let index = (line as usize)
-            .saturating_sub(1)
-            .checked_sub(self.line_offset as usize)?;
-        source_lines(text)
-            .nth(index)
-            .map(|line| line.trim_end_matches(['\r', '\n']))
+    pub fn get_line(&self, line: u32) -> Option<String> {
+        self.document.as_ref()?.get_line(line)
     }
 
     /// Format a caret-style error context block for a source location.
@@ -180,7 +155,17 @@ impl SourceMap {
     ///                     ^
     /// ```
     pub fn format_context(&self, loc: &SourceLocation) -> Option<String> {
-        let line_text = self.get_line(loc.line)?;
+        let line_text = if let Some(span) = &loc.span {
+            span.document.get_line(loc.line)?
+        } else if self
+            .primary_source
+            .as_deref()
+            .is_none_or(|name| name == loc.source.as_ref())
+        {
+            self.get_line(loc.line)?
+        } else {
+            return None;
+        };
         let col = (loc.column as usize).saturating_sub(1); // 0-indexed
         let caret_len = loc.length.unwrap_or(1).max(1) as usize;
         let prefix = format!("{:>4} | ", loc.line);
@@ -211,10 +196,14 @@ impl SourceMap {
 
     /// Record that a macro with the given name was expanded at this location.
     pub fn record_expansion(&mut self, loc: &SourceLocation, macro_name: String) {
-        self.expansion_records
-            .entry((loc.line, loc.column))
-            .or_default()
-            .push(macro_name);
+        if let Some(document) = loc
+            .span
+            .as_ref()
+            .map(|s| &s.document)
+            .or(self.document.as_ref())
+        {
+            document.record_expansion(loc.line, loc.column, macro_name);
+        }
     }
 
     /// Iterate over all recorded source locations.
@@ -223,16 +212,25 @@ impl SourceMap {
     }
 
     /// Return the ordered list of macro names expanded at this location, if any.
-    pub fn get_expansions(&self, loc: &SourceLocation) -> Option<&[String]> {
-        self.expansion_records
-            .get(&(loc.line, loc.column))
-            .map(|v| v.as_slice())
+    pub fn get_expansions(&self, loc: &SourceLocation) -> Option<Vec<String>> {
+        if let Some(chain) = loc
+            .span
+            .as_ref()
+            .and_then(|span| span.expansion_chain.as_ref())
+        {
+            return Some(chain.to_vec());
+        }
+        loc.span
+            .as_ref()
+            .map(|s| &s.document)
+            .or(self.document.as_ref())?
+            .expansions(loc.line, loc.column)
     }
 
     /// Drop the entries for slots the GC reclaimed (`GC_DESIGN.md` §9.1): a
     /// reused slot must not inherit the old datum's source location.
-    /// `expansion_records` is keyed by source position, not raw bits, so it
-    /// stays valid and is untouched.
+    /// Expansion records belong to retained source documents, so they remain
+    /// valid and are untouched.
     pub fn prune_freed(&mut self, freed: &[u64]) {
         for bits in freed {
             self.locations.remove(bits);
@@ -250,11 +248,10 @@ impl SourceMap {
 /// Drain the slots the GC reclaimed since the last call and drop their
 /// entries from `source_map` (`GC_DESIGN.md` §9.1).
 ///
-/// Call between evaluating one top-level form and parsing the next: sweeps
-/// can only happen during evaluation, and raw-bits lookups only during the
-/// desugaring of a later form, so pruning at the form boundary closes the
-/// staleness window completely. Cheap when no collection ran (one empty
-/// drain, no map borrow).
+/// Call between evaluating one top-level form and parsing the next to bound
+/// the compatibility snapshot. Compiler lookups use the heap's provenance,
+/// pruned directly by sweep, rather than relying on this shared drain. Cheap
+/// when no collection ran (one empty drain, no map borrow).
 pub fn prune_freed_locations(heap: &SharedHeap, source_map: &RefCell<SourceMap>) {
     match heap.borrow_mut().take_gc_freed_bits() {
         GcFreedBits::Exact(freed) if freed.is_empty() => {}
@@ -296,7 +293,7 @@ mod tests {
                 .into_iter()
                 .enumerate()
             {
-                assert_eq!(map.get_line(i as u32 + 1), Some(expected));
+                assert_eq!(map.get_line(i as u32 + 1).as_deref(), Some(expected));
             }
             let at = SourceLocation::new("test.scm", 6, 3);
             assert_eq!(
@@ -304,9 +301,9 @@ mod tests {
                 "   6 | λ last\n         ^"
             );
             map.forget_old_source_lines(1, 4);
-            assert_eq!(map.get_line(3), None);
-            assert_eq!(map.get_line(4), Some(""));
-            assert_eq!(map.get_line(6), Some("λ last"));
+            assert_eq!(map.get_line(3).as_deref(), None);
+            assert_eq!(map.get_line(4).as_deref(), Some(""));
+            assert_eq!(map.get_line(6).as_deref(), Some("λ last"));
         }
     }
 
@@ -321,30 +318,38 @@ mod tests {
             line,
             column: 1,
             length: None,
+            span: None,
         };
         for line in 1..=4 {
             sm.push_source_line(line, &format!("(form {line})\r\n"));
             sm.record_expansion(&loc(line), format!("m{line}"));
         }
-        assert_eq!(sm.get_line(2), Some("(form 2)"));
-        assert_eq!(sm.get_line(5), None);
+        assert_eq!(sm.get_line(2).as_deref(), Some("(form 2)"));
+        assert_eq!(sm.get_line(5).as_deref(), None);
 
         sm.forget_old_source_lines(1000, 4);
-        assert_eq!(sm.get_line(1), Some("(form 1)"), "within the budget");
+        assert_eq!(
+            sm.get_line(1).as_deref(),
+            Some("(form 1)"),
+            "within the budget"
+        );
 
         sm.forget_old_source_lines(10, 3);
-        assert_eq!(sm.get_line(2), None);
+        assert_eq!(sm.get_line(2).as_deref(), None);
         assert!(sm.get_expansions(&loc(2)).is_none());
         assert_eq!(
-            sm.get_line(3),
+            sm.get_line(3).as_deref(),
             Some("(form 3)"),
             "an unfinished datum's line stays"
         );
-        assert_eq!(sm.get_expansions(&loc(3)), Some(&["m3".to_string()][..]));
+        assert_eq!(
+            sm.get_expansions(&loc(3)).as_deref(),
+            Some(&["m3".to_string()][..])
+        );
 
         sm.set_source_text("x\n".to_string());
         assert_eq!(
-            sm.get_line(1),
+            sm.get_line(1).as_deref(),
             Some("x"),
             "whole text starts at line 1 again"
         );
@@ -361,6 +366,7 @@ mod tests {
             line: 1,
             column: 5,
             length: Some(2),
+            span: None,
         };
         sm.record(tv, loc.clone());
 
@@ -404,6 +410,7 @@ mod tests {
             line,
             column: 1,
             length: None,
+            span: None,
         };
         let sm = RefCell::new(SourceMap::new());
         sm.borrow_mut().record(live, loc(1));

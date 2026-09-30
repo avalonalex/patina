@@ -109,11 +109,15 @@ impl Compiler {
         // borrows the heap itself when macro debugging is on.
         let scopes = {
             let heap = self.heap.borrow();
-            match heap.get_identifier_data_any(form) {
+            match heap
+                .get_identifier_data_any(form)
+                .filter(|_| !heap.is_source_identifier(form))
+            {
                 // An identifier: introduced by an expansion, and its own scopes
                 // are the context it came from — empty meaning top level, where
                 // `...` is the ellipsis. `get_identifier_data_any` answers None
-                // for a plain symbol, which is exactly the source-written case.
+                // for a plain symbol; written source identifiers take that
+                // same branch, regardless of whether spans were requested.
                 Some((_, token_scopes)) => token_scopes,
                 None => self.definition_scopes.clone(),
             }
@@ -216,12 +220,9 @@ impl Compiler {
     /// provenance test.
     pub(super) fn is_substituted_from_outer_macro(&self, form: TaggedValue) -> bool {
         let heap = self.heap.borrow();
-        // Any identifier at all, whatever scopes it carries.
-        //
-        // Being an identifier rather than a plain symbol is what says the token
-        // arrived from somewhere else: the reader produces symbols, and only an
-        // expansion produces identifiers. So this is the whole "not written
-        // here" test, and the scopes it carries are the context it came from,
+        // Program readers use distinct written identifiers for source spans.
+        // They have ordinary symbol semantics here; only expansion identifiers
+        // arrived from somewhere else. Their scopes are the context they came from,
         // whether that is a macro defined in some inner scope (a non-empty set)
         // or one defined at top level (an empty one).
         //
@@ -232,7 +233,7 @@ impl Compiler {
         // local variable became a real binding that re-tagging was enough to
         // capture it: `def-mid`'s template `if`, expanded inside
         // `(let ((if 'shadowed)) …)`, resolved to the *variable*.
-        heap.get_identifier_data_any(form).is_some()
+        heap.get_identifier_data_any(form).is_some() && !heap.is_source_identifier(form)
     }
 
     /// Collect items from a list TaggedValue

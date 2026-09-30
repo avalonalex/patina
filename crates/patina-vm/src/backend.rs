@@ -264,7 +264,7 @@ impl VmBackend {
                 self.process_import_set(set, env).map_err(|e| {
                     VmBackendError::Runtime {
                         message: e.to_string(),
-                        location: None,
+                        location: e.source_location().cloned(),
                     }
                     .with_diagnostic(e.diagnostic())
                 })
@@ -616,6 +616,7 @@ impl VmBackend {
                                 format!("desugar error: {e}"),
                                 e.diagnostic(),
                             )
+                            .at_opt(e.source_location().cloned())
                         },
                     )?;
 
@@ -643,6 +644,7 @@ impl VmBackend {
                             format!("runtime error: {}", e),
                             e.diagnostic(),
                         )
+                        .at_opt(e.source_location().cloned())
                     })?;
                 }
                 Ok(())
@@ -825,7 +827,7 @@ mod tests {
         let error = result.expect_err("an unbound variable");
         let rendered =
             patina_interpreter::format_backend_error_with_source(&error, &source_map.borrow());
-        assert!(rendered.contains("t.scm:3:1"), "{rendered}");
+        assert!(rendered.contains("t.scm:3:2"), "{rendered}");
         assert!(rendered.contains("3 | (no-such x)"), "{rendered}");
 
         let (_, outcome) =

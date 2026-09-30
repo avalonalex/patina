@@ -28,7 +28,12 @@ impl Compiler {
                 patina_core::format_tagged(form, &self.heap.borrow())
             )));
         }
-        let compiled = self.compile_template_node(form, level);
+        let compiled = self.compile_template_node(form, level).map(|mut template| {
+            if let Template::Symbol(identifier) = &mut template {
+                identifier.source = self.heap.borrow().source(form).cloned();
+            }
+            template
+        });
         if compound {
             self.open.leave();
         }

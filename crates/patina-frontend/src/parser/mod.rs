@@ -176,8 +176,9 @@ impl Parser {
 
     /// Create a new parser with source map tracking.
     ///
-    /// Source positions of list forms, vectors, and quote abbreviations are
-    /// recorded in the source map, keyed by the TaggedValue's raw bits.
+    /// Program identifiers have distinct syntax identities and complete
+    /// spans. Container slots retain immediate-datum spans as well. Ordinary
+    /// datum callers should use `new_with_heap` or `read_from_port`.
     pub fn new_with_source_map(
         input: &str,
         heap: SharedHeap,
@@ -276,12 +277,56 @@ impl Parser {
         self.read_state
     }
 
-    /// Record a source location for a TaggedValue in the source map (if present)
-    fn record_source(&self, tv: TaggedValue, line: u32, col: u32) {
-        if let Some(ref sm) = self.source_map {
-            sm.borrow_mut()
-                .record(tv, SourceLocation::new(self.source_name.clone(), line, col));
+    fn source_location(&self, line: u32, col: u32) -> Option<SourceLocation> {
+        self.source_map.as_ref().map(|sm| {
+            sm.borrow().location(
+                &self.source_name,
+                line,
+                col,
+                self.current_token_end.line,
+                self.current_token_end.column,
+            )
+        })
+    }
+
+    fn record_location(&self, tv: TaggedValue, loc: SourceLocation) {
+        self.heap.borrow_mut().record_source(tv, loc.clone());
+        if let Some(map) = &self.source_map
+            && (tv.is_pair() || tv.is_vector() || self.heap.borrow().is_identifier(tv))
+        {
+            map.borrow_mut().record(tv, loc);
         }
+    }
+
+    /// Program syntax has distinct identifiers; datum readers continue to
+    /// return interned symbols without allocating syntax metadata.
+    fn identifier(&self, name: &str) -> TaggedValue {
+        if self.source_map.is_some() {
+            self.heap
+                .borrow_mut()
+                .alloc_source_identifier(Rc::from(name))
+        } else {
+            self.heap.borrow_mut().intern_symbol(name)
+        }
+    }
+
+    /// Parse program text with retained source, for loaders that do not own
+    /// an interactive source map. Compiled expressions retain the document.
+    pub fn new_program(
+        input: &str,
+        heap: SharedHeap,
+        name: &str,
+        fold_case: bool,
+    ) -> Result<Self, ParseError> {
+        let mut lexer = Lexer::new(input);
+        lexer.set_initial_fold_case(fold_case);
+        let mut parser = Self::from_lexer(lexer, heap)?;
+        let mut map = SourceMap::new();
+        map.set_source_text(input.to_owned());
+        map.set_primary_source(name);
+        parser.source_name = Rc::from(name);
+        parser.source_map = Some(Rc::new(RefCell::new(map)));
+        Ok(parser)
     }
 
     fn advance(&mut self) -> Result<(), ParseError> {
@@ -2627,5 +2672,42 @@ mod tests {
         let mut parser = Parser::new("(+ 1 2)").unwrap();
         let result = parser.parse().unwrap();
         assert!(result.is_pair());
+    }
+}
+
+#[cfg(test)]
+mod occurrence_span_tests {
+    use super::*;
+
+    #[test]
+    fn program_identifiers_are_occurrences_and_immediate_slots_have_spans() {
+        let heap = patina_core::new_shared_heap();
+        let mut parser =
+            Parser::new_program("(same 42 same) next", heap.clone(), "test.scm", false).unwrap();
+        let form = parser.parse().unwrap();
+        let h = heap.borrow();
+        let first = h.car(form);
+        let rest = h.cdr(form);
+        let last = h.car(h.cdr(rest));
+        assert_ne!(first, last);
+        assert_eq!(h.get_identifier_data(first).unwrap().0.as_ref(), "same");
+        assert_eq!(h.source(first).unwrap().column, 2);
+        assert_eq!(h.source(last).unwrap().column, 10);
+        assert_eq!(h.source(last).unwrap().length, Some(4));
+        let number = h.child_source(rest, 0).unwrap();
+        assert_eq!(
+            (number.column, number.span.as_ref().unwrap().end_column),
+            (7, 9)
+        );
+        let outer = h.source(form).unwrap();
+        assert_eq!(outer.span.as_ref().unwrap().end_column, 15);
+        drop(h);
+        let mut datum_reader = Parser::new_with_heap("(same same)", heap.clone()).unwrap();
+        let datum = datum_reader.parse().unwrap();
+        let h = heap.borrow();
+        assert_eq!(h.car(datum), h.car(h.cdr(datum)));
+        assert_eq!(h.get_symbol_name(h.car(datum)), Some("same"));
+        assert!(h.source(datum).is_none());
+        assert!(h.child_source(datum, 0).is_none());
     }
 }

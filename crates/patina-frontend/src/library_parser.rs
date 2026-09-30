@@ -144,7 +144,7 @@ impl LibraryDefinition {
         }
 
         // First element is `define-library` (R7RS) or `library` (R6RS §7.1).
-        let r6rs = heap.borrow().get_symbol_name(list[0]) == Some("library");
+        let r6rs = heap.borrow().get_symbol_or_identifier_name(list[0]) == Some("library");
         if r6rs && !crate::dialect::allow_r6rs() {
             return Err(ParseError::InvalidSyntax(
                 "R6RS (library ...) form is not R7RS; use define-library \
@@ -237,7 +237,7 @@ impl LibraryDefinition {
                 let keyword = {
                     let h = heap.borrow();
                     h.try_pair(tv)
-                        .and_then(|(car, _)| h.get_symbol_name(car))
+                        .and_then(|(car, _)| h.get_symbol_or_identifier_name(car))
                         .map(|s| s.to_string())
                 };
                 return Self::skip_or_reject_declaration(
@@ -256,7 +256,8 @@ impl LibraryDefinition {
         // First element determines the type
         let keyword = {
             let h = heap.borrow();
-            h.get_symbol_name(list[0]).map(|s| s.to_string())
+            h.get_symbol_or_identifier_name(list[0])
+                .map(|s| s.to_string())
         };
 
         if let Some(keyword) = keyword {
@@ -342,7 +343,7 @@ impl LibraryDefinition {
     fn describe_malformed(tv: TaggedValue, heap: &SharedHeap) -> String {
         let h = heap.borrow();
         let head = h.try_pair(tv).map(|(car, _)| car);
-        let keyword = head.and_then(|car| h.get_symbol_name(car));
+        let keyword = head.and_then(|car| h.get_symbol_or_identifier_name(car));
         match keyword {
             Some(keyword) if KNOWN_DECLARATIONS.contains(&keyword) => format!(
                 "malformed `{keyword}` declaration; everything it would have \
@@ -468,7 +469,7 @@ impl LibraryDefinition {
             // Check for else clause
             let is_else = {
                 let h = heap.borrow();
-                h.get_symbol_name(clause_list[0]) == Some("else")
+                h.get_symbol_or_identifier_name(clause_list[0]) == Some("else")
             };
 
             let matches = if is_else {
@@ -508,7 +509,7 @@ impl LibraryDefinition {
         // Check if it's a simple symbol
         {
             let h = heap.borrow();
-            if let Some(name) = h.get_symbol_name(tv) {
+            if let Some(name) = h.get_symbol_or_identifier_name(tv) {
                 return Ok(ExportSpec::Identifier(name.to_string()));
             }
             if tv.is_pair() {
@@ -534,14 +535,14 @@ impl LibraryDefinition {
 
         let h = heap.borrow();
         let internal = h
-            .get_symbol_name(list[1])
+            .get_symbol_or_identifier_name(list[1])
             .ok_or_else(|| {
                 ParseError::InvalidSyntax("rename internal name must be a symbol".to_string())
             })?
             .to_string();
 
         let external = h
-            .get_symbol_name(list[2])
+            .get_symbol_or_identifier_name(list[2])
             .ok_or_else(|| {
                 ParseError::InvalidSyntax("rename external name must be a symbol".to_string())
             })?
@@ -738,7 +739,7 @@ impl LibraryDefinition {
         }
         let h = heap.borrow();
         matches!(
-            h.get_symbol_name(h.car(tv)),
+            h.get_symbol_or_identifier_name(h.car(tv)),
             Some("export") | Some("import")
         )
     }
@@ -750,7 +751,7 @@ impl LibraryDefinition {
         expected: &str,
     ) -> Result<(), ParseError> {
         let h = heap.borrow();
-        if let Some(name) = h.get_symbol_name(tv) {
+        if let Some(name) = h.get_symbol_or_identifier_name(tv) {
             if name == expected {
                 Ok(())
             } else {
@@ -1315,7 +1316,7 @@ mod tests {
         let h = heap.borrow();
         match &parsed.body_elements[0] {
             BodyElement::Begin(exprs) => {
-                assert_eq!(h.get_symbol_name(exprs[0]), Some("first"));
+                assert_eq!(h.get_symbol_or_identifier_name(exprs[0]), Some("first"));
             }
             _ => panic!("Expected Begin"),
         }
@@ -1329,7 +1330,7 @@ mod tests {
 
         match &parsed.body_elements[2] {
             BodyElement::Begin(exprs) => {
-                assert_eq!(h.get_symbol_name(exprs[0]), Some("third"));
+                assert_eq!(h.get_symbol_or_identifier_name(exprs[0]), Some("third"));
             }
             _ => panic!("Expected Begin"),
         }

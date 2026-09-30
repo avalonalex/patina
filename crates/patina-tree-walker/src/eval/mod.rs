@@ -801,6 +801,7 @@ impl Evaluator {
                         format!("Failed to desugar expression: {e}"),
                         e.diagnostic(),
                     )
+                    .at_opt(e.source_location().cloned())
                 },
             )?;
 

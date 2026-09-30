@@ -81,7 +81,7 @@ fn an_error_later_in_the_stream_is_placed_and_quoted() {
             Some("(import (scheme base))\n(define x 1)\n\n(no-such-procedure x)\n"),
         );
         assert!(!ok, "{backend:?}");
-        assert!(stderr.contains("<stdin>:4:1"), "{backend:?}: {stderr}");
+        assert!(stderr.contains("<stdin>:4:2"), "{backend:?}: {stderr}");
         assert!(
             stderr.contains("4 | (no-such-procedure x)"),
             "{backend:?}: {stderr}"
@@ -210,7 +210,7 @@ fn reading_bytes_preserves_the_next_forms_source_position() {
             stderr.contains("no-such-procedure"),
             "{backend:?}: {stderr}"
         );
-        assert!(stderr.contains("<stdin>:2:29"), "{backend:?}: {stderr}");
+        assert!(stderr.contains("<stdin>:2:30"), "{backend:?}: {stderr}");
         assert!(stderr.contains(line), "{backend:?}: {stderr}");
     }
 }
@@ -245,7 +245,7 @@ fn source_positions_resume_after_reads_across_line_endings() {
                 let (_, stderr, ok) = run_with_deadline(dir.path(), backend, Some(&program));
                 assert!(!ok);
                 assert!(
-                    stderr.contains("<stdin>:3:3\n   3 |   (missing)\n         ^"),
+                    stderr.contains("<stdin>:3:4\n   3 |   (missing)\n          ^"),
                     "{backend:?}, {take}, {ending:?}: {stderr}"
                 );
             }

@@ -125,8 +125,8 @@ Raw indices escape `TaggedValue` into places a relocator cannot see or would
 have to be taught about:
 
 1. `Heap::symbol_table` maps names to bare `HeapIndex` (`heap/mod.rs:255`).
-2. `SourceMap` keys source locations by `tv.raw_bits()`
-   (`crates/patina-core/src/source_map.rs`).
+2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
+   locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
 4. `CallFrame.closure: Option<HeapIndex>` (`crates/patina-vm/src/types/mod.rs:52`).
 5. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
@@ -610,26 +610,39 @@ the backends remain the registry owners.
 
 ## 9. Known Hazards and Policies
 
-### 9.1 SourceMap raw-bits keying (pruned since stage 4b)
+### 9.1 Syntax provenance and source-map snapshots
 
-`SourceMap` keys `HashMap<u64, SourceLocation>` by `tv.raw_bits()`
-(`source_map.rs`). Once slots are reused, a new object could inherit a stale
-source location — misattributed diagnostics, never unsoundness.
+Program parsers allocate a distinct, empty-scoped `Identifier` for each written
+identifier. Its `written` flag preserves ordinary symbol semantics in macro
+scope edits, template compilation and ellipsis recognition; an expansion's
+identifiers remain distinct from these annotated source names. Ordinary datum
+parsers and Scheme `read` still intern symbols and allocate no source metadata.
+Their parser frames also omit source fields. The heap's `syntax_sources` table
+records node spans and pair/vector child spans (including immediate values). Desugaring uses
+this table, never an interned symbol as an occurrence key. Scope edits preserve
+provenance; stripping syntax identifiers into quoted data preserves graph
+sharing and cycles, using the same iterative graph copier. A memo shared by all
+quotes in one form preserves sharing across separate insertions of a macro
+argument; it is cleared when desugaring that form ends, before GC can reuse slots.
 
-**Implemented (stage 4b)** as the recording flavor: sweep pushes each
-reclaimed slot's raw bits into a capped buffer on the heap
-(`Heap::take_gc_freed_bits`), recorded only once a source-mapped session has
-called `enable_gc_freed_tracking` (done by `Parser::new_with_source_map` and `Parser::recording_into`, so
-plain backend use pays nothing). The run loops in `patina-interpreter` and
-`patina-repl` drain via `prune_freed_locations` at the top of each
-parse–eval iteration — sweeps happen only during evaluation and raw-bits
-lookups only during a later form's desugaring, so pruning at the form
-boundary closes the window. Overflowing the buffer cap degrades the next
-drain to "clear all locations": a missing location degrades a diagnostic, a
-stale one misattributes it. Residual (accepted): with several live maps at
-once — nested tracked evals — a drain consumes bits for all of them, leaving
-possibly-stale entries in the map not being pruned; no worse than the
-unpruned status quo, and lookups by raw bits happen only at desugar time.
+This table is **not a root**. Before reclaiming slots, sweep retains only entries
+whose values are marked, then shrinks excess table capacity. This visits annotated
+syntax rather than doing a lookup for every freed datum, and removes entries
+before slots can be reused. There is no drain shared between nested loaders,
+and a later parse cannot see stale provenance. Spans retain an `Arc` to a source
+document containing text and a line-start index, but no Scheme values. Expansion
+chains travel with each expanded span, so separate uses of a template do not
+accumulate history at its definition. IR, bytecode and errors retain a document
+independently of the parsed syntax's lifetime. `SourceLocation` remains `Send + Sync`.
+
+`SourceMap` keeps a compatibility snapshot of parsed node locations for callers
+that inspect it, plus the primary document used by streaming input and parse
+error formatting. These snapshots are pruned at form boundaries using the
+existing capped `Heap::take_gc_freed_bits` buffer; overflow clears the snapshot.
+The compiler does not consult those raw-bit snapshots. Streaming documents
+forget old lines under the existing text budget, preserving the unfinished
+datum; old compiled locations still report their file/line/column but cannot
+quote text that was deliberately discarded.
 
 ### 9.2 Symbol table
 

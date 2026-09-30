@@ -28,7 +28,9 @@ impl<'a> CpsEvaluator<'a> {
         match &expr.kind {
             CpsExprKind::Literal(v) => Ok(*v),
 
-            CpsExprKind::Var { name, scopes } => self.lookup_var_tagged(name, scopes, env),
+            CpsExprKind::Var { name, scopes } => self
+                .lookup_var_tagged(name, scopes, env)
+                .map_err(|error| error.at_opt(expr.source.clone())),
 
             CpsExprKind::ContRef(k) => {
                 let cont = cont_env

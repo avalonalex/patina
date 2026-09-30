@@ -767,6 +767,7 @@ fn vm_evaluate_parsed_library(
                         format!("desugar error: {e}"),
                         e.diagnostic(),
                     )
+                    .at_opt(e.source_location().cloned())
                 },
             )?;
 
@@ -801,6 +802,7 @@ fn vm_evaluate_parsed_library(
                     format!("runtime error: {}", e),
                     e.diagnostic(),
                 )
+                .at_opt(e.source_location().cloned())
             })?;
         }
         Ok(())
@@ -971,6 +973,7 @@ fn compile_for_eval(
                     message: e.to_string(),
                 }
                 .with_diagnostic(e.diagnostic())
+                .at_opt(e.source_location().cloned())
             })
         },
         |e| {
@@ -978,6 +981,7 @@ fn compile_for_eval(
                 message: format!("eval: desugar error: {e}"),
             }
             .with_diagnostic(e.diagnostic())
+            .at_opt(e.source_location().cloned())
         },
     )?;
 

@@ -65,6 +65,8 @@ pub struct SourceLocation {
     pub column: u32,
     /// Optional span length
     pub length: Option<u32>,
+    /// Retained input and exclusive end, when this came from program source.
+    pub span: Option<crate::source_document::SourceSpan>,
 }
 
 impl SourceLocation {
@@ -75,6 +77,7 @@ impl SourceLocation {
             line,
             column,
             length: None,
+            span: None,
         }
     }
 
@@ -85,6 +88,7 @@ impl SourceLocation {
             line,
             column,
             length: Some(length),
+            span: None,
         }
     }
 

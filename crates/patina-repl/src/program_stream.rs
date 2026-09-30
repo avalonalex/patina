@@ -438,7 +438,7 @@ mod tests {
         let input = Port::new_input_string("(define (f)\n  1)\n(f)\n".to_string());
         let mut quoted = None;
         run_program_stream(&input, &heap, "<test>", false, |_, map| {
-            quoted = map.borrow().get_line(1).map(str::to_string);
+            quoted = map.borrow().get_line(1);
             Ok(())
         });
         assert_eq!(quoted.as_deref(), Some("(define (f)"));
@@ -448,7 +448,7 @@ mod tests {
     fn a_byte_order_mark_is_dropped_only_at_the_start_of_the_program() {
         let (outcome, seen) = run("\u{feff}(a)\n\u{feff} (b)\n");
         assert!(outcome.clean());
-        assert_eq!(seen, [Some((1, 1)), None, Some((2, 3))]);
+        assert_eq!(seen, [Some((1, 1)), Some((2, 1)), Some((2, 3))]);
     }
 
     #[test]

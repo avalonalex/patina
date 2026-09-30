@@ -360,7 +360,7 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
         HeapObjectData::Complex { real, imag } => format_complex(*real, *imag, heap, buf),
         HeapObjectData::Symbol(s) => buf.push_str(s),
         HeapObjectData::Ephemeron(_) => buf.push_str("#<ephemeron>"),
-        HeapObjectData::Identifier { name, scopes } => {
+        HeapObjectData::Identifier { name, scopes, .. } => {
             buf.push_str(name);
             if printer.with_scopes && !scopes.is_empty() {
                 write!(buf, "{}", scopes).unwrap();

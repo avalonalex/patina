@@ -50,7 +50,11 @@ impl Expander {
 
         // Create native Identifier with scopes (Racket-style hygiene)
         let mut heap = self.heap().borrow_mut();
-        heap.alloc_identifier(name.clone(), scopes)
+        let value = heap.alloc_identifier(name.clone(), scopes);
+        if let Some(source) = &id.source {
+            heap.record_source(value, source.clone());
+        }
+        value
     }
 
     /// Mark a substituted TaggedValue from a pattern variable with the macro scope.
@@ -98,7 +102,10 @@ impl Expander {
             if let Some((name, scopes)) = heap_ref.get_identifier_data_any(tv) {
                 let new_scopes = scopes.with_scope(self.macro_scope);
                 drop(heap_ref);
-                return heap.borrow_mut().alloc_identifier(name, new_scopes);
+                let mut heap = heap.borrow_mut();
+                let copy = heap.alloc_identifier(name, new_scopes);
+                heap.inherit_source(tv, copy);
+                return copy;
             }
         }
 
@@ -145,6 +152,7 @@ impl Expander {
             for e in marked.into_iter().rev() {
                 out = heap.alloc_pair(e, out);
             }
+            heap.inherit_source(tv, out);
             return out;
         }
 

@@ -243,7 +243,7 @@ impl<B: Backend> Interpreter<B> {
     pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         // Use global environment's heap for parsing to ensure TaggedValue indices are valid
         let heap = self.backend.global_env().heap();
-        let mut parser = Parser::new_with_heap(input, heap.clone())?;
+        let mut parser = Parser::new_program(input, heap.clone(), "<eval>", false)?;
         let expr = parser.parse()?;
         parser.skip_rest()?;
         // Drop parser to release any borrows before evaluation
@@ -264,7 +264,7 @@ impl<B: Backend> Interpreter<B> {
         let mut result = TaggedValue::UNSPECIFIED;
         // Use global environment's heap for parsing to ensure TaggedValue indices are valid
         let heap = self.backend.global_env().heap();
-        let mut parser = Parser::new_with_heap(input, heap.clone())?;
+        let mut parser = Parser::new_program(input, heap.clone(), "<eval>", false)?;
 
         loop {
             match parser.parse_next() {
@@ -293,7 +293,7 @@ impl<B: Backend> Interpreter<B> {
         let mut result = TaggedValue::UNSPECIFIED;
         // Use global environment's heap for parsing to ensure TaggedValue indices are valid
         let heap = self.backend.global_env().heap();
-        let mut parser = match Parser::new_with_heap(input, heap.clone()) {
+        let mut parser = match Parser::new_program(input, heap.clone(), "<eval>", false) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("Error: {}", e);
@@ -781,7 +781,8 @@ mod tests {
     #[test]
     fn test_source_info_desugarer_integration() {
         // Verify that source info flows from parser through desugarer
-        let heap = patina_core::new_shared_heap();
+        let backend = TreeWalker::new();
+        let heap = backend.global_env().heap().clone();
         let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
         let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
         let mut parser =
@@ -790,7 +791,6 @@ mod tests {
         drop(parser);
 
         // Desugar with source map
-        let backend = TreeWalker::new();
         let env = backend.global_env().clone();
         let desugarer = Desugarer::with_env_and_source_map(env, sm);
         let internal_heap = backend.global_env().heap();
@@ -810,21 +810,22 @@ mod tests {
     #[test]
     fn test_eval_error_with_location_tracked() {
         // When using tracked eval, undefined variable errors inside call forms carry source location.
-        // We use a call form because list forms have their source position recorded by the parser.
+        // The identifier span is preserved through the CPS trivial-value path.
         let interp = TreeWalkInterpreter::new_tree_walker();
-        // (list undefined-variable) is a call form at 1:1 — the App CpsExpr carries that source
+        // The unbound identifier starts at column 7.
         let err = interp
             .eval_str_tracked("(list undefined-variable)")
             .unwrap_err();
         if let InterpreterError::Backend(eval_err) = &err {
-            // The error should carry a source location from the call site
+            // The error should carry a source location from the identifier
             assert!(
                 eval_err.source_location().is_some(),
                 "tracked eval error should have source location, got: {eval_err}"
             );
             let loc = eval_err.source_location().unwrap();
             assert_eq!(loc.line, 1);
-            assert_eq!(loc.column, 1);
+            assert_eq!(loc.column, 7);
+            assert_eq!(loc.length, Some(18));
         } else {
             panic!("Expected backend error, got: {err:?}");
         }
@@ -930,31 +931,22 @@ mod tests {
         let mut parser =
             Parser::new_with_source_map(input, heap.clone(), source_name.clone(), sm.clone())
                 .unwrap();
-        let _expr = parser.parse().unwrap();
-        // After parsing, the let form itself is in the source map
-        let sm_ref = sm.borrow();
-        // After expansion (triggered by eval), expansion_records should be populated
-        // We verify the record_expansion mechanism via the SourceMap API directly
-        let loc = patina_core::error::SourceLocation::new("test.scm", 1, 1);
-        drop(sm_ref);
-        // Trigger full eval so expansion happens
-        let mut parser2 =
-            Parser::new_with_source_map(input, heap.clone(), source_name.clone(), sm.clone())
-                .unwrap();
-        let expr2 = parser2.parse().unwrap();
-        drop(parser2);
+        let expr = parser.parse().unwrap();
+        drop(parser);
         let global = interp.backend().global_env().clone();
-        let _ = interp.backend().eval_with_source_map(expr2, &global, &sm);
-        // After eval, expansion records for (1,1) should contain "let"
+        interp
+            .backend()
+            .eval_with_source_map(expr, &global, &sm)
+            .unwrap();
+        // Expanded syntax retains its own history at the invocation position.
         let sm_ref = sm.borrow();
-        let expansions = sm_ref.get_expansions(&loc);
         assert!(
-            expansions.is_some(),
-            "expansion records should be populated for the let call site"
-        );
-        assert!(
-            expansions.unwrap().contains(&"let".to_string()),
-            "should record 'let' expansion"
+            sm_ref.iter_locations().any(|loc| loc.line == 1
+                && loc.column == 1
+                && sm_ref
+                    .get_expansions(loc)
+                    .is_some_and(|names| names.contains(&"let".into()))),
+            "expanded inner forms should retain the 'let' invocation"
         );
     }
 

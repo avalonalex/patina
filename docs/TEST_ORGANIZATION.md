@@ -96,6 +96,14 @@ cargo test -p patina-repl --test reader_robustness
 PROPTEST_CASES=10000 cargo test -p patina-frontend --test reader_properties
 ```
 
+`patina-repl/tests/diagnostics.rs` also checks source spans (#367) through both
+backends: repeated identifiers, reordered macro arguments, Unicode and mixed
+line endings, and deferred calls into included, loaded and library files.
+Core tests check document identity across same-named inputs, retained excerpts,
+stream compaction and GC slot reuse. Parser tests distinguish program identifier
+occurrences from ordinary interned read data; quoted pair/vector cycles check
+that annotations do not escape into Scheme values.
+
 `reader_robustness.rs` runs child processes with deadlines on both backends:
 million-element lists, million-level nesting, million-directive sequences and
 million-character strings with Unicode, escapes and an unterminated variant.

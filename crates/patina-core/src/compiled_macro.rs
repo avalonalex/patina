@@ -198,6 +198,8 @@ impl std::fmt::Display for Pattern {
 #[derive(Clone, Debug)]
 pub struct Identifier {
     name: Rc<str>,
+    /// The written template occurrence, independent of its hygiene scopes.
+    pub source: Option<crate::SourceLocation>,
     /// Scope set from macro definition time (for scope-based hygiene).
     ///
     /// - `Some(scopes)` = FREE VARIABLE with definition-time scopes.
@@ -210,6 +212,7 @@ impl Identifier {
     pub fn new(name: impl Into<Rc<str>>) -> Self {
         Self {
             name: name.into(),
+            source: None,
             definition_scopes: None,
         }
     }
@@ -218,6 +221,7 @@ impl Identifier {
     pub fn with_scopes(name: impl Into<Rc<str>>, scopes: ScopeSet) -> Self {
         Self {
             name: name.into(),
+            source: None,
             definition_scopes: Some(scopes),
         }
     }

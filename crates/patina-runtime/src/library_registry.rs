@@ -64,6 +64,7 @@ pub enum LibraryError {
         file: String,
         message: String,
         diagnostic: Box<crate::Diagnostic>,
+        location: Option<patina_core::SourceLocation>,
     },
 
     /// Evaluation failed after parsing. Keep the error typed: a continuation
@@ -89,11 +90,28 @@ impl LibraryError {
     pub fn into_eval_error(self) -> crate::EvalError {
         use crate::HasDiagnostic;
         let diagnostic = self.diagnostic();
+        let location = self.source_location().cloned();
         match self {
             Self::EvaluationError { error, .. } => error.with_diagnostic(diagnostic),
             other => crate::EvalError::InvalidSyntax(format!("Failed to load library: {other}"))
-                .with_diagnostic(diagnostic),
+                .with_diagnostic(diagnostic)
+                .at_opt(location),
         }
+    }
+
+    pub fn source_location(&self) -> Option<&patina_core::SourceLocation> {
+        match self {
+            Self::ProcessingError { location, .. } => location.as_ref(),
+            Self::EvaluationError { error, .. } => error.source_location(),
+            _ => None,
+        }
+    }
+
+    pub fn at_opt(mut self, source: Option<patina_core::SourceLocation>) -> Self {
+        if let Self::ProcessingError { location, .. } = &mut self {
+            *location = source;
+        }
+        self
     }
 
     pub fn processing(
@@ -105,6 +123,7 @@ impl LibraryError {
             file: source.map(|p| p.display().to_string()).unwrap_or_default(),
             message: message.into(),
             diagnostic: Box::new(diagnostic.in_library(source)),
+            location: None,
         }
     }
 

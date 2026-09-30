@@ -124,6 +124,9 @@ impl EvalError {
 
     /// Wrap this error with a source location.
     pub fn at(self, loc: SourceLocation) -> Self {
+        if self.source_location().is_some() {
+            return self;
+        }
         EvalError::WithLocation {
             error: Box::new(self),
             location: loc,
