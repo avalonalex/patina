@@ -341,6 +341,26 @@ fn reader_errors_show_scheme_tokens_and_caret_context() {
             "  )",
             None,
         ),
+        (
+            "(import (scheme write))\n(display \"before\")\n  #!Fold_Case ABC\n",
+            "before",
+            "Unknown reader directive: #!Fold_Case",
+            3,
+            3,
+            11,
+            "  #!Fold_Case ABC",
+            None,
+        ),
+        (
+            "#!fold-case\n  #!no-fold-caseABC DEF\n",
+            "",
+            "Unknown reader directive: #!no-fold-caseABC",
+            2,
+            3,
+            17,
+            "  #!no-fold-caseABC DEF",
+            None,
+        ),
     ] {
         for ending in ["\n", "\r\n", "\r"] {
             let program = program.replace('\n', ending);
@@ -504,6 +524,41 @@ fn malformed_booleans_are_read_errors_in_programs_and_ports() {
             assert!(ok, "{backend:?}: {text}: {stderr}");
             assert_eq!(stdout, "#t#t", "{backend:?}: {text}: {stderr}");
             assert!(ds.is_empty());
+        }
+    }
+}
+
+#[test]
+fn unknown_directives_are_read_errors_on_string_file_and_stdin_ports() {
+    let dir = tempfile::tempdir().unwrap();
+    for text in ["#!fold_case", "#!no-fold-caseABC", "#!unknown", "#!"] {
+        // The first read succeeds despite lookahead reaching the bad
+        // directive. The next read must raise a Scheme read-error object.
+        let data = format!("#!fold-case Before {text}\nAfter");
+        fs::write(dir.path().join("datum.dat"), &data).unwrap();
+        let reader = format!(
+            r#"(import (scheme base) (scheme read) (scheme write) (scheme file))
+(for-each
+ (lambda (port)
+   (write (read port))
+   (write (guard (e (else (read-error? e))) (read port) #f))
+   (close-input-port port))
+ (list (open-input-string "{data}")
+       (open-input-file "datum.dat")
+       (current-input-port)))
+"#
+        );
+        fs::write(dir.path().join("read.scm"), reader).unwrap();
+        for backend in BOTH_BACKENDS {
+            let (ds, stdout, stderr, ok) = run(dir.path(), backend, &["read.scm"], Some(&data));
+            assert!(ok, "{backend:?}: {text}: {stderr}");
+            assert_eq!(
+                stdout,
+                "before#t".repeat(3),
+                "{backend:?}: {text}: {stderr}"
+            );
+            assert!(ds.is_empty());
+            assert!(stderr.is_empty());
         }
     }
 }

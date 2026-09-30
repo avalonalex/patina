@@ -59,6 +59,9 @@ pub enum LexError {
     #[error("Invalid boolean literal: {0}")]
     InvalidBoolean(String),
 
+    #[error("Unknown reader directive: #!{0}")]
+    UnknownReaderDirective(String),
+
     #[error("Reserved character (R7RS): {0}. Reserved for future extensions")]
     ReservedCharacter(char),
 
@@ -790,7 +793,7 @@ impl Lexer {
             let token = if self.matches_ascii_at(0, "#!") {
                 self.advance(); // #
                 self.advance(); // !
-                self.read_reader_directive();
+                self.read_reader_directive()?;
                 if !self.is_at_end() {
                     continue;
                 }
@@ -1430,14 +1433,14 @@ impl Lexer {
 
     /// Read a reader directive like #!fold-case or #!no-fold-case
     /// These directives affect subsequent lexing but don't produce tokens themselves
-    fn read_reader_directive(&mut self) {
+    fn read_reader_directive(&mut self) -> Result<(), LexError> {
         // A shebang (`#!/usr/bin/env patina`) is not a reader directive:
         // `#!` followed by `/` or a space comments out the rest of the line,
         // so an installed script runs. `#!fold-case` is unaffected — a
         // directive name follows its `#!` immediately.
         if !self.is_at_end() && matches!(self.current_char(), '/' | ' ') {
             self.skip_to_line_ending();
-            return;
+            return Ok(());
         }
 
         // Read the directive name (until whitespace or delimiter)
@@ -1451,11 +1454,15 @@ impl Lexer {
         match directive.to_lowercase().as_str() {
             "fold-case" => self.fold_case = true,
             "no-fold-case" => self.fold_case = false,
-            _ => {
-                // Unknown directive - R7RS says implementations may support others
-                // For now, just ignore unknown directives and continue
-            }
+            // Compatibility markers are accepted explicitly. They do not
+            // infer a dialect or change the caller's --allow-r6rs setting.
+            "r6rs" | "r7rs" => {}
+            // A typo must not silently change how subsequent data is read
+            // (#365). next_fed_token defers names at a temporary EOF until
+            // their delimiter arrives, just as it does for other tokens.
+            _ => return Err(LexError::UnknownReaderDirective(directive)),
         }
+        Ok(())
     }
 
     fn read_character(&mut self) -> Result<Token, LexError> {
@@ -2841,6 +2848,103 @@ mod tests {
     }
 
     // ========== Reader Directive Tests ==========
+
+    #[test]
+    fn unknown_directives_report_the_whole_name_and_its_position() {
+        for text in [
+            "#!fold_case",
+            "#!Fold_Case",
+            "#!no-fold-caseABC",
+            "#!r7rs-typo",
+            "#!unknown",
+            "#!λ",
+            "#!fold-case#!no-fold-case",
+        ] {
+            for ending in ["", " ", "\t", "\n", ")", ";comment", "'ABC"] {
+                let mut lexer = Lexer::new(&format!("\n  {text}{ending}"));
+                let error = lexer.next_token().unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("Unknown reader directive: {text}")
+                );
+                assert!(!error.is_incomplete());
+                let span = error.span().unwrap();
+                assert_eq!((span.start.line, span.start.column), (2, 3));
+                assert_eq!(
+                    (span.end.line, span.end.column),
+                    (2, 3 + text.chars().count() as u32)
+                );
+                assert!(
+                    !lexer.fold_case,
+                    "a malformed fold directive must not change the mode"
+                );
+            }
+        }
+        for text in ["#!", "#!\n", "#!\t", "#!;comment"] {
+            let error = Lexer::new(text).next_token().unwrap_err();
+            assert_eq!(error.to_string(), "Unknown reader directive: #!");
+        }
+    }
+
+    #[test]
+    fn compatibility_directives_preserve_case_and_dialect_settings() {
+        for marker in ["#!r6rs", "#!r7rs", "#!R6RS", "#!R7RS"] {
+            for r6rs in [false, true] {
+                for fold_case in [false, true] {
+                    let mut lexer = Lexer::new(&format!("{marker} ABC [")).reading_r6rs(r6rs);
+                    lexer.set_initial_fold_case(fold_case);
+                    assert_eq!(
+                        lexer.next_token_kind().unwrap(),
+                        Token::Identifier(if fold_case { "abc" } else { "ABC" }.into())
+                    );
+                    if r6rs {
+                        assert_eq!(lexer.next_token_kind().unwrap(), Token::LeftParen);
+                    } else {
+                        assert!(matches!(
+                            lexer.next_token().unwrap_err().kind(),
+                            LexError::R6rsSyntax { .. }
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fed_directives_wait_for_the_whole_name() {
+        for text in [
+            "#!fold-case",
+            "#!no-fold-case",
+            "#!r6rs",
+            "#!r7rs",
+            "#!fold_case",
+            "#!no-fold-caseABC",
+            "#!unknown",
+        ] {
+            let expected = Lexer::new(text)
+                .next_token_kind()
+                .map_err(|e| e.to_string());
+            for split in 0..=text.len() {
+                let mut lexer = Lexer::feedable(false);
+                lexer.feed(&text[..split]);
+                assert!(
+                    lexer.next_fed_token().unwrap().is_none(),
+                    "{text}, split {split}"
+                );
+                lexer.feed(&text[split..]);
+                assert!(
+                    lexer.next_fed_token().unwrap().is_none(),
+                    "{text}, no boundary yet"
+                );
+                lexer.no_more_text();
+                let result = lexer
+                    .next_fed_token()
+                    .map(|s| s.unwrap().token)
+                    .map_err(|e| e.to_string());
+                assert_eq!(result, expected, "{text}, split {split}");
+            }
+        }
+    }
 
     #[test]
     fn test_fold_case_directive() {
