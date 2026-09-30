@@ -7,9 +7,9 @@
 # invention and nothing defines it -- not the corpus, not Patina, not chibi or
 # Gauche. But correcting it to `(srfi 114)` would not help either, because
 # **SRFI 114 is withdrawn**, superseded by SRFI 128 on 2017-08-10
-# (https://srfi.schemers.org/srfi-114/). Patina ships SRFI 128, and bundling a
-# withdrawn SRFI to satisfy one package is what the bundling policy in
-# PRD/phase2/R7RS_LARGE_STATUS.md exists to prevent.
+# (https://srfi.schemers.org/srfi-114/). Patina ships SRFI 128, so this patch
+# uses the available successor. Bundling eligibility does not require
+# implementing every SRFI; see docs/README.md#library-bundling-policy.
 #
 # So this patch moves the package to the successor SRFI, which is what its
 # author would do today. Three renames, all of them SRFI 114 -> 128 spelling

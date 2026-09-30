@@ -10,8 +10,17 @@ This directory contains completed research, analysis, and implementation documen
 
 ### R7RS-large planning history
 
-The [live tracker](../phase2/R7RS_LARGE_STATUS.md) now contains the current
-bundling policy and edition coverage. Its superseded policy discussion and
+**Status:** Red and Tangerine completed and archived 2026-09-30 after
+[#577](https://github.com/avalonalex/patina/pull/577) and
+[#578](https://github.com/avalonalex/patina/pull/578).
+
+The [completion record](R7RS_LARGE_STATUS.md) preserves the edition coverage,
+verification references and policy at completion. The standing
+[bundling policy](../../docs/README.md#library-bundling-policy) now lives in
+`docs/README.md`; later R7RS-large work belongs in issues and the
+[syntax-case design](../macro/SYNTAX_CASE_DESIGN.md).
+
+The superseded policy discussion and
 completed porting priorities are preserved in the
 [pre-cleanup revision](https://github.com/avalonalex/patina/blob/ca1a1762c1c40be7c28896f9983809b6bbfcca95/PRD/phase2/R7RS_LARGE_STATUS.md),
 retired 2026-09-30. That historical version's Tangerine completion claim was

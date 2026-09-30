@@ -85,7 +85,7 @@ history and licence notice. The full checkout recipe retains it automatically.
 
 ## Why this root exists
 
-`PRD/phase2/R7RS_LARGE_STATUS.md` § "Bundling policy" includes R7RS-large
+The [bundling policy](../docs/README.md#library-bundling-policy) includes R7RS-large
 libraries (including drafts) and SRFIs, and keeps implementation-specific
 libraries external. A pure-Scheme `(chibi …)` library stays external even if
 many tests need it; a SRFI implementation sourced from Chibi can ship under

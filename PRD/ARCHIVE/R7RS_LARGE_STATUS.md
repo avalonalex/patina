@@ -1,13 +1,18 @@
-# R7RS-Large Coverage and Bundling Policy
+# R7RS-large — Red and Tangerine completion record
 
-**Updated:** 2026-09-30
+**Completed and archived:** 2026-09-30, after
+[#577](https://github.com/avalonalex/patina/pull/577) added the bytevector alias
+and [#578](https://github.com/avalonalex/patina/pull/578) added integer division.
 
-This is the current bundling policy and edition tracker. Track L is complete;
-remaining library work is tracked in issues. Red's 17 library families are
-available using SRFI 158 for generators. Tangerine's **10 adopted items** are
-available, including integer division ([#576](https://github.com/avalonalex/patina/issues/576)).
+This is a dated completion record, not an active planning queue. Red's 17
+library families and Tangerine's **10 adopted items** are available, using
+SRFI 158 for generators. Later R7RS-large work remains separate; new work
+belongs in GitHub issues. The standing
+[bundling policy](../../docs/README.md#library-bundling-policy) now lives in
+the implementation documentation. The policy and coverage below record the
+state at completion.
 
-## Bundling policy
+## Bundling policy at completion
 
 **Bundle R7RS-large libraries (including drafts) and SRFIs. Keep libraries specific to another
 Scheme implementation external.** Owner decision, 2026-09-12; this replaces the earlier restriction
@@ -139,6 +144,11 @@ the old I/O, exception, records, and system-interface queue is retired.
 
 ## Beyond Red and Tangerine
 
+The [current R7RS-large report](https://r7rs.org/large/) is organized into
+volumes and fascicles. A sweep against those drafts is deferred in
+[#580](https://github.com/avalonalex/patina/issues/580); the older edition
+coverage above does not establish conformance to them.
+
 Eligibility extends to later R7RS-large drafts and other SRFIs under the policy
 above. This table is not an inventory of every SRFI Patina ships, nor a claim
 that R7RS-large as a whole is complete. New implementation work belongs in
@@ -152,8 +162,8 @@ not implement its procedural macro facilities; see the
 ## Historical record
 
 The completed compatibility work is summarized in the
-[Track L archive](../ARCHIVE/TRACK_L_LEFTOVERS.md). The superseded policies,
+[Track L archive](TRACK_L_LEFTOVERS.md). The superseded policies,
 porting narrative, and old priority lists remain available in the
 [pre-cleanup revision of this tracker](https://github.com/avalonalex/patina/blob/ca1a1762c1c40be7c28896f9983809b6bbfcca95/PRD/phase2/R7RS_LARGE_STATUS.md).
 That revision contains stale coverage claims, including the omitted SRFI 141;
-use the tables above for current status.
+the tables above record coverage at completion.

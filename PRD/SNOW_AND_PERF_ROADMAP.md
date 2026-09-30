@@ -65,7 +65,7 @@ GC (P6) is the cross-cutting unblocker: real Snow workloads run long enough that
   churn from committed chibi reports ([#380](https://github.com/avalonalex/patina/issues/380)).
 - Package distribution and FFI remain separate, deferred efforts in their
   designs linked above.
-- Use the [R7RS-large status](phase2/R7RS_LARGE_STATUS.md) for bundling policy,
+- Use the [bundling policy](../docs/README.md#library-bundling-policy) for library scope,
   [VM decisions](../docs/VM_DECISIONS.md) for the implemented architecture and
   [GC design](../docs/GC_DESIGN.md) for collection rules. New defects belong
   in GitHub issues.

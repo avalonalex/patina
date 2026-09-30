@@ -12,7 +12,7 @@ use patina_runtime::Backend;
 use patina_tree_walker::Evaluator;
 use patina_vm::VmBackend;
 
-/// (alias tail, backing SRFI tail) pairs, per PRD/phase2/R7RS_LARGE_STATUS.md.
+/// (alias tail, backing SRFI tail) pairs, per PRD/ARCHIVE/R7RS_LARGE_STATUS.md.
 ///
 /// Each entry is the part of the library name *after* the head — so `("list",
 /// "1")` is `(scheme list)` over `(srfi 1)`. Most are a single word and a

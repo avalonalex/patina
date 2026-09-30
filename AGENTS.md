@@ -130,13 +130,6 @@ issues and the archive before filing**, for the same reason.
   step did, the acceptance criteria, and the approaches measured and rejected
   — and the non-hygiene families are still open. Two PRs were closed for
   skipping it.
-- `PRD/phase2/R7RS_LARGE_STATUS.md` — **the bundling policy and edition
-  tracker.** The answer to "does Patina ship this library, and why (not)":
-  it records edition coverage and the 2026-09-12 policy: R7RS-large
-  libraries (including drafts) and SRFIs are eligible, Patina's own extensions
-  remain bundled, and libraries specific to another implementation stay
-  external. Eligibility does not require immediate implementation. Check it
-  before bundling anything.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — archived Phase 1 cleanup tracker
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
@@ -148,6 +141,9 @@ issues and the archive before filing**, for the same reason.
 
 **Completed compatibility work:**
 
+- `PRD/ARCHIVE/R7RS_LARGE_STATUS.md` — Red and Tangerine completed 2026-09-30
+  with #577 and #578. Preserves dated library coverage and verification
+  references; later R7RS-large work belongs in issues and the syntax-case design.
 - `PRD/ARCHIVE/TRACK_L_LEFTOVERS.md` — Track L completed 2026-09-29 with #551.
   The final ledger preserves dated corpus and Larceny measurements, standing
   rules and separate follow-ups. The earlier working record is
@@ -155,6 +151,11 @@ issues and the archive before filing**, for the same reason.
   not active queues. New findings belong in GitHub issues.
 
 **Feature docs:**
+- `docs/README.md#library-bundling-policy` — **the standing bundling policy.**
+  R7RS-large libraries (including drafts) and SRFIs are eligible, Patina's own
+  extensions remain bundled, and libraries specific to another implementation
+  stay external. Eligibility does not require immediate implementation. Check
+  it before bundling anything; it also records provenance and test requirements.
 - `docs/MACRO_SYSTEM.md` — macro system architecture (scope sets, flip-scope
   algorithm), and the two instruments for hygiene work: `PATINA_SCOPE_TRACE`
   (what scopes a binding actually gets, and how a reference resolved) and

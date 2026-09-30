@@ -13,6 +13,12 @@ The [archived completion record](ARCHIVE/TRACK_L_LEFTOVERS.md) preserves the
 corpus measurements, standing rules and separate follow-ups. New work belongs
 in GitHub issues.
 
+**Red and Tangerine — complete 2026-09-30.** #577 and #578 delivered the last
+two recorded items. The [archived edition tracker](ARCHIVE/R7RS_LARGE_STATUS.md)
+preserves the coverage tables; the standing
+[bundling policy](../docs/README.md#library-bundling-policy) lives in `docs/`.
+Later R7RS-large work remains separate.
+
 See [MILESTONES.md](MILESTONES.md) for full history.
 
 The implemented filesystem abstraction and public directory API are documented
@@ -67,14 +73,15 @@ miniKanren embedding.
 PRD/
 ├── MILESTONES.md                       # Achievement history
 ├── phase2/
-│   ├── README.md                      # Phase 2A completion and follow-ons
-│   └── R7RS_LARGE_STATUS.md
+│   └── README.md                      # Phase 2A completion and follow-ons
 ├── macro/
 │   └── SYNTAX_CASE_DESIGN.md           # Includes deferred mechanization (H5)
 ```
 
 ## Deferred Ideas
 
+- [Review current R7RS-large volumes and fascicles](https://github.com/avalonalex/patina/issues/580) —
+  assess the current drafts separately from completed Red/Tangerine library coverage.
 - [Editor integration and Scheme formatting](future/EDITOR_AND_FORMATTER_PRD.md) —
   preserve the reader audit's tooling ideas for later; no implementation is scheduled.
 
@@ -82,6 +89,7 @@ PRD/
 
 Completed research and historical documents in `PRD/ARCHIVE/`. Key references:
 
+- [R7RS-large — Red and Tangerine](ARCHIVE/R7RS_LARGE_STATUS.md) — completed edition coverage and verification references
 - [Track L — Third-Party Library Compatibility](ARCHIVE/TRACK_L_LEFTOVERS.md) — completed backlog, dated measurements and standing rules
 - [Track H — Hygiene Assurance](ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md) — H1–H3's bounded harnesses and H4's completed evaluation; runtime defects remain in their live issues and triage entries
 - `ARCHIVE/numeric_research/NUMERIC_SUMMARY.md` — canonical numeric tower guide
