@@ -147,6 +147,7 @@ const SUITE: &[(&str, i64)] = &[
     ("srfi/bitwise.scm", 82),
     ("srfi/char-sets.scm", 87),
     ("srfi/regex-graphemes.scm", 6),
+    ("srfi/division.scm", 17),
     ("srfi/fixnums.scm", 54),
     ("srfi/homogeneous-vectors.scm", 111),
     ("srfi/sets.scm", 22),

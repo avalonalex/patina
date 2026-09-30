@@ -37,6 +37,20 @@ fn fnv1a(data: &[u8]) -> u64 {
 
 /// (repo-relative path, FNV-1a 64 of the file bytes, recorded 2026-08-12)
 const PINNED: &[(&str, u64)] = &[
+    // SRFI 141 reference implementation and R7RS wrapper, pinned after the
+    // marked base-binding reuse and domain checks recorded in 141.sld.
+    // Its Chibi division suite lifts only the import into our wrapper;
+    // the original BSD-3-Clause COPYING file is retained beside it.
+    ("lib/srfi/141.sld", 0xfca19c227cef92ca),
+    ("lib/srfi/141/division.scm", 0xcb0d525ac33e254b),
+    (
+        "scheme_tests/upstream/srfi/141/test.sld",
+        0x94d482d561139617,
+    ),
+    (
+        "scheme_tests/upstream/srfi/141/division-tests.scm",
+        0x398c8ebd5c348d0b,
+    ),
     // SRFI 162's own sample implementation, byte-identical. The rest of
     // lib/srfi/128/ is the adapted SRFI 128 port and is deliberately unpinned
     // (see the module docs); this file is not adapted, so it is watched.
@@ -318,6 +332,8 @@ const PINNED_TREES: &[&str] = &[
     "lib/srfi/132",
     "lib/srfi/134",
     "lib/srfi/135",
+    "lib/srfi/141",
+    "scheme_tests/upstream/srfi/141",
     "lib/srfi/144",
     // SRFI 159's two directories. Without both named here the hash list is
     // the only guard on this tree, and it cannot see an *added* file: a

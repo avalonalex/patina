@@ -4,8 +4,8 @@
 
 This is the current bundling policy and edition tracker. Track L is complete;
 remaining library work is tracked in issues. Red's 17 library families are
-available using SRFI 158 for generators. Tangerine has **9 of 10** adopted
-items; integer division remains open in [#576](https://github.com/avalonalex/patina/issues/576).
+available using SRFI 158 for generators. Tangerine's **10 adopted items** are
+available, including integer division ([#576](https://github.com/avalonalex/patina/issues/576)).
 
 ## Bundling policy
 
@@ -63,7 +63,7 @@ renames the SRFI 101 interface to avoid shadowing ordinary list operations
 
 ## Tangerine Edition
 
-**9 of 10 adopted items are available.** The
+**All 10 adopted items are available.** The
 [final ballot results](https://groups.google.com/g/scheme-reports-wg2/c/ZDG-J5Mi2og)
 adopted nine SRFIs plus R6RS bytevectors. Count each adopted item once: SRFI 146
 provides two libraries, and SRFI 160 provides a family of libraries.
@@ -71,7 +71,7 @@ provides two libraries, and SRFI 160 provides a family of libraries.
 | Adopted API | R7RS-large name | Patina status |
 |-------------|-----------------|---------------|
 | SRFI 115 | `(scheme regex)` | Shipped over `(srfi 115)` |
-| SRFI 141 | `(scheme division)` | **Missing**, including `(srfi 141)` — [#576](https://github.com/avalonalex/patina/issues/576) |
+| SRFI 141 | `(scheme division)` | Shipped over `(srfi 141)` — [#576](https://github.com/avalonalex/patina/issues/576) |
 | SRFI 143 | `(scheme fixnum)` | Shipped over `(srfi 143)` |
 | SRFI 144 | `(scheme flonum)` | Shipped over `(srfi 144)` |
 | SRFI 146 | `(scheme mapping)`, `(scheme mapping hash)` | Shipped over `(srfi 146)` and `(srfi 146 hash)` |
@@ -83,6 +83,11 @@ provides two libraries, and SRFI 160 provides a family of libraries.
 
 `TYPE` denotes `u8`, `s8`, `u16`, `s16`, `u32`, `s32`, `u64`, `s64`, `f32`,
 `f64`, `c64`, or `c128`. SRFI 4 supplies the numeric-vector substrate.
+
+`(scheme division)` and `(srfi 141)` share all eighteen procedures across the
+floor, ceiling, truncate, round, Euclidean, and balanced families. Floor and
+truncate reuse `(scheme base)`'s bindings. Round breaks ties toward an even
+quotient; balanced division keeps the remainder in `[-|d|/2, |d|/2)`.
 
 `(scheme bytevector)` shares bindings with `(r6rs bytevectors)` and
 `(rnrs bytevectors)`. Its `bytevector-copy!` follows R6RS:
@@ -108,6 +113,11 @@ provenance records give the narrower evidence:
   exercises the public bytevector name, both copy conventions, overlapping
   copies, integer/IEEE access, and text encodings. The CLI tests also require
   the alias to resolve with isolated library lookup.
+- [`division.scm`](../../crates/patina-tests/tests/scheme/srfi/division.scm)
+  checks all six division families, signs, ties, exactness, and large integers.
+  The upstream lane also runs Chibi's division suite; the source revision,
+  licenses, and local adaptations are recorded in
+  [`141.sld`](../../lib/srfi/141.sld) and the suite inventory below.
 - [`upstream_srfi_suites.rs`](../../crates/patina-tests/tests/upstream_srfi_suites.rs)
   and the [suite inventory](../../scheme_tests/upstream/README.md) track upstream
   coverage and explicit reasons for omissions. Larceny's separately obtained

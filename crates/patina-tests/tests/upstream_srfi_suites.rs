@@ -265,6 +265,7 @@ const SRFI_159_BODY: &str = "(run-tests) \
      (guard (e (#t #f)) (delete-file \"chibi-show-test-0123456789\"))";
 
 suite_tests! {
+    (srfi_141, "srfi 141", "(srfi 141 test)", 0, 304),
     (srfi_151_bitwise, "srfi 151", "(srfi 151 test)", 0, 145),
     (srfi_143_fixnum, "srfi 143", "(srfi 143 test)", 0, 141),
     (srfi_132_sort, "srfi 132", "(srfi 132 test)", 0, 221),

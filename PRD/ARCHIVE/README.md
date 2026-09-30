@@ -15,7 +15,8 @@ bundling policy and edition coverage. Its superseded policy discussion and
 completed porting priorities are preserved in the
 [pre-cleanup revision](https://github.com/avalonalex/patina/blob/ca1a1762c1c40be7c28896f9983809b6bbfcca95/PRD/phase2/R7RS_LARGE_STATUS.md),
 retired 2026-09-30. That historical version's Tangerine completion claim was
-incorrect; SRFI 141 remains tracked in [#576](https://github.com/avalonalex/patina/issues/576).
+incorrect; the omitted SRFI 141 was subsequently added in
+[#576](https://github.com/avalonalex/patina/issues/576).
 
 ---
 

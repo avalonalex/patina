@@ -36,6 +36,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("ilist", "116"),             // Red
     ("ideque", "134"),            // Red
     ("flonum", "144"),            // Tangerine
+    ("division", "141"),          // Tangerine
     ("text", "135"),              // Red
     ("ephemeron", "124"),         // Red
     ("mapping", "146"),           // Tangerine
@@ -179,6 +180,69 @@ fn eval_to_string(src: &str) -> String {
         "backends disagree for: {src}\n  tree-walker: {tw_out}\n  vm: {vm_out}"
     );
     vm_out
+}
+
+/// SRFI 141 adds four families and reuses R7RS-small's other two (#576).
+#[test]
+fn division_alias_shares_srfi_and_base_bindings() {
+    assert_eq!(
+        eval_to_string(
+            r#"
+            (import (scheme base)
+                    (prefix (scheme division) d:)
+                    (prefix (srfi 141) s:))
+            (define original d:ceiling-quotient)
+            (define shared
+              (and (eq? original s:ceiling-quotient)
+                   (eq? floor/ d:floor/) (eq? floor/ s:floor/)
+                   (eq? floor-quotient d:floor-quotient)
+                   (eq? floor-remainder d:floor-remainder)
+                   (eq? truncate/ d:truncate/) (eq? truncate/ s:truncate/)
+                   (eq? truncate-quotient d:truncate-quotient)
+                   (eq? truncate-remainder d:truncate-remainder)))
+            (set! d:ceiling-quotient (lambda (n d) 'replacement))
+            (define observed (list shared (s:ceiling-quotient 13 4)))
+            (set! d:ceiling-quotient original)
+            observed
+            "#,
+        ),
+        "(#t replacement)"
+    );
+}
+
+/// SRFI 141 calls invalid domains "an error", without requiring signalling.
+/// Patina deliberately rejects them like its base division procedures do;
+/// this policy is not a portable oracle assertion.
+#[test]
+fn division_families_reject_invalid_arguments() {
+    assert_eq!(
+        eval_to_string(
+            r#"
+            (import (scheme base) (scheme division))
+            (define procedures
+              (list floor/ floor-quotient floor-remainder
+                    truncate/ truncate-quotient truncate-remainder
+                    ceiling/ ceiling-quotient ceiling-remainder
+                    round/ round-quotient round-remainder
+                    euclidean/ euclidean-quotient euclidean-remainder
+                    balanced/ balanced-quotient balanced-remainder))
+            (define invalid
+              (list '(1 0) '(1 0.0) '(1.0 0) '(1 -0.0) '(0 0)
+                    '(3/2 2) '(3 1.5) '(x 2) '(1 x)
+                    '(+inf.0 2) '(1 +nan.0) '(1) '(1 2 3)))
+            (define (all? pred xs)
+              (or (null? xs) (and (pred (car xs)) (all? pred (cdr xs)))))
+            (all? (lambda (f)
+                    (all? (lambda (args)
+                            (guard (e (else #t))
+                              (call-with-values (lambda () (apply f args))
+                                                (lambda results #f))))
+                          invalid))
+                  procedures)
+            "#,
+        ),
+        "#t"
+    );
 }
 
 /// Tangerine's bytevector library is backed by R6RS, not a SRFI (#575).

@@ -11,7 +11,8 @@ here is the same person who wrote the implementation. `srfi/151/test.sld` alone
 is 145 assertions against the few dozen hand-written SRFI 151 rows in
 `crates/patina-tests/tests/scheme/srfi/bitwise.scm`.
 
-The SRFI suites are from chibi-scheme's `lib/` except `srfi/134/`, which comes
+The SRFI suites are from chibi-scheme's `lib/` except `srfi/141/`, which comes
+from its `tests/` directory, `srfi/134/`, which comes
 from the SRFI 134 distribution itself (`lib/srfi/PROVENANCE.md`), and
 `srfi/188/`, whose source is recorded below; the `chibi/`
 suites are from the same sha256-pinned snowballs the libraries themselves
@@ -31,6 +32,7 @@ that adoption, since the hand-written subset it replaced could not express
 |---|---|---|---|
 | `srfi/151/test.sld` | 145 | 0 | verbatim |
 | `srfi/143/test.sld` | 141 | 0 | verbatim |
+| `srfi/141/test.sld` | 304 | 0 | Chibi's division script, import lifted into the wrapper |
 | `srfi/132/test.sld` | 221 | 0 | verbatim |
 | `srfi/133/test.sld` | 93 | 0 | verbatim |
 | `srfi/113/test.sld` | 253 | 0 | verbatim |
@@ -59,6 +61,18 @@ that adoption, since the hand-written subset it replaced could not express
 | `chibi/optional-test.sld` | 11 | 0 | imports |
 | `chibi/diff-test.sld` | 7 | 0 | imports |
 | `chibi/term/ansi-test.sld` | 234 | 0 | framework shim |
+
+**SRFI 141** uses Chibi's `tests/division-tests.scm` at commit
+`bb9b3215e52bd29cecdfa3ce37cd97721f0c2cc0`. All 304 assertions are unchanged;
+only the leading import moved into `test.sld`, whose `run-tests` lets the
+harness install its counting reporter before any assertions run. Chibi's
+BSD-3-Clause `COPYING` is retained beside the suite. The wrapper and adapted
+body are pinned in `bundled_provenance.rs`. This suite exercises
+Patina's SRFI reference implementation through `(scheme division)`, not
+Chibi's implementation. The additional portable `srfi/division.scm` rows
+check the six families' identities and remainder bounds over signed exact,
+inexact, and large-integer inputs; Patina's error policy and binding sharing
+are checked in `r7rs_large_aliases.rs`.
 
 **SRFI 188** comes directly from the specification author's
 [reference repository](https://github.com/scheme-requests-for-implementation/srfi-188/blob/7fed7187f640c75d83543b852afac176b5ab4ae1/srfi/188/test.sld),
