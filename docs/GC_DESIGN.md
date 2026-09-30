@@ -632,7 +632,12 @@ before slots can be reused. There is no drain shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source
 document containing text and a line-start index, but no Scheme values. Expansion
 chains travel with each expanded span, so separate uses of a template do not
-accumulate history at its definition. IR, bytecode and errors retain a document
+accumulate history at its definition. Within an invocation, nodes with the same
+history prefix share its extended name array; copying every name for every node
+makes large library imports consume gigabytes while collection is deferred.
+Syntax copies likewise share location and child-span payloads, detaching them
+only when their provenance changes. The table's entries still own no Scheme values.
+IR, bytecode and errors retain a document
 independently of the parsed syntax's lifetime. `SourceLocation` remains `Send + Sync`.
 
 `SourceMap` keeps a compatibility snapshot of parsed node locations for callers

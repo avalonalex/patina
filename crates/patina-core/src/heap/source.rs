@@ -3,11 +3,12 @@
 
 use super::Heap;
 use crate::{SourceLocation, TaggedValue};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct SyntaxSource {
     pub location: Option<SourceLocation>,
-    pub children: Vec<Option<SourceLocation>>,
+    pub children: Option<Rc<[Option<SourceLocation>]>>,
 }
 
 impl Heap {
@@ -22,10 +23,8 @@ impl Heap {
         if value.is_pair() || value.is_vector() || value.is_string() || value.is_object() {
             // Interned symbols denote a name, never one occurrence.
             if self.get_symbol_name(value).is_none() {
-                self.syntax_sources
-                    .entry(value.raw_bits())
-                    .or_default()
-                    .location = Some(location);
+                Rc::make_mut(self.syntax_sources.entry(value.raw_bits()).or_default()).location =
+                    Some(location);
             }
         }
     }
@@ -36,21 +35,23 @@ impl Heap {
         value: TaggedValue,
         children: Vec<Option<SourceLocation>>,
     ) {
-        self.syntax_sources
-            .entry(value.raw_bits())
-            .or_default()
-            .children = children;
+        Rc::make_mut(self.syntax_sources.entry(value.raw_bits()).or_default()).children =
+            Some(children.into());
     }
 
     pub fn child_source(&self, value: TaggedValue, index: usize) -> Option<&SourceLocation> {
         self.syntax_sources
             .get(&value.raw_bits())?
             .children
+            .as_ref()?
             .get(index)?
             .as_ref()
     }
 
     pub fn inherit_source(&mut self, original: TaggedValue, copy: TaggedValue) {
+        // Scope edits often copy the same syntax repeatedly while a library
+        // load defers GC. Share its immutable provenance; record_source and
+        // record_source_children detach only when an occurrence is updated.
         if original != copy
             && (copy.is_pair() || copy.is_vector() || copy.is_string() || copy.is_object())
             && self.get_symbol_name(copy).is_none()
@@ -180,6 +181,32 @@ impl Heap {
 mod tests {
     use super::*;
     use crate::{Collector, GcRoots, GcVisitor, MarkSweepCollector, ScopeSet, SourceMap};
+
+    #[test]
+    fn syntax_copies_keep_independent_locations_and_child_spans() {
+        let mut heap = Heap::new();
+        let mut map = SourceMap::new();
+        map.set_source_text("(1) (2)".into());
+        let original = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let copy = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let first = map.location("test.scm", 1, 1, 1, 4);
+        let second = map.location("test.scm", 1, 5, 1, 8);
+        heap.record_source(original, first.clone());
+        heap.record_source_children(original, vec![Some(first.clone()), None]);
+        heap.inherit_source(original, copy);
+
+        heap.record_source(copy, second.clone());
+        assert_eq!(heap.source(original), Some(&first));
+        assert_eq!(heap.source(copy), Some(&second));
+        assert_eq!(heap.child_source(copy, 0), Some(&first));
+
+        heap.record_source_children(copy, vec![Some(second.clone()), None]);
+        assert_eq!(heap.child_source(original, 0), Some(&first));
+        assert_eq!(heap.child_source(copy, 0), Some(&second));
+        heap.record_source_children(original, vec![None, Some(first.clone())]);
+        assert_eq!(heap.child_source(copy, 0), Some(&second));
+        assert_eq!(heap.source(copy), Some(&second));
+    }
 
     #[test]
     fn sweep_removes_non_owning_provenance_before_slot_reuse() {

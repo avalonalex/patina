@@ -120,6 +120,11 @@ fn stamp_expansion_source(
     // not accumulate history at the template's shared text position.
     let mut pending = vec![tv];
     let mut seen = HashSet::new();
+    // A wide expansion gives many nodes the same history. Extend each
+    // distinct prefix once, rather than copying all its strings per node.
+    // Keep the prefixes alive while keyed by address, so an allocation's
+    // address cannot be reused during this walk.
+    let mut histories = HashMap::new();
     while let Some(value) = pending.pop() {
         if !seen.insert(value.raw_bits()) {
             continue;
@@ -131,13 +136,17 @@ fn stamp_expansion_source(
             .unwrap_or_else(|| source.clone());
         if value.is_pair() || value.is_vector() || heap.is_identifier(value) {
             if let Some(span) = &mut loc.span {
-                let mut chain = span
+                let prefix = span
                     .expansion_chain
                     .as_ref()
-                    .or_else(|| source.span.as_ref()?.expansion_chain.as_ref())
-                    .map_or_else(Vec::new, |chain| chain.to_vec());
-                chain.push(macro_name.to_owned());
-                span.expansion_chain = Some(chain.into());
+                    .or_else(|| source.span.as_ref()?.expansion_chain.as_ref());
+                let key = prefix.map_or(0, |chain| chain.as_ptr() as usize);
+                let (_, chain) = histories.entry(key).or_insert_with(|| {
+                    let mut names = prefix.map_or_else(Vec::new, |chain| chain.to_vec());
+                    names.push(macro_name.to_owned());
+                    (prefix.cloned(), std::sync::Arc::<[String]>::from(names))
+                });
+                span.expansion_chain = Some(chain.clone());
             }
             heap.record_source(value, loc.clone());
             let mut map = source_map.borrow_mut();

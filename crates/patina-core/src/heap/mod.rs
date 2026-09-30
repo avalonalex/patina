@@ -302,7 +302,7 @@ pub enum SpineEnd {
 /// ```
 #[derive(Debug)]
 pub struct Heap {
-    syntax_sources: std::collections::HashMap<u64, source::SyntaxSource>,
+    syntax_sources: std::collections::HashMap<u64, Rc<source::SyntaxSource>>,
     /// Pair storage: (car, cdr) tuples
     pairs: Vec<(TaggedValue, TaggedValue)>,
 
