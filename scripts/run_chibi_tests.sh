@@ -87,14 +87,25 @@ echo "Results:   $RESULTS_FILE"
 echo ""
 
 # -k reports an error that escapes to top level and runs the next form anyway,
-# so the suite still reaches its tally. The exit status is not read: the suite
-# ends with bare (test-end) and never calls (test-exit), so a failed assertion
-# exits 0, and the `if` below tests the trailing sed in any case. Failures are
+# so the suite still reaches its tally. The suite ends with bare (test-end)
+# and never calls (test-exit), so a failed assertion can exit 0. Failures are
 # learnt from the parsed tally below, escaped errors from ERROR_COUNT, and an
 # aborted run from TRUE_TOTAL being 0.
 # The pipeline also colourises, so strip escapes on the way to disk -- the
 # saved log stays readable and every parse below sees the same plain text.
-if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -k -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$RESULTS_FILE"; then
+# Keep timings in the console, but omit them from the committed log (#380).
+# Only framework tally lines are normalized; failure details and skipped-test
+# counts stay intact. Truncate even on empty output so an aborted run cannot
+# reuse the previous run's tally.
+if "$PATINA_BIN" "${BACKEND_ARGS[@]}" -k -A "$SUPPLIED_LIB" "$TEST_FILE" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | awk -v results="$RESULTS_FILE" '
+    BEGIN { printf "%s", "" > results }
+    {
+        print
+        if ($0 ~ /^[[:space:]]*[0-9]+ out of [0-9]+ \([^)]*%\) tests? passed in /)
+            sub(/ in [-+0-9.eE]+ seconds/, "")
+        print > results
+    }
+'; then
     echo -e "${GREEN}Suite completed${NC}"
 else
     echo -e "${YELLOW}Suite completed with failures${NC}"
@@ -144,7 +155,6 @@ SECTION_BREAKDOWN=$(awk '
 cat > "$COMPAT_REPORT" << EOF
 # Patina R7RS Compatibility Report
 
-**Generated:** $(date '+%Y-%m-%d %H:%M:%S')
 **Backend:** $BACKEND_NAME
 **Test Suite:** chibi-scheme r7rs-tests.scm, reported by upstream \`(chibi test)\`
 
