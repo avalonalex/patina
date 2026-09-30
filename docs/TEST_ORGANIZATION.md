@@ -62,6 +62,79 @@ workspace/
 │           └── *.rs          # Feature-specific tests
 ```
 
+### Reader properties and fuzzing (#366)
+
+`patina-frontend/tests/reader_properties.rs` generates arbitrary Unicode and
+combinations of Scheme syntax, and checks every split in representative inputs.
+Its shared `tests/support/reader_checks.rs` compares `Parser::parse_all`,
+successive whole-text parses, chunk-fed `Reader`, and repeated port reads. It
+compares the successful prefix **and** accept/reject outcome, exercises trial
+EOF and consumed-buffer compaction, and compares cyclic graphs iteratively.
+This is agreement between entry points, not an external conformance oracle.
+
+`patina-primitives/src/primitives/io/datum_writer_properties.rs` constructs
+data independently of the reader, writes it, reads it and checks the runtime's
+`equal?`. It extends #368's symbol property to strings, characters, booleans,
+fixnums/bignums/rationals/reals/complexes, bytevectors, proper/improper lists and
+vectors. Trees use depth 5 and a target of 64 nodes; separate 1–8-node pair/vector
+graphs exercise cycles and sharing. `write`, `write-shared`, and (for trees)
+`write-simple` are covered. Generated NaNs have the canonical payload because
+Scheme text does not encode NaN payloads; signed zero and exactness are checked.
+Writer output also goes through the shared reader comparison.
+
+These properties run in the normal Rust CI lane with seed 366, 256 cases per
+property and a 4096-step shrink limit (1024 symbol cases, and 32 cyclic cases,
+whose runtime `equal?` starts tracking cycles after a million visits). Increase the
+ordinary sampling budget with `PROPTEST_CASES`; failures print minimized inputs.
+Keep discovered defects as named regressions and fuzz seeds. #565 is the first:
+`#0=#0#` must not expose an internal label placeholder.
+
+```bash
+cargo test -p patina-frontend --test reader_properties
+cargo test -p patina-primitives datum_writer
+cargo test -p patina-repl --test reader_robustness
+PROPTEST_CASES=10000 cargo test -p patina-frontend --test reader_properties
+```
+
+`reader_robustness.rs` runs child processes with deadlines on both backends:
+million-element lists, million-level nesting, million-directive sequences and
+million-character strings with Unicode, escapes and an unterminated variant.
+This keeps stack aborts and hangs observable without taking down the test runner.
+
+The separate `fuzz/` workspace uses libFuzzer and the same reader comparison.
+It does not format arbitrary-depth data. Invalid UTF-8 is discarded at the
+`&str` API boundary; byte-decoding tests remain in `patina-core`. The target
+checks both varying chunk lengths derived from the input and single-character
+feeds. The checked-in seeds and dictionary cover directives, escapes, numbers,
+comments, labels and incomplete input. Generated corpus and failure artifacts
+are ignored, while `fuzz/Cargo.lock` pins the fuzz dependencies.
+
+Run this short smoke test from the repository root (nightly is used only for
+fuzz instrumentation; the normal toolchain stays pinned):
+
+```bash
+rustup toolchain install nightly --profile minimal
+cargo install cargo-fuzz --locked
+mkdir -p fuzz/corpus/reader
+cargo +nightly fuzz run reader fuzz/corpus/reader fuzz/seeds/reader -- \
+  -max_total_time=60 -max_len=4096 -timeout=5 -rss_limit_mb=1024 \
+  -seed=366 -dict=fuzz/reader.dict
+```
+
+The first corpus directory receives discoveries; tracked seeds stay unchanged.
+The timeout, input-length and RSS limits bound a run and expose pathological
+inputs; a passing smoke run does not prove an asymptotic resource bound. For a
+failure, use the artifact path reported by libFuzzer:
+
+```bash
+cargo +nightly fuzz tmin reader fuzz/artifacts/reader/<artifact> -- -max_total_time=30
+cargo +nightly fuzz run reader fuzz/artifacts/reader/<artifact>
+```
+
+See the [cargo-fuzz tutorial](https://rust-fuzz.github.io/book/cargo-fuzz/tutorial.html)
+for running and reducing targets. There is no scheduled fuzz CI job; ordinary
+properties run in CI and this command is the bounded fuzz smoke lane.
+
 ### Scheme test files (`tests/scheme/`, driven by `scheme_suite.rs`)
 
 **Prefer these for new tests of the language.** They are ordinary, portable

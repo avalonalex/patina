@@ -1115,6 +1115,10 @@ fn format_simple_list_tail(
 }
 
 #[cfg(test)]
+#[path = "datum_writer_properties.rs"]
+mod properties;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use patina_frontend::Parser;
@@ -1122,7 +1126,7 @@ mod tests {
 
     // Arbitrary Unicode exercises escaping; ASCII names and number-like
     // prefixes exercise the narrower set the writer actually leaves bare.
-    fn symbol_names() -> impl Strategy<Value = String> {
+    pub(super) fn symbol_names() -> impl Strategy<Value = String> {
         prop_oneof![
             proptest::collection::vec(any::<char>(), 0..80)
                 .prop_map(|chars| chars.into_iter().collect()),
@@ -1183,7 +1187,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1024))]
+        #![proptest_config(ProptestConfig { cases: 1024, ..super::properties::config() })]
 
         #[test]
         fn every_written_symbol_reads_back(name in symbol_names()) {

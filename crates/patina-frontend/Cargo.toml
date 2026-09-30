@@ -28,3 +28,6 @@ unicode-casefold = { workspace = true }
 [lib]
 name = "patina_frontend"
 path = "src/lib.rs"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

@@ -447,7 +447,50 @@ impl Parser {
         {
             return Err(ParseError::UndefinedLabel(n).at(span));
         }
+        self.resolve_label_aliases()?;
         Ok(self.resolve_labels(tv))
+    }
+
+    /// Collapse aliases before patching containers (#565). A chain of labels
+    /// must end in an actual datum: `#0=#0#` has no value to substitute. Real
+    /// cycles such as `#0=(a . #0#)` end in a pair here and are patched below.
+    /// Memoizing every traversed label makes long forward chains linear, and
+    /// the explicit path avoids consuming the Rust stack.
+    fn resolve_label_aliases(&mut self) -> Result<(), ParseError> {
+        // None marks a label on the current path; Some is its final value.
+        let mut resolved: HashMap<usize, Option<TaggedValue>> = HashMap::new();
+        let mut path = Vec::new();
+        let heap = self.heap.borrow();
+        for &(start, span) in &self.pending_refs {
+            let mut label = start;
+            let value = loop {
+                match resolved.get(&label) {
+                    Some(Some(value)) => break *value,
+                    Some(None) => {
+                        return Err(ParseError::InvalidSyntax(format!(
+                            "Datum label #{label}= refers to itself without a datum"
+                        ))
+                        .at(span));
+                    }
+                    None => {}
+                }
+                resolved.insert(label, None);
+                path.push(label);
+                let value = self.labels[&label];
+                if value.is_object()
+                    && let HeapObjectData::LabelPlaceholder(next) = heap.get_object(value)
+                {
+                    label = *next;
+                } else {
+                    break value;
+                }
+            };
+            for alias in path.drain(..) {
+                resolved.insert(alias, Some(value));
+                self.labels.insert(alias, value);
+            }
+        }
+        Ok(())
     }
 
     /// Parse every datum up to the end of the input, for files that hold
@@ -1247,7 +1290,7 @@ impl Parser {
             if value.is_object()
                 && let HeapObjectData::LabelPlaceholder(label) = heap.get_object(value)
             {
-                // finish_datum checked that every pending label is defined.
+                // finish_datum checked definitions and collapsed aliases.
                 self.labels[label]
             } else {
                 value

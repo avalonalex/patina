@@ -1,4 +1,8 @@
 /target
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/coverage/
 # Cargo.lock is tracked deliberately: this workspace ships a binary, so the
 # lockfile is what makes a build reproducible. Together with
 # rust-toolchain.toml it pins both halves — compiler and dependencies — so a

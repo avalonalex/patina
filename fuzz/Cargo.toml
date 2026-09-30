@@ -1,0 +1,24 @@
+[package]
+name = "patina-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+patina-core = { path = "../crates/patina-core" }
+patina-frontend = { path = "../crates/patina-frontend" }
+
+# Keep nightly-only fuzz instrumentation out of the ordinary workspace gate.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "reader"
+path = "fuzz_targets/reader.rs"
+test = false
+doc = false
+bench = false

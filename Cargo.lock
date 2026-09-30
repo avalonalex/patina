@@ -573,6 +573,7 @@ dependencies = [
  "patina-ir",
  "patina-macros",
  "patina-runtime",
+ "proptest",
  "rustc-hash",
  "thiserror",
  "unicode-casefold",
