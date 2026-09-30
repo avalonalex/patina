@@ -1,5 +1,7 @@
+use patina_core::Port;
 use patina_core::source_map::SourceCursor;
 use std::fmt;
+use std::rc::Rc;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
 
@@ -36,6 +38,8 @@ pub enum Token {
 
 #[derive(Error, Debug)]
 pub enum LexError {
+    #[error("{0}")]
+    Input(std::io::Error),
     #[error("{error}")]
     Located {
         #[source]
@@ -266,6 +270,12 @@ struct OpenDelimiter {
 
 pub struct Lexer {
     input: Vec<char>,
+    /// Pull input shares the port's raw lookahead and consumed position.
+    /// Only characters requested for this datum are retained here.
+    port: Option<Rc<Port>>,
+    input_error: Option<std::io::Error>,
+    input_ended: bool,
+    offset_base: usize,
     position: usize,
     /// Whether to case-fold identifiers and character names (R7RS #!fold-case).
     fold_case: bool,
@@ -444,6 +454,10 @@ impl Lexer {
     pub fn new(input: &str) -> Self {
         Lexer {
             input: strip_byte_order_mark(input),
+            port: None,
+            input_error: None,
+            input_ended: false,
+            offset_base: 0,
             position: 0,
             fold_case: false,
             cursor: SourceCursor::START,
@@ -458,9 +472,32 @@ impl Lexer {
         }
     }
 
+    /// Read directly from a port. Persistent bytes, directive mode and source
+    /// position belong to the port; this lexer retains only the current read.
+    pub(crate) fn from_port(port: Rc<Port>) -> Result<Self, LexError> {
+        if port.input_position().byte_offset == 0
+            && port.peek_char().map_err(LexError::Input)? == Some('\u{feff}')
+        {
+            port.read_char().map_err(LexError::Input)?;
+        }
+        let at = port.input_position();
+        let mut lexer = Self::new("");
+        lexer.cursor = at.cursor;
+        lexer.fold_case = port.fold_case();
+        lexer.offset_base = at.offset;
+        lexer.at_source_start = false;
+        lexer.prev_token_end = lexer.raw_state();
+        lexer.port = Some(port);
+        Ok(lexer)
+    }
+
+    pub(crate) fn is_port(&self) -> bool {
+        self.port.is_some()
+    }
+
     /// A lexer with no text yet, fed with [`Lexer::feed`] as it arrives: a
-    /// program on standard input, a `read` from a line-oriented port, a
-    /// session deciding whether to take another line.
+    /// program on standard input or a session deciding whether to take
+    /// another line. Runtime `read` uses [`Lexer::from_port`].
     ///
     /// `r6rs` is the dialect, resolved once by the caller rather than once per
     /// lexer, as [`Lexer::reading_r6rs`] takes it.
@@ -750,7 +787,15 @@ impl Lexer {
     }
 
     pub fn next_token(&mut self) -> Result<Spanned, LexError> {
-        self.scan_token().map_err(|error| {
+        let result = self.scan_token();
+        if let Some(port) = &self.port {
+            port.set_fold_case(self.fold_case);
+        }
+        let result = match self.input_error.take() {
+            Some(error) => Err(LexError::Input(error)),
+            None => result,
+        };
+        result.map_err(|error| {
             let include_current = matches!(
                 error.kind(),
                 LexError::UnexpectedChar(_)
@@ -763,14 +808,14 @@ impl Lexer {
         })
     }
 
-    fn span_from(&self, start: ReaderState, include_current: bool) -> ReadSpan {
+    fn span_from(&mut self, start: ReaderState, include_current: bool) -> ReadSpan {
         let mut end = self.state();
         if include_current && !self.is_at_end() {
             end.advance(self.current_char());
         }
         ReadSpan {
             start: ReaderState {
-                offset: start.offset + self.bom_offset,
+                offset: start.offset + self.bom_offset + self.offset_base,
                 ..start
             },
             end,
@@ -827,7 +872,7 @@ impl Lexer {
     /// Where the lexer stands, its offset counted in the caller's input.
     pub fn state(&self) -> ReaderState {
         ReaderState {
-            offset: self.position + self.bom_offset,
+            offset: self.position + self.bom_offset + self.offset_base,
             ..self.raw_state()
         }
     }
@@ -836,7 +881,7 @@ impl Lexer {
     /// offset counted in the caller's input. See [`Lexer::prev_token_end`].
     pub fn prev_token_end_state(&self) -> ReaderState {
         ReaderState {
-            offset: self.prev_token_end.offset + self.bom_offset,
+            offset: self.prev_token_end.offset + self.bom_offset + self.offset_base,
             ..self.prev_token_end
         }
     }
@@ -965,13 +1010,35 @@ impl Lexer {
         }
     }
 
-    fn current_char(&self) -> char {
-        self.input.get(self.position).copied().unwrap_or('\0')
+    fn char_at(&mut self, at: usize) -> Option<char> {
+        if let Some(port) = &self.port {
+            while self.input.len() <= at && !self.input_ended {
+                match port.peek_char_at(self.input.len() - self.position) {
+                    Ok(Some(ch)) => self.input.push(ch),
+                    Ok(None) => self.input_ended = true,
+                    Err(error) => {
+                        self.input_error = Some(error);
+                        self.input_ended = true;
+                    }
+                }
+            }
+        }
+        self.input.get(at).copied()
+    }
+
+    fn current_char(&mut self) -> char {
+        self.char_at(self.position).unwrap_or('\0')
     }
 
     fn advance(&mut self) {
-        if self.position < self.input.len() {
-            self.cursor.advance(self.input[self.position]);
+        if let Some(ch) = self.char_at(self.position) {
+            if let Some(port) = &self.port
+                && let Err(error) = port.read_char()
+            {
+                self.input_error = Some(error);
+                self.input_ended = true;
+            }
+            self.cursor.advance(ch);
         }
         self.position += 1;
     }
@@ -986,8 +1053,8 @@ impl Lexer {
         self.cursor.column
     }
 
-    fn is_at_end(&self) -> bool {
-        self.position >= self.input.len()
+    fn is_at_end(&mut self) -> bool {
+        self.char_at(self.position).is_none()
     }
 
     fn skip_whitespace_and_comments(&mut self) -> Result<(), LexError> {
@@ -1027,8 +1094,8 @@ impl Lexer {
         Ok(())
     }
 
-    fn peek_char(&self) -> Option<char> {
-        self.input.get(self.position + 1).copied()
+    fn peek_char(&mut self) -> Option<char> {
+        self.char_at(self.position + 1)
     }
 
     fn skip_block_comment(&mut self) -> Result<(), LexError> {
@@ -1082,38 +1149,24 @@ impl Lexer {
             )
     }
 
-    fn is_delimiter_next(&self) -> bool {
-        if self.position + 1 >= self.input.len() {
-            return true;
-        }
-        Self::is_delimiter(self.input[self.position + 1])
+    fn is_delimiter_next(&mut self) -> bool {
+        self.peek_char().is_none_or(Self::is_delimiter)
     }
 
     /// ASCII-only; see the number dispatch in `lex_token` for why.
-    fn peek_is_numeric(&self) -> bool {
-        if self.position + 1 >= self.input.len() {
-            return false;
-        }
-        self.input[self.position + 1].is_ascii_digit()
+    fn peek_is_numeric(&mut self) -> bool {
+        self.peek_char().is_some_and(|ch| ch.is_ascii_digit())
     }
 
-    fn peek_is_imaginary(&self) -> bool {
-        if self.position + 1 >= self.input.len() {
-            return false;
-        }
-        let next = self.input[self.position + 1];
-        next == 'i' || next == 'I'
+    fn peek_is_imaginary(&mut self) -> bool {
+        matches!(self.peek_char(), Some('i' | 'I'))
     }
 
-    /// Check if the next character is a decimal point followed by a digit
-    /// This handles cases like `-.1` which should parse as `-0.1`
-    fn peek_is_decimal_start(&self) -> bool {
-        if self.position + 2 >= self.input.len() {
-            return false;
-        }
-        let next = self.input[self.position + 1];
-        let after = self.input[self.position + 2];
-        next == '.' && after.is_ascii_digit()
+    fn peek_is_decimal_start(&mut self) -> bool {
+        self.peek_char() == Some('.')
+            && self
+                .char_at(self.position + 2)
+                .is_some_and(|ch| ch.is_ascii_digit())
     }
 
     /// Are we at `+nan.0` or `-nan.0` — or, in principle, `+inf.0`/`-inf.0`?
@@ -1135,7 +1188,7 @@ impl Lexer {
     /// lowercases to a bare `i`, `n`, `f` or `a` (checked over every code
     /// point), and `İ` (U+0130), the near miss, folds to *two* chars — which
     /// the old prefix test rejected too.
-    fn is_special_float_literal(&self) -> bool {
+    fn is_special_float_literal(&mut self) -> bool {
         matches!(self.current_char(), '+' | '-')
             && (self.matches_ascii_at(1, "nan.0") || self.matches_ascii_at(1, "inf.0"))
     }
@@ -1184,8 +1237,9 @@ impl Lexer {
                     '|' => '|',        // vertical bar
                     // R7RS inline hex escape: \x<hex>;
                     'x' => self.read_inline_hex_escape().map_err(|escape| {
+                        let semicolon = self.current_char() == ';';
                         LexError::InvalidEscapeInString(format!("\\{escape}"))
-                            .at(self.span_from(escape_start, self.current_char() == ';'))
+                            .at(self.span_from(escape_start, semicolon))
                     })?,
                     // R7RS: Line ending escape - backslash followed by intraline whitespace
                     // and line ending is ignored along with any leading intraline whitespace
@@ -1274,8 +1328,9 @@ impl Lexer {
                     '"' => '"',        // double quote
                     // Inline hex escape: \x<hex>;
                     'x' => self.read_inline_hex_escape().map_err(|escape| {
+                        let semicolon = self.current_char() == ';';
                         LexError::InvalidEscapeInIdentifier(escape)
-                            .at(self.span_from(escape_start, self.current_char() == ';'))
+                            .at(self.span_from(escape_start, semicolon))
                     })?,
                     c => {
                         return Err(LexError::InvalidEscapeInIdentifier(c.to_string())
@@ -1361,16 +1416,14 @@ impl Lexer {
     }
 
     /// Do the characters at `offset` from here spell `text`, ASCII
-    /// case-insensitively? Never allocates and never reads past the end.
-    fn matches_ascii_at(&self, offset: usize, text: &str) -> bool {
-        let start = self.position + offset;
-        let Some(window) = self.input.get(start..start + text.len()) else {
-            return false;
-        };
-        window
-            .iter()
-            .zip(text.chars())
-            .all(|(c, t)| c.eq_ignore_ascii_case(&t))
+    /// case-insensitively? Fetch only through the first mismatch.
+    fn matches_ascii_at(&mut self, offset: usize, text: &str) -> bool {
+        // Short circuit at the first mismatch: looking past an already-known
+        // delimiter could block a read, or reach unrelated binary data.
+        text.chars().enumerate().all(|(i, expected)| {
+            self.char_at(self.position + offset + i)
+                .is_some_and(|ch| ch.eq_ignore_ascii_case(&expected))
+        })
     }
 
     /// If the upcoming characters spell `suffix` (ASCII case-insensitive),
@@ -1663,6 +1716,59 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulling_tokens_matches_whole_source_positions_and_modes() {
+        for text in [
+            "\u{feff}#!fold-case Straẞe #TRUE +NaN.0abc #!no-fold-case X",
+            "1\r2\r\n3\n(λ #u8(1 2) #\\space #\\x3bb) '\"str\\x41;\" |a\\x42;b|",
+            "; comment\n#|outer #|inner|# done|# #;(+1 -1 -.2 +nan.0 +inf.0) #0=(x . #0#)",
+            "#!r7rs [#false ,@x ,y `z] #! /a script\nfoo",
+            "#!fold-case\r\n#!no-fold-case ",
+        ] {
+            let mut whole = Lexer::new(text).reading_r6rs(true);
+            let port = Port::new_input_string(text.into());
+            let mut pull = Lexer::from_port(port).unwrap().reading_r6rs(true);
+            loop {
+                let expected = whole.next_token().unwrap();
+                let actual = pull.next_token().unwrap();
+                assert_eq!(actual.token, expected.token, "{text}");
+                assert_eq!(actual.start, expected.start, "{text}");
+                assert_eq!(actual.end, expected.end, "{text}");
+                if actual.token == Token::Eof {
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_byte_read_past_the_start_prevents_dropping_a_later_signature() {
+        let mut bytes = vec![0xc2];
+        bytes.extend_from_slice("\u{feff}x ".as_bytes());
+        let port = Port::new_input_bytevector(bytes);
+        assert_eq!(port.read_u8().unwrap(), Some(0xc2));
+        // No complete character has been consumed, but this is no longer the
+        // source start. Only the byte position can decide that distinction.
+        assert_eq!(port.input_position().offset, 0);
+        assert_eq!(port.input_position().byte_offset, 1);
+        let mut lexer = Lexer::from_port(port).unwrap();
+        assert_eq!(
+            lexer.next_token_kind().unwrap(),
+            Token::Identifier("\u{feff}x".into())
+        );
+    }
+
+    #[test]
+    fn pulling_a_token_does_not_materialize_the_unread_tail() {
+        let port = Port::new_input_string("1 ".repeat(80_000));
+        let mut lexer = Lexer::from_port(port.clone()).unwrap();
+        assert!(lexer.input.is_empty());
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Number("1".into()));
+        assert!(lexer.input.len() <= 2);
+        assert_eq!(port.input_position().offset, 1);
+        assert_eq!(port.read_char().unwrap(), Some(' '));
+    }
 
     #[test]
     fn positions_count_logical_lines_and_unicode_characters() {
