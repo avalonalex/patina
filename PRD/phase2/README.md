@@ -26,7 +26,7 @@ Not in scope for Phase 2A but tracked here.
 
 | Document | Feature | Phase |
 |----------|---------|-------|
-| **[SYNTAX_CASE_DESIGN.md](./SYNTAX_CASE_DESIGN.md)** | `syntax-case` procedural macros | Phase 3 |
+| **[SYNTAX_CASE_DESIGN.md](../macro/SYNTAX_CASE_DESIGN.md)** | `syntax-case` procedural macros | Phase 3 |
 | **[R7RS_LARGE_STATUS.md](./R7RS_LARGE_STATUS.md)** | R7RS-large library tracking | Ongoing |
 | **[reference/01_META_TRACING.md](./reference/01_META_TRACING.md)** | Meta-tracing JIT (Cranelift) | Phase 2D+ |
 | **[reference/03_ADAPTIVE_NUMERIC.md](./reference/03_ADAPTIVE_NUMERIC.md)** | Specialized fixnum/float opcodes | Phase 2B |

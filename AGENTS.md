@@ -132,11 +132,11 @@ issues and the archive before filing**, for the same reason.
   skipping it.
 - `PRD/phase2/R7RS_LARGE_STATUS.md` — **the bundling policy and edition
   tracker.** The answer to "does Patina ship this library, and why (not)":
-  it records edition coverage and the policy (standard-track
-  + runtime-forced + demanded legacy aliases + the standard testing API —
-  SRFI 64, added 2026-09-06 and not shipped until #193's Phase 0; other leaf
-  libraries stay out) used by Track L's L1. Check it before bundling
-  anything.
+  it records edition coverage and the 2026-09-12 policy: R7RS-large
+  libraries (including drafts) and SRFIs are eligible, Patina's own extensions
+  remain bundled, and libraries specific to another implementation stay
+  external. Eligibility does not require immediate implementation. Check it
+  before bundling anything.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — archived Phase 1 cleanup tracker
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
