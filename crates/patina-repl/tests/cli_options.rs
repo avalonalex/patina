@@ -170,6 +170,26 @@ fn eval_print_rejects_script_file() {
     assert!(stderr.contains("cannot be combined"), "stderr: {}", stderr);
 }
 
+/// Both SRFI 141 and its Tangerine name ship with Patina (#576).
+#[test]
+fn division_libraries_are_bundled() {
+    let dir = TempDir::new().unwrap();
+    run_both_backends(
+        dir.path(),
+        &[
+            "--isolated-libraries",
+            "-p",
+            "(import (scheme base) (scheme division) (prefix (srfi 141) s:))
+             (list (cond-expand ((and (library (scheme division))
+                                      (library (srfi 141))) #t) (else #f))
+                   (call-with-values (lambda () (round/ 5 2)) list)
+                   (call-with-values (lambda () (s:balanced/ 5 2)) list)
+                   (ceiling-quotient 13 4))",
+        ],
+        "(#t (2 1) (3 -1) 4)",
+    );
+}
+
 /// Tangerine's bytevector name resolves without an external root (#575).
 #[test]
 fn bytevector_library_is_bundled() {
