@@ -170,6 +170,35 @@ fn eval_print_rejects_script_file() {
     assert!(stderr.contains("cannot be combined"), "stderr: {}", stderr);
 }
 
+/// Patina's directory API is available without an external library root (#205).
+#[test]
+fn public_filesystem_is_bundled() {
+    let dir = TempDir::new().unwrap();
+    run_both_backends(
+        dir.path(),
+        &[
+            "--isolated-libraries",
+            "-p",
+            "(import (scheme base) (patina filesystem))
+             (list (cond-expand ((library (patina filesystem)) #t) (else #f))
+                   (map procedure? (list directory-files create-directory delete-directory
+                                         current-directory change-directory
+                                         file-directory? file-regular?))
+                   (directory-files \".\"))",
+        ],
+        "(#t (#t #t #t #t #t #t #t) (\".\" \"..\"))",
+    );
+    expect_failure_on_both_backends(
+        dir.path(),
+        &[
+            "--isolated-libraries",
+            "-p",
+            "(import (only (scheme file) directory-files))",
+        ],
+        |stderr| assert!(stderr.contains("directory-files"), "{stderr}"),
+    );
+}
+
 /// `test-lib/` is supplied, not shipped — and this is the pair of assertions
 /// that makes the difference real rather than stated.
 ///

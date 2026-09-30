@@ -1,8 +1,9 @@
 //! Directory operations, routed through the VFS `FileSystem` trait.
 //!
-//! These back the portable half of `(chibi filesystem)` — the half that can be
-//! given an in-memory implementation. The POSIX half (file descriptors, stat
-//! fields, symlinks, pipes) is deliberately not here; see the `patina`
+//! These back `(patina filesystem)` and the portable half of the external
+//! `(chibi filesystem)` adaptation. See `docs/VFS_DESIGN.md` for the public
+//! contract. The POSIX half (file descriptors, stat fields, symlinks, pipes)
+//! is deliberately not here; see the `patina`
 //! `cond-expand` branch in `test-lib/chibi/filesystem.sld` for where that boundary
 //! is drawn and why.
 //!

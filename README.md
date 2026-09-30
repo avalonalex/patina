@@ -237,6 +237,17 @@ lookup, not filesystem access or Scheme `load`/`include`.
 Program and library `cond-expand` forms can test `(library (name ...))` against
 the current library roots and registered libraries without importing them.
 
+Patina's portable directory operations are bundled as `(patina filesystem)`:
+
+```scheme
+(import (scheme base) (scheme write) (patina filesystem))
+(write (directory-files "."))
+(newline)
+```
+
+See the [filesystem API and VFS reference](docs/VFS_DESIGN.md) for its seven
+procedures, error behavior, and support for in-memory filesystems.
+
 A limited Snow workflow is available for an explicitly selected set of source archives:
 
 ```sh

@@ -52,6 +52,7 @@ When switching tools:
 | Document | Description |
 |----------|-------------|
 | [MACRO_SYSTEM.md](MACRO_SYSTEM.md) | Macro system architecture (syntax-rules, hygiene, scope sets) |
+| [VFS_DESIGN.md](VFS_DESIGN.md) | Filesystem abstraction, public `(patina filesystem)` API, and current boundaries |
 | [TEST_ORGANIZATION.md](TEST_ORGANIZATION.md) | Test structure, running tests, and test guidelines |
 | [reference_impls/](reference_impls/) | Notes on reference Scheme implementations (Chibi, Chez, Gauche, Koka) |
 
