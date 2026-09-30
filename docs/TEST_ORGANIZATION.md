@@ -809,6 +809,14 @@ cargo test --workspace
 cargo test --package patina-tests --test interpreter_api
 ```
 
+For the chibi R7RS gate, run `cargo build --release` followed by
+`./scripts/run_chibi_tests.sh` and `./scripts/run_chibi_tests_tree_walker.sh`.
+Both scripts print the suite output, including durations, to the console.
+The committed `scheme_tests/reports/results*.txt` omit only tally durations,
+and `compatibility*.md` omit generation timestamps, so identical outcomes
+produce identical reports. Counts, skipped tests and failure details remain
+in the saved output.
+
 ### Third-party corpus measurements
 
 Build the binary under test with `cargo build --release`, then run
