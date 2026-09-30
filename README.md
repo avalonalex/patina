@@ -47,6 +47,13 @@ rule: one underscore between digits in a numeric component. For example,
 This extension is independent of `--allow-r6rs`. Printed numbers use ordinary
 spellings without separators; portable R7RS code should omit numeric underscores.
 
+Source literals, `read`, and `string->number` share one scanner for the
+[R7RS number grammar](https://standards.scheme.org/corrected-r7rs/r7rs-Z-H-9.html).
+Invalid literals report the character and its position in the original spelling.
+The existing optional `s`, `f`, `d`, and `l` exponent markers use double precision.
+An exact zero polar angle preserves the magnitude (`1@0` is exact `1`);
+an inexact zero angle retains its signed imaginary zero.
+
 **Current status**: 100% of chibi r7rs-tests.scm passing (1226/1226 tests) on both backends.
 
 ### Modular Architecture
