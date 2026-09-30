@@ -37,6 +37,50 @@ impl Drop for TempFile {
     }
 }
 
+#[test]
+fn file_reads_keep_directives_and_exclude_unread_lookahead() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("folding.scm");
+    for (text, expected) in [
+        (
+            "#!fold-case ABC DEF #!no-fold-case GHI JKL",
+            "(abc def GHI JKL)",
+        ),
+        (
+            "#!fold-case\nABC\nDEF\n#!no-fold-case\nGHI\nJKL",
+            "(abc def GHI JKL)",
+        ),
+    ] {
+        std::fs::write(&path, text).unwrap();
+        assert_program_eval_to(
+            &format!(
+                r#"(import (scheme base) (scheme read) (scheme file))
+              (call-with-input-file {:?} (lambda (p)
+                (let* ((a (read p)) (b (read p)) (c (read p)) (d (read p)))
+                  (list a b c d))))"#,
+                path
+            ),
+            expected,
+        );
+    }
+    for (text, expected) in [
+        ("#!fold-case A #!no-fold-case\nB C", "(a b c)"),
+        ("A #!fold-case\nB C", "(A B C)"),
+    ] {
+        std::fs::write(&path, text).unwrap();
+        assert_program_eval_to(
+            &format!(
+                r#"(import (scheme base) (scheme read) (scheme file))
+              (call-with-input-file {:?} (lambda (p)
+                (let* ((a (read p)) (line (read-line p)) (b (read p)) (c (read p)))
+                  (list a b c))))"#,
+                path
+            ),
+            expected,
+        );
+    }
+}
+
 // =============================================================================
 // peek-char where the buffered bytes end inside a character (#410)
 // =============================================================================

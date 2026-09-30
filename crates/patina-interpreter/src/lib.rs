@@ -370,7 +370,20 @@ impl<B: Backend> Interpreter<B> {
         input: &str,
         source_name: &str,
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
-        let (value, end, source_map) = self.run_forms(input, source_name, |error, _| Some(error));
+        self.eval_program_with_fold_case(input, source_name, &mut false)
+    }
+
+    /// Evaluate one interactive submission, retaining directives for the next.
+    /// Each submission has its own source positions. Only directives actually
+    /// consumed before an error survive; parser lookahead must not change them.
+    pub fn eval_program_with_fold_case(
+        &self,
+        input: &str,
+        source_name: &str,
+        fold_case: &mut bool,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        let (value, end, source_map) =
+            self.run_forms(input, source_name, fold_case, |error, _| Some(error));
         let result = match end {
             FormsEnd::Read => Ok(value),
             FormsEnd::Stopped(error) => Err(InterpreterError::Backend(error)),
@@ -392,7 +405,7 @@ impl<B: Backend> Interpreter<B> {
     /// continuing past evaluation errors, as [`Interpreter::eval_program_resilient`]
     /// does. Returns the last value evaluated.
     pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
-        let (value, end, _) = self.run_forms(input, "<eval>", |error, _| {
+        let (value, end, _) = self.run_forms(input, "<eval>", &mut false, |error, _| {
             eprintln!("Error: {}", error);
             patina_runtime::exit_status::exit_if_interrupted();
             None
@@ -426,19 +439,20 @@ impl<B: Backend> Interpreter<B> {
         B::Error: HasSourceLocation,
     {
         let mut eval_errors = 0usize;
-        let (value, end, source_map) = self.run_forms(input, source_name, |error, source_map| {
-            eval_errors += 1;
-            patina_runtime::exit_status::note_error_reported();
-            let mut diagnostic = error.diagnostic();
-            if diagnostic.path.is_none() {
-                diagnostic.path = Some(source_name.into());
-            }
-            patina_runtime::diagnostic::emit(diagnostic);
-            eprintln!("Error: {}", format_error_with_source(&error, source_map));
-            // The program asked to exit, so it does not carry on; the caller
-            // ends the process.
-            patina_runtime::exit_status::exit_interrupted().then_some(error)
-        });
+        let (value, end, source_map) =
+            self.run_forms(input, source_name, &mut false, |error, source_map| {
+                eval_errors += 1;
+                patina_runtime::exit_status::note_error_reported();
+                let mut diagnostic = error.diagnostic();
+                if diagnostic.path.is_none() {
+                    diagnostic.path = Some(source_name.into());
+                }
+                patina_runtime::diagnostic::emit(diagnostic);
+                eprintln!("Error: {}", format_error_with_source(&error, source_map));
+                // The program asked to exit, so it does not carry on; the caller
+                // ends the process.
+                patina_runtime::exit_status::exit_interrupted().then_some(error)
+            });
         if let FormsEnd::Unreadable(error) = &end {
             patina_runtime::diagnostic::emit(error.diagnostic().at_path(source_name));
             eprintln!(
@@ -467,26 +481,35 @@ impl<B: Backend> Interpreter<B> {
         &self,
         input: &str,
         source_name: &str,
+        fold_case: &mut bool,
         mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
     ) -> (TaggedValue, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
         let mut value = TaggedValue::UNSPECIFIED;
         let heap = self.backend.global_env().heap();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
-        let mut parser = match Parser::new_with_source_map(
+        let mut parser = match Parser::new_with_source_map_and_fold_case(
             input,
             heap.clone(),
             Rc::from(source_name),
             source_map.clone(),
+            *fold_case,
         ) {
             Ok(parser) => parser,
-            Err(error) => return (value, FormsEnd::Unreadable(error), source_map),
+            Err(error) => {
+                if let Some(span) = error.span() {
+                    *fold_case = span.end.fold_case;
+                }
+                return (value, FormsEnd::Unreadable(error), source_map);
+            }
         };
         let global = self.backend.global_env().clone();
         loop {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
             prune_freed_locations(heap, &source_map);
-            match parser.parse_next() {
+            let datum = parser.parse_next();
+            *fold_case = parser.read_state().fold_case;
+            match datum {
                 Ok(Some(expr)) => {
                     match self
                         .backend

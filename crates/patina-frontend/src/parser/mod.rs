@@ -59,10 +59,10 @@ impl TokenSource {
         }
     }
 
-    fn prev_token_end(&self) -> usize {
+    fn prev_token_end(&self) -> ReaderState {
         match self {
-            TokenSource::Lexing(lexer) => lexer.prev_token_end(),
-            TokenSource::Replay { prev_end, .. } => prev_end.offset,
+            TokenSource::Lexing(lexer) => lexer.prev_token_end_state(),
+            TokenSource::Replay { prev_end, .. } => *prev_end,
         }
     }
 }
@@ -100,6 +100,8 @@ pub struct Parser {
     /// A lexical error met in the token after a finished outermost datum,
     /// kept for the next read (see `advance_past_datum`).
     deferred: Option<ParseError>,
+    /// State reached by the last parse_next, excluding its token lookahead.
+    read_state: ReaderState,
 }
 
 impl Parser {
@@ -149,6 +151,7 @@ impl Parser {
             source_name: Rc::from("<unknown>"),
             nesting: 0,
             deferred: None,
+            read_state: spanned.start,
         })
     }
 
@@ -169,6 +172,17 @@ impl Parser {
         source_name: Rc<str>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Result<Self, ParseError> {
+        Self::new_with_source_map_and_fold_case(input, heap, source_name, source_map, false)
+    }
+
+    /// Source-mapped input continuing an interactive session's directive mode.
+    pub fn new_with_source_map_and_fold_case(
+        input: &str,
+        heap: SharedHeap,
+        source_name: Rc<str>,
+        source_map: Rc<RefCell<SourceMap>>,
+        fold_case: bool,
+    ) -> Result<Self, ParseError> {
         // Store source text for caret-style error display, and where it came
         // from, for resolving a relative `include` beside the program.
         {
@@ -184,7 +198,9 @@ impl Parser {
         // map is empty, so the prune itself is a no-op).
         heap.borrow_mut().enable_gc_freed_tracking();
         crate::source_map::prune_freed_locations(&heap, &source_map);
-        let mut parser = Self::from_lexer(Lexer::new(input), heap)?;
+        let mut lexer = Lexer::new(input);
+        lexer.set_initial_fold_case(fold_case);
+        let mut parser = Self::from_lexer(lexer, heap)?;
         parser.source_map = Some(source_map);
         parser.source_name = source_name;
         Ok(parser)
@@ -211,7 +227,7 @@ impl Parser {
     /// Create a parser with case-folding enabled and the given heap.
     ///
     /// Used by `include-ci` to read files in case-insensitive mode.
-    /// All identifiers will be folded to lowercase.
+    /// Identifiers and character names fold as if by string-foldcase.
     pub fn new_case_insensitive_with_heap(
         input: &str,
         heap: SharedHeap,
@@ -237,7 +253,13 @@ impl Parser {
     /// before the lookahead token) is unconsumed input. Used by `read` to
     /// preserve the remainder for subsequent input operations.
     pub fn consumed_end(&self) -> usize {
-        self.source.prev_token_end()
+        self.source.prev_token_end().offset
+    }
+
+    /// State after the last `parse_next`: the datum's end, or the end of
+    /// comments/directives at EOF. A lookahead directive is not consumed.
+    pub fn read_state(&self) -> ReaderState {
+        self.read_state
     }
 
     /// Record a source location for a TaggedValue in the source map (if present)
@@ -301,11 +323,34 @@ impl Parser {
     /// — so is an incomplete datum comment — and a caller reading forms
     /// until the end of the input must treat only `Ok(None)` as that end.
     pub fn parse_next(&mut self) -> Result<Option<TaggedValue>, ParseError> {
-        if self.at_datum()? {
-            self.parse().map(Some)
-        } else {
-            Ok(None)
-        }
+        let result = self.at_datum().and_then(|present| {
+            if present {
+                self.parse().map(Some)
+            } else {
+                Ok(None)
+            }
+        });
+        self.read_state = match &result {
+            Ok(Some(_)) => self.source.prev_token_end(),
+            Ok(None) => self.current_token_end,
+            Err(error) if matches!(error.kind(), ParseError::IncompleteDatum { .. }) => {
+                self.current_token_end
+            }
+            Err(error) => {
+                // A label error can point back into a completed datum. Its
+                // diagnostic position must not roll back directives read
+                // since then, nor commit directives in the next token.
+                let consumed = self.source.prev_token_end();
+                error.span().map_or(consumed, |span| {
+                    if span.end.offset > consumed.offset {
+                        span.end
+                    } else {
+                        consumed
+                    }
+                })
+            }
+        };
+        result
     }
 
     /// Consume any leading datum comments and say whether a datum follows,

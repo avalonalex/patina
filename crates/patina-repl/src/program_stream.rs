@@ -62,8 +62,17 @@ where
         eval_errors: 0,
         source_map,
         r6rs,
-        reader: Reader::new(r6rs),
-        at: ReaderState::START,
+        reader: Reader::resuming(
+            r6rs,
+            ReaderState {
+                fold_case: input.fold_case(),
+                ..ReaderState::START
+            },
+        ),
+        at: ReaderState {
+            fold_case: input.fold_case(),
+            ..ReaderState::START
+        },
         lines: 0,
     };
     loop {
@@ -133,9 +142,12 @@ where
             prune_freed_locations(self.heap, &self.source_map);
             let source_name = self.source_name.clone();
             let source_map = self.source_map.clone();
-            let datum = self.reader.next_datum(self.heap, move |parser| {
+            let Some(datum) = self.reader.next_datum(self.heap, move |parser| {
                 parser.recording_into(source_name.clone(), source_map.clone())
-            })?;
+            }) else {
+                self.consume_what_was_read();
+                return None;
+            };
             let datum = match datum {
                 Ok(datum) => datum,
                 Err(error) => return Some(self.read_failed(&error)),
@@ -182,6 +194,7 @@ where
             offset: 0,
             ..self.reader.position()
         };
+        self.input.set_fold_case(self.at.fold_case);
     }
 
     /// The program read from its input while a form ran, taking text the
@@ -213,6 +226,7 @@ where
                 }
             }
         }
+        self.at.fold_case = self.input.fold_case();
         self.reader = Reader::resuming(self.r6rs, self.at);
         self.reader.feed(&after);
     }

@@ -549,7 +549,7 @@ fn run_repl_vm(opts: &CliOptions) {
         }
     };
 
-    let clean = run_repl_loop(&mut lines, "patina> ", |line| {
+    let clean = run_repl_loop(&mut lines, "patina> ", |line, fold_case| {
         // Special form: (vm-compile <expr>) -- compile and disassemble without executing.
         // Only finished input takes it: a session cut off part-way through one
         // is reported as the unfinished form it is.
@@ -563,7 +563,7 @@ fn run_repl_vm(opts: &CliOptions) {
             };
         }
 
-        let (result, source_map) = interp.eval_program_with_source_name(line, "<repl>");
+        let (result, source_map) = interp.eval_program_with_fold_case(line, "<repl>", fold_case);
         match result {
             Ok(value) if value == TaggedValue::UNSPECIFIED => None,
             Ok(value) => Some(format_tagged(value, &heap.borrow())),

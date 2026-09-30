@@ -354,6 +354,76 @@ fn fold_case_holds_for_the_rest_of_a_program_from_files_and_standard_input() {
     }
 }
 
+#[test]
+fn program_and_datum_reads_share_stdin_directives() {
+    let dir = tempfile::tempdir().unwrap();
+    let import = "(import (scheme base) (scheme read) (scheme write))\n";
+    for (body, expected) in [
+        ("#!fold-case\n(WRITE (read)) ABC\n(WRITE 'DEF)\n", "abcdef"),
+        ("(write (read)) #!fold-case ABC\n(WRITE 'DEF)\n", "abcdef"),
+        (
+            "#!fold-case\n(WRITE (read)) #!no-fold-case ABC\n(write 'DEF)\n",
+            "ABCDEF",
+        ),
+        // A raw read skips the directive the program reader saw ahead.
+        ("(read-line) #!fold-case\n(write 'ABC)\n", "ABC"),
+    ] {
+        let program = format!("{import}{body}");
+        for backend in BOTH_BACKENDS {
+            let (stdout, stderr, ok) = run_with_deadline(dir.path(), backend, Some(&program));
+            assert!(ok, "{backend:?}: {stderr}");
+            assert_eq!(stdout, expected, "{backend:?}: {program}");
+        }
+    }
+}
+
+#[test]
+fn a_session_keeps_directives_between_submissions_and_in_multiline_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = r#"(import (scheme write))
+#!fold-case
+(DISPLAY "folded:")
+(WRITE (LIST #\NEWLINE
+             #\Space))
+#!no-fold-case
+(define ABC 42)
+(write ABC)
+"#;
+    for backend in BOTH_BACKENDS {
+        let mut args = backend.to_vec();
+        args.push("-i");
+        let (stdout, stderr, ok) = run_with_deadline(dir.path(), &args, Some(program));
+        assert!(ok, "{args:?}: {stderr}");
+        assert!(!stdout.contains("Error:"), "{args:?}: {stdout}");
+        assert!(
+            stdout.contains("folded:(#\\newline #\\space)42"),
+            "{args:?}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn a_session_keeps_consumed_directives_after_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    for program in [
+        "#!fold-case (missing) #!no-fold-case\n(DISPLAY \"kept\")\n",
+        "#!fold-case #\\BOGUS\n(DISPLAY \"kept\")\n",
+    ] {
+        let program = format!("(import (scheme write))\n{program}");
+        for backend in BOTH_BACKENDS {
+            let mut args = backend.to_vec();
+            args.push("-i");
+            let (stdout, stderr, _) = run_with_deadline(dir.path(), &args, Some(&program));
+            assert!(stdout.contains("Error:"), "{args:?}: {stdout} {stderr}");
+            assert!(
+                stdout.contains("keptGoodbye!"),
+                "{args:?}: {stdout} {stderr}"
+            );
+            assert!(!stdout.contains("`DISPLAY`"), "{args:?}: {stdout}");
+        }
+    }
+}
+
 /// A form spanning many lines is read in time proportional to its size.
 /// Asking the parser whether it is finished at every new line takes time
 /// proportional to its square, which would not finish within the deadline:
