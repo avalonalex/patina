@@ -233,6 +233,26 @@ fn a_piped_session_resumes_from_lookahead_left_by_its_own_reads() {
     }
 }
 
+#[test]
+fn source_positions_resume_after_reads_across_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    for ending in ["\n", "\r\n", "\r"] {
+        // Reading only CR out of CRLF leaves LF for the resumed lexer.
+        for take in ["(read-char)", "(read-line)"] {
+            let program =
+                format!("(import (scheme base)){ending}{take}{ending}  (missing){ending}");
+            for backend in BOTH_BACKENDS {
+                let (_, stderr, ok) = run_with_deadline(dir.path(), backend, Some(&program));
+                assert!(!ok);
+                assert!(
+                    stderr.contains("<stdin>:3:3\n   3 |   (missing)\n         ^"),
+                    "{backend:?}, {take}, {ending:?}: {stderr}"
+                );
+            }
+        }
+    }
+}
+
 /// A bad token after a finished form is reported after the form has run, from
 /// a file as from standard input, as chibi and Gauche report it.
 #[test]

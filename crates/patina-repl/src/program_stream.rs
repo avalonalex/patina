@@ -19,6 +19,7 @@
 //! file, while its line is among the last megabyte of text read. Older lines
 //! are forgotten, so what the reader holds stays bounded.
 
+use patina_core::source_map::source_lines;
 use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::{Reader, ReaderState, dialect};
 use patina_interpreter::{
@@ -123,10 +124,14 @@ where
             self.input.consume_unread('\u{feff}'.len_utf8());
             line = rest;
         }
-        self.lines = self.lines.saturating_add(1);
         {
             let mut map = self.source_map.borrow_mut();
-            map.push_source_line(self.lines, line);
+            // A physical read ends at LF, but can contain several logical
+            // lines separated by bare CR. Number and retain each of them.
+            for line in source_lines(line) {
+                self.lines = self.lines.saturating_add(1);
+                map.push_source_line(self.lines, line);
+            }
             map.forget_old_source_lines(SOURCE_TEXT_KEPT, self.at.line);
         }
         self.reader.feed(line);
@@ -217,10 +222,11 @@ where
                     offset: 0,
                     line: self.lines.saturating_add(1),
                     column: 1,
+                    after_cr: false,
                     fold_case: self.at.fold_case,
                 };
                 let mut map = self.source_map.borrow_mut();
-                for line in after.split_inclusive('\n') {
+                for line in source_lines(&after) {
                     self.lines = self.lines.saturating_add(1);
                     map.push_source_line(self.lines, line);
                 }
@@ -269,21 +275,11 @@ where
 }
 
 /// `at` moved past `text`.
-fn advance(at: ReaderState, text: &str) -> ReaderState {
-    text.chars().fold(at, |at, c| {
-        if c == '\n' {
-            ReaderState {
-                line: at.line.saturating_add(1),
-                column: 1,
-                ..at
-            }
-        } else {
-            ReaderState {
-                column: at.column.saturating_add(1),
-                ..at
-            }
-        }
-    })
+fn advance(mut at: ReaderState, text: &str) -> ReaderState {
+    for ch in text.chars() {
+        at.advance(ch);
+    }
+    at
 }
 
 #[cfg(test)]

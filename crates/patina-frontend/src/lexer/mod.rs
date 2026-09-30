@@ -1,3 +1,4 @@
+use patina_core::source_map::SourceCursor;
 use std::fmt;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
@@ -106,8 +107,8 @@ fn describe_char(ch: char) -> String {
 }
 
 /// Where a reader stands in its text: a character offset with the line and
-/// column it falls on, and the one piece of reader state that outlives a
-/// token, whether `#!fold-case` is in effect.
+/// column it falls on, whether the preceding character was CR, and whether
+/// `#!fold-case` is in effect.
 ///
 /// A reader that stops and later carries on — a program read as it arrives,
 /// which cannot parse a form until the lines holding it are in — resumes from
@@ -119,6 +120,8 @@ pub struct ReaderState {
     pub offset: usize,
     pub line: u32,
     pub column: u32,
+    /// The preceding character was CR; a following LF completes that ending.
+    pub after_cr: bool,
     pub fold_case: bool,
 }
 
@@ -128,8 +131,27 @@ impl ReaderState {
         offset: 0,
         line: 1,
         column: 1,
+        after_cr: false,
         fold_case: false,
     };
+
+    fn cursor(self) -> SourceCursor {
+        SourceCursor {
+            line: self.line,
+            column: self.column,
+            after_cr: self.after_cr,
+        }
+    }
+
+    /// Move past one source character, retaining CRLF state for a later read.
+    pub fn advance(&mut self, ch: char) {
+        let mut cursor = self.cursor();
+        cursor.advance(ch);
+        self.line = cursor.line;
+        self.column = cursor.column;
+        self.after_cr = cursor.after_cr;
+        self.offset += 1;
+    }
 }
 
 /// A half-open range in reader coordinates. Offsets count characters, as
@@ -244,10 +266,7 @@ pub struct Lexer {
     position: usize,
     /// Whether to case-fold identifiers and character names (R7RS #!fold-case).
     fold_case: bool,
-    /// Current line number (1-based)
-    line: u32,
-    /// Current column number (1-based)
-    column: u32,
+    cursor: SourceCursor,
     /// Where the token returned by the previous `next_token` call ended (the
     /// start of the input before any token is returned). Its offset does not
     /// count a dropped byte order mark; the accessors add it back.
@@ -424,8 +443,7 @@ impl Lexer {
             input: strip_byte_order_mark(input),
             position: 0,
             fold_case: false,
-            line: 1,
-            column: 1,
+            cursor: SourceCursor::START,
             prev_token_end: ReaderState::START,
             bom_offset: usize::from(input.starts_with('\u{feff}')),
             allow_r6rs: crate::dialect::allow_r6rs(),
@@ -543,8 +561,7 @@ impl Lexer {
     pub fn resume_at(&mut self, at: ReaderState) {
         self.at_source_start = false;
         self.position = 0;
-        self.line = at.line;
-        self.column = at.column;
+        self.cursor = at.cursor();
         self.fold_case = at.fold_case;
         self.prev_token_end = ReaderState { offset: 0, ..at };
         self.token_start = ReaderState::START;
@@ -592,8 +609,7 @@ impl Lexer {
     /// text itself is kept: only where the lexer stands in it is restored.
     pub fn restore(&mut self, mark: LexerMark) {
         self.position = mark.at.offset;
-        self.line = mark.at.line;
-        self.column = mark.at.column;
+        self.cursor = mark.at.cursor();
         self.fold_case = mark.at.fold_case;
         self.prev_token_end = mark.prev_token_end;
         self.open_delimiters = mark.open_delimiters;
@@ -630,7 +646,7 @@ impl Lexer {
                     at += 1;
                 }
                 Looking::LineComment => {
-                    if ch == '\n' {
+                    if matches!(ch, '\r' | '\n') {
                         self.partial = None;
                         return Some(partial.start);
                     }
@@ -680,8 +696,7 @@ impl Lexer {
     /// (`)`).
     fn rewind_to(&mut self, at: ReaderState, delimiters: (usize, Option<OpenDelimiter>)) {
         self.position = at.offset;
-        self.line = at.line;
-        self.column = at.column;
+        self.cursor = at.cursor();
         self.fold_case = at.fold_case;
         self.prev_token_end = at;
         let (depth, innermost) = delimiters;
@@ -748,13 +763,7 @@ impl Lexer {
     fn span_from(&self, start: ReaderState, include_current: bool) -> ReadSpan {
         let mut end = self.state();
         if include_current && !self.is_at_end() {
-            end.offset += 1;
-            if self.current_char() == '\n' {
-                end.line = end.line.saturating_add(1);
-                end.column = 1;
-            } else {
-                end.column = end.column.saturating_add(1);
-            }
+            end.advance(self.current_char());
         }
         ReadSpan {
             start: ReaderState {
@@ -805,8 +814,9 @@ impl Lexer {
     fn raw_state(&self) -> ReaderState {
         ReaderState {
             offset: self.position,
-            line: self.line,
-            column: self.column,
+            line: self.cursor.line,
+            column: self.cursor.column,
+            after_cr: self.cursor.after_cr,
             fold_case: self.fold_case,
         }
     }
@@ -958,26 +968,19 @@ impl Lexer {
 
     fn advance(&mut self) {
         if self.position < self.input.len() {
-            // Saturating: a program read as it arrives has no length, and a
-            // position that stops counting beats one that wraps or panics.
-            if self.input[self.position] == '\n' {
-                self.line = self.line.saturating_add(1);
-                self.column = 1;
-            } else {
-                self.column = self.column.saturating_add(1);
-            }
+            self.cursor.advance(self.input[self.position]);
         }
         self.position += 1;
     }
 
     /// Current line number (1-based)
     pub fn current_line(&self) -> u32 {
-        self.line
+        self.cursor.line
     }
 
     /// Current column number (1-based)
     pub fn current_column(&self) -> u32 {
-        self.column
+        self.cursor.column
     }
 
     fn is_at_end(&self) -> bool {
@@ -1693,6 +1696,53 @@ impl Lexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn positions_count_logical_lines_and_unicode_characters() {
+        let mut lexer = Lexer::new("λ\r\n  x\ry\n\r\r\nz");
+        for (name, line, column) in [("λ", 1, 1), ("x", 2, 3), ("y", 3, 1), ("z", 6, 1)] {
+            let token = lexer.next_token().unwrap();
+            assert_eq!(token.token, Token::Identifier(name.into()));
+            assert_eq!((token.start.line, token.start.column), (line, column));
+            assert_eq!((token.end.line, token.end.column), (line, column + 1));
+        }
+    }
+
+    #[test]
+    fn crlf_survives_chunk_boundaries_compaction_and_trial_reads() {
+        let mut lexer = Lexer::feedable(false);
+        lexer.feed("\r");
+        assert!(lexer.next_fed_token().unwrap().is_none());
+        let at = lexer.state();
+        assert_eq!((at.line, at.column, at.after_cr), (2, 1, true));
+        lexer.forget_read_text(at.offset);
+        let mark = lexer.mark();
+        lexer.no_more_text();
+        assert_eq!(lexer.next_token_kind().unwrap(), Token::Eof);
+        lexer.restore(mark);
+        lexer.feed("\nλ ");
+        let token = lexer.next_fed_token().unwrap().unwrap();
+        assert_eq!((token.start.line, token.start.column), (2, 1));
+
+        let mut resumed = Lexer::feedable(false);
+        resumed.resume_at(at);
+        resumed.feed("\nλ ");
+        assert_eq!(
+            resumed.next_fed_token().unwrap().unwrap().start,
+            token.start
+        );
+    }
+
+    #[test]
+    fn a_split_line_comment_ends_at_a_bare_return_without_waiting_for_eof() {
+        let mut lexer = Lexer::feedable(false);
+        lexer.feed("; comment");
+        assert!(lexer.next_fed_token().unwrap().is_none());
+        lexer.feed("\r42 ");
+        let token = lexer.next_fed_token().unwrap().unwrap();
+        assert_eq!(token.token, Token::Number("42".into()));
+        assert_eq!((token.start.line, token.start.column), (2, 1));
+    }
 
     #[test]
     fn lexical_error_spans_count_characters_and_end_after_the_bad_text() {

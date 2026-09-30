@@ -418,6 +418,7 @@ mod tests {
             "(a)\n  #false-x ",
             "(a)\n  (#t#f)",
             "(a)\n  #\\bogus ",
+            "(a)\n; comment\n  #\\bogus ",
             "(λ)\n  \"β\\q\" ",
             "\u{feff}(a)\n  { ",
             "#!fold-case\n  #(1 . 2)",
@@ -429,7 +430,11 @@ mod tests {
             "(a)\n  |unfinished",
             "(a)\n  (unfinished",
         ];
-        for text in texts {
+        for text in texts
+            .into_iter()
+            .flat_map(|text| ["\n", "\r\n", "\r"].map(|ending| text.replace('\n', ending)))
+        {
+            let text = text.as_str();
             let whole = (|| {
                 let mut parser = Parser::new(text)?;
                 while parser.parse_next()?.is_some() {}
@@ -596,6 +601,7 @@ mod tests {
             offset: 0,
             line: 7,
             column: 5,
+            after_cr: false,
             fold_case: true,
         };
         let mut reader = Reader::resuming(false, at);

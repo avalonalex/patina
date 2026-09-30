@@ -9,6 +9,50 @@ use crate::{GcFreedBits, SharedHeap, TaggedValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+/// A character-based source position using R7RS 7.1.1 line endings.
+/// Keep `after_cr` across input chunks: CRLF starts one line even when its
+/// characters arrive separately, or the preceding text has been discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceCursor {
+    pub line: u32,
+    pub column: u32,
+    pub after_cr: bool,
+}
+
+impl SourceCursor {
+    pub const START: Self = Self {
+        line: 1,
+        column: 1,
+        after_cr: false,
+    };
+
+    pub fn advance(&mut self, ch: char) {
+        if ch == '\r' || (ch == '\n' && !self.after_cr) {
+            self.line = self.line.saturating_add(1);
+            self.column = 1;
+        } else if ch != '\n' {
+            self.column = self.column.saturating_add(1);
+        }
+        self.after_cr = ch == '\r';
+    }
+}
+
+/// Split complete source text at LF, CRLF or bare CR, keeping each ending.
+/// Like `split_inclusive`, an ending at EOF adds no empty trailing line.
+pub fn source_lines(mut text: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        if text.is_empty() {
+            return None;
+        }
+        let end = text.find(['\r', '\n']).map_or(text.len(), |at| {
+            at + if text[at..].starts_with("\r\n") { 2 } else { 1 }
+        });
+        let (line, rest) = text.split_at(end);
+        text = rest;
+        Some(line)
+    })
+}
+
 /// Maps TaggedValue raw bits to their source locations.
 ///
 /// Since TaggedValue is a NaN-boxed u64, we use the raw bits as keys.
@@ -86,10 +130,14 @@ impl SourceMap {
         let mut cut = 0;
         let mut first_line = self.line_offset.saturating_add(1);
         while text.len() - cut > max_bytes / 2 && first_line < keep_from_line {
-            let Some(end) = text[cut..].find('\n') else {
+            let Some(line) = source_lines(&text[cut..]).next() else {
                 break;
             };
-            cut += end + 1;
+            // A final unterminated line cannot precede another source line.
+            if !line.ends_with(['\r', '\n']) {
+                break;
+            }
+            cut += line.len();
             first_line += 1;
         }
         if cut == 0 {
@@ -119,7 +167,9 @@ impl SourceMap {
         let index = (line as usize)
             .saturating_sub(1)
             .checked_sub(self.line_offset as usize)?;
-        text.lines().nth(index)
+        source_lines(text)
+            .nth(index)
+            .map(|line| line.trim_end_matches(['\r', '\n']))
     }
 
     /// Format a caret-style error context block for a source location.
@@ -217,6 +267,48 @@ pub fn prune_freed_locations(heap: &SharedHeap, source_map: &RefCell<SourceMap>)
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn source_lines_and_cursor_agree_on_all_three_endings() {
+        let text = "a\r\nb\rc\n\r\r\nλ";
+        let lines: Vec<_> = source_lines(text).collect();
+        assert_eq!(lines, ["a\r\n", "b\r", "c\n", "\r", "\r\n", "λ"]);
+        let mut cursor = SourceCursor::START;
+        for ch in text.chars() {
+            cursor.advance(ch);
+        }
+        assert_eq!((cursor.line, cursor.column), (6, 2));
+        assert!(source_lines("").next().is_none());
+        assert_eq!(source_lines("\r\n").collect::<Vec<_>>(), ["\r\n"]);
+    }
+
+    #[test]
+    fn raw_and_streamed_source_quote_and_forget_the_same_logical_lines() {
+        let text = "first\r\nsecond\rthird\n\r\r\nλ last";
+        let mut raw = SourceMap::new();
+        raw.set_source_text(text.into());
+        let mut streamed = SourceMap::new();
+        for (i, line) in source_lines(text).enumerate() {
+            streamed.push_source_line(i as u32 + 1, line);
+        }
+        for map in [&mut raw, &mut streamed] {
+            for (i, expected) in ["first", "second", "third", "", "", "λ last"]
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(map.get_line(i as u32 + 1), Some(expected));
+            }
+            let at = SourceLocation::new("test.scm", 6, 3);
+            assert_eq!(
+                map.format_context(&at).unwrap(),
+                "   6 | λ last\n         ^"
+            );
+            map.forget_old_source_lines(1, 4);
+            assert_eq!(map.get_line(3), None);
+            assert_eq!(map.get_line(4), Some(""));
+            assert_eq!(map.get_line(6), Some("λ last"));
+        }
+    }
 
     /// A source read a line at a time is quoted by its own line numbers, and
     /// forgetting old lines bounds what is held without dropping the line an

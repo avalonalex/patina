@@ -322,28 +322,81 @@ fn reader_errors_show_scheme_tokens_and_caret_context() {
             None,
         ),
     ] {
-        fs::write(dir.path().join("program.scm"), program).unwrap();
+        for ending in ["\n", "\r\n", "\r"] {
+            let program = program.replace('\n', ending);
+            fs::write(dir.path().join("program.scm"), &program).unwrap();
+            for backend in BOTH_BACKENDS {
+                for (args, input, source) in [
+                    (&["program.scm"][..], None, "program.scm"),
+                    (&[][..], Some(program.as_str()), "<stdin>"),
+                ] {
+                    let (ds, output, stderr, ok) = run(dir.path(), backend, args, input);
+                    let mut expected = format!(
+                        "Error: {message}\n  at {source}:{line}:{column}\n{line:>4} | {text}\n{}{}\n",
+                        " ".repeat(7 + column - 1),
+                        "^".repeat(width),
+                    );
+                    if let Some((line, column)) = opening {
+                        expected.push_str(&format!("  opened at {source}:{line}:{column}\n"));
+                    }
+                    assert!(!ok, "{program}");
+                    assert_eq!(output, stdout, "{backend:?}, {source}, {program}");
+                    assert_eq!(stderr, expected, "{backend:?}, {source}, {program}");
+                    assert_eq!(ds.len(), 1);
+                    assert_eq!(ds[0].kind, K::Parse);
+                    assert_eq!(ds[0].path.as_deref(), Some(source));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_errors_and_mixed_endings_quote_the_correct_line() {
+    let dir = tempfile::tempdir().unwrap();
+    for ending in ["\n", "\r\n", "\r"] {
         for backend in BOTH_BACKENDS {
+            // The tree-walker's primitive type errors currently omit source
+            // locations even for LF. Unbound calls carry them on both.
+            let bad = if backend.is_empty() {
+                "  (car 5)"
+            } else {
+                "  (missing)"
+            };
+            let program = format!("(import (scheme base)){ending}; λ{ending}{bad}{ending}");
+            fs::write(dir.path().join("program.scm"), &program).unwrap();
             for (args, input, source) in [
                 (&["program.scm"][..], None, "program.scm"),
-                (&[][..], Some(program), "<stdin>"),
+                (&[][..], Some(program.as_str()), "<stdin>"),
             ] {
-                let (ds, output, stderr, ok) = run(dir.path(), backend, args, input);
-                let mut expected = format!(
-                    "Error: {message}\n  at {source}:{line}:{column}\n{line:>4} | {text}\n{}{}\n",
-                    " ".repeat(7 + column - 1),
-                    "^".repeat(width),
+                let (_, _, stderr, ok) = run(dir.path(), backend, args, input);
+                assert!(!ok);
+                assert!(
+                    stderr.contains(&format!("at {source}:3:3\n   3 | {bad}\n         ^")),
+                    "{backend:?}: {stderr}"
                 );
-                if let Some((line, column)) = opening {
-                    expected.push_str(&format!("  opened at {source}:{line}:{column}\n"));
-                }
-                assert!(!ok, "{program}");
-                assert_eq!(output, stdout, "{backend:?}, {source}, {program}");
-                assert_eq!(stderr, expected, "{backend:?}, {source}, {program}");
-                assert_eq!(ds.len(), 1);
-                assert_eq!(ds[0].kind, K::Parse);
-                assert_eq!(ds[0].path.as_deref(), Some(source));
+                assert!(
+                    !stderr.contains('\r'),
+                    "the excerpt contains no line-ending controls"
+                );
             }
+        }
+    }
+    let program = "(import (scheme base))\r\n; comment\r\n\r; another\r  #\\bogus";
+    fs::write(dir.path().join("program.scm"), program).unwrap();
+    for backend in BOTH_BACKENDS {
+        for (args, input, source) in [
+            (&["program.scm"][..], None, "program.scm"),
+            (&[][..], Some(program), "<stdin>"),
+        ] {
+            let (_, _, stderr, ok) = run(dir.path(), backend, args, input);
+            assert!(!ok);
+            assert!(
+                stderr.contains(&format!(
+                    "at {source}:5:3\n   5 |   #\\bogus\n         ^^^^^^^"
+                )),
+                "{backend:?}: {stderr}"
+            );
         }
     }
 }
