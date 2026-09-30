@@ -8,6 +8,7 @@
 //! This module provides the infrastructure for string ports, stdio ports,
 //! file ports, and (in the future) bytevector ports.
 
+use crate::source_map::SourceCursor;
 use crate::vfs::{FileSystem, ReadPort, WritePort};
 use std::cell::{Cell, RefCell};
 use std::io::{self, BufRead, Read, Write};
@@ -26,14 +27,76 @@ pub struct Port {
     pub direction: PortDirection,
     /// The actual port data (shared, mutable)
     pub data: Rc<RefCell<PortData>>,
-    /// Text already read from the underlying source but not yet consumed
-    /// (e.g. the rest of a line after `read` parses one datum from it).
-    /// Textual input operations drain this before touching the source.
+    /// Program text fetched a line at a time, but not yet executed. Runtime
+    /// reads consume it before the source; byte reads move it into raw carry.
     /// Shared behind `Rc` so cloned ports stay in sync, like `data`, and
     /// shared by every standard input port (see [`Port::stdin`]).
     pushback: Rc<RefCell<Unread>>,
     /// Reader directives follow the input, including across cloned ports.
     fold_case: Rc<Cell<bool>>,
+    position: Rc<RefCell<InputPosition>>,
+}
+
+/// Position shared by datum, character and byte reads. UTF-8 decoding carries
+/// across byte operations, as does CRLF across calls. Invalid binary bytes
+/// count as replacement characters for subsequent textual diagnostics.
+#[derive(Debug, Clone, Copy)]
+pub struct InputPosition {
+    /// Bytes consumed, even when the last read split a UTF-8 character.
+    pub byte_offset: usize,
+    /// Completed characters consumed, including a leading signature.
+    pub offset: usize,
+    pub cursor: SourceCursor,
+    pending: [u8; 4],
+    pending_len: usize,
+}
+
+impl Default for InputPosition {
+    fn default() -> Self {
+        Self {
+            byte_offset: 0,
+            offset: 0,
+            cursor: SourceCursor::START,
+            pending: [0; 4],
+            pending_len: 0,
+        }
+    }
+}
+
+impl InputPosition {
+    fn character(&mut self, ch: char) {
+        // A leading UTF-8 signature occupies bytes, but no source column.
+        if self.offset != 0 || ch != '\u{feff}' {
+            self.cursor.advance(ch);
+        }
+        self.offset += 1;
+    }
+
+    fn consume(&mut self, bytes: &[u8]) {
+        self.byte_offset += bytes.len();
+        for &byte in bytes {
+            if self.pending_len > 0 && byte & 0xc0 != 0x80 {
+                self.character('\u{fffd}');
+                self.pending_len = 0;
+            }
+            if self.pending_len == 0 && byte < 0x80 {
+                self.character(byte as char);
+            } else if self.pending_len == 0 && !(0xc2..=0xf4).contains(&byte) {
+                self.character('\u{fffd}');
+            } else {
+                self.pending[self.pending_len] = byte;
+                self.pending_len += 1;
+                if self.pending_len == utf8_char_len(self.pending[0]) {
+                    let ch = std::str::from_utf8(&self.pending[..self.pending_len])
+                        .ok()
+                        .and_then(|s| s.chars().next())
+                        .unwrap_or('\u{fffd}');
+                    self.character(ch);
+                    self.pending_len = 0;
+                }
+            }
+        }
+    }
 }
 
 /// Text a port has read from its source and not yet handed out.
@@ -98,6 +161,7 @@ thread_local! {
     /// standard input depends on it, because the reader running the program
     /// and the program's own reads take their text from the one stream.
     static STDIN_UNREAD: Rc<RefCell<Unread>> = Rc::new(RefCell::new(Unread::default()));
+    static STDIN_POSITION: Rc<RefCell<InputPosition>> = Rc::new(RefCell::new(InputPosition::default()));
     static STDIN_FOLD_CASE: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
     /// Raw lookahead shared by all stdin ports. Keep the consumed offset too,
@@ -246,21 +310,6 @@ fn decode_utf8_at(bytes: &[u8], position: usize) -> io::Result<Option<(char, usi
     Ok(s.chars().next().map(|c| (c, c.len_utf8())))
 }
 
-/// The text at the front of `bytes`: its longest prefix that is valid UTF-8.
-///
-/// What `read` parses when its port is a binary one. A binary port need not
-/// hold text all the way down — a textual header, then a body of arbitrary
-/// bytes — and `read` takes one datum off the front, so it must not fail on
-/// bytes it was never going to reach. The caller tells a datum that ran into
-/// the undecodable part from one that ended before it.
-pub fn utf8_prefix(bytes: &[u8]) -> &str {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()])
-            .expect("valid_up_to bounds a valid prefix"),
-    }
-}
-
 /// The encoded length a UTF-8 lead byte announces. Invalid lead bytes
 /// (stray continuations, ≥ 0xF8) are deliberately lumped into 4 and left
 /// for `from_utf8` to reject — every caller validates the bytes it gathers.
@@ -297,13 +346,13 @@ fn utf8_char_len(first: u8) -> usize {
 /// `read-bytevector`, which never look there: once per boundary, silently,
 /// where there had been a loud error.
 ///
-/// The datum reader also returns the unused tail of a line here with
-/// [`unread`](Self::unread), so byte operations see it too (#411). A line ends
-/// at a newline or EOF, never part-way through a character that the next line
-/// would complete.
+/// Datum reads use bounded character lookahead here too (#371). Unconsumed
+/// bytes remain in this buffer, available to every kind of read. A program
+/// arriving on stdin also returns its unread text here with [`unread`](Self::unread)
+/// when its own reads switch from program text to raw bytes (#412).
 ///
-/// Only `fill_char` assembles a character, and only `peek-char` asks it to. `fill_buf`
-/// hands out what is buffered and waits for nothing more, as the inner reader
+/// Only character lookahead assembles characters. `fill_buf` hands out what
+/// is buffered and waits for nothing more, as the inner reader
 /// would: `peek-u8`, `u8-ready?` and `read_until` have no use for a whole
 /// character, and waiting for one is a wait for bytes. On a file that costs
 /// nothing; on a pipe the bytes may not be sent until what has already arrived
@@ -315,11 +364,12 @@ fn utf8_char_len(first: u8) -> usize {
 /// borrowed lock, with lookahead shared between operations (#412).
 pub struct WholeCharReader<R = Box<dyn ReadPort>> {
     inner: R,
-    /// A character that straddled a chunk, or the unused tail of a line the
-    /// datum reader returned. Empty means every call goes to `inner`.
+    /// Characters that straddled a chunk, or unread stdin program text.
+    /// Empty means every call goes to `inner`.
     carry: Vec<u8>,
     /// Bytes of `carry` already consumed.
     carry_pos: usize,
+    position: Rc<RefCell<InputPosition>>,
 }
 
 impl<R: BufRead> WholeCharReader<R> {
@@ -328,6 +378,7 @@ impl<R: BufRead> WholeCharReader<R> {
             inner,
             carry: Vec::new(),
             carry_pos: 0,
+            position: Rc::new(RefCell::new(InputPosition::default())),
         }
     }
 
@@ -335,8 +386,7 @@ impl<R: BufRead> WholeCharReader<R> {
         &self.carry[self.carry_pos..]
     }
 
-    /// Return the unused tail of a line obtained with `read_until`. It ends
-    /// at a newline or EOF, so no complete character crosses its far edge.
+    /// Prepend unread bytes, for resuming stdin after reading program text.
     /// Every character and byte operation sees these bytes before the source.
     pub fn unread(&mut self, mut bytes: Vec<u8>) {
         if bytes.is_empty() {
@@ -347,43 +397,18 @@ impl<R: BufRead> WholeCharReader<R> {
         self.carry_pos = 0;
     }
 
-    /// The buffer, which begins with the whole of the next character unless
-    /// the source ends inside it. Like `fill_buf`, it consumes nothing.
-    ///
-    /// The check is on the *first* byte only, which is all a peek needs, and
-    /// it costs a table lookup and a comparison. Anything else passes straight
-    /// through, so the inner reader's buffer is still the buffer.
-    pub fn fill_char(&mut self) -> io::Result<&[u8]> {
-        if self.carried().is_empty() {
-            // How much is buffered, and how much the first character needs.
-            // Read out as numbers so the borrow ends here: the buffer itself
-            // is handed back by a second `fill_buf` below, which a non-empty
-            // buffer answers without touching the source.
-            let (buffered, needed) = {
-                let buf = self.inner.fill_buf()?;
-                (buf.len(), buf.first().map_or(0, |&b| utf8_char_len(b)))
-            };
-            if buffered >= needed {
-                return self.inner.fill_buf();
-            }
+    /// Make at least `needed` bytes visible, stopping at EOF. Moving bytes
+    /// into carry is lookahead, not consumption; every operation still sees them.
+    fn fill_at_least(&mut self, needed: usize) -> io::Result<&[u8]> {
+        if self.carried().is_empty() && self.inner.fill_buf()?.len() >= needed {
+            return self.inner.fill_buf();
         }
-        // The chunk ends inside its first character. Take what is there, then
-        // what completes it. If the source ends first, the carry is a
-        // truncated character, and decoding it is the error it should be.
-        //
-        // A carry nothing has been read from is completed whenever it is
-        // asked for, not only when it is begun: an error from the source
-        // leaves it part-built, with its bytes already off the inner reader,
-        // and the next peek must finish it rather than decode the part. One
-        // that bytes have been read from is no longer a character's start,
-        // and is served as it stands.
-        while self.carry_pos == 0 {
-            // An empty carry needs its lead byte before it can say how long
-            // the character is.
-            let needed = self.carry.first().map_or(1, |&b| utf8_char_len(b));
-            if self.carry.len() >= needed {
-                break;
-            }
+        if self.carried().len() < needed && self.carry_pos > 0 {
+            self.carry.drain(..self.carry_pos);
+            self.carry_pos = 0;
+        }
+        while self.carried().len() < needed {
+            let missing = needed - self.carried().len();
             let buf = match self.inner.fill_buf() {
                 Ok(buf) => buf,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -392,18 +417,50 @@ impl<R: BufRead> WholeCharReader<R> {
             if buf.is_empty() {
                 break;
             }
-            let take = (needed - self.carry.len()).min(buf.len());
+            let take = missing.min(buf.len());
             self.carry.extend_from_slice(&buf[..take]);
             self.inner.consume(take);
         }
         Ok(self.carried())
+    }
+
+    /// The next whole character, without consuming its bytes.
+    pub fn fill_char(&mut self) -> io::Result<&[u8]> {
+        if self.carry_pos > 0 {
+            return Ok(self.carried());
+        }
+        let needed = self
+            .fill_at_least(1)?
+            .first()
+            .map_or(0, |&b| utf8_char_len(b));
+        self.fill_at_least(needed)
+    }
+
+    /// Bounded character lookahead used by the lexer. Do not wait for a line
+    /// or for characters past the requested one (a pipe may remain open).
+    fn peek_char_at(&mut self, offset: usize) -> io::Result<Option<char>> {
+        let mut byte = 0;
+        for index in 0..=offset {
+            let Some(&first) = self.fill_at_least(byte + 1)?.get(byte) else {
+                return Ok(None);
+            };
+            let end = byte + utf8_char_len(first);
+            let ch = decode_utf8_at(self.fill_at_least(end)?, byte)?;
+            if index == offset {
+                return Ok(ch.map(|(ch, _)| ch));
+            }
+            byte = end;
+        }
+        unreachable!()
     }
 }
 
 impl<R: BufRead> Read for WholeCharReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.carried().is_empty() {
-            return self.inner.read(buf);
+            let n = self.inner.read(buf)?;
+            self.position.borrow_mut().consume(&buf[..n]);
+            return Ok(n);
         }
         // A short read, which `Read` allows: what is carried comes first, and
         // the caller comes back for the rest.
@@ -423,10 +480,21 @@ impl<R: BufRead> BufRead for WholeCharReader<R> {
     }
 
     fn consume(&mut self, amt: usize) {
+        if amt == 0 {
+            return;
+        }
         if self.carried().is_empty() {
+            if let Ok(bytes) = self.inner.fill_buf() {
+                self.position
+                    .borrow_mut()
+                    .consume(&bytes[..amt.min(bytes.len())]);
+            }
             self.inner.consume(amt);
             return;
         }
+        self.position
+            .borrow_mut()
+            .consume(&self.carried()[..amt.min(self.carried().len())]);
         self.carry_pos = (self.carry_pos + amt).min(self.carry.len());
         if self.carry_pos == self.carry.len() {
             self.carry.clear();
@@ -444,6 +512,7 @@ fn with_stdin_reader<T>(f: impl FnOnce(&mut WholeCharReader<io::StdinLock<'_>>) 
             inner: io::stdin().lock(),
             carry: bytes,
             carry_pos: position,
+            position: STDIN_POSITION.with(Rc::clone),
         };
         let result = f(&mut reader);
         *carry.borrow_mut() = (reader.carry, reader.carry_pos);
@@ -498,6 +567,13 @@ pub enum StdioKind {
 
 impl Port {
     fn new_port(kind: PortKind, direction: PortDirection, data: PortData) -> Rc<Port> {
+        let position = match &data {
+            PortData::File(FilePortData {
+                handle: FileHandle::Input(reader),
+                ..
+            }) => reader.position.clone(),
+            _ => Rc::new(RefCell::new(InputPosition::default())),
+        };
         Rc::new(Port {
             kind,
             supports_binary: !matches!(data, PortData::String(_)),
@@ -505,6 +581,7 @@ impl Port {
             data: Rc::new(RefCell::new(data)),
             pushback: Rc::new(RefCell::new(Unread::default())),
             fold_case: Rc::new(Cell::new(false)),
+            position,
         })
     }
 
@@ -566,7 +643,24 @@ impl Port {
             data: Rc::new(RefCell::new(PortData::Stdio(StdioKind::Stdin))),
             pushback: STDIN_UNREAD.with(Rc::clone),
             fold_case: STDIN_FOLD_CASE.with(Rc::clone),
+            position: STDIN_POSITION.with(Rc::clone),
         })
+    }
+
+    /// The consumed position, unaffected by lookahead or peeking.
+    pub fn input_position(&self) -> InputPosition {
+        *self.position.borrow()
+    }
+
+    /// Name used in diagnostics about input data, independently of the caller.
+    pub fn input_name(&self) -> String {
+        match &*self.data.borrow() {
+            PortData::File(file) => file.path.display().to_string(),
+            PortData::Stdio(StdioKind::Stdin) => "<stdin>".into(),
+            PortData::String(_) => "<string port>".into(),
+            PortData::Bytevector(_) => "<bytevector port>".into(),
+            _ => "<port>".into(),
+        }
     }
 
     /// Whether a preceding datum read enabled case folding on this input.
@@ -714,7 +808,11 @@ impl Port {
     /// Consume the first `bytes` bytes of the unread text, which must end on
     /// a character boundary.
     pub fn consume_unread(&self, bytes: usize) {
-        self.pushback.borrow_mut().consume(bytes);
+        let mut unread = self.pushback.borrow_mut();
+        self.position
+            .borrow_mut()
+            .consume(&unread.as_str().as_bytes()[..bytes]);
+        unread.consume(bytes);
     }
 
     /// A number that changes whenever the unread text does, whichever port
@@ -735,7 +833,12 @@ impl Port {
                 "not an input port",
             ));
         }
-        let line = self.read_line_from_source()?;
+        // Pulling program text is lookahead. Its cursor advances when the
+        // program reader commits a form or the running program consumes it.
+        let position = self.input_position();
+        let result = self.read_line_from_source();
+        *self.position.borrow_mut() = position;
+        let line = result?;
         if let Some(line) = &line {
             self.pushback.borrow_mut().push_str(line);
         }
@@ -799,6 +902,9 @@ impl Port {
         {
             let mut pb = self.pushback.borrow_mut();
             if let Some(ch) = pb.as_str().chars().next() {
+                self.position
+                    .borrow_mut()
+                    .consume(&pb.as_str().as_bytes()[..ch.len_utf8()]);
                 pb.consume(ch.len_utf8());
                 return Ok(Some(ch));
             }
@@ -813,6 +919,9 @@ impl Port {
                 // Get character at position (handle UTF-8)
                 let remaining = &s.content[s.position..];
                 if let Some(ch) = remaining.chars().next() {
+                    self.position
+                        .borrow_mut()
+                        .consume(&remaining.as_bytes()[..ch.len_utf8()]);
                     s.position += ch.len_utf8();
                     Ok(Some(ch))
                 } else {
@@ -860,6 +969,9 @@ impl Port {
             // `decode_utf8_at` for why this is allowed at all.
             PortData::Bytevector(b) => match decode_utf8_at(&b.content, b.position)? {
                 Some((ch, len)) => {
+                    self.position
+                        .borrow_mut()
+                        .consume(&b.content[b.position..b.position + len]);
                     b.position += len;
                     Ok(Some(ch))
                 }
@@ -890,6 +1002,7 @@ impl Port {
                 }
                 let byte = b.content[b.position];
                 b.position += 1;
+                self.position.borrow_mut().consume(&[byte]);
                 Ok(Some(byte))
             }
             PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
@@ -1071,57 +1184,56 @@ impl Port {
 
     /// Peek at the next character without consuming it
     pub fn peek_char(&self) -> io::Result<Option<char>> {
+        self.peek_char_at(0)
+    }
+
+    /// Look ahead by a bounded number of characters without consuming them.
+    /// The bytes remain available to character and binary operations alike.
+    pub fn peek_char_at(&self, mut offset: usize) -> io::Result<Option<char>> {
         if self.direction != PortDirection::Input {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not an input port",
             ));
         }
-
-        // Buffered pushback text is delivered first, so peek there first
-        if let Some(ch) = self.pushback.borrow().as_str().chars().next() {
-            return Ok(Some(ch));
+        {
+            let pb = self.pushback.borrow();
+            for ch in pb.as_str().chars() {
+                if offset == 0 {
+                    return Ok(Some(ch));
+                }
+                offset -= 1;
+            }
         }
-
         let mut data = self.data.borrow_mut();
         match &mut *data {
-            PortData::String(s) => {
-                if s.position >= s.content.len() {
-                    return Ok(None); // EOF
-                }
-                let remaining = &s.content[s.position..];
-                Ok(remaining.chars().next())
-            }
-            PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
-                decode_utf8_at(reader.fill_char()?, 0).map(|ch| ch.map(|(ch, _)| ch))
-            }),
-            PortData::Stdio(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not an input port",
-            )),
-            PortData::File(fp) => {
-                if let FileHandle::Input(ref mut reader) = fp.handle {
-                    // The first character only. Validating the whole chunk
-                    // to return one character failed wherever a chunk ended
-                    // inside a character, or held a byte further along that
-                    // is not text at all (#410). `fill_char` sees to it that
-                    // the first character is all there unless the file ends
-                    // inside it.
-                    let buf = reader.fill_char()?;
-                    Ok(decode_utf8_at(buf, 0)?.map(|(ch, _)| ch))
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "not an input file port",
-                    ))
-                }
-            }
+            PortData::String(s) => Ok(s.content[s.position..].chars().nth(offset)),
+            // Pushback was already accounted for above; don't move it again.
+            PortData::Stdio(StdioKind::Stdin) => with_stdin_reader(|r| r.peek_char_at(offset)),
+            PortData::File(FilePortData {
+                handle: FileHandle::Input(r),
+                ..
+            }) => r.peek_char_at(offset),
             PortData::Bytevector(b) => {
-                Ok(decode_utf8_at(&b.content, b.position)?.map(|(ch, _)| ch))
+                let mut byte = b.position;
+                for index in 0..=offset {
+                    let Some((ch, len)) = decode_utf8_at(&b.content, byte)? else {
+                        return Ok(None);
+                    };
+                    if index == offset {
+                        return Ok(Some(ch));
+                    }
+                    byte += len;
+                }
+                unreachable!()
             }
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
+            )),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not an input port",
             )),
         }
     }
@@ -1338,6 +1450,7 @@ impl Port {
                 let to_read = std::cmp::min(k, available);
                 let result = b.content[b.position..b.position + to_read].to_vec();
                 b.position += to_read;
+                self.position.borrow_mut().consume(&result);
                 Ok(Some(result))
             }
             PortData::Stdio(StdioKind::Stdin) => self.with_stdin_reader(|reader| {
@@ -1411,6 +1524,7 @@ impl Port {
                 let to_read = std::cmp::min(target.len(), available);
                 target[..to_read].copy_from_slice(&b.content[b.position..b.position + to_read]);
                 b.position += to_read;
+                self.position.borrow_mut().consume(&target[..to_read]);
                 Ok(Some(to_read))
             }
             PortData::Stdio(StdioKind::Stdin) => {
@@ -1511,11 +1625,13 @@ impl Port {
             let mut pb = self.pushback.borrow_mut();
             if let Some(newline_pos) = pb.as_str().find('\n') {
                 let line = pb.as_str()[..=newline_pos].to_owned();
+                self.position.borrow_mut().consume(line.as_bytes());
                 pb.consume(newline_pos + 1);
                 return Ok(Some(line));
             }
         }
         let mut prefix = self.take_pushback();
+        self.position.borrow_mut().consume(prefix.as_bytes());
         match self.read_line_from_source()? {
             Some(line) => {
                 prefix.push_str(&line);
@@ -1537,11 +1653,13 @@ impl Port {
                 let remaining = &s.content[s.position..];
                 if let Some(newline_pos) = remaining.find('\n') {
                     let line = remaining[..=newline_pos].to_string();
+                    self.position.borrow_mut().consume(line.as_bytes());
                     s.position += line.len();
                     Ok(Some(line))
                 } else {
                     // No newline, return rest of content
                     let line = remaining.to_string();
+                    self.position.borrow_mut().consume(line.as_bytes());
                     s.position = s.content.len();
                     Ok(Some(line))
                 }
@@ -1586,58 +1704,12 @@ impl Port {
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
                     .to_string();
                 b.position += end;
+                self.position.borrow_mut().consume(line.as_bytes());
                 Ok(Some(line))
             }
             PortData::Closed => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "port is closed",
-            )),
-        }
-    }
-
-    /// Get the remaining content from a string input port (for `read` procedure)
-    pub fn remaining_content(&self) -> io::Result<String> {
-        if self.direction != PortDirection::Input {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not an input port",
-            ));
-        }
-
-        let data = self.data.borrow();
-        match &*data {
-            PortData::String(s) => Ok(s.content[s.position..].to_string()),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not a string port",
-            )),
-        }
-    }
-
-    /// Advance the position of an in-memory input port by `bytes_consumed`,
-    /// after `read` has parsed a datum out of the text ahead of it. Bytes, not
-    /// characters, on both kinds: a string port's position indexes its UTF-8.
-    pub fn advance_position(&self, bytes_consumed: usize) -> io::Result<()> {
-        if self.direction != PortDirection::Input {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not an input port",
-            ));
-        }
-
-        let mut data = self.data.borrow_mut();
-        match &mut *data {
-            PortData::String(s) => {
-                s.position += bytes_consumed;
-                Ok(())
-            }
-            PortData::Bytevector(b) => {
-                b.position += bytes_consumed;
-                Ok(())
-            }
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "not an in-memory port",
             )),
         }
     }
@@ -1670,6 +1742,64 @@ impl std::fmt::Display for Port {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_input_operation_updates_one_cursor_but_peeking_does_not() {
+        let fs = crate::vfs::MemoryFs::new();
+        let text = "λ\r\nαx\n  next";
+        fs.add_file("/cursor", text.as_bytes().to_vec());
+        for port in [
+            Port::new_input_bytevector(text.as_bytes().to_vec()),
+            Port::open_input_file("/cursor", &fs).unwrap(),
+        ] {
+            let clone = (*port).clone();
+            assert_eq!(port.peek_char_at(4).unwrap(), Some('x'));
+            assert_eq!(port.input_position().offset, 0);
+            assert_eq!(port.read_u8().unwrap(), Some(0xce));
+            assert_eq!(clone.input_position().cursor.column, 1);
+            let mut bytes = [0; 2];
+            assert_eq!(
+                clone.read_bytevector_into(&mut bytes, 0, 2).unwrap(),
+                Some(2)
+            );
+            assert_eq!(bytes, [0xbb, b'\r']);
+            assert_eq!(
+                port.input_position().cursor,
+                SourceCursor {
+                    line: 2,
+                    column: 1,
+                    after_cr: true
+                }
+            );
+            assert_eq!(port.peek_char().unwrap(), Some('\n'));
+            assert_eq!(port.read_bytevector(1).unwrap(), Some(vec![b'\n']));
+            assert_eq!(port.read_char().unwrap(), Some('α'));
+            assert_eq!(port.input_position().cursor.column, 2);
+            assert_eq!(port.read_line().unwrap().as_deref(), Some("x\n"));
+            assert_eq!(
+                port.input_position().cursor,
+                SourceCursor {
+                    line: 3,
+                    column: 1,
+                    after_cr: false
+                }
+            );
+            assert_eq!(port.read_char().unwrap(), Some(' '));
+            assert_eq!(clone.input_position().cursor.column, 2);
+        }
+    }
+
+    #[test]
+    fn pulling_program_lines_does_not_advance_the_consumed_cursor() {
+        let port = Port::new_input_string("λ\r\nx\n".into());
+        assert_eq!(port.pull_line().unwrap().as_deref(), Some("λ\r\n"));
+        assert_eq!(port.input_position().offset, 0);
+        port.consume_unread(3); // λ and CR
+        assert_eq!(port.input_position().cursor.line, 2);
+        assert_eq!(port.read_char().unwrap(), Some('\n'));
+        assert_eq!(port.read_char().unwrap(), Some('x'));
+        assert_eq!(port.input_position().cursor.column, 2);
+    }
 
     #[test]
     fn test_input_string_port() {
@@ -2049,31 +2179,32 @@ mod tests {
         assert!(port.write_string("x").is_err());
     }
 
-    #[test]
-    fn test_utf8_prefix_stops_where_the_text_does() {
-        assert_eq!(utf8_prefix(b"all text"), "all text");
-        assert_eq!(utf8_prefix(&[b'x', b' ', 0xFF, b'y']), "x ");
-        assert_eq!(utf8_prefix(&[0xFF]), "");
-        assert_eq!(utf8_prefix(&[]), "");
-        // A character cut off by the end of the bytes is not text either.
-        assert_eq!(utf8_prefix(&[b'a', 0xCE]), "a");
-    }
-
-    #[test]
-    fn test_advance_position_moves_a_bytevector_port_by_bytes() {
-        // What `read` does after parsing a datum off the front: the binary
-        // operations continue from the byte after it.
-        let port = Port::new_input_bytevector(vec![b'x', b' ', 0xFF]);
-        port.advance_position(1).unwrap();
-        assert_eq!(port.read_u8().unwrap(), Some(b' '));
-        assert_eq!(port.read_u8().unwrap(), Some(0xFF));
-    }
-
     /// A `WholeCharReader` over `bytes`, whose inner reader hands out chunks
     /// of at most `capacity` — so a chunk boundary can be put anywhere.
     fn chunked(bytes: &[u8], capacity: usize) -> WholeCharReader {
         let inner = io::BufReader::with_capacity(capacity, io::Cursor::new(bytes.to_vec()));
         WholeCharReader::new(Box::new(inner))
+    }
+
+    #[test]
+    fn bounded_lookahead_preserves_bytes_across_every_chunk_boundary() {
+        let text = "aλ€𝄞bλλ€";
+        for capacity in 1..=9 {
+            let mut reader = chunked(text.as_bytes(), capacity);
+            for (index, ch) in text.chars().enumerate() {
+                for (ahead, expected) in text.chars().skip(index).enumerate() {
+                    assert_eq!(reader.peek_char_at(ahead).unwrap(), Some(expected));
+                }
+                assert_eq!(reader.position.borrow().offset, index);
+                let mut bytes = [0; 4];
+                reader.read_exact(&mut bytes[..ch.len_utf8()]).unwrap();
+                assert_eq!(
+                    std::str::from_utf8(&bytes[..ch.len_utf8()]).unwrap(),
+                    ch.to_string()
+                );
+            }
+            assert_eq!(reader.peek_char_at(0).unwrap(), None);
+        }
     }
 
     #[test]

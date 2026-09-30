@@ -904,13 +904,11 @@ quadratic dominates:
 - REPL bootstrap (`patina -p 1`): 9.2 ms → 9.1 ms, i.e. inside noise.
 - A `(read)` loop over a 73 KB **file**: no reliable change.
 
-That last line is also the answer to why this went unnoticed: the cost only concentrates when one
-large buffer is lexed in a single pass, which is what library loading does and interactive use
-never does. **The first draft of this entry gave the wrong reason for it** — it said `read`
-re-slices per datum so the buffer never grows. Review checked: file and stdin ports go through
-`read_buffered`, which accumulates line by line, so the buffer only ever holds *one datum*; that,
-not the re-slicing, is why they are linear. For **string** ports the re-slicing is real and is
-itself quadratic — see below.
+The file measurement above did not expose many datums on one line. The earlier
+claim here that file/stdin buffering held only one datum was incorrect: it held
+a line and re-read its tail. [#371](https://github.com/avalonalex/patina/issues/371)
+tracks that defect together with string-port tail copying; both now use the
+port's shared cursor and pull input only as needed.
 
 **Equivalence:** every one of the 727 `.scm`/`.sld` files in `lib/`, `compat/vendor/` and
 `scheme_tests/` was read and written back through both binaries with byte-identical output; both
@@ -918,35 +916,19 @@ chibi suites stayed 1226/1226 and the corpus 143 of 184 with byte-identical arti
 `is_special_float_literal` had no unit test of its own before this — which is how it kept a
 quadratic implementation — and now has three.
 
-### The same class, still open  *(found 2026-08-16 by the review sweep over the fix above)*
+### Related follow-ups *(original review: 2026-08-16)*
 
-**`read` on a string port is quadratic — the largest remaining instance.** Each `read` does
-`content[position..].to_string()` and then `Parser::new_with_heap` over that copy, which runs
-`Lexer::new` over it: **two full copies of the remaining buffer per datum**
-(`patina-primitives/src/primitives/io/read.rs`). Measured with the release binary on
-`open-input-string` + a `read` loop:
+The string-port `read` loop copied and decoded the unread tail twice per datum.
+It is addressed with file/stdin streaming in [#371](https://github.com/avalonalex/patina/issues/371);
+measurements and acceptance criteria belong to that issue.
 
-| data | buffer | total |
-|---|---|---|
-| 256 | 6.4 KB | 1.19 ms |
-| 512 | 12.8 KB | 3.56 ms |
-| 1024 | 25.6 KB | 11.1 ms |
-| 2048 | 51.2 KB | 41.2 ms |
-
-≈3.2–3.7× per doubling. A linear reader would be ~5 ms at 2048 data, so ~36 ms of that is
-quadratic overhead at only 51 KB. **The two adjuncts are one defect, not two:** ~34 ms of the 36 is
-`Lexer::new`'s `Vec<char>` collect (0.64 ns/char, measured), ~3 ms the `to_string`. That makes
-`Lexer::new` the place to start, and makes the pair worth fixing together — the `Vec<char>` is 0.2%
-of a file import but ~85% of this loop's overhead.
-
-**Three smaller survivors of the same shape**, none on a measured hot path, listed so the class is
-counted rather than rediscovered:
+**Other findings from that review**, with their subsequent disposition:
 - `SourceMap`'s byte-offset→line lookup rescans the whole source per call
   (`patina-core/src/source_map.rs`). Called once per *error*, which would be fine — except
   `eval_program_resilient_with_source_name` (`patina-interpreter/src/lib.rs`) prints and continues,
   so cost is O(errors × source length). A lazily built line-start index fixes it.
-- `read_buffered` re-parses the accumulated buffer from scratch after every appended line, so a
-  datum spanning L lines is lexed L times. Bounded by one datum, not the file.
+- Re-reading a multiline datum was fixed in #341; #371 retains its large-datum
+  coverage while replacing runtime line buffering with pull input.
 - `pass5_codegen`'s `add_constant` interns by linear scan, O(K²) in distinct literals per code
   object. `TaggedValue` compares as one `u64` and the pool index caps K at 65535, so this is
   microseconds outside a pathologically literal-dense body.

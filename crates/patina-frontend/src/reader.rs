@@ -1,10 +1,10 @@
 //! Reading data from text that arrives in pieces.
 //!
-//! A program on standard input, a `read` from a line-oriented port and an
-//! interactive session are all fed text a line at a time, and each must decide
+//! A program on standard input and an interactive session are fed text a
+//! line at a time, and each must decide
 //! after every line whether a datum has finished. Reading everything since the
 //! datum began again after each line costs time proportional to the square of
-//! its length, which is what all three did (#341).
+//! its length (#341). Runtime `read` now pulls directly from its port (#371).
 //!
 //! A [`Reader`] keeps one lexer and feeds it each piece of text as it arrives.
 //! The lexer stops at a token the next text could still continue

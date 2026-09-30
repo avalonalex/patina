@@ -102,6 +102,8 @@ pub struct Parser {
     deferred: Option<ParseError>,
     /// State reached by the last parse_next, excluding its token lookahead.
     read_state: ReaderState,
+    /// A completed outer datum on a port must not fetch the following token.
+    port_boundary: Option<ReaderState>,
 }
 
 impl Parser {
@@ -109,6 +111,15 @@ impl Parser {
     /// This is the preferred constructor when a heap is available.
     pub fn new_with_heap(input: &str, heap: SharedHeap) -> Result<Self, ParseError> {
         Self::from_lexer(Lexer::new(input), heap)
+    }
+
+    /// Parse one datum directly from the port's persistent input cursor.
+    /// No tokens or Scheme values are cached between calls.
+    pub fn read_from_port(
+        port: Rc<patina_core::Port>,
+        heap: SharedHeap,
+    ) -> Result<Option<TaggedValue>, ParseError> {
+        Self::from_lexer(Lexer::from_port(port)?, heap)?.parse_next()
     }
 
     fn from_lexer(lexer: Lexer, heap: SharedHeap) -> Result<Self, ParseError> {
@@ -152,6 +163,7 @@ impl Parser {
             nesting: 0,
             deferred: None,
             read_state: spanned.start,
+            port_boundary: None,
         })
     }
 
@@ -253,7 +265,9 @@ impl Parser {
     /// before the lookahead token) is unconsumed input. Used by `read` to
     /// preserve the remainder for subsequent input operations.
     pub fn consumed_end(&self) -> usize {
-        self.source.prev_token_end().offset
+        self.port_boundary
+            .unwrap_or_else(|| self.source.prev_token_end())
+            .offset
     }
 
     /// State after the last `parse_next`: the datum's end, or the end of
@@ -303,6 +317,13 @@ impl Parser {
     /// read a line at a time, which parses the form before the next line
     /// arrives, ran it.
     fn advance_past_datum(&mut self) -> Result<(), ParseError> {
+        if self.nesting == 0
+            && matches!(&self.source, TokenSource::Lexing(lexer) if lexer.is_port())
+        {
+            self.port_boundary = Some(self.current_token_end);
+            self.current_token = Token::Eof;
+            return Ok(());
+        }
         match self.source.next_token() {
             Ok(spanned) => {
                 self.set_current(spanned);
@@ -331,7 +352,9 @@ impl Parser {
             }
         });
         self.read_state = match &result {
-            Ok(Some(_)) => self.source.prev_token_end(),
+            Ok(Some(_)) => self
+                .port_boundary
+                .unwrap_or_else(|| self.source.prev_token_end()),
             Ok(None) => self.current_token_end,
             Err(error) if matches!(error.kind(), ParseError::IncompleteDatum { .. }) => {
                 self.current_token_end
@@ -361,6 +384,9 @@ impl Parser {
     /// run — `#; #;` — is one construct, and like an unfinished nested list
     /// is reported against where that construct starts.
     fn at_datum(&mut self) -> Result<bool, ParseError> {
+        if self.port_boundary.take().is_some() {
+            self.advance()?;
+        }
         if let Some(error) = self.deferred.take() {
             return Err(error);
         }
