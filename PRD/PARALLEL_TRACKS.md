@@ -33,7 +33,7 @@
 priority SRFIs, and hygiene/error quality improvements. All work here is
 immediately usable and will also be inherited by the VM.
 
-**Reference:** `PRD/phase2/R7RS_LARGE_STATUS.md`, chibi-scheme at
+**Reference:** [archived edition tracker](ARCHIVE/R7RS_LARGE_STATUS.md), chibi-scheme at
 `~/Project/reference/chibi-scheme`
 
 ### B1 — R7RS-small compliance audit ✅ COMPLETE

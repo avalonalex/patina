@@ -13,7 +13,7 @@
 ;; Why this namespace, and not `(srfi 160 u1)` — which is what chibi calls it.
 ;; Publishing a `u1` under SRFI 160's namespace would put a name the SRFI does
 ;; not define into a SRFI's public library space, which is the sort of thing
-;; the bundling policy in `PRD/phase2/R7RS_LARGE_STATUS.md` keeps out. Under
+;; the bundling policy in `docs/README.md#library-bundling-policy` keeps out. Under
 ;; `(patina …)` the type is plainly ours, and nothing outside `(srfi 231)`
 ;; imports it. If a standard-track `u1` ever appears, this becomes its
 ;; implementation rather than a name to retract.

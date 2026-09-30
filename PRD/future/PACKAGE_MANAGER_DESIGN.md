@@ -4,7 +4,7 @@
 now wraps Snow for a limited project-local workflow (see below), and a pinned source checkout
 supplies maintained adaptations. [#195](https://github.com/avalonalex/patina/issues/195) records
 the acquisition decision; general automatic dependency selection remains deferred. Bundling follows
-[the current policy](../phase2/R7RS_LARGE_STATUS.md#bundling-policy): R7RS-large libraries,
+[the current policy](../../docs/README.md#library-bundling-policy): R7RS-large libraries,
 including drafts, and SRFIs are eligible; other implementations' libraries stay external.
 
 ## #195 investigation: Snow installation layout

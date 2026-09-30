@@ -8,6 +8,11 @@
 > in GitHub issues. This working record's companion is
 > [`TRACK_L_FIXED_DEFECTS.md`](TRACK_L_FIXED_DEFECTS.md).
 >
+> **Reference relocation, 2026-09-30:** references below to
+> `PRD/phase2/R7RS_LARGE_STATUS.md` describe its historical location. The
+> [edition tracker](R7RS_LARGE_STATUS.md) is now archived; the standing
+> [bundling policy](../../docs/README.md#library-bundling-policy) lives in `docs/`.
+>
 > Three things in it were already stale when it was archived, so nobody
 > re-derives them: the status line's Larceny figures (they read 24 of 33 and
 > 8512 of 8534 on both backends by then); L5's heading "suite deferred" (L5.3

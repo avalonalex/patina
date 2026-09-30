@@ -27,7 +27,6 @@ Not in scope for Phase 2A but tracked here.
 | Document | Feature | Phase |
 |----------|---------|-------|
 | **[SYNTAX_CASE_DESIGN.md](../macro/SYNTAX_CASE_DESIGN.md)** | `syntax-case` procedural macros | Phase 3 |
-| **[R7RS_LARGE_STATUS.md](./R7RS_LARGE_STATUS.md)** | R7RS-large library tracking | Ongoing |
 | **[reference/01_META_TRACING.md](./reference/01_META_TRACING.md)** | Meta-tracing JIT (Cranelift) | Phase 2D+ |
 | **[reference/03_ADAPTIVE_NUMERIC.md](./reference/03_ADAPTIVE_NUMERIC.md)** | Specialized fixnum/float opcodes | Phase 2B |
 
@@ -55,5 +54,10 @@ Not in scope for Phase 2A but tracked here.
 ---
 
 ## Archive
+
+Red and Tangerine library coverage completed 2026-09-30 with #577 and #578.
+The [edition tracker](../ARCHIVE/R7RS_LARGE_STATUS.md) is archived; the standing
+[bundling policy](../../docs/README.md#library-bundling-policy) lives in `docs/`.
+Later R7RS-large work belongs in GitHub issues and the syntax-case design above.
 
 Superseded documents in [`archive/`](./archive/).

@@ -40,7 +40,7 @@ does not remove contents.
 Use `(scheme file)` for standard file operations such as `open-input-file`,
 `file-exists?`, and `delete-file`. The directory procedures are Patina extensions
 and are exported under Patina's namespace, consistent with the
-[bundling policy](../PRD/phase2/R7RS_LARGE_STATUS.md#bundling-policy).
+[bundling policy](README.md#library-bundling-policy).
 
 The external `(chibi filesystem)` adaptation also uses these underlying
 primitives, and adds Scheme traversal helpers and explicit POSIX stubs. Its
