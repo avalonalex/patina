@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "started_utc": "2026-09-30T23:55:07.249719+00:00",
+  "revision": "ad7ad4b91d33842eba205c13eae47c79b9d94783",
+  "dirty": false,
+  "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "cpu": "arm (CPU model unavailable)",
+  "logical_cpus": 12,
+  "runner_arguments": {
+    "kind": "criterion",
+    "quick": true,
+    "filter": "phases/|end_to_end/r7rs/sum/1000$",
+    "output": "/tmp/patina-ad7ad4b-tree-walker.json",
+    "backend": "tree-walker"
+  },
+  "build_environment": {},
+  "workload_sha256": "a4d065ca22e7cf2a956a35a2f120c8e8dc9663494d9b80ba6706eb9d22de359e",
+  "library_policy": "isolated workspace libraries",
+  "correctness": "passed",
+  "kind": "criterion",
+  "backend": "tree-walker",
+  "settings": {
+    "sample_size": 10,
+    "measurement_seconds": 1,
+    "warmup_seconds": 0.5
+  },
+  "command": [
+    "cargo",
+    "bench",
+    "--package",
+    "patina-tests",
+    "--bench",
+    "scheme_benchmarks",
+    "--",
+    "--sample-size",
+    "10",
+    "--measurement-time",
+    "1",
+    "--warm-up-time",
+    "0.5",
+    "--noplot",
+    "phases/|end_to_end/r7rs/sum/1000$"
+  ],
+  "timing_contract": "docs/VM_TESTING.md: Checked benchmark lanes (at the recorded revision)",
+  "measurements": [
+    {
+      "id": "tree-walker/end_to_end/r7rs/sum/1000",
+      "median_ns": 916938.80625,
+      "confidence_interval_ns": [
+        912368.3316666667,
+        924778.5675
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "500500",
+        "expression": "(run 1000)",
+        "extra_check": "#t"
+      }
+    },
+    {
+      "id": "tree-walker/phases/allocation_gc/list_256",
+      "median_ns": 238137.77777777778,
+      "confidence_interval_ns": [
+        237321.4814814815,
+        240620.0
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "256",
+        "expression": "(let loop ((n 256) (xs '())) (if (= n 0) (length xs) (loop (- n 1) (cons n xs))))",
+        "gc_probe": {
+          "after": {
+            "allocations_since_gc": 61779,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 65163,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 4,
+            "free_slots": {
+              "objects": 9131,
+              "pairs": 3723,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 65532,
+            "symbols": 1
+          },
+          "after_explicit_gc": {
+            "allocations_since_gc": 0,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 65163,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 5,
+            "free_slots": {
+              "objects": 9611,
+              "pairs": 65163,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 61922,
+            "symbols": 1
+          },
+          "before": {
+            "allocations_since_gc": 0,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 16330,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 1,
+            "free_slots": {
+              "objects": 9611,
+              "pairs": 16330,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 25948,
+            "symbols": 1
+          },
+          "calls": 1000,
+          "pairs_per_call": 256
+        },
+        "jiffies_per_second": 1000000.0
+      }
+    },
+    {
+      "id": "tree-walker/phases/execution/sum_100",
+      "median_ns": 92510.14109347443,
+      "confidence_interval_ns": [
+        91643.73897707231,
+        93218.34215167549
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "5050",
+        "expression": "(let loop ((n 100) (acc 0)) (if (= n 0) acc (loop (- n 1) (+ acc n))))",
+        "jiffies_per_second": 1000000.0
+      }
+    },
+    {
+      "id": "tree-walker/phases/frontend/parse_expand_lower",
+      "median_ns": 74864.92361111111,
+      "confidence_interval_ns": [
+        72792.07738095238,
+        75995.5
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "5050",
+        "expression": "(let loop ((n 100) (acc 0)) (if (= n 0) acc (loop (- n 1) (+ acc n))))",
+        "fresh_heap_per_iteration": true
+      }
+    },
+    {
+      "id": "tree-walker/phases/startup/bootstrap_and_drop",
+      "median_ns": 6675171.868055556,
+      "confidence_interval_ns": [
+        6657029.166666666,
+        6758680.666666667
+      ],
+      "samples": 10,
+      "parameters": {
+        "fresh_interpreter": true,
+        "includes_drop": true
+      }
+    }
+  ],
+  "counter_limitations": "Separate probe: 1000 calls of list_256 plus driver parsing/compilation and answer check. Arena/free slots and collection counts, not bytes, RSS, allocation throughput or pause times"
+}
