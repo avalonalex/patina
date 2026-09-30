@@ -889,6 +889,15 @@ impl Heap {
     /// first) and resets the allocation counter and the collection-pending
     /// flag — sweep completion is the "collection happened" boundary.
     pub fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
+        // Provenance is not a root. Prune it before slots can be reused,
+        // inspecting only annotated syntax rather than every freed datum.
+        self.syntax_sources
+            .retain(|&bits, _| marks.is_marked(TaggedValue::from_raw(bits)) == Some(true));
+        // HashMap::retain visits capacity, so release a large table after a
+        // source-heavy phase instead of rescanning it on every later read GC.
+        if self.syntax_sources.capacity() > self.syntax_sources.len().saturating_mul(4).max(64) {
+            self.syntax_sources.shrink_to(64);
+        }
         // Moved out so the per-arena recording closures can hold it while
         // the arenas themselves are mutably borrowed.
         let mut freed = self.gc_freed_bits.take();
@@ -901,7 +910,9 @@ impl Heap {
                 &mut marks.pairs,
                 cfg!(debug_assertions),
                 || (TaggedValue::GC_POISON, TaggedValue::GC_POISON),
-                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::pair(i)),
+                |i, _| {
+                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::pair(i));
+                },
             ),
             vectors: sweep_arena(
                 &mut self.vectors,
@@ -909,7 +920,9 @@ impl Heap {
                 &mut marks.vectors,
                 true,
                 Vec::new,
-                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::vector(i)),
+                |i, _| {
+                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::vector(i));
+                },
             ),
             strings: sweep_arena(
                 &mut self.strings,
@@ -917,7 +930,9 @@ impl Heap {
                 &mut marks.strings,
                 true,
                 Vec::new,
-                |i, _| record_freed_bits(&mut freed, &mut overflow, TaggedValue::string(i)),
+                |i, _| {
+                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::string(i));
+                },
             ),
             objects: sweep_arena(
                 &mut self.objects,

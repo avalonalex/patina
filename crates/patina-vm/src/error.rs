@@ -98,6 +98,9 @@ impl VmError {
 
     /// Wrap this error with a source location.
     pub fn at(self, loc: SourceLocation) -> Self {
+        if self.source_location().is_some() {
+            return self;
+        }
         VmError::WithLocation {
             error: Box::new(self),
             location: loc,

@@ -8,7 +8,7 @@ use patina_core::debug_format::format_tagged;
 use patina_core::{Heap, SharedHeap, SpineEnd, TaggedValue};
 use patina_ir::{Formals, ScopedParam, Symbol};
 use patina_runtime::ScopeSet;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 // ============================================================================
@@ -165,108 +165,14 @@ pub fn get_identifier_info(tv: TaggedValue, heap: &Heap) -> Option<(Rc<str>, Sco
 /// In quoted data, identifiers from macro expansion should become plain symbols.
 /// Identifier scopes are only needed during desugaring for binding resolution,
 /// not in quoted output data.
-pub fn strip_identifiers_tagged(tv: TaggedValue, shared_heap: &SharedHeap) -> TaggedValue {
-    // Postorder traversal with explicit return frames: both nested elements
-    // (#356) and long list spines (#355) must be independent of Rust's stack.
-    // Retain the old visitation order and copy only changed containers.
-    enum Work {
-        Visit(TaggedValue),
-        Car {
-            original: TaggedValue,
-            car: TaggedValue,
-            cdr: TaggedValue,
-        },
-        Cdr {
-            original: TaggedValue,
-            car: TaggedValue,
-            cdr: TaggedValue,
-            new_car: TaggedValue,
-        },
-        Vector {
-            original: TaggedValue,
-            elements: Vec<TaggedValue>,
-            index: usize,
-            changed: bool,
-        },
-    }
-    let mut seen = HashSet::new();
-    let mut work = vec![Work::Visit(tv)];
-    let mut value = tv;
-    while let Some(next) = work.pop() {
-        match next {
-            Work::Visit(original) => {
-                value = original;
-                let heap = shared_heap.borrow();
-                if let Some((name, _)) = heap.get_identifier_data_any(original) {
-                    drop(heap);
-                    value = shared_heap.borrow_mut().intern_symbol(&name);
-                } else if original.is_pair() && seen.insert(original.raw_bits()) {
-                    let (car, cdr) = heap.get_pair(original);
-                    work.push(Work::Car { original, car, cdr });
-                    work.push(Work::Visit(car));
-                } else if original.is_vector() && seen.insert(original.raw_bits()) {
-                    let elements = (0..heap.vector_len(original))
-                        .map(|i| heap.vector_ref(original, i))
-                        .collect::<Vec<_>>();
-                    if let Some(&first) = elements.first() {
-                        work.push(Work::Vector {
-                            original,
-                            elements,
-                            index: 0,
-                            changed: false,
-                        });
-                        work.push(Work::Visit(first));
-                    }
-                }
-            }
-            Work::Car { original, car, cdr } => {
-                work.push(Work::Cdr {
-                    original,
-                    car,
-                    cdr,
-                    new_car: value,
-                });
-                work.push(Work::Visit(cdr));
-            }
-            Work::Cdr {
-                original,
-                car,
-                cdr,
-                new_car,
-            } => {
-                value = if new_car == car && value == cdr {
-                    original
-                } else {
-                    shared_heap.borrow_mut().alloc_pair(new_car, value)
-                };
-            }
-            Work::Vector {
-                original,
-                mut elements,
-                index,
-                mut changed,
-            } => {
-                changed |= elements[index] != value;
-                elements[index] = value;
-                if let Some(&next) = elements.get(index + 1) {
-                    work.push(Work::Vector {
-                        original,
-                        elements,
-                        index: index + 1,
-                        changed,
-                    });
-                    work.push(Work::Visit(next));
-                } else {
-                    value = if changed {
-                        shared_heap.borrow_mut().alloc_vector(elements)
-                    } else {
-                        original
-                    };
-                }
-            }
-        }
-    }
-    value
+pub fn strip_identifiers_tagged(
+    tv: TaggedValue,
+    shared_heap: &SharedHeap,
+    memo: &mut HashMap<u64, TaggedValue>,
+) -> TaggedValue {
+    shared_heap
+        .borrow_mut()
+        .map_syntax_identifiers_memo(tv, memo, |heap, _, name, _| Some(heap.intern_symbol(&name)))
 }
 
 /// Parse define function syntax from TaggedValue
@@ -379,7 +285,7 @@ mod tests {
             let original = heap.alloc_pair(TaggedValue::fixnum(1), changed);
             (original, identifier, unchanged_tail)
         };
-        let stripped = strip_identifiers_tagged(original, &heap);
+        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
         let heap = heap.borrow();
         assert_ne!(stripped, original);
         assert_eq!(heap.car(stripped), TaggedValue::fixnum(1));
@@ -400,7 +306,7 @@ mod tests {
                 identifier,
             )
         };
-        let stripped = strip_identifiers_tagged(original, &heap);
+        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
         let heap = heap.borrow();
         assert_eq!(heap.get_symbol_name(heap.cdr(stripped)), Some("tail"));
         assert_eq!(heap.cdr(original), identifier);
@@ -418,7 +324,7 @@ mod tests {
             let vector = heap.alloc_vector(vec![pair, cycle]);
             (heap.alloc_pair(vector, cycle), cycle, identifier)
         };
-        let stripped = strip_identifiers_tagged(original, &heap);
+        let stripped = strip_identifiers_tagged(original, &heap, &mut HashMap::new());
         let heap = heap.borrow();
         let vector = heap.car(stripped);
         assert_ne!(vector, heap.car(original));

@@ -105,12 +105,13 @@ impl Codegen {
     fn record_source(&mut self, source: &Option<SourceLocation>) {
         if let Some(loc) = source {
             let pc = self.current_pc();
-            // Avoid duplicate entries for the same pc.
-            if self
-                .source_map
-                .last()
-                .is_none_or(|(last_pc, _)| *last_pc != pc)
+            // Parent and child can start at the same instruction. The
+            // child is the expression that instruction actually evaluates.
+            if let Some((last_pc, last_source)) = self.source_map.last_mut()
+                && *last_pc == pc
             {
+                *last_source = loc.clone();
+            } else {
                 self.source_map.push((pc, loc.clone()));
             }
         }
@@ -839,6 +840,7 @@ fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> 
 
         RegExprKind::SetGlobal { name, value } => {
             gen_expr(value, cg)?;
+            cg.record_source(&expr.source);
             cg.emit(Instruction::StoreGlobal {
                 name: name.clone(),
                 src: value.dst,
@@ -901,6 +903,7 @@ fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> 
                 && let Some(&func_id) = cg.prim_calls.by_value.get(&v.raw_bits())
             {
                 let (regs, _) = primitive_operands(args, arg_tmps, None, cg)?;
+                cg.record_source(&expr.source);
                 cg.emit(Instruction::CallPrimitiveDirect {
                     func_id,
                     args: regs,
@@ -917,6 +920,7 @@ fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> 
             {
                 let inline = resolved.inline.filter(|op| op.arity() == args.len());
                 let (regs, imm) = primitive_operands(args, arg_tmps, inline, cg)?;
+                cg.record_source(&expr.source);
                 cg.emit(primitive_call_instruction(
                     inline,
                     resolved,
@@ -936,6 +940,7 @@ fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> 
             for arg in args {
                 gen_expr(arg, cg)?;
             }
+            cg.record_source(&expr.source);
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
                 cg.emit(Instruction::TailCall {
@@ -961,6 +966,7 @@ fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> 
             for arg in args {
                 gen_expr(arg, cg)?;
             }
+            cg.record_source(&expr.source);
             let arg_regs: Vec<u16> = arg_tmps.clone();
             if *is_tail {
                 cg.emit(Instruction::TailApply {

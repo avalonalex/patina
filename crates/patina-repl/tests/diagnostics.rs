@@ -411,8 +411,12 @@ fn runtime_errors_and_mixed_endings_quote_the_correct_line() {
             ] {
                 let (_, _, stderr, ok) = run(dir.path(), backend, args, input);
                 assert!(!ok);
+                let column = if backend.is_empty() { 3 } else { 4 };
                 assert!(
-                    stderr.contains(&format!("at {source}:3:3\n   3 | {bad}\n         ^")),
+                    stderr.contains(&format!(
+                        "at {source}:3:{column}\n   3 | {bad}\n{}^",
+                        " ".repeat(7 + column - 1)
+                    )),
                     "{backend:?}: {stderr}"
                 );
                 assert!(
@@ -593,5 +597,175 @@ fn numeric_separators_work_in_source_without_r6rs_mode() {
             assert_eq!(stdout, "#t".repeat(cases.len()));
             assert!(ds.is_empty());
         }
+    }
+}
+
+#[test]
+fn identifier_spans_survive_loading_compilation_and_macro_reordering() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = "(define (f x)\n  (+ x undefined-thing))\n";
+    fs::write(dir.path().join("body.scm"), body).unwrap();
+    fs::write(dir.path().join("probe.sld"),
+        "(define-library (probe)\n  (export f)\n  (import (scheme base))\n  (include \"body.scm\"))\n").unwrap();
+    fs::write(dir.path().join("inline.sld"),
+        "(define-library (inline)\n  (export f)\n  (import (scheme base))\n  (begin\n    (define (f x)\n      (+ x undefined-thing))))\n").unwrap();
+    fs::write(
+        dir.path().join("init.sld"),
+        "(define-library (init)\n  (import (scheme base))\n  (begin\n    (+ 1 undefined-thing)))\n",
+    )
+    .unwrap();
+    for backend in BOTH_BACKENDS {
+        for (program, file, line, column, quoted_line) in [
+            (
+                "(import (init))",
+                "init.sld",
+                4,
+                10,
+                "    (+ 1 undefined-thing)))",
+            ),
+            (
+                "(import (scheme base))\n(define (f x)\n  (+ x undefined-thing))\n(f 1)",
+                "program.scm",
+                3,
+                8,
+                "  (+ x undefined-thing))",
+            ),
+            (
+                "(import (scheme base))\n(include \"body.scm\")\n(f 1)",
+                "body.scm",
+                2,
+                8,
+                "  (+ x undefined-thing))",
+            ),
+            (
+                "(import (scheme base) (scheme load) (scheme repl))\n(load \"body.scm\" (interaction-environment))\n(f 1)",
+                "body.scm",
+                2,
+                8,
+                "  (+ x undefined-thing))",
+            ),
+            (
+                "(import (scheme base) (probe))\n(f 1)",
+                "body.scm",
+                2,
+                8,
+                "  (+ x undefined-thing))",
+            ),
+            (
+                "(import (scheme base) (inline))\n(f 1)",
+                "inline.sld",
+                6,
+                12,
+                "      (+ x undefined-thing))))",
+            ),
+        ] {
+            fs::write(dir.path().join("program.scm"), program).unwrap();
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+            assert!(!ok, "{backend:?}: {program}");
+            assert!(
+                stderr.contains(&format!("{file}:{line}:{column}")),
+                "{backend:?}: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(
+                    "{line:>4} | {quoted_line}\n{}{}",
+                    " ".repeat(7 + column - 1),
+                    "^".repeat(15)
+                )),
+                "{backend:?}: {stderr}"
+            );
+        }
+        for (program, line, column, width, expansion) in [
+            ("(set! absent 1)", 1, 7, 6, false),
+            ("(list #0=absent #0#)", 1, 10, 6, false),
+            (
+                "(define-syntax bad (syntax-rules () ((_ x) (if #t unknown x))))\n(bad 42)",
+                1,
+                51,
+                7,
+                true,
+            ),
+            ("(if #f absent absent)", 1, 15, 6, false),
+            (
+                "(define-syntax backwards (syntax-rules () ((_ a b) (if #t b a))))\n(backwards absent absent)",
+                2,
+                19,
+                6,
+                true,
+            ),
+            ("(let ((x 1)) (+ x absent))", 1, 19, 6, true),
+            ("(begin\r\n  (list 'λ |a\\x62;sent|))", 2, 12, 12, false),
+        ] {
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["-p", program], None);
+            assert!(!ok, "{backend:?}: {program}");
+            assert!(
+                stderr.contains(&format!("<eval>:{line}:{column}")),
+                "{backend:?}: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!(
+                    "\n{}{}\n",
+                    " ".repeat(7 + column - 1),
+                    "^".repeat(width)
+                )),
+                "{backend:?}: {stderr}"
+            );
+            assert_eq!(stderr.contains("macro expansion"), expansion, "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn macro_expansion_chains_belong_to_each_invocation() {
+    let dir = tempfile::tempdir().unwrap();
+    for backend in BOTH_BACKENDS {
+        for (program, expected) in [
+            (
+                "(define-syntax bad (syntax-rules () ((_ x) (if #t unknown x))))
+                 (define (f) (bad 42)) (define (g) (bad 43)) (f)",
+                "  macro expansion: bad",
+            ),
+            (
+                "(define-syntax bad (syntax-rules () ((_ x) (if #t unknown x))))
+                 (define-syntax outer (syntax-rules () ((_ x) (bad x))))
+                 (define (f) (bad 42)) (outer 43)",
+                "  macro expansion chain: outer → bad",
+            ),
+            (
+                "(define-syntax peel (syntax-rules ()
+                   ((_) absent) ((_ x rest ...) (peel rest ...))))
+                 (peel 1 2)",
+                "  macro expansion chain: peel → peel → peel",
+            ),
+        ] {
+            let (_, _, stderr, ok) = run(dir.path(), backend, &["-p", program], None);
+            assert!(!ok, "{backend:?}: {program}");
+            assert_eq!(
+                stderr.lines().last(),
+                Some(expected),
+                "{backend:?}: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn program_annotations_do_not_escape_as_scheme_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = "(import (scheme base) (scheme write) (scheme read))\n\
+        (define-syntax identity (syntax-rules () ((_ x) x)))\n\
+        (define cycle (identity '#0=(a . #0#)))\n\
+        (define vector-cycle (identity '#0=#(a #0#)))\n\
+        (define shared-tail (list '(a . #0=(tail)) '(b . #0#)))\n\
+        (write (list (symbol? 'a) (eq? 'a (read (open-input-string \"a\")))\n\
+          (symbol? (vector-ref '#(a) 0)) (symbol? (vector-ref #(a) 0))\n\
+          (eq? cycle (cdr cycle)) (symbol? (car cycle))\n\
+          (eq? vector-cycle (vector-ref vector-cycle 1)) (symbol? (vector-ref vector-cycle 0))\n\
+          (eq? (cdr (car shared-tail)) (cdr (cadr shared-tail)))))";
+    fs::write(dir.path().join("program.scm"), program).unwrap();
+    for backend in BOTH_BACKENDS {
+        let (_, stdout, stderr, ok) = run(dir.path(), backend, &["program.scm"], None);
+        assert!(ok, "{backend:?}: {stderr}");
+        assert_eq!(stdout, "(#t #t #t #t #t #t #t #t #t)");
     }
 }

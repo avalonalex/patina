@@ -760,8 +760,8 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
             e.format_in_source(&filename, &content)
         )
     };
-    let mut parser =
-        patina_frontend::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
+    let mut parser = patina_frontend::Parser::new_program(&content, heap.clone(), &filename, false)
+        .map_err(|e| {
             EvalError::InvalidSyntax(parse_error(&e)).with_diagnostic(
                 Diagnostic::new(DiagnosticKind::Parse, e.to_string()).at_path(&filename),
             )

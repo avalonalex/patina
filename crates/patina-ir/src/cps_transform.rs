@@ -139,7 +139,7 @@ impl CpsTransformer {
     ///
     /// The continuation `k` will receive the result of evaluating `expr`.
     pub fn transform(&self, expr: &CoreExpr, k: &ContVar) -> CpsExpr {
-        match &expr.kind {
+        let mut result = match &expr.kind {
             // ==================== Trivial expressions ====================
             // These don't need CPS transformation - just pass to continuation
             CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Continue {
@@ -147,12 +147,9 @@ impl CpsTransformer {
                 value: CpsExpr::rc(CpsExprKind::Literal(*v)),
             }),
 
-            CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Continue {
+            CoreExprKind::Var { .. } => CpsExpr::new(CpsExprKind::Continue {
                 cont: k.clone(),
-                value: CpsExpr::rc(CpsExprKind::Var {
-                    name: name.clone(),
-                    scopes: scopes.clone(),
-                }),
+                value: Rc::new(self.transform_trivial(expr)),
             }),
 
             CoreExprKind::Quote(v) => CpsExpr::new(CpsExprKind::Continue {
@@ -353,7 +350,11 @@ impl CpsTransformer {
                 // Expand is a debugging form, skip CPS transform
                 panic!("Expand should be handled before CPS transform")
             }
+        };
+        if result.source.is_none() {
+            result.source = expr.source.clone();
         }
+        result
     }
 
     /// Check if an expression is trivial (no control effects)
@@ -369,7 +370,7 @@ impl CpsTransformer {
 
     /// Transform a trivial expression (must be trivial!)
     fn transform_trivial(&self, expr: &CoreExpr) -> CpsExpr {
-        match &expr.kind {
+        let mut result = match &expr.kind {
             CoreExprKind::Literal(v) => CpsExpr::new(CpsExprKind::Literal(*v)),
             CoreExprKind::Var { name, scopes } => CpsExpr::new(CpsExprKind::Var {
                 name: name.clone(),
@@ -397,7 +398,11 @@ impl CpsTransformer {
                 "transform_trivial called on non-trivial expression: {:?}",
                 expr.expr_kind()
             ),
+        };
+        if result.source.is_none() {
+            result.source = expr.source.clone();
         }
+        result
     }
 
     /// Transform lambda formals

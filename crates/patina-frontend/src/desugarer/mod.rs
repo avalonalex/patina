@@ -87,10 +87,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-/// Walk a freshly-expanded pair tree and stamp each unrecorded pair with the call-site source.
-///
-/// Pairs from the original user source are already recorded by the parser; this only
-/// stamps new template-created pairs. Bounded by depth to avoid runaway recursion.
 /// Whether a desugared body contributes any definition, looking through
 /// `Begin`.
 ///
@@ -116,25 +112,55 @@ fn stamp_expansion_source(
     source: &SourceLocation,
     source_map: &Rc<RefCell<SourceMap>>,
     heap: &SharedHeap,
-    depth: u32,
+    macro_name: &str,
 ) {
-    const MAX_DEPTH: u32 = 64;
-    if depth > MAX_DEPTH || !tv.is_pair() {
-        return;
-    }
-
-    {
-        let mut sm = source_map.borrow_mut();
-        if sm.get(tv).is_none() {
-            sm.record(tv, source.clone());
+    // Syntax without an origin uses the invocation. Written templates and
+    // substituted syntax keep their original occurrence, across files. Each
+    // expanded occurrence owns its chain: separate uses of one template must
+    // not accumulate history at the template's shared text position.
+    let mut pending = vec![tv];
+    let mut seen = HashSet::new();
+    // A wide expansion gives many nodes the same history. Extend each
+    // distinct prefix once, rather than copying all its strings per node.
+    // Keep the prefixes alive while keyed by address, so an allocation's
+    // address cannot be reused during this walk.
+    let mut histories = HashMap::new();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value.raw_bits()) {
+            continue;
         }
-    }
-
-    // Extract car/cdr without holding SourceMap borrow
-    let pair = heap.borrow().try_pair(tv);
-    if let Some((car, cdr)) = pair {
-        stamp_expansion_source(car, source, source_map, heap, depth + 1);
-        stamp_expansion_source(cdr, source, source_map, heap, depth + 1);
+        let mut heap = heap.borrow_mut();
+        let mut loc = heap
+            .source(value)
+            .cloned()
+            .unwrap_or_else(|| source.clone());
+        if value.is_pair() || value.is_vector() || heap.is_identifier(value) {
+            if let Some(span) = &mut loc.span {
+                let prefix = span
+                    .expansion_chain
+                    .as_ref()
+                    .or_else(|| source.span.as_ref()?.expansion_chain.as_ref());
+                let key = prefix.map_or(0, |chain| chain.as_ptr() as usize);
+                let (_, chain) = histories.entry(key).or_insert_with(|| {
+                    let mut names = prefix.map_or_else(Vec::new, |chain| chain.to_vec());
+                    names.push(macro_name.to_owned());
+                    (prefix.cloned(), std::sync::Arc::<[String]>::from(names))
+                });
+                span.expansion_chain = Some(chain.clone());
+            }
+            heap.record_source(value, loc.clone());
+            let mut map = source_map.borrow_mut();
+            if loc.span.is_none() {
+                map.record_expansion(&loc, macro_name.to_owned());
+            }
+            map.record(value, loc);
+        }
+        if value.is_pair() {
+            let (car, cdr) = heap.get_pair(value);
+            pending.extend([cdr, car]);
+        } else if value.is_vector() {
+            pending.extend(heap.vector_slice(value).iter().rev());
+        }
     }
 }
 
@@ -341,6 +367,10 @@ pub struct Desugarer<'a> {
     /// elements are desugared by them.
     open_forms: Rc<RefCell<OpenNodes>>,
 
+    /// Syntax-to-datum copies shared by every quote in this form. No GC runs
+    /// while desugaring; clear on exit so raw indices never outlive a form.
+    quoted: Rc<RefCell<HashMap<u64, TaggedValue>>>,
+
     splicing: Option<Rc<SplicingContext>>,
     /// Splicing forms behave as ordinary local syntax in operand positions.
     definition_context: Cell<bool>,
@@ -383,6 +413,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::default(),
             declarations: Rc::default(),
             open_forms: Rc::default(),
+            quoted: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -407,6 +438,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::default(),
             declarations: Rc::default(),
             open_forms: Rc::default(),
+            quoted: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -452,6 +484,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::default(),
             declarations: Rc::default(),
             open_forms: Rc::default(),
+            quoted: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -480,6 +513,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::clone(&self.early),
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
+            quoted: self.quoted.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -569,6 +603,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::clone(&self.early),
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
+            quoted: self.quoted.clone(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(false),
@@ -1005,6 +1040,7 @@ impl<'a> Desugarer<'a> {
             early: Rc::clone(&self.early),
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
+            quoted: self.quoted.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -1694,6 +1730,7 @@ impl<'a> Desugarer<'a> {
             } else {
                 self.rewrite_vector(tv, renames, quote_depth, shared_heap)
             };
+            shared_heap.borrow_mut().inherit_source(tv, rewritten);
             renames.open.borrow_mut().leave();
             return rewritten;
         }
@@ -1701,8 +1738,21 @@ impl<'a> Desugarer<'a> {
         if quote_depth > 0 {
             return tv;
         }
-        self.introduced_alias(tv, renames, shared_heap)
-            .unwrap_or(tv)
+        let Some(alias) = self.introduced_alias(tv, renames, shared_heap) else {
+            return tv;
+        };
+        let mut heap = shared_heap.borrow_mut();
+        if let Some(source) = heap.source(tv).cloned() {
+            let name = Rc::from(
+                heap.get_symbol_or_identifier_name(alias)
+                    .expect("alias name"),
+            );
+            let copy = heap.alloc_identifier(name, ScopeSet::new());
+            heap.record_source(copy, source);
+            copy
+        } else {
+            alias
+        }
     }
 
     /// [`Self::rewrite_refs`] for a vector.
@@ -1731,11 +1781,13 @@ impl<'a> Desugarer<'a> {
         shared_heap.borrow_mut().alloc_vector(out)
     }
 
-    /// Look up the source location for a TaggedValue in the source map
-    fn lookup_source(&self, tv: TaggedValue) -> Option<SourceLocation> {
-        self.source_map
-            .as_ref()
-            .and_then(|sm| sm.borrow().get(tv).cloned())
+    fn quoted_datum(&self, value: TaggedValue, heap: &SharedHeap) -> TaggedValue {
+        utils::strip_identifiers_tagged(value, heap, &mut self.quoted.borrow_mut())
+    }
+
+    /// Look up authoritative provenance for a syntax node.
+    fn lookup_source(&self, tv: TaggedValue, heap: &SharedHeap) -> Option<SourceLocation> {
+        heap.borrow().source(tv).cloned()
     }
 
     /// Desugar a TaggedValue (surface syntax) to CoreExpr (core IR)
@@ -1766,6 +1818,7 @@ impl<'a> Desugarer<'a> {
             "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
         );
         let result = self.desugar_form(tagged, shared_heap);
+        self.quoted.borrow_mut().clear();
         let finished = self.early.finish_form();
         *self.declarations.borrow_mut() = declarations::Declarations::default();
         result.map(|expr| Self::settle_early_bindings(expr, finished))
@@ -1825,6 +1878,7 @@ impl<'a> Desugarer<'a> {
             early: self.early.clone(),
             declarations: self.declarations.clone(),
             open_forms: self.open_forms.clone(),
+            quoted: self.quoted.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -1857,6 +1911,21 @@ impl<'a> Desugarer<'a> {
     /// comes here rather than through `desugar_tagged`, whose bookkeeping is
     /// per top-level form and was a measurable cost per *node*.
     fn desugar_form(&self, tagged: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
+        let source = self.lookup_source(tagged, shared_heap);
+        let mut expr = self
+            .desugar_form_inner(tagged, shared_heap)
+            .map_err(|error| error.at_opt(source.clone()))?;
+        if expr.source.is_none() {
+            expr.source = source;
+        }
+        Ok(expr)
+    }
+
+    fn desugar_form_inner(
+        &self,
+        tagged: TaggedValue,
+        shared_heap: &SharedHeap,
+    ) -> Result<CoreExpr> {
         let _phase = patina_core::scope_trace::enter(patina_core::scope_trace::Phase::Desugar);
         // Immediate values - no heap access needed
         if tagged.is_fixnum() {
@@ -1903,7 +1972,9 @@ impl<'a> Desugarer<'a> {
             return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
         }
         if tagged.is_vector() {
-            return Ok(CoreExpr::new(CoreExprKind::Literal(tagged)));
+            drop(heap);
+            let datum = self.quoted_datum(tagged, shared_heap);
+            return Ok(CoreExpr::new(CoreExprKind::Literal(datum)));
         }
         // Numeric types stored natively on heap
         if heap.is_complex(tagged) {
@@ -1927,20 +1998,9 @@ impl<'a> Desugarer<'a> {
             // Drop the borrow before calling desugar_list_tagged
             // (it will manage its own borrows)
             drop(heap);
-            let source = self.lookup_source(tagged);
-            // An error from inside this form is placed here unless a form
-            // nested in it already placed it (#432). Every compound form comes
-            // through this line, so this is where a desugar error gets the
-            // position no raising site had to pass along.
-            let mut expr = self
-                .desugar_open_form(tagged, shared_heap)
-                .map_err(|e| e.at_opt(source.clone()))?;
-            // Attach source location from the source map if available
-            // and the desugared result doesn't already have one
-            if expr.source.is_none() {
-                expr.source = source;
-            }
-            return Ok(expr);
+            // desugar_form attaches this node's location unless a nested
+            // expression or error already has a more precise one.
+            return self.desugar_open_form(tagged, shared_heap);
         }
 
         // All valid AST types should be handled above
@@ -2034,7 +2094,7 @@ impl<'a> Desugarer<'a> {
         // minted, which the relinker below needs.
         if let Some(compiled_macro) = macro_to_expand {
             // Save call-site source location before expansion
-            let call_site_source = self.lookup_source(list);
+            let call_site_source = self.lookup_source(list, shared_heap);
 
             let patina_macros::MacroExpansion {
                 form: expanded_tagged,
@@ -2074,10 +2134,18 @@ impl<'a> Desugarer<'a> {
             );
 
             // Phase 4: stamp expanded pairs + record macro expansion chain
-            if let (Some(src), Some(sm)) = (&call_site_source, &self.source_map) {
-                stamp_expansion_source(expanded_tagged, src, sm, shared_heap, 0);
-                sm.borrow_mut()
-                    .record_expansion(src, compiled_macro.name.to_string());
+            if let Some(src) = &call_site_source {
+                let sm = self
+                    .source_map
+                    .clone()
+                    .unwrap_or_else(|| Rc::new(RefCell::new(SourceMap::new())));
+                stamp_expansion_source(
+                    expanded_tagged,
+                    src,
+                    &sm,
+                    shared_heap,
+                    &compiled_macro.name,
+                );
             }
 
             // Result is already TaggedValue - continue desugaring
@@ -2438,11 +2506,13 @@ impl<'a> Desugarer<'a> {
 
         let value = self.desugar_expression(args_vec[1], shared_heap)?;
 
-        Ok(CoreExpr::new(CoreExprKind::Set {
+        let mut expr = CoreExpr::new(CoreExprKind::Set {
             var: name,
             scopes,
             value: Rc::new(value),
-        }))
+        });
+        expr.source = self.lookup_source(var_tv, shared_heap);
+        Ok(expr)
     }
 
     /// Desugar define using TaggedValue
@@ -2664,7 +2734,7 @@ impl<'a> Desugarer<'a> {
                 got: args_vec.len(),
             });
         }
-        let datum = utils::strip_identifiers_tagged(args_vec[0], shared_heap);
+        let datum = self.quoted_datum(args_vec[0], shared_heap);
         Ok(CoreExpr::new(CoreExprKind::Quote(datum)))
     }
 
@@ -3343,11 +3413,12 @@ impl<'a> Desugarer<'a> {
             })?;
 
             // Parse the file contents
-            let mut parser = if case_insensitive {
-                crate::Parser::new_case_insensitive_with_heap(&content, shared_heap.clone())
-            } else {
-                crate::Parser::new_with_heap(&content, shared_heap.clone())
-            }
+            let mut parser = crate::Parser::new_program(
+                &content,
+                shared_heap.clone(),
+                &path.display().to_string(),
+                case_insensitive,
+            )
             .map_err(|e| {
                 DesugarError::InvalidSyntax(format!(
                     "include: parse error in '{}': {}",

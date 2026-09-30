@@ -176,13 +176,12 @@ fn source_map_entries_pruned_after_collection() {
             format!("(import (scheme base) (patina debug))\n'(a b c d e f)\n{middle_form}\n42\n");
         let (result, source_map) = interp.eval_program_with_source_name(&program, "prune-test");
         assert_eq!(result.unwrap().as_fixnum(), Some(42));
-        let len = source_map.borrow().len();
-        assert!(len > 0, "parser recorded nothing");
-        len
+        source_map.borrow().len()
     }
 
     let collected = map_len("(gc)");
     let uncollected = map_len("(list)");
+    assert!(uncollected > 0, "parser recorded nothing");
     assert!(
         collected < uncollected,
         "collection did not prune the source map: {collected} entries with (gc) \
@@ -391,7 +390,7 @@ fn a_located_error_names_its_position_once() {
     let at_run_time = "(define (f x)\n  (undefined-thing x))\n(f 5)";
     let before_it_runs = "(define (f n)\n  (case n (else 'many) ((1) 'one)))";
     for (program, at) in [
-        (at_run_time, "  at once.scm:2:3"),
+        (at_run_time, "  at once.scm:2:4"),
         (before_it_runs, "  at once.scm:2:3"),
     ] {
         for (backend, rendered) in rendered_on_both(program, "once.scm") {
@@ -414,7 +413,7 @@ fn a_located_tree_walker_error_keeps_its_position_in_its_text() {
     let (result, _) = interp
         .eval_program_with_source_name("(define (f x)\n  (undefined-thing x))\n(f 5)", "text.scm");
     let text = result.expect_err("unbound").to_string();
-    assert!(text.contains("at text.scm:2:3"), "{text}");
+    assert!(text.contains("at text.scm:2:4"), "{text}");
 }
 
 /// `case` and `cond` are `syntax-rules` macros, so a malformed use could only
@@ -638,4 +637,32 @@ fn tracked_eval_program_variants_reject_input_cut_short_inside_a_datum() {
         interp.eval_str("ran-before-cut").unwrap().as_fixnum(),
         Some(7)
     );
+}
+
+#[test]
+fn compiled_functions_retain_their_document_across_same_named_inputs() {
+    fn check<B: Backend>(interp: &Interpreter<B>)
+    where
+        B::Error: patina_interpreter::HasSourceLocation,
+    {
+        let (result, map) = interp
+            .eval_program_with_source_name("(define (remember-source)\n  old-missing)", "same.scm");
+        result.unwrap();
+        drop(map);
+        interp.eval_program("(import (patina debug)) (gc)").unwrap();
+        let (result, map) = interp
+            .eval_program_with_source_name("(define unrelated 1)\n(remember-source)", "same.scm");
+        let rendered = patina_interpreter::format_backend_error_with_source(
+            &result.unwrap_err(),
+            &map.borrow(),
+        );
+        assert!(rendered.contains("same.scm:2:3"), "{rendered}");
+        assert!(
+            rendered.contains("   2 |   old-missing)\n         ^^^^^^^^^^^"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("2 | (remember-source)"), "{rendered}");
+    }
+    check(&TreeWalkInterpreter::new_tree_walker());
+    check(&Interpreter::new(VmBackend::new()));
 }

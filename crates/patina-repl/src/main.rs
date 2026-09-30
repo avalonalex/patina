@@ -177,7 +177,10 @@ fn prepare_backend(backend: &dyn LibraryPaths, opts: &CliOptions, script: Option
 /// `-p` mode: apply the search-path flags, evaluate each expression in
 /// order, print each non-unspecified result (write representation, like the
 /// REPL), and exit.
-fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &CliOptions) -> ! {
+fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &CliOptions) -> !
+where
+    B::Error: patina_core::error::HasSourceLocation,
+{
     use patina_tree_walker::eval::format_write_tagged;
 
     prepare_backend(interp.backend(), opts, None);
@@ -191,7 +194,13 @@ fn run_eval_print<B: Backend + LibraryPaths>(interp: &Interpreter<B>, opts: &Cli
             }
             Err(e) => {
                 patina_runtime::diagnostic::emit(e.diagnostic());
-                eprintln!("Error: {}", e);
+                let mut source_map = patina_core::SourceMap::new();
+                source_map.set_source_text(expr.clone());
+                source_map.set_primary_source("<eval>");
+                eprintln!(
+                    "Error: {}",
+                    format_backend_error_with_source(&e, &source_map)
+                );
                 patina_runtime::exit_status::exit_if_interrupted();
                 patina_runtime::exit_status::end_process(1);
             }

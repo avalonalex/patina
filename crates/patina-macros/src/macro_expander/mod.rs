@@ -247,196 +247,53 @@ fn contains_edit_target(
     edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
 ) -> bool {
-    let mut guard = CycleGuard::default();
-    contains_identifier_impl(tv, edit, shared_heap, &mut guard)
-}
-
-/// A revisit guard for walks over reader data that may be cyclic. Records
-/// nothing for the first `BUDGET` pairs — the acyclic common case — and every
-/// pair after that; `enter` says whether a pair is new.
-#[derive(Default)]
-pub(crate) struct CycleGuard {
-    steps: usize,
-    seen: std::collections::HashSet<u64>,
-}
-
-impl CycleGuard {
-    const BUDGET: usize = 4096;
-
-    /// `true` if the pair should be walked, `false` if it was walked already.
-    pub(crate) fn enter(&mut self, tv: patina_core::TaggedValue) -> bool {
-        self.steps += 1;
-        self.steps <= Self::BUDGET || self.seen.insert(tv.raw_bits())
-    }
-}
-
-fn contains_identifier_impl(
-    tv: patina_core::TaggedValue,
-    edit: ScopeEdit<'_>,
-    shared_heap: &patina_core::SharedHeap,
-    guard: &mut CycleGuard,
-) -> bool {
-    // Immediate values (fixnum, char, bool, null) never contain identifiers
-    if tv.is_fixnum() || tv.is_char() || tv.is_special() {
-        return false;
-    }
-
-    if tv.is_pair() {
-        if !guard.enter(tv) {
-            return false;
-        }
-        let (car, cdr) = shared_heap.borrow().get_pair(tv);
-        return contains_identifier_impl(car, edit, shared_heap, guard)
-            || contains_identifier_impl(cdr, edit, shared_heap, guard);
-    }
-
-    if tv.is_vector() {
-        if !guard.enter(tv) {
-            return false;
-        }
-        // Scanned in place: the recursion only ever borrows the heap
-        // immutably, so the slice can stay borrowed across it.
-        let heap = shared_heap.borrow();
-        return heap
-            .vector_slice(tv)
-            .iter()
-            .any(|&e| contains_identifier_impl(e, edit, shared_heap, guard));
-    }
-
-    // Non-object types can't contain identifiers
-    if !tv.is_object() {
-        return false;
-    }
-
-    // An identifier this edit would actually change. Read by borrow: the
-    // question is a `bool`, and cloning the name and scope set to answer it
-    // is what the walk used to do, twice per expansion.
     let heap = shared_heap.borrow();
-    heap.get_identifier_data(tv)
-        .is_some_and(|(name, scopes)| edit.affects(name, scopes))
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![tv];
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value.raw_bits()) {
+            continue;
+        }
+        if !heap.is_source_identifier(value)
+            && heap
+                .get_identifier_data(value)
+                .is_some_and(|(name, scopes)| edit.affects(name, scopes))
+        {
+            return true;
+        }
+        if value.is_pair() {
+            let (car, cdr) = heap.get_pair(value);
+            pending.extend([cdr, car]);
+        } else if value.is_vector() {
+            pending.extend(heap.vector_slice(value));
+        }
+    }
+    false
 }
 
 /// Implementation of the scope walks for TaggedValue
 ///
-/// Copies the pair structure, editing every identifier's scopes. The copy
-/// is memoized pair by pair, from the first one: expander output is a DAG
-/// (a pattern variable used twice shares its pairs), and a quoted datum with
-/// labels is a cycle — a memo makes the copy share where the original shared
-/// and close on itself where the original did, instead of either walking
-/// forever or splicing the original's tail into the copy. The new pair is
-/// registered *before* its fields are copied, which is what lets a back edge
-/// find it.
-///
-/// Vectors are walked because they are part of the form: a quasiquoted
-/// `#(,(helper x))` in a template evaluates its elements, and the `helper`
-/// in it is a reference the template introduced like any other. The
-/// desugarer's relinker recognises an introduced reference by this very
-/// scope, so an identifier the flip skipped would be one it could not
-/// relink (`test_quasiquoted_vector_elements_are_rewritten`). Unlike pairs
-/// they are copied only when an element changes: a vector of data comes
-/// back as itself, so a vector object embedded in code — `(eval (list 'm
-/// vec) env)` — is still the object the program holds when the expansion
-/// mutates it.
+/// Edit each syntax identifier once, retaining source provenance and graph
+/// sharing. The heap's iterative copier closes cycles on the copied container
+/// and leaves unaffected data untouched, including vectors supplied to `eval`.
 fn edit_scope_on_tagged(
     tv: patina_core::TaggedValue,
     scope: patina_runtime::ScopeId,
     edit: ScopeEdit<'_>,
     shared_heap: &patina_core::SharedHeap,
 ) -> patina_core::TaggedValue {
-    let mut memo: std::collections::HashMap<u64, patina_core::TaggedValue> =
-        std::collections::HashMap::new();
-    edit_scope_memo(tv, scope, edit, shared_heap, &mut memo)
-}
-
-fn edit_scope_memo(
-    tv: patina_core::TaggedValue,
-    scope: patina_runtime::ScopeId,
-    edit: ScopeEdit<'_>,
-    shared_heap: &patina_core::SharedHeap,
-    memo: &mut std::collections::HashMap<u64, patina_core::TaggedValue>,
-) -> patina_core::TaggedValue {
-    // Immediate values pass through unchanged
-    if tv.is_fixnum() || tv.is_char() || tv.is_special() {
-        return tv;
-    }
-
-    if tv.is_pair() {
-        if let Some(copy) = memo.get(&tv.raw_bits()) {
-            return *copy;
-        }
-        let (car, cdr) = shared_heap.borrow().get_pair(tv);
-        let copy = shared_heap.borrow_mut().alloc_pair(car, cdr);
-        memo.insert(tv.raw_bits(), copy);
-        let new_car = edit_scope_memo(car, scope, edit, shared_heap, memo);
-        let new_cdr = edit_scope_memo(cdr, scope, edit, shared_heap, memo);
-        let mut heap = shared_heap.borrow_mut();
-        heap.set_car(copy, new_car);
-        heap.set_cdr(copy, new_cdr);
-        return copy;
-    }
-
-    if tv.is_vector() {
-        if let Some(copy) = memo.get(&tv.raw_bits()) {
-            return *copy;
-        }
-        // Registered as itself before the walk, so a cycle through this
-        // vector closes on the original. Only reader data is cyclic, and
-        // reader data holds no identifiers, so such a vector is never one
-        // that changes.
-        memo.insert(tv.raw_bits(), tv);
-        // Elements are copied out only once one of them changes: a vector of
-        // data — the common case, and the one this arm exists to return by
-        // identity — is walked with no allocation at all.
-        let len = shared_heap.borrow().vector_len(tv);
-        let mut elems: Option<Vec<patina_core::TaggedValue>> = None;
-        for i in 0..len {
-            let e = shared_heap.borrow().vector_ref(tv, i);
-            let edited = edit_scope_memo(e, scope, edit, shared_heap, memo);
-            match &mut elems {
-                Some(out) => out.push(edited),
-                None if edited != e => {
-                    let heap = shared_heap.borrow();
-                    let mut out = heap.vector_slice(tv)[..i].to_vec();
-                    out.push(edited);
-                    elems = Some(out);
-                }
-                None => {}
+    shared_heap
+        .borrow_mut()
+        .map_syntax_identifiers(tv, |heap, value, name, scopes| {
+            if heap.is_source_identifier(value) || !edit.affects(&name, &scopes) {
+                return None;
             }
-        }
-        let Some(elems) = elems else {
-            return tv;
-        };
-        let copy = shared_heap.borrow_mut().alloc_vector(elems);
-        memo.insert(tv.raw_bits(), copy);
-        return copy;
-    }
-
-    // Non-object types pass through unchanged
-    if !tv.is_object() {
-        return tv;
-    }
-
-    // Handle symbols (pass through - they don't participate in hygiene)
-    if shared_heap.borrow().get_symbol_name(tv).is_some() {
-        return tv;
-    }
-
-    // Handle identifiers (native or boxed) via unified method
-    // Extract to binding first to avoid RefCell borrow conflict with alloc_identifier
-    let id_data = shared_heap.borrow().get_identifier_data_any(tv);
-    if let Some((name, scopes)) = id_data {
-        if !edit.affects(&name, &scopes) {
-            return tv;
-        }
-        let new_scopes = match edit {
-            ScopeEdit::Flip => scopes.flip_scope(scope),
-            ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
-        };
-        return shared_heap.borrow_mut().alloc_identifier(name, new_scopes);
-    }
-
-    // Everything else — strings, numbers, records — has no scopes to edit.
-    tv
+            let new_scopes = match edit {
+                ScopeEdit::Flip => scopes.flip_scope(scope),
+                ScopeEdit::AddToScoped | ScopeEdit::AddToBound(_) => scopes.with_scope(scope),
+            };
+            Some(heap.alloc_identifier(name, new_scopes))
+        })
 }
 
 /// One side of a literal comparison: where a macro was defined, or where it is

@@ -169,6 +169,7 @@ pub(super) fn expand_for_eval(
         |e| {
             EvalError::InvalidSyntax(format!("eval: desugar error: {e}"))
                 .with_diagnostic(e.diagnostic())
+                .at_opt(e.source_location().cloned())
         },
     )?;
     super::lower_quasiquotes_for(&core_expr, evaluator)

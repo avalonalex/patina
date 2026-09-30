@@ -24,6 +24,7 @@
 
 pub mod gc;
 mod numeric;
+mod source;
 
 use crate::tagged_value::{HeapIndex, TaggedValue};
 use num_bigint::BigInt;
@@ -166,6 +167,8 @@ pub enum HeapObjectData {
     Identifier {
         name: Rc<str>,
         scopes: crate::scope::ScopeSet,
+        /// A written program name, which has the binding behavior of a symbol.
+        written: bool,
     },
     Continuation(Rc<crate::continuation::CpsContinuation>),
     Parameter {
@@ -299,6 +302,7 @@ pub enum SpineEnd {
 /// ```
 #[derive(Debug)]
 pub struct Heap {
+    syntax_sources: std::collections::HashMap<u64, Rc<source::SyntaxSource>>,
     /// Pair storage: (car, cdr) tuples
     pairs: Vec<(TaggedValue, TaggedValue)>,
 
@@ -505,6 +509,7 @@ impl Heap {
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         Self {
+            syntax_sources: std::collections::HashMap::new(),
             features: crate::features::FeatureRegistry::new(),
             library_availability: None,
             features_read: false,
@@ -999,7 +1004,28 @@ impl Heap {
         name: Rc<str>,
         scopes: crate::scope::ScopeSet,
     ) -> TaggedValue {
-        self.alloc_object(HeapObjectData::Identifier { name, scopes })
+        self.alloc_object(HeapObjectData::Identifier {
+            name,
+            scopes,
+            written: false,
+        })
+    }
+
+    /// A distinct program occurrence with ordinary source-symbol semantics.
+    pub fn alloc_source_identifier(&mut self, name: Rc<str>) -> TaggedValue {
+        self.alloc_object(HeapObjectData::Identifier {
+            name,
+            scopes: crate::ScopeSet::new(),
+            written: true,
+        })
+    }
+
+    pub fn is_source_identifier(&self, value: TaggedValue) -> bool {
+        value.is_object()
+            && matches!(
+                self.get_object(value),
+                HeapObjectData::Identifier { written: true, .. }
+            )
     }
 
     /// Allocate a native Continuation object (first-class continuation)
@@ -1463,7 +1489,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Identifier { name, scopes } => Some((name, scopes)),
+            HeapObjectData::Identifier { name, scopes, .. } => Some((name, scopes)),
             _ => None,
         }
     }
@@ -1480,7 +1506,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::Identifier { name, scopes } => Some((name.clone(), scopes.clone())),
+            HeapObjectData::Identifier { name, scopes, .. } => Some((name.clone(), scopes.clone())),
             _ => None,
         }
     }

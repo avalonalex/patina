@@ -65,7 +65,7 @@ pub fn is_define_library_form(tv: TaggedValue, heap: &SharedHeap) -> bool {
     let h = heap.borrow();
     let head = h.car(tv);
     matches!(
-        h.get_symbol_name(head),
+        h.get_symbol_or_identifier_name(head),
         Some("define-library") | Some("library")
     )
 }
@@ -221,12 +221,12 @@ impl SchemeLibraryLoader {
         })?;
 
         // Parse the .sld header directly as TaggedValue on the shared heap
-        let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
-            LibraryError::ParseError {
-                file: path.display().to_string(),
-                message: e.format_in_source(&path.display().to_string(), &content),
-            }
-        })?;
+        let mut parser =
+            crate::Parser::new_program(&content, heap.clone(), &path.display().to_string(), false)
+                .map_err(|e| LibraryError::ParseError {
+                    file: path.display().to_string(),
+                    message: e.format_in_source(&path.display().to_string(), &content),
+                })?;
 
         let parse_error = |e: crate::ParseError| LibraryError::ParseError {
             file: path.display().to_string(),
@@ -408,12 +408,12 @@ impl SchemeLibraryLoader {
         })?;
 
         // Parse all expressions directly as TaggedValues on the shared heap
-        let mut parser = crate::Parser::new_with_heap(&content, heap.clone()).map_err(|e| {
-            LibraryError::ParseError {
-                file: path.display().to_string(),
-                message: e.format_in_source(&path.display().to_string(), &content),
-            }
-        })?;
+        let mut parser =
+            crate::Parser::new_program(&content, heap.clone(), &path.display().to_string(), false)
+                .map_err(|e| LibraryError::ParseError {
+                    file: path.display().to_string(),
+                    message: e.format_in_source(&path.display().to_string(), &content),
+                })?;
 
         let declarations = parser.parse_all().map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
@@ -543,11 +543,12 @@ impl SchemeLibraryLoader {
         })?;
 
         // Create parser with shared heap — TaggedValues go directly on global heap
-        let mut parser = if case_insensitive {
-            crate::Parser::new_case_insensitive_with_heap(&content, heap.clone())
-        } else {
-            crate::Parser::new_with_heap(&content, heap.clone())
-        }
+        let mut parser = crate::Parser::new_program(
+            &content,
+            heap.clone(),
+            &path.display().to_string(),
+            case_insensitive,
+        )
         .map_err(|e| LibraryError::ParseError {
             file: path.display().to_string(),
             message: e.format_in_source(&path.display().to_string(), &content),
