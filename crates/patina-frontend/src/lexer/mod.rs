@@ -1137,6 +1137,27 @@ impl Lexer {
             && (self.matches_ascii_at(1, "nan.0") || self.matches_ascii_at(1, "inf.0"))
     }
 
+    /// Read the digits after `x`, leaving the semicolon for the caller.
+    ///
+    /// R7RS 7.1.1 requires hexadecimal digits followed by `;` in both strings
+    /// and barred identifiers. Stop at the first other character: searching
+    /// for a later semicolon swallowed closing delimiters and unrelated source
+    /// into the diagnostic (#363). At a temporary end of input,
+    /// `next_fed_token` defers the error until more text arrives.
+    fn read_inline_hex_escape(&mut self) -> Result<char, String> {
+        self.advance(); // consume x
+        let start = self.position;
+        while !self.is_at_end() && self.current_char().is_ascii_hexdigit() {
+            self.advance();
+        }
+        let hex: String = self.input[start..self.position].iter().collect();
+        if self.current_char() != ';' {
+            return Err(format!("x{hex} (missing semicolon)"));
+        }
+        let code = u32::from_str_radix(&hex, 16).map_err(|_| format!("x{hex}; (invalid hex)"))?;
+        char::from_u32(code).ok_or_else(|| format!("x{hex}; (invalid Unicode code point)"))
+    }
+
     fn read_string(&mut self) -> Result<Token, LexError> {
         self.advance(); // consume opening "
         let mut result = String::new();
@@ -1159,41 +1180,10 @@ impl Lexer {
                     '"' => '"',        // double quote
                     '|' => '|',        // vertical bar
                     // R7RS inline hex escape: \x<hex>;
-                    'x' => {
-                        self.advance();
-                        let mut hex_str = String::new();
-                        while !self.is_at_end() && self.current_char() != ';' {
-                            hex_str.push(self.current_char());
-                            self.advance();
-                        }
-                        if self.is_at_end() || self.current_char() != ';' {
-                            return Err(LexError::InvalidEscapeInString(format!(
-                                "\\x{} (missing semicolon)",
-                                hex_str
-                            ))
-                            .at(self.span_from(escape_start, true)));
-                        }
-                        // Don't advance past ';' here - done at end of loop
-                        match u32::from_str_radix(&hex_str, 16) {
-                            Ok(code) => match char::from_u32(code) {
-                                Some(ch) => ch,
-                                None => {
-                                    return Err(LexError::InvalidEscapeInString(format!(
-                                        "\\x{}; (invalid Unicode code point)",
-                                        hex_str
-                                    ))
-                                    .at(self.span_from(escape_start, true)));
-                                }
-                            },
-                            Err(_) => {
-                                return Err(LexError::InvalidEscapeInString(format!(
-                                    "\\x{}; (invalid hex)",
-                                    hex_str
-                                ))
-                                .at(self.span_from(escape_start, true)));
-                            }
-                        }
-                    }
+                    'x' => self.read_inline_hex_escape().map_err(|escape| {
+                        LexError::InvalidEscapeInString(format!("\\{escape}"))
+                            .at(self.span_from(escape_start, self.current_char() == ';'))
+                    })?,
                     // R7RS: Line ending escape - backslash followed by intraline whitespace
                     // and line ending is ignored along with any leading intraline whitespace
                     // on the next line
@@ -1280,40 +1270,10 @@ impl Lexer {
                     '|' => '|',        // vertical bar
                     '"' => '"',        // double quote
                     // Inline hex escape: \x<hex>;
-                    'x' => {
-                        self.advance();
-                        let mut hex_str = String::new();
-                        while !self.is_at_end() && self.current_char() != ';' {
-                            hex_str.push(self.current_char());
-                            self.advance();
-                        }
-                        if self.current_char() != ';' {
-                            return Err(LexError::InvalidEscapeInIdentifier(format!(
-                                "x{} (missing semicolon)",
-                                hex_str
-                            ))
-                            .at(self.span_from(escape_start, true)));
-                        }
-                        match u32::from_str_radix(&hex_str, 16) {
-                            Ok(code) => match char::from_u32(code) {
-                                Some(ch) => ch,
-                                None => {
-                                    return Err(LexError::InvalidEscapeInIdentifier(format!(
-                                        "x{};",
-                                        hex_str
-                                    ))
-                                    .at(self.span_from(escape_start, true)));
-                                }
-                            },
-                            Err(_) => {
-                                return Err(LexError::InvalidEscapeInIdentifier(format!(
-                                    "x{};",
-                                    hex_str
-                                ))
-                                .at(self.span_from(escape_start, true)));
-                            }
-                        }
-                    }
+                    'x' => self.read_inline_hex_escape().map_err(|escape| {
+                        LexError::InvalidEscapeInIdentifier(escape)
+                            .at(self.span_from(escape_start, self.current_char() == ';'))
+                    })?,
                     c => {
                         return Err(LexError::InvalidEscapeInIdentifier(c.to_string())
                             .at(self.span_from(escape_start, true)));
@@ -1749,7 +1709,7 @@ mod tests {
         for (text, start, end) in [
             ("\u{feff}\"λ\\q\"", (3, 1, 3), (5, 1, 5)),
             ("\"λ\\xD800;\"", (2, 1, 3), (9, 1, 10)),
-            ("|λ\\xGG;|", (2, 1, 3), (7, 1, 8)),
+            ("|λ\\xGG;|", (2, 1, 3), (4, 1, 5)),
             ("\n  #\\bogus", (3, 2, 3), (10, 2, 10)),
             ("\n  #| unfinished", (3, 2, 3), (16, 2, 16)),
         ] {
@@ -2757,6 +2717,87 @@ mod tests {
             lexer.next_token_kind().as_ref().map_err(LexError::kind),
             Err(LexError::InvalidEscapeInString(_))
         ));
+    }
+
+    #[test]
+    fn inline_hex_errors_stop_before_the_first_non_hex_character() {
+        for delimiter in ['"', '|'] {
+            for suffix in [
+                delimiter.to_string(),
+                " abc".into(),
+                "\t".into(),
+                "\n".into(),
+                "\r\n".into(),
+                "\r".into(),
+                "G".into(),
+                "_".into(),
+                "λ".into(),
+                "\\".into(),
+                String::new(),
+            ] {
+                let text = format!("{delimiter}β\\x41{suffix}");
+                // A later semicolon must not change the escape or its span.
+                for tail in ["", "\n(display 1)\n; unrelated comment"] {
+                    let mut lexer = Lexer::new(&format!("{text}{tail}"));
+                    let error = lexer.next_token().unwrap_err();
+                    let context = if delimiter == '"' {
+                        "string"
+                    } else {
+                        "identifier"
+                    };
+                    assert_eq!(
+                        error.to_string(),
+                        format!("Invalid escape sequence in {context}: \\x41 (missing semicolon)"),
+                        "{text:?}{tail:?}"
+                    );
+                    assert_eq!(lexer.position, 6, "the non-hex character remains unread");
+                    let span = error.span().unwrap();
+                    assert_eq!(
+                        (span.start.line, span.start.column, span.start.offset),
+                        (1, 3, 2)
+                    );
+                    assert_eq!((span.end.line, span.end.column, span.end.offset), (1, 7, 6));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inline_hex_escapes_require_digits_and_unicode_scalars_in_both_contexts() {
+        for delimiter in ['"', '|'] {
+            for (escape, reason) in [
+                ("x;", "invalid hex"),
+                ("xD800;", "invalid Unicode code point"),
+                ("x110000;", "invalid Unicode code point"),
+                ("x100000000;", "invalid hex"),
+            ] {
+                let mut lexer = Lexer::new(&format!("{delimiter}\\{escape}{delimiter}"));
+                let error = lexer.next_token().unwrap_err();
+                let context = if delimiter == '"' {
+                    "string"
+                } else {
+                    "identifier"
+                };
+                assert_eq!(
+                    error.to_string(),
+                    format!("Invalid escape sequence in {context}: \\{escape} ({reason})")
+                );
+            }
+            for (escape, expected) in [
+                ("0", '\0'),
+                ("41", 'A'),
+                ("3bB", 'λ'),
+                ("10FFFF", '\u{10ffff}'),
+            ] {
+                let mut lexer = Lexer::new(&format!("{delimiter}\\x{escape};{delimiter}"));
+                let expected = if delimiter == '"' {
+                    Token::String(expected.to_string())
+                } else {
+                    Token::Identifier(expected.to_string())
+                };
+                assert_eq!(lexer.next_token_kind().unwrap(), expected);
+            }
+        }
     }
 
     #[test]

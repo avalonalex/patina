@@ -420,6 +420,18 @@ mod tests {
             "(a)\n  #\\bogus ",
             "(a)\n; comment\n  #\\bogus ",
             "(λ)\n  \"β\\q\" ",
+            // #363: malformed escapes keep the same bounded diagnostic even
+            // when a chunk ends inside the escape or preceding token text.
+            "(a)\n  \"β\\x41 abc\"\n(next)\n; unrelated",
+            "(a)\n  |β\\x41 abc|\n(next)\n; unrelated",
+            "(a)\n  \"\\x41\"\n(next)\n; unrelated",
+            "(a)\n  |\\x41|\n(next)\n; unrelated",
+            "(a)\n  \"\\x41\nunfinished",
+            "(a)\n  |\\x41\nunfinished",
+            "(a)\n  \"\\x41",
+            "(a)\n  |\\x41",
+            "(a)\n  \"\\x;\"",
+            "(a)\n  |\\xD800;|",
             "\u{feff}(a)\n  { ",
             "#!fold-case\n  #(1 . 2)",
             "(a . b c)",
@@ -516,6 +528,8 @@ mod tests {
             // a feed splits a digit group or a radix/exactness prefix.
             "1_000 #xAB_CD #e1.2_5 1e1_0 #e1_0+2_0i 1_0@0_0",
             "\"a b\" \"c\\\"d\" |a b| |c\\|d|",
+            // #363: a chunk boundary before the semicolon is not an error.
+            "\"\\x41;\\x3bB;\" |\\x41;\\x3bB;| \"β\\x0;\" |β\\x10FFFF;|",
             "#| a #| b |# c |# (d)",
             "#\\a #\\space #\\( 42 #xff",
             "#(1 2) #u8(1 2) `(a ,b ,@c)",
