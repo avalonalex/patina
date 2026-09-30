@@ -68,6 +68,11 @@ PRD/
 │   └── SYNTAX_CASE_DESIGN.md           # Includes deferred mechanization (H5)
 ```
 
+## Deferred Ideas
+
+- [Editor integration and Scheme formatting](future/EDITOR_AND_FORMATTER_PRD.md) —
+  preserve the reader audit's tooling ideas for later; no implementation is scheduled.
+
 ## Archive
 
 Completed research and historical documents in `PRD/ARCHIVE/`. Key references:
