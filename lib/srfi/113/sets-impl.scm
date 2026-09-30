@@ -959,7 +959,9 @@
 
 (define (sob-union sob1 . sobs)
   (if (null? sobs)
-    sob1
+    ;; PATINA LOCAL EDIT: SRFI 113 requires a newly allocated functional
+    ;; result even with one argument; sharing our mutable table aliases it.
+    (sob-copy sob1)
     (let ((result (sob-empty-copy sob1)))
       (dyadic-sob-union! result sob1 (car sobs))
       (for-each
@@ -1012,7 +1014,8 @@
 
 (define (sob-intersection sob1 . sobs)
   (if (null? sobs)
-    sob1
+    ;; PATINA LOCAL EDIT: preserve the functional result's independence.
+    (sob-copy sob1)
     (let ((result (sob-empty-copy sob1)))
       (dyadic-sob-intersection! result sob1 (car sobs))
       (for-each
@@ -1058,7 +1061,8 @@
 
 (define (sob-difference sob1 . sobs)
   (if (null? sobs)
-    sob1
+    ;; PATINA LOCAL EDIT: preserve the functional result's independence.
+    (sob-copy sob1)
     (let ((result (sob-empty-copy sob1)))
       (dyadic-sob-difference! result sob1 (car sobs))
       (for-each
@@ -1104,7 +1108,8 @@
 
 (define (sob-sum sob1 . sobs)
   (if (null? sobs)
-    sob1
+    ;; PATINA LOCAL EDIT: bag-sum promises a newly allocated bag too.
+    (sob-copy sob1)
     (let ((result (sob-empty-copy sob1)))
       (dyadic-sob-sum! result sob1 (car sobs))
       (for-each
@@ -1222,19 +1227,26 @@
     (hash-table-for-each
       (lambda (elem count) (hash-table-set! rht elem (* count n)))
       (sob-hash-table sob))
-    result))
+    ;; PATINA LOCAL EDIT: a zero product has no members. Clean up after the
+    ;; traversal, since result and sob may share their table in bag-product!.
+    (if (zero? n) (sob-cleanup! result) result)))
 
-(define (valid-n n)
-   (and (integer? n) (exact? n) (positive? n)))
+;; PATINA LOCAL EDIT: upstream discarded valid-n's boolean, and its positive?
+;; test excluded zero despite the specified multiplication of counts. Accept
+;; exact nonnegative multipliers, and reject the rest before mutating a bag.
+;; The SRFI does not prescribe these errors; this is Patina's domain check.
+(define (check-product-multiplier n)
+  (if (not (and (integer? n) (exact? n) (>= n 0)))
+      (error "bag product multiplier must be an exact nonnegative integer" n)))
 
 (define (bag-product n bag)
   (check-bag bag)
-  (valid-n n)
+  (check-product-multiplier n)
   (sob-product! n (sob-empty-copy bag) bag))
 
 (define (bag-product! n bag)
   (check-bag bag)
-  (valid-n n)
+  (check-product-multiplier n)
   (sob-product! n bag bag))
 
 (define (bag-unique-size bag)
