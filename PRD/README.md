@@ -15,6 +15,11 @@ in GitHub issues.
 
 See [MILESTONES.md](MILESTONES.md) for full history.
 
+The implemented filesystem abstraction and public directory API are documented
+in [docs/VFS_DESIGN.md](../docs/VFS_DESIGN.md). Its March proposals have been
+retired; the [earlier design](ARCHIVE/vfs_2026_03/FILE_SYSTEM_ABSTRACTION.md)
+is preserved as historical reference.
+
 ## Phase 1 Cleanup — COMPLETE ✅
 
 All 5 priorities done. Archived at `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md`.

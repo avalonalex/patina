@@ -53,10 +53,9 @@ pub fn build_internal_io(_name: Vec<String>, env: Rc<Environment>) -> Vec<String
         ("delete-file", Arity::Exact(1)),
         // === Directories ===
         // Not R7RS, so `(scheme file)` does not re-export them despite the
-        // `scheme.file` registration label: this library is their import
-        // route. `(chibi filesystem)`'s portable half is built on them, and
-        // that library is supplied from `test-lib/` rather than bundled, so
-        // this is also the only route a plain `patina` run has.
+        // `scheme.file` registration label. `(patina filesystem)` provides
+        // their public import route; the external `(chibi filesystem)`
+        // adaptation also uses them for its portable half.
         ("directory-files", Arity::Exact(1)),
         ("create-directory", Arity::Range(1, 2)),
         ("delete-directory", Arity::Exact(1)),

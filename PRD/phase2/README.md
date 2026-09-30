@@ -16,6 +16,7 @@ Phase 2A design docs have been moved to `docs/` (updated to match implementation
 | **[docs/VM_COMPILER.md](../../docs/VM_COMPILER.md)** | 2 pre-passes + 5-pass compiler: `CoreExpr → CodeObject` |
 | **[docs/VM_RUNTIME.md](../../docs/VM_RUNTIME.md)** | `VmState`, execution loop, control primitives, exceptions |
 | **[docs/VM_TESTING.md](../../docs/VM_TESTING.md)** | Testing layers and commands |
+| **[docs/VFS_DESIGN.md](../../docs/VFS_DESIGN.md)** | Implemented filesystem abstraction and public directory API; replaces the VFS proposal |
 
 ---
 

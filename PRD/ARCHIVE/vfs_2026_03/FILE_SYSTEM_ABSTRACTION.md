@@ -1,6 +1,14 @@
 # File System Abstraction Design
 
-**Status:** Proposed
+**Status:** Archived 2026-09-30 — superseded proposal; not an active plan.
+
+The filesystem abstraction is implemented. See the
+[current VFS reference](../../../docs/VFS_DESIGN.md) for the shipped API and
+its boundaries. The WASM, embedded-library, sandboxing, async/remote, and
+snapshot ideas below are historical possibilities, not completed features.
+The original proposal is preserved below.
+
+**Original status:** Proposed
 **Target:** Phase 2 (VM Backend) / Can be implemented earlier
 **Goal:** Abstract file system operations behind a trait to enable testing, WASM support, and embedded stdlib
 

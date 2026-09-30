@@ -2,11 +2,24 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2026-09-29
+**Last Updated:** 2026-09-30
 
 ---
 
 ## Directory Structure
+
+### Filesystem abstraction proposals
+
+**Status:** Retired 2026-09-30. The filesystem abstraction is implemented.
+
+- [Earlier design](vfs_2026_03/FILE_SYSTEM_ABSTRACTION.md) — preserved as a
+  historical proposal, including ideas that have not shipped.
+- The later `PRD/phase2/VFS_DESIGN.md` moved to
+  [docs/VFS_DESIGN.md](../../docs/VFS_DESIGN.md) and was rewritten to describe
+  the current implementation and public API. Its deferred ideas remain
+  explicitly distinguished from implemented functionality.
+
+---
 
 ### Track L — Third-Party Library Compatibility
 

@@ -47,26 +47,16 @@ use std::collections::{BTreeMap, BTreeSet};
 /// the loader instead is blocked on the duplicated registration lists
 /// `RustLibraryLoader::with_standard_libraries` records as deferred work.
 ///
-/// `(patina internal io)` is here for the seven directory procedures
-/// — `directory-files`, `create-directory`, `delete-directory`,
-/// `current-directory`, `change-directory`, `file-directory?`,
-/// `file-regular?` — which are registered under `scheme.file` and
-/// deliberately not exported by `(scheme file)`, since they are not R7RS.
-///
-/// Until #196 this list was unnecessary, for a bad reason: the bundled
-/// `lib/chibi/filesystem.sld` re-exported all seven, so a *third-party*
-/// library was this guard's only evidence that seven Patina primitives were
-/// importable. Moving that library to `test-lib/` is what exposed it.
+/// The directory primitives now have `(patina filesystem)` as their public
+/// route (#205), so `(patina internal io)` must not be added here to mask a
+/// missing export from that library.
 ///
 /// `(patina internal chars)` is here for `char-set-unicode-ranges`, which is
 /// registered under `scheme.char` and deliberately not exported by
 /// `(scheme char)`: it is not an R7RS procedure but the substrate `(srfi 14)`
 /// builds its `char-set:*` constants from (#372). Only `lib/srfi/14.sld`
 /// imports it, and it does so by the internal name.
-const RUST_SIDE_LIBRARIES: &[&[&str]] = &[
-    &["patina", "internal", "io"],
-    &["patina", "internal", "chars"],
-];
+const RUST_SIDE_LIBRARIES: &[&[&str]] = &[&["patina", "internal", "chars"]];
 
 #[test]
 fn every_registered_primitive_is_reachable_by_some_import() {

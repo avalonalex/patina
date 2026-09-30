@@ -538,6 +538,10 @@ const NO_SUITE: &[(&str, &str)] = &[
         "patina bitvector",
         "Patina's own, written for (srfi 231)'s u1-storage-class; there is no upstream to have a suite. tests/scheme/srfi/bitvector.scm covers the packing, which is what a plausible implementation gets wrong",
     ),
+    (
+        "patina filesystem",
+        "Patina's own public directory API has no upstream suite; patina_filesystem.rs exercises its VFS operations and errors on both backends, and patina-repl/tests/cli_options.rs checks isolated public imports",
+    ),
     // The four re-export shims of #390. Each names functionality R7RS-small
     // already provides, so what there is to test is that the shim loads and
     // that a binding reached through it works — which is behavioural, not
