@@ -470,7 +470,7 @@ suite_tests! {
 const NO_SUITE_TREES: &[(&str, &str)] = &[
     (
         "scheme",
-        "the R7RS surface (gated by the chibi R7RS suite) plus alias libraries whose backing SRFIs this table covers, drift-checked in r7rs_large_aliases.rs",
+        "the R7RS-small surface (chibi R7RS gate) plus aliases checked in r7rs_large_aliases.rs; backing SRFI suites run here, while scheme bytevector uses the existing R6RS port and tests/scheme/data/bytevector-library.scm",
     ),
     (
         "r6rs",

@@ -170,6 +170,26 @@ fn eval_print_rejects_script_file() {
     assert!(stderr.contains("cannot be combined"), "stderr: {}", stderr);
 }
 
+/// Tangerine's bytevector name resolves without an external root (#575).
+#[test]
+fn bytevector_library_is_bundled() {
+    let dir = TempDir::new().unwrap();
+    run_both_backends(
+        dir.path(),
+        &[
+            "--isolated-libraries",
+            "-p",
+            "(import (scheme base) (prefix (scheme bytevector) bv:))
+             (define source (bytevector 10 20 30 40))
+             (define target (make-bytevector 4 0))
+             (bv:bytevector-copy! source 1 target 0 2)
+             (list (cond-expand ((library (scheme bytevector)) #t) (else #f))
+                   source target)",
+        ],
+        "(#t #u8(10 20 30 40) #u8(20 30 0 0))",
+    );
+}
+
 /// Patina's directory API is available without an external library root (#205).
 #[test]
 fn public_filesystem_is_bundled() {

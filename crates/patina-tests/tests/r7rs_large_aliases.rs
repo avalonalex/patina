@@ -1,10 +1,10 @@
 //! Tests for the R7RS-large `(scheme ...)` alias libraries.
 //!
 //! R7RS-large names its libraries `(scheme list)`, `(scheme sort)`, and so on;
-//! each is an existing SRFI under its standard-track name. The alias libraries
-//! in `lib/scheme/` are pure re-exports of the corresponding `(srfi n)`, so
+//! most are existing SRFIs under their standard-track names; bytevectors use
+//! the R6RS library. The alias libraries re-export the backing bindings, so
 //! these tests check two things: that each alias loads, and that a binding
-//! reached through the alias is the *same* binding as through the SRFI.
+//! reached through the alias is the *same* binding as through its source.
 
 use patina_interpreter::{Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
@@ -179,6 +179,57 @@ fn eval_to_string(src: &str) -> String {
         "backends disagree for: {src}\n  tree-walker: {tw_out}\n  vm: {vm_out}"
     );
     vm_out
+}
+
+/// Tangerine's bytevector library is backed by R6RS, not a SRFI (#575).
+#[test]
+fn bytevector_alias_exports_match_both_r6rs_names() {
+    let eval = Evaluator::new();
+    let alias = eval
+        .load_library(&library_name("scheme", "bytevector"))
+        .unwrap();
+    let mut exported: Vec<_> = alias.exports.keys().cloned().collect();
+    exported.sort();
+    for head in ["r6rs", "rnrs"] {
+        let source = eval
+            .load_library(&library_name(head, "bytevectors"))
+            .unwrap();
+        let mut expected: Vec<_> = source.exports.keys().cloned().collect();
+        expected.sort();
+        assert_eq!(
+            exported, expected,
+            "(scheme bytevector) vs ({head} bytevectors)"
+        );
+    }
+}
+
+/// A re-export must share locations as well as the initial procedure values.
+#[test]
+fn bytevector_alias_shares_bindings_with_both_r6rs_names() {
+    assert_eq!(
+        eval_to_string(
+            r#"
+            (import (scheme base)
+                    (prefix (scheme bytevector) bv:)
+                    (prefix (r6rs bytevectors) r6:)
+                    (prefix (rnrs bytevectors) rn:))
+            (define original bv:bytevector-u16-ref)
+            (define shared (and (eq? original r6:bytevector-u16-ref)
+                                (eq? original rn:bytevector-u16-ref)))
+            (define replacement (lambda args 'replacement))
+            (set! bv:bytevector-u16-ref replacement)
+            (define observed
+              (list shared
+                    (eq? r6:bytevector-u16-ref replacement)
+                    (eq? rn:bytevector-u16-ref replacement)
+                    (r6:bytevector-u16-ref (make-bytevector 2) 0 (r6:endianness big))
+                    (rn:bytevector-u16-ref (make-bytevector 2) 0 (rn:endianness big))))
+            (set! bv:bytevector-u16-ref original)
+            observed
+            "#,
+        ),
+        "(#t #t #t replacement replacement)"
+    );
 }
 
 /// #426: sharing list-copy means sharing its binding, including SRFI 117's
