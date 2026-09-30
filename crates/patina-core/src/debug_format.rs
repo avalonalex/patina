@@ -288,13 +288,15 @@ impl CycleSearch {
     }
 }
 
-/// Format a real (f64) value in Scheme display style
+/// Append a real's external representation for writers and `number->string`.
 ///
-/// Handles +inf.0, -inf.0, +nan.0, and ensures all inexact numbers
-/// have a decimal point (e.g., "1.0" not "1").
+/// Preserve signed zero, spell infinities/NaN as Scheme numbers, and retain a
+/// decimal point so finite values are visibly inexact. Nonzero magnitudes
+/// outside [1e-4, 1e15) use scientific notation with a signed exponent.
 ///
-/// Note: This is for display/write output. `number->string` uses a separate
-/// implementation in conversion.rs that also handles -0.0 and scientific notation.
+/// This is Patina's existing `number->string` policy, shared since #219 so
+/// datum writers and REPL output cannot drift from it. Chibi, Gauche and Chez
+/// also agree internally, but use different thresholds and exponent spellings.
 pub fn format_real(r: f64, buf: &mut String) {
     if r.is_infinite() {
         if r.is_sign_positive() {
@@ -304,6 +306,20 @@ pub fn format_real(r: f64, buf: &mut String) {
         }
     } else if r.is_nan() {
         buf.push_str("+nan.0");
+    } else if r != 0.0 && !(1e-4..1e15).contains(&r.abs()) {
+        // Rust supplies the shortest round-tripping mantissa. Normalize its
+        // spelling without adding significant digits or rounding it again.
+        let scientific = format!("{r:e}");
+        let (mantissa, exponent) = scientific.split_once('e').expect("LowerExp exponent");
+        buf.push_str(mantissa);
+        if !mantissa.contains('.') {
+            buf.push_str(".0");
+        }
+        buf.push('e');
+        if !exponent.starts_with(['-', '+']) {
+            buf.push('+');
+        }
+        buf.push_str(exponent);
     } else if r.fract() == 0.0 {
         write!(buf, "{:.1}", r).unwrap();
     } else {
@@ -565,6 +581,57 @@ fn format_tagged_list(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &
 }
 
 #[cfg(test)]
+mod real_spelling_tests {
+    use super::{format_real, format_tagged};
+    use crate::heap::Heap;
+
+    #[test]
+    fn reals_use_the_number_to_string_spelling_including_in_the_repl() {
+        let mut heap = Heap::new();
+        for (value, expected) in [
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1e-4, "0.0001"),
+            (1e-5, "1.0e-5"),
+            (-1e-5, "-1.0e-5"),
+            (1e14, "100000000000000.0"),
+            (1e15, "1.0e+15"),
+            (-1e21, "-1.0e+21"),
+            (1e100, "1.0e+100"),
+            (f64::MAX, "1.7976931348623157e+308"),
+            (f64::MIN_POSITIVE, "2.2250738585072014e-308"),
+            (f64::from_bits(1), "5.0e-324"),
+            (f64::INFINITY, "+inf.0"),
+            (f64::NEG_INFINITY, "-inf.0"),
+            (f64::NAN, "+nan.0"),
+            (-f64::NAN, "+nan.0"),
+        ] {
+            let mut out = String::from("prefix:");
+            format_real(value, &mut out);
+            assert_eq!(out, format!("prefix:{expected}"));
+            let value = heap.alloc_real(value);
+            assert_eq!(format_tagged(value, &heap), expected);
+        }
+    }
+
+    #[test]
+    fn finite_spelling_preserves_bits_across_all_binary_exponents() {
+        // Exercise both signs, zeros, subnormals, and mantissas on either
+        // side of a rounding boundary for every finite binary exponent.
+        for exponent in 0..2047_u64 {
+            for fraction in [0, 1, (1 << 51) - 1, 1 << 51, (1 << 52) - 1] {
+                for sign in [0, 1 << 63] {
+                    let bits = sign | (exponent << 52) | fraction;
+                    let mut out = String::new();
+                    format_real(f64::from_bits(bits), &mut out);
+                    assert_eq!(out.parse::<f64>().unwrap().to_bits(), bits, "{out}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod complex_spelling_tests {
     use super::format_tagged;
     use crate::heap::Heap;
@@ -586,6 +653,7 @@ mod complex_spelling_tests {
             (1.0, 0.0, "1.0+0.0i"),
             (1.0, 2.0, "1.0+2.0i"),
             (0.0, -2.0, "0.0-2.0i"),
+            (1e21, -1e-7, "1.0e+21-1.0e-7i"),
         ];
         for (re, im, expected) in cases {
             let r = heap.alloc_real(re);

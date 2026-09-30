@@ -10,12 +10,13 @@
 ;; error assertions become one `test-error` each, because `test-error` takes a
 ;; single expression — except the six that pin Patina's *strictness* about
 ;; radices, which are one scoped row together, for the reason recorded there.
-;; **62 rows**, and the arithmetic closes: 43 migrated value rows, 12 error
+;; **66 rows**: 43 migrated value rows, 12 error
 ;; rows, 4 added at migration time — `-0.0`, the two `write`/`number->string`
 ;; agreement rows, and a split of the complex row so the half an oracle can
 ;; corroborate is not scoped away with the half it cannot — and 3 that arrived
 ;; later from `larceny_families.rs`: Larceny family 7's row, the
-;; one-number-token row, and the huge-exponent row split out of it.
+;; one-number-token row, and the huge-exponent row split out of it; plus 4
+;; writer/converter consistency and round-trip rows for #219.
 ;;
 ;; **What the move costs, precisely.** `assert_eval_to` compared the datum
 ;; writer's output. For the `number->string` rows nothing is lost — the
@@ -32,25 +33,22 @@
 ;; driver compares the two backends' count vectors, so a divergence in *which*
 ;; rows failed would still surface — a divergence in the stage would not.
 ;;
-;; Oracles, measured 2026-09-07. Three rows are scoped to Patina and report a
+;; Oracles, measured 2026-09-30. Three rows are scoped to Patina and report a
 ;; *skip* elsewhere — complex-part elision, inexact complex radix, and radix strictness
 ;; — each because R7RS leaves the answer to the implementation.
 ;;
-;;   patina VM / tree-walker   61 pass, 1 expected failure (the defect below)
-;;   Gauche                    56 pass, 3 skip, 3 fail — it has no exact complex
+;;   patina VM / tree-walker   66 pass
+;;   Gauche                    60 pass, 3 skip, 3 fail — it has no exact complex
 ;;                             numbers, so "3+4i" prints as "3.0+4.0i"
-;;   chibi                     54 pass, 4 skip, 4 fail — it alone tolerates a
+;;   chibi                     58 pass, 4 skip, 4 fail — it alone tolerates a
 ;;                             third argument to either procedure
 ;;
-;; The second failure on each is Larceny family 7's `string->number` row, which
-;; moved in from `larceny_families.rs`: chibi and Gauche each miss a different
-;; element of it, and the register says which.
-;;
-;; The two oracle failures are each one implementation against the other three,
-;; and are noted where those rows sit. Neither is scoped away: doing so would
-;; also drop the agreement of the oracle that *does* corroborate the row.
+;; Both oracles also differ on the two string->number syntax rows. Those
+;; disagreements are recorded beside the rows and in DIVERGENCES.tsv; they
+;; are not scoped away, so each oracle still corroborates the other cases.
 
-(import (scheme base) (scheme write) (srfi 64))
+(import (scheme base) (scheme write) (scheme read) (scheme inexact)
+        (scheme complex) (srfi 64))
 
 (test-begin "conversion")
 
@@ -80,40 +78,87 @@
 (test-equal "inexact reals" '("3.14" "100.0" "-2.5")
   (list (number->string 3.14) (number->string 100.0) (number->string -2.5)))
 
-;; Negative zero keeps its sign, and reads back as itself. Portable — all four
-;; agree, `write` and `number->string` included. (`debug_format.rs:81` and
-;; `conversion.rs:199` both say `-0.0` is a case `number->string` handles that
-;; the display path does not; measured, that is not true — `(write -0.0)` is
-;; `-0.0` on both backends. The comments are stale.)
+;; Negative zero keeps its sign, and reads back as itself.
 (test-equal "negative zero keeps its sign, both ways" '("-0.0" "0.0" -0.0)
   (list (number->string -0.0) (number->string 0.0) (string->number "-0.0")))
 
-;; The other half of that stale comment names scientific notation, and there the
-;; two paths really do disagree — which is a defect, not a property to pin:
-;;
-;;   (write 1e21)            1000000000000000000000.0
-;;   (number->string 1e21)   "1.0e+21"
-;;
-;; One number, two external representations, on both backends. chibi is
-;; self-consistent (`1e+21` either way) and so is Gauche (`1.0e21`). R7RS §6.2.6
-;; requires only that the result read back, which both spellings do, so this is
-;; a quality defect rather than a conformance one — but a program that writes a
-;; number and one that converts it should not disagree.
-;;
-;; `(scheme write)` is in this file's import set for this row alone. It resolves
-;; without one on Patina — the top level carries `(scheme base)`, and `write` is
-;; exported from there (issue #211) — so the omission is invisible here and
-;; fails on both oracles. Third time in this migration; see #211.
-;;
-;; Asserted as the property that *should* hold, with the failure expected on
-;; Patina only, so the row retires itself when the defect is fixed: an xpass is
-;; something `scheme_suite.rs` reports. Both oracles pass it today.
-(define (written x) (let ((p (open-output-string))) (write x p) (get-output-string p)))
-(cond-expand (patina (test-expect-fail 1)) (else))
+;; #219: the writers used fixed decimal notation where number->string used
+;; exponents, including inside complex numbers. Both paths now share one
+;; formatter. These properties require consistency and numeric round-trips;
+;; the exact spelling and notation thresholds are Patina's policy, pinned in
+;; patina-core's formatter tests. Measured 2026-09-30: Chibi 0.12 and Gauche
+;; 0.9.15 corroborate these rows. Chez 10.3 corroborates write/display agreement
+;; and numeric round-trips for the same 38 samples; its native API lacks the
+;; R7RS write-simple/write-shared names. Their exact spellings differ.
+(define (printed writer x)
+  (let ((p (open-output-string))) (writer x p) (get-output-string p)))
+(define (written x) (printed write x))
 (test-equal "write and number->string agree on a number needing an exponent" #t
   (string=? (written 1e21) (number->string 1e21)))
 (test-equal "…and on one that does not" #t
   (string=? (written 3.14) (number->string 3.14)))
+
+;; Include the nearest binary64 values on either side of both notation
+;; boundaries, both signs, subnormal/normal extremes, and complex signed zeros.
+(define spelling-samples
+  '("0.0" "-0.0" "1.0" "-1.0" "3.14" "-3.14" "1e-5" "-1e-5"
+    "1e6" "1e21" "-1e21" "1e100" "-1e100" "1.23456789012345678e20"
+    "1.7976931348623157e308" "4.940656458412465e-324"
+    "2.2250738585072014e-308" "+inf.0" "-inf.0" "+nan.0"
+    "1e21+1e-7i" "-1e21-1e-7i" "0.0+1e21i" "-0.0-1e21i"
+    "1e21+0.0i" "1e21-0.0i"
+    "9.999999999999999e-5" "-9.999999999999999e-5" "0.0001" "-0.0001"
+    "0.00010000000000000002" "-0.00010000000000000002"
+    "999999999999999.9" "-999999999999999.9"
+    "1000000000000000.0" "-1000000000000000.0"
+    "1000000000000000.1" "-1000000000000000.1"))
+
+(define number-writers (list write display write-simple write-shared))
+(define (all? predicate xs)
+  (or (null? xs) (and (predicate (car xs)) (all? predicate (cdr xs)))))
+(define (spelling-failures check)
+  (let loop ((sources spelling-samples))
+    (if (null? sources) '()
+        (let ((source (car sources)))
+          (if (check (string->number source))
+              (loop (cdr sources))
+              (cons source (loop (cdr sources))))))))
+
+(test-equal "all number writers agree across flonum boundaries" '()
+  (spelling-failures
+    (lambda (x)
+      (all? (lambda (writer) (string=? (printed writer x) (number->string x)))
+            number-writers))))
+
+;; eqv? alone is not a portable NaN comparison. Check zero signs explicitly
+;; too, so replacing -0.0 by +0.0 cannot masquerade as a successful round-trip.
+(define (same-number-part? a b)
+  (and (eqv? (exact? a) (exact? b))
+       (or (and (nan? a) (nan? b))
+           (and (eqv? a b)
+                (or (not (and (inexact? a) (zero? a)))
+                    (eqv? (/ 1.0 a) (/ 1.0 b)))))))
+(define (same-number? a b)
+  (and (number? b)
+       (same-number-part? (real-part a) (real-part b))
+       (same-number-part? (imag-part a) (imag-part b))))
+
+(test-equal "written flonums round-trip with exactness and zero signs" '()
+  (spelling-failures
+    (lambda (x)
+      (all? (lambda (writer)
+              (same-number? x (read (open-input-string (printed writer x)))))
+            number-writers))))
+
+(test-equal "converted flonums round-trip with exactness and zero signs" '()
+  (spelling-failures (lambda (x) (same-number? x (string->number (number->string x))))))
+
+(test-equal "nested exponent numbers use the same spelling" #t
+  (let ((datum (list (list 1e21 -1e-5) (vector 1e-5 1e21+1e-7i)))
+        (expected (string-append "((" (number->string 1e21) " "
+                    (number->string -1e-5) ") #(" (number->string 1e-5) " "
+                    (number->string 1e21+1e-7i) "))")))
+    (all? (lambda (writer) (string=? (printed writer datum) expected)) number-writers)))
 
 ;; The infinities and NaN have written forms R7RS §6.2.5 fixes exactly, so
 ;; these are the one place in the file where the spelling is required rather

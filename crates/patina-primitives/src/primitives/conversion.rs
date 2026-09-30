@@ -190,83 +190,11 @@ fn bigint_to_string(n: &BigInt, radix: i64) -> String {
     }
 }
 
-/// Convert a real number to string for `number->string`
-///
-/// R7RS requires number->string to produce a result that, when read back,
-/// produces an equivalent number. For extreme values, we use scientific
-/// notation to ensure this property holds.
-///
-/// Note: Display/write formatting uses `patina_core::debug_format::format_real` instead.
-/// This function differs by handling -0.0 and using scientific notation for extreme values.
+/// Use the same real spelling as datum writers and REPL output (#219).
 fn real_to_string(f: f64) -> String {
-    if f.is_infinite() {
-        if f.is_sign_positive() {
-            "+inf.0".to_string()
-        } else {
-            "-inf.0".to_string()
-        }
-    } else if f.is_nan() {
-        "+nan.0".to_string()
-    } else if f == 0.0 {
-        // Handle zero explicitly (including negative zero)
-        if f.is_sign_negative() {
-            "-0.0".to_string()
-        } else {
-            "0.0".to_string()
-        }
-    } else {
-        let abs_f = f.abs();
-
-        // Use scientific notation for:
-        // - Numbers >= 1e15 (too many digits for decimal notation)
-        // - Numbers < 1e-4 (too many leading zeros)
-        // This matches chibi-scheme behavior
-        if !(1e-4..1e15).contains(&abs_f) {
-            // Format with scientific notation and normalize
-            format_scientific(f)
-        } else if f.fract() == 0.0 {
-            // For whole numbers, ensure .0 suffix to indicate inexactness
-            format!("{:.1}", f)
-        } else {
-            // Use Rust's default formatting for normal range floats
-            format!("{}", f)
-        }
-    }
-}
-
-/// Format a number in scientific notation with R7RS-compatible output
-///
-/// Ensures:
-/// - Explicit + sign on positive exponents (e.g., "1e+15" not "1e15")
-/// - Decimal point in mantissa (e.g., "5.0e-324" not "5e-324")
-fn format_scientific(f: f64) -> String {
-    // Use full precision scientific notation
-    let s = format!("{:e}", f);
-
-    // Parse the result to normalize it
-    if let Some(e_pos) = s.find('e') {
-        let (mantissa, exp_part) = s.split_at(e_pos);
-
-        // Ensure mantissa has a decimal point
-        let mantissa = if !mantissa.contains('.') {
-            format!("{}.0", mantissa)
-        } else {
-            mantissa.to_string()
-        };
-
-        // Ensure exponent has explicit sign
-        let exp_str = &exp_part[1..]; // skip the 'e'
-        let exp_with_sign = if !exp_str.starts_with('-') && !exp_str.starts_with('+') {
-            format!("+{}", exp_str)
-        } else {
-            exp_str.to_string()
-        };
-
-        format!("{}e{}", mantissa, exp_with_sign)
-    } else {
-        // Fallback (shouldn't happen with {:e})
-        s
-    }
+    let mut result = String::new();
+    patina_core::debug_format::format_real(f, &mut result);
+    result
 }
 
 /// Format a numeric TaggedValue as a string (for complex number parts)
