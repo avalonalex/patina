@@ -105,12 +105,8 @@ fn environment_imports(
                 bindings = selected;
             }
             ImportSet::Except { identifiers, .. } => {
-                // Validate against the original set, including repeated names.
-                for name in identifiers {
-                    if !bindings.contains_key(name) {
-                        return Err(missing(name));
-                    }
-                }
+                // Unknown names exclude nothing, as in program/library imports
+                // and on chibi/Gauche (#489, #592). Repeated names are harmless.
                 for name in identifiers {
                     bindings.remove(name);
                 }
