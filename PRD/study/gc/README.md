@@ -3,7 +3,9 @@
 The research record behind [`PRD/GC_PRD.md`](../../GC_PRD.md).
 
 - **Dates:** research on 2026-09-30; design, reviews and follow-up studies on 2026-10-01.
-- **Revision:** `main` at `28a94f8`. The study read and measured it and did not modify it.
+- **Revision:** `main` at `28a94f8`. The study read and measured it and did not modify it. The contract study
+  (`followup/contract/`) also read `PRD/GC_PRD.md` at `f82e8e8` on branch `gc-prd`, a commit that adds only `PRD/`
+  to that revision.
 - **Machine:** every measurement was taken on one machine: Apple M4 Pro (8 performance and 4 efficiency cores),
   24 GiB, macOS 27.2 arm64 with 16 KiB pages, Rust 1.97.1 release builds. The oracles were chibi-scheme 0.12,
   Gauche 0.9.15 and Chez Scheme 10.
@@ -21,7 +23,7 @@ The owner set three goals for a new collector:
 - change Patina's value and object representations freely where that helps;
 - design for a Cranelift JIT.
 
-The owner also asked three follow-up questions:
+The owner also asked four follow-up questions:
 
 1. **Threading model.** Which model should SRFI 18 threads use, and what does the GC owe it? This was answered
    during the research, in `research/threads-*.md`: M:1 green threads now, with the collector's interfaces ready
@@ -30,6 +32,9 @@ The owner also asked three follow-up questions:
    answered after the design, in `followup/parallelism/`.
 3. **Steady state.** What is steady state, what memory contract follows from it, and which heap and stack limits
    should apply? This was answered after the design, in `followup/steady/`.
+4. **The GC contract.** What is the contract between the GC and the rest of the runtime, and how do concurrency and
+   a Cranelift JIT affect it? This was answered on 2026-10-01, after `PRD/GC_PRD.md` was written, in
+   `followup/contract/`.
 
 ## Method
 
@@ -53,9 +58,13 @@ The owner also asked three follow-up questions:
    Appendix C).
 7. **Completeness passes.** Two rounds checked the design for missing obligations (`REVIEW_DISPOSITIONS.md`,
    "Completeness round 1" and "Completeness round 2").
-8. **Follow-up studies** (`followup/`). Parallelism cost: an itemized cost, measurements and prior art, combined in
-   `ANSWER.md`. Steady state: an audit and prior art, combined in `SECTION.md`. Both answers were reviewed before
-   they closed.
+8. **Follow-up studies** (`followup/`). Each answer was reviewed before it closed.
+   - Parallelism cost: an itemized cost, measurements and prior art, combined in `ANSWER.md`.
+   - Steady state: an audit and prior art, combined in `SECTION.md`.
+   - The GC contract: two extractions of the contract, one of the collector as built and one of the PRD's; three
+     impact analyses, for concurrency, a Cranelift JIT and other planned features; an adversarial check, whose 22
+     findings were verified and applied to the notes; and the synthesis, `ANSWER.md`. The gaps in its §4 are
+     rules of the design contract, so it proposes them as amendments to the PRD, with text, rather than as issues.
 9. **Issues.** The observed defects were drafted (`design/ISSUES_DRAFT.md`) and filed after a search for duplicates
    (see below).
 
@@ -79,6 +88,8 @@ Less common labels:
 - **[C]**: cited from a primary source.
 - **[R]**: recalled and not re-verified (`java-hotspot.md`).
 - `whippet-misc.md` uses [src], [doc], [meas] and [inf].
+- `followup/contract/jit.md` uses [cg §x] for a Cranelift fact checked in `research/cranelift-gc.md` §x, and [rev]
+  for one checked only by the design review.
 
 ## Issues filed from the study
 
@@ -237,6 +248,29 @@ Top level:
 - [`prior-art.md`](followup/steady/prior-art.md): how production runtimes define and enforce steady state and
   heap and stack limits.
 
+`followup/contract/`: the contract between the GC and the rest of the runtime, and what concurrency and a
+Cranelift JIT do to it.
+
+- [`ANSWER.md`](followup/contract/ANSWER.md): the synthesis. It sets the contract today against the PRD's, party
+  by party; sorts concurrency by who may touch heap words while a mutator runs; says what a Cranelift JIT relies on
+  and what each GC stage changes in emitted code; lists fourteen gaps (three major), with proposed PRD text; and
+  records the corrections the adversarial check made to the notes below.
+- [`today.md`](followup/contract/today.md): the contract as built, from the code. What today's collector promises
+  (P1–P8), what every other party must do (O1–O17), what enforces each clause, issues #604–#618 by clause, and
+  the clauses nothing enforces.
+- [`prd-contract.md`](followup/contract/prd-contract.md): the contract in `PRD/GC_PRD.md`, by party and direction.
+  The collector's promises (C1–C19); obligations on the VM, JIT code, Rust code, the tree-walker, embedders and
+  anyone adding an object kind; the pluggability seam; the N-mutator rules; and gaps found while extracting.
+- [`concurrency.md`](followup/contract/concurrency.md): eight kinds of concurrency, from M:1 green threads to
+  concurrent relocation. For each: what it keeps, changes and breaks in the contract, its PRD status, its effort
+  and its run-time tax.
+- [`jit.md`](followup/contract/jit.md): the contract seen from a Cranelift JIT, by tier and feature. Covers the
+  Cranelift features needed, optional and avoided; what the shapes the PRD excludes would cost; what today's design
+  would demand of the same JIT; and JIT-specific gaps.
+- [`other.md`](followup/contract/other.md): other planned features against the contract, each with a verdict: FFI,
+  syntax-case, the debugger and hooks, guardians and weak hash tables, a boot image and AOT, delimited
+  continuations and effect handlers, long REPL sessions, and general tail calls.
+
 `probes/`: the retained probe programs.
 
 - [`probes/README.md`](probes/README.md): maps each working path the reports cite to its place in `probes/`, or
@@ -256,6 +290,9 @@ remain as written:
   `design/REVIEW_DISPOSITIONS.md`, where it names the file those drafts planned to rewrite. The file is now
   `PRD/ARCHIVE/GC_STAGE5_PRD.md`. Citations of its content elsewhere point there, with line numbers shifted by its
   12-line banner.
+
+The contract study (`followup/contract/`) cites `PRD/GC_PRD.md` as §n:L, section and line, at `f82e8e8`, before the
+PRD took in the amendments that study proposed. Read those lines at that commit.
 
 ## Not retained
 
