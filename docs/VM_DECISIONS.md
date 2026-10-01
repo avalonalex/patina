@@ -109,7 +109,7 @@ from closure ↔ environment references are reclaimed. `Rc` still owns
 individual heap payloads; the collector breaks cycles by tombstoning dead
 slots at sweep, which drops those `Rc`s.
 
-The VM roots `VmState` (`runtime/gc_roots.rs`), including two members no heap
+The VM roots `VmState` (`runtime/vm_state/gc_roots.rs`), including two members no heap
 scan can reach: the continuation side tables (the heap holds only an opaque
 `VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `HeapIndex`).
 

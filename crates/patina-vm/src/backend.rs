@@ -145,12 +145,7 @@ impl VmBackend {
     /// see the code of finished forms let go (#338). Not an interface.
     #[doc(hidden)]
     pub fn loaded_code_objects(&self) -> usize {
-        let state = self.state.borrow();
-        state
-            .code_store
-            .iter()
-            .filter(|code| !Rc::ptr_eq(code, &state.empty_code))
-            .count()
+        self.state.borrow().loaded_code_objects()
     }
 
     /// How many slots the VM's code store has, holding code or not: what a
@@ -158,7 +153,7 @@ impl VmBackend {
     /// Not an interface.
     #[doc(hidden)]
     pub fn code_store_slots(&self) -> usize {
-        self.state.borrow().code_store.len()
+        self.state.borrow().code_store_slots()
     }
 
     /// Create a new VM backend with a fresh environment and primitive registry.
@@ -176,7 +171,6 @@ impl VmBackend {
         // missed one does not error, it silently takes the `else` branch.
         global_env.heap().borrow_mut().add_feature("patina-vm");
         let mut state = VmState::new(Rc::clone(&global_env));
-        state.fs = fs.clone();
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set
         // (`cadddr` was callable with only `(scheme base)` imported).
@@ -189,13 +183,16 @@ impl VmBackend {
 
         // Set up library loading infrastructure (Rc-shared with VmState)
         let mut lib_registry = LibraryRegistry::with_default_paths();
-        lib_registry.set_fs(fs);
+        lib_registry.set_fs(fs.clone());
         let library_registry = Rc::new(RefCell::new(lib_registry));
         let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
 
         // Share registries with VmState so eval primitives can load libraries
-        state.library_registry = Some(Rc::clone(&library_registry));
-        state.loader_registry = Some(Rc::clone(&loader_registry));
+        state.configure_libraries(
+            fs,
+            Rc::clone(&library_registry),
+            Rc::clone(&loader_registry),
+        );
 
         let mut backend = VmBackend {
             state: RefCell::new(state),
@@ -221,7 +218,7 @@ impl VmBackend {
 
     /// Attach a structured tracer for instruction-level debugging.
     pub fn set_tracer(&self, tracer: Option<crate::tracer::TracerHandle>) {
-        self.state.borrow_mut().tracer = tracer;
+        self.state.borrow_mut().set_tracer(tracer);
     }
 
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
@@ -252,9 +249,9 @@ impl VmBackend {
         // Desugar: TaggedValue → CoreExpr.
         let desugarer = match source_map {
             Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone())
-                .with_fs(self.state.borrow().fs.clone()),
+                .with_fs(self.state.borrow().fs().clone()),
             None => Desugarer::with_env(Rc::clone(&self.global_env))
-                .with_fs(self.state.borrow().fs.clone()),
+                .with_fs(self.state.borrow().fs().clone()),
         };
         let core_expr = desugarer.desugar_with_imports(
             expr,
@@ -272,7 +269,7 @@ impl VmBackend {
         )?;
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
-        let registry = Rc::clone(&self.state.borrow().primitive_registry);
+        let registry = Rc::clone(self.state.borrow().primitive_registry());
         let (top, nested) =
             compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
 
@@ -385,7 +382,7 @@ impl VmBackend {
 
         // Add Scheme loader for .sld files
         loaders.add_evaluating_loader(Box::new(SchemeLibraryLoader::new(
-            self.state.borrow().fs.clone(),
+            self.state.borrow().fs().clone(),
         )));
     }
 
@@ -456,7 +453,7 @@ impl VmBackend {
         let heap = self.global_env.heap().clone();
         let can_load_library =
             |lib_name: &[String]| patina_frontend::cond_expand::library_available(&heap, lib_name);
-        let loader = SchemeLibraryLoader::new(self.state.borrow().fs.clone());
+        let loader = SchemeLibraryLoader::new(self.state.borrow().fs().clone());
         let parsed = loader.parse_inline_form(
             form,
             std::path::Path::new("."),
@@ -486,13 +483,13 @@ impl VmBackend {
             .map_err(|e| VmBackendError::Compile(e.to_string()).with_diagnostic(e.diagnostic()))?;
 
         let desugarer = Desugarer::with_env(Rc::clone(&self.global_env))
-            .with_fs(self.state.borrow().fs.clone());
+            .with_fs(self.state.borrow().fs().clone());
         for tv in parsed {
             let core_expr = desugarer
                 .desugar_tagged(tv, &heap)
                 .map_err(VmBackendError::from)?;
 
-            let registry = Rc::clone(&self.state.borrow().primitive_registry);
+            let registry = Rc::clone(self.state.borrow().primitive_registry());
             let (top, nested) =
                 compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
 
@@ -592,23 +589,18 @@ impl VmBackend {
 
         // A relative `include` in the body resolves beside the `.sld`.
         let desugarer = Desugarer::with_env(lib_env.clone())
-            .with_fs(self.state.borrow().fs.clone())
+            .with_fs(self.state.borrow().fs().clone())
             .with_include_base_of(parsed.source.as_deref());
         let shared_heap = lib_env.heap().clone();
 
         {
             let mut state = self.state.borrow_mut();
-            let saved_globals = state.globals.clone();
-            state.globals = lib_env.clone();
-
-            let body_result = (|| -> Result<(), LibraryError> {
+            state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
                 for tv in &parsed.body {
                     let core_expr = desugarer.desugar_with_imports(
                         *tv,
                         &shared_heap,
-                        |set, env| {
-                            crate::runtime::vm_state::vm_process_import_set(&mut state, set, env)
-                        },
+                        |set, env| crate::runtime::vm_state::vm_process_import_set(state, set, env),
                         |e| {
                             patina_runtime::LibraryError::processing(
                                 parsed.source.as_deref(),
@@ -623,7 +615,7 @@ impl VmBackend {
                         &core_expr,
                         &shared_heap,
                         &lib_env,
-                        &state.primitive_registry,
+                        state.primitive_registry(),
                     )
                     .map_err(|e| {
                         patina_runtime::LibraryError::processing(
@@ -634,7 +626,7 @@ impl VmBackend {
                     })?;
 
                     let top_id = state.load_unit(top, nested);
-                    let result = execute(&mut state, top_id);
+                    let result = execute(state, top_id);
                     state.release_unit_if_unused(top_id);
 
                     result.map_err(|e| {
@@ -647,11 +639,7 @@ impl VmBackend {
                     })?;
                 }
                 Ok(())
-            })();
-
-            // Always restore globals, even on error
-            state.globals = saved_globals;
-            body_result?;
+            })?;
         }
 
         // Step 3: Assemble the library and resolve its exports

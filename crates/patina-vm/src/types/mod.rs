@@ -41,7 +41,7 @@ pub type LabelId = usize; // instruction index (absolute within a CodeObject)
 pub struct CallFrame {
     /// Program counter — index of the next instruction to execute.
     pub pc: usize,
-    /// Offset into `VmState::registers` where this frame's r0 lives.
+    /// Offset into `ExecutionState::registers` where this frame's r0 lives.
     pub register_base: usize,
     /// Number of registers owned by this frame.
     pub num_regs: u16,

@@ -36,7 +36,7 @@ use crate::types::continuation::{
 };
 use patina_core::TaggedValue;
 
-use super::vm_state::VmState;
+use super::VmState;
 
 /// Clear finished compiler temporaries before collection or snapshotting.
 /// Keeping the full-vector tracing contract means no captured snapshot or
@@ -44,7 +44,7 @@ use super::vm_state::VmState;
 /// Delimited snapshots use absolute frame bases but store only their slice.
 #[cold]
 #[inline(never)]
-pub(super) fn retire_registers(
+pub(in crate::runtime) fn retire_registers(
     registers: &mut [TaggedValue],
     frames: &[CallFrame],
     base_at_capture: usize,
@@ -72,7 +72,7 @@ impl GcRoots for VmState {
         // Trace the whole register file after the safe point has retired
         // completed expression temporaries (#423). Continuation snapshots
         // are retired at capture, so they obey the same full-vector contract.
-        visitor.visit_slice(&self.registers);
+        visitor.visit_slice(self.execution.registers());
         visitor.visit_slice(&self.scratch_args);
 
         // A hidden root while it is set: between the stash in `across_reentry`
@@ -86,7 +86,7 @@ impl GcRoots for VmState {
             visitor.visit(v);
         }
 
-        trace_frames(&self.frames, visitor);
+        trace_frames(self.execution.frames(), visitor);
 
         // The constants of every code object still loaded. A form's code stays
         // in the store only while a frame, a captured continuation or a live
@@ -100,9 +100,9 @@ impl GcRoots for VmState {
 
         visitor.visit_env(&self.globals);
 
-        trace_prompts(&self.prompt_stack, visitor);
-        trace_winds(&self.dynamic_winds, visitor);
-        trace_handlers(&self.exception_handlers, visitor);
+        trace_prompts(self.execution.prompts(), visitor);
+        trace_winds(self.execution.winds(), visitor);
+        trace_handlers(self.execution.handlers(), visitor);
 
         // The continuation side tables are deliberately NOT traced here —
         // they are weak; see the module comment and `trace_weak_ids`.

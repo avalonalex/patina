@@ -47,9 +47,9 @@ fn lambda(params: Vec<&str>, body: Vec<CoreExpr>) -> CoreExpr {
 /// Compile `expr` against `state`'s globals and return every instruction
 /// from the top-level and nested code objects.
 fn compile_all_in(state: &VmState, expr: &CoreExpr) -> Vec<Instruction> {
-    let env = state.globals.clone();
+    let env = state.global_env().clone();
     let heap = env.heap().clone();
-    let (top, nested) = compile_with_qq_resolving(expr, &heap, &env, &state.primitive_registry)
+    let (top, nested) = compile_with_qq_resolving(expr, &heap, &env, state.primitive_registry())
         .expect("compile error");
     let mut instrs = top.instructions;
     for co in nested {
@@ -71,9 +71,11 @@ fn compile_all_instructions(expr: &CoreExpr) -> Vec<Instruction> {
 fn state_with_library_binding(name: &'static str, arity: Arity, library: &[&str]) -> VmState {
     let mut state = VmState::new(Rc::new(Environment::new()));
     state.install_primitives();
-    state
-        .globals
-        .define_primitive(name, arity, library.iter().map(|s| s.to_string()).collect());
+    state.global_env().define_primitive(
+        name,
+        arity,
+        library.iter().map(|s| s.to_string()).collect(),
+    );
     state
 }
 
@@ -480,7 +482,7 @@ fn state_with_control_forms() -> VmState {
         Arity::Exact(2),
         &["patina", "internal", "control"],
     );
-    state.globals.define_primitive(
+    state.global_env().define_primitive(
         "dynamic-wind",
         Arity::Exact(3),
         vec!["patina".into(), "internal".into(), "control".into()],
@@ -534,10 +536,10 @@ fn control_forms_follow_the_binding_under_another_name() {
     // What a renamed import, or the alias early binding gives a library
     // template's reference, looks like to the compiler.
     let state = state_with_control_forms();
-    let cwv = state.globals.get("call-with-values").unwrap();
-    let dw = state.globals.get("dynamic-wind").unwrap();
-    state.globals.define("receive-values", cwv);
-    state.globals.define("wind", dw);
+    let cwv = state.global_env().get("call-with-values").unwrap();
+    let dw = state.global_env().get("dynamic-wind").unwrap();
+    state.global_env().define("receive-values", cwv);
+    state.global_env().define("wind", dw);
     let instrs = compile_all_in(&state, &cwv_call("receive-values"));
     assert_eq!(
         guarded(&instrs, ControlForm::CallWithValues),
@@ -553,9 +555,9 @@ fn control_forms_spelled_so_but_bound_elsewhere_are_ordinary_calls() {
     // The program's own definitions: the name is the form's, the binding is
     // not, so the site calls what it is bound to.
     let state = state_with_control_forms();
-    let list = state.globals.get("list").unwrap();
-    state.globals.define("call-with-values", list);
-    state.globals.define("dynamic-wind", list);
+    let list = state.global_env().get("list").unwrap();
+    state.global_env().define("call-with-values", list);
+    state.global_env().define("dynamic-wind", list);
     for expr in [cwv_call("call-with-values"), dw_call("dynamic-wind")] {
         let instrs = compile_all_in(&state, &expr);
         assert_eq!(

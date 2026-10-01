@@ -426,7 +426,7 @@ pub enum Instruction {
     TailCallWithValues { consumer: Reg, producer_result: Reg },
 
     // ── dynamic-wind (instruction-level) ────────────────────────────────────
-    /// Push a dynamic-wind record onto `VmState::dynamic_winds`.
+    /// Push a dynamic-wind record onto `ExecutionState::dynamic_winds`.
     ///
     /// The only site that *mints* a record (`DynamicWindRecord::new`, which is
     /// where its `id` comes from). Head-position `dynamic-wind` compiles to
@@ -440,7 +440,7 @@ pub enum Instruction {
     /// depth, and it carries none.
     PushWind { before: Reg, after: Reg },
 
-    /// Pop the top dynamic-wind record from `VmState::dynamic_winds`.
+    /// Pop the top dynamic-wind record from `ExecutionState::dynamic_winds`.
     /// Does NOT call the after-thunk — that is handled by a separate `Call`
     /// instruction emitted after `PopWind` in the codegen sequence.
     PopWind,

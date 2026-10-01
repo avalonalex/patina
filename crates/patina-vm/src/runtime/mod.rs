@@ -7,7 +7,7 @@
 //! See `docs/VM_RUNTIME.md` for the full specification.
 
 pub(crate) mod control;
-mod gc_roots;
+mod execution_state;
 pub mod vm_state;
 
-pub use vm_state::{VmState, execute, execute_nested};
+pub use vm_state::{VmState, execute};

@@ -109,16 +109,15 @@
 //! are `control_flow_matrix.rs`, `escape_from_primitive.rs`, and the Scheme
 //! control suites (including their existing backend-specific expectations).
 
+use super::execution_state::push_abort_stub;
 use super::vm_state::{
     VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
+use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
-use crate::types::continuation::{
-    ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
-};
+use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
-use crate::types::{CallFrame, CodeObjectId};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
@@ -147,17 +146,12 @@ fn call_closure_resolved(
 
     check_arity(code.arity, args.len())?;
 
-    let base = state.alloc_registers(code.num_regs);
-    store_args_in_window(state, base, code.arity, args);
+    let arity = code.arity;
+    let base = state
+        .execution
+        .push_frame(code, closure_heap_index(closure_val), return_reg);
+    store_args_in_window(state, base, arity, args);
 
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: code.num_regs,
-        closure: closure_heap_index(closure_val),
-        return_reg,
-        code,
-    });
     Ok(())
 }
 
@@ -184,36 +178,33 @@ pub(super) fn call_closure_from_regs(
 
     check_arity(code.arity, arg_regs.len())?;
 
-    let base = state.alloc_registers(code.num_regs);
-    if let Arity::Variadic(fixed) = &code.arity {
+    let arity = code.arity;
+    let base = state
+        .execution
+        .push_frame(code, closure_heap_index(closure_val), return_reg);
+    if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
-            state.registers[base + i] = state.registers[caller_base + r as usize];
+            state.execution.registers_mut()[base + i] =
+                state.execution.registers()[caller_base + r as usize];
         }
         // Cons the rest list straight from the caller's registers — no
         // staging Vec. Variadic calls are hot in practice: `map` and every
         // rest-arg stdlib procedure land here per call.
-        let regs = &state.registers;
-        let rest = state.heap.borrow_mut().list_from_iter(
+        let regs = state.execution.registers();
+        let rest = state.heap().borrow_mut().list_from_iter(
             arg_regs[fixed..]
                 .iter()
                 .map(|&r| regs[caller_base + r as usize]),
         );
-        state.registers[base + fixed] = rest;
+        state.execution.registers_mut()[base + fixed] = rest;
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
-            state.registers[base + i] = state.registers[caller_base + r as usize];
+            state.execution.registers_mut()[base + i] =
+                state.execution.registers()[caller_base + r as usize];
         }
     }
 
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: code.num_regs,
-        closure: closure_heap_index(closure_val),
-        return_reg,
-        code,
-    });
     Ok(())
 }
 
@@ -227,7 +218,7 @@ pub(super) fn call_closure_from_regs(
 /// Read-only type probe. Does not alter any VM stack or invoke Scheme.
 fn resolve_closure(state: &VmState, val: TaggedValue) -> Result<CodeObjectId, VmError> {
     state
-        .heap
+        .heap()
         .borrow()
         .get_vm_closure_code_id(val)
         .map(CodeObjectId)
@@ -328,7 +319,7 @@ fn apply_call_once(
 /// The caller must keep these values protected by the entry rooting contract.
 fn spread_apply_tail(state: &VmState, last: TaggedValue) -> Result<Vec<TaggedValue>, VmError> {
     state
-        .heap
+        .heap()
         .borrow()
         .list_to_vec(last)
         .ok_or_else(|| VmError::Runtime {
@@ -389,9 +380,9 @@ pub(super) fn call_any(
     args: &[TaggedValue],
     return_reg: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
-    let depth_before = state.frames.len();
+    let depth_before = state.execution.frames().len();
     call_value(state, func_val, args, return_reg)?;
-    if state.frames.len() != depth_before {
+    if state.execution.frames().len() != depth_before {
         return Ok(None);
     }
     Ok(Some(state.reg(return_reg)))
@@ -413,7 +404,7 @@ fn try_call_parameter(
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Option<Result<TaggedValue, VmError>> {
-    let heap = state.heap.borrow();
+    let heap = state.heap().borrow();
     let (values, _converter) = heap.get_parameter(func_val)?;
     drop(heap);
     if !args.is_empty() {
@@ -472,16 +463,19 @@ fn check_arity(arity: Arity, n: usize) -> Result<(), VmError> {
 fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals: &[TaggedValue]) {
     if let Arity::Variadic(fixed) = arity {
         let fixed = fixed as usize;
-        for (dst, &val) in state.registers[base..base + fixed].iter_mut().zip(arg_vals) {
+        for (dst, &val) in state.execution.registers_mut()[base..base + fixed]
+            .iter_mut()
+            .zip(arg_vals)
+        {
             *dst = val;
         }
         let rest = state
-            .heap
+            .heap()
             .borrow_mut()
             .list_from_iter(arg_vals[fixed..].iter().copied());
-        state.registers[base + fixed] = rest;
+        state.execution.registers_mut()[base + fixed] = rest;
     } else {
-        for (dst, &val) in state.registers[base..base + arg_vals.len()]
+        for (dst, &val) in state.execution.registers_mut()[base..base + arg_vals.len()]
             .iter_mut()
             .zip(arg_vals)
         {
@@ -500,7 +494,7 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
 /// Reads the heap only; returns detached values and changes none of the five
 /// dynamic components. Protect the returned vector until its consumer runs.
 pub(super) fn unpack_values(state: &VmState, primary: TaggedValue) -> Vec<TaggedValue> {
-    match state.heap.borrow().get_values_as_tagged(primary) {
+    match state.heap().borrow().get_values_as_tagged(primary) {
         Some(vals) => vals,
         None => vec![primary],
     }
@@ -556,15 +550,8 @@ fn handle_control_primitive(
             // along with the frame, rather than a Rust frame it cannot
             // (issue #157, and PR #156's move for a jump's wind thunks).
             let code = value_wind_stub(state)?;
-            let base = state.alloc_registers(value_wind::NUM_REGS);
-            state.frames.push(CallFrame {
-                pc: 0,
-                register_base: base,
-                num_regs: value_wind::NUM_REGS,
-                closure: None,
-                return_reg: dst,
-                code,
-            });
+            let base = state.execution.push_frame(code, None, dst);
+
             // Through `set_reg_at`, not the raw slice: the frame is already
             // pushed, so `base` *is* `frame_base()`, and the debug assert
             // keeps that machine-checked if these writes are ever moved above
@@ -589,7 +576,7 @@ fn handle_control_primitive(
                 // No tag: use a fresh default tag (not ideal but functional for A6)
                 use patina_core::cps_expr::PromptTag;
                 state
-                    .heap
+                    .heap()
                     .borrow_mut()
                     .alloc_prompt_tag(std::rc::Rc::new(PromptTag::new("default")))
             };
@@ -598,15 +585,7 @@ fn handle_control_primitive(
             } else {
                 TaggedValue::FALSE
             };
-            let prompt_idx = state.prompt_stack.len();
-            state.prompt_stack.push(PromptFrame {
-                tag,
-                stack_depth: state.frames.len(),
-                dynamic_wind_depth: state.dynamic_winds.len(),
-                exception_handler_depth: state.exception_handlers.len(),
-                handler,
-                dst,
-            });
+            let prompt_idx = state.execution.push_prompt(tag, handler, dst);
             // Anything past the handler goes to the body, as Racket's does.
             // These were dropped on the floor until the review of #175 — a
             // one-argument body was called with none.
@@ -629,7 +608,7 @@ fn handle_control_primitive(
                 // and a prompt left above ours is what `pop()` would take,
                 // closing someone else's and leaving this one live for the
                 // next abort to land on.
-                state.prompt_stack.truncate(prompt_idx);
+                state.execution.close_prompts(prompt_idx);
                 state.set_reg(dst, result);
             }
         }
@@ -673,17 +652,7 @@ fn handle_control_primitive(
             // iteration for the life of its frame (296 MB at 160k).
             state.set_reg(dst, TaggedValue::NULL);
             // Capture a full continuation: snapshot of entire current state
-            let cont = VmContinuation {
-                frames: state.frames.clone(),
-                dynamic_winds: state.dynamic_winds.clone(),
-                prompt_stack: state.prompt_stack.clone(),
-                exception_handlers: state.exception_handlers.clone(),
-                registers: state.registers.clone(),
-                deliver_reg: dst,
-                exit_status: None,
-                abort_landing: false,
-                reentry: captured_reentry(state),
-            };
+            let cont = state.execution.capture_full(dst, captured_reentry(state));
             let cont_tv = state.alloc_vm_continuation(cont);
             // Call proc with the continuation object.
             // Proc could be a primitive or a VM closure.
@@ -731,7 +700,7 @@ fn handle_control_primitive(
             // shows it, the tree-walker does the same). There is no side
             // channel: a register-only protocol cannot go stale when a
             // `values` call is discarded.
-            let packed = state.heap.borrow_mut().values_from(args.to_vec());
+            let packed = state.heap().borrow_mut().values_from(args.to_vec());
             state.set_reg(dst, packed);
         }
 
@@ -748,22 +717,15 @@ fn handle_control_primitive(
                 });
             }
             let obj = args[0];
-            let cell = state.heap.borrow().get_promise(obj);
+            let cell = state.heap().borrow().get_promise(obj);
             let state_now = cell.as_deref().map(|cell| *cell.borrow());
             match state_now {
                 None => state.set_reg(dst, obj),
                 Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
-                    let base = state.alloc_registers(force_step::NUM_REGS);
-                    state.frames.push(CallFrame {
-                        pc: 0,
-                        register_base: base,
-                        num_regs: force_step::NUM_REGS,
-                        closure: None,
-                        return_reg: dst,
-                        code,
-                    });
+                    let base = state.execution.push_frame(code, None, dst);
+
                     state.set_reg_at(base, force_step::PROMISE, obj);
                     state.set_reg_at(base, force_step::THUNK, thunk);
                 }
@@ -786,15 +748,8 @@ fn handle_control_primitive(
             // come back through the consumer: a producer returning by
             // `(k 1 2)` answered `#<procedure>`.
             let code = value_cwv_stub(state)?;
-            let base = state.alloc_registers(value_cwv::NUM_REGS);
-            state.frames.push(CallFrame {
-                pc: 0,
-                register_base: base,
-                num_regs: value_cwv::NUM_REGS,
-                closure: None,
-                return_reg: dst,
-                code,
-            });
+            let base = state.execution.push_frame(code, None, dst);
+
             state.set_reg_at(base, value_cwv::PRODUCER, args[0]);
             state.set_reg_at(base, value_cwv::CONSUMER, args[1]);
         }
@@ -832,7 +787,7 @@ fn handle_control_primitive(
             // `(call/cc (lambda (k) (with-exception-handler k thunk)))` is
             // R7RS's idiom for capturing a raised object.
             {
-                let heap = state.heap.borrow();
+                let heap = state.heap().borrow();
                 if !heap.is_callable(handler_proc) {
                     return Err(VmError::TypeError {
                         message: "with-exception-handler: first argument must be a procedure"
@@ -851,17 +806,13 @@ fn handle_control_primitive(
             // popped when the thunk returns (via pop_exception_handlers) or when
             // raise invokes it. It records no wind depth: a raise does not
             // unwind, so there is nothing to unwind *to*.
-            let handler_index = state.exception_handlers.len();
-            state.exception_handlers.push(ExceptionHandler {
-                handler: handler_proc,
-                stack_depth: state.frames.len(),
-            });
+            let handler_index = state.execution.push_handler(handler_proc);
 
             // A frameless result sends no Return to sweep this extent. Close
             // by the saved index: re-entry can leave entries above our own.
             // On an error/transfer, leave cleanup to the owning dispatch loop.
             if let Some(result) = call_any(state, thunk, &[], dst)? {
-                state.exception_handlers.truncate(handler_index);
+                state.execution.close_handlers(handler_index);
                 state.set_reg(dst, result);
             }
         }
@@ -886,19 +837,19 @@ fn handle_control_primitive(
             // requirement. A non-string is displayed instead of refused; see
             // the `error` primitive in patina-primitives for why.
             let message = {
-                let as_string = state.heap.borrow().get_string_contents(args[0]);
+                let as_string = state.heap().borrow().get_string_contents(args[0]);
                 match as_string {
                     Some(s) => s,
                     None => patina_primitives::primitives::io::datum_writer::format_display_tagged(
                         args[0],
-                        &state.heap,
+                        state.heap(),
                     ),
                 }
             };
             let irritants = args[1..].to_vec();
 
             // Create exception object on heap
-            let exception_tv = state.heap.borrow_mut().alloc_exception(
+            let exception_tv = state.heap().borrow_mut().alloc_exception(
                 patina_core::ExceptionKind::Error,
                 message,
                 irritants,
@@ -961,7 +912,7 @@ pub(super) fn vm_raise_value(
     dst: u16,
     continuable: bool,
 ) -> Result<(), VmError> {
-    if let Some(handler_entry) = state.exception_handlers.pop() {
+    if let Some(handler_entry) = state.execution.pop_handler() {
         // The wind stack is left exactly as the raise found it. R7RS 6.11
         // calls the handler "in the dynamic environment of the call to
         // `raise`, except that the current exception handler is the outer
@@ -999,17 +950,18 @@ pub(super) fn vm_raise_value(
         // own depth makes the entry go when the resumed region does, which is
         // what Guile answers.
         let floor = state
-            .prompt_stack
+            .execution
+            .prompts()
             .last()
             .map_or(handler_entry.stack_depth, |prompt| {
                 handler_entry.stack_depth.max(prompt.stack_depth)
             });
-        let below = state.frames.len().saturating_sub(floor);
+        let below = state.execution.frames().len().saturating_sub(floor);
         let base = push_stub_frame(state, code, raise_step::NUM_REGS);
         // `push_stub_frame` leaves `return_reg` at 0, which is right for the
         // stubs that deliver their own value. This one returns through the
         // ordinary `Return`, so it needs the raise's own destination.
-        state.frames.last_mut().expect("just pushed").return_reg = dst;
+        state.execution.set_return_reg(dst);
         state.set_reg_at(base, raise_step::HANDLER, handler_entry.handler);
         state.set_reg_at(base, raise_step::EXCEPTION, exception);
         state.set_reg_at(
@@ -1026,7 +978,7 @@ pub(super) fn vm_raise_value(
     } else {
         // No handler — format and propagate as Rust error
         use patina_primitives::primitives::io::datum_writer::format_display_tagged;
-        let display = format_display_tagged(exception, &state.heap);
+        let display = format_display_tagged(exception, state.heap());
         // Deliberately the same wording whether or not the raise was
         // continuable — the variant's `Display` supplies it. Continuability is
         // an implementation detail once nothing handles it, and since
@@ -1131,13 +1083,7 @@ pub(super) fn classify_error(err: &VmError) -> (patina_core::ExceptionKind, Stri
 /// Use only after normal value delivery or full-jump arrival, never merely
 /// because a tail call popped a frame. Mutates only the prompt stack.
 fn pop_resolved_prompts(state: &mut VmState) {
-    while let Some(pf) = state.prompt_stack.last() {
-        if pf.stack_depth >= state.frames.len() {
-            state.prompt_stack.pop();
-        } else {
-            break;
-        }
-    }
+    state.execution.pop_resolved_prompts();
 }
 
 /// Close the extents keyed on frames that are no longer on the stack. Called
@@ -1178,7 +1124,7 @@ fn pop_resolved_prompts(state: &mut VmState) {
 /// transfer. Pops resolved prompts/handlers except at the driver exit depth;
 /// leaves frames, registers and winds untouched.
 pub(super) fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) {
-    if state.frames.len() == exit_depth || state.frames.is_empty() {
+    if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
         return;
     }
     pop_resolved_prompts(state);
@@ -1192,13 +1138,7 @@ pub(super) fn pop_resolved_extents(state: &mut VmState, exit_depth: usize) {
 /// Requires a completed thunk return at a depth the owning driver may sweep.
 /// Mutates only the handler stack; no Scheme call or wind traversal.
 fn pop_exception_handlers(state: &mut VmState) {
-    while let Some(eh) = state.exception_handlers.last() {
-        if eh.stack_depth >= state.frames.len() {
-            state.exception_handlers.pop();
-        } else {
-            break;
-        }
-    }
+    state.execution.pop_resolved_handlers();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1268,13 +1208,13 @@ pub(super) fn step_wind_jump(
         .ok_or_else(|| VmError::TypeError {
             message: "continuation jump: not a full continuation".into(),
         })?;
-    let step = next_wind_step(&state.dynamic_winds, &cc.dynamic_winds, |r| r.id);
+    let step = next_wind_step(state.execution.winds(), &cc.dynamic_winds, |r| r.id);
 
     // Leaving an extent: pop first, then run its after-thunk.
     if step == WindStep::Exit {
         let record = state
-            .dynamic_winds
-            .pop()
+            .execution
+            .pop_wind()
             .expect("longer than its own prefix");
         return push_wind_step(
             state,
@@ -1334,11 +1274,7 @@ pub(super) fn step_wind_jump(
         .take_while(|(captured, active)| captured == active)
         .count();
     state.reentry_kept = (kept == cc.reentry.len() && kept < state.reentry.len()).then_some(kept);
-    state.registers = cc.registers.clone();
-    state.frames = cc.frames.clone();
-    state.dynamic_winds = cc.dynamic_winds.clone();
-    state.prompt_stack = cc.prompt_stack.clone();
-    state.exception_handlers = cc.exception_handlers.clone();
+    state.execution.restore(&cc);
     // A snapshot can carry a prompt whose body is already finished, and this
     // is the one moment that can tell (issue #176).
     //
@@ -1361,9 +1297,9 @@ pub(super) fn step_wind_jump(
     pop_resolved_prompts(state);
     // Deliver into `deliver_reg` of the top frame. Any `base` the caller
     // hoisted is stale here — the whole register file was just replaced.
-    if let Some(top) = state.frames.last() {
+    if let Some(top) = state.execution.frames().last() {
         let top_base = top.register_base;
-        state.registers[top_base + cc.deliver_reg as usize] = value;
+        state.execution.registers_mut()[top_base + cc.deliver_reg as usize] = value;
     }
     Ok(())
 }
@@ -1384,13 +1320,15 @@ pub(super) fn step_wind_jump(
 pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
     let stub = state.wind_jump_code?;
     state
-        .frames
+        .execution
+        .frames()
         .iter()
         .rev()
         .filter(|frame| frame.code.id == stub)
         .find_map(|frame| {
             let target = *state
-                .registers
+                .execution
+                .registers()
                 .get(frame.register_base + wind_step::TARGET as usize)?;
             state.get_vm_continuation(target)?.exit_status
         })
@@ -1457,14 +1395,7 @@ fn push_wind_step(
 /// Requires the wind thunk's current frame depth. Replaces only handlers,
 /// clamping their saved depths to the live stack; does not call Scheme.
 fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
-    let depth = state.frames.len();
-    state.exception_handlers.clear();
-    state
-        .exception_handlers
-        .extend(handlers.iter().map(|h| ExceptionHandler {
-            handler: h.handler,
-            stack_depth: h.stack_depth.min(depth),
-        }));
+    state.execution.install_thunk_handlers(handlers);
 }
 
 /// A code object the runtime builds rather than compiles, memoised in `slot`.
@@ -1542,16 +1473,8 @@ fn runtime_stub(
 /// frame/window, initially returning to r0; caller fills operands before yielding.
 /// Does not change winds, prompts or handlers.
 fn push_stub_frame(state: &mut VmState, code: Rc<CodeObject>, num_regs: u16) -> usize {
-    let base = state.alloc_registers(num_regs);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs,
-        closure: None,
-        return_reg: 0,
-        code,
-    });
-    base
+    debug_assert_eq!(num_regs, code.num_regs);
+    state.execution.push_frame(code, None, 0)
 }
 
 /// The one-instruction code object every wind step's frame runs.
@@ -1830,7 +1753,7 @@ fn set_resume_call(state: &mut VmState, base: usize, call: ResumeCall) {
             state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
         }
     } else {
-        let list = state.heap.borrow_mut().list_from_iter(args);
+        let list = state.heap().borrow_mut().list_from_iter(args);
         state.set_reg_at(base, resume_step::ARGS, list);
     }
 }
@@ -1846,7 +1769,7 @@ fn resumable_index(state: &VmState, prim: &Procedure) -> Option<usize> {
     else {
         return None;
     };
-    let registry = &state.primitive_registry;
+    let registry = state.primitive_registry();
     let index = registry.resolve_index_cached(qualified_name, registry_index)?;
     registry.resumable(index).map(|_| index)
 }
@@ -1859,10 +1782,10 @@ fn parameter_set_call(
     func_val: TaggedValue,
     args: &[TaggedValue],
 ) -> Option<usize> {
-    if args.len() != 1 || !state.heap.borrow().is_parameter(func_val) {
+    if args.len() != 1 || !state.heap().borrow().is_parameter(func_val) {
         return None;
     }
-    state.parameter_set
+    state.parameter_set()
 }
 
 fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
@@ -1922,7 +1845,7 @@ fn vm_step(
             // a raise in a library body can reach a handler of the program's
             // that escapes. The frames every caller is about to push onto or
             // rewrite are then gone (#482).
-            let depth_before = state.frames.len();
+            let depth_before = state.execution.frames().len();
             let callee = across_reentry(
                 state,
                 depth_before,
@@ -1954,7 +1877,7 @@ fn start_resumable(
     args: &[TaggedValue],
     dst: u16,
 ) -> Result<(), VmError> {
-    let registry = Rc::clone(&state.primitive_registry);
+    let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
@@ -1982,19 +1905,19 @@ fn tail_start_resumable(
     args: &[TaggedValue],
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    let registry = Rc::clone(&state.primitive_registry);
+    let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
     // Taken, `Step::Eval`'s expansion included, before the frame is popped:
     // the expander can load a library, which runs code of its own.
     let step = vm_step(state, registry.start(index, args, &ctx))?;
-    let frame = state.frames.pop().expect("tail call with empty stack");
+    let frame = state.execution.pop_frame();
     let return_reg = frame.return_reg;
-    state.free_top_registers(frame.register_base);
+
     match step {
         VmStep::Done(value) => {
-            if state.frames.len() == exit_depth {
+            if state.execution.frames().len() == exit_depth {
                 return Ok(Some(value));
             }
             state.set_reg(return_reg, value);
@@ -2021,15 +1944,8 @@ fn push_resume_frame(
     return_reg: u16,
 ) -> Result<(), VmError> {
     let code = resume_stub(state, call.args.len())?;
-    let base = state.alloc_registers(resume_step::NUM_REGS);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: resume_step::NUM_REGS,
-        closure: None,
-        return_reg,
-        code,
-    });
+    let base = state.execution.push_frame(code, None, return_reg);
+
     state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
     set_resume_call(state, base, call);
     Ok(())
@@ -2058,7 +1974,7 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
     }
     let kept = state.reg_at(base, resume_step::STATE);
     let result = state.reg_at(base, resume_step::RESULT);
-    let registry = Rc::clone(&state.primitive_registry);
+    let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
@@ -2069,9 +1985,7 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
             // argument count; the loop picks up a changed code object.
             let code = resume_stub(state, call.args.len())?;
             set_resume_call(state, base, call);
-            let frame = state.frames.last_mut().expect("the stub frame");
-            frame.code = code;
-            frame.pc = 0;
+            state.execution.restart_stub(code);
         }
     }
     Ok(())
@@ -2136,7 +2050,7 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
     let promise = state.reg_at(base, force_step::PROMISE);
     let result = state.reg_at(base, force_step::RESULT);
     let cell = state
-        .heap
+        .heap()
         .borrow()
         .get_promise(promise)
         .ok_or_else(|| VmError::Runtime {
@@ -2148,12 +2062,16 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
         // this thunk's result is dropped (R7RS 7.3, "unless promise-done?").
         PromiseState::Forced(value) => Some(value),
         PromiseState::Delayed(_) => {
-            if state.heap.borrow().is_promise(result) {
+            if state.heap().borrow().is_promise(result) {
                 // `delay-force`: this promise takes the other's state, and the
                 // other shares this one's, so either forced later sees one
                 // value (`Heap::promise_update`).
-                state.heap.borrow_mut().promise_update(promise, result);
-                let cell = state.heap.borrow().get_promise(promise).expect("still one");
+                state.heap().borrow_mut().promise_update(promise, result);
+                let cell = state
+                    .heap()
+                    .borrow()
+                    .get_promise(promise)
+                    .expect("still one");
                 let next = *cell.borrow();
                 match next {
                     PromiseState::Forced(value) => Some(value),
@@ -2172,7 +2090,7 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
         Some(value) => state.set_reg_at(base, force_step::RESULT, value),
         // Not done: round again from the `Call`, in this same frame, so a
         // chain of `delay-force`s runs in constant space.
-        None => state.frames.last_mut().expect("the stub frame").pc = 0,
+        None => state.execution.set_pc(0),
     }
     Ok(())
 }
@@ -2187,10 +2105,10 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
 /// Reads handlers and clones their shared snapshot; leaves all dynamic
 /// components unchanged. The returned handlers must be rooted before a safe point.
 pub(super) fn captured_handlers(state: &VmState) -> Rc<[ExceptionHandler]> {
-    if state.exception_handlers.is_empty() {
+    if state.execution.handlers().is_empty() {
         return EMPTY_HANDLERS.with(Rc::clone);
     }
-    Rc::from(state.exception_handlers.as_slice())
+    Rc::from(state.execution.handlers())
 }
 
 thread_local! {
@@ -2286,7 +2204,7 @@ pub(super) fn across_reentry<T>(
     // depth test stays as the rule it always was, for a stack cut below the
     // boundary by a route that is not an arrival.
     let left = state.reentry_kept.is_some_and(|kept| kept <= level);
-    if left || state.frames.len() < depth_before {
+    if left || state.execution.frames().len() < depth_before {
         // Any error here belongs to a call that is being abandoned; what
         // resumes is the continuation's value, not this one's outcome. The
         // loop that saw it arrive has usually parked it already.
@@ -2335,12 +2253,12 @@ impl Reentry {
 impl patina_primitives::ApplyContext for VmApplyContext {
     fn heap(&self) -> &SharedHeap {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
-        unsafe { &(*self.state).heap }
+        unsafe { (*self.state).heap() }
     }
 
     fn fs(&self) -> &Arc<dyn patina_core::FileSystem> {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
-        unsafe { &(*self.state).fs }
+        unsafe { (*self.state).fs() }
     }
 
     fn apply_proc(
@@ -2350,7 +2268,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         // SAFETY: we have exclusive access (see struct doc comment).
         let state = unsafe { &mut *self.state };
-        let depth_before = state.frames.len();
+        let depth_before = state.execution.frames().len();
         across_reentry(
             state,
             depth_before,
@@ -2366,7 +2284,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         env: &Rc<patina_core::environment::Environment>,
     ) -> Result<TaggedValue, patina_primitives::EvalError> {
         let state = unsafe { &mut *self.state };
-        let depth_before = state.frames.len();
+        let depth_before = state.execution.frames().len();
         across_reentry(state, depth_before, |s| vm_eval_expr(s, expr, env), |v| *v)
             .map_err(Reentry::into_eval_error)
     }
@@ -2378,7 +2296,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         let state = unsafe { &mut *self.state };
         // A library is not a `TaggedValue`; an escape out of a load resumes
         // with whatever the continuation carried, not with the library.
-        let depth_before = state.frames.len();
+        let depth_before = state.execution.frames().len();
         across_reentry(
             state,
             depth_before,
@@ -2398,7 +2316,7 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 
     fn interaction_environment(&self) -> Rc<patina_core::environment::Environment> {
         // SAFETY: pointer is valid for the lifetime of the primitive call.
-        unsafe { (*self.state).globals.clone() }
+        unsafe { (*self.state).global_env().clone() }
     }
 }
 
@@ -2415,16 +2333,10 @@ fn run_apply_proc(
     proc: TaggedValue,
     args: &[TaggedValue],
 ) -> Result<TaggedValue, VmError> {
-    let depth_before = state.frames.len();
+    let depth_before = state.execution.frames().len();
 
     // Use a scratch return register beyond the current frame's live registers.
-    let return_reg = state.frames.last().map(|f| f.num_regs).unwrap_or(0);
-    if let Some(f) = state.frames.last() {
-        let needed = f.register_base + return_reg as usize + 1;
-        if state.registers.len() < needed {
-            state.registers.resize(needed, TaggedValue::UNSPECIFIED);
-        }
-    }
+    let return_reg = state.execution.scratch_return_reg();
 
     if let Some(result) = call_any(state, proc, args, return_reg)? {
         // Primitive — returned immediately.
@@ -2524,7 +2436,7 @@ pub(crate) const VM_INTERCEPTED_PRIMITIVES: &[(&str, VmControlPrimitive)] = &[
 ///
 /// Read-only callee classification. Does not invoke Scheme or change VM state.
 fn vm_control_primitive(state: &VmState, func_val: TaggedValue) -> Option<VmControlPrimitive> {
-    let proc = state.heap.borrow().get_procedure(func_val)?;
+    let proc = state.heap().borrow().get_procedure(func_val)?;
     let Procedure::Primitive { qualified_name, .. } = proc.as_ref() else {
         return None;
     };
@@ -2600,7 +2512,8 @@ fn try_invoke_full_continuation(
 /// mutation; consume it before calling arbitrary Scheme.
 pub(super) fn find_prompt(state: &VmState, tag: TaggedValue) -> Result<usize, VmError> {
     state
-        .prompt_stack
+        .execution
+        .prompts()
         .iter()
         .rposition(|p| p.tag == tag)
         .ok_or(VmError::NoMatchingPrompt)
@@ -2631,7 +2544,7 @@ pub(super) fn abort_to_prompt(
     val: TaggedValue,
     dst: u16,
 ) -> VmError {
-    let prompt = state.prompt_stack[prompt_idx].clone();
+    let prompt = state.execution.prompts()[prompt_idx].clone();
     // `dst` is this abort call's own destination — dead as a result slot, and
     // for that reason the hole the captured continuation resumes into.
     let cont = capture_delimited(state, prompt_idx, dst);
@@ -2658,12 +2571,12 @@ pub(super) fn abort_to_prompt(
         Ok(code) => code,
         Err(e) => return e,
     };
-    let landing_depth = prompt.stack_depth.min(state.frames.len());
-    let wind_depth = prompt.dynamic_wind_depth.min(state.dynamic_winds.len());
+    let landing_depth = prompt.stack_depth.min(state.execution.frames().len());
+    let wind_depth = prompt.dynamic_wind_depth.min(state.execution.winds().len());
     let handler_depth = prompt
         .exception_handler_depth
-        .min(state.exception_handlers.len());
-    let registers_end = match state.frames[..landing_depth].last() {
+        .min(state.execution.handlers().len());
+    let registers_end = match state.execution.frames()[..landing_depth].last() {
         Some(top) => top.register_base + top.num_regs as usize,
         None => 0,
     };
@@ -2675,28 +2588,19 @@ pub(super) fn abort_to_prompt(
     // frame, plus a heap continuation and a weak-store entry, plus a second
     // copy on arrival: ~20% on a loop of 300-frame aborts, measured
     // interleaved against the previous release.
-    if state.dynamic_winds.len() == wind_depth {
-        state.frames.truncate(landing_depth);
-        state.registers.truncate(registers_end);
-        state.prompt_stack.truncate(prompt_idx);
-        state.exception_handlers.truncate(handler_depth);
-        push_abort_stub(
-            &mut state.frames,
-            &mut state.registers,
-            stub,
-            prompt.dst,
-            prompt.handler,
-            val,
-            cont_tv,
-        );
+    if state.execution.winds().len() == wind_depth {
+        state.execution.truncate_to_prompt(prompt_idx);
+        state
+            .execution
+            .push_abort_stub(stub, prompt.dst, prompt.handler, val, cont_tv);
         return park_transfer(state, val);
     }
 
     // Otherwise the same landing has to be described rather than applied: the
     // travel needs the live wind stack intact to know what it is leaving, so
     // the machine cannot be cut back until it arrives.
-    let mut frames = state.frames[..landing_depth].to_vec();
-    let mut registers = state.registers[..registers_end].to_vec();
+    let mut frames = state.execution.frames()[..landing_depth].to_vec();
+    let mut registers = state.execution.registers()[..registers_end].to_vec();
     push_abort_stub(
         &mut frames,
         &mut registers,
@@ -2709,9 +2613,9 @@ pub(super) fn abort_to_prompt(
     let target = VmContinuation {
         frames,
         registers,
-        dynamic_winds: state.dynamic_winds[..wind_depth].to_vec(),
-        prompt_stack: state.prompt_stack[..prompt_idx].to_vec(),
-        exception_handlers: state.exception_handlers[..handler_depth].to_vec(),
+        dynamic_winds: state.execution.winds()[..wind_depth].to_vec(),
+        prompt_stack: state.execution.prompts()[..prompt_idx].to_vec(),
+        exception_handlers: state.execution.handlers()[..handler_depth].to_vec(),
         // The jump delivers its value into the top frame's `deliver_reg` on
         // arrival. Nothing reads this one — the stub's `Call` overwrites it —
         // and the abort's value reaches the handler as an argument instead.
@@ -2728,43 +2632,6 @@ pub(super) fn abort_to_prompt(
         Ok(()) => park_transfer(state, val),
         Err(e) => e,
     }
-}
-
-/// Put the frame an abort lands in on top of `frames`, with its window on the
-/// end of `registers`.
-///
-/// One description of the landing frame, used by both of `abort_to_prompt`'s
-/// paths — the one that cuts the live machine back in place and the one that
-/// describes the same machine as a jump target. They differ in how they get
-/// there and must not differ in where they end up.
-///
-/// # State contract
-///
-/// Requires a matched frame/register prefix and loaded abort-handler code.
-/// Appends one initialized frame/window to those buffers, live or detached;
-/// no other dynamic components are touched.
-fn push_abort_stub(
-    frames: &mut Vec<CallFrame>,
-    registers: &mut Vec<TaggedValue>,
-    code: Rc<CodeObject>,
-    return_reg: u16,
-    handler: TaggedValue,
-    val: TaggedValue,
-    cont: TaggedValue,
-) {
-    let base = registers.len();
-    registers.resize(base + abort_step::NUM_REGS as usize, TaggedValue::NULL);
-    registers[base + abort_step::HANDLER as usize] = handler;
-    registers[base + abort_step::VAL as usize] = val;
-    registers[base + abort_step::CONT as usize] = cont;
-    frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: abort_step::NUM_REGS,
-        closure: None,
-        return_reg,
-        code,
-    });
 }
 
 /// The registers of the stub frame a raise's handler is called in.
@@ -2907,17 +2774,17 @@ pub(super) fn push_invoke_step(
 
 /// The registers of the stub frame an abort's prompt handler is called in.
 /// See [`abort_handler_stub`].
-mod abort_step {
+pub(super) mod abort_step {
     /// The prompt's handler procedure.
-    pub(super) const HANDLER: u16 = 0;
+    pub(in crate::runtime) const HANDLER: u16 = 0;
     /// The value the abort carries.
-    pub(super) const VAL: u16 = 1;
+    pub(in crate::runtime) const VAL: u16 = 1;
     /// The delimited continuation the handler is given.
-    pub(super) const CONT: u16 = 2;
+    pub(in crate::runtime) const CONT: u16 = 2;
     /// The handler's result, which the stub returns to `prompt.dst`.
-    pub(super) const RESULT: u16 = 3;
+    pub(in crate::runtime) const RESULT: u16 = 3;
     /// Window size of the stub frame.
-    pub(super) const NUM_REGS: u16 = 4;
+    pub(in crate::runtime) const NUM_REGS: u16 = 4;
 }
 
 /// `(handler val k)`, then return its value — the two instructions an abort
@@ -2975,7 +2842,7 @@ pub(super) fn capture_delimited(
     prompt_idx: usize,
     hole: u16,
 ) -> VmDelimitedContinuation {
-    let prompt = &state.prompt_stack[prompt_idx];
+    let prompt = &state.execution.prompts()[prompt_idx];
     // A prompt's recorded depths can outrun the stacks they index: a `raise`
     // pops the handler entry it is running *before* calling it, so a handler
     // that aborts to a prompt established under itself arrives with
@@ -2983,12 +2850,12 @@ pub(super) fn capture_delimited(
     // sliced — nothing above the boundary is left to capture — and clamped for
     // all three, since the same "recorded against a stack that has since
     // shrunk" applies to a jump popping winds mid-travel. Slicing panicked.
-    let depth_at_capture = prompt.stack_depth.min(state.frames.len());
-    let wind_depth_at_capture = prompt.dynamic_wind_depth.min(state.dynamic_winds.len());
+    let depth_at_capture = prompt.stack_depth.min(state.execution.frames().len());
+    let wind_depth_at_capture = prompt.dynamic_wind_depth.min(state.execution.winds().len());
     let handler_depth_at_capture = prompt
         .exception_handler_depth
-        .min(state.exception_handlers.len());
-    let frames = state.frames[depth_at_capture..].to_vec();
+        .min(state.execution.handlers().len());
+    let frames = state.execution.frames()[depth_at_capture..].to_vec();
     // An empty capture is the identity continuation, and it carries no dynamic
     // environment at all — no frames to run under means nothing for prompts,
     // handlers or extents to belong to, and an identity invoke appends no
@@ -3001,7 +2868,7 @@ pub(super) fn capture_delimited(
     let dynamic_winds = if frames.is_empty() {
         Vec::new()
     } else {
-        state.dynamic_winds[wind_depth_at_capture..].to_vec()
+        state.execution.winds()[wind_depth_at_capture..].to_vec()
     };
     // Everything above the delimiting prompt is *inside* the captured region
     // and belongs to the continuation: for prompts the slice above
@@ -3018,14 +2885,14 @@ pub(super) fn capture_delimited(
         (Vec::new(), Vec::new())
     } else {
         (
-            state.prompt_stack[prompt_idx + 1..].to_vec(),
-            state.exception_handlers[handler_depth_at_capture..].to_vec(),
+            state.execution.prompts()[prompt_idx + 1..].to_vec(),
+            state.execution.handlers()[handler_depth_at_capture..].to_vec(),
         )
     };
     let base_at_capture = frames
         .first()
-        .map_or(state.registers.len(), |f| f.register_base);
-    let mut registers = state.registers[base_at_capture..].to_vec();
+        .map_or(state.execution.registers().len(), |f| f.register_base);
+    let mut registers = state.execution.registers()[base_at_capture..].to_vec();
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
         // — the capturing call never returns a value into it — so whatever it
@@ -3047,20 +2914,6 @@ pub(super) fn capture_delimited(
         prompt_stack,
         exception_handlers,
     }
-}
-
-/// Move a depth recorded against one stack onto another: `value` sat `from`
-/// units up that stack, and the same position is `to` units up this one.
-///
-/// Saturating rather than wrapping, and not hypothetically:
-/// `install_thunk_handlers` clamps a record's handler depths down to the
-/// thunk's frame depth, which can be *below* the prompt a continuation was
-/// delimited by, so `value < from` happens. Wrapping would send such a depth
-/// to about 2^64, where `pop_exception_handlers`' `stack_depth >= frames.len()`
-/// test drops it on the next return instead of keeping it for as long as the
-/// resumed frames run.
-fn relocate_depth(value: usize, from: usize, to: usize) -> usize {
-    (to + value).saturating_sub(from)
 }
 
 /// How an invoke of a delimited continuation ended.
@@ -3154,91 +3007,7 @@ pub(super) fn finish_delimited_invoke(
     value: TaggedValue,
     dst: u16,
 ) -> Result<(), VmError> {
-    // Checked, because arbitrary user code has run between the invoke and
-    // here — that is what the stub frames are for — and this assumes every
-    // captured record is still on top. Unchecked it would wrap in release and
-    // hand `relocate_depth` a base near 2^64, producing carried prompts with
-    // garbage wind depths: silent corruption of some later abort's travel
-    // rather than a diagnosis here.
-    let wind_base = state
-        .dynamic_winds
-        .len()
-        .checked_sub(dc.dynamic_winds.len())
-        .ok_or_else(|| VmError::Runtime {
-            message: "composable invoke: a re-entered extent left the wind stack".into(),
-        })?;
-    // Relocate the captured register windows onto the end of the live array.
-    let shift = state.registers.len().wrapping_sub(dc.base_at_capture);
-    state.registers.extend_from_slice(&dc.registers);
-    let outermost = state.frames.len();
-    state.frames.extend(dc.frames.iter().cloned());
-    for f in &mut state.frames[outermost..] {
-        f.register_base = f.register_base.wrapping_add(shift);
-    }
-
-    // The dynamic environment the captured frames ran in comes back with them:
-    // the prompts they established and the handlers they installed. Every
-    // depth in it was recorded against a stack at capture and has to be moved
-    // onto the live one — and a `PromptFrame` records **three**, one per stack
-    // it delimits. Relocating only `stack_depth` left the other two indexing
-    // the invoke site's stacks, so an abort to a carried prompt ran an
-    // enclosing `after` thunk early and uninstalled handlers enclosing the
-    // invoke.
-    let handler_base = state.exception_handlers.len();
-    for p in dc.prompt_stack.iter() {
-        let stack_depth = relocate_depth(p.stack_depth, dc.depth_at_capture, outermost);
-        debug_assert!(
-            stack_depth >= outermost,
-            "a carried prompt is inside the capture"
-        );
-        state.prompt_stack.push(PromptFrame {
-            stack_depth,
-            dynamic_wind_depth: relocate_depth(
-                p.dynamic_wind_depth,
-                dc.wind_depth_at_capture,
-                wind_base,
-            ),
-            exception_handler_depth: relocate_depth(
-                p.exception_handler_depth,
-                dc.handler_depth_at_capture,
-                handler_base,
-            ),
-            // A carried prompt sitting at the outermost appended frame — its
-            // `call-with-continuation-prompt` was tail-called, so it shares
-            // that frame's depth — has no captured frame below it to deliver
-            // into any more. Its result is this invoke's result, by the same
-            // reasoning that re-points `return_reg` below.
-            dst: if stack_depth == outermost { dst } else { p.dst },
-            ..p.clone()
-        });
-    }
-    state
-        .exception_handlers
-        .extend(dc.exception_handlers.iter().map(|h| ExceptionHandler {
-            stack_depth: relocate_depth(h.stack_depth, dc.depth_at_capture, outermost),
-            ..h.clone()
-        }));
-    // Both stacks are swept by frame depth as the resumed frames return
-    // (`pop_resolved_extents`), which is when they stop applying — except at a
-    // dispatch loop's own exit depth, where that sweep does nothing by design
-    // and `run_loop_until_outcome`'s `handlers_at_entry` truncation is the
-    // only backstop, which covers handlers and not prompts. A prompt a *full*
-    // continuation's snapshot carries past its own body is swept on arrival
-    // instead (issue #176, `restore_continuation`); a composable invoke has no
-    // equivalent, because it appends to the live stacks rather than replacing
-    // them, and the frames it appends are the ones the depth sweep follows.
-
-    state.frames[outermost].return_reg = dst;
-    let top_base = state
-        .frames
-        .last()
-        .expect("deliver_reg is Some only for a non-empty capture")
-        .register_base;
-    let deliver_reg = dc
-        .deliver_reg
-        .expect("the caller returns Identity when there is no hole");
-    state.registers[top_base + deliver_reg as usize] = value;
-    Ok(())
+    state.execution.append_delimited(dc, value, dst)
 }
 
 /// [`invoke_delimited`] for an invoke in tail position: the invoking frame is
@@ -3263,9 +3032,9 @@ pub(super) fn tail_invoke_delimited(
     value: TaggedValue,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
-    let frame = state.frames.pop().expect("tail invoke with empty stack");
+    let frame = state.execution.pop_frame();
     let return_reg = frame.return_reg;
-    state.free_top_registers(frame.register_base);
+
     match invoke_delimited(state, cont, dc, value, return_reg)? {
         DelimitedInvoke::Resumed => Ok(None),
         // The identity continuation passes the value straight through, so
@@ -3274,7 +3043,7 @@ pub(super) fn tail_invoke_delimited(
         // abort truncates to its prompt, which may be below this loop's exit
         // depth, and the frame just popped can be the last one.
         DelimitedInvoke::Identity => {
-            if state.frames.len() == exit_depth || state.frames.is_empty() {
+            if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
                 return Ok(Some(value));
             }
             state.set_reg(return_reg, value);
@@ -3299,7 +3068,7 @@ pub(super) fn tail_invoke_delimited(
 /// May allocate a multiple-values heap object; leaves all dynamic stacks
 /// and registers unchanged. Protect the result until it is stored or parked.
 fn deliver_value(state: &mut VmState, args: &[TaggedValue]) -> TaggedValue {
-    state.heap.borrow_mut().values_from(args.to_vec())
+    state.heap().borrow_mut().values_from(args.to_vec())
 }
 
 /// Try to call `func_val` as a primitive. Returns `Some(result)` if it was a
@@ -3313,7 +3082,7 @@ fn deliver_value(state: &mut VmState, args: &[TaggedValue]) -> TaggedValue {
 ///
 /// Read-only heap classification; no Scheme call or VM state mutation.
 fn primitive_procedure(state: &VmState, func_val: TaggedValue) -> Option<Rc<Procedure>> {
-    let proc = state.heap.borrow().get_procedure(func_val)?;
+    let proc = state.heap().borrow().get_procedure(func_val)?;
     matches!(proc.as_ref(), Procedure::Primitive { .. }).then_some(proc)
 }
 
@@ -3389,7 +3158,7 @@ pub(super) fn call_value(
     // rarer probes below (control primitive, primitive, parameter,
     // continuation) on every call. Keep the probed code id so the closure
     // branch doesn't resolve it a second time.
-    let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    let closure_code_id = state.heap().borrow().get_vm_closure_code_id(func_val);
     call_value_with_probe(state, func_val, closure_code_id, arg_vals, dst)
 }
 
@@ -3481,7 +3250,7 @@ pub(super) fn tail_call_value(
 ) -> Result<Option<TaggedValue>, VmError> {
     // Same closure-first probe as `call_value` — see there for why probe
     // order is safe.
-    let closure_code_id = state.heap.borrow().get_vm_closure_code_id(func_val);
+    let closure_code_id = state.heap().borrow().get_vm_closure_code_id(func_val);
     tail_call_value_with_probe(state, func_val, closure_code_id, arg_vals, exit_depth)
 }
 
@@ -3516,10 +3285,10 @@ pub(super) fn tail_call_value_with_probe(
                 let (callee, call_args) = apply_call(state, arg_vals)?;
                 return tail_call_value(state, callee, &call_args, exit_depth);
             }
-            let frame = state.frames.pop().expect("tail call ctrl with empty stack");
+            let frame = state.execution.pop_frame();
             let return_reg = frame.return_reg;
-            state.free_top_registers(frame.register_base);
-            let depth = state.frames.len();
+
+            let depth = state.execution.frames().len();
             // Now at depth N-1. Handle with dst = return_reg (slot in frame
             // N-2). (At exit depth, return_reg is still the right dst — not
             // 0, which could clobber live registers like MutableCell
@@ -3534,10 +3303,10 @@ pub(super) fn tail_call_value_with_probe(
             // the popped frame's extents close now, as after `Return`; a
             // frame it did push closes them when that frame returns. Then,
             // if this is the exit depth, the enclosing loop is done.
-            if state.frames.len() == depth {
+            if state.execution.frames().len() == depth {
                 pop_resolved_extents(state, exit_depth);
             }
-            if state.frames.len() == exit_depth {
+            if state.execution.frames().len() == exit_depth {
                 let result = state.reg(return_reg);
                 return Ok(Some(result));
             }
@@ -3558,14 +3327,13 @@ pub(super) fn tail_call_value_with_probe(
                 return tail_start_resumable(state, index, arg_vals, exit_depth);
             }
             let result = call_primitive_proc(state, &prim, arg_vals)?;
-            let frame = state.frames.pop().expect("tail call with empty stack");
-            if state.frames.len() == exit_depth {
-                state.free_top_registers(frame.register_base);
+            let frame = state.execution.pop_frame();
+            if state.execution.frames().len() == exit_depth {
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
-            state.free_top_registers(frame.register_base);
+
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
             return Ok(None);
@@ -3588,17 +3356,13 @@ pub(super) fn tail_call_value_with_probe(
         }
         if let Some(result) = try_call_parameter(state, func_val, arg_vals) {
             let result = result?;
-            let frame = state
-                .frames
-                .pop()
-                .expect("tail call param with empty stack");
-            if state.frames.len() == exit_depth {
-                state.free_top_registers(frame.register_base);
+            let frame = state.execution.pop_frame();
+            if state.execution.frames().len() == exit_depth {
                 return Ok(Some(result));
             }
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
-            state.free_top_registers(frame.register_base);
+
             pop_resolved_extents(state, exit_depth);
             return Ok(None);
         }
@@ -3629,7 +3393,8 @@ pub(super) fn tail_call_closure_resolved(
     arg_vals: &[TaggedValue],
 ) -> Result<(), VmError> {
     let top = state
-        .frames
+        .execution
+        .frames()
         .last()
         .expect("tail call with empty frame stack");
     if top.code.id == new_code_id {
@@ -3641,28 +3406,11 @@ pub(super) fn tail_call_closure_resolved(
 
     check_arity(new_code.arity, arg_vals.len())?;
 
-    // Reuse the current frame's register window.
-    // If the new code needs more registers, grow the window.
-    let frame = state.frames.last_mut().unwrap();
-    let old_base = frame.register_base;
-    let old_num = frame.num_regs;
-    let new_num = new_code.num_regs;
-
-    if new_num > old_num {
-        let extra = new_num - old_num;
-        state
-            .registers
-            .resize(state.registers.len() + extra as usize, TaggedValue::NULL);
-        state.frames.last_mut().unwrap().num_regs = new_num;
-    }
-
-    store_args_in_window(state, old_base, new_code.arity, arg_vals);
-
-    // Update frame in-place — dispatch fetches instructions from `code`.
-    let frame = state.frames.last_mut().unwrap();
-    frame.pc = 0;
-    frame.closure = closure_heap_index(func_val);
-    frame.code = new_code;
+    let arity = new_code.arity;
+    let base = state
+        .execution
+        .tail_replace(new_code, closure_heap_index(func_val));
+    store_args_in_window(state, base, arity, arg_vals);
     Ok(())
 }
 
@@ -3686,12 +3434,9 @@ pub(super) fn self_tail_call(
 ) -> Result<(), VmError> {
     check_arity(arity, arg_vals.len())?;
     store_args_in_window(state, base, arity, arg_vals);
-    let frame = state
-        .frames
-        .last_mut()
-        .expect("tail call with empty frame stack");
-    frame.pc = 0;
-    frame.closure = closure_heap_index(func_val);
+    state
+        .execution
+        .restart_closure(closure_heap_index(func_val));
     Ok(())
 }
 
@@ -3733,7 +3478,7 @@ pub(super) fn exec_call_primitive(
         // semantically a tail call anyway. On the tail path the callee
         // returns directly to this frame's caller; the `Return` is never
         // executed.
-        let frame = state.frames.last().expect("no active frame");
+        let frame = state.execution.frames().last().expect("no active frame");
         let is_tail_site = matches!(
             frame.code.instructions.get(frame.pc),
             Some(Instruction::Return { val }) if *val == dst
@@ -3767,7 +3512,7 @@ pub(super) fn exec_call_primitive_direct(
     arg_vals: &[TaggedValue],
     dst: u16,
 ) -> Result<Option<TaggedValue>, VmError> {
-    let registry = Rc::clone(&state.primitive_registry);
+    let registry = Rc::clone(state.primitive_registry());
     let ctx = VmApplyContext {
         state: state as *mut VmState,
     };
@@ -3815,7 +3560,7 @@ fn call_primitive_proc(
         state: state as *mut VmState,
     };
     state
-        .primitive_registry
+        .primitive_registry()
         .apply_cached(qualified_name, registry_index, args, &ctx)
         .map_err(|e| VmError::Runtime {
             message: e.to_string(),

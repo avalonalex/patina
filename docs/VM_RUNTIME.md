@@ -27,7 +27,7 @@ No value conversion is needed.
 #[derive(Clone)]   // ← non-negotiable; required for stack-snapshot continuations
 pub struct CallFrame {
     pub pc:            usize,           // program counter
-    pub register_base: usize,           // offset into VmState::registers
+    pub register_base: usize,           // offset into the machine's register file
     pub num_regs:      u16,             // register window size
     pub closure:       Option<HeapIndex>, // heap index of VmClosure (if any)
     pub return_reg:    Reg,             // where to write result in caller
@@ -43,55 +43,58 @@ and a call looks it up there.
 
 ### 2.2 `VmState`
 
-The complete runtime state.
+The complete runtime state, with no public fields. The lower-level Rust entry
+points are `VmState::new`, `load_unit`, `release_unit_if_unused` and `execute`;
+embedding applications normally use `VmBackend` through `Interpreter`.
+`global_env()` and `primitive_registry()` supply compiler inputs, and
+`set_tracer()` attaches the existing event/slice-based observer. The environment
+and heap still have their own interior-mutability APIs; these accessors do not
+make them immutable, but cannot replace the machine's heap/environment pair.
+`install_primitives()` remains only for bare compiler/runtime test scaffolding.
 
-```rust
-pub struct VmState {
-    /// Flat register array. Each CallFrame owns a slice via register_base + num_regs.
-    pub registers: Vec<TaggedValue>,
+The five dynamic components in §5.6 live in
+[`ExecutionState`](../crates/patina-vm/src/runtime/execution_state.rs). Its
+collections are private even to the rest of `runtime`. Instruction handlers
+can inspect slices and write register **slots**, but cannot resize the register
+file or mutate a frame's base/window independently. Frame entry, paired
+frame/window removal, tail replacement, full capture/arrival, prompt landing,
+and composable append are named operations on this owner. The continuation
+representations and transfer algorithms are unchanged.
 
-    /// Call stack. frames.last() is the currently executing frame.
-    pub frames: Vec<CallFrame>,
+The deliberate exception to paired frame/window removal is
+`finish_wind_step`: a full jump's finished stub retains its register window
+as roots until arrival replaces the register file. A composable invoke instead
+uses paired removal, since it appends to that file. Keep this distinction when
+adding drivers; see §5.3 and `GC_DESIGN.md` §5.2.
 
-    /// Side channel for multiple return values (values / call-with-values).
-    pub value_buffer: Vec<TaggedValue>,
+The remaining state belongs to `VmState`: code-unit ownership/recycling,
+weak continuation stores, global bindings and their invalidation bits, library
+services, GC policy, and transfer bookkeeping. Storage and invalidation fields
+are private; only the driver/control pair can see their shared transfer flags,
+stub ids, and scratch argument pool. `with_globals` scopes library/eval
+substitution on the same heap, defers GC while saved globals are on the Rust
+stack, and restores the environment on both success and error/escape results.
+`import_export` still installs shared bindings and invalidates primitive fast
+paths in the same operation. Library loading keeps one machine and its existing
+re-entry protocol.
 
-    /// Prompt stack for delimited continuations.
-    pub prompt_stack: Vec<PromptFrame>,
+#### Mutation audit (#596)
 
-    /// Dynamic-wind records, outermost first.
-    pub dynamic_winds: Vec<DynamicWindRecord>,
+Audited from `9a04c90` (2026-09-30). `VmState` had 37 exposed fields: 15
+public and 22 crate-visible. It now has **zero public or crate-visible fields**;
+shared runtime bookkeeping is restricted to `runtime`, with the five coupled
+collections private to `ExecutionState`. Its public inherent methods fell from
+15 to 7; the free nested-execution entry also became runtime-only.
 
-    /// Exception handler stack (with-exception-handler).
-    pub exception_handlers: Vec<ExceptionHandler>,
-
-    /// Loaded code objects, indexed by the slot in their CodeObjectId.
-    pub code_store: Vec<Rc<CodeObject>>,
-
-    /// Global environment.
-    pub globals: Rc<Environment>,
-
-    /// Shared heap (pairs, strings, closures, etc.).
-    pub heap: SharedHeap,
-
-    /// Primitive function dispatch.
-    pub primitive_registry: Rc<PrimitiveRegistry>,
-
-    /// Full continuation side table (avoids circular deps with patina-core).
-    /// Weak GC table (GC_DESIGN.md §9.5); ids are minted by the heap.
-    pub continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
-
-    /// Delimited continuation side table. Weak, like `continuation_store`.
-    pub delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
-
-    /// Optional instruction-level tracer.
-    pub tracer: Option<TracerHandle>,
-
-    /// Library registries for library loading.
-    pub library_registry: Option<Rc<RefCell<LibraryRegistry>>>,
-    pub loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
-}
-```
+| Consumer before | Mutation or inspection | Access after |
+|---|---|---|
+| `backend.rs` | filesystem, two library registries, tracer; swap globals for a library body; inspect code slots and compiler registry | paired library configuration, tracer attachment, `with_globals`, count/compiler accessors |
+| `runtime/vm_state.rs` | dispatch PC/register writes, returns, extent steps, top-level error reset, library/eval swaps | `ExecutionState` operations; scoped globals; private code, invalidation and continuation-store methods |
+| `runtime/control.rs` | closure/stub frame allocation and tail reuse; prompt/handler/wind stacks; capture, full arrival, abort prefixes, composable relocation | same control policy over `ExecutionState` operations; fixed heap/registry handles |
+| `runtime/gc_roots.rs` | read live roots; prune weak stores through `RefCell` | moved beneath `vm_state`; read-only execution slices, private weak-store pruning |
+| `tests/callprimitive.rs` | configure compiler fixture environments; inspect primitive registry | `global_env()` / `primitive_registry()`; assertions unchanged |
+| `tests/smoke.rs`, `tests/gc_weak_continuations.rs` | allocate/free raw register vectors; pin weak-table fixtures in registers and inspect store lengths | white-box fixtures moved beneath `vm_state`; matched frame/window setup, same weak-store assertions |
+| `tracer.rs` and other crates | tracing events/slices, `VmBackend` methods | no mutable state access before or after |
 
 ### 2.3 `PromptFrame`
 
@@ -134,7 +137,6 @@ backend supplying the handler-root visitor.
 ```rust
 pub struct ExceptionHandler {
     pub handler:       TaggedValue,
-    pub dynamic_winds: Vec<DynamicWindRecord>,
     pub stack_depth:   usize,
 }
 ```
@@ -217,8 +219,8 @@ frame access.
 
 ```rust
 impl VmState {
-    pub fn reg(&self, r: Reg) -> TaggedValue;
-    pub fn set_reg(&mut self, r: Reg, val: TaggedValue);
+    pub(super) fn reg(&self, r: Reg) -> TaggedValue;
+    pub(super) fn set_reg(&mut self, r: Reg, val: TaggedValue);
     fn reg_at(&self, base: usize, r: Reg) -> TaggedValue;      // dispatch loop
     fn set_reg_at(&mut self, base: usize, r: Reg, val: TaggedValue);
 }
@@ -362,7 +364,8 @@ probes remain private. Only the entry points and resume-register layouts used
 by the driver are visible within `runtime`; the compiler separately reads the
 control-primitive identity table. `vm_state.rs` retains `VmState`, instruction
 dispatch, loop ownership/error recovery, GC safe points, library evaluation,
-and global-binding invalidation. The control module calls its explicit loop
+and global-binding invalidation; `execution_state.rs` owns the five coupled
+collections and their structural updates (§2.2). The control module calls its explicit loop
 and host-evaluation services rather than owning a second driver.
 
 The key obligation for another driver is to propagate an escaped call before
@@ -696,8 +699,8 @@ the abort carries. That is what makes the next missed boundary visible.
 
 ### 5.6 The dynamic-state matrix
 
-`VmState` carries five components that belong to a *dynamic extent* rather
-than to the machine: `frames`, `registers`, `dynamic_winds`, `prompt_stack`,
+`VmState` owns an `ExecutionState` carrying five components that belong to a
+*dynamic extent* rather than to the machine: `frames`, `registers`, `dynamic_winds`, `prompt_stack`,
 `exception_handlers`. Every control transfer has to say what it does with each
 one, and a transfer that forgets a component does not fail loudly — it runs
 under somebody else's dynamic context.
