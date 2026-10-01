@@ -278,9 +278,10 @@
 (test-error "only rejects a missing export" #t
   (environment '(only (scheme base) no-such-export)))
 
-(cond-expand (patina) (else (test-skip 1)))
-(test-error "except rejects a missing export" #t
-  (environment '(except (scheme base) no-such-export)))
+;; #592: the same permissive except policy as program/library imports (#489).
+;; Measured on chibi 0.12 and Gauche 0.9.15: both answer 42.
+(test-equal "except ignores a missing export" 42
+  (eval '(+ 20 22) (environment '(except (scheme base) no-such-export))))
 
 (cond-expand (patina) (else (test-skip 1)))
 (test-error "rename rejects a missing export" #t

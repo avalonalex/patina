@@ -11,13 +11,13 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
 use patina_core::{CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
-use patina_frontend::{Desugarer, ImportSet, LibraryDefinition};
+use patina_frontend::{Desugarer, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::environment::Environment;
 use patina_runtime::{Diagnostic, DiagnosticKind};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 /// Runtime arguments can contain cycles even though source import declarations
@@ -50,97 +50,6 @@ fn check_import_datum(tv: TaggedValue, heap: &patina_core::Heap) -> Result<(), E
     Ok(())
 }
 
-/// Resolve one set from the library outward. This path is shared by both
-/// backends; loading stays behind ApplyContext. Transform the exported names,
-/// retaining which export each one is (including macro and core-syntax
-/// bindings) — the export and not its value, because what gets installed is
-/// the library's binding (#406): code evaluated in the environment must see
-/// what the library assigns after the environment was made.
-///
-/// Returns the library, and for each name the set brings in, the export it
-/// names.
-fn environment_imports(
-    ctx: &dyn ApplyContext,
-    set: &ImportSet,
-) -> Result<(Rc<patina_core::Library>, BTreeMap<String, String>), EvalError> {
-    let mut modifiers = Vec::new();
-    let mut current = set;
-    let library_name = loop {
-        match current {
-            ImportSet::Library(name) => break name,
-            ImportSet::Only { import_set, .. }
-            | ImportSet::Except { import_set, .. }
-            | ImportSet::Prefix { import_set, .. }
-            | ImportSet::Rename { import_set, .. } => {
-                modifiers.push(current);
-                current = import_set;
-            }
-        }
-    };
-    // Loading can run Scheme and escape to the caller's handler. Preserve
-    // that control transfer instead of replacing it with a syntax error.
-    let library = ctx.load_scheme_library(library_name)?;
-    let mut bindings: BTreeMap<String, String> = library
-        .export_names()
-        .into_iter()
-        .map(|name| (name.to_string(), name.to_string()))
-        .collect();
-    let missing = |name: &str| {
-        patina_runtime::LibraryError::load(
-            None,
-            format!("environment: identifier '{name}' not found in import set"),
-        )
-        .into_eval_error()
-    };
-    for modifier in modifiers.into_iter().rev() {
-        match modifier {
-            ImportSet::Only { identifiers, .. } => {
-                let mut selected = BTreeMap::new();
-                for name in identifiers {
-                    selected.insert(
-                        name.clone(),
-                        bindings.get(name).ok_or_else(|| missing(name))?.clone(),
-                    );
-                }
-                bindings = selected;
-            }
-            ImportSet::Except { identifiers, .. } => {
-                // Validate against the original set, including repeated names.
-                for name in identifiers {
-                    if !bindings.contains_key(name) {
-                        return Err(missing(name));
-                    }
-                }
-                for name in identifiers {
-                    bindings.remove(name);
-                }
-            }
-            ImportSet::Prefix { prefix, .. } => {
-                bindings = bindings
-                    .into_iter()
-                    .map(|(name, value)| (format!("{prefix}{name}"), value))
-                    .collect();
-            }
-            ImportSet::Rename { renames, .. } => {
-                for (old, _) in renames {
-                    if !bindings.contains_key(old) {
-                        return Err(missing(old));
-                    }
-                }
-                // Rename simultaneously: swaps must not overwrite an input
-                // binding before its own rename is applied.
-                let names: BTreeMap<_, _> = renames.iter().cloned().collect();
-                bindings = bindings
-                    .into_iter()
-                    .map(|(name, value)| (names.get(&name).cloned().unwrap_or(name), value))
-                    .collect();
-            }
-            ImportSet::Library(_) => unreachable!("only modifiers are stacked"),
-        }
-    }
-    Ok((library, bindings))
-}
-
 /// (environment import-set ...) → immutable environment-specifier
 fn primitive_environment(
     ctx: &dyn ApplyContext,
@@ -160,8 +69,11 @@ fn primitive_environment(
 
     let env = Rc::new(Environment::with_heap(heap.clone()));
     for set in &import_sets {
-        let (library, bindings) = environment_imports(ctx, set)?;
-        for (name, export) in bindings {
+        // Loading stays behind ApplyContext so a Scheme initializer can
+        // transfer control normally. Selection never copies binding values.
+        let library = ctx.load_scheme_library(set.library_name())?;
+        for binding in set.resolve_bindings(library.export_names()) {
+            let (name, export) = binding.map_err(patina_runtime::LibraryError::into_eval_error)?;
             library.import_into(&env, name, &export);
         }
     }

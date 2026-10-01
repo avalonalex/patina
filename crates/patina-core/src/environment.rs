@@ -740,9 +740,9 @@ impl Environment {
         self.take_binding(name.into(), source, source_name, true)
     }
 
-    /// Bring a binding out of a *staging* environment — the scratch one an
-    /// `only`, `except`, `prefix` or `rename` import set is resolved into
-    /// before its names are filtered or changed.
+    /// Copy a binding without making the source environment its owner.
+    /// Used for non-owning staging environments; import modifiers now select
+    /// original export names directly, without staging environments (#592).
     ///
     /// The difference from [`share_binding`] is who may own a location. A
     /// library owns what it defined; a staging environment owns nothing, it

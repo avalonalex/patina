@@ -738,6 +738,47 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
 - `bundled_provenance.rs` — pins every third-party file claimed byte-identical
   to an upstream release, so an unrecorded edit fails
 
+#### Import modifier policy and context coverage (#592)
+
+`ImportSet::resolve_bindings` in `crates/patina-runtime/src/import_set.rs` is the shared
+name-selection policy for program imports, library imports, `eval`/`load`, and
+`environment` on both backends. It maps each importing name to its original
+library export. Loading and evaluating the library stay with the backend (or
+`ApplyContext`); installation uses `Library::import_into`, with the VM's
+`import_export` wrapper preserving primitive-shadow invalidation. The selector
+holds strings, not Scheme values or temporary environments.
+
+| Import-set case | Policy |
+|---|---|
+| `only` | Select the named bindings; an unknown name is an error (#485). Repeated names are accepted; an empty list imports nothing. |
+| `except` | Remove the named bindings; unknown or repeated names are harmless. An empty list changes nothing (#489, #592). |
+| `prefix` | Prefix every name in the immediately enclosed set. Bare names are not additionally imported. |
+| `rename` | Require each source name to exist (#489); rename simultaneously so swaps work. Keep unmentioned exports. An empty list changes nothing. |
+| Nested modifiers | Work from the library outward. Validation sees the names produced by the enclosed set, not the library's original spellings. |
+| Syntax exports | Macros and core syntax participate in selection and renaming exactly like variables. Macro references keep their definition-site bindings. |
+| Exported binding identity | Every alias still denotes the original exported location (#406), including a library's renamed exports. Later assignments by the library remain visible. |
+| Failure effects | Loading/initialization is not rolled back. Preserve the existing final-`only` behavior: names before the first missing name are installed; an inner modifier failure installs nothing in the outer destination. |
+
+This preserves Patina's established policy, not a claim that every Scheme must
+reject the same invalid import. In particular, Chibi 0.12 and Gauche 0.9.15
+both accept an unknown `except` name in `environment`; measured on 2026-10-01 (UTC),
+the corrected `stdlib/eval.scm` row returns 42 on both. The existing divergence
+register describes the separate `rename` disagreement with Chibi. This work
+does not introduce a new validation policy for conflicting rename destinations.
+
+`import_modifiers.rs` runs the same 18 selection/validation cases through five
+contexts on both backends, plus primitive-cache rebinding and partial-failure
+regressions (190 backend executions). These are fixed seeds for
+[#589](https://github.com/avalonalex/patina/issues/589) in testing master plan
+[#584](https://github.com/avalonalex/patina/issues/584), not a new generator.
+Existing `library-bindings.scm`, `spliced_imports.rs`, `sld_file_loading.rs`,
+`hygiene_matrix.rs` and the control/rooting tests remain separate guardrails.
+
+```bash
+cargo test -p patina-tests --test import_modifiers
+./scripts/run_suite_oracles.sh stdlib/eval.scm
+```
+
 #### **Integration Tests** (`tests/integration/`)
 - Compare Patina output with chibi-scheme
 - Test full program execution

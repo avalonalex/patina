@@ -12,7 +12,7 @@
 
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
-use crate::runtime::vm_state::{import_export, import_staged};
+use crate::runtime::vm_state::import_export;
 use crate::runtime::{VmState, execute};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -25,7 +25,6 @@ use patina_runtime::{
     Backend, Library, LibraryLoaderRegistry, LibraryRegistry, RustLibraryLoader, stdlib,
 };
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -665,93 +664,14 @@ impl VmBackend {
         import_set: &ImportSet,
         lib_env: &Rc<Environment>,
     ) -> Result<(), LibraryError> {
-        // Every binding installed here goes through `import_export` or
-        // `import_staged`, which mark the primitive-shadow bit when the import
-        // rebinds a primitive (PRD P8.1). The
-        // state borrow is taken after any recursive resolution/loading, so it
-        // never spans a call that borrows state itself.
-        match import_set {
-            ImportSet::Library(lib_name) => {
-                let imported_lib = self.load_library(lib_name)?;
-                let mut state = self.state.borrow_mut();
-                for name in imported_lib.export_names() {
-                    import_export(&mut state, lib_env, name.to_string(), &imported_lib, name);
-                }
-                Ok(())
-            }
-            ImportSet::Only {
-                import_set,
-                identifiers,
-            } => {
-                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
-                let mut state = self.state.borrow_mut();
-                for id in identifiers {
-                    if temp_env.local_slot(id).is_none() {
-                        return Err(LibraryError::load(
-                            None,
-                            format!("Identifier '{}' not found in import set", id),
-                        ));
-                    }
-                    import_staged(&mut state, lib_env, id.clone(), &temp_env, id);
-                }
-                Ok(())
-            }
-            ImportSet::Except {
-                import_set,
-                identifiers,
-            } => {
-                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
-                let exclude: HashSet<_> = identifiers.iter().collect();
-                let mut state = self.state.borrow_mut();
-                for name in temp_env.local_names() {
-                    if !exclude.contains(&name) {
-                        import_staged(&mut state, lib_env, name.clone(), &temp_env, &name);
-                    }
-                }
-                Ok(())
-            }
-            ImportSet::Prefix { import_set, prefix } => {
-                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
-                let mut state = self.state.borrow_mut();
-                for name in temp_env.local_names() {
-                    let prefixed = format!("{}{}", prefix, name);
-                    import_staged(&mut state, lib_env, prefixed, &temp_env, &name);
-                }
-                Ok(())
-            }
-            ImportSet::Rename {
-                import_set,
-                renames,
-            } => {
-                let temp_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-                self.process_import_set(import_set, &temp_env)?;
-                // R7RS leaves open a `rename` of an identifier the set does not
-                // provide; it is refused, as Gauche and Chez refuse it and as
-                // `only` is, because accepting it leaves the new name unbound
-                // and the old one imported, a typo found far from itself (#489).
-                for (old_name, _) in renames {
-                    if temp_env.local_slot(old_name).is_none() {
-                        return Err(LibraryError::load(
-                            None,
-                            format!("Identifier '{}' not found for rename", old_name),
-                        ));
-                    }
-                }
-                let rename_map: std::collections::HashMap<_, _> = renames
-                    .iter()
-                    .map(|(o, n)| (o.clone(), n.clone()))
-                    .collect();
-                let mut state = self.state.borrow_mut();
-                for name in temp_env.local_names() {
-                    let exported_name = rename_map.get(&name).unwrap_or(&name).clone();
-                    import_staged(&mut state, lib_env, exported_name, &temp_env, &name);
-                }
-                Ok(())
-            }
+        // Loading may re-enter Scheme. Borrow state only after it completes.
+        let library = self.load_library(import_set.library_name())?;
+        let mut state = self.state.borrow_mut();
+        for binding in import_set.resolve_bindings(library.export_names()) {
+            let (name, export) = binding?;
+            import_export(&mut state, lib_env, name, &library, &export);
         }
+        Ok(())
     }
 }
 
