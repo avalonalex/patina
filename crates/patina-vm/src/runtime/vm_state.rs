@@ -4,6 +4,8 @@
 //! This module owns state, the dispatch loop, GC safe points, library loading,
 //! and global-binding invalidation. See `docs/VM_RUNTIME.md` for the design.
 
+pub(super) mod gc_roots;
+
 use super::control::{
     Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
     call_value_with_probe, capture_delimited, captured_handlers, classify_error,
@@ -14,12 +16,12 @@ use super::control::{
     vm_raise_value, wind_step,
 };
 use crate::error::VmError;
+use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
-    DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
+    DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
-use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -40,10 +42,8 @@ use std::sync::Arc;
 
 /// The complete mutable state of the VM during execution.
 pub struct VmState {
-    /// Flat register array. Each `CallFrame` owns a slice via `register_base + num_regs`.
-    pub registers: Vec<TaggedValue>,
-    /// The call stack. Currently-executing frame is `frames.last()`.
-    pub frames: Vec<CallFrame>,
+    /// Coupled frame/register and dynamic-extent storage (VM_RUNTIME §5.6).
+    pub(super) execution: super::execution_state::ExecutionState,
     /// Value carried by a continuation that escaped past a re-entry boundary,
     /// parked between `across_reentry` and the dispatch loop that resumes
     /// with it. A field rather than a return value because the
@@ -51,7 +51,7 @@ pub struct VmState {
     /// "escaped". Mirrors the tree-walker's `set_pending_escape` /
     /// `take_pending_escape` pair (`cps_eval/types.rs`) — same split, same
     /// reason, and rooted for the same reason (`gc_roots.rs`).
-    pub(crate) pending_escape: Option<TaggedValue>,
+    pub(super) pending_escape: Option<TaggedValue>,
     /// Set while an `abort-current-continuation` is travelling to the landing
     /// it built, and only then: by `abort_to_prompt`, and again by each later
     /// step of a travel that has after thunks to run (`ResumeWindJump`), since
@@ -80,7 +80,7 @@ pub struct VmState {
     /// landing, which is the point past which no boundary is owed the news;
     /// and `execute`, with the rest of the machine, so a form cannot leave
     /// one latched for the next.
-    pub(crate) pending_transfer: bool,
+    pub(super) pending_transfer: bool,
     /// The re-entry boundaries the machine is inside, outermost first: one id
     /// per [`across_reentry`](super::control) still on the Rust stack — a
     /// primitive running a callback, `eval`, a parameter converter. Ids are
@@ -94,104 +94,98 @@ pub struct VmState {
     /// machines (#469, #472, #474), and one captured outside at a deeper
     /// stack restores more frames than the callback's loop started with
     /// (#473).
-    pub(crate) reentry: Vec<u64>,
+    pub(super) reentry: Vec<u64>,
     /// The id the next boundary takes.
-    pub(crate) next_reentry: u64,
+    pub(super) next_reentry: u64,
     /// Set by a full continuation's arrival (`step_wind_jump`) when the
     /// continuation was captured outside some of the boundaries now on
     /// [`Self::reentry`]: how many of them it keeps. Every boundary past that
     /// count is left, and each dispatch loop and `across_reentry` inside one
     /// unwinds rather than resuming. Cleared by the loop that resumes into
     /// the arrival, which is inside the boundaries kept, and by `execute`.
-    pub(crate) reentry_kept: Option<usize>,
-    /// Stack of active continuation prompts (SRFI-226).
-    pub prompt_stack: Vec<PromptFrame>,
-    /// Stack of active `dynamic-wind` records.
-    pub dynamic_winds: Vec<DynamicWindRecord>,
-    /// Stack of installed exception handlers (`with-exception-handler`).
-    pub exception_handlers: Vec<ExceptionHandler>,
+    pub(super) reentry_kept: Option<usize>,
     /// The loaded `CodeObject`s, each in the slot its `CodeObjectId` names.
     /// A slot whose code has been let go holds `empty_code` until
     /// [`VmState::load_unit`] gives it to other code.
-    pub(crate) code_store: Vec<Rc<CodeObject>>,
+    code_store: Vec<Rc<CodeObject>>,
     /// What an empty slot of `code_store` holds: code with no instructions,
     /// named by a label, which no loaded code's id is. A lookup then checks
     /// only that the slot's code has the id asked for, which turns away an
     /// empty slot as well as one holding later code — a branch fewer on every
     /// closure call than an `Option` slot, and about 1% of a call-heavy loop.
-    pub(crate) empty_code: Rc<CodeObject>,
+    empty_code: Rc<CodeObject>,
     /// The ids the next code loaded is given, one for each empty slot: the
     /// slot with the generation after the code it last held. A slot that has
     /// used every generation is left out, and stays empty (#352).
-    pub(crate) free_code_ids: Vec<CodeObjectId>,
+    free_code_ids: Vec<CodeObjectId>,
     /// The code each compilation loaded together, keyed by the id it runs
     /// from: a top-level form's code, with the code of the lambdas in it. A
     /// unit is kept or let go whole, since code that is not running can still
     /// make a closure of a lambda nested in it.
-    pub(crate) code_units: FxHashMap<CodeObjectId, Vec<CodeObjectId>>,
+    code_units: FxHashMap<CodeObjectId, Vec<CodeObjectId>>,
     /// Id of the one-instruction stub each step of a continuation jump runs
     /// in (`wind_jump_stub`). Built on the first jump that has a wind thunk
     /// to run; most states never build one. The id, not the `Rc` — the code
     /// object has exactly one owner, `code_store`, and this is a note of
     /// where to find it.
-    pub(crate) wind_jump_code: Option<CodeObjectId>,
+    pub(super) wind_jump_code: Option<CodeObjectId>,
     /// Id of the six-instruction stub the *value* form of `dynamic-wind` runs
     /// in (`value_wind_stub`). Built on the first such call; a program that
     /// only ever calls `dynamic-wind` in head position never builds one.
-    pub(crate) value_wind_code: Option<CodeObjectId>,
+    pub(super) value_wind_code: Option<CodeObjectId>,
     /// Id of the two-instruction stub the *value* form of `call-with-values`
     /// runs in (`value_cwv_stub`). Built on the first such call.
-    pub(crate) value_cwv_code: Option<CodeObjectId>,
+    pub(super) value_cwv_code: Option<CodeObjectId>,
     /// Id of the two-instruction stub an abort's prompt handler is called in
     /// (`abort_handler_stub`). Built on the first abort; a program with no
     /// prompts never builds one.
-    pub(crate) abort_handler_code: Option<CodeObjectId>,
+    pub(super) abort_handler_code: Option<CodeObjectId>,
     /// Id of the one-instruction stub each step of a composable invoke's
     /// extent re-entry runs in (`invoke_step_stub`). Built on the first
     /// invoke that has a `before` thunk to run.
-    pub(crate) invoke_step_code: Option<CodeObjectId>,
+    pub(super) invoke_step_code: Option<CodeObjectId>,
     /// Id of the three-instruction stub a raise's handler is called in
     /// (`raise_step_stub`). Built on the first raise that reaches a
     /// handler; a program that never raises never builds one.
-    pub(crate) raise_step_code: Option<CodeObjectId>,
+    pub(super) raise_step_code: Option<CodeObjectId>,
     /// Id of the three-instruction stub a delayed promise's thunk is run in
     /// (`force_stub`). Built on the first `force` of a promise not yet done.
-    pub(crate) force_code: Option<CodeObjectId>,
+    pub(super) force_code: Option<CodeObjectId>,
     /// Ids of the three-instruction stubs a resumable primitive's call runs
     /// in (`resume_stub`), one per argument count up to
     /// `resume_step::INLINE_ARGS` and one that spreads a list for more. Each
     /// built on the first such call.
-    pub(crate) resume_codes: [Option<CodeObjectId>; super::control::resume_step::VARIANTS],
+    pub(super) resume_codes: [Option<CodeObjectId>; super::control::resume_step::VARIANTS],
     /// `%parameter-set!`'s registry index, which a call `(p v)` of a
     /// parameter object runs (#478); looked up once, here, not per call.
-    pub(crate) parameter_set: Option<usize>,
+    parameter_set: Option<usize>,
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
-    pub globals: Rc<Environment>,
+    globals: Rc<Environment>,
     /// The heap, shared with `patina-runtime` primitives.
-    pub heap: SharedHeap,
+    heap: SharedHeap,
     /// Registry of all primitive procedures.
-    pub primitive_registry: Rc<PrimitiveRegistry>,
+    primitive_registry: Rc<PrimitiveRegistry>,
     /// Bitset over registry indices: primitives whose global binding was
     /// overwritten by a top-level `define`/`set!` after code was compiled.
     /// `CallPrimitive` sites check their bit and deoptimize to the
     /// name-lookup `Call` path when it is set, so rebinding a primitive name
     /// behaves exactly as it did before `CallPrimitive` emission.
-    pub shadowed_primitives: Vec<u64>,
+    shadowed_primitives: Vec<u64>,
     /// The same for the two control forms pass 5 compiles to a sequence of
     /// their own, one bit each (`ControlForm::bit`): set when a global
     /// binding holding the form's procedure is given another value, after
     /// which `JumpUnlessShadowed` sends every such site to an ordinary call.
     /// Separate from `shadowed_primitives` because `dynamic-wind` has no
     /// registry entry to index it by.
-    pub(crate) shadowed_controls: u8,
+    shadowed_controls: u8,
     /// Reusable argument buffer for `CallPrimitive` dispatch, taken out of
     /// the state (`mem::take`) for the duration of each call so re-entrant
     /// primitives see an empty buffer and simply allocate — only nested
     /// primitive calls pay an allocation; the common depth-1 case is
     /// allocation-free. An allocation pool, never read for meaning after a
     /// call returns — never a channel for values, which travel in registers.
-    pub(crate) scratch_args: Vec<TaggedValue>,
+    pub(super) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
     /// id inside the `VmContinuationRef(id)` handle. **Weak** (design §9.5):
     /// entries whose ref object dies are pruned at collection via
@@ -199,29 +193,29 @@ pub struct VmState {
     /// `RefCell`. Ids come from the heap's counter (unique across both
     /// continuation kinds and every `VmState` on the heap, never reused), so
     /// a pruned id cannot alias another entry.
-    pub continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
+    continuation_store: RefCell<FxHashMap<u64, Rc<VmContinuation>>>,
     /// Side table for delimited continuations — keyed by opaque u64 id.
     /// Weak, like `continuation_store`.
-    pub delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
+    delimited_continuation_store: RefCell<FxHashMap<u64, Rc<VmDelimitedContinuation>>>,
     /// Structured tracer for instruction-level debugging.
-    pub tracer: Option<crate::tracer::TracerHandle>,
+    tracer: Option<crate::tracer::TracerHandle>,
     /// Shared library registry for `load_scheme_library` in eval primitives.
-    /// `None` for temporary VmStates created during library loading.
-    pub library_registry: Option<Rc<RefCell<LibraryRegistry>>>,
+    /// `None` for bare low-level states without library services.
+    library_registry: Option<Rc<RefCell<LibraryRegistry>>>,
     /// Shared library loader registry for `load_scheme_library` in eval primitives.
-    /// `None` for temporary VmStates created during library loading.
-    pub loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
+    /// `None` for bare low-level states without library services.
+    loader_registry: Option<Rc<RefCell<LibraryLoaderRegistry>>>,
     /// Virtual filesystem for all file I/O operations.
-    pub fs: Arc<dyn patina_core::FileSystem>,
+    fs: Arc<dyn patina_core::FileSystem>,
     /// Garbage collector policy and state (see `docs/GC_DESIGN.md`).
     /// Serviced at the dispatch-loop safe point; always adaptive outside the
     /// differential test lanes. Behind a `RefCell` so `collect` can take
     /// `&VmState` as a root while mutating the collector.
-    pub(crate) gc: RefCell<GcController>,
+    gc: RefCell<GcController>,
     /// The heap's collection-pending flag, cached at construction so
     /// dispatch-loop entry costs no heap borrow and the per-instruction safe
     /// point is a single load.
-    pub(crate) gc_pending: Rc<Cell<bool>>,
+    gc_pending: Rc<Cell<bool>>,
 }
 
 impl VmState {
@@ -240,16 +234,12 @@ impl VmState {
         heap.borrow_mut().enable_gc_freed_closure_tracking();
         let parameter_set = registry.resolve_index("scheme.base/%parameter-set!");
         Self {
-            registers: Vec::new(),
-            frames: Vec::new(),
+            execution: super::execution_state::ExecutionState::default(),
             pending_escape: None,
             pending_transfer: false,
             reentry: Vec::new(),
             next_reentry: 1,
             reentry_kept: None,
-            prompt_stack: Vec::new(),
-            dynamic_winds: Vec::new(),
-            exception_handlers: Vec::new(),
             code_store: Vec::new(),
             empty_code: Rc::new(CodeObject {
                 id: CodeObjectId::label(),
@@ -291,9 +281,75 @@ impl VmState {
         }
     }
 
+    /// The current global environment. The environment/heap retain their own
+    /// interior-mutability APIs; this cannot replace the machine's heap pair.
+    pub fn global_env(&self) -> &Rc<Environment> {
+        &self.globals
+    }
+
+    /// Registry used when compiling calls for this machine.
+    pub fn primitive_registry(&self) -> &Rc<PrimitiveRegistry> {
+        &self.primitive_registry
+    }
+
+    pub(super) fn heap(&self) -> &SharedHeap {
+        &self.heap
+    }
+
+    pub(super) fn parameter_set(&self) -> Option<usize> {
+        self.parameter_set
+    }
+
+    pub(crate) fn fs(&self) -> &Arc<dyn patina_core::FileSystem> {
+        &self.fs
+    }
+
+    /// Configure both library services together before the backend executes.
+    pub(crate) fn configure_libraries(
+        &mut self,
+        fs: Arc<dyn patina_core::FileSystem>,
+        libraries: Rc<RefCell<LibraryRegistry>>,
+        loaders: Rc<RefCell<LibraryLoaderRegistry>>,
+    ) {
+        self.fs = fs;
+        self.library_registry = Some(libraries);
+        self.loader_registry = Some(loaders);
+    }
+
+    /// Tracers receive slices and events, never mutable runtime storage.
+    pub fn set_tracer(&mut self, tracer: Option<crate::tracer::TracerHandle>) {
+        self.tracer = tracer;
+    }
+
+    pub(crate) fn loaded_code_objects(&self) -> usize {
+        self.code_store
+            .iter()
+            .filter(|code| !Rc::ptr_eq(code, &self.empty_code))
+            .count()
+    }
+    pub(crate) fn code_store_slots(&self) -> usize {
+        self.code_store.len()
+    }
+
+    /// Temporarily compile/evaluate in another environment on the same heap.
+    /// Restore on every Result exit, including nonlocal-transfer errors. The
+    /// defer guard protects saved globals living only on this Rust stack.
+    pub(crate) fn with_globals<T>(
+        &mut self,
+        env: Rc<Environment>,
+        run: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        debug_assert!(Rc::ptr_eq(env.heap(), &self.heap));
+        let _gc_defer = GcDeferGuard::new(&self.heap);
+        let saved = std::mem::replace(&mut self.globals, env);
+        let result = run(self);
+        self.globals = saved;
+        result
+    }
+
     /// Record that the primitive at `index` had its global binding
     /// overwritten; `CallPrimitive` sites for it deoptimize from now on.
-    pub fn mark_shadowed_primitive(&mut self, index: usize) {
+    fn mark_shadowed_primitive(&mut self, index: usize) {
         let word = index / 64;
         if word >= self.shadowed_primitives.len() {
             self.shadowed_primitives.resize(word + 1, 0);
@@ -303,19 +359,19 @@ impl VmState {
 
     /// Record that a binding of `form`'s procedure was given another value;
     /// its sites call their operator from now on.
-    pub(crate) fn mark_shadowed_control(&mut self, form: ControlForm) {
+    fn mark_shadowed_control(&mut self, form: ControlForm) {
         self.shadowed_controls |= form.bit();
     }
 
     /// Has a binding of `form`'s procedure been given another value?
     #[inline]
-    pub(crate) fn is_control_shadowed(&self, form: ControlForm) -> bool {
+    fn is_control_shadowed(&self, form: ControlForm) -> bool {
         self.shadowed_controls & form.bit() != 0
     }
 
     /// Has the primitive at `index` been rebound since compilation?
     #[inline]
-    pub fn is_primitive_shadowed(&self, index: usize) -> bool {
+    pub(super) fn is_primitive_shadowed(&self, index: usize) -> bool {
         self.shadowed_primitives
             .get(index / 64)
             .is_some_and(|w| w & (1 << (index % 64)) != 0)
@@ -530,16 +586,20 @@ impl VmState {
 
     #[inline(always)]
     fn frame_base(&self) -> usize {
-        self.frames.last().expect("no active frame").register_base
+        self.execution
+            .frames()
+            .last()
+            .expect("no active frame")
+            .register_base
     }
 
     #[inline(always)]
-    pub fn reg(&self, reg: u16) -> TaggedValue {
+    pub(super) fn reg(&self, reg: u16) -> TaggedValue {
         self.reg_at(self.frame_base(), reg)
     }
 
     #[inline(always)]
-    pub fn set_reg(&mut self, reg: u16, val: TaggedValue) {
+    pub(super) fn set_reg(&mut self, reg: u16, val: TaggedValue) {
         let base = self.frame_base();
         self.set_reg_at(base, reg, val);
     }
@@ -559,24 +619,13 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        self.registers[base + reg as usize]
+        self.execution.registers()[base + reg as usize]
     }
 
     #[inline(always)]
     pub(super) fn set_reg_at(&mut self, base: usize, reg: u16, val: TaggedValue) {
         debug_assert_eq!(base, self.frame_base());
-        self.registers[base + reg as usize] = val;
-    }
-
-    pub fn alloc_registers(&mut self, num_regs: u16) -> usize {
-        let base = self.registers.len();
-        self.registers
-            .resize(base + num_regs as usize, TaggedValue::NULL);
-        base
-    }
-
-    pub fn free_top_registers(&mut self, base: usize) {
-        self.registers.truncate(base);
+        self.execution.registers_mut()[base + reg as usize] = val;
     }
 
     /// Allocate a full VM continuation, returning its heap `TaggedValue` handle.
@@ -584,8 +633,8 @@ impl VmState {
     /// The ref object (which mints the id) and the store entry are created
     /// back-to-back within one instruction dispatch, so no safe point can
     /// observe one without the other — required for the weak-table protocol.
-    pub fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
-        super::gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
+    pub(super) fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
+        gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref();
         self.continuation_store
             .borrow_mut()
@@ -594,11 +643,11 @@ impl VmState {
     }
 
     /// Allocate a delimited VM continuation, returning its heap `TaggedValue` handle.
-    pub fn alloc_vm_delimited_continuation(
+    pub(super) fn alloc_vm_delimited_continuation(
         &mut self,
         mut cont: VmDelimitedContinuation,
     ) -> TaggedValue {
-        super::gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
+        gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_delimited_continuation_ref();
         self.delimited_continuation_store
             .borrow_mut()
@@ -607,13 +656,13 @@ impl VmState {
     }
 
     /// Look up a full continuation by its `TaggedValue` handle.
-    pub fn get_vm_continuation(&self, tv: TaggedValue) -> Option<Rc<VmContinuation>> {
+    pub(super) fn get_vm_continuation(&self, tv: TaggedValue) -> Option<Rc<VmContinuation>> {
         let id = self.heap.borrow().get_vm_continuation_ref(tv)?;
         self.continuation_store.borrow().get(&id).cloned()
     }
 
     /// Look up a delimited continuation by its `TaggedValue` handle.
-    pub fn get_vm_delimited_continuation(
+    pub(super) fn get_vm_delimited_continuation(
         &self,
         tv: TaggedValue,
     ) -> Option<Rc<VmDelimitedContinuation>> {
@@ -621,8 +670,14 @@ impl VmState {
         self.delimited_continuation_store.borrow().get(&id).cloned()
     }
 
-    pub fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
-        Ok(self.frames.last().expect("no active frame").code.clone())
+    pub(super) fn current_code(&self) -> Result<Rc<CodeObject>, VmError> {
+        Ok(self
+            .execution
+            .frames()
+            .last()
+            .expect("no active frame")
+            .code
+            .clone())
     }
 }
 
@@ -744,9 +799,6 @@ fn vm_evaluate_parsed_library(
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
     // `ParsedLibrary`), which also covers `saved_globals` and `lib_env`.
 
-    let saved_globals = state.globals.clone();
-    state.globals = lib_env.clone();
-
     // A relative `include` in the body resolves beside the `.sld` — the same
     // rule as the backend's loader; a library must not load or fail
     // depending on which door it came through.
@@ -755,7 +807,7 @@ fn vm_evaluate_parsed_library(
         .with_include_base_of(parsed.source.as_deref());
     let shared_heap = lib_env.heap().clone();
 
-    let body_result = (|| -> Result<(), LibraryError> {
+    state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
         for tv in &parsed.body {
             let core_expr = desugarer.desugar_with_imports(
                 *tv,
@@ -791,7 +843,7 @@ fn vm_evaluate_parsed_library(
             // leaves this load. The rest of the body must not run then, and
             // the library must not be registered or its exports bound.
             let top_id = state.load_unit(top, nested);
-            let depth_before = state.frames.len();
+            let depth_before = state.execution.frames().len();
             let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
                 .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
@@ -806,11 +858,7 @@ fn vm_evaluate_parsed_library(
             })?;
         }
         Ok(())
-    })();
-
-    // Always restore globals, even on error
-    state.globals = saved_globals;
-    body_result?;
+    })?;
 
     // Step 3: Assemble the library and resolve its exports
     build_library(parsed, lib_env)
@@ -852,20 +900,12 @@ pub(super) fn vm_eval_expr(
     // `saved_globals` is reachable only from this Rust frame while the swap
     // is in effect, so defer for its extent rather than relying on this
     // always being reached from inside a dispatch loop.
-    let _gc_defer = GcDeferGuard::new(&state.heap);
-
-    let saved_globals = state.globals.clone();
-    state.globals = env.clone();
-
-    let top_id = state.load_unit(top, nested);
-
-    let result = execute_nested(state, top_id);
-    state.release_unit_if_unused(top_id);
-
-    // Always restore globals, even on error
-    state.globals = saved_globals;
-
-    result
+    state.with_globals(env.clone(), |state| {
+        let top_id = state.load_unit(top, nested);
+        let result = execute_nested(state, top_id);
+        state.release_unit_if_unused(top_id);
+        result
+    })
 }
 
 /// Expand and compile the datum `expr` in `env`, as `eval` does.
@@ -1004,15 +1044,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     // Set up the initial frame.
     let code = state.code_object(code_id)?;
 
-    let base = state.alloc_registers(code.num_regs);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: code.num_regs,
-        closure: None,
-        return_reg: 0,
-        code,
-    });
+    state.execution.push_frame(code, None, 0);
 
     let result = run_loop_until(state, 0);
     // Nothing is left to resume: an escape that reached depth 0 *is* this
@@ -1040,12 +1072,8 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
         if let Some(status) = super::control::exit_in_progress(state) {
             patina_runtime::exit_status::note_interrupted_exit(status);
         }
-        state.frames.clear();
-        state.registers.clear();
+        state.execution.clear();
         state.pending_escape = None;
-        state.prompt_stack.clear();
-        state.dynamic_winds.clear();
-        state.exception_handlers.clear();
     }
     result
 }
@@ -1054,19 +1082,14 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 /// caller's frame depth. Unlike `execute` (which always runs until the
 /// frame stack is empty), this variant is safe to call when the state
 /// already has in-flight frames (e.g. during library loading from `eval`).
-pub fn execute_nested(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue, VmError> {
-    let depth_before = state.frames.len();
+pub(super) fn execute_nested(
+    state: &mut VmState,
+    code_id: CodeObjectId,
+) -> Result<TaggedValue, VmError> {
+    let depth_before = state.execution.frames().len();
     let code = state.code_object(code_id)?;
 
-    let base = state.alloc_registers(code.num_regs);
-    state.frames.push(CallFrame {
-        pc: 0,
-        register_base: base,
-        num_regs: code.num_regs,
-        closure: None,
-        return_reg: 0,
-        code,
-    });
+    state.execution.push_frame(code, None, 0);
 
     run_loop_until(state, depth_before)
 }
@@ -1103,7 +1126,7 @@ pub(super) fn run_loop_until(
     run_loop_until_outcome(state, exit_depth).map(LoopExit::value)
 }
 
-/// The main dispatch loop. Runs until `state.frames.len() == exit_depth`.
+/// The main dispatch loop. Runs until `state.execution.frames().len() == exit_depth`.
 ///
 /// Use `exit_depth = 0` to run until the frame stack is fully empty (top-level).
 /// Use `exit_depth = N` to run a nested thunk until it returns to depth N.
@@ -1152,7 +1175,7 @@ pub(super) fn run_loop_until_outcome(
     // run their thunks as frames of a stub now. The count stays: whether a
     // loop still started some other way can begin from a tail-replaced frame
     // has not been re-checked, and it costs a load.
-    let handlers_at_entry = state.exception_handlers.len();
+    let handlers_at_entry = state.execution.handlers().len();
     // The same for prompts. A nested loop that returns at its own exit depth
     // pops nothing there by design (`pop_resolved_extents`), so a prompt
     // opened *inside* it — by a parameter converter, by a primitive's
@@ -1164,7 +1187,7 @@ pub(super) fn run_loop_until_outcome(
     // Not the fix for a prompt a *continuation's snapshot* carries past its
     // own body: that one is closed on arrival (issue #176), because no loop
     // need return between the re-entry and the abort that finds it.
-    let prompts_at_entry = state.prompt_stack.len();
+    let prompts_at_entry = state.execution.prompts().len();
     // The re-entry boundaries this loop runs inside. A continuation arriving
     // from outside the innermost of them leaves it, and this loop with it,
     // however many frames it restored (`VmState::reentry_kept`).
@@ -1186,8 +1209,8 @@ pub(super) fn run_loop_until_outcome(
 
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
-                state.exception_handlers.truncate(handlers_at_entry);
-                state.prompt_stack.truncate(prompts_at_entry);
+                state.execution.close_handlers(handlers_at_entry);
+                state.execution.close_prompts(prompts_at_entry);
                 return Ok(LoopExit::Returned(val));
             }
             Ok(None) => continue,
@@ -1198,7 +1221,7 @@ pub(super) fn run_loop_until_outcome(
                 // to a `guard`. See `VmState::pending_escape`.
                 if let Some(value) = state.pending_escape.take() {
                     let left = state.reentry_kept.is_some_and(|kept| kept < reentry_level);
-                    if left || state.frames.len() <= exit_depth {
+                    if left || state.execution.frames().len() <= exit_depth {
                         // Still in flight: this loop does not own the frame
                         // the escape landed in, so the one that does must
                         // still find it parked. Returning it in `Escaped`
@@ -1223,7 +1246,7 @@ pub(super) fn run_loop_until_outcome(
                 let e = attach_source_location(state, e);
 
                 // Route catchable errors through exception handlers
-                if is_catchable(&e) && !state.exception_handlers.is_empty() {
+                if is_catchable(&e) && !state.execution.handlers().is_empty() {
                     let (kind, message) = classify_error(&e);
                     let exception = state
                         .heap
@@ -1265,7 +1288,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) {
     if !state.gc_pending.get() || !is_outermost {
         return;
     }
-    super::gc_roots::retire_registers(&mut state.registers, &state.frames, 0);
+    state.execution.retire_registers();
     GcController::safe_point(
         &state.gc,
         &state.heap,
@@ -1312,7 +1335,7 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
     if e.source_location().is_some() {
         return e;
     }
-    for frame in state.frames.iter().rev() {
+    for frame in state.execution.frames().iter().rev() {
         if frame.code.source_map.is_empty() {
             continue;
         }
@@ -1332,7 +1355,7 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
 /// captured globals (the environment it was compiled against). Otherwise
 /// returns `state.globals` (for top-level code).
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
-    if let Some(closure_idx) = state.frames.last().and_then(|f| f.closure)
+    if let Some(closure_idx) = state.execution.frames().last().and_then(|f| f.closure)
         && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure_idx)
     {
         return globals;
@@ -1381,15 +1404,7 @@ fn dispatch_one_instruction(
     // read `pc` and fold in its advance (instructions that jump overwrite
     // it), and hoist the register window base for the frame-stable arms
     // (`reg_at`/`set_reg_at`).
-    let (pc, base) = {
-        let f = state.frames.last_mut().expect("empty frame stack");
-        if !Rc::ptr_eq(cur_code, &f.code) {
-            *cur_code = f.code.clone();
-        }
-        let pc = f.pc;
-        f.pc = pc + 1;
-        (pc, f.register_base)
-    };
+    let (pc, base) = state.execution.dispatch_frame(cur_code);
     let code: &CodeObject = cur_code;
 
     let instr = code.instructions.get(pc).ok_or_else(|| VmError::Runtime {
@@ -1398,10 +1413,10 @@ fn dispatch_one_instruction(
 
     // ── Trace: before instruction ────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
-        let f = state.frames.last().unwrap();
-        let depth = state.frames.len();
+        let f = state.execution.frames().last().unwrap();
+        let depth = state.execution.frames().len();
         tracer.borrow_mut().pre_instruction_with_depth(
-            &state.registers,
+            state.execution.registers(),
             f,
             code.id,
             pc,
@@ -1434,14 +1449,14 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadClosure { dst, slot } => {
-            let closure_idx =
-                state
-                    .frames
-                    .last()
-                    .and_then(|f| f.closure)
-                    .ok_or_else(|| VmError::Runtime {
-                        message: "LoadClosure in non-closure frame".into(),
-                    })?;
+            let closure_idx = state
+                .execution
+                .frames()
+                .last()
+                .and_then(|f| f.closure)
+                .ok_or_else(|| VmError::Runtime {
+                    message: "LoadClosure in non-closure frame".into(),
+                })?;
             let val = state
                 .heap
                 .borrow()
@@ -1454,14 +1469,14 @@ fn dispatch_one_instruction(
 
         Instruction::StoreClosure { slot, src } => {
             let val = state.reg_at(base, src);
-            let closure_idx =
-                state
-                    .frames
-                    .last()
-                    .and_then(|f| f.closure)
-                    .ok_or_else(|| VmError::Runtime {
-                        message: "StoreClosure in non-closure frame".into(),
-                    })?;
+            let closure_idx = state
+                .execution
+                .frames()
+                .last()
+                .and_then(|f| f.closure)
+                .ok_or_else(|| VmError::Runtime {
+                    message: "StoreClosure in non-closure frame".into(),
+                })?;
             let ok =
                 state
                     .heap
@@ -1538,26 +1553,26 @@ fn dispatch_one_instruction(
 
         // ── Control Flow ────────────────────────────────────────────────
         Instruction::Jump { target } => {
-            state.frames.last_mut().unwrap().pc = target;
+            state.execution.set_pc(target);
         }
 
         Instruction::JumpIf { cond, target } => {
             let val = state.reg_at(base, cond);
             if val != TaggedValue::FALSE {
-                state.frames.last_mut().unwrap().pc = target;
+                state.execution.set_pc(target);
             }
         }
 
         Instruction::JumpUnless { cond, target } => {
             let val = state.reg_at(base, cond);
             if val == TaggedValue::FALSE {
-                state.frames.last_mut().unwrap().pc = target;
+                state.execution.set_pc(target);
             }
         }
 
         Instruction::JumpUnlessShadowed { form, target } => {
             if !state.is_control_shadowed(form) {
-                state.frames.last_mut().unwrap().pc = target;
+                state.execution.set_pc(target);
             }
         }
 
@@ -1651,18 +1666,15 @@ fn dispatch_one_instruction(
 
         Instruction::Return { val } => {
             let result = state.reg_at(base, val);
-            let frame = state.frames.pop().expect("Return with empty stack");
-            if state.frames.len() == exit_depth || state.frames.is_empty() {
+            let frame = state.execution.pop_frame();
+            if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
                 // Reached target depth (or absolute bottom) — this loop is
                 // done. Handlers installed under it close in the loop itself.
-                state.free_top_registers(frame.register_base);
                 return Ok(Some(result));
             }
             // Write result into caller's return_reg.
             let return_reg = frame.return_reg;
             state.set_reg(return_reg, result);
-            // Free the callee's register window.
-            state.free_top_registers(frame.register_base);
             pop_resolved_extents(state, exit_depth);
         }
 
@@ -1707,15 +1719,15 @@ fn dispatch_one_instruction(
             let after_val = state.reg_at(base, after);
             let handlers = captured_handlers(state);
             state
-                .dynamic_winds
-                .push(DynamicWindRecord::new(before_val, after_val, handlers));
+                .execution
+                .push_wind(DynamicWindRecord::new(before_val, after_val, handlers));
         }
 
         Instruction::PopWind => {
             // Pop the top wind record. The after-thunk is called by a
             // separate Call instruction emitted after this in the codegen.
-            if !state.dynamic_winds.is_empty() {
-                state.dynamic_winds.pop();
+            if !state.execution.winds().is_empty() {
+                state.execution.pop_wind();
             }
         }
 
@@ -1759,8 +1771,8 @@ fn dispatch_one_instruction(
                 // clause invokes. An absolute index would name a frame in the
                 // stack the raise happened on, and after either of those the
                 // live stack is a different one.
-                let stub_index = state.frames.len().saturating_sub(1);
-                state.exception_handlers.push(ExceptionHandler {
+                let stub_index = state.execution.frames().len().saturating_sub(1);
+                state.execution.restore_handler(ExceptionHandler {
                     handler,
                     stack_depth: stub_index.saturating_sub(below),
                 });
@@ -1803,10 +1815,7 @@ fn dispatch_one_instruction(
                 .reg_at(base, invoke_step::INDEX)
                 .as_fixnum()
                 .ok_or_else(malformed)? as usize;
-            state
-                .frames
-                .pop()
-                .expect("ResumeComposableInvoke runs in its own frame");
+            state.execution.pop_frame();
             // Freed, unlike `ResumeWindJump`'s — and copying that rule without
             // its reason is what made this leak. A jump's arrival *replaces*
             // the register file, so an un-freed window costs one travel; a
@@ -1821,7 +1830,6 @@ fn dispatch_one_instruction(
             // next step's window, or nowhere if this was the last — reaches a
             // GC safe point. Those live in `run_loop_until_outcome`'s loop,
             // one dispatch out.
-            state.free_top_registers(base);
 
             let dc =
                 state
@@ -1839,7 +1847,7 @@ fn dispatch_one_instruction(
                 .ok_or_else(|| VmError::Runtime {
                     message: "composable invoke: entered wind record is gone".into(),
                 })?;
-            state.dynamic_winds.push(record.clone());
+            state.execution.push_wind(record.clone());
 
             match dc.dynamic_winds.get(index + 1) {
                 Some(next) => push_invoke_step(state, cont, value, dst, index + 1, next.before)?,
@@ -1853,10 +1861,7 @@ fn dispatch_one_instruction(
             let target = state.reg_at(base, wind_step::TARGET);
             let value = state.reg_at(base, wind_step::VALUE);
             let entering = state.reg_at(base, wind_step::ENTERING);
-            state
-                .frames
-                .pop()
-                .expect("ResumeWindJump runs in its own frame");
+            state.execution.finish_wind_step();
             // The stub's register window is deliberately **not** freed here.
             // It is the only root for `target` and `value` — and `target` is a
             // `VmContinuationRef` whose payload lives in a *weak* store
@@ -1893,7 +1898,7 @@ fn dispatch_one_instruction(
                             // side effects instead of a diagnosis.
                             message: "continuation jump: entered wind record is gone".into(),
                         })?;
-                state.dynamic_winds.push(record.clone());
+                state.execution.push_wind(record.clone());
             }
 
             // An abort's travel is a transfer at every step. This loop cleared
@@ -2211,8 +2216,7 @@ fn dispatch_one_instruction(
                     // when the test is false, over the kept `JumpUnless`
                     // otherwise.
                     state.set_reg_at(base, dst, TaggedValue::boolean(truthy));
-                    let f = state.frames.last_mut().expect("empty frame stack");
-                    f.pc = if truthy { pc + 2 } else { target };
+                    state.execution.set_pc(if truthy { pc + 2 } else { target });
                 }
                 None => {
                     // Slow path — rebound predicate, or operands the fast
@@ -2416,9 +2420,11 @@ fn dispatch_one_instruction(
 
     // ── Trace: after instruction ─────────────────────────────────────
     if let Some(tracer) = state.tracer.clone() {
-        tracer
-            .borrow_mut()
-            .post_instruction(&state.registers, state.frames.last(), &state.heap);
+        tracer.borrow_mut().post_instruction(
+            state.execution.registers(),
+            state.execution.frames().last(),
+            &state.heap,
+        );
     }
 
     Ok(None)
@@ -2436,7 +2442,7 @@ fn dispatch_one_instruction(
 /// than a value they hold. Rebinding a name to the value it already has is a
 /// no-op and does not deoptimize, so re-importing a library never pays for
 /// this.
-pub(crate) fn mark_if_shadowing_primitive(
+fn mark_if_shadowing_primitive(
     state: &mut VmState,
     globals: &Rc<Environment>,
     name: &str,
@@ -2449,11 +2455,7 @@ pub(crate) fn mark_if_shadowing_primitive(
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
 /// already hold the binding's current value (the cached `StoreGlobal` path)
 /// and need no name lookup.
-pub(crate) fn mark_if_shadowing_primitive_value(
-    state: &mut VmState,
-    old: TaggedValue,
-    new_val: TaggedValue,
-) {
+fn mark_if_shadowing_primitive_value(state: &mut VmState, old: TaggedValue, new_val: TaggedValue) {
     if old == new_val {
         return;
     }
@@ -2522,8 +2524,25 @@ fn mark_if_import_rebound(
 mod tests {
     use super::*;
 
+    #[test]
+    fn vm_state_basic() {
+        let mut state = VmState::new(Rc::new(Environment::new()));
+        let mut code = code();
+        code.num_regs = 4;
+        let id = state.load_unit(code, Vec::new());
+        let base = state
+            .execution
+            .push_frame(state.code_object(id).unwrap(), None, 0);
+        assert_eq!(base, 0);
+        assert_eq!(state.execution.registers().len(), 4);
+        assert_eq!(state.execution.frames().len(), 1);
+        state.execution.pop_frame();
+        assert_eq!(state.execution.registers().len(), 0);
+        assert!(state.execution.frames().is_empty());
+    }
+
     /// Code that returns register 0, compiled by no one.
-    fn code() -> CodeObject {
+    pub(super) fn code() -> CodeObject {
         let instructions = vec![Instruction::Return { val: 0 }];
         CodeObject {
             id: CodeObjectId::label(),
@@ -2564,3 +2583,6 @@ mod tests {
         assert!(state.code_object(last).is_err());
     }
 }
+
+#[cfg(test)]
+mod weak_continuation_tests;

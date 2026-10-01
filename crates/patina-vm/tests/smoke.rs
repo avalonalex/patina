@@ -60,20 +60,3 @@ fn call_frame_is_clone() {
     assert_eq!(cloned.pc, 42);
     assert_eq!(cloned.return_reg, 3);
 }
-
-#[test]
-fn vm_state_basic() {
-    use patina_core::environment::Environment;
-    use patina_vm::runtime::VmState;
-    use std::rc::Rc;
-
-    let globals = Rc::new(Environment::new());
-    let mut state = VmState::new(globals);
-
-    let base = state.alloc_registers(4);
-    assert_eq!(base, 0);
-    assert_eq!(state.registers.len(), 4);
-
-    state.free_top_registers(0);
-    assert_eq!(state.registers.len(), 0);
-}

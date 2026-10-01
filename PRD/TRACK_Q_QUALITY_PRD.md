@@ -364,6 +364,9 @@ the runtime corrections for #289–#291, which were to precede Q7.1
 consolidation, landed with #316 (the behaviour half of Q7 item 1).
 
 ### Q4 — Reduce the `Heap` and `VmState` API surface
+VM portion tracked in [#596](https://github.com/avalonalex/patina/issues/596);
+the mutation audit and resulting ownership rules are in `docs/VM_RUNTIME.md` §2.2.
+
 `Heap` exposes ~200 public methods, and the `RefCell` borrow rule documented in
 `CLAUDE.md` exists because the API permits the mistake it warns about. This item
 makes the footgun structural rather than documentary. Bounded scope:

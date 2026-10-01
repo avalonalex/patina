@@ -11,12 +11,24 @@
 //! `VmState` so they can assert on store contents and arena free lists —
 //! the Scheme-level behavior is covered in `patina-tests/tests/gc_vm.rs`.
 
+use super::VmState;
+use crate::types::{ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation};
 use patina_core::environment::Environment;
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Collector, MarkSweepCollector};
-use patina_vm::runtime::VmState;
-use patina_vm::types::{ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation};
 use std::rc::Rc;
+
+// Root the fixture in an owned frame/window instead of exposing a raw
+// register Vec in the public runtime API.
+fn pin_in_register(state: &mut VmState, value: TaggedValue) {
+    if state.execution.frames().is_empty() {
+        let id = state.load_unit(super::tests::code(), Vec::new());
+        state
+            .execution
+            .push_frame(state.code_object(id).unwrap(), None, 0);
+    }
+    state.set_reg(0, value);
+}
 
 /// A `VmState` with no primitives installed — unlike `integration.rs`'s
 /// `fresh_state`, these tests drive the collector directly and need only
@@ -100,7 +112,7 @@ fn a_carried_prompt_and_handler_are_traced() {
         }],
     };
     let cont_ref = state.alloc_vm_delimited_continuation(cont);
-    state.registers.push(cont_ref);
+    pin_in_register(&mut state, cont_ref);
 
     collect(&state);
 
@@ -136,7 +148,7 @@ fn dead_entry_pruned_live_entry_survives() {
     let live_ref = state.alloc_vm_continuation(continuation_pinning(live_pin));
     let _dead_ref = state.alloc_vm_continuation(continuation_pinning(dead_pin));
     // Only the live ref is rooted (register file); the dead ref is dropped.
-    state.registers.push(live_ref);
+    pin_in_register(&mut state, live_ref);
     assert_eq!(state.continuation_store.borrow().len(), 2);
 
     collect(&state);
@@ -163,7 +175,7 @@ fn continuation_reachable_only_through_live_payload_survives() {
         .alloc_pair(TaggedValue::fixnum(7), TaggedValue::NULL);
     let inner_ref = state.alloc_vm_continuation(continuation_pinning(inner_pin));
     let outer_ref = state.alloc_vm_continuation(continuation_pinning(inner_ref));
-    state.registers.push(outer_ref);
+    pin_in_register(&mut state, outer_ref);
 
     collect(&state);
 
@@ -208,7 +220,7 @@ fn delimited_entries_weak_too() {
 
     let live_ref = state.alloc_vm_delimited_continuation(delimited_continuation_pinning(live_pin));
     let _dead_ref = state.alloc_vm_delimited_continuation(delimited_continuation_pinning(dead_pin));
-    state.registers.push(live_ref);
+    pin_in_register(&mut state, live_ref);
 
     collect(&state);
 
@@ -231,7 +243,7 @@ fn full_and_delimited_refs_cross_reference() {
         .alloc_pair(TaggedValue::fixnum(9), TaggedValue::NULL);
     let delim_ref = state.alloc_vm_delimited_continuation(delimited_continuation_pinning(pin));
     let full_ref = state.alloc_vm_continuation(continuation_pinning(delim_ref));
-    state.registers.push(full_ref);
+    pin_in_register(&mut state, full_ref);
 
     collect(&state);
 

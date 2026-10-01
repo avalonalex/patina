@@ -351,14 +351,18 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 
 ### 5.2 VM
 
-Everything hangs off `VmState` (`crates/patina-vm/src/runtime/vm_state.rs:29`),
-which makes `impl GcRoots for VmState` natural:
+Everything hangs off `VmState` (`crates/patina-vm/src/runtime/vm_state.rs`).
+Its `GcRoots` implementation lives in the child module
+`runtime/vm_state/gc_roots.rs`, the only production code outside the storage
+implementation allowed to prune its private weak stores. The five dynamic
+collections are owned by `ExecutionState` and traced through read-only slices;
+the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 
 | Field | Root? | Notes |
 |-------|-------|-------|
 | `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
 | `frames[*].closure` | **yes** | **Bare `Option<HeapIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
-| `value_buffer` | **yes** | Multi-value side channel |
+| `pending_escape` | **yes** | Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Empty at safe points (`mem::take`n during primitive calls), but rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
 | `code_store[*].constants` | **yes** | Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
@@ -385,12 +389,14 @@ Rust-stack temporaries (continuation-capture register clones, the
 
 **Implementation note (stage 3):** every dispatch loop takes a
 `GcDeferGuard`, so any nested `run_loop_until` — reached via `execute_nested`,
-a re-entrant primitive, or `eval` — is deferred by construction.
+a re-entrant primitive, or `eval` — is deferred by construction. `with_globals`
+also defers across each temporary environment substitution and restores the
+original environment on every returned result, including transfer errors.
 
 Library loading is the case that needed more. The predicate is **"does this
 Rust frame hold heap values that must survive across an evaluation call?"** —
 *not* which entry point it uses. `execute` versus `execute_nested` is a red
-herring: `vm_load_library_from_parsed` calls `execute_nested` and still needed
+herring: `vm_evaluate_parsed_library` calls `execute_nested` and still needed
 deferral, because `run_loop_until` guards unconditionally, so a nested call
 reached from outside any dispatch loop is equally "outermost".
 

@@ -16,7 +16,7 @@ pub struct PromptFrame {
     /// The prompt tag (opaque heap object, compared by identity).
     pub tag: TaggedValue,
 
-    /// `VmState::frames.len()` at the point where the prompt was established.
+    /// `ExecutionState::frames.len()` at the point where the prompt was established.
     /// `AbortToPrompt` unwinds to this depth.
     pub stack_depth: usize,
 
@@ -27,11 +27,11 @@ pub struct PromptFrame {
     /// (or the handler's return value) should be written.
     pub dst: Reg,
 
-    /// `VmState::dynamic_winds.len()` at the time the prompt was pushed.
+    /// `ExecutionState::dynamic_winds.len()` at the time the prompt was pushed.
     /// Used to run the correct subset of wind hooks during unwinding.
     pub dynamic_wind_depth: usize,
 
-    /// `VmState::exception_handlers.len()` at the time the prompt was pushed:
+    /// `ExecutionState::exception_handlers.len()` at the time the prompt was pushed:
     /// the handler stack the prompt's *own* call had, which is also the one
     /// its handler runs under, and the boundary an abort unwinds to (#162) and
     /// a delimited capture starts from (#163).
@@ -97,7 +97,7 @@ pub struct VmDelimitedContinuation {
     /// is then the identity and `(k v)` is `v`.
     pub deliver_reg: Option<Reg>,
 
-    /// `VmState::frames.len()` the captured slice started at — the prompt's
+    /// `ExecutionState::frames.len()` the captured slice started at — the prompt's
     /// own depth. Invoking the continuation lands `frames[0]` somewhere else,
     /// and this is what the difference is measured from: the frame depths
     /// recorded in `prompt_stack` and `exception_handlers` below are relative
@@ -147,7 +147,7 @@ pub struct VmDelimitedContinuation {
 pub struct ExceptionHandler {
     /// The handler procedure: called as `(handler condition)`.
     pub handler: TaggedValue,
-    /// `VmState::frames.len()` at the time the handler was installed.
+    /// `ExecutionState::frames.len()` at the time the handler was installed.
     /// Used to pop the handler when the thunk returns normally.
     pub stack_depth: usize,
 }
