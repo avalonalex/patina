@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "started_utc": "2026-09-30T23:55:17.544051+00:00",
+  "revision": "ad7ad4b91d33842eba205c13eae47c79b9d94783",
+  "dirty": false,
+  "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "cpu": "arm (CPU model unavailable)",
+  "logical_cpus": 12,
+  "runner_arguments": {
+    "kind": "compare",
+    "quick": true,
+    "filter": "",
+    "output": "/tmp/patina-ad7ad4b-compare.json"
+  },
+  "build_environment": {},
+  "workload_sha256": "a4d065ca22e7cf2a956a35a2f120c8e8dc9663494d9b80ba6706eb9d22de359e",
+  "library_policy": "isolated workspace libraries",
+  "correctness": "passed",
+  "kind": "comparison",
+  "backends": [
+    "tree-walker",
+    "vm"
+  ],
+  "timing": "one execution after setup; Scheme timer, excludes process startup and compilation; includes automatic GC",
+  "limitations": "single samples are smoke measurements, not evidence of a speedup",
+  "measurements": [
+    {
+      "id": "r7rs/fib/20",
+      "expression": "(fib 20)",
+      "expected": "6765",
+      "extra_check": "#t",
+      "tree-walker_ms": 19.812,
+      "vm_ms": 0.856
+    },
+    {
+      "id": "r7rs/fib/25",
+      "expression": "(fib 25)",
+      "expected": "75025",
+      "extra_check": "#t",
+      "tree-walker_ms": 190.133,
+      "vm_ms": 9.068
+    },
+    {
+      "id": "r7rs/tak/12_8_4",
+      "expression": "(tak 12 8 4)",
+      "expected": "5",
+      "extra_check": "#t",
+      "tree-walker_ms": 1.721,
+      "vm_ms": 0.067
+    },
+    {
+      "id": "r7rs/ack/3/4",
+      "expression": "(ack 3 4)",
+      "expected": "125",
+      "extra_check": "#t",
+      "tree-walker_ms": 9.102,
+      "vm_ms": 0.345
+    },
+    {
+      "id": "r7rs/primes/500",
+      "expression": "(length (primes<= 500))",
+      "expected": "95",
+      "extra_check": "#t",
+      "tree-walker_ms": 9.946,
+      "vm_ms": 0.463
+    },
+    {
+      "id": "r7rs/nqueens/8",
+      "expression": "(nqueens 8)",
+      "expected": "92",
+      "extra_check": "#t",
+      "tree-walker_ms": 59.533,
+      "vm_ms": 1.833
+    },
+    {
+      "id": "r7rs/sum/5000",
+      "expression": "(run 5000)",
+      "expected": "12502500",
+      "extra_check": "#t",
+      "tree-walker_ms": 4.733,
+      "vm_ms": 0.144
+    },
+    {
+      "id": "r7rs/deriv/1000_iter",
+      "expression": "(let loop ((i 1000)) (if (= i 0) 'done (begin (deriv test-expr) (loop (- i 1)))))",
+      "expected": "'done",
+      "extra_check": "(equal? (deriv test-expr) '(+ (* (* 3 x x) (+ (/ 0 3) (/ 1 x) (/ 1 x))) (* (* a x x) (+ (/ 0 a) (/ 1 x) (/ 1 x))) (* (* b x) (+ (/ 0 b) (/ 1 x))) 0))",
+      "tree-walker_ms": 46.316,
+      "vm_ms": 3.495
+    },
+    {
+      "id": "r7rs/ctak/8_4_2",
+      "expression": "(ctak 8 4 2)",
+      "expected": "3",
+      "extra_check": "#t",
+      "tree-walker_ms": 0.23,
+      "vm_ms": 0.07
+    },
+    {
+      "id": "continuations/dynamic_wind/simple",
+      "expression": "(dynamic-wind (lambda () #f) (lambda () 42) (lambda () #f))",
+      "expected": "42",
+      "extra_check": "#t",
+      "tree-walker_ms": 0.003,
+      "vm_ms": 0.002
+    },
+    {
+      "id": "continuations/callcc/loop/100",
+      "expression": "(cc-loop 100 0)",
+      "expected": "100",
+      "extra_check": "#t",
+      "tree-walker_ms": 0.14,
+      "vm_ms": 0.022
+    },
+    {
+      "id": "data/lists/make_1000",
+      "expression": "(length (bench-list 1000))",
+      "expected": "1000",
+      "extra_check": "(equal? (bench-list 3) '(3 2 1))",
+      "tree-walker_ms": 0.841,
+      "vm_ms": 0.06
+    },
+    {
+      "id": "data/lists/reverse_1000",
+      "expression": "(length (reverse test-list))",
+      "expected": "1000",
+      "extra_check": "(let loop ((xs (reverse test-list)) (n 1)) (if (null? xs) (= n 1001) (and (= (car xs) n) (loop (cdr xs) (+ n 1)))))",
+      "tree-walker_ms": 0.031,
+      "vm_ms": 0.033
+    },
+    {
+      "id": "data/lists/map_1000",
+      "expression": "(length (map (lambda (x) (* x 2)) test-list))",
+      "expected": "1000",
+      "extra_check": "(let loop ((xs (map (lambda (x) (* x 2)) test-list)) (n 1000)) (if (null? xs) (= n 0) (and (= (car xs) (* n 2)) (loop (cdr xs) (- n 1)))))",
+      "tree-walker_ms": 1.545,
+      "vm_ms": 0.092
+    },
+    {
+      "id": "data/vectors/sum_1000",
+      "expression": "(sum-vec test-vec 1000 0)",
+      "expected": "42000",
+      "extra_check": "#t",
+      "tree-walker_ms": 1.412,
+      "vm_ms": 0.046
+    },
+    {
+      "id": "numeric/sum_10000",
+      "expression": "(sum-to 10000 0)",
+      "expected": "50005000",
+      "extra_check": "#t",
+      "tree-walker_ms": 8.909,
+      "vm_ms": 0.264
+    },
+    {
+      "id": "numeric/factorial/50",
+      "expression": "(fact 50 1)",
+      "expected": "30414093201713378043612608166064768844377641568960512000000000000",
+      "extra_check": "#t",
+      "tree-walker_ms": 0.081,
+      "vm_ms": 0.012
+    },
+    {
+      "id": "numeric/float_sum_1000",
+      "expression": "(float-sum 1000 0.0)",
+      "expected": "1500.0",
+      "extra_check": "#t",
+      "tree-walker_ms": 0.873,
+      "vm_ms": 0.064
+    }
+  ]
+}

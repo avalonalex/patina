@@ -685,10 +685,13 @@ dependencies = [
  "patina-core",
  "patina-frontend",
  "patina-interpreter",
+ "patina-ir",
  "patina-primitives",
  "patina-runtime",
  "patina-tree-walker",
  "patina-vm",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

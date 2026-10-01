@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "started_utc": "2026-09-30T23:54:57.211879+00:00",
+  "revision": "ad7ad4b91d33842eba205c13eae47c79b9d94783",
+  "dirty": false,
+  "toolchain": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "platform": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "cpu": "arm (CPU model unavailable)",
+  "logical_cpus": 12,
+  "runner_arguments": {
+    "kind": "criterion",
+    "quick": true,
+    "filter": "phases/|end_to_end/r7rs/sum/1000$",
+    "output": "/tmp/patina-ad7ad4b-vm.json",
+    "backend": "vm"
+  },
+  "build_environment": {},
+  "workload_sha256": "a4d065ca22e7cf2a956a35a2f120c8e8dc9663494d9b80ba6706eb9d22de359e",
+  "library_policy": "isolated workspace libraries",
+  "correctness": "passed",
+  "kind": "criterion",
+  "backend": "vm",
+  "settings": {
+    "sample_size": 10,
+    "measurement_seconds": 1,
+    "warmup_seconds": 0.5
+  },
+  "command": [
+    "cargo",
+    "bench",
+    "--package",
+    "patina-tests",
+    "--bench",
+    "scheme_benchmarks",
+    "--",
+    "--sample-size",
+    "10",
+    "--measurement-time",
+    "1",
+    "--warm-up-time",
+    "0.5",
+    "--noplot",
+    "phases/|end_to_end/r7rs/sum/1000$"
+  ],
+  "timing_contract": "docs/VM_TESTING.md: Checked benchmark lanes (at the recorded revision)",
+  "measurements": [
+    {
+      "id": "vm/end_to_end/r7rs/sum/1000",
+      "median_ns": 31799.04678362573,
+      "confidence_interval_ns": [
+        31562.59140350877,
+        32555.79573934837
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "500500",
+        "expression": "(run 1000)",
+        "extra_check": "#t"
+      }
+    },
+    {
+      "id": "vm/phases/allocation_gc/list_256",
+      "median_ns": 14895.551801801801,
+      "confidence_interval_ns": [
+        14822.417953667955,
+        14976.5625
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "256",
+        "expression": "(let loop ((n 256) (xs '())) (if (= n 0) (length xs) (loop (- n 1) (cons n xs))))",
+        "gc_probe": {
+          "after": {
+            "allocations_since_gc": 62780,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 65178,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 4,
+            "free_slots": {
+              "objects": 8881,
+              "pairs": 2714,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 65527,
+            "symbols": 1
+          },
+          "after_explicit_gc": {
+            "allocations_since_gc": 0,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 65178,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 5,
+            "free_slots": {
+              "objects": 9611,
+              "pairs": 65178,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 63196,
+            "symbols": 1
+          },
+          "before": {
+            "allocations_since_gc": 0,
+            "arena_slots": {
+              "objects": 10004,
+              "pairs": 16330,
+              "strings": 32,
+              "vectors": 0
+            },
+            "collections": 1,
+            "free_slots": {
+              "objects": 9611,
+              "pairs": 16330,
+              "strings": 7,
+              "vectors": 0
+            },
+            "last_swept": 25948,
+            "symbols": 1
+          },
+          "calls": 1000,
+          "pairs_per_call": 256
+        },
+        "jiffies_per_second": 1000000.0
+      }
+    },
+    {
+      "id": "vm/phases/execution/sum_100",
+      "median_ns": 3058.7504740235117,
+      "confidence_interval_ns": [
+        3048.9419795221843,
+        3065.8774175199087
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "5050",
+        "expression": "(let loop ((n 100) (acc 0)) (if (= n 0) acc (loop (- n 1) (+ acc n))))",
+        "jiffies_per_second": 1000000.0
+      }
+    },
+    {
+      "id": "vm/phases/frontend/parse_expand_lower",
+      "median_ns": 83867.37083333333,
+      "confidence_interval_ns": [
+        82787.0,
+        84409.83333333334
+      ],
+      "samples": 10,
+      "parameters": {
+        "expected": "5050",
+        "expression": "(let loop ((n 100) (acc 0)) (if (= n 0) acc (loop (- n 1) (+ acc n))))",
+        "fresh_heap_per_iteration": true
+      }
+    },
+    {
+      "id": "vm/phases/startup/bootstrap_and_drop",
+      "median_ns": 7152994.619047619,
+      "confidence_interval_ns": [
+        7045791.75,
+        7300375.0
+      ],
+      "samples": 10,
+      "parameters": {
+        "fresh_interpreter": true,
+        "includes_drop": true
+      }
+    }
+  ],
+  "counter_limitations": "Separate probe: 1000 calls of list_256 plus driver parsing/compilation and answer check. Arena/free slots and collection counts, not bytes, RSS, allocation throughput or pause times"
+}

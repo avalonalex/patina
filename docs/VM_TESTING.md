@@ -96,6 +96,88 @@ The workflow behind every Track P item (history and rankings live in
 `PRD/TRACK_P_PERFORMANCE_PRD.md`). Rule one: **profile first** — every
 lever in that PRD that skipped this step turned out to be mis-ranked.
 
+### Checked benchmark lanes
+
+Use Python 3 and the pinned Rust toolchain. The runners work from any current
+working directory, use this checkout's isolated libraries, enable normal GC,
+and disable scope tracing. Cargo chooses the executable even when
+`CARGO_TARGET_DIR` is set. Backend names are part of every Criterion ID.
+
+| Category / ID below `<backend>/` | Inside the clock | Outside the clock |
+|---|---|---|
+| `end_to_end/<workload>` | `eval_program`: parse, expand, compile/lower, execute, automatic GC | Interpreter bootstrap, workload definitions, source construction, correctness checks, result formatting |
+| `phases/startup/bootstrap_and_drop` | Fresh interpreter construction, base-library bootstrap, teardown | OS process launch; this is cold interpreter state, **not** a cold filesystem/cache measurement |
+| `phases/frontend/parse_expand_lower` | Read a named-let sum, macro expansion, VM compilation or CPS lowering; intermediate cleanup | Fresh bootstrapped heap for each iteration, execution, output and interpreter destruction |
+| `phases/execution/sum_100` | Repeated calls to an already loaded sum procedure, Scheme driver loop, timer overhead, automatic GC | Bootstrap, driver parsing/compilation, answer check after the final clock read |
+| `phases/allocation_gc/list_256` | Repeated construction and length traversal of 256-pair lists, driver loop, automatic GC | Same exclusions as execution; the separate fixed-size GC counter probe |
+
+The two execution lanes use Criterion's `iter_custom` and Scheme's monotonic
+`current-jiffy` clock. They are steady-state procedure measurements, including
+call/loop overhead; they do not isolate a single bytecode instruction. The
+frontend lane uses per-iteration batched setup to avoid an ever-growing heap.
+Its wall time includes that untimed bootstrap, so it is slower to run than its
+reported frontend time suggests. These categories are independent workloads;
+their medians are not additive.
+
+```bash
+# 18 single-sample execution comparisons, with checked answers on both backends.
+# This is a smoke check; one row is not statistical evidence of a speedup.
+./scripts/bench_compare.sh --quick
+
+# Four phase measurements, plus one representative end-to-end workload.
+# Repeat with --backend tree-walker for the other backend.
+./scripts/run_benchmarks.sh --quick --backend vm \
+  --filter 'phases/|end_to_end/r7rs/sum/1000$'
+
+# All 40 end-to-end workloads and four phases with longer sampling.
+./scripts/run_benchmarks.sh --backend vm
+
+# Optional archival copy: choose a NEW filename; existing baselines are protected.
+./scripts/run_benchmarks.sh --quick --backend vm --filter phases/ \
+  --output /tmp/patina-vm-phases.json
+
+# No timing suite: offline failure-injection tests, already included in CI.
+python3 -B -m unittest discover -s scripts/tests -p 'test_benchmarks.py'
+
+# Run every Rust benchmark body once, including all semantic prechecks.
+PATINA_ISOLATED_LIBRARIES=1 cargo bench -p patina-tests --bench scheme_benchmarks -- --test
+PATINA_ISOLATED_LIBRARIES=1 PATINA_BENCH_BACKEND=tree-walker \
+  cargo bench -p patina-tests --bench scheme_benchmarks -- --test
+```
+
+Each runner creates a fresh `target/benchmark-runs/<UTC timestamp>-<unique>/`.
+Only a complete successful run produces `report.json`. Interpreter/Cargo
+failures retain diagnostics and exit nonzero; missing, nonfinite, nonpositive,
+or unchecked results also fail. Criterion reports come from its structured
+sample/estimate files, matched against the harness's correctness ledger, never
+from parsing terminal tables. A filter matching nothing is an error. No report
+or history from an earlier run is overwritten, and VM samples cannot reuse a
+tree-walker baseline. `--filter` is a substring in the comparison runner and a
+Criterion regex in the Criterion runner.
+
+Reports record UTC time, full Git revision, dirty state, toolchain, platform,
+CPU when available, build overrides, backend, workload-manifest hash, sampling
+settings, expected answers and extra semantic checks. Both runners share
+`crates/patina-tests/bench_programs/workloads.json`; definitions load before the
+clock starts. The comparison runner measures execution within a fresh process
+for each case; its list/setup boundaries now agree with Criterion, so old
+comparison results must not be mixed with these measurements.
+
+The allocation report also includes a separate probe of **1,000 calls × 256
+pairs**, after a requested full collection. Snapshots before/after the workload
+and after another requested collection report arena slots, free slots, symbols,
+allocations since the latest collection, collection count and the latest swept
+count. Subtract collection counts to see automatic collections during the
+probe, which also includes parsing/compilation of its driver and answer check.
+Slot counts are not bytes or RSS; `allocations_since_gc` is not total
+allocation count, and `last_swept` is not cumulative. No GC pause latency or
+allocation-throughput claim can be made from these counters.
+
+The dated 2026-09-30 baseline is linked from
+[the performance report](../benchmark_reports/performance.md). Older reports
+remain historical records. There is no CI timing threshold; the interleaved
+measurement procedure below still applies before making a performance claim.
+
 ### Sampling profile (macOS `sample`)
 
 ```bash
