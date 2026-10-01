@@ -822,85 +822,12 @@ pub(crate) fn vm_process_import_set(
     import_set: &ImportSet,
     lib_env: &Rc<Environment>,
 ) -> Result<(), LibraryError> {
-    match import_set {
-        ImportSet::Library(lib_name) => {
-            let imported_lib = vm_load_library(state, lib_name)?;
-            for name in imported_lib.export_names() {
-                import_export(state, lib_env, name.to_string(), &imported_lib, name);
-            }
-            Ok(())
-        }
-        ImportSet::Only {
-            import_set,
-            identifiers,
-        } => {
-            let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
-            vm_process_import_set(state, import_set, &temp_env)?;
-            for id in identifiers {
-                if temp_env.local_slot(id).is_none() {
-                    return Err(LibraryError::load(
-                        None,
-                        format!("Identifier '{}' not found in import set", id),
-                    ));
-                }
-                import_staged(state, lib_env, id.clone(), &temp_env, id);
-            }
-            Ok(())
-        }
-        ImportSet::Except {
-            import_set,
-            identifiers,
-        } => {
-            let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
-            vm_process_import_set(state, import_set, &temp_env)?;
-            let exclude: std::collections::HashSet<_> = identifiers.iter().collect();
-            for name in temp_env.local_names() {
-                if !exclude.contains(&name) {
-                    import_staged(state, lib_env, name.clone(), &temp_env, &name);
-                }
-            }
-            Ok(())
-        }
-        ImportSet::Prefix { import_set, prefix } => {
-            let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
-            vm_process_import_set(state, import_set, &temp_env)?;
-            for name in temp_env.local_names() {
-                import_staged(
-                    state,
-                    lib_env,
-                    format!("{}{}", prefix, name),
-                    &temp_env,
-                    &name,
-                );
-            }
-            Ok(())
-        }
-        ImportSet::Rename {
-            import_set,
-            renames,
-        } => {
-            let temp_env = Rc::new(Environment::with_heap(state.globals.heap().clone()));
-            vm_process_import_set(state, import_set, &temp_env)?;
-            // Refused, as by the backend's resolver: see there (#489).
-            for (old_name, _) in renames {
-                if temp_env.local_slot(old_name).is_none() {
-                    return Err(LibraryError::load(
-                        None,
-                        format!("Identifier '{}' not found for rename", old_name),
-                    ));
-                }
-            }
-            let rename_map: std::collections::HashMap<_, _> = renames
-                .iter()
-                .map(|(o, n)| (o.clone(), n.clone()))
-                .collect();
-            for name in temp_env.local_names() {
-                let exported_name = rename_map.get(&name).unwrap_or(&name).clone();
-                import_staged(state, lib_env, exported_name, &temp_env, &name);
-            }
-            Ok(())
-        }
+    let library = vm_load_library(state, import_set.library_name())?;
+    for binding in import_set.resolve_bindings(library.export_names()) {
+        let (name, export) = binding?;
+        import_export(state, lib_env, name, &library, &export);
     }
+    Ok(())
 }
 
 /// Evaluate a datum expression in the given environment using the VM.
@@ -2504,7 +2431,7 @@ fn dispatch_one_instruction(
 /// Every Rust-side writer that can overwrite a global binding must call this
 /// *before* replacing it: the `Define`/`StoreGlobal` handlers. The import
 /// machinery in both this file and `backend.rs` does the same job through
-/// `import_export`/`import_staged` (PRD P8.1), which compare the value before
+/// `import_export` (PRD P8.1), which compares the value before
 /// with the value after, since what an import installs is a binding rather
 /// than a value they hold. Rebinding a name to the value it already has is a
 /// no-op and does not deoptimize, so re-importing a library never pays for
@@ -2554,9 +2481,10 @@ pub(crate) fn mark_if_shadowing_primitive_value(
 /// Import-path install: make `name` in `env` the library's binding of
 /// `export`, marking the shadow bit when that rebinds a primitive (see
 /// `mark_if_shadowing_primitive`). Both import-set resolvers (this file's and
-/// `backend.rs`'s) funnel every binding they install through here or through
-/// [`import_staged`]. Installs into fresh staging/library environments find
-/// no existing binding and mark nothing; over-marking is possible only when a
+/// `backend.rs`'s) funnel every binding they install through here, including
+/// names transformed by `ImportSet::resolve_bindings`. Fresh library
+/// environments find no existing binding and mark nothing; over-marking is
+/// possible only when a
 /// library env genuinely rebinds a primitive name, which costs a deopt, never
 /// a wrong result.
 ///
@@ -2575,27 +2503,13 @@ pub(crate) fn import_export(
     mark_if_import_rebound(state, env, &name, old);
 }
 
-/// [`import_export`] for a binding being brought out of the staging
-/// environment an `only`/`except`/`prefix`/`rename` set was resolved into.
-pub(crate) fn import_staged(
-    state: &mut VmState,
-    env: &Rc<Environment>,
-    name: String,
-    staging: &Rc<Environment>,
-    staged_name: &str,
-) {
-    let old = env.get(&name);
-    env.copy_binding(name.as_str(), staging, staged_name);
-    mark_if_import_rebound(state, env, &name, old);
-}
-
 fn mark_if_import_rebound(
     state: &mut VmState,
     env: &Rc<Environment>,
     name: &str,
     old: Option<TaggedValue>,
 ) {
-    // Nothing was bound before — every install into a fresh staging or
+    // Nothing was bound before — every install into a fresh
     // library environment — so there is nothing to have shadowed, and no
     // reason to look the name up a second time.
     let Some(old) = old else { return };
