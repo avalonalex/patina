@@ -60,12 +60,13 @@ an inexact zero angle retains its signed imaginary zero.
 
 Patina separates concerns into independent crates with two key abstractions:
 
-**Pipeline** - Orchestrates the entire evaluation flow:
+**Interpreter** - Owns program reading, source tracking, and error handling:
 ```
 Source Code → Parse → Expand → Desugar → Evaluate → Result
 ```
 
-Different pipelines can compose phases differently (e.g., adding optimization passes, bytecode compilation).
+`Interpreter<B>` is the common embedding API. Convenience types select a backend
+without adding another parser or evaluation loop.
 
 **Backend** - Handles evaluation of parsed expressions:
 ```rust
@@ -75,7 +76,8 @@ trait Backend {
 }
 ```
 
-This separation allows swapping evaluation strategies (tree-walker, VM, JIT) without changing the pipeline, or adding pipeline stages without touching the backend.
+This separation allows swapping the VM and tree-walker without changing the
+host API. The old `patina-pipeline` crate is a tree-walker compatibility facade.
 
 ### Workspace Structure
 
@@ -84,7 +86,7 @@ patina-frontend     →  Lexer, Parser, Desugarer
 patina-ir           →  CoreExpr intermediate representation
 patina-macros       →  Hygienic macro expansion (scope sets)
 patina-runtime      →  Core types, Backend trait, Library system
-patina-pipeline     →  Pipeline orchestration
+patina-pipeline     →  Legacy tree-walker API facade
 patina-vm           →  Register-based bytecode VM (default backend)
 patina-tree-walker  →  CPS tree-walking backend (--tree-walker)
 patina-interpreter  →  High-level API
@@ -210,6 +212,75 @@ format), N-queens, and an ASCII Mandelbrot renderer:
 
 ---
 
+## Embedding from Rust
+
+Use `VmInterpreter` for the same backend as the CLI, or select
+`TreeWalkInterpreter` explicitly. Both are aliases of `Interpreter<B>`:
+
+```rust
+use patina_interpreter::VmInterpreter;
+
+let interpreter = VmInterpreter::new_vm();
+let value = interpreter.eval_program(
+    "(import (scheme base)) (define answer 42) (list answer)"
+)?;
+assert_eq!(interpreter.display_tagged(value), "(42)");
+```
+
+For the tree-walker, use `TreeWalkInterpreter::new_tree_walker()` instead.
+The complete examples also demonstrate source-aware error formatting:
+
+```bash
+cargo run -p patina-interpreter --example embed_vm --no-default-features --features vm
+cargo run -p patina-interpreter --example embed_tree_walker --no-default-features --features tree-walker
+```
+
+A host with a sibling Patina checkout can select only the VM:
+
+```toml
+[dependencies]
+patina-interpreter = { path = "../patina/crates/patina-interpreter", default-features = false, features = ["vm"] }
+```
+
+| Feature | API enabled |
+|---|---|
+| `vm` | `VmInterpreter`, `VmBackend`, `VmBackendError` |
+| `tree-walker` | `TreeWalkInterpreter`, `TreeWalker`, `Evaluator` |
+| `legacy-pipeline` | Deprecated `SimpleInterpreter` and `StandardPipeline`, plus the legacy traits/errors; enables `tree-walker` |
+| No features | Generic `Interpreter<B>` with a host-supplied backend |
+
+Defaults enable all three for source compatibility. Disabling defaults and
+selecting `vm` excludes both `patina-tree-walker` and `patina-pipeline` from the
+host's normal dependency graph. The CLI continues to support both backends.
+
+Scheme libraries must accompany the host: run with `lib/` in the working
+directory, use the installed executable-relative layout, or set
+`PATINA_LIBRARY_PATH` to Patina's `lib/` before starting the host. The existing
+library lookup and `backend().bootstrap_error()` reporting still apply.
+
+**Migration from the old convenience API:** replace `SimpleInterpreter::new()`
+with an explicit constructor above. Both interpreters provide `global_env()`,
+`display_tagged()`, and `set_command_line()`. Tree-walker-specific `evaluator()`
+access remains on `TreeWalkInterpreter`; portable code uses `backend()`.
+`new_vm_with_fs` and `new_tree_walker_with_fs` accept a host filesystem.
+
+The old types and `patina_pipeline::{error,pipeline,standard}` paths remain
+available as deprecated tree-walker adapters; they do not silently switch
+backends. Their `PipelineError` variants are retained, including their lossy
+string payloads. New APIs return typed `InterpreterError<B::Error>`; use
+`eval_program_with_source_name` and `format_interpreter_error` for caret context
+and macro expansion details. Format returned values with `display_tagged`,
+since `TaggedValue::to_string()` cannot render heap objects fully.
+
+All embedding entry points now reject an incomplete suffix in `eval_str`,
+return unspecified for an empty program, and support inline `define-library`.
+These correct three legacy differences recorded in
+[#595](https://github.com/avalonalex/patina/issues/595). `eval_program` runs
+complete forms before reporting a later parse error; `eval_str` validates the
+whole input before running its first expression. Unnamed APIs record positions
+under `<eval>`; the existing `*_tracked` names remain aliases. The legacy
+pipeline's supplied environment must share its evaluator's heap.
+
 ## Architecture Highlights
 
 ### CoreExpr IR
@@ -320,7 +391,7 @@ patina/
 │   ├── patina-ir/           # CoreExpr IR
 │   ├── patina-frontend/     # Lexer, Parser, Desugarer
 │   ├── patina-macros/       # Macro expansion
-│   ├── patina-pipeline/     # Pipeline orchestration
+│   ├── patina-pipeline/     # Legacy tree-walker API facade
 │   ├── patina-vm/           # Register-based bytecode VM (default)
 │   ├── patina-tree-walker/  # CPS tree-walking backend
 │   ├── patina-interpreter/  # High-level API

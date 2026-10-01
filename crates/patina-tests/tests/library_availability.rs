@@ -227,6 +227,7 @@ fn a_bundled_library_is_not_changed_by_a_foreign_library_being_reachable() {
 }
 
 #[test]
+#[allow(deprecated)] // Deliberately cover the legacy facade.
 fn standalone_pipeline_uses_its_evaluators_catalogue() {
     use patina_interpreter::{Pipeline, StandardPipeline};
     let pipeline = StandardPipeline::new();

@@ -1,119 +1,47 @@
-//! Simple pipeline-based interpreter API
+//! Compatibility wrapper for the original tree-walker embedding API.
 //!
-//! This module provides a simpler interpreter interface using the new pipeline architecture.
-//! Unlike the generic `Interpreter<B: Backend>`, this provides a concrete type that's easier
-//! to use and reason about.
-//!
-//! # Example
-//!
-//! ```no_run
-//! use patina_interpreter::SimpleInterpreter;
-//!
-//! let interp = SimpleInterpreter::new();
-//! let result = interp.eval_str("(+ 1 2 3)").unwrap();
-//! println!("Result: {}", result);
-//! ```
+//! New hosts should use `VmInterpreter::new_vm()` (recommended) or
+//! `TreeWalkInterpreter::new_tree_walker()`. This adapter retains its original
+//! constructors, evaluator access and `PipelineError` return type; all program
+//! reading and execution are delegated to the common interpreter.
+#![allow(deprecated)]
 
-use patina_core::TaggedValue;
-use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
-use patina_runtime::Environment;
+use crate::{Environment, Evaluator, PipelineError, TaggedValue, TreeWalkInterpreter};
 use std::rc::Rc;
 
-/// Simple interpreter using the standard pipeline
-///
-/// This is a concrete interpreter type (not generic) that uses the
-/// standard parse → eval pipeline. It's simpler to use than the
-/// generic `Interpreter<B>` and is recommended for most use cases.
+/// Legacy tree-walker convenience API. It never selects the VM implicitly.
+#[deprecated(note = "use VmInterpreter::new_vm() or TreeWalkInterpreter::new_tree_walker()")]
 pub struct SimpleInterpreter {
-    pipeline: StandardPipeline,
+    interpreter: TreeWalkInterpreter,
 }
 
 impl SimpleInterpreter {
-    /// Create a new interpreter
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use patina_interpreter::SimpleInterpreter;
-    ///
-    /// let interp = SimpleInterpreter::new();
-    /// ```
     pub fn new() -> Self {
         Self {
-            pipeline: StandardPipeline::new(),
+            interpreter: TreeWalkInterpreter::new_tree_walker(),
         }
     }
 
-    /// Evaluate a single Scheme expression
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use patina_interpreter::SimpleInterpreter;
-    /// let interp = SimpleInterpreter::new();
-    /// let result = interp.eval_str("(+ 1 2 3)").unwrap();
-    /// assert_eq!(result.to_string(), "6");
-    /// ```
+    /// Evaluate one expression; reject an unreadable suffix (#329).
     pub fn eval_str(&self, code: &str) -> Result<TaggedValue, PipelineError> {
-        let env = self.global_env();
-        self.pipeline.eval(code, &env)
+        self.interpreter.eval_str(code).map_err(Into::into)
     }
 
-    /// Evaluate a Scheme program (multiple expressions)
-    ///
-    /// Returns the value of the last expression.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use patina_interpreter::SimpleInterpreter;
-    /// let interp = SimpleInterpreter::new();
-    /// let code = r#"
-    ///     (define x 10)
-    ///     (define y 20)
-    ///     (+ x y)
-    /// "#;
-    /// let result = interp.eval_program(code).unwrap();
-    /// assert_eq!(result.to_string(), "30");
-    /// ```
+    /// Evaluate every form; return unspecified for an empty program.
     pub fn eval_program(&self, code: &str) -> Result<TaggedValue, PipelineError> {
-        let env = self.global_env();
-        self.pipeline.eval_program(code, &env)
+        self.interpreter.eval_program(code).map_err(Into::into)
     }
 
-    /// Get the global environment
-    ///
-    /// Useful for inspecting or modifying global bindings.
     pub fn global_env(&self) -> Rc<Environment> {
-        self.pipeline.evaluator().global_env.clone()
+        self.interpreter.global_env()
     }
 
-    /// Get a reference to the underlying evaluator
-    ///
-    /// Useful for advanced operations like library loading.
-    pub fn evaluator(&self) -> &patina_tree_walker::Evaluator {
-        self.pipeline.evaluator()
+    pub fn evaluator(&self) -> &Evaluator {
+        self.interpreter.evaluator()
     }
 
-    /// Format a TaggedValue for display using write notation (machine-readable)
-    ///
-    /// Uses the datum writer which properly handles all TaggedValue types
-    /// including heap pairs, vectors, strings, and circular structures.
     pub fn display_tagged(&self, tv: TaggedValue) -> String {
-        use patina_tree_walker::eval::format_write_tagged;
-        let heap = self.pipeline.evaluator().global_env.heap();
-
-        // Unpack multiple values (R7RS: each value displayed on its own line)
-        let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
-        if let Some(vals) = vals {
-            return vals
-                .iter()
-                .map(|v| format_write_tagged(*v, heap))
-                .collect::<Vec<_>>()
-                .join("\n");
-        }
-
-        format_write_tagged(tv, heap)
+        self.interpreter.display_tagged(tv)
     }
 }
 

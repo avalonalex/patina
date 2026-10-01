@@ -8,62 +8,56 @@
 //! with backend (evaluation). It supports multiple backend implementations
 //! through the `Backend` trait.
 //!
-//! # CoreExpr IR Pipeline
+//! `Interpreter<B>` owns program reading, source tracking and error handling;
+//! the backend owns desugaring and execution. `VmInterpreter` is the recommended
+//! convenience type, matching the CLI. `TreeWalkInterpreter` selects the CPS
+//! tree-walker explicitly. Scheme libraries must be available through the
+//! usual library search paths (for example, `PATINA_LIBRARY_PATH` set before
+//! starting the host).
 //!
-//! The interpreter uses a clean IR-based evaluation pipeline:
-//!
-//! ```text
-//! String → Parser → TaggedValue AST → Macro Expander → Desugarer → CoreExpr → Evaluator → TaggedValue
+//! ```
+//! # #[cfg(feature = "vm")]
+//! # {
+//! use patina_interpreter::VmInterpreter;
+//! let interp = VmInterpreter::new_vm();
+//! # // rustdoc runs in a temporary directory, outside the installed layout.
+//! # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+//! let result = interp.eval_program("(import (scheme base)) (define x 40) (list (+ x 2))").unwrap();
+//! assert_eq!(interp.display_tagged(result), "(42)");
+//! # }
 //! ```
 //!
-//! **Architecture:**
-//! - **Frontend**: Lexer → Parser → Macro Expander (produces TaggedValue AST)
-//! - **Desugarer**: Converts TaggedValue AST to CoreExpr IR (9 core forms)
-//! - **Backend**: Tree-walking interpreter evaluates CoreExpr
-//!
-//! **CoreExpr advantages:**
-//! - Clean separation: frontend (homoiconic) vs backend (typed IR)
-//! - Simpler evaluator: 9 core forms
-//! - Better foundation for future backends (VM, JIT)
-//!
-//! # Example
-//!
-//! ```no_run
-//! use patina_interpreter::Interpreter;
-//! use patina_tree_walker::TreeWalker;
-//!
-//! let interp = Interpreter::new(TreeWalker::new());
-//! let result = interp.eval_str("(+ 1 2 3)").unwrap();
-//! println!("Result: {}", result);
-//! ```
-//!
-//! # Using the Default Backend
-//!
-//! For convenience, a type alias `TreeWalkInterpreter` is provided that uses
-//! the tree-walking backend by default:
-//!
-//! ```no_run
-//! use patina_interpreter::TreeWalkInterpreter;
-//!
-//! let interp = TreeWalkInterpreter::new_tree_walker();
-//! let result = interp.eval_str("(+ 1 2 3)").unwrap();
-//! ```
+//! Features: `vm`, `tree-walker`, and `legacy-pipeline` (which enables
+//! `tree-walker`). All are enabled by default to retain existing imports. Use
+//! `default-features = false, features = ["vm"]` for a VM-only dependency graph.
+//! With no features, `Interpreter<B>` supports a backend supplied by the host.
+//! Legacy `SimpleInterpreter` and pipeline types remain tree-walker adapters;
+//! migrate to an explicit interpreter type for structured errors.
 
-// New pipeline-based interpreter (simpler API)
+#[cfg(feature = "legacy-pipeline")]
+pub mod legacy;
+#[cfg(feature = "legacy-pipeline")]
 pub mod simple;
+#[cfg(feature = "legacy-pipeline")]
+#[allow(deprecated)]
 pub use simple::SimpleInterpreter;
 
 // Re-export types from workspace crates for convenience
+#[cfg(feature = "legacy-pipeline")]
+#[allow(deprecated)]
+pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::TaggedValue;
 pub use patina_core::error::SourceLocation;
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap, prune_freed_locations,
 };
 pub use patina_ir::CoreExpr;
-pub use patina_pipeline::{Pipeline, PipelineError, StandardPipeline};
 use patina_runtime::HasDiagnostic;
-pub use patina_runtime::{Arity, Backend, Environment, Procedure};
-pub use patina_tree_walker::{EvalError, Evaluator, TreeWalker};
+pub use patina_runtime::{Arity, Backend, Environment, EvalError, Procedure};
+#[cfg(feature = "tree-walker")]
+pub use patina_tree_walker::{Evaluator, TreeWalker};
+#[cfg(feature = "vm")]
+pub use patina_vm::{VmBackend, VmBackendError};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -91,11 +85,11 @@ impl ProgramOutcome {
 
 /// Format any `InterpreterError` with source context.
 ///
-/// The tree-walker's name for [`format_backend_error_with_source`]: an
+/// An alias for [`format_backend_error_with_source`]: an
 /// evaluation error or reader error that carries a position gets caret
 /// context; errors without a position fall back to `Display`.
-pub fn format_interpreter_error(
-    error: &InterpreterError<EvalError>,
+pub fn format_interpreter_error<E: std::error::Error + HasSourceLocation>(
+    error: &InterpreterError<E>,
     source_map: &SourceMap,
 ) -> String {
     format_backend_error_with_source(error, source_map)
@@ -196,13 +190,14 @@ enum FormsEnd<E> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use patina_interpreter::Interpreter;
-/// use patina_tree_walker::TreeWalker;
-///
-/// // Create interpreter with tree-walking backend
-/// let interp = Interpreter::new(TreeWalker::new());
-/// let result = interp.eval_str("(+ 1 2)").unwrap();
+/// ```
+/// # #[cfg(feature = "vm")]
+/// # {
+/// use patina_interpreter::{Interpreter, VmBackend};
+/// let interp = Interpreter::new(VmBackend::new());
+/// let result = interp.eval_str("42").unwrap();
+/// assert_eq!(result.as_fixnum(), Some(42));
+/// # }
 /// ```
 pub struct Interpreter<B: Backend> {
     backend: B,
@@ -217,12 +212,13 @@ impl<B: Backend> Interpreter<B> {
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// use patina_interpreter::Interpreter;
-    /// use patina_tree_walker::TreeWalker;
-    ///
-    /// let backend = TreeWalker::new();
-    /// let interp = Interpreter::new(backend);
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// use patina_interpreter::{Interpreter, VmBackend};
+    /// let interp = Interpreter::new(VmBackend::new());
+    /// assert_eq!(interp.eval_str("42").unwrap().as_fixnum(), Some(42));
+    /// # }
     /// ```
     pub fn new(backend: B) -> Self {
         Interpreter { backend }
@@ -237,9 +233,12 @@ impl<B: Backend> Interpreter<B> {
     /// fresh Scheme strings and a fresh list.
     ///
     /// ```
-    /// use patina_interpreter::TreeWalkInterpreter;
-    /// let interp = TreeWalkInterpreter::new_tree_walker();
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// use patina_interpreter::VmInterpreter;
+    /// let interp = VmInterpreter::new_vm();
     /// interp.set_command_line("embedded.scm", ["hello".to_owned()]);
+    /// # }
     /// ```
     pub fn set_command_line(
         &self,
@@ -262,26 +261,22 @@ impl<B: Backend> Interpreter<B> {
     /// Uses the backend's evaluation strategy. Text after that expression is
     /// not evaluated, but it must still read: a remainder that ends inside a
     /// datum is an error rather than something to drop silently. Use
-    /// `eval_program` to evaluate every form in a string.
+    /// `eval_program` to evaluate every form in a string. Source positions are
+    /// recorded under `<eval>`; use the named variant to retain its source map.
     ///
     /// # Example
     ///
-    /// ```ignore
-    /// let result = interp.eval_str("(+ 1 2)").unwrap();
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// # let interp = VmInterpreter::new_vm();
+    /// let result = interp.eval_str("42").unwrap();
+    /// assert_eq!(result.as_fixnum(), Some(42));
+    /// # }
     /// ```
     pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        // Use global environment's heap for parsing to ensure TaggedValue indices are valid
-        let heap = self.backend.global_env().heap();
-        let mut parser = Parser::new_program(input, heap.clone(), "<eval>", false)?;
-        let expr = parser.parse()?;
-        parser.skip_rest()?;
-        // Drop parser to release any borrows before evaluation
-        drop(parser);
-        let result = self
-            .backend
-            .eval_global(expr)
-            .map_err(InterpreterError::Backend)?;
-        Ok(result)
+        self.eval_str_with_source_name(input, "<eval>").0
     }
 
     /// Evaluate multiple expressions from a string, returning the last result
@@ -290,25 +285,7 @@ impl<B: Backend> Interpreter<B> {
     /// Each expression is parsed and evaluated in sequence, with the result
     /// of the last expression being returned.
     pub fn eval_program(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        let mut result = TaggedValue::UNSPECIFIED;
-        // Use global environment's heap for parsing to ensure TaggedValue indices are valid
-        let heap = self.backend.global_env().heap();
-        let mut parser = Parser::new_program(input, heap.clone(), "<eval>", false)?;
-
-        loop {
-            match parser.parse_next() {
-                Ok(Some(expr)) => {
-                    result = self
-                        .backend
-                        .eval_global(expr)
-                        .map_err(InterpreterError::Backend)?;
-                }
-                Ok(None) => break,
-                Err(e) => return Err(e.into()),
-            }
-        }
-
-        Ok(result)
+        self.eval_program_with_source_name(input, "<eval>").0
     }
 
     /// Evaluate multiple expressions from a string, continuing on errors
@@ -319,39 +296,7 @@ impl<B: Backend> Interpreter<B> {
     ///
     /// Returns the last successfully evaluated result, or Unspecified if all failed.
     pub fn eval_program_resilient(&self, input: &str) -> TaggedValue {
-        let mut result = TaggedValue::UNSPECIFIED;
-        // Use global environment's heap for parsing to ensure TaggedValue indices are valid
-        let heap = self.backend.global_env().heap();
-        let mut parser = match Parser::new_program(input, heap.clone(), "<eval>", false) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                return result;
-            }
-        };
-
-        loop {
-            match parser.parse_next() {
-                Ok(Some(expr)) => match self.backend.eval_global(expr) {
-                    Ok(val) => result = val,
-                    Err(e) => {
-                        // Print error and continue
-                        eprintln!("Error: {}", e);
-                        patina_runtime::exit_status::exit_if_interrupted();
-                    }
-                },
-                Ok(None) => break,
-                Err(e) => {
-                    // Print parse error and continue
-                    eprintln!("Error: {}", e);
-                    // Try to recover by skipping to the next expression
-                    // (for now, we just stop on parse errors)
-                    break;
-                }
-            }
-        }
-
-        result
+        self.eval_program_resilient_tracked(input)
     }
 
     /// Evaluate a string containing one expression with its source positions,
@@ -361,6 +306,15 @@ impl<B: Backend> Interpreter<B> {
         &self,
         input: &str,
         source_name: &str,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        self.eval_str_in_env(input, source_name, self.backend.global_env())
+    }
+
+    fn eval_str_in_env(
+        &self,
+        input: &str,
+        source_name: &str,
+        env: &Rc<Environment>,
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
         let heap = self.backend.global_env().heap();
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
@@ -378,10 +332,9 @@ impl<B: Backend> Interpreter<B> {
             Err(e) => return (Err(e.into()), source_map),
         };
         drop(parser);
-        let global = self.backend.global_env().clone();
         let result = self
             .backend
-            .eval_with_source_map(expr, &global, &source_map)
+            .eval_with_source_map(expr, env, &source_map)
             .map_err(InterpreterError::Backend);
         (result, source_map)
     }
@@ -411,8 +364,18 @@ impl<B: Backend> Interpreter<B> {
         source_name: &str,
         fold_case: &mut bool,
     ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        self.eval_program_in_env(input, source_name, fold_case, self.backend.global_env())
+    }
+
+    fn eval_program_in_env(
+        &self,
+        input: &str,
+        source_name: &str,
+        fold_case: &mut bool,
+        env: &Rc<Environment>,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
         let (value, end, source_map) =
-            self.run_forms(input, source_name, fold_case, |error, _| Some(error));
+            self.run_forms(input, source_name, fold_case, env, |error, _| Some(error));
         let result = match end {
             FormsEnd::Read => Ok(value),
             FormsEnd::Stopped(error) => Err(InterpreterError::Backend(error)),
@@ -434,11 +397,17 @@ impl<B: Backend> Interpreter<B> {
     /// continuing past evaluation errors, as [`Interpreter::eval_program_resilient`]
     /// does. Returns the last value evaluated.
     pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
-        let (value, end, _) = self.run_forms(input, "<eval>", &mut false, |error, _| {
-            eprintln!("Error: {}", error);
-            patina_runtime::exit_status::exit_if_interrupted();
-            None
-        });
+        let (value, end, _) = self.run_forms(
+            input,
+            "<eval>",
+            &mut false,
+            self.backend.global_env(),
+            |error, _| {
+                eprintln!("Error: {}", error);
+                patina_runtime::exit_status::exit_if_interrupted();
+                None
+            },
+        );
         if let FormsEnd::Unreadable(error) = end {
             eprintln!("Error: {}", error);
         }
@@ -468,8 +437,12 @@ impl<B: Backend> Interpreter<B> {
         B::Error: HasSourceLocation,
     {
         let mut eval_errors = 0usize;
-        let (value, end, source_map) =
-            self.run_forms(input, source_name, &mut false, |error, source_map| {
+        let (value, end, source_map) = self.run_forms(
+            input,
+            source_name,
+            &mut false,
+            self.backend.global_env(),
+            |error, source_map| {
                 eval_errors += 1;
                 patina_runtime::exit_status::note_error_reported();
                 let mut diagnostic = error.diagnostic();
@@ -481,7 +454,8 @@ impl<B: Backend> Interpreter<B> {
                 // The program asked to exit, so it does not carry on; the caller
                 // ends the process.
                 patina_runtime::exit_status::exit_interrupted().then_some(error)
-            });
+            },
+        );
         if let FormsEnd::Unreadable(error) = &end {
             patina_runtime::diagnostic::emit(error.diagnostic().at_path(source_name));
             eprintln!(
@@ -498,7 +472,7 @@ impl<B: Backend> Interpreter<B> {
     }
 
     /// Read `input` a form at a time and evaluate each with its source
-    /// positions: the one loop behind the source-named evaluations.
+    /// positions: the one loop behind all program entry points.
     ///
     /// An evaluation error goes to `on_error`, with the source map for
     /// formatting it, which gives the error back to stop there or returns
@@ -511,6 +485,7 @@ impl<B: Backend> Interpreter<B> {
         input: &str,
         source_name: &str,
         fold_case: &mut bool,
+        env: &Rc<Environment>,
         mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
     ) -> (TaggedValue, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
         let mut value = TaggedValue::UNSPECIFIED;
@@ -531,7 +506,6 @@ impl<B: Backend> Interpreter<B> {
                 return (value, FormsEnd::Unreadable(error), source_map);
             }
         };
-        let global = self.backend.global_env().clone();
         loop {
             // Drop SourceMap entries for slots the previous form's evaluation
             // freed, before this iteration's parse can reuse them (§9.1).
@@ -539,24 +513,46 @@ impl<B: Backend> Interpreter<B> {
             let datum = parser.parse_next();
             *fold_case = parser.read_state().fold_case;
             match datum {
-                Ok(Some(expr)) => {
-                    match self
-                        .backend
-                        .eval_with_source_map(expr, &global, &source_map)
-                    {
-                        Ok(result) => value = result,
-                        Err(error) => {
-                            let stop = on_error(error, &source_map.borrow());
-                            if let Some(error) = stop {
-                                return (value, FormsEnd::Stopped(error), source_map);
-                            }
+                Ok(Some(expr)) => match self.backend.eval_with_source_map(expr, env, &source_map) {
+                    Ok(result) => value = result,
+                    Err(error) => {
+                        let stop = on_error(error, &source_map.borrow());
+                        if let Some(error) = stop {
+                            return (value, FormsEnd::Stopped(error), source_map);
                         }
                     }
-                }
+                },
                 Ok(None) => return (value, FormsEnd::Read, source_map),
                 Err(error) => return (value, FormsEnd::Unreadable(error), source_map),
             }
         }
+    }
+
+    /// The interpreter's global environment, shared with its backend.
+    pub fn global_env(&self) -> Rc<Environment> {
+        self.backend.global_env().clone()
+    }
+
+    /// Format a TaggedValue for display using write notation (machine-readable)
+    ///
+    /// Uses the datum writer which properly handles all TaggedValue types
+    /// including heap pairs, vectors, strings, and circular structures.
+    /// Multiple values (from `values`) are unpacked and displayed one per line.
+    pub fn display_tagged(&self, tv: TaggedValue) -> String {
+        use patina_primitives::primitives::io::datum_writer::format_write_tagged;
+        let heap = self.backend.global_env().heap();
+
+        // Unpack multiple values (R7RS: each value displayed on its own line)
+        let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
+        if let Some(vals) = vals {
+            return vals
+                .iter()
+                .map(|v| format_write_tagged(*v, heap))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        format_write_tagged(tv, heap)
     }
 
     /// Get a reference to the underlying backend
@@ -570,29 +566,31 @@ impl<B: Backend> Interpreter<B> {
 
 /// Convenience type alias for interpreter with tree-walking backend
 ///
-/// This is the default backend and provides the same API as the previous
-/// non-generic `Interpreter` implementation.
+/// This explicitly selects the tree-walker. The recommended default is
+/// `VmInterpreter`, matching the CLI.
 ///
 /// # Example
 ///
-/// ```no_run
-/// use patina_interpreter::TreeWalkInterpreter;
-///
-/// let interp = TreeWalkInterpreter::new_tree_walker();
-/// let result = interp.eval_str("(+ 1 2 3)").unwrap();
 /// ```
+/// use patina_interpreter::TreeWalkInterpreter;
+/// let interp = TreeWalkInterpreter::new_tree_walker();
+/// assert_eq!(interp.eval_str("42").unwrap().as_fixnum(), Some(42));
+/// ```
+#[cfg(feature = "tree-walker")]
 pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
 
 // Specialized implementation for TreeWalker backend
+#[cfg(feature = "tree-walker")]
 impl Interpreter<TreeWalker> {
-    /// Create a new interpreter with the default TreeWalker backend
+    /// Create a new interpreter with the TreeWalker backend
     ///
     /// This initializes an interpreter with full R7RS continuation support
     /// including call/cc, dynamic-wind, and exception handling.
     ///
     /// This is a convenience method that's equivalent to:
-    /// ```ignore
-    /// Interpreter::new(TreeWalker::new())
+    /// ```
+    /// use patina_interpreter::{Interpreter, TreeWalker};
+    /// let interp = Interpreter::new(TreeWalker::new());
     /// ```
     pub fn new_tree_walker() -> Self {
         Self::new(TreeWalker::new())
@@ -624,34 +622,30 @@ impl Interpreter<TreeWalker> {
     pub fn evaluator(&self) -> &Evaluator {
         self.backend.evaluator()
     }
-
-    /// Format a TaggedValue for display using write notation (machine-readable)
-    ///
-    /// Uses the datum writer which properly handles all TaggedValue types
-    /// including heap pairs, vectors, strings, and circular structures.
-    /// Multiple values (from `values`) are unpacked and displayed one per line.
-    pub fn display_tagged(&self, tv: TaggedValue) -> String {
-        use patina_tree_walker::eval::format_write_tagged;
-        let heap = self.evaluator().global_env.heap();
-
-        // Unpack multiple values (R7RS: each value displayed on its own line)
-        let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
-        if let Some(vals) = vals {
-            return vals
-                .iter()
-                .map(|v| format_write_tagged(*v, heap))
-                .collect::<Vec<_>>()
-                .join("\n");
-        }
-
-        format_write_tagged(tv, heap)
-    }
 }
 
 // Implement Default only for TreeWalker backend
+#[cfg(feature = "tree-walker")]
 impl Default for Interpreter<TreeWalker> {
     fn default() -> Self {
         Self::new_tree_walker()
+    }
+}
+
+/// Recommended embedding type, using the same VM backend as the CLI.
+#[cfg(feature = "vm")]
+pub type VmInterpreter = Interpreter<VmBackend>;
+
+#[cfg(feature = "vm")]
+impl Interpreter<VmBackend> {
+    /// Construct the recommended VM interpreter.
+    pub fn new_vm() -> Self {
+        Self::new(VmBackend::new())
+    }
+
+    /// Construct a VM interpreter with a host-supplied filesystem.
+    pub fn new_vm_with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
+        Self::new(VmBackend::with_fs(fs))
     }
 }
 
@@ -710,7 +704,7 @@ impl<E: std::error::Error + patina_runtime::HasDiagnostic> patina_runtime::HasDi
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "tree-walker"))]
 mod tests {
     use super::*;
 
