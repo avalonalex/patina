@@ -1,0 +1,12 @@
+[package]
+name = "interp-churn"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-interpreter = { path = "../../../../../../../crates/patina-interpreter" }
+
+[profile.release]
+debug = false
+
+[workspace]

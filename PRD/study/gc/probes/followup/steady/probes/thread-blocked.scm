@@ -1,0 +1,11 @@
+(import (scheme base) (scheme write) (scheme process-context) (srfi 18))
+(define N (string->number (cadr (command-line))))
+;; N threads blocked for ever on mutexes nothing else reaches
+(let loop ((i 0))
+  (when (< i N)
+    (let ((m (make-mutex)))
+      (mutex-lock! m)
+      (thread-start! (make-thread (lambda () (mutex-lock! m) 'never))))
+    (loop (+ i 1))))
+(thread-sleep! 0.5)
+(display 'done) (newline)

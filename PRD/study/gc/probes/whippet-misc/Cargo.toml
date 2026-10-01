@@ -1,0 +1,9 @@
+[package]
+name = "whippet-misc-sizes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+
+[workspace]

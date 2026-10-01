@@ -1,0 +1,13 @@
+(import (scheme base) (scheme file) (scheme write))
+(define (make-garbage-port name)
+  (let ((p (open-output-file name)))
+    (write-string "hello" p)
+    #f))
+(define (file-text name)
+  (call-with-input-file name
+    (lambda (in) (let ((s (read-string 100 in))) (if (eof-object? s) "" s)))))
+(make-garbage-port "e1b.txt")
+(display "before-alloc: ") (write (file-text "e1b.txt")) (newline)
+(define (churn n acc) (if (= n 0) (length acc) (churn (- n 1) (if (> (length acc) 1000) '() (cons (make-vector 8 n) acc)))))
+(let loop ((k 0)) (if (< k 2000) (begin (churn 1000 '()) (loop (+ k 1)))))
+(display "after-alloc: ") (write (file-text "e1b.txt")) (newline)

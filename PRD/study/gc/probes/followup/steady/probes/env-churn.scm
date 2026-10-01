@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(let loop ((i 0) (acc 0))
+  (if (< i N)
+      (let ((e (environment '(scheme base))))
+        (loop (+ i 1) (+ acc (eval '(+ 1 2) e))))
+      (begin (display acc) (newline))))

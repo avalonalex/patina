@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme repl) (patina debug))
+(define env (interaction-environment))
+(define (go i) (when (< i 3000) (eval (list 'guard '(e (#t 0)) '(raise 'x)) env) (go (+ i 1))))
+(go 0)
+(write (assq 'symbols (gc-stats)))

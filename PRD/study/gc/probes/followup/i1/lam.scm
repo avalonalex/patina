@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write) (patina debug))
+(define (f) (guard (e (#t 0)) (raise 'x)))
+(define (go i) (when (< i 3000) (f) (go (+ i 1))))
+(go 0)
+(write (assq 'symbols (gc-stats)))

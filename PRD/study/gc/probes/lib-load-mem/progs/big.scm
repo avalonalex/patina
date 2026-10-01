@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write) (scheme time) (patina debug)
+        (scheme list) (scheme hash-table) (scheme char) (scheme comparator) (scheme generator)
+        (scheme set) (scheme sort) (scheme vector) (scheme text) (scheme ideque) (scheme ilist)
+        (scheme rlist) (scheme mapping) (scheme stream) (scheme show) (scheme regex) (scheme charset)
+        (scheme lseq) (scheme bytevector) (scheme flonum) (scheme fixnum) (scheme bitwise))

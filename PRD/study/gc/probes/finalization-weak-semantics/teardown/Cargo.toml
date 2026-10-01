@@ -1,0 +1,11 @@
+[package]
+name = "fin-teardown"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "../../../../../../crates/patina-core" }
+patina-interpreter = { path = "../../../../../../crates/patina-interpreter" }
+patina-runtime = { path = "../../../../../../crates/patina-runtime" }
+
+[workspace]

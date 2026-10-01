@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (t m))
+(write (m3 1))
+(write (helper-proc.0 7))
+(define (helper-proc.0 x) 'mine)
+(write (helper-proc.0 7))
+(write (m3 1))
+(newline)

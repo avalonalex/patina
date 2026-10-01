@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define (f) (list-copy '(1 2)))
+(define (g) (car '(1 2)))
+(write (list (f) (g))) (newline)
+(define (list-copy x) 'mine)
+(define (car x) 'mycar)
+(write (list (f) (g))) (newline)

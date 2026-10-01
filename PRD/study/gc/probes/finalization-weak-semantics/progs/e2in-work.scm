@@ -1,0 +1,12 @@
+(import (scheme base) (scheme file) (scheme write))
+(define count 0)
+(define result
+  (guard (e (#t (list 'failed-at count (if (file-error? e) 'file-error 'other-error))))
+    (let loop ()
+      (if (< count 20000)
+          (let ((p (open-input-file "data.txt")))
+            (read-line p)
+            (make-list 50 count)
+            (set! count (+ count 1)) (loop))
+          (list 'ok count)))))
+(write result) (newline)

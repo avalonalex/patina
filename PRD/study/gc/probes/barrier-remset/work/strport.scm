@@ -1,0 +1,10 @@
+(import (scheme base) (scheme write))
+;; string building + assoc-list environments + parameterize
+(define p (make-parameter 0))
+(define (f n) (if (= n 0) (p) (parameterize ((p (+ (p) 1))) (f (- n 1)))))
+(define out (open-output-string))
+(let loop ((i 0))
+  (when (< i 20000)
+    (write (list i (f 5) (number->string i 16)) out)
+    (loop (+ i 1))))
+(display (string-length (get-output-string out))) (newline)

@@ -1,0 +1,8 @@
+[package]
+name = "sizes-java-hotspot"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+patina-vm = { path = "../../../../../crates/patina-vm" }
+[workspace]

@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define s (open-output-string))
+(current-output-port s)
+(display "x")
+(current-output-port (current-error-port))
+(write (get-output-string s))
+(newline)

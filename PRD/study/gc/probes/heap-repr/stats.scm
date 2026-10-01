@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (patina debug))
+(define (show tag) (display tag) (display " ") (write (gc-stats)) (newline))
+(show "startup")
+(gc)
+(define (spin n) (if (> n 0) (spin (- n 1)) 'done))
+(spin 10)
+(show "after-gc")

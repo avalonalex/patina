@@ -1,0 +1,8 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme process-context) (patina debug))
+(define n (string->number (cadr (command-line))))
+(let loop ((i 0))
+  (when (< i n)
+    (environment '(scheme base))
+    (if (= 0 (modulo i 100)) (gc))
+    (loop (+ i 1))))
+(write (assq 'collections (gc-stats))) (newline)

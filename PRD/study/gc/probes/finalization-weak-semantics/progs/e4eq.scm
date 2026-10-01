@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (scheme file))
+(define p (open-output-file "eq.txt"))
+(write (list (eq? (current-output-port) (current-output-port))
+             (let ((q #f)) (with-output-to-file "eq2.txt" (lambda () (set! q (eq? (current-output-port) (current-output-port))))) q)
+             (eq? p p)
+             (parameterize ((current-output-port p)) (eq? (current-output-port) p))))
+(newline)

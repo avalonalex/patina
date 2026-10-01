@@ -1,0 +1,16 @@
+[package]
+name = "sendcheck"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+patina-core = { path = "../../../../../../crates/patina-core" }
+patina-runtime = { path = "../../../../../../crates/patina-runtime" }
+patina-primitives = { path = "../../../../../../crates/patina-primitives" }
+patina-frontend = { path = "../../../../../../crates/patina-frontend" }
+patina-vm = { path = "../../../../../../crates/patina-vm" }
+patina-tree-walker = { path = "../../../../../../crates/patina-tree-walker" }
+patina-interpreter = { path = "../../../../../../crates/patina-interpreter" }
+patina-ir = { path = "../../../../../../crates/patina-ir" }

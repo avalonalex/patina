@@ -1,0 +1,8 @@
+(define N (string->number (cadr (command-line))))
+(define env (interaction-environment))
+(let loop ((i 0) (acc 0))
+  (if (< i N)
+      (begin
+        (eval '(define (f x) (let ((y (* x 2))) (if (> y 10) (- y 1) (+ y 1)))) env)
+        (loop (+ i 1) (+ acc (eval '(f 3) env))))
+      (begin (display acc) (newline))))

@@ -1,0 +1,6 @@
+(import (scheme base) (scheme eval) (scheme write))
+(define (nest n)
+  (if (= n 0) 'a (list 'let '((a 1)) (nest (- n 1)))))
+(write (guard (e (#t (list 'refused (if (error-object? e) (error-object-message e) e))))
+  (eval (nest 10000) (environment '(scheme base)))))
+(newline)

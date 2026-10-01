@@ -1,0 +1,10 @@
+(import (scheme base) (scheme file) (scheme write))
+(define count 0)
+(define kept '())
+(define result
+  (guard (e (#t (list 'failed-at count (if (file-error? e) 'file-error 'other-error))))
+    (let loop ()
+      (if (< count 5000)
+          (begin (set! kept (cons (open-input-file "data.txt") kept)) (set! count (+ count 1)) (loop))
+          (list 'ok count)))))
+(write result) (newline)

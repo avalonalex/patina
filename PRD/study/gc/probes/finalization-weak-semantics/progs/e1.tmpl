@@ -1,0 +1,13 @@
+(import (scheme base) (scheme file) (scheme write) GCLIB)
+(define (make-garbage-port name)
+  (let ((p (open-output-file name)))
+    (write-string "hello" p)
+    #f))
+(define (file-text name)
+  (call-with-input-file name
+    (lambda (in) (let ((s (read-string 100 in))) (if (eof-object? s) "" s)))))
+(make-garbage-port "e1.txt")
+(display "before-gc: ") (write (file-text "e1.txt")) (newline)
+(gc) (gc)
+(let loop ((i 0)) (if (< i 10) (begin (cons i i) (loop (+ i 1)))))
+(display "after-gc: ") (write (file-text "e1.txt")) (newline)

@@ -1,5 +1,17 @@
 # GC Stage 5+: Pause Work and Collector Upgrades
 
+> **Superseded 2026-10-01 by [`PRD/GC_PRD.md`](../GC_PRD.md)** and archived. It
+> is kept for its dated measurements: do not update it. Section references are
+> into `docs/GC_DESIGN.md` as it stood then. Priority 1 item 1 (#19) and
+> Priority 2b (#423) were complete; the open items went to these stages of the
+> new PRD:
+>
+> - Priority 1 item 2 → traced code liveness at stage 4e and descriptors in stage 5c's non-moving space; the immortal set is replaced by memory-contract rule M1.
+> - Priority 2 → stage 2 (rooted loading) and stage 4e (nested loops collect once the weak continuation tables go).
+> - Priority 3 → stage 5 (lazy sweep), stage 7 (sticky generations), decision 11 as amended by SD2 (weak symbol table).
+> - Priority 4 → stage 3: the poll is folded into the stack-limit check at frame entry.
+> - Non-goals → moving is no longer ruled out (stage 8, opportunistic evacuation); stop-the-world stays, and shared-memory parallelism is decision 7.
+
 **Status:** In progress — Priority 1 item 1 (weak continuation tables) done
 2026-08-05. Stage 4 complete 2026-08-03 (PRs #4–#6, #8, #10, #11):
 both backends collect, adaptive collection is always on, the safe point has no

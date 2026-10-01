@@ -1,0 +1,8 @@
+(import (scheme base) (scheme eval) (scheme repl) (scheme process-context))
+(define n (string->number (cadr (command-line))))
+(define form '(case (car (command-line)) ((1 2) 'a) (else (vector-ref (vector) 0))))
+(let loop ((i 0))
+  (when (< i n)
+    (guard (e (#t #f)) (eval form (interaction-environment)))
+    (loop (+ i 1))))
+(eval form (interaction-environment))

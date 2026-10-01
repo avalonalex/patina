@@ -1,0 +1,6 @@
+(define (lf1 x) (+ x 1))
+(define (lf2 x) (* x 2))
+(define (lf3 x) (let loop ((i 0) (a 0)) (if (< i x) (loop (+ i 1) (+ a (lf1 i) (lf2 i))) a)))
+(define lv (list 1 2 3 "four" 'five))
+(define-record-type thing (make-thing a) thing? (a thing-a))
+(define lt (make-thing (lf3 10)))

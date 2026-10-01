@@ -1,0 +1,18 @@
+(import (scheme base) (scheme write) (scheme process-context) (scheme time))
+;; bounded live data: a ring of K slots, each holding a 10-element list,
+;; a 16-char string and a 4-element vector; replace one slot per iteration
+(define SECONDS (string->number (cadr (command-line))))
+(define K 20000)
+(define ring (make-vector K #f))
+(define start (current-jiffy))
+(define jps (jiffies-per-second))
+(define (make-item i)
+  (list (let build ((n 10) (acc '())) (if (= n 0) acc (build (- n 1) (cons (+ i n) acc))))
+        (make-string 16 #\a)
+        (vector i (* i 2) (* i 3) (inexact i))))
+(let loop ((i 0))
+  (vector-set! ring (modulo i K) (make-item i))
+  (if (and (= 0 (modulo i 10000))
+           (> (- (current-jiffy) start) (* SECONDS jps)))
+      (begin (display i) (newline))
+      (loop (+ i 1))))

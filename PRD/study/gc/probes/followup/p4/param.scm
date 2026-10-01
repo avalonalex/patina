@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define p (make-parameter 1))
+(parameterize ((p 2)) (car 5))
+(write (p))
+(newline)
+(dynamic-wind (lambda () (display "[in]")) (lambda () (car 5)) (lambda () (display "[out]")))
+(newline)

@@ -1,0 +1,8 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme repl) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(define env (interaction-environment))
+(let loop ((i 0))
+  (when (< i N)
+    (eval '(import (scheme char) (scheme list)) env)
+    (loop (+ i 1))))
+(display (eval '(char-upcase #\a) env)) (newline)

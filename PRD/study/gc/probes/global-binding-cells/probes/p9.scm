@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write))
+(define count 'mine)
+(define (show) count)
+(import (counter))
+(bump!)
+(write (list (show) count)) (newline)

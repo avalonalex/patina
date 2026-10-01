@@ -1,0 +1,16 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme repl) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(define env (interaction-environment))
+;; a macro whose expansion introduces a hidden top-level definition, re-run
+;; with the same visible name each time (REPL redefinition)
+(eval '(define-syntax def-counter
+         (syntax-rules ()
+           ((_ name) (begin (define state 0)
+                            (define (name) (set! state (+ state 1)) state)))))
+      env)
+(let loop ((i 0) (acc 0))
+  (if (< i N)
+      (begin
+        (eval '(def-counter counter) env)
+        (loop (+ i 1) (+ acc (eval '(counter) env))))
+      (begin (display acc) (newline))))

@@ -1,13 +1,13 @@
 # Snow Compatibility & Performance Roadmap (Umbrella)
 
 **Created:** 2026-06-19
-**Status:** Track L complete 2026-09-29; performance follow-ups remain in Track P and the GC stage 5 PRD
+**Status:** Track L complete 2026-09-29; performance follow-ups remain in Track P and the GC PRD
 **Owner decisions:** interleave both tracks · library-compat-first (defer the fetcher) · clarity-safe optimizations only
 
 This is the **cross-track overview**. Current status and standing rules live in:
 
 - **Track P — VM performance:** [performance PRD](TRACK_P_PERFORMANCE_PRD.md)
-  and [GC stage 5 PRD](future/GC_STAGE5_PRD.md).
+  and [GC PRD](GC_PRD.md).
 - **Track L — Snow library compatibility:** [archived completion record](ARCHIVE/TRACK_L_LEFTOVERS.md).
   #551 closed the last recorded item, #423. The 2026-09-28 corpus measurement
   passes 143 of 143 in-scope packages on both backends; #429 removed all

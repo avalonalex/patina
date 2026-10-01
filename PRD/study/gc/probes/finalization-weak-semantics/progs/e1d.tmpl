@@ -1,0 +1,7 @@
+(import (scheme base) (scheme file) (scheme process-context))
+(define (make-garbage-port name)
+  (let ((p (open-output-file name)))
+    (write-string "hello" p)
+    #f))
+(make-garbage-port "e1d.txt")
+(exit 0)

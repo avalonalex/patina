@@ -1,0 +1,14 @@
+[package]
+name = "tree-walker-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+patina-tree-walker = { path = "../../../../../crates/patina-tree-walker" }
+patina-interpreter = { path = "../../../../../crates/patina-interpreter", default-features = false, features = ["tree-walker"] }
+
+[profile.release]
+debug = 1
+
+[workspace]

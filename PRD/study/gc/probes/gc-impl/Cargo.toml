@@ -1,0 +1,14 @@
+[package]
+name = "gc-impl-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+patina-vm = { path = "../../../../../crates/patina-vm" }
+patina-interpreter = { path = "../../../../../crates/patina-interpreter" }
+
+[workspace]
+
+[profile.release]
+debug = false

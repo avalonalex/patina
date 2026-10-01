@@ -1,0 +1,5 @@
+(define n (string->number (cadr (command-line))))
+(length (make-list n 0))
+(collect (collect-maximum-generation)) (collect (collect-maximum-generation))
+(display "idle") (newline) (flush-output-port (current-output-port))
+(read-char)
