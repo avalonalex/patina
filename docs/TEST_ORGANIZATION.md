@@ -665,7 +665,7 @@ are rejected outright for the same reason.
 | patina-frontend | 100 | Lexer, parser, desugarer |
 | patina-ir | 22 | CPS transformation |
 | patina-tree-walker | 15 | Evaluator internals |
-| patina-pipeline | 13 | Pipeline orchestration |
+| patina-pipeline | — | Compatibility facade; tested by the isolated embedding consumer |
 | patina-runtime | 9 | Environment, library system |
 | patina-interpreter | 3 | High-level API |
 | **Total** | **~483** | |
@@ -856,6 +856,38 @@ cargo test --package patina-tests --test cps_features
 # Only the macro hygiene scoreboard
 cargo test --package patina-tests --test hygiene_matrix
 ```
+
+### Embedding API and feature coverage (#595)
+
+`Interpreter<B>` supplies the one program loop and source tracking used by the
+VM/tree-walker aliases and the legacy adapters. The runnable examples and the
+[migration guide](../README.md#embedding-from-rust) make backend selection
+explicit. `patina-pipeline` only re-exports compatibility types from the
+interpreter; the interpreter never depends on that facade.
+
+```bash
+cargo test -p patina-interpreter -p patina-pipeline --lib --tests
+cargo test -p patina-tests --test interpreter_api
+./scripts/check_embedding_features.sh
+```
+
+The script creates a consumer outside the workspace and tests no features
+(host-supplied backend), VM, tree-walker, both, legacy-only, and actual defaults.
+It checks the normal dependency graph as well as execution: a VM-only host must
+not include the tree-walker or pipeline, and a tree-walker-only host must not
+include the VM. Workspace dev-dependency feature unification cannot supply a
+missing feature. It uses cached dependencies (`--offline`; run a workspace
+build first) and `target/embedding-features`, separate from the CLI artifacts.
+Both CI platform test jobs run it.
+
+The consumer covers malformed input (#329), library/macro imports, macro and
+runtime diagnostics with source positions, multiple/cyclic result formatting,
+host command lines, and old pipeline module paths with a child environment.
+`legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
+legacy error categories and effects before a read error. These are fixed
+embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
+not a separate equivalence generator. Both backend examples and the rustdoc
+examples should also run when this API changes.
 
 ### Development Workflow
 ```bash
@@ -1440,9 +1472,12 @@ crates/
 patina-tests depends on:
   └─ patina-interpreter
       ├─ patina-frontend
-      ├─ patina-tree-walker
-      ├─ patina-pipeline
+      ├─ patina-primitives (shared datum writer)
+      ├─ patina-vm (optional)
+      ├─ patina-tree-walker (optional)
       └─ patina-runtime
+
+patina-pipeline → patina-interpreter (legacy-pipeline feature, no defaults)
 ```
 
 ## Known Issues and Future Work

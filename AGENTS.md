@@ -23,7 +23,7 @@ patina/
     ├── patina-ir/          # ExprVisitor, CPS transform, re-exports CoreExpr types
     ├── patina-frontend/    # Lexer, Parser, Desugarer
     ├── patina-macros/      # syntax-rules with Racket-style scope-set hygiene
-    ├── patina-pipeline/    # StandardPipeline orchestration
+    ├── patina-pipeline/    # Legacy tree-walker embedding facade
     ├── patina-primitives/  # Shared backend-agnostic primitive implementations
     ├── patina-vm/          # Register-based bytecode VM (default backend)
     ├── patina-tree-walker/ # CPS tree-walking backend (--tree-walker)

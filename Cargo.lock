@@ -586,9 +586,11 @@ dependencies = [
  "patina-core",
  "patina-frontend",
  "patina-ir",
- "patina-pipeline",
+ "patina-macros",
+ "patina-primitives",
  "patina-runtime",
  "patina-tree-walker",
+ "patina-vm",
  "thiserror",
 ]
 
@@ -614,13 +616,7 @@ dependencies = [
 name = "patina-pipeline"
 version = "0.1.0"
 dependencies = [
- "patina-core",
- "patina-frontend",
- "patina-ir",
- "patina-macros",
- "patina-runtime",
- "patina-tree-walker",
- "thiserror",
+ "patina-interpreter",
 ]
 
 [[package]]

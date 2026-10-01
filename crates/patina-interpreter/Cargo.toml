@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 description = "High-level interpreter interface for Patina Scheme - supports multiple backends"
 
+[features]
+# Keep existing tree-walker and pipeline imports source-compatible. New hosts
+# can use default-features = false with vm (or tree-walker) alone.
+default = ["vm", "tree-walker", "legacy-pipeline"]
+vm = ["dep:patina-vm"]
+tree-walker = ["dep:patina-tree-walker"]
+legacy-pipeline = ["tree-walker", "dep:patina-macros"]
+
 [dependencies]
 # Core types
 patina-core = { path = "../patina-core" }
@@ -11,11 +19,12 @@ patina-runtime = { path = "../patina-runtime" }
 patina-frontend = { path = "../patina-frontend" }
 patina-ir = { path = "../patina-ir" }
 
-# Pipeline orchestration
-patina-pipeline = { path = "../patina-pipeline" }
-
-# Default backend
-patina-tree-walker = { path = "../patina-tree-walker" }
+# Shared result writer and optional concrete backends.
+patina-primitives = { path = "../patina-primitives" }
+patina-vm = { path = "../patina-vm", optional = true }
+patina-tree-walker = { path = "../patina-tree-walker", optional = true }
+# Only the legacy error enum exposes MacroError directly.
+patina-macros = { path = "../patina-macros", optional = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -23,3 +32,11 @@ thiserror = { workspace = true }
 [lib]
 name = "patina_interpreter"
 path = "src/lib.rs"
+
+[[example]]
+name = "embed_vm"
+required-features = ["vm"]
+
+[[example]]
+name = "embed_tree_walker"
+required-features = ["tree-walker"]

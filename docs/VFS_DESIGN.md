@@ -53,6 +53,7 @@ for failed directory listing; Patina raises errors.
 [`FileSystem`](../crates/patina-core/src/vfs.rs) is a `Send + Sync` trait in
 `patina-core`. Both backends accept an `Arc<dyn FileSystem>`:
 
+- `VmInterpreter::new_vm_with_fs(fs)`
 - `TreeWalkInterpreter::new_tree_walker_with_fs(fs)`
 - `Interpreter::new(VmBackend::with_fs(fs))`
 

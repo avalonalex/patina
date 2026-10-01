@@ -2,19 +2,11 @@
 name = "patina-pipeline"
 version = "0.1.0"
 edition = "2024"
-description = "Flexible pipeline orchestration for Patina Scheme"
+description = "Legacy tree-walker embedding facade for Patina Scheme"
 
 [dependencies]
-# Workspace crates
-patina-core = { path = "../patina-core" }
-patina-runtime = { path = "../patina-runtime" }
-patina-frontend = { path = "../patina-frontend" }
-patina-macros = { path = "../patina-macros" }
-patina-ir = { path = "../patina-ir" }
-patina-tree-walker = { path = "../patina-tree-walker" }
-
-# Error handling
-thiserror = { workspace = true }
+# Compatibility facade: evaluation lives in Interpreter<B>, never here.
+patina-interpreter = { path = "../patina-interpreter", default-features = false, features = ["legacy-pipeline"] }
 
 [lib]
 name = "patina_pipeline"
