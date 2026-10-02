@@ -370,6 +370,9 @@ include their fast true/false edges and their deoptimization fallthrough.
 These are GC metadata, with no extra bytecode instructions. The VM clears
 excluded slots just before collection and in full/delimited continuation
 snapshots at capture, then traces the complete register vectors as before.
+A check build clears them to `DEAD_SLOT` and panics where an instruction or a
+call's argument copy reads one, so a map that excludes a register still to be
+read fails at that read (#625, `docs/GC_DESIGN.md` §11 item 6).
 The entry map also retires stale slots in a reused tail-call window. Pending
 earlier operands and local bindings remain roots; this is expression lifetime
 tracking, not last-use analysis of local variables. Runtime-built stubs keep

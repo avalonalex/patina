@@ -98,14 +98,18 @@ GitHub's path-filter limits and required-check considerations.
 |---|---|
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`) |
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
-| GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621) and the GC protocol checks (#624) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
+| GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621), the GC protocol checks (#624) and the retired-register checks (#625) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
+| GC zeal (`gc-zeal.yml`, path-filtered) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, only for changes to the VM's runtime or compiler, the heap, the tree-walker's `cps_eval` or the lane itself |
 | Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 For GC/rooting changes, also run `scripts/run_gc_differential.sh` against release
 and debug builds; debug builds, and release built with
 `--features patina-core/gc-check`, compile in the stale-reference checks (#621),
-which panic on a use of a freed or reused slot. For backend semantics,
+which panic on a use of a freed or reused slot, and fill a register its
+liveness map retired with `DEAD_SLOT`, which panics when read (#625). For
+changes to register liveness maps, safe points or collection triggers, also
+run `scripts/run_gc_zeal.sh` on the release `gc-check` build. For backend semantics,
 run both chibi backend scripts. Check CI results when a branch is pushed; a push
 alone does not establish that checks passed.
 
