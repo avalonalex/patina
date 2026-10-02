@@ -14,9 +14,13 @@
 # Usage: scripts/run_gc_differential.sh [path-to-patina-binary]
 # Default binary: target/release/patina (build it first).
 #
-# Run against a debug build too when touching GC internals — release turns a
-# use-after-free into a confusing type error at an unrelated call site, while
-# the debug build's poison assertions panic at the exact accessor.
+# Run against a build with the stale-reference checks (#621) when touching GC
+# internals: a debug build, or release built with
+# `--features patina-core/gc-check`. A plain release build turns a
+# use-after-free into a confusing type error at an unrelated call site, or
+# into nothing at all once the slot is reused, while a check build panics at
+# the first use of the stale value, or at the next collection that reaches
+# it. CI's release lane runs the check build at stress 1.
 set -euo pipefail
 
 # Apply before bootstrap, including the generated reclamation probes below.
@@ -33,7 +37,8 @@ BIN="${1:-target/release/patina}"
 #
 # 16 keeps collection roughly 4000x more frequent than the adaptive default
 # (which collects about every 65k allocations) for 13x less runtime. Override
-# to 1 when hunting a specific lost root.
+# to 1 when hunting a specific lost root; CI's release lane does, on the
+# gc-check build, where it costs a few minutes.
 #
 # Note the reclamation proof below asserts >1000 collections over 20k
 # allocations, so it holds only while this stays <= 16.

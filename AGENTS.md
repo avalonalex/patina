@@ -96,12 +96,14 @@ GitHub's path-filter limits and required-check considerations.
 |---|---|
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`) |
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
-| GC differential | `run_gc_differential.sh` on release **and** on debug with poison assertions |
+| GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the stale-reference checks' positive controls (#621), **and** on debug at stress 16 |
 | Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings` |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 For GC/rooting changes, also run `scripts/run_gc_differential.sh` against release
-and debug builds; the debug lane enables poison assertions. For backend semantics,
+and debug builds; debug builds, and release built with
+`--features patina-core/gc-check`, compile in the stale-reference checks (#621),
+which panic on a use of a freed or reused slot. For backend semantics,
 run both chibi backend scripts. Check CI results when a branch is pushed; a push
 alone does not establish that checks passed.
 

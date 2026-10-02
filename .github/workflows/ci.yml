@@ -91,8 +91,11 @@ jobs:
 
   # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
   # be byte-identical with GC off, under stress, and under the adaptive mode,
-  # on both backends. The debug lane is the strong one — poison assertions
-  # turn a lost root into a deterministic panic at the exact accessor.
+  # on both backends. Both run the stale-reference checks (#621), which turn
+  # a lost root into a deterministic panic at the first use of the stale
+  # value, or at the next collection that reaches it: every debug build has
+  # them, and the release lane compiles them in with patina-core's gc-check
+  # feature, which makes stress 1 affordable there.
   gc-differential:
     name: GC differential (release)
     runs-on: ubuntu-latest
@@ -101,10 +104,36 @@ jobs:
     - name: Install Rust
       run: rustup show
     - uses: Swatinem/rust-cache@v2
-    - name: Build release
-      run: cargo build --release
-    - name: Stress + adaptive lanes vs baseline, both backends
-      run: ./scripts/run_gc_differential.sh target/release/patina
+    # Only this lane builds with the checks; every other job keeps the plain
+    # release build, which compiles none of them.
+    - name: Build release with the stale-reference checks
+      run: cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
+    # Without the checks this lane can only see a premature collection that
+    # changes the output, so a binary built without them must fail the job,
+    # not pass it. A build with them says so in its version line.
+    - name: Require the checks in the binary
+      run: |
+        version=$(./target/release/patina --version)
+        echo "$version"
+        case "$version" in
+          *"(gc-check)") ;;
+          *) echo "::error::target/release/patina was built without the stale-reference checks"; exit 1 ;;
+        esac
+    # The positive controls, built with the same features: each must panic
+    # with its check's message. A build without the checks reports them
+    # ignored; --include-ignored runs them anyway, so there they fail, and
+    # the summary must show controls that ran and none ignored.
+    - name: Positive controls for the checks
+      run: |
+        set -euo pipefail
+        controls() {
+          "$@" 2>&1 | tee "$RUNNER_TEMP/controls.txt"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; 0 ignored' "$RUNNER_TEMP/controls.txt"
+        }
+        controls cargo test --release -p patina-core --features gc-check --lib -- --include-ignored heap::check:: heap::gc::tests::marking_a_free
+        controls cargo test --release -p patina-tests --features gc-check --test stale_references -- --include-ignored
+    - name: Stress 1 + adaptive lanes vs baseline, both backends
+      run: PATINA_GC_STRESS_INTERVAL=1 ./scripts/run_gc_differential.sh target/release/patina
 
   gc-differential-debug:
     name: GC differential (debug, poison assertions)
