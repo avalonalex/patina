@@ -60,6 +60,11 @@ impl Default for SimpleInterpreter {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests evaluate through the adapter from outside any loop, as an embedder \
+              does, and none reads a value from one evaluation after another (#605's shape)"
+)]
 mod tests {
     use super::*;
 

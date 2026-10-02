@@ -102,6 +102,22 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_resilient_with_source_name("", "");
 
+    // patina-interpreter's deprecated adapters
+    #[cfg(feature = "legacy-pipeline")]
+    {
+        use crate::legacy::Pipeline;
+        #[expect(clippy::disallowed_methods, reason = "positive control")]
+        let _ = |p: &dyn Pipeline, env: &Rc<Environment>| p.eval("", env);
+        #[expect(clippy::disallowed_methods, reason = "positive control")]
+        let _ = |p: &dyn Pipeline, env: &Rc<Environment>| p.eval_program("", env);
+        #[allow(deprecated)]
+        #[expect(clippy::disallowed_methods, reason = "positive control")]
+        let _ = |i: &crate::SimpleInterpreter| i.eval_str("");
+        #[allow(deprecated)]
+        #[expect(clippy::disallowed_methods, reason = "positive control")]
+        let _ = |i: &crate::SimpleInterpreter| i.eval_program("");
+    }
+
     // patina-core
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |parent: Rc<Environment>| Environment::with_parent(parent);

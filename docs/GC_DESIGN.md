@@ -726,7 +726,9 @@ misspelled one, crate name included, which clippy otherwise skips without a
 word. `crates/patina-interpreter/src/reentry_lint_control.rs` matches every
 entry that crate can name, and each private entry is matched by its own call
 sites. `patina-tests` and `patina-repl` allow the lint through `[lints]` in
-their `Cargo.toml`, and the test and example targets of other crates through
+their `Cargo.toml` (the REPL's standard-input driver, a second
+`Interpreter::run_forms`, keeps an `expect` of its own, which overrides the
+crate's allow), and the test and example targets of other crates through
 a crate-level `allow`, `patina-core`'s unit tests (`cfg(test)`) among them;
 the core's own code is linted like any other crate's.
 
