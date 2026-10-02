@@ -684,7 +684,8 @@ tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
 and `eval`'s expansion (`expand_for_eval`, `eval_step`), which loads the
 libraries a datum imports while `resumable_step` holds a primitive's state and
 the step's stacks; `Backend::eval`, `eval_global` and `eval_with_source_map`;
-`Interpreter::eval_*`; and `Environment::with_parent`, since an environment
+`Interpreter::eval_*` and the deprecated `Pipeline` and `SimpleInterpreter`
+adapters; and `Environment::with_parent`, since an environment
 built with it is reachable from no root unless its caller makes it so (#620).
 Only `with_parent` is listed, as #622 scoped it: an environment from
 `Environment::new` or `with_heap` that is held across a re-entry is named in
