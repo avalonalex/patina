@@ -88,8 +88,17 @@ must hold no outstanding borrow.
 with a **low-3-bit tag and 61-bit payload** (`tagged_value.rs:9-21`). Despite
 older doc comments saying "NaN-boxed", it is not — it is a tagged integer.
 Heap references are **arena indices** (`HeapIndex = u32`, `tagged_value.rs:28`),
-e.g. a pair is `(index << 3) | 0b011`. Index reuse is invisible to holders, so
-a non-moving collector requires no handle rewriting.
+e.g. a pair is `(index << 3) | 0b011`, the index in bits 3–34 of the word. A
+non-moving collector requires no handle rewriting. In a plain release build
+index reuse is invisible to holders. In a check build (debug, or release with
+`patina-core`'s `gc-check` feature; #621) bits 40–55 of the word also carry the
+slot's 16-bit allocation generation, which `heap_index()` does not read: the
+heap stamps it into every reference it makes, bumps a slot's generation when
+sweep frees it, and refuses a reference whose stamp no longer matches its slot
+(`heap/check.rs`, §4.5). So a holder of a reference to a reused slot panics
+instead of reading the new tenant. Every copy of a value carries the same
+stamp, so `eq?` and the other raw-bit consumers still see one key per
+object.
 
 ### 3.3 Environments live outside the heap
 
@@ -133,7 +142,8 @@ have to be taught about:
 2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
    locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
-4. `CallFrame.closure: Option<HeapIndex>` (`crates/patina-vm/src/types/mod.rs:52`).
+4. `CallFrame.closure: Option<ObjectIndex>`, a bare object-arena index that
+   keeps the generation stamp in check builds (`crates/patina-vm/src/types/mod.rs:52`).
 5. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
 6. `CompiledMacro` captures literal `TaggedValue`s at macro-compile time
    (`crates/patina-core/src/compiled_macro.rs:461-465`).
@@ -179,7 +189,7 @@ impl GcVisitor<'_> {
     /// The normal edge: mark + enqueue any heap reference; no-op for immediates.
     pub fn visit(&mut self, v: TaggedValue);
     /// For bare object-arena indices (CallFrame.closure).
-    pub fn visit_object_index(&mut self, i: HeapIndex);
+    pub fn visit_object_index(&mut self, index: ObjectIndex);
     /// Trace through an environment chain; deduped by Rc::as_ptr so the
     /// global env is not re-walked once per closure.
     pub fn visit_env(&mut self, env: &Rc<Environment>);
@@ -373,7 +383,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | Field | Root? | Notes |
 |-------|-------|-------|
 | `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
-| `frames[*].closure` | **yes** | **Bare `Option<HeapIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
+| `frames[*].closure` | **yes** | **Bare `Option<ObjectIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
 | `pending_escape` | **yes** | Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Empty at safe points (`mem::take`n during primitive calls), but rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
