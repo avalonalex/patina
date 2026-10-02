@@ -967,8 +967,9 @@ visitor exists, and the stress lane is the real safety net.
    read through `reg_at`. So a map that calls a live register dead panics at
    the read, where with `UNSPECIFIED` the program went wrong at an unrelated
    instruction, or not at all. Readers that only display registers (the step
-   tracer, its watchpoints, `--dump`, the datum writer, `debug_format`)
-   render it `#<dead>`. A plain release build writes `UNSPECIFIED` and checks
+   tracer, its watchpoints, the datum writer, `debug_format`) render it
+   `#<dead>`; `--dump` disassembles without running, so it shows no register
+   values. A plain release build writes `UNSPECIFIED` and checks
    nothing. Controls: `crates/patina-tests/tests/retired_registers.rs`, which
    drops the highest live register from every map with patina-vm's
    test-only switch (`test_support::DropHighestLive`, under its

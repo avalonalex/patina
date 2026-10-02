@@ -900,3 +900,19 @@ fn format_event_json(e: &TraceEvent) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::format_value;
+    use patina_core::new_shared_heap;
+    use patina_core::tagged_value::TaggedValue;
+
+    /// A register retirement filled with `DEAD_SLOT` (#625) displays as
+    /// `#<dead>` in the trace and its watchpoints: showing a register is not
+    /// a read of it, so the tracer does not panic on one.
+    #[test]
+    fn a_retired_register_displays_as_dead() {
+        let heap = new_shared_heap();
+        assert_eq!(format_value(TaggedValue::DEAD_SLOT, &heap), "#<dead>");
+    }
+}
