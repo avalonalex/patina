@@ -644,7 +644,9 @@ these checks except the defer balance, which every build checks.
 The positive controls make each check panic on purpose:
 `patina-core`'s `heap::gc::tests::protocol` (depth, holder, balance and poll)
 and `crates/patina-tests/tests/gc_protocol.rs` (a poll inside a window, on each
-backend). CI's release GC lane runs them on its `gc-check` build. Two tests
+backend). CI's release GC lane runs them on its `gc-check` build, and runs
+the balance control once more in the plain release build, the one build
+where only that check is compiled in. Two tests
 show the deferral itself is load-bearing: `parameterize` over a
 parameter-like procedure that calls `(gc)` while `%parameterize-swap!` holds
 an old value in Rust (both backends, `gc_shared_tests!`), and
