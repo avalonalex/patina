@@ -14,7 +14,7 @@ pub use continuation::{
 };
 pub use instruction::Instruction;
 
-use patina_core::tagged_value::HeapIndex;
+use patina_core::tagged_value::ObjectIndex;
 use patina_core::tagged_value::TaggedValue;
 use std::rc::Rc;
 
@@ -46,8 +46,10 @@ pub struct CallFrame {
     /// Number of registers owned by this frame.
     pub num_regs: u16,
     /// The closure for this activation (if the function is a closure).
-    /// `None` for top-level functions with no free variables.
-    pub closure: Option<HeapIndex>,
+    /// `None` for top-level functions with no free variables. An index, not
+    /// a value; in a check build it keeps the closure's generation stamp, so
+    /// the heap refuses it if the slot is ever freed and reused (#621).
+    pub closure: Option<ObjectIndex>,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
     pub return_reg: Reg,

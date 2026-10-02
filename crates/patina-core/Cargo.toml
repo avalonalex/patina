@@ -21,3 +21,10 @@ smallvec.workspace = true
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+# Compile the stale-reference checks (#621, `heap::GC_CHECK`) into a release
+# build. Every debug build has them already; this feature exists for the
+# release GC lane, which needs the checks in optimized code. Additive: the
+# shipped binary does not enable it and compiles none of the checks.
+gc-check = []

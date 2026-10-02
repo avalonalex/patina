@@ -14,7 +14,7 @@
 //!   pruned after marking (`sweep_weak`). Tracing them as strong roots
 //!   instead made every capture immortal — snapshots contain other
 //!   continuation refs, so the tables pinned themselves transitively.
-//! - **`CallFrame::closure`**, a bare `HeapIndex` rather than a
+//! - **`CallFrame::closure`**, a bare index (`ObjectIndex`) rather than a
 //!   `TaggedValue`, so a "scan every TaggedValue" pass would step straight
 //!   past it. It is rooted through `GcVisitor::visit_object_index`.
 //!
@@ -153,7 +153,7 @@ fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVis
 
 fn trace_frames(frames: &[CallFrame], visitor: &mut GcVisitor<'_>) {
     for frame in frames {
-        // A bare HeapIndex, not a TaggedValue.
+        // A bare index (`ObjectIndex`), not a TaggedValue.
         if let Some(closure) = frame.closure {
             visitor.visit_object_index(closure);
         }

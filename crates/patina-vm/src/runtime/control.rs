@@ -420,13 +420,9 @@ fn try_call_parameter(
         .unwrap_or(TaggedValue::UNSPECIFIED)))
 }
 
-fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::HeapIndex> {
+fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::ObjectIndex> {
     // VmClosures are TAG_OBJECT (generic heap objects).
-    if val.is_object() {
-        Some(val.heap_index())
-    } else {
-        None
-    }
+    patina_core::tagged_value::ObjectIndex::of(val)
 }
 
 /// Outlined error constructor — `#[cold]` keeps the formatting machinery

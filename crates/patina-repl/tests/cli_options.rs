@@ -134,9 +134,15 @@ fn version_flag_prints_version() {
     // --version touches no files; any cwd serves.
     let (stdout, stderr, ok) = run_patina(&std::env::temp_dir(), &["--version"]);
     assert!(ok, "stderr: {}", stderr);
+    // A build with the stale-reference checks (every debug build) says so.
+    let checks = if patina_core::GC_CHECK {
+        " (gc-check)"
+    } else {
+        ""
+    };
     assert_eq!(
         stdout.trim(),
-        format!("patina {}", env!("CARGO_PKG_VERSION"))
+        format!("patina {}{checks}", env!("CARGO_PKG_VERSION"))
     );
 }
 

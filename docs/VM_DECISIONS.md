@@ -75,7 +75,7 @@ pub struct CallFrame {
     pub pc:            usize,
     pub register_base: usize,
     pub num_regs:      u16,
-    pub closure:       Option<HeapIndex>,
+    pub closure:       Option<ObjectIndex>,
     pub return_reg:    Reg,
 }
 ```
@@ -111,7 +111,7 @@ slots at sweep, which drops those `Rc`s.
 
 The VM roots `VmState` (`runtime/vm_state/gc_roots.rs`), including two members no heap
 scan can reach: the continuation side tables (the heap holds only an opaque
-`VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `HeapIndex`).
+`VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `ObjectIndex`).
 
 **On by default** since stage 4c (`PATINA_GC=0` opts out), at zero standing
 cost since stage 4a's trigger redesign (the safe point reads one pending

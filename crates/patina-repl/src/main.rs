@@ -66,7 +66,15 @@ fn parse_args(args: &[String]) -> CliOptions {
                 process::exit(0);
             }
             "--version" => {
-                println!("patina {}", env!("CARGO_PKG_VERSION"));
+                // A build with the stale-reference checks says so, so that
+                // the release GC lane can refuse a binary built without them
+                // (#621). Every debug build has them.
+                let checks = if patina_core::GC_CHECK {
+                    " (gc-check)"
+                } else {
+                    ""
+                };
+                println!("patina {}{checks}", env!("CARGO_PKG_VERSION"));
                 process::exit(0);
             }
             "--diagnostics-file" => {

@@ -231,7 +231,9 @@ mod tests {
         assert!(heap.source(dead).is_none());
         assert!(heap.child_source(pair, 0).is_none());
         let reused = heap.alloc_identifier("new".into(), ScopeSet::new());
-        assert_eq!(reused, dead);
+        // The same slot. In a check build the new tenant's reference carries
+        // a newer generation stamp, so it is deliberately not `dead` (#621).
+        assert_eq!(reused.heap_index(), dead.heap_index());
         assert!(heap.source(reused).is_none());
         assert!(
             SourceMap::new()

@@ -370,35 +370,66 @@ impl TaggedValue {
     // =========================================================================
     // Heap Pointer Operations
     // =========================================================================
+    //
+    // The index constructors are crate-private: a heap reference comes from
+    // the heap that owns the slot, which stamps it with the slot's generation
+    // in a check build (`heap/check.rs`). A reference minted anywhere else
+    // would carry no stamp, so it would be refused as stale once its slot had
+    // been reused, and would not be `eq?` to the heap's own reference.
 
     /// Create a pair pointer from a heap index
     #[inline(always)]
-    pub fn pair(index: HeapIndex) -> Self {
+    pub(crate) fn pair(index: HeapIndex) -> Self {
         Self(((index as u64) << Self::TAG_BITS) | Self::TAG_PAIR)
     }
 
     /// Create a vector pointer from a heap index
     #[inline(always)]
-    pub fn vector(index: HeapIndex) -> Self {
+    pub(crate) fn vector(index: HeapIndex) -> Self {
         Self(((index as u64) << Self::TAG_BITS) | Self::TAG_VECTOR)
     }
 
     /// Create a string pointer from a heap index
     #[inline(always)]
-    pub fn string(index: HeapIndex) -> Self {
+    pub(crate) fn string(index: HeapIndex) -> Self {
         Self(((index as u64) << Self::TAG_BITS) | Self::TAG_STRING)
     }
 
-    /// Create a closure pointer from a heap index
+    /// Create a closure pointer from a heap index. No arena allocates a
+    /// `TAG_CLOSURE` value today; the tag is reserved.
     #[inline(always)]
-    pub fn closure(index: HeapIndex) -> Self {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn closure(index: HeapIndex) -> Self {
         Self(((index as u64) << Self::TAG_BITS) | Self::TAG_CLOSURE)
     }
 
     /// Create a generic object pointer from a heap index
     #[inline(always)]
-    pub fn object(index: HeapIndex) -> Self {
+    pub(crate) fn object(index: HeapIndex) -> Self {
         Self(((index as u64) << Self::TAG_BITS) | Self::TAG_OBJECT)
+    }
+
+    /// Where a check build keeps a heap reference's allocation generation:
+    /// payload bits 40–55, above the 32-bit index in bits 3–34 that
+    /// [`Self::heap_index`] reads, so the index needs no masking.
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    const GENERATION_SHIFT: u32 = 40;
+
+    /// This reference with its generation stamp set to `generation` (#621).
+    /// Only the heap stamps, with the generation of the slot it names.
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[inline(always)]
+    pub(crate) fn with_generation(self, generation: u16) -> Self {
+        const MASK: u64 = 0xFFFF << TaggedValue::GENERATION_SHIFT;
+        Self((self.0 & !MASK) | (u64::from(generation) << Self::GENERATION_SHIFT))
+    }
+
+    /// The generation a check build stamped into this heap reference: that of
+    /// its slot when the reference was made.
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[inline(always)]
+    pub(crate) fn generation(self) -> u16 {
+        (self.0 >> Self::GENERATION_SHIFT) as u16
     }
 
     /// Extract heap index (unchecked)
@@ -424,13 +455,14 @@ impl TaggedValue {
         self.0
     }
 
-    /// Create from raw u64 (for deserialization)
+    /// The value whose raw bits are `raw`, as [`Self::raw`] returned them.
     ///
-    /// # Safety
-    ///
-    /// Caller must ensure the raw value is a valid TaggedValue.
+    /// Crate-private, as the index constructors are: raw bits from anywhere
+    /// but a value the heap made would be a reference without the heap's
+    /// stamp (`heap/check.rs`). The `syntax_sources` prune in sweep, which
+    /// reads only the index, is the one caller.
     #[inline(always)]
-    pub fn from_raw(raw: u64) -> Self {
+    pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 
@@ -488,19 +520,78 @@ impl fmt::Debug for TaggedValue {
             write!(f, "TaggedValue::UNSPECIFIED")
         } else if self.is_char() {
             write!(f, "TaggedValue::character({:?})", self.as_char_unchecked())
-        } else if self.is_pair() {
-            write!(f, "TaggedValue::pair({})", self.heap_index())
-        } else if self.is_vector() {
-            write!(f, "TaggedValue::vector({})", self.heap_index())
-        } else if self.is_string() {
-            write!(f, "TaggedValue::string({})", self.heap_index())
-        } else if self.is_closure() {
-            write!(f, "TaggedValue::closure({})", self.heap_index())
-        } else if self.is_object() {
-            write!(f, "TaggedValue::object({})", self.heap_index())
+        } else if self.is_heap_pointer() {
+            let kind = if self.is_pair() {
+                "pair"
+            } else if self.is_vector() {
+                "vector"
+            } else if self.is_string() {
+                "string"
+            } else if self.is_closure() {
+                "closure"
+            } else {
+                "object"
+            };
+            write!(f, "TaggedValue::{kind}({}", self.heap_index())?;
+            // Two references to one slot differ only in their stamps once the
+            // slot is reused, so a check build shows it: without it a failed
+            // `assert_eq!` prints the same text on both sides.
+            #[cfg(any(debug_assertions, feature = "gc-check"))]
+            write!(f, ", gen {}", self.generation())?;
+            write!(f, ")")
         } else {
             write!(f, "TaggedValue({:#018x})", self.0)
         }
+    }
+}
+
+/// An object-arena reference kept as a bare index rather than a value: the
+/// VM's `CallFrame.closure`, which continuation snapshots copy.
+///
+/// In a check build it keeps the generation stamp of the reference it was
+/// taken from, so the heap refuses it once its slot has been freed and
+/// reused, as it refuses a stale [`TaggedValue`] (#621). Without the checks
+/// it is the index alone, the size of a [`HeapIndex`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ObjectIndex {
+    index: HeapIndex,
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    generation: u16,
+}
+
+impl ObjectIndex {
+    /// The index of `value` if it is an object reference.
+    #[inline(always)]
+    pub fn of(value: TaggedValue) -> Option<Self> {
+        value.is_object().then(|| Self {
+            index: value.heap_index(),
+            #[cfg(any(debug_assertions, feature = "gc-check"))]
+            generation: value.generation(),
+        })
+    }
+
+    /// The slot in the object arena.
+    #[inline(always)]
+    pub fn index(self) -> HeapIndex {
+        self.index
+    }
+
+    /// The object reference this index was taken from, stamp included.
+    #[inline(always)]
+    pub(crate) fn value(self) -> TaggedValue {
+        let value = TaggedValue::object(self.index);
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        let value = value.with_generation(self.generation);
+        value
+    }
+}
+
+impl fmt::Debug for ObjectIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ObjectIndex({}", self.index)?;
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        write!(f, ", gen {}", self.generation)?;
+        write!(f, ")")
     }
 }
 
@@ -848,9 +939,31 @@ mod tests {
             format!("{:?}", TaggedValue::character('λ')),
             "TaggedValue::character('λ')"
         );
-        assert_eq!(
-            format!("{:?}", TaggedValue::pair(5)),
+        let expected = if crate::heap::GC_CHECK {
+            "TaggedValue::pair(5, gen 0)"
+        } else {
             "TaggedValue::pair(5)"
+        };
+        assert_eq!(format!("{:?}", TaggedValue::pair(5)), expected);
+    }
+
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[test]
+    fn generation_stamp_leaves_the_index_and_tag_alone() {
+        let max_index = TaggedValue::object(HeapIndex::MAX);
+        let stamped = max_index.with_generation(u16::MAX);
+        assert_eq!(stamped.heap_index(), HeapIndex::MAX);
+        assert!(stamped.is_object());
+        assert_eq!(stamped.generation(), u16::MAX);
+        assert_eq!(stamped.with_generation(3).generation(), 3);
+        assert_ne!(stamped, max_index, "the stamp is part of identity");
+        assert_eq!(
+            format!("{:?}", TaggedValue::pair(7).with_generation(2)),
+            "TaggedValue::pair(7, gen 2)"
         );
+        let index = ObjectIndex::of(stamped).expect("an object reference");
+        assert_eq!(index.index(), HeapIndex::MAX);
+        assert_eq!(index.value(), stamped);
+        assert_eq!(ObjectIndex::of(TaggedValue::pair(1)), None);
     }
 }

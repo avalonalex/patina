@@ -72,7 +72,7 @@ pub use heap::gc::{
     MarkBits, MarkSweepCollector, run_mark_phase,
 };
 pub use heap::{
-    GcFreedBits, Heap, SharedHeap, SpineEnd,
+    GC_CHECK, GcFreedBits, Heap, SharedHeap, SpineEnd,
     gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
     new_shared_heap,
 };

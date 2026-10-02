@@ -29,7 +29,7 @@ pub struct CallFrame {
     pub pc:            usize,           // program counter
     pub register_base: usize,           // offset into the machine's register file
     pub num_regs:      u16,             // register window size
-    pub closure:       Option<HeapIndex>, // heap index of VmClosure (if any)
+    pub closure:       Option<ObjectIndex>, // VmClosure's object index (if any)
     pub return_reg:    Reg,             // where to write result in caller
     pub code:          Rc<CodeObject>,  // the code this frame runs
 }

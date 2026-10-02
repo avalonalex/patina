@@ -22,11 +22,13 @@
 //! - `numeric.rs`: All numeric operations (arithmetic, division, complex, number theory)
 //! - `gc.rs`: Mark-and-sweep garbage collection (see `docs/GC_DESIGN.md`)
 
+mod check;
 pub mod gc;
 mod numeric;
 mod source;
 
-use crate::tagged_value::{HeapIndex, TaggedValue};
+use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
+use check::SlotChecks;
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::cell::{Cell, RefCell};
@@ -66,6 +68,23 @@ pub enum GcFreedBits {
 /// - `values_stack`: The stack of parameter values (most recent on top)
 /// - `converter`: Optional converter procedure for the parameter
 pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
+
+/// Whether the stale-reference checks are compiled in (#621): every debug
+/// build, and a release build with `patina-core`'s `gc-check` feature, which
+/// the release GC lane enables. A plain release build — the shipped binary —
+/// has this `false`, and every check below folds away with it.
+///
+/// What it turns on, for every stale heap reference the collector can tell
+/// apart from a live one:
+/// - marking that reaches a slot already free when the collection began
+///   panics (`sweep_arena` in `gc.rs`, `docs/GC_DESIGN.md` §11 item 5);
+/// - every arena accessor panics on a reference to a freed slot, and on one
+///   to a slot that has been freed and reused since the reference was made,
+///   which it tells apart by the generation stamp in the reference
+///   (`heap/check.rs`);
+/// - marking panics on a root or traced edge whose slot was freed and reused
+///   (`GcVisitor::visit`).
+pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
 
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
@@ -375,6 +394,13 @@ pub struct Heap {
     /// Free list for objects
     free_objects: Vec<HeapIndex>,
 
+    /// Each arena's stale-reference state — every slot's generation, and
+    /// whether it is free (`heap/check.rs`). Zero-sized without the checks.
+    pair_checks: SlotChecks,
+    vector_checks: SlotChecks,
+    string_checks: SlotChecks,
+    object_checks: SlotChecks,
+
     /// Allocations since the last GC (drives the collection trigger)
     allocs_since_gc: usize,
 
@@ -541,6 +567,10 @@ impl Heap {
             free_vectors: Vec::new(),
             free_strings: Vec::new(),
             free_objects: Vec::new(),
+            pair_checks: SlotChecks::new(),
+            vector_checks: SlotChecks::new(),
+            string_checks: SlotChecks::new(),
+            object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
             gc_threshold: usize::MAX,
             gc_pending: Rc::new(Cell::new(false)),
@@ -702,28 +732,23 @@ impl Heap {
     #[inline]
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         self.note_alloc();
-        let index = if let Some(free) = self.free_pairs.pop() {
+        if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
-            free
+            self.pair_checks.reuse(TaggedValue::pair(free))
         } else {
             let index = self.pairs.len() as HeapIndex;
             self.pairs.push((car, cdr));
-            index
-        };
-        TaggedValue::pair(index)
+            self.pair_checks.push();
+            TaggedValue::pair(index)
+        }
     }
 
     /// Get pair contents
     #[inline(always)]
     pub fn get_pair(&self, ptr: TaggedValue) -> (TaggedValue, TaggedValue) {
         debug_assert!(ptr.is_pair());
-        let pair = self.pairs[ptr.heap_index() as usize];
-        debug_assert!(
-            pair.0 != TaggedValue::GC_POISON,
-            "use-after-free: pair slot {} was reclaimed by the GC",
-            ptr.heap_index()
-        );
-        pair
+        self.pair_checks.check("pair", ptr);
+        self.pairs[ptr.heap_index() as usize]
     }
 
     /// Get car of a pair
@@ -742,11 +767,7 @@ impl Heap {
     #[inline(always)]
     pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
-        debug_assert!(
-            self.pairs[ptr.heap_index() as usize].1 != TaggedValue::GC_POISON,
-            "use-after-free: pair slot {} was reclaimed by the GC",
-            ptr.heap_index()
-        );
+        self.pair_checks.check("pair", ptr);
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -754,11 +775,7 @@ impl Heap {
     #[inline(always)]
     pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
-        debug_assert!(
-            self.pairs[ptr.heap_index() as usize].0 != TaggedValue::GC_POISON,
-            "use-after-free: pair slot {} was reclaimed by the GC",
-            ptr.heap_index()
-        );
+        self.pair_checks.check("pair", ptr);
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 
@@ -769,15 +786,15 @@ impl Heap {
     /// Allocate a new vector
     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
         self.note_alloc();
-        let index = if let Some(free) = self.free_vectors.pop() {
+        if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
-            free
+            self.vector_checks.reuse(TaggedValue::vector(free))
         } else {
             let index = self.vectors.len() as HeapIndex;
             self.vectors.push(elements);
-            index
-        };
-        TaggedValue::vector(index)
+            self.vector_checks.push();
+            TaggedValue::vector(index)
+        }
     }
 
     /// Allocate a vector filled with a value
@@ -789,6 +806,7 @@ impl Heap {
     #[inline(always)]
     pub fn vector_len(&self, ptr: TaggedValue) -> usize {
         debug_assert!(ptr.is_vector());
+        self.vector_checks.check("vector", ptr);
         self.vectors[ptr.heap_index() as usize].len()
     }
 
@@ -796,6 +814,7 @@ impl Heap {
     #[inline(always)]
     pub fn vector_ref(&self, ptr: TaggedValue, index: usize) -> TaggedValue {
         debug_assert!(ptr.is_vector());
+        self.vector_checks.check("vector", ptr);
         self.vectors[ptr.heap_index() as usize][index]
     }
 
@@ -803,18 +822,21 @@ impl Heap {
     #[inline(always)]
     pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
         debug_assert!(ptr.is_vector());
+        self.vector_checks.check("vector", ptr);
         self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
     /// Get a slice of the vector
     pub fn vector_slice(&self, ptr: TaggedValue) -> &[TaggedValue] {
         debug_assert!(ptr.is_vector());
+        self.vector_checks.check("vector", ptr);
         &self.vectors[ptr.heap_index() as usize]
     }
 
     /// Get a mutable slice of the vector
     pub fn vector_slice_mut(&mut self, ptr: TaggedValue) -> &mut [TaggedValue] {
         debug_assert!(ptr.is_vector());
+        self.vector_checks.check("vector", ptr);
         &mut self.vectors[ptr.heap_index() as usize]
     }
 
@@ -830,15 +852,15 @@ impl Heap {
     /// Allocate a new string from Vec<char> (primary method)
     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
         self.note_alloc();
-        let index = if let Some(free) = self.free_strings.pop() {
+        if let Some(free) = self.free_strings.pop() {
             self.strings[free as usize] = chars;
-            free
+            self.string_checks.reuse(TaggedValue::string(free))
         } else {
             let index = self.strings.len() as HeapIndex;
             self.strings.push(chars);
-            index
-        };
-        TaggedValue::string(index)
+            self.string_checks.push();
+            TaggedValue::string(index)
+        }
     }
 
     /// Allocate a string from a &str
@@ -850,6 +872,7 @@ impl Heap {
     #[inline(always)]
     pub fn get_string_chars(&self, ptr: TaggedValue) -> &[char] {
         debug_assert!(ptr.is_string());
+        self.string_checks.check("string", ptr);
         &self.strings[ptr.heap_index() as usize]
     }
 
@@ -857,6 +880,7 @@ impl Heap {
     #[inline(always)]
     pub fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut Vec<char> {
         debug_assert!(ptr.is_string());
+        self.string_checks.check("string", ptr);
         &mut self.strings[ptr.heap_index() as usize]
     }
 
@@ -864,6 +888,7 @@ impl Heap {
     #[inline]
     pub fn string_set_char(&mut self, ptr: TaggedValue, index: usize, ch: char) {
         debug_assert!(ptr.is_string());
+        self.string_checks.check("string", ptr);
         self.strings[ptr.heap_index() as usize][index] = ch;
     }
 
@@ -966,6 +991,7 @@ impl Heap {
         if !tagged.is_object() {
             return None;
         }
+        self.object_checks.check_if_present("object", tagged);
         let index = tagged.heap_index() as usize;
         match self.objects.get(index)? {
             HeapObjectData::Exception {
@@ -980,7 +1006,7 @@ impl Heap {
     /// Intern a symbol (returns existing if already interned)
     pub fn intern_symbol(&mut self, name: &str) -> TaggedValue {
         if let Some(&index) = self.symbol_table.get(name) {
-            TaggedValue::object(index)
+            self.object_checks.stamp(TaggedValue::object(index))
         } else {
             let tagged = self.alloc_object(HeapObjectData::Symbol(Rc::from(name)));
             self.symbol_table
@@ -996,7 +1022,7 @@ impl Heap {
     /// renamed `blk` and the original `begin` still be one form.
     pub fn core_syntax(&mut self, form: crate::core_syntax::CoreForm) -> TaggedValue {
         if let Some(&index) = self.core_syntax_table.get(&form) {
-            TaggedValue::object(index)
+            self.object_checks.stamp(TaggedValue::object(index))
         } else {
             let tagged = self.alloc_object(HeapObjectData::CoreSyntax(form));
             self.core_syntax_table.insert(form, tagged.heap_index());
@@ -1082,6 +1108,10 @@ impl Heap {
         };
         if !Rc::ptr_eq(&outer_cell, &self.get_promise(inner).expect("checked")) {
             *outer_cell.borrow_mut() = inner_state;
+            // The write indexes the arena directly, but needs no check of
+            // its own in a check build (#621): `get_promise(inner)` above
+            // runs `get_object`'s on this same value before anything is
+            // written, and nothing since has freed or reused a slot.
             self.objects[inner.heap_index() as usize] = HeapObjectData::Promise(outer_cell);
         }
     }
@@ -1352,6 +1382,7 @@ impl Heap {
         if !val.is_object() {
             return None;
         }
+        self.object_checks.check("object", val);
         match &mut self.objects[val.heap_index() as usize] {
             HeapObjectData::VmClosure { code_id, .. }
                 if *code_id != Self::RETIRED_VM_CLOSURE_CODE =>
@@ -1362,12 +1393,13 @@ impl Heap {
         }
     }
 
-    /// Get the globals environment from a VM closure by heap index.
+    /// Get the globals environment from a VM closure by its frame's index.
     pub fn get_vm_closure_globals(
         &self,
-        heap_index: crate::tagged_value::HeapIndex,
+        closure: ObjectIndex,
     ) -> Option<Rc<crate::environment::Environment>> {
-        match self.objects.get(heap_index as usize)? {
+        self.object_checks.check_index(closure);
+        match self.objects.get(closure.index() as usize)? {
             HeapObjectData::VmClosure { globals, .. } => Some(globals.clone()),
             _ => None,
         }
@@ -1379,10 +1411,11 @@ impl Heap {
     /// the slot is out of range.
     pub fn get_vm_closure_free_var(
         &self,
-        heap_index: crate::tagged_value::HeapIndex,
+        closure: ObjectIndex,
         slot: usize,
     ) -> Option<TaggedValue> {
-        match self.objects.get(heap_index as usize)? {
+        self.object_checks.check_index(closure);
+        match self.objects.get(closure.index() as usize)? {
             HeapObjectData::VmClosure { free_vars, .. } => free_vars.get(slot).copied(),
             _ => None,
         }
@@ -1393,11 +1426,12 @@ impl Heap {
     /// Returns `false` if the heap index or slot is out of range.
     pub fn set_vm_closure_free_var(
         &mut self,
-        heap_index: crate::tagged_value::HeapIndex,
+        closure: ObjectIndex,
         slot: usize,
         val: TaggedValue,
     ) -> bool {
-        match self.objects.get_mut(heap_index as usize) {
+        self.object_checks.check_index(closure);
+        match self.objects.get_mut(closure.index() as usize) {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
                 free_vars[slot] = val;
                 true
@@ -1468,28 +1502,23 @@ impl Heap {
     /// Allocate a generic object
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
         self.note_alloc();
-        let index = if let Some(free) = self.free_objects.pop() {
+        if let Some(free) = self.free_objects.pop() {
             self.objects[free as usize] = data;
-            free
+            self.object_checks.reuse(TaggedValue::object(free))
         } else {
             let index = self.objects.len() as HeapIndex;
             self.objects.push(data);
-            index
-        };
-        TaggedValue::object(index)
+            self.object_checks.push();
+            TaggedValue::object(index)
+        }
     }
 
     /// Get object data reference
     #[inline(always)]
     pub fn get_object(&self, ptr: TaggedValue) -> &HeapObjectData {
         debug_assert!(ptr.is_object());
-        let data = &self.objects[ptr.heap_index() as usize];
-        debug_assert!(
-            !matches!(data, HeapObjectData::Free),
-            "use-after-free: object slot {} was reclaimed by the GC",
-            ptr.heap_index()
-        );
-        data
+        self.object_checks.check("object", ptr);
+        &self.objects[ptr.heap_index() as usize]
     }
 
     /// Get object type
@@ -2872,6 +2901,7 @@ impl Heap {
         if !tv.is_object() {
             return false;
         }
+        self.object_checks.check("object", tv);
         let obj = &mut self.objects[tv.heap_index() as usize];
         match obj {
             HeapObjectData::Bytevector(bytes) => {
@@ -2887,6 +2917,7 @@ impl Heap {
         if !tv.is_object() {
             return None;
         }
+        self.object_checks.check("object", tv);
         let obj = &mut self.objects[tv.heap_index() as usize];
         match obj {
             HeapObjectData::Bytevector(bytes) => Some(bytes),
@@ -2900,6 +2931,7 @@ impl Heap {
         if !tv.is_object() {
             return false;
         }
+        self.object_checks.check("object", tv);
         let obj = &mut self.objects[tv.heap_index() as usize];
         match obj {
             HeapObjectData::Bytevector(bytes) => {

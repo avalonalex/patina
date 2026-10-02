@@ -88,8 +88,17 @@ must hold no outstanding borrow.
 with a **low-3-bit tag and 61-bit payload** (`tagged_value.rs:9-21`). Despite
 older doc comments saying "NaN-boxed", it is not — it is a tagged integer.
 Heap references are **arena indices** (`HeapIndex = u32`, `tagged_value.rs:28`),
-e.g. a pair is `(index << 3) | 0b011`. Index reuse is invisible to holders, so
-a non-moving collector requires no handle rewriting.
+e.g. a pair is `(index << 3) | 0b011`, the index in bits 3–34 of the word. A
+non-moving collector requires no handle rewriting. In a plain release build
+index reuse is invisible to holders. In a check build (debug, or release with
+`patina-core`'s `gc-check` feature; #621) bits 40–55 of the word also carry the
+slot's 16-bit allocation generation, which `heap_index()` does not read: the
+heap stamps it into every reference it makes, bumps a slot's generation when
+sweep frees it, and refuses a reference whose stamp no longer matches its slot
+(`heap/check.rs`, §4.5). So a holder of a reference to a reused slot panics
+instead of reading the new tenant. Every copy of a value carries the same
+stamp, so `eq?` and the other raw-bit consumers still see one key per
+object.
 
 ### 3.3 Environments live outside the heap
 
@@ -133,7 +142,8 @@ have to be taught about:
 2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
    locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
-4. `CallFrame.closure: Option<HeapIndex>` (`crates/patina-vm/src/types/mod.rs:52`).
+4. `CallFrame.closure: Option<ObjectIndex>`, a bare object-arena index that
+   keeps the generation stamp in check builds (`crates/patina-vm/src/types/mod.rs:52`).
 5. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
 6. `CompiledMacro` captures literal `TaggedValue`s at macro-compile time
    (`crates/patina-core/src/compiled_macro.rs:461-465`).
@@ -179,7 +189,7 @@ impl GcVisitor<'_> {
     /// The normal edge: mark + enqueue any heap reference; no-op for immediates.
     pub fn visit(&mut self, v: TaggedValue);
     /// For bare object-arena indices (CallFrame.closure).
-    pub fn visit_object_index(&mut self, i: HeapIndex);
+    pub fn visit_object_index(&mut self, index: ObjectIndex);
     /// Trace through an environment chain; deduped by Rc::as_ptr so the
     /// global env is not re-walked once per closure.
     pub fn visit_env(&mut self, env: &Rc<Environment>);
@@ -305,8 +315,9 @@ already-free set):
 2. **tombstone the slot** — overwrite with a payload-free value:
    vectors/strings → `Vec::new()` (drops element storage); objects → the
    dedicated `HeapObjectData::Free` variant. Pairs are `Copy` with nothing to
-   drop, so release builds skip the store entirely; debug builds write a
-   reserved poison value (`TaggedValue::GC_POISON`) instead.
+   drop, so plain release builds skip the store entirely; check builds
+   (debug, or release with `gc-check`) write a reserved poison value
+   (`TaggedValue::GC_POISON`) instead.
 
 Tombstoning is not just hygiene: dropping the old `HeapObjectData` releases its
 `Rc` payloads (environments, ports, procedures) at sweep time rather than at
@@ -321,11 +332,17 @@ free.
 Arena `Vec`s are never shrunk; a "free list ratio" stat can inform future
 shrink heuristics but v1 does not shrink.
 
-**Use-after-free detectability by arena** (debug builds): object-arena UAF
-panics via the `Free` assert in `get_object`; pair UAF panics via the poison
-assert in `get_pair`/`set_car`/`set_cdr`; vector/string tombstones (empty) are
-legal values, so UAF in those two arenas goes undetected — the differential
-stress lane is the safety net there.
+**Use-after-free detectability by arena** (check builds: every debug build,
+and release with `patina-core`'s `gc-check` feature; #621): every arena
+accessor refuses a reference to a freed slot, and one to a slot freed and
+reused since the reference was made, by a per-slot generation that the heap
+stamps into each reference (`heap/check.rs`). Marking refuses the same two
+cases: a free slot at sweep's pre-mark (§11 item 5), a reused one in
+`GcVisitor::visit`. The tombstones are no longer what detects a use after
+free — before #621, vector and string tombstones (empty) were legal values and
+a reused slot read as its new tenant, so those cases went undetected. Check
+builds also write the pair poison, so a stale pair that marking reaches traces
+nothing.
 
 ---
 
@@ -366,7 +383,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | Field | Root? | Notes |
 |-------|-------|-------|
 | `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
-| `frames[*].closure` | **yes** | **Bare `Option<HeapIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
+| `frames[*].closure` | **yes** | **Bare `Option<ObjectIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
 | `pending_escape` | **yes** | Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Empty at safe points (`mem::take`n during primitive calls), but rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
@@ -830,7 +847,8 @@ visitor exists, and the stress lane is the real safety net.
    missed library-loading guard was diagnosed this way in one run.
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
-   heisenbug.
+   heisenbug. Superseded by #621's stale-reference checks (§4.5), which also
+   see vectors, strings and reused slots, and run in release `gc-check` builds.
 3. **Reclamation proofs:** cycle tests (`set-cdr!` self-loop, closure
    capturing its own env, `call/cc` captured and dropped); arena-length
    plateau test (allocate-and-drop in a loop; assert arena `len()` stabilizes).
@@ -838,7 +856,10 @@ visitor exists, and the stress lane is the real safety net.
    per the project's established methodology; record `GcStats.last_pause`
    distribution on allocation-heavy benchmarks.
 5. **Paranoid pre-sweep assertion (debug):** after marking, assert no free-list
-   slot is marked and no marked slot is on a free list.
+   slot is marked and no marked slot is on a free list. Implemented by #621 in
+   every check build (`heap::GC_CHECK`: debug, or release with `gc-check`):
+   `sweep_arena`'s pre-mark panics with `dangling reference: <arena> slot N is
+   free, but marking reached it` when a free-list slot's bit is already set.
 
 ---
 
