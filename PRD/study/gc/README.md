@@ -5,7 +5,8 @@ The research record behind [`PRD/GC_PRD.md`](../../GC_PRD.md).
 - **Dates:** research on 2026-09-30; design, reviews and follow-up studies on 2026-10-01.
 - **Revision:** `main` at `28a94f8`. The study read and measured it and did not modify it. The contract study
   (`followup/contract/`) also read `PRD/GC_PRD.md` at `f82e8e8` on branch `gc-prd`, a commit that adds only `PRD/`
-  to that revision.
+  to that revision. The premature-collection study (`followup/premature/`) read `gc-prd` at `f82e8e8` and
+  `3682302`, which also add only `PRD/`.
 - **Machine:** every measurement was taken on one machine: Apple M4 Pro (8 performance and 4 efficiency cores),
   24 GiB, macOS 27.2 arm64 with 16 KiB pages, Rust 1.97.1 release builds. The oracles were chibi-scheme 0.12,
   Gauche 0.9.15 and Chez Scheme 10.
@@ -23,7 +24,7 @@ The owner set three goals for a new collector:
 - change Patina's value and object representations freely where that helps;
 - design for a Cranelift JIT.
 
-The owner also asked four follow-up questions:
+The owner also asked five follow-up questions:
 
 1. **Threading model.** Which model should SRFI 18 threads use, and what does the GC owe it? This was answered
    during the research, in `research/threads-*.md`: M:1 green threads now, with the collector's interfaces ready
@@ -35,6 +36,8 @@ The owner also asked four follow-up questions:
 4. **The GC contract.** What is the contract between the GC and the rest of the runtime, and how do concurrency and
    a Cranelift JIT affect it? This was answered on 2026-10-01, after `PRD/GC_PRD.md` was written, in
    `followup/contract/`.
+5. **Premature collection.** Live values got collected in the current implementation. How do we prevent it? This
+   was answered on 2026-10-01, after the contract study, in `followup/premature/`.
 
 ## Method
 
@@ -65,8 +68,17 @@ The owner also asked four follow-up questions:
      impact analyses, for concurrency, a Cranelift JIT and other planned features; an adversarial check, whose 22
      findings were verified and applied to the notes; and the synthesis, `ANSWER.md`. The gaps in its §4 are
      rules of the design contract, so it proposes them as amendments to the PRD, with text, rather than as issues.
+   - Premature collection:
+     - git, issue and PR mining over the git history since GC stage 1 (`b908f16`, 2026-07-31), all 406 merged PRs
+       and all 204 issues (`git-cases.md`, `gh-cases.md`);
+     - an inventory of today's defenses and remaining hazards, with an embedding probe (`defenses-hazards.md`);
+     - a merged catalogue of the cases, classified into root-cause classes (`catalogue.md`);
+     - a prevention map, and a ranked list of what can land now, measured on scratch copies of the tree
+       (`prevention.md`, `do-now.md`);
+     - two review rounds of those two, whose 17 findings were verified (`ANSWER.md`, Appendix A);
+     - the synthesis, `ANSWER.md`.
 9. **Issues.** The observed defects were drafted (`design/ISSUES_DRAFT.md`) and filed after a search for duplicates
-   (see below).
+   (see below). The premature-collection study's live defect and its do-now list were filed the same way.
 
 ## Labels
 
@@ -93,13 +105,15 @@ Less common labels:
 
 ## Issues filed from the study
 
-The issues filed from the study are #603–#618, plus a comment on #597. The defect IDs come from the study:
+The issues filed from the study are #603–#618 and #620–#626, plus a comment on #597 and comments on #605 and #609.
+The defect IDs in the first table come from the study:
 
 - A1–A9 are in `design/ISSUES_DRAFT.md`.
 - I1–I6 are in `followup/steady/SECTION.md`.
 - N1 and P4 are items 1 and 4 of the list "Problems to file as GitHub issues" in `followup/parallelism/ANSWER.md`.
 
-Where a report says "nothing here has been filed", it was written before the filing.
+Where a report says "nothing here has been filed", or `followup/premature/` calls its incident A7 "not filed" or
+"unfiled", it was written before the filing.
 
 Not filed with this batch:
 
@@ -128,6 +142,24 @@ Not filed with this batch:
 | I6 | #616 | Pause and RSS after a dropped peak |
 | N1 | #617 | Deep nesting overflows the stack and aborts |
 | P4 | #618 | Two interpreters share the current ports |
+
+The premature-collection study (`followup/premature/`) numbers its incidents A1–A7 independently of
+`ISSUES_DRAFT.md`. `ANSWER.md` uses `catalogue.md`'s labels; `git-cases.md` and `gh-cases.md` keep their own, so
+`gh-cases.md`'s A2, A3 and B1 are the catalogue's A4 (#130), A6 (#605) and A3 (#47). The study's live incident A7,
+and the issues that `ANSWER.md` §4 lists to file (A–F there, covering the items of its ranked do-now list), were
+filed on 2026-10-01:
+
+| Study item | Issue | Subject |
+|---|---|---|
+| Incident A7 | #620 | Bindings in a host-built environment are freed by a later collection, and the VM's `Backend::eval` ignores the environment it is given |
+| Items 1, 2 and 9 (A) | #621 | Make every stale reference panic in debug and `gc-check` builds |
+| Item 3 (B) | #622 | Put every Rust re-entry into the evaluator under a clippy rule |
+| Item 4 | comment on #605 | Widens #605 to every public path that hands the host a raw value or environment, a handle table that traces its handles, and tests over all 10 `eval_*` methods |
+| Item 5 (C) | #623 | Name every traced field, and test each with a sentinel |
+| Items 6 and 7 (D) | #624 | Assert the deferral protocol and the no-collection windows |
+| Item 8 (E) | #625 | Mark retired registers with `DEAD_SLOT`, and add a zeal lane |
+| Item 10 (F) | #626 | Run more programs under GC stress |
+| The #609 entry | comment on #609 | Adds a naive-fixpoint mark oracle to #609's acceptance |
 
 ## Index
 
@@ -271,6 +303,29 @@ Cranelift JIT do to it.
   syntax-case, the debugger and hooks, guardians and weak hash tables, a boot image and AOT, delimited
   continuations and effect handlers, long REPL sessions, and general tail calls.
 
+`followup/premature/`: live values that got collected in the current implementation, and how to prevent it.
+
+- [`ANSWER.md`](followup/premature/ANSWER.md): the synthesis. The history of the seven incidents (A1–A7); the
+  design properties that made them possible; prevention by construction, detection and process, sequenced against
+  the PRD's stages; the ranked do-now list; what stays uncatchable; and, in Appendix A, the two review rounds'
+  findings and what each changed.
+- [`git-cases.md`](followup/premature/git-cases.md): every case in the git history since GC stage 1 (`b908f16`,
+  2026-07-31): live values freed or latent unrooted holders, near relatives, protections added with a holder, and
+  fixes to the detectors.
+- [`gh-cases.md`](followup/premature/gh-cases.md): the same history mined from issues, PRs, review-round commit
+  messages and failed CI runs, with the failures of the detection machinery itself.
+- [`defenses-hazards.md`](followup/premature/defenses-hazards.md): the defenses that exist today, the hazards that
+  remain, and which defense sees which. Its embedding probe found the host-built environment that became A7.
+- [`catalogue.md`](followup/premature/catalogue.md): the merged catalogue (incidents A1–A7, near relatives B1–B6,
+  protections, detector failures and a timeline) and the root-cause taxonomy, classes R1–R8 and X, with each
+  class's latent entries.
+- [`prevention.md`](followup/premature/prevention.md): a prevention map. For each class, what prevents, flags or
+  catches it; the cross-cutting techniques (capability and brand, static analysis, zeal, poison, Miri, fuzzing,
+  mutation testing, differential lanes) evaluated once; a process tier; and what to do now and by stage.
+- [`do-now.md`](followup/premature/do-now.md): what can land on today's collector, measured on scratch copies of
+  the tree. Probe results per build, the measures with their costs, those evaluated and not recommended, and the
+  issues to file.
+
 `probes/`: the retained probe programs.
 
 - [`probes/README.md`](probes/README.md): maps each working path the reports cite to its place in `probes/`, or
@@ -280,7 +335,7 @@ Cranelift JIT do to it.
 
 The reports were written in a working directory outside the repository. Their citations of probe programs now name
 the retained copies under `probes/`, and fetched third-party sources are cited by upstream project and path.
-`probes/README.md` maps each working path to its retained location and says what was not kept. Three kinds of path
+`probes/README.md` maps each working path to its retained location and says what was not kept. Four kinds of path
 remain as written:
 
 - relative names of outputs that were not retained, such as `results/…` and `out/…`;
@@ -290,9 +345,16 @@ remain as written:
   `design/REVIEW_DISPOSITIONS.md`, where it names the file those drafts planned to rewrite. The file is now
   `PRD/ARCHIVE/GC_STAGE5_PRD.md`. Citations of its content elsewhere point there, with line numbers shifted by its
   12-line banner.
+- `scratch/…`, `<scratch>` and `$S` in `followup/premature/`, which name that study's working directory: its copies
+  of the tree (`base` and `exp` to `exp5`) and their patches, its probe crates, its PR and issue dumps, and its
+  outputs. None of it was retained.
 
 The contract study (`followup/contract/`) cites `PRD/GC_PRD.md` as §n:L, section and line, at `f82e8e8`, before the
 PRD took in the amendments that study proposed. Read those lines at that commit.
+
+The premature-collection study's `ANSWER.md` describes `PRD/GC_PRD.md` at `3682302`, before the PRD took in that
+study's amendments. Its "In the PRD?" and "PRD" columns, and the gaps they name (among them the `Trace` derive, the
+host-environment handles and the detection measures filed as #621–#626), are stale wherever the PRD took them in.
 
 ## Not retained
 
@@ -303,7 +365,8 @@ Only small probe programs and scripts written during the study were kept, in `pr
   files. Also the Chez Scheme source tree and its two builds, the OCaml changelogs, and the papers and their text
   extractions. The reports name the upstream revisions they read.
 - **Copies of the repository used for instrumentation.** The patched copies for the store-mix counters, for the
-  demographics census and for the parallelism perturbations. The census patch itself is kept as
+  demographics census and for the parallelism perturbations, and the premature-collection study's copies (`base`
+  and the experiments `exp` to `exp5`). The census patch itself is kept as
   `probes/workload-demographics/instrumented/demographics.patch`, and the perturbation script as
   `probes/followup/perturb_patch.py`.
 - **Larceny benchmark sources.** These are LGPL; see AGENTS.md. This covers the R7RS benchmark sources and inputs,

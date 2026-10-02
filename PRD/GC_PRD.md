@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | Date | 2026-10-01, repository `main` at `28a94f8` |
-| Status | Proposed. The owner decisions of 2026-10-01 are marked decided in §2; the other rows there are proposed defaults awaiting owner review, except the two Open rows (7a, 7b). Amended 2026-10-01 after the GC–runtime contract study ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) |
+| Status | Proposed. The owner decisions of 2026-10-01 are marked decided in §2; the other rows there are proposed defaults awaiting owner review, except the two Open rows (7a, 7b). Amended 2026-10-01 after the GC–runtime contract study ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) and the premature-collection study ([`ANSWER.md`](study/gc/followup/premature/ANSWER.md)) |
 | Supersedes | The stage-5 PRD (formerly under `PRD/future/`, now [`PRD/ARCHIVE/GC_STAGE5_PRD.md`](ARCHIVE/GC_STAGE5_PRD.md)); §21 says where each of its items went |
 | As built | [`docs/GC_DESIGN.md`](../docs/GC_DESIGN.md) describes the collector Patina runs today. It is rewritten as each stage lands; this file is the target and the plan |
-| Research record | [`PRD/study/gc/`](study/gc/README.md), indexed by its README: the digest (`DIGEST.md`); studies of Patina today (`understand/`), of prior art (`research/`) and of six gaps (`gaps/`); the five candidate proposals, the recommended design this file condenses ([`DESIGN.md`](study/gc/design/DESIGN.md)), its review dispositions and the issue drafts (`design/`); the follow-ups on parallelism cost ([`ANSWER.md`](study/gc/followup/parallelism/ANSWER.md)), steady state ([`SECTION.md`](study/gc/followup/steady/SECTION.md)) and the GC–runtime contract ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) in `followup/` |
+| Research record | [`PRD/study/gc/`](study/gc/README.md), indexed by its README: the digest (`DIGEST.md`); studies of Patina today (`understand/`), of prior art (`research/`) and of six gaps (`gaps/`); the five candidate proposals, the recommended design this file condenses ([`DESIGN.md`](study/gc/design/DESIGN.md)), its review dispositions and the issue drafts (`design/`); the follow-ups on parallelism cost ([`ANSWER.md`](study/gc/followup/parallelism/ANSWER.md)), steady state ([`SECTION.md`](study/gc/followup/steady/SECTION.md)), the GC–runtime contract ([`ANSWER.md`](study/gc/followup/contract/ANSWER.md)) and premature collection, the live values collected so far, their causes and their prevention ([`ANSWER.md`](study/gc/followup/premature/ANSWER.md)), in `followup/` |
 | Work items | GitHub issues. The present-day defects are filed and mapped to stages in §17.5 and §19; stage issues are filed as each stage starts (§22) |
 
 **Contents.**
@@ -91,6 +91,7 @@ matrix" is `crates/patina-tests/tests/control_flow_matrix.rs` (64 rows [S]); "th
 | Is a pluggable design like Java's sensible? | The contract yes; a catalogue of collectors no | [§14](#14-pluggability-contract); decision 24 |
 | What would shared-memory parallelism cost later? | Itemized, 9–18 engineer-months after the redesign; about 2–9 engineer-years with overrun and recovery; a single-thread tax of ≈2–5%. Proposed: not now | [§18.3](#183-cost), [§18.4](#184-single-thread-tax-the-threaded-build-with-one-carrier); decisions 7, 7c |
 | What is steady state, and which limits apply? | Five clauses tested on deterministic readings; a memory contract that bounds every source of growth; limits derived from the machine's budget, raising a catchable condition that names what grew | [§17](#17-steady-state-the-memory-contract-and-limits); decision 15; SD1–SD9; stage 5g |
+| Live values got collected in the current implementation: how do we prevent it? | In three layers, in this order: detection on today's collector now, so the next one panics where it happens ([#621]–[#626]), and no stage moves a collection point before it is in CI; the two live defects fixed at stage 2 ([#605], [#620]); then the bug made unwritable: rooted handles and the `Trace` derive (stage 2), the collect capability and the value brand (stage 3), continuations as heap objects (4e) and generated heap-kind traces (5a) | [§16](#16-testing-and-verification), [§14](#14-pluggability-contract), [§19](#19-stages); [§11.5](#115-embedding-api) |
 | Where do the design and the plan live? | In this one file; `docs/GC_DESIGN.md` stays the description of the collector as built | decision 22 |
 | Where is the research? | `PRD/study/gc/`, indexed by its README | [study README](study/gc/README.md) |
 
@@ -141,7 +142,7 @@ Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 
     switches on suffices; a nursery or an MMTk adapter can still plug in through `Collector<M>`.
 12. **Threads and parallelism ([§18](#18-threading-readiness-and-future-parallelism-decision-7)):** SRFI 18 as M:1 green
     threads (decided) over a carrier/thread split, protocols written for N mutators. Shared-memory parallelism is **not
-    now** (proposed). Like for like, both itemized with no overrun factor: the redesign is 98–137 engineer-weeks, and
+    now** (proposed). Like for like, both itemized with no overrun factor: the redesign is 99–138 engineer-weeks, and
     parallelism after it 38–77 more (29–61.5 with decision 7c's additions) [I]. Other runtimes' histories put the
     planning figure at about 2–9 engineer-years with overrun and recovery [A, I]. A threaded build's single-thread tax
     measured +1.9% on today's interpreter [P] and is estimated at ≈2–5%, up to ~7%, after the redesign [I].
@@ -156,8 +157,10 @@ Decided on 2026-10-01: rows 1, 2, 6 (priority), 7 (threading model), 12, 14, 15 
     `--stack-max` or `PATINA_STACK_MAX` (4d). GC-time port flushing becomes observable (4a). Semantic changes, each in
     its own PR with its `DIVERGENCES.tsv` rows (decision 19): port `eq?` ([#608], 4a), symbol-keyed `eq?` table order
     (5c), flonum `eq?` and flonum-keyed ephemerons (5f), deep-bound `parameterize` (9), and the six define-after-use
-    tests that flip under variant C (after stage 5). Embedders get `Owned` handles, `Interpreter::call` and mandatory
-    teardown (stages 2–3), and the `Backend` trait migrates one step per stage under [#601]'s deprecation convention.
+    tests that flip under variant C (after stage 5). Embedders get `Owned` and environment handles, `Interpreter::call`
+    and mandatory teardown (stages 2–3), and the `Backend` trait migrates one step per stage under [#601]'s deprecation
+    convention. From stage 2 the VM evaluates in the environment it is given, as the tree-walker does, so a `define`
+    evaluated in a host environment stops landing in the global one ([#620]).
 
 **For the JIT.** JIT code keeps every Scheme value in the VM's register frames, tagged, at every call that can collect,
 so Cranelift stack maps are never needed. One context, the `Mutator`, sits in a pinned register (`x21` on aarch64, `r15`
@@ -177,7 +180,7 @@ offset table. **No JIT PRD exists yet;** until one does, [§11.2](#112-jit-frame
 **The plan ([§19](#19-stages)).** Stage 0 brings in the benchmark mode, census, probes and steady-state lane; 1 fixes
 today's measured blow-ups on the current collector; 2 makes roots slot-based and embedding sound; 3–4 build the core
 every candidate design needs; 5 is the new heap, with limits in 5g; 6 the JIT ABI spike; 7 and 8 generations and
-evacuation behind measured gates; 9 threads readiness; P parallel marking. About 98–137 engineer-weeks in all [I],
+evacuation behind measured gates; 9 threads readiness; P parallel marking. About 99–138 engineer-weeks in all [I],
 roughly 23–32 months for one engineer (14–21 weeks less with two, [§19](#19-stages)); 5–8 of those weeks are decision
 7c's threading additions. The figure is itemized, with no overrun factor; [K14](#k14) is its only calibration.
 
@@ -212,7 +215,7 @@ steady-state study and keep their labels; SD2 is folded into decision 11.
 | 10 | Identity hashing | Proposed | **Side-metadata `HASHED` plus the BFG extension on move; heap-base-relative; a symbol hashes by its name** ([§9.8](#98-identity-hash)) | Pin-on-hash blocks evacuation on eq-table heaps; GC-rehashed native tables mean rewriting SRFI 69/125 in Rust | JDK compact headers (JEPs 450, 519) | 5c |
 | 11, SD2 | Weakness scope and the symbol table | Proposed | **SRFI 124 and 254 ephemerons now; SRFI 125 weak tables over ephemerons; guardians and transport cells after stage 7; a weak symbol table hashed by name** ([§9.5](#95-weak-references-and-ephemerons-with-no-on-rescans), [§17.2](#172-the-memory-contract)) | A strong symbol table, as in chibi and Gauche, keeps 32–48 B per symbol for ever, and the symbol rows of the steady-state lane become class D | Chez's weak oblist (flat at 49.4 MiB over 1 M symbols [P, Chez]) | 5a; 5c |
 | 12 | Port finalization | Decided 2026-10-01 | **Flush and close at GC; `EMFILE` collect-and-retry where collection is possible; GC timing declared observable** ([§9.6](#96-finalization-and-ports-f1f7)) | Without it F2 and F3 stay divergent from chibi and Gauche, and descriptor exhaustion stays ([#607]) | chibi; Gauche | — |
-| 13 | Embedding API | Proposed | **`Owned` handles, branded `with`, `Interpreter::call`, branded host primitives with a declared helper class (`Leaf` or `Transfer`, never `NoAlloc`), `interrupt_handle()`, mandatory teardown, many heaps per process, `Backend` migrated one step per stage, memory hooks, and an optional `MemoryBudget` shared by several heaps** ([§11.5](#115-embedding-api), [§17.3](#173-limits)) | Scoped-only handles block long-lived host references; without `call` a host must evaluate source text to call a procedure; without a declared class the JIT treats every host primitive as `Transfer`; a trusted host `NoAlloc` lets safe Rust that allocates corrupt the heap under JIT code (an `unsafe` host `NoAlloc` declaration, or a context type with no allocation methods, would put that obligation on the embedder or on the type checker, and would save the write-back of `ap` and the reload of `ap` and `alloc_limit` around each host-primitive call [I]); without teardown every dropped interpreter leaks a reservation | Wasmtime and V8 handles | 2 (handles, teardown); 3 (the rest); 5e (`notify_idle`); 5g (near-limit and memory-pressure hooks, the shared budget) |
+| 13 | Embedding API | Proposed | **`Owned` and environment handles, branded `with`, `Interpreter::call`, branded host primitives with a declared helper class (`Leaf` or `Transfer`, never `NoAlloc`), `interrupt_handle()`, mandatory teardown, many heaps per process, `Backend` migrated one step per stage, memory hooks, and an optional `MemoryBudget` shared by several heaps** ([§11.5](#115-embedding-api), [§17.3](#173-limits)) | Scoped-only handles block long-lived host references; without `call` a host must evaluate source text to call a procedure; without a declared class the JIT treats every host primitive as `Transfer`; a trusted host `NoAlloc` lets safe Rust that allocates corrupt the heap under JIT code (an `unsafe` host `NoAlloc` declaration, or a context type with no allocation methods, would put that obligation on the embedder or on the type checker, and would save the write-back of `ap` and the reload of `ap` and `alloc_limit` around each host-primitive call [I]); without teardown every dropped interpreter leaks a reservation | Wasmtime and V8 handles | 2 (handles, teardown); 3 (the rest); 5e (`notify_idle`); 5g (near-limit and memory-pressure hooks, the shared budget) |
 | 14 | Dependencies; MMTk | Decided 2026-10-01, by the research the owner delegated it to: MMTk not adopted | **`patina-gc` depends on `libc` only**; loom models and any other new dependency wait for an explicit approval ([§14](#14-pluggability-contract)) | An MMTk spike is 4–6 weeks, needs crate downloads, lives outside the default workspace, and MMTk's single instance per process conflicts with many heaps per process | in-tree collectors (Chez, OCaml) | 5a |
 | 15 | Footprint and limits: scope | Decided 2026-10-01 | **Limits are part of the effort, organised around steady state** ([§17](#17-steady-state-the-memory-contract-and-limits)) | — | — | — |
 | 15 | Footprint and limits: values | Proposed | **Whole-heap interval `max(8 MiB, 2·L)`, L being the live bytes after the last major; √L only for generational majors after an A/B; decommit with 2-major hysteresis; `max_heap` = min(16 GiB, 75%·B), its reservation from the heap ceiling; heaps given one `MemoryBudget` drawing these from its total; exhaustion raising `&heap-exhausted` or `&stack-exhausted`** ([§7](#7-heap-organisation), [§15](#15-heap-sizing-pacing-and-observability), [§17.3](#173-limits)). SD4–SD9 set the rest | Today only RAM limits a program, so these defaults are new limits; without a shared budget, N heaps or isolates in one process each default to 75%·B, and the process can be killed before any of them raises `&heap-exhausted`; larger ones cost VA per heap (318 heaps × 16 GiB is already about 5 TiB [P]), and none at all would need chained reservations ([K13](#k13)'s fallback, one more load in the barrier). √L without a nursery costs 1.15–2× more full marking and a 32 MiB first major [P] | .NET (75% of the container limit); Chez `heap-reserve-ratio` (decommit) | 4d; 5e; 5g |
@@ -441,7 +444,8 @@ generated `const` assertion fails the build if any laid-out type needs `Drop`.
 **One layout specification.** `declare_layouts!` (defined in `patina-gc`, invoked in `patina-core`) generates the
 `ObjectModel` implementation (`size`, `trace`, `copy`, `verify`), the debug printer, the datum writer's kind view and
 the JIT offset table, as Chez's `mkgc.ss` does, so misfiling a value-bearing variant as a leaf becomes a compile error
-rather than today's use-after-free (`crates/patina-core/src/heap/mod.rs:137-141` [S]).
+rather than today's use-after-free (`crates/patina-core/src/heap/mod.rs:137-141` [S]). The Rust structures that stay
+off the heap get the same guarantee from the `Trace` derive (§14).
 
 ## 7. Heap organisation
 
@@ -921,9 +925,11 @@ the machine beneath a `Cx`, so its evaluation runs under `NoGcScope` and its all
   only the interpreter tier, as attached hooks do (§11.2), and only the outermost driver frees JIT bodies (§9.7), so no
   body is freed while a fragment beneath it is suspended on the native stack.
 - **The VM and tree-walker cores are a trusted island**: their loops hold `&mut Heap` and raw `Word`s in VM-managed
-  memory, resting on the root-provider contract, the verifier, the poison lanes and zeal. JIT entry passes the heap as
-  a raw pointer derived from the driver's `&mut Heap`, reborrowed by each helper (Stacked Borrows, checked by Miri on
-  the Rust twins). Until 5e the capability is a `GcDriver` token over the `RefCell`-wrapped arena heap.
+  memory, resting on the root-provider contract, generated traces (`declare_layouts!` for heap kinds, §6; the `Trace`
+  derive for every Rust structure a root provider walks, §14), the verifier, the poison lanes and zeal. JIT entry
+  passes the heap as a raw pointer derived from the driver's `&mut Heap`, reborrowed by each helper (Stacked Borrows,
+  checked by Miri on the Rust twins). Until 5e the capability is a `GcDriver` token over the `RefCell`-wrapped arena
+  heap.
 - **`NoGcScope` is a type with a counter behind it.** The type is the rule: nothing beneath a `Cx` can name
   `&mut Heap`, so safe Rust there can neither collect nor forget a scope. The counter is the rule's run-time form for
   the trusted island, which reaches the heap through a raw pointer: each nested entry opens a `NoGcScope` guard that
@@ -992,7 +998,8 @@ it red.**
 
 | Entry | Contract |
 |---|---|
-| `Interpreter::eval_*`, `interp.with` | `eval_*` returns `Owned`, which fixes the use-after-free of an `eval_str` result read after a later collecting `eval_program` ([#605]). `interp.with(\|cx: &mut Cx<'gc>\| …)` is branded and takes `&mut self`, so nothing that may collect runs inside it |
+| `Interpreter::eval_*`, `interp.with` | `eval_*` returns `Owned`, which fixes the use-after-free of an `eval_str` result read after a later collecting `eval_program` ([#605]). [#605] also covers every other public path that hands the host a raw value or environment (`global_env().get`, `backend()`, `evaluator()`): each returns a handle or is documented as the raw layer, unrooted between calls, and the handle table traces its handles rather than only marking them. `interp.with(\|cx: &mut Cx<'gc>\| …)` is branded and takes `&mut self`, so nothing that may collect runs inside it |
+| Host environments | a rooted environment handle from [#605]'s table, in which both backends evaluate; today a host-built `Environment::with_parent` loses its bindings at a later collection, and the VM's `Backend::eval` ignores the environment it is given ([#620]). At 4b it becomes a namespace handle (DESIGN E.3) |
 | `Interpreter::call(&mut self, f: &Owned, args: &[Owned]) -> Result<Owned, InterpreterError<_>>` | a driver entry like `eval_*`: it may collect while the callee runs, with the arguments rooted by their handles, and a continuation captured inside it behaves as one captured inside `eval_*`. `Cx` has no `call`; a primitive needing a callback returns `Step::Call` |
 | Host primitives | `register_primitive(lib, name, PrimSpec { f: Prim, arity, class })` and `register_resumable(lib, name, arity, f)`. `class` declares the helper class the JIT reads, `Leaf` or `Transfer` (`Transfer` for one that blocks; resumable means `Transfer`). **The JIT treats every registered host primitive as allocating:** it writes `ap` back before the call and reloads `ap` and `alloc_limit` after, whatever its class, since only the runtime's own helpers in `HelperTable`, checked by the call-graph test (§16), may be `NoAlloc`. A host `Leaf` is trusted only not to block: its `Cx` can neither collect nor call Scheme. A procedure argument is called only through `Step::Call`; registration exports the primitive from the library `lib`, so a program reaches it through `import` and fast paths key on that binding, never on the spelling |
 | Memory hooks | an external-bytes accounter from stage 3 (V8's `ExternalMemoryAccounter`, Chez's phantom bytevectors); `notify_idle()` from 5e; from 5g a near-limit callback that may raise `max_heap` up to the heap ceiling and, under a shared `MemoryBudget`, no further than the budget's remaining total (V8 raises only inside its pre-reserved cage), a memory-pressure notification, and `HeapConfig`'s optional `Arc<MemoryBudget>`, shared by every heap created with it (§17.3) |
@@ -1255,6 +1262,20 @@ On a generational heap, a host payload written other than through `store` (throu
 the contract; `PATINA_GC_VERIFY_ROOTS` catches it (§16). Tree-walker heaps never run minors (§11.4), so their payloads
 need no `store`.
 
+**Off-heap traces are generated, never written by hand.** Every `HostPayload`, and every Rust structure a root
+provider walks (`VmState`, `Library`, `Environment` until 4b, `CompiledMacro`, `CpsContinuation`, `ContValue`, the
+wind, handler and prompt records), gets its `trace` from a `Trace` derive that names every field: a field whose type
+has no `Trace` does not compile, and a field is left out only by `#[trace(skip, reason = "…")]`, so a new field cannot
+go untraced silently. `declare_layouts!` closes this gap for heap kinds (§6), not for these structures, and both
+incidents of a missed trace edge so far (two edges in [#38], one in [#47]) were in hand-written off-heap traces, the
+second hidden from every dynamic check because its values were also reachable another way; [#623] decides
+`CompiledMacro.foreign_expansions`, untraced today. A proc-macro derive needs `syn` and `quote` as
+direct dependencies, which wait for decision 14's approval; without them, a `macro_rules!` declaration in
+`declare_layouts!`' style generates the same code. It lands at stage 2 with the slot visitor, so 4b–4e reshape these
+structures under it, and 4f does not start without it: the tree-walker never moves (§11.4), so `move-all` never checks
+its payloads' traces. Until then, and for heap kinds until `declare_layouts!` (5a), [#623] names every traced field
+and tests each with a sentinel.
+
 | Obligation of every `Collector` | Content |
 |---|---|
 | Order | §9.9's eleven steps, in that order, in every collection; a step may be empty (`NullGc` leaves all but statistics and release empty), never reordered |
@@ -1264,9 +1285,10 @@ need no `store`.
 
 **The conformance suite** runs on `MarkRegion<TestModel>`, `NullGc<TestModel>` and `ActiveGc`: allocation and tracing; a
 live-key ephemeron never broken, a dead-key one broken after a `complete` collection; a 16 K ephemeron chain resolved
-with linear work (counted); host-payload edges traced and an unreached payload queued; a young value stored into an old
-payload through `store` surviving the next minor; `drain` in id order, `drain_all` at teardown, nothing finalized inside
-`collect`; the epilogue order; with two `Mutator`s, both buffers retired and both logs drained.
+with linear work (counted); mark sets checked against a naive-fixpoint reference marker ([#609]); host-payload edges
+traced and an unreached payload queued; a young value stored into an old payload through `store` surviving the next
+minor; `drain` in id order, `drain_all` at teardown, nothing finalized inside `collect`; the epilogue order; with two
+`Mutator`s, both buffers retired and both logs drained.
 
 **The JIT ABI: `Mutator`, `#[repr(C)]`, 128-byte aligned, in `x21` (`r15` on x64)**, offsets asserted in CI and frozen
 after the spike.
@@ -1404,6 +1426,24 @@ accessor poison assertions and the `DEAD_SLOT` fill, so a stale reference panics
 ([#605]); these lanes compare program output, never identity-hash values. **Miri** runs on `patina-gc` and a
 `patina-core` subset (funnel, `HeapSlot` slices, slot visitor, `Mutator` access, `RootScope`/`Owned`, the JIT-entry
 handoff on the Rust twins), with strict provenance.
+
+**Detection on today's collector.** Until stages 2–5 replace them with handles, the brand, generated traces, the
+verifier and the poison lanes, these run on the arena collector, each detector shown to fire by a test of its own so
+that a lane cannot go quietly blind:
+- [#621]: every stale reference panics in debug and `gc-check` builds (a free slot reached by marking, a freed-slot
+  check in every accessor, generation stamps in the value word), and the release GC lane runs the `gc-check` build at
+  stress 1. The verifier (5a) and 5b's poisoning sweep, quarantine and `DEAD_SLOT` fill supersede it.
+- [#622]: every Rust re-entry into the evaluator under a clippy rule, each existing call carrying its reason; the list
+  is what stages 2 and 4e convert, and stage 3's brand supersedes it in the safe crates. It also brings C9's
+  `thread_local!` check forward (§18.6).
+- [#623]: every traced field named in trace code and tested with a sentinel reachable only through it, until the
+  `Trace` derive (§14) for off-heap structures and `declare_layouts!` (5a) for heap kinds.
+- [#624]: the deferral protocol asserted, and `AssertNoGc` around the windows only comments hold, checked at the poll
+  sites, until stage 3's `NoGcScope` and zeal-entry.
+- [#625]: retired VM registers filled with `DEAD_SLOT` and checked at every read and copy (§11.1's invariant 3, brought
+  forward), with a zeal lane over the control suite.
+- [#626]: more programs under stress: the GC- and control-relevant `cargo test` targets per PR, both Larceny lanes
+  nightly in the `gc-check` build.
 
 **Contract tests:** `Mutator` offsets, alignment and `GcAttrs`; emitters against their Rust twins once the spike exists;
 a call-graph test of the helper table (no `Leaf` reaches a `Transfer` function, no `NoAlloc` an allocation); a host
@@ -1754,7 +1794,7 @@ value; happens-before only through mutexes, condition variables, thread start an
 Target: N OS-thread carriers over one heap; SRFI 18 threads scheduled M:N; stop-the-world collection with parallel
 marking.
 
-**Like for like**, both itemized with no overrun factor: the redesign is 98–137 weeks (§19), and parallelism after it
+**Like for like**, both itemized with no overrun factor: the redesign is 99–138 weeks (§19), and parallelism after it
 38–77 more (29–61.5 with decision 7c's additions). The calibrated planning figure follows the table.
 
 | Item (rows of `itemize.md`) | Why | From today [E] | After stages 0–9, P [E] | Basis |
@@ -1844,7 +1884,7 @@ it.
 | Per-carrier collect capability (C2) | 3 | 2–3 days | 1–2 weeks |
 | Reserve `fenced_ap`, a quiescence epoch and a handshake word in `Mutator`, and `publication` in `GcAttrs`; assert 128-byte alignment (C1, C10; §14) | 3; frozen at 6 | 1–2 days | an ABI break; 0.5–1 week |
 | Bulk-range accessors; `HeapSlot::compare_exchange` (C4, C5) | 3, 5d | 3–4 days | 1–2 weeks, and the 3.2× bulk loss |
-| A CI check against new `thread_local!`, `static mut` and heap-side `Rc`/`RefCell`/`Cell` (today's 19 `thread_local!` statics allowlisted), plus `Send`/`Sync` assertions as each type first satisfies them (C9, C11): `InterruptHandle` and `PrimitiveRegistry` at 3, `CodeBody` at 4e, `GreenThread` at 9; `HeapShared: Sync` waits for decision 7; VM-heap payloads need a separate `Send + Sync` payload trait-object type per heap kind, because tree-walker payloads stay `!Send` | 3, 4e, 9 | 1–2 days | 0.5–1 week |
+| A CI check against new `thread_local!` (that part brought forward by [#622]), `static mut` and heap-side `Rc`/`RefCell`/`Cell` (today's 19 `thread_local!` statics allowlisted), plus `Send`/`Sync` assertions as each type first satisfies them (C9, C11): `InterruptHandle` and `PrimitiveRegistry` at 3, `CodeBody` at 4e, `GreenThread` at 9; `HeapShared: Sync` waits for decision 7; VM-heap payloads need a separate `Send + Sync` payload trait-object type per heap kind, because tree-walker payloads stay `!Send` | 3, 4e, 9 | 1–2 days | 0.5–1 week |
 | The memory model of §18.2 | 3 | 1–2 days | R29, 0.5–1 week |
 | One read-mostly namespace API (C6) | 4b | 1–2 days | 1–1.5 weeks |
 | Tax re-measurement on the new representation, with global-cell and record-field loads added (a run, not a lane) | 5 exit | 2–3 days | §18.4's figure; start condition 3 |
@@ -1925,6 +1965,11 @@ ThreadSanitizer (nightly, blind to standalone fences) and arm64 lanes.
 - **No stage removes a safety property before its replacement has landed**: `Rc` code liveness stays until traced
   code liveness (4e); nested-loop deferral stays until the weak continuation tables are gone (4e); dead-slot clearing
   stays for good.
+- **No stage moves a collection point before the detectors that would see its failure are in CI.** Stage 1's byte
+  trigger waits for [#621] and its release `gc-check` lane; stage 2 opens loading points A, B and D only once every
+  loading-path entry on [#622]'s list is rooted, guarded on its data or held in the machine; and 4e lets driver-level
+  nested loops collect only once every `apply_proc` and `across_reentry` entry on that list stays deferred or holds
+  its values in the machine (§11.3).
 - Embedding-API changes follow [#601]'s deprecation convention, one step per stage (stages 2 and 3).
 - **Every stage ships measured value or stays neutral within its gate.** No geomean regression above 1% unless the
   stage declares a budget; regressions and gains under 2% are judged in instructions or cycles with confidence
@@ -1936,9 +1981,10 @@ the plan stops after it.
 | # | Stage | Effort [I] | Limits and steady state | Threading readiness (§18.6 additions) | Gate | Value on its own | Issues |
 |---|---|---|---|---|---|---|---|
 | now | Ahead of the stages: two present-day defects | about 1–2, outside the totals | keyword aliases deduplicated by target; a Rust-recursion depth guard in the expander, compiler and printer (part of cost row R33, §18.3) | — | `symbols` flat across top-level `guard` forms; 1,000 nested `let`s run on both backends and deeper nesting raises a catchable error | two defects fixed independently of the redesign | [#611], [#617] |
+| now | Ahead of the stages: detection on today's collector (§16): stale references panic in the check build, which the release GC lane runs; re-entries into the evaluator under clippy; every traced field named and tested with a sentinel; the deferral protocol and the no-collection windows asserted; `DEAD_SLOT` for retired registers and a zeal lane; more programs under stress | about 2–3, outside the totals | — | — | each detector's positive control fails when the detector is removed; no false positive on either backend; every stress run asserts that it collected | the next premature collection panics where it happens instead of reading as a legal value, so stages 1, 2 and 4e, which move collection points, run with detectors watching | [#621], [#622], [#623], [#624], [#625], [#626] |
 | 0 | Ground truth: a `gc` mode for the benchmark runner, the GBS with `large-live`, the pause/MMU log, [K16](#k16)'s counters, the `gc-census` feature, the vendored probes; the measurement table and the off-heap holder inventory on the tracking issue (§22); the rebinding suite file with its `DIVERGENCES.tsv` rows | 3–4 | the steady-state lane and its portable runner; `resident-bytes` and `cpu-us`; the MMU ring buffer; the `def-getter` hygiene maker; the lane's resident-size form and the SS4 gate (SD1) | time-to-safepoint metric (addition C12) | the measurement table's baselines reproduced within their confidence intervals; no behaviour change; every steady-state row runs (red rows capped) | every later claim becomes measurable | [#603]; drift: comment on [#597] |
 | 1 | Quick wins on today's collector: byte trigger, `(gc)` collects at its call, `EMFILE` collect-and-retry with descriptor pressure, the unread provenance stores deleted | 4–5 | SS1, SS2 and SS5 at forced majors (SD1); environment-specifier namespaces charged as external bytes; expansion chains interned per document; `(gc-stats)` shows each limit beside its use | — | trigger blindness and descriptor exhaustion fixed; reclamation proofs non-vacuous; GBS ±1% | the measured blow-ups fixed now; `(gc)`'s timing independent of the poll | [#606], [#607], [#612] (part), [#615] (part) |
-| 2 | Root and boundary contract: slot visitor, `CallFrame.closure` as a value, `Owned` handles, heap teardown, top-level `import` and `define-library` recognized by binding, rooted loading | 5–7 | `define-library` forms reach a collection point; teardown returns each dropped interpreter's memory | per-heap Rust tables behind one wrapper; loading entries record their thread (additions C3, C15) | embedder use-after-free and teardown leak fixed; library bodies loaded through `import` collect; GBS ±1% | embedding is sound; library bodies collect; no leak | [#604], [#605], [#610], [#614] (part) |
+| 2 | Root and boundary contract: slot visitor and the `Trace` derive for off-heap structures (§14), `CallFrame.closure` as a value, `Owned` and environment handles on the public paths that yield a value or environment, `backend()` and `evaluator()` documented as the raw layer (§11.5), heap teardown, top-level `import` and `define-library` recognized by binding, rooted loading | 6–8 (Appendix D's 5–7, plus about 1 for the derive) | `define-library` forms reach a collection point; teardown returns each dropped interpreter's memory | per-heap Rust tables behind one wrapper; loading entries record their thread (additions C3, C15) | embedder use-after-free (returned values, global reads, host environments) and teardown leak fixed; the VM evaluates in the environment it is given; no hand-written off-heap trace left; library bodies loaded through `import` collect; GBS ±1% | embedding is sound; library bodies collect; no leak; a new field cannot go untraced silently | [#604], [#605], [#610], [#614] (part), [#620] |
 | 3 | `Mutator`, the collect capability, `Cx` and the store funnel; `#![forbid(unsafe_code)]` in the safe crates (§11.3); polls at frame entry; `InterruptHandle`; `Interpreter::call` and host primitives | 10–13 | the `CoreExpr` literal pool scoped to one compilation; the embedders' external-bytes accounter | per-carrier collect capability (addition C2); reserved `Mutator` words, `GcAttrs.publication`, 128-byte alignment (C1, C10); bulk-range accessors (C4); the CI check and the first `Send`/`Sync` assertions (C9, C11); the memory model; the `threaded` feature with accessor bodies only, linted by `--all-features` clippy | ABI, trybuild, interrupt and embedding tests on both backends; `ephemerons.rs:94,109,127`; geomean ≥ 0% in instructions | the JIT ABI object exists; who may collect is a type; hosts can call Scheme and register primitives soundly; Ctrl-C stops a tight loop | — |
 | 4a | Canonical identity and ports | 4–5 | the `PortTable` registry prunes dropped heaps; the loader retries after `EMFILE` | — | `(eq? (current-output-port) (current-output-port))` ⇒ `#t`; `garbage_port_flushed_by_collection`, `descriptor_exhaustion_retries`, `one_port_one_object`, `dropped_interpreter_flushes_ports` and `exit_flushes_every_interpreter` on both backends; [#618]'s repro (two interpreters on one OS thread keep separate current ports) on both backends; I/O workloads ±1% | port semantics match the oracles; no primitive calls back for `parameterize` | [#608], [#618] |
 | 4b | Global cells and binding records (variant R) | 3–4 | namespaces own records and cells, placeholders weak; a variable alias stops being a name; introduced definitions strong with an indexed lookup; environment-specifier namespaces die with their specifier or last unit; redefined libraries released | one read-mostly namespace API (addition C6) | the rebinding tests and decision 3's rows answer as today; the global path neutral or better than `frame_globals` | no `Rc` clone, `RefCell` borrow or `FORWARDED` hop on the global path, and no environment held by closures | [#613], [#614] (part), [#615] (part) |
@@ -1962,6 +2008,10 @@ the plan stops after it.
 
 **Documents each stage updates**, besides `docs/GC_DESIGN.md`, which every stage rewrites (the stage issues carry
 the detail):
+- **now (detection):** `docs/TEST_ORGANIZATION.md` (the release `gc-check` lane at stress 1, the zeal lane, the per-PR
+  stress targets, the nightly Larceny lanes); AGENTS.md's CI table (the GC differential job's build and interval, the
+  nightly job); AGENTS.md's "When Adding Features" and `docs/GC_DESIGN.md` §5, §7 and §11 (the checklists and review
+  rules of the premature-collection study, [`ANSWER.md`](study/gc/followup/premature/ANSWER.md) §3.3).
 - **0:** `docs/TEST_ORGANIZATION.md` (the `gc` benchmark mode, the GBS list, the census feature, the steady-state
   lane); AGENTS.md drift ("NaN-boxed", "24 transfer shapes").
 - **1:** `docs/TEST_ORGANIZATION.md` (the rewritten reclamation proofs); README.md (the new `(gc-stats)` keys of
@@ -2004,15 +2054,16 @@ the detail):
 - **9:** `docs/VM_RUNTIME.md` §5.6 (the `parameterize` rows); `docs/TEST_ORGANIZATION.md` (two-mutator and simulation
   lanes). **P:** `docs/TEST_ORGANIZATION.md` (workers lane).
 
-**Totals.** Stages 0–9 and P total about 88–122 focused engineer-weeks [I] (the stage-4 exit's week is not counted).
-Steady state and limits add about 5–7 (5g and the items placed in named stages), and decision 7c's threading additions
-5–8, so about 98–137 in all [I], roughly 23–32 months for one engineer. The figure is itemized, with no overrun factor;
-[K14](#k14) is its only calibration, and 5–8 of its weeks depend on decision 7c. Outside it: the "now" row (about 1–2),
-row C (about 2–3), the SRFI 18 row (6–11 [I]) and the JIT track. Stage P is in the total because the pause estimate
-(§9.10) says its trigger will fire; if `large-live` measures under 100 ms, the total falls by 4–6 weeks. Parallel work
-is limited by shared files: only 4a and 4c can run beside 4d–4e, stage 6 beside stage 5, and stage P beside stages 7–9,
-so a second engineer shortens the calendar by about 14–21 weeks [I]. The collector proper is about 4–6 kLOC through
-stage 7, plus 2–3 kLOC for stage 8 [I]; most of the effort is the common core every candidate design pays for.
+**Totals.** Stages 0–9 and P total about 89–123 focused engineer-weeks [I] (the stage-4 exit's week is not counted;
+stage 2's `Trace` derive adds 1 to DESIGN's figures). Steady state and limits add about 5–7 (5g and the items placed in
+named stages), and decision 7c's threading additions 5–8, so about 99–138 in all [I], roughly 23–32 months for one
+engineer. The figure is itemized, with no overrun factor; [K14](#k14) is its only calibration, and 5–8 of its weeks
+depend on decision 7c. Outside it: the two "now" rows (about 1–2 for the defects, 2–3 for detection), row C (about
+2–3), the SRFI 18 row (6–11 [I]) and the JIT track. Stage P is in the total because the pause estimate (§9.10) says
+its trigger will fire; if `large-live` measures under 100 ms, the total falls by 4–6 weeks. Parallel work is limited by
+shared files: only 4a and 4c can run beside 4d–4e, stage 6 beside stage 5, and stage P beside stages 7–9, so a second
+engineer shortens the calendar by about 14–21 weeks [I]. The collector proper is about 4–6 kLOC through stage 7, plus
+2–3 kLOC for stage 8 [I]; most of the effort is the common core every candidate design pays for.
 
 ## 20. Risks, mitigations and kill criteria
 
@@ -2065,8 +2116,11 @@ All measurements are interleaved A/B with confidence intervals (§16), on the pr
 | [K19](#k19) | the limits lane; the GBS under default limits | handler room; progress-guard events |
 
 **Risks without a numeric threshold:**
-- **Hidden references** (Julia's lesson). Mitigation: the off-heap holder inventory, the verifier, `VERIFY_ROOTS`, and
-  the poison and move-all lanes.
+- **Hidden references** (Julia's lesson). Mitigation: the off-heap holder inventory; generated traces, the `Trace`
+  derive for off-heap structures (§14, stage 2) and `declare_layouts!` for heap kinds (5a), with [#623]'s sentinel
+  tests until they land; the poison lanes, and [#621]'s stale-reference checks before them; the verifier; and the
+  move-all lane, which covers VM heaps only (§14). A missed edge that a second path masks escapes every dynamic check,
+  `VERIFY_ROOTS` included, since it sees only the words a provider reports.
 - **Single-mutator shortcuts creeping in.** Mitigation: §18's rules, the two-mutator and simulation lanes, the
   `threaded` feature linted in CI, the CI check against new `thread_local!`s, and review of new heap payloads.
 - **Port-finalization and limits flakiness.** Mitigation: those tests are kept out of the byte-identical lane.
@@ -2104,8 +2158,8 @@ stage 6's, and the stack probe and the stack address-space bound into stage 9's;
 stay with cost row R25.
 
 **Where DESIGN.md (including Appendices D, E and H) or ISSUES_DRAFT.md differ from this file, this file holds.** Both
-predate the steady-state, parallelism and contract follow-ups, so correct a stage issue drafted from them on these known
-points before filing it:
+predate the steady-state, parallelism, contract and premature-collection follow-ups, so correct a stage issue drafted
+from them on these known points before filing it:
 - Symbols, global cells, binding records, record types and code descriptors are mortal and live in the NMS (M1,
   decision 11, SD3), not in an immortal or descriptor space, as DESIGN §3, §4, Appendix D rows 4b and 5a, E.1 and E.6
   and ISSUES_DRAFT's S0 holder inventory have it.
@@ -2133,8 +2187,13 @@ points before filing it:
 - No counterpart there: the process budget (§17.3); F7; FFI callbacks as driver entries, the nested-driver tier rule
   and `NoGcScope`'s type and counter (§11.3); inline caches outside descriptors and the panic rule (§11.2); weak tables
   keyed by fresh symbols as class D (§17.1); `InterruptCell` following the token (§18.7); the stage-6 check of the
-  Cranelift facts (§19).
+  Cranelift facts (§19); the `Trace` derive for off-heap structures (§14, stage 2).
+- Stage 2 gives handles to the public paths that yield a value or environment, host-built environments included, and
+  documents `backend()` and `evaluator()` as the raw layer ([#605], [#620], §11.5), where DESIGN E.3's stage 2 adds
+  handles only for the `eval_*` results and leaves host environments to 4b's namespace handle.
 
+[#38]: https://github.com/avalonalex/patina/pull/38
+[#47]: https://github.com/avalonalex/patina/pull/47
 [#157]: https://github.com/avalonalex/patina/issues/157
 [#163]: https://github.com/avalonalex/patina/issues/163
 [#338]: https://github.com/avalonalex/patina/issues/338
@@ -2162,3 +2221,10 @@ points before filing it:
 [#616]: https://github.com/avalonalex/patina/issues/616
 [#617]: https://github.com/avalonalex/patina/issues/617
 [#618]: https://github.com/avalonalex/patina/issues/618
+[#620]: https://github.com/avalonalex/patina/issues/620
+[#621]: https://github.com/avalonalex/patina/issues/621
+[#622]: https://github.com/avalonalex/patina/issues/622
+[#623]: https://github.com/avalonalex/patina/issues/623
+[#624]: https://github.com/avalonalex/patina/issues/624
+[#625]: https://github.com/avalonalex/patina/issues/625
+[#626]: https://github.com/avalonalex/patina/issues/626
