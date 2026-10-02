@@ -242,7 +242,7 @@ if let Some(v) = v { heap.borrow()... }
 3. A new function that runs Scheme from Rust for other code to call goes on the list, and if it is public, into `crates/patina-interpreter/src/reentry_lint_control.rs`, whose `expect`s fail clippy when an entry stops matching.
 4. A new `thread_local!` goes on its crate root's `#![expect(clippy::disallowed_macros)]` list with what it holds: clippy takes that lint only at a crate root, so a second one in the same crate is caught only by that review.
 
-Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s header). `docs/GC_DESIGN.md` §7 has the reasoning and the three sites that are not safe today.
+Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s header). `docs/GC_DESIGN.md` §7 has the reasoning and the sites that are not safe today.
 
 **New Scheme library:**
 - Internal Rust primitives: `crates/patina-runtime/src/stdlib/internal_<name>.rs`

@@ -698,14 +698,16 @@ across the call and why that is safe:
 - the call runs on a nested loop that defers: every `apply_proc` a primitive
   makes from a machine's dispatch, `%parameterize-swap!`'s among them.
 
-Three sites are none of these, and their reasons say so: the detached
+Two sites are none of these, and their reasons say so: the detached
 `ApplyContext for Evaluator` (and `run_synchronously`, which only it and an
 embedder reach) runs an outermost trampoline beneath a primitive's Rust frame,
-though nothing in the workspace calls it; `load_library_extras` holds an
-environment no root reaches across a run, though no `-extras.scm` file exists;
-and `Interpreter::run_forms` holds the last form's value unrooted across the
-next form, returning it stale only when every later form fails under `-k`
-(#605's shape).
+though nothing in the workspace calls it; and `Interpreter::run_forms` holds
+the last form's value unrooted across the next form, returning it stale only
+when every later form fails under `-k` (#605's shape). A third went with the
+tree-walker's `-extras.scm` step, which ran a Rust-defined library's extras
+file, found on any search path, on an outermost trampoline while an
+environment no root reached held its definitions; no such file shipped, and
+the VM never had the step.
 
 `expect` rather than `allow`: it fails clippy once its lint stops firing, so
 an entry that stops matching anything fails the build, and so does a
