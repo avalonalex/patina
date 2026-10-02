@@ -1837,8 +1837,9 @@ impl<'a> Desugarer<'a> {
     ) -> std::result::Result<CoreExpr, E> {
         // Loading an import can execute Scheme. The unfinished input, include
         // datums, and partially built IR live in this Rust stack until we
-        // return; none is yet a machine root.
-        let _gc_defer = patina_core::GcDeferGuard::new(shared_heap);
+        // return; none is yet a machine root. A holder's guard: no collection
+        // may run until we return (#624).
+        let _gc_defer = patina_core::GcDeferGuard::holding(shared_heap);
         let import = RefCell::new(import);
         let failure = RefCell::new(None);
         let handler = |sets: &[TaggedValue], env: &Rc<Environment>| {

@@ -28,3 +28,10 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # release GC lane, which needs the checks in optimized code. Additive: the
 # shipped binary does not enable it and compiles none of the checks.
 gc-check = []
+
+# Compile `heap::gc::collect_for_tests`, which collects outside every safe
+# point, for unit tests in other crates that drive the collector against
+# hand-built state (#624). Only `patina-vm`'s [dev-dependencies] enable it,
+# and resolver 2 keeps a dev-dependency's features out of normal builds, so
+# no build that ships can name a collector entry point.
+test-support = []

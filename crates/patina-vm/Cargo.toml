@@ -17,6 +17,9 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 patina-interpreter = { path = "../patina-interpreter" }
+# The weak continuation table tests drive the collector directly, through
+# patina-core's test-only entry (`collect_for_tests`, #624).
+patina-core = { path = "../patina-core", features = ["test-support"] }
 [lib]
 name = "patina_vm"
 path = "src/lib.rs"

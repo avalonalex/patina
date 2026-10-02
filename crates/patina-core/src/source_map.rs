@@ -386,7 +386,8 @@ mod tests {
 
     #[test]
     fn prune_freed_drops_reclaimed_entries_only() {
-        use crate::{Collector, GcRoots, GcVisitor, MarkSweepCollector};
+        use crate::heap::gc::{Collector, MarkSweepCollector};
+        use crate::{GcRoots, GcVisitor};
 
         // A root provider keeping one of the two datums alive.
         struct Keep(TaggedValue);

@@ -161,7 +161,7 @@ impl SchemeLibraryLoader {
             lib_def.name,
             imports,
             body,
-            Some(heap),
+            heap,
             exports,
             source,
         ))

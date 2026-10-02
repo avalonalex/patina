@@ -78,7 +78,7 @@ use crate::eval::error::EvalError;
 use patina_core::Environment;
 use patina_core::TaggedValue;
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{GcController, GcDeferGuard};
+use patina_core::{GcController, GcDeferGuard, NoGcScopes};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use tracing::debug;
@@ -219,6 +219,8 @@ impl<'a> CpsEvaluator<'a> {
         let gc_defer = GcDeferGuard::new(self.evaluator.global_env.heap());
         // Loop invariant, hoisted out of the safe point (see maybe_collect).
         let is_outermost = gc_defer.is_outermost();
+        // The open `AssertNoGc` windows, checked at every poll (#624).
+        let no_gc_scopes = NoGcScopes::of(self.evaluator.global_env.heap());
         let trampoline = types::TrampolineGuard::enter(kind);
 
         let mut current_step = initial;
@@ -227,6 +229,12 @@ impl<'a> CpsEvaluator<'a> {
         loop {
             // GC safe point: all live state is in `current_step` and `expr`,
             // both rooted below. No heap borrow is outstanding here.
+            //
+            // The poll asserts first that no `AssertNoGc` window is open, on
+            // every step of every trampoline, nested or not: the shared safe
+            // point returns at once unless a collection is pending and this
+            // run is outermost, so a check inside it would almost never run.
+            no_gc_scopes.assert_none_open();
             self.maybe_collect(is_outermost, &current_step, expr);
 
             step_count += 1;

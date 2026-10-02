@@ -755,6 +755,33 @@ macro_rules! gc_shared_tests {
         }
 
         #[test]
+        fn collection_while_parameterize_swaps_a_parameter_like_procedure() {
+            // `parameterize` accepts a parameter-like procedure — the
+            // standard ports are some — and `%parameterize-swap!` reads and
+            // sets one by calling it from Rust (`ApplyContext::apply_proc`),
+            // on a nested loop. `q`'s setter asks for a collection while the
+            // swap holds `p`'s old value in its Rust `olds` vector, which no
+            // root provider sees: `p` has already been set to `new`, so
+            // nothing else names the list. Only the nested loop's deferral
+            // keeps it alive until the outer loop, which collects once the
+            // swap has returned the old values as a list. With that deferral
+            // gone, the list is freed, the after-thunk puts a dangling value
+            // back into `held`, and reading it panics in a check build
+            // (#624).
+            assert_gc_eval_to(
+                r#"
+                (import (patina debug))
+                (define held (list 'old 1 2))
+                (define (p . v) (if (null? v) held (set! held (car v))))
+                (define (q . v) (if (null? v) 'q-old (gc)))
+                (define inside (parameterize ((p 'new) (q 'q-new)) held))
+                (list inside held)
+                "#,
+                "(new (old 1 2))",
+            );
+        }
+
+        #[test]
         fn records_and_exceptions_survive_collection() {
             // The record's fields live behind an `Rc<RefCell<Vec<_>>>`, and
             // the guard clause closes over `p` — both must survive.

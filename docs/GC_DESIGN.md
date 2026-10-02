@@ -215,8 +215,9 @@ pub trait GcRoots {
 /// Swappable algorithm. Non-moving is a contract: implementations may not
 /// relocate live slots. Automatic policy is expressed as an allocation
 /// threshold the controller installs into the heap (§6), not a per-query
-/// method — the safe point never asks the collector anything.
-pub trait Collector {
+/// method — the safe point never asks the collector anything. Crate-private
+/// since #624, with every other way to run a collection (§7).
+pub(crate) trait Collector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
 }
 
@@ -588,6 +589,88 @@ scenarios. The deferral rule generalizes: whichever backend is *outermost*
 owns the safe point; any nested execution (either backend) runs at
 `gc_defer_depth > 0` and never collects. This replaces P6's blunter
 "GC runs only from the VM driver" rule.
+
+**Asserted, not only argued (#624).** Until #624 the protocol above was held
+by comments. Each part is now checked in check builds (`heap::GC_CHECK`:
+debug, or release with `gc-check`). A plain release build compiles none of
+these checks except the defer balance, which every build checks.
+
+- *A collection runs under exactly one guard.* `GcController::safe_point`
+  asserts that the defer depth is 1 when it collects: the collecting loop's
+  own guard and no other. A loop reads `is_outermost` once, at entry, so
+  without this a guard that a callee took and kept past its instruction would
+  not stop the running loop from collecting under it.
+- *A holder sees no collection.* A Rust scope or value that keeps heap values
+  across a call that can evaluate takes `GcDeferGuard::holding` instead of
+  `new`: `ParsedLibrary` (whose constructor now requires the heap, so it
+  cannot be built without its guard), `Desugarer::desugar_with_imports` and
+  `VmState::with_globals`. The guard records the heap's collection count, and
+  its drop panics if the count moved. Every loop entered under a holder is
+  nested today, so it cannot fire yet; once stage 4e lets nested loops
+  collect, the first that does under a holder fails at the holder rather than
+  freeing what it holds. It does not reach the values a primitive holds
+  across `ApplyContext::apply_proc`, which takes no guard of its own.
+- *The defer balance* (`Heap::exit_gc_defer`) is an `assert!` in **every**
+  build: in release an underflow would wrap the depth and end collection with
+  no report.
+- *No-collection windows.* A stretch whose soundness rests on reaching no safe
+  point, rather than on a root, is covered by an `AssertNoGc` scope: a depth
+  counter on the heap. Every dispatch loop and trampoline checks at its poll
+  that no scope is open (`NoGcScopes::assert_none_open`), before
+  `maybe_collect` and on every iteration, nested or not. Inside `safe_point`
+  the check would almost never run, since it returns at once unless a
+  collection is pending and the loop is outermost. The VM's windows:
+  - a continuation's capture to its weak-store entry
+    (`alloc_vm_continuation`, `alloc_vm_delimited_continuation`), under the
+    weak-table rule in `gc_roots.rs`, and on to the write of its handle
+    where the capture site writes it or hands it to a jump
+    (`CaptureComposable`, `abort_to_prompt`, `exit`). `call/cc` hands the
+    handle to its procedure instead, and a higher-order primitive may poll
+    in a nested loop before it stores it, so from the store entry on the
+    handle is covered by the deferral rule (no *collecting* safe point), not
+    by a window;
+  - an invoke, from where its handle and value leave the machine's roots,
+    or from before the value is built, to the copy-back of the snapshot, or
+    to the write of its operands into the next step's stub
+    (`step_wind_jump`, `invoke_delimited`). A full continuation's weak-store
+    lookup is inside the window; a delimited one's comes just before it,
+    while the handle is still where the caller found it. The window is
+    handed by value to `push_wind_step` / `push_invoke_step`, which drop it
+    once the stub holds the operands and before they call the thunk, which
+    may run a nested loop; the identity continuation hands it back to the
+    caller, which drops it once it has placed the value;
+  - the composable invoke's freed stub window (#172, `ResumeComposableInvoke`);
+  - `ResumeWindJump`'s retained target and value, from `finish_wind_step` to
+    the next write (#156).
+- *Collector entry points are crate-private.* `Collector`,
+  `MarkSweepCollector`, `run_mark_phase`, `Heap::sweep` and
+  `GcController::collect` cannot be named outside `patina-core`, so
+  `safe_point` is the only way to collect. `heap::gc::collect_for_tests`
+  (`#[doc(hidden)]`) serves unit tests that drive the collector against
+  hand-built state; it is compiled only with `patina-core`'s `test-support`
+  feature, which only `patina-vm`'s dev-dependencies enable, so no build that
+  ships contains it.
+
+The positive controls make each check panic on purpose:
+`patina-core`'s `heap::gc::tests::protocol` (depth, holder, balance and poll)
+and `crates/patina-tests/tests/gc_protocol.rs` (a poll inside a window, on each
+backend). CI's release GC lane runs them on its `gc-check` build, and runs
+the balance control once more in the plain release build, the one build
+where only that check is compiled in. Two tests
+show the deferral itself is load-bearing: `parameterize` over a
+parameter-like procedure that calls `(gc)` while `%parameterize-swap!` holds
+an old value in Rust (both backends, `gc_shared_tests!`), and
+`collection_inside_higher_order_primitive` (`gc_tree_walker.rs`). With the
+nested loops' deferral disabled, both fail.
+
+**Review rule.** A comment that argues "no safe point here" comes with an
+`AssertNoGc` at the same lines (AGENTS.md). An argued window with no scope is a
+missing assertion.
+
+These checks detect violations on today's collector. The redesign replaces
+them with `NoGcScope` and the collect capability at stage 3, where a nested
+entry cannot collect by type, and stage 4e deletes the weak continuation
+tables and with them the first two VM windows (`PRD/GC_PRD.md`).
 
 ---
 
