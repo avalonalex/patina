@@ -99,7 +99,7 @@ GitHub's path-filter limits and required-check considerations.
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`) |
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
 | GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621), the GC protocol checks (#624) and the retired-register checks (#625) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
-| GC zeal (`gc-zeal.yml`, path-filtered) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, only for changes to the VM's runtime or compiler, the heap, the tree-walker's `cps_eval` or the lane itself |
+| GC zeal (`gc-zeal.yml`, path-filtered and weekly) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, for changes to the VM's runtime, compiler or types, the heap or `TaggedValue`, the library loader or registry, the tree-walker's evaluator, the toolchain or the lane itself, and weekly on `main` |
 | Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 

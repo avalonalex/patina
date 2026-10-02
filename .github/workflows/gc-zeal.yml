@@ -8,24 +8,34 @@ name: GC zeal
 # collects only after allocations, and most pcs follow none.
 #
 # Zeal costs about 7x stress 1, so it runs a subset (tests/scheme/control/
-# without tail-recursion.scm, both backends, about 9 minutes on a runner),
-# and only for the changes that can break what it checks: the VM's runtime
-# and compiler, which make and use the maps; the heap and its collector; the
-# tree-walker's trampoline, which polls the same way; and the lane's own
-# inputs. A path filter rather than a schedule, so the run comes with the
-# change that broke it. The filter has the limits ci.yml's has
-# (docs/TEST_ORGANIZATION.md, "CI trigger scope"): a whole workflow filtered
-# out leaves a required check pending, and none is required today.
+# without tail-recursion.scm, both backends, about 9 minutes on a runner).
+# It runs on the changes most likely to break what it checks, so the run
+# comes with the change that broke it: the VM's runtime and compiler, which
+# make and use the maps, and its types (Instruction, CallFrame, CodeObject's
+# register_roots); the heap and its collector, and TaggedValue, where
+# DEAD_SLOT lives; the library loader and registry (GcDeferGuard::holding
+# and the registry's roots); the tree-walker's trampoline and evaluator,
+# which poll the same way; the toolchain; and the lane's own inputs. A
+# weekly run catches what the filter misses (the primitives, lib/scheme,
+# Cargo.lock), at one lane's cost a week. The filter has the limits ci.yml's
+# has (docs/TEST_ORGANIZATION.md, "CI trigger scope"): a whole workflow
+# filtered out leaves a required check pending, and none is required today.
 on:
   push:
     branches: [ main ]
     paths:
       - 'crates/patina-vm/src/runtime/**'
       - 'crates/patina-vm/src/compiler/**'
+      - 'crates/patina-vm/src/types/**'
       - 'crates/patina-core/src/heap/**'
+      - 'crates/patina-core/src/tagged_value.rs'
+      - 'crates/patina-runtime/src/library_loader.rs'
+      - 'crates/patina-runtime/src/library_registry.rs'
+      - 'crates/patina-tree-walker/src/eval/mod.rs'
       - 'crates/patina-tree-walker/src/eval/cps_eval/**'
       - 'crates/patina-tests/tests/scheme/control/**'
       - 'crates/patina-tests/tests/finished_forms_release_code.rs'
+      - 'rust-toolchain.toml'
       - 'scripts/run_gc_zeal.sh'
       - '.github/workflows/gc-zeal.yml'
   pull_request:
@@ -33,12 +43,21 @@ on:
     paths:
       - 'crates/patina-vm/src/runtime/**'
       - 'crates/patina-vm/src/compiler/**'
+      - 'crates/patina-vm/src/types/**'
       - 'crates/patina-core/src/heap/**'
+      - 'crates/patina-core/src/tagged_value.rs'
+      - 'crates/patina-runtime/src/library_loader.rs'
+      - 'crates/patina-runtime/src/library_registry.rs'
+      - 'crates/patina-tree-walker/src/eval/mod.rs'
       - 'crates/patina-tree-walker/src/eval/cps_eval/**'
       - 'crates/patina-tests/tests/scheme/control/**'
       - 'crates/patina-tests/tests/finished_forms_release_code.rs'
+      - 'rust-toolchain.toml'
       - 'scripts/run_gc_zeal.sh'
       - '.github/workflows/gc-zeal.yml'
+  # Mondays, 06:17 UTC; GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: '17 6 * * 1'
   workflow_dispatch:
 
 env:

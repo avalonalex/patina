@@ -979,7 +979,8 @@ visitor exists, and the stress lane is the real safety net.
    maps at a pc no allocation precedes; zeal collects at every outermost safe
    point. It costs about 7× stress 1 (the full chibi suite under zeal: 882–920
    s on the VM, measured 2026-10-01), so it runs on that subset, in CI's
-   path-filtered `gc-zeal.yml` (docs/TEST_ORGANIZATION.md, "GC lanes"). The
+   `gc-zeal.yml`, path-filtered and weekly (docs/TEST_ORGANIZATION.md, "GC
+   lanes"). The
    VM learns that a collection ran from `maybe_collect`'s answer, not from the
    pending flag, which zeal raises again before the collection returns:
    `finished_forms_release_code.rs` under zeal fails without it, since no

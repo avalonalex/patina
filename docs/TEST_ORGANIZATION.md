@@ -28,9 +28,10 @@ whole workflow is filtered out](https://docs.github.com/en/pull-requests/how-tos
 Such a policy needs a check that runs for every PR and accounts for skipped jobs.
 
 [`gc-zeal.yml`](../.github/workflows/gc-zeal.yml) is the one workflow
-filtered the other way: it runs only when a change touches what its lane
-checks (see "GC lanes" below), and can be started by hand
-(`workflow_dispatch`). The same caveat applies to it.
+filtered the other way: it runs when a change touches what its lane checks
+most directly (see "GC lanes" below), weekly on `main` for whatever the
+filter misses, and by hand (`workflow_dispatch`). The same caveat applies to
+it.
 
 ## Test Structure
 
@@ -906,7 +907,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 | Lane | Script | What it compares | In CI |
 |---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress (`PATINA_GC_STRESS_INTERVAL`, default 16), on both backends, with the tally pinned; plus reclamation proofs | `ci.yml`, every change: release `gc-check` at stress 1, and debug at 16 |
-| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and `PATINA_GC_ZEAL=entry`, which collects at every outermost safe point, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime or compiler, `patina-core/src/heap`, the tree-walker's `cps_eval`, or the lane's own files; it also runs `finished_forms_release_code` under zeal |
+| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and `PATINA_GC_ZEAL=entry`, which collects at every outermost safe point, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
 under zeal took 882–920 s on the VM alone (2026-10-01), and
