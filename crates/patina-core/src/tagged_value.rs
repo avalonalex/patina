@@ -455,13 +455,14 @@ impl TaggedValue {
         self.0
     }
 
-    /// Create from raw u64 (for deserialization)
+    /// The value whose raw bits are `raw`, as [`Self::raw`] returned them.
     ///
-    /// # Safety
-    ///
-    /// Caller must ensure the raw value is a valid TaggedValue.
+    /// Crate-private, as the index constructors are: raw bits from anywhere
+    /// but a value the heap made would be a reference without the heap's
+    /// stamp (`heap/check.rs`). The `syntax_sources` prune in sweep, which
+    /// reads only the index, is the one caller.
     #[inline(always)]
-    pub fn from_raw(raw: u64) -> Self {
+    pub(crate) fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 

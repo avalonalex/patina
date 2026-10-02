@@ -44,9 +44,9 @@
 //!   [`ObjectIndex`](crate::tagged_value::ObjectIndex) that kept the stamp,
 //!   and the `syntax_sources` prune, which reads only the index.
 //!
-//! `TaggedValue::from_raw` has no other caller, and the index constructors
-//! (`TaggedValue::pair` and the rest) are crate-private, so no other crate can
-//! mint a reference. Every copy of a value carries the same stamp, so the
+//! `TaggedValue::from_raw` has no other caller, and it and the index
+//! constructors (`TaggedValue::pair` and the rest) are crate-private, so no
+//! other crate can mint a reference. Every copy of a value carries the same stamp, so the
 //! consumers of raw bits — `eq?`/`eqv?`/`equal?`'s fast paths, identity
 //! hashing (which hashes the index), the datum writer's labels, the
 //! desugarer's and parser's `seen` sets, the VM's primitive table and the
