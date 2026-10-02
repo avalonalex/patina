@@ -1241,11 +1241,10 @@ pub(super) fn run_loop_until_outcome(
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
-        // A collection happened if one was pending and sweep has cleared the
-        // flag since: a nested loop never collects, and leaves it set. Two
-        // `Cell` reads, where following every pending safe point would borrow
-        // the heap on each instruction of a callback that crossed the
-        // threshold.
+        // `maybe_collect` says whether a collection ran. The pending flag
+        // cannot: under zeal the collection raises it again before it
+        // returns, so "pending before and lowered after" would never see one
+        // and the code a collection frees would never be let go (#625).
         //
         // The poll asserts first that no `AssertNoGc` window is open, on
         // every iteration of every loop, nested or not: `maybe_collect`
@@ -1253,9 +1252,7 @@ pub(super) fn run_loop_until_outcome(
         // pending and this loop is outermost, so a check placed there would
         // almost never run (#624).
         no_gc_scopes.assert_none_open();
-        let pending = state.gc_pending.get();
-        maybe_collect(state, is_outermost);
-        if pending && !state.gc_pending.get() {
+        if maybe_collect(state, is_outermost) {
             state.after_collection();
         }
 
@@ -1330,15 +1327,16 @@ pub(super) fn run_loop_until_outcome(
     }
 }
 
-/// GC safe point: the VM's root set, handed to the shared driver.
+/// GC safe point: the VM's root set, handed to the shared driver. Returns
+/// whether a collection ran.
 ///
 /// The protocol — `(gc)` honored in every mode, only the outermost guard
 /// collects, one borrow spans the collection — lives in
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
-fn maybe_collect(state: &mut VmState, is_outermost: bool) {
+fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     if !state.gc_pending.get() || !is_outermost {
-        return;
+        return false;
     }
     state.execution.retire_registers();
     GcController::safe_point(
@@ -1358,7 +1356,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) {
                 None => collect(&[state]),
             }
         },
-    );
+    )
 }
 
 /// Attach a source location to an error if it doesn't already have one.

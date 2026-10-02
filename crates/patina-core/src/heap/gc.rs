@@ -477,15 +477,30 @@ pub enum GcMode {
     /// Collect once `n` allocations have happened since the last collection,
     /// ignoring the adaptive floor. The differential-testing lane.
     Stress(usize),
+    /// Collect at every outermost safe point, allocation or not
+    /// (`PATINA_GC_ZEAL=entry`, #625). Its threshold is 0, so the pending
+    /// flag is raised again as soon as a collection re-installs it. Stress
+    /// cannot express this: it counts allocations, so a stretch of
+    /// instructions that allocates nothing never collects under it, even at
+    /// `PATINA_GC_STRESS=1`. A torture lane, about 7x slower than stress 1:
+    /// it runs on a subset of the suite (`scripts/run_gc_zeal.sh`).
+    Zeal,
 }
 
 impl GcMode {
     /// Read the mode from the environment. Adaptive collection is always on;
-    /// the two variables exist for the differential test lanes
+    /// the variables exist for the differential test lanes
     /// (`docs/GC_DESIGN.md` §11): `PATINA_GC=0` produces the no-collection
-    /// reference run, and `PATINA_GC_STRESS` takes an optional allocation
-    /// count (`=1`, the default, collects at nearly every safe point; larger
-    /// values trade coverage for runtime).
+    /// reference run, `PATINA_GC_STRESS` takes an optional allocation
+    /// count (`=1`, the default, collects at nearly every safe point that
+    /// follows an allocation; larger values trade coverage for runtime), and
+    /// `PATINA_GC_ZEAL=entry` collects at every outermost safe point.
+    ///
+    /// Zeal wins over stress, and stress over `PATINA_GC=0`. `entry` is the
+    /// one zeal mode today's collector has, spelled as GC_PRD §14 spells it;
+    /// the PRD's others (`major`, `minor`, `alternate`, `move-all`) come with
+    /// the redesign. Any other value panics rather than run a torture lane
+    /// that is quietly not torturing anything.
     pub fn from_env() -> Self {
         fn flag(name: &str) -> Option<String> {
             std::env::var(name)
@@ -493,7 +508,16 @@ impl GcMode {
                 .filter(|v| !v.is_empty() && v != "0")
         }
 
-        if let Some(v) = flag("PATINA_GC_STRESS") {
+        if let Some(v) = flag("PATINA_GC_ZEAL") {
+            match v.as_str() {
+                "entry" => GcMode::Zeal,
+                other => panic!(
+                    "PATINA_GC_ZEAL={other}: today's collector has one zeal mode, \
+                     `entry` (collect at every outermost safe point); GC_PRD §14's \
+                     others come with the redesign"
+                ),
+            }
+        } else if let Some(v) = flag("PATINA_GC_STRESS") {
             GcMode::Stress(v.parse().unwrap_or(1).max(1))
         } else if matches!(std::env::var("PATINA_GC").as_deref(), Ok("0")) {
             GcMode::Off
@@ -532,6 +556,9 @@ impl GcController {
             GcMode::Off => usize::MAX,
             GcMode::On => self.collector.auto_threshold(),
             GcMode::Stress(n) => n,
+            // Already crossed: installing it raises the pending flag, and
+            // `collect` re-installs it after every sweep.
+            GcMode::Zeal => 0,
         }
     }
 
@@ -567,6 +594,11 @@ impl GcController {
     /// borrow, no mode dispatch. The collection *decision* was already made
     /// where it becomes true, in `Heap::note_alloc` / `Heap::request_gc`
     /// (design §6.1).
+    ///
+    /// Returns whether a collection ran, for a backend with work to do after
+    /// one (the VM's code release, #338). It cannot tell from the pending
+    /// flag: under [`GcMode::Zeal`] the flag is raised again before the
+    /// collection returns.
     #[inline]
     pub fn safe_point(
         gc: &RefCell<Self>,
@@ -574,14 +606,14 @@ impl GcController {
         pending: &Cell<bool>,
         is_outermost: bool,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
-    ) {
+    ) -> bool {
         // A nested loop never collects — its caller holds live values in Rust
         // locals no root provider can see. Its flag check would be dead code,
         // but `is_outermost` is a hoisted constant, so the branch predicts.
         if !is_outermost || !pending.get() {
-            return;
+            return false;
         }
-        Self::safe_point_cold(gc, heap, with_roots);
+        Self::safe_point_cold(gc, heap, with_roots)
     }
 
     /// The rare branch, out of line so only the fast path inlines into the
@@ -591,7 +623,8 @@ impl GcController {
         gc: &RefCell<Self>,
         heap: &SharedHeap,
         with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
-    ) {
+    ) -> bool {
+        let mut collected = false;
         with_roots(&mut |roots| {
             let mut h = heap.borrow_mut();
             // The outermost loop's own guard, and no other. `is_outermost`
@@ -606,7 +639,9 @@ impl GcController {
                 }
             }
             gc.borrow_mut().collect(&mut h, roots);
+            collected = true;
         });
+        collected
     }
 }
 
@@ -2028,25 +2063,69 @@ mod tests {
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
 
         // Flag down: nothing happens.
-        GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
             collect(&[&no_roots]);
         });
+        assert!(!collected);
         assert_eq!(shared.borrow().gc_collections(), 0);
 
         // Flag up but nested: deferred, flag stays up for the outer loop.
         shared.borrow_mut().request_gc();
-        GcController::safe_point(&gc, &shared, &pending, false, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &pending, false, |collect| {
             collect(&[&no_roots]);
         });
+        assert!(!collected);
         assert_eq!(shared.borrow().gc_collections(), 0);
         assert!(pending.get());
 
+        // Flag up, outermost, but the backend cannot supply its roots: no
+        // collection, and the flag stays up for the next safe point.
+        let collected = GcController::safe_point(&gc, &shared, &pending, true, |_collect| {});
+        assert!(!collected);
+        assert!(pending.get());
+
         // Flag up and outermost: collects and lowers the flag.
-        GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+        let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
             collect(&[&no_roots]);
         });
+        assert!(collected);
         assert_eq!(shared.borrow().gc_collections(), 1);
         assert!(!pending.get());
+    }
+
+    /// Zeal (#625): the collection that lowers the pending flag re-installs a
+    /// threshold of 0, which raises it again, so every outermost safe point
+    /// collects whether or not anything was allocated, and `safe_point` says
+    /// that it did, since the flag cannot.
+    #[test]
+    fn zeal_collects_at_every_outermost_safe_point() {
+        let shared = crate::heap::new_shared_heap();
+        let pending = shared.borrow().gc_pending_handle();
+        let gc = RefCell::new(GcController {
+            mode: GcMode::Zeal,
+            collector: MarkSweepCollector::new(),
+        });
+        let no_roots = TestRoots::default();
+        let _loop_guard = GcDeferGuard::new(&shared);
+
+        let threshold = gc.borrow().current_threshold();
+        shared.borrow_mut().set_gc_threshold(threshold);
+        assert!(pending.get(), "installing zeal's threshold raises the flag");
+
+        for n in 1..=3 {
+            let collected = GcController::safe_point(&gc, &shared, &pending, true, |collect| {
+                collect(&[&no_roots]);
+            });
+            assert!(collected);
+            assert_eq!(shared.borrow().gc_collections(), n);
+            assert!(pending.get(), "raised again by the collection itself");
+        }
+        // Nested loops still never collect.
+        let collected = GcController::safe_point(&gc, &shared, &pending, false, |collect| {
+            collect(&[&no_roots]);
+        });
+        assert!(!collected);
+        assert_eq!(shared.borrow().gc_collections(), 3);
     }
 
     // ------------------------------------------------------------------------
