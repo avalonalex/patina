@@ -29,8 +29,10 @@
 //! `safe_point` is the only way in from outside this crate. The collector,
 //! the mark phase, `Heap::sweep` and `GcController::collect` are
 //! crate-private (#624), so no backend or host can collect without the
-//! deferral rule `safe_point` enforces; [`collect_for_tests`] is the one
-//! exception, for tests that drive the collector against hand-built state.
+//! deferral rule `safe_point` enforces. The one exception is
+//! `collect_for_tests`, for tests that drive the collector against
+//! hand-built state, and it exists only under the `test-support` feature,
+//! which only `patina-vm`'s tests enable.
 //!
 //! The deferral protocol is asserted, not only described (#624, design §7):
 //! a collection runs only while the collecting loop's own [`GcDeferGuard`]
@@ -1373,6 +1375,12 @@ impl Collector for MarkSweepCollector {
 /// `patina-vm`'s weak continuation table tests. A backend or a host collects
 /// through [`GcController::safe_point`], which is what keeps a collection
 /// from running while a Rust frame holds values no root provider sees.
+///
+/// Compiled only with the `test-support` feature, which `patina-vm` enables
+/// for its tests alone (a dev-dependency feature, which resolver 2 keeps out
+/// of every normal build): a build that ships has no way to collect outside
+/// `safe_point`.
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
     MarkSweepCollector::new().collect(heap, roots)

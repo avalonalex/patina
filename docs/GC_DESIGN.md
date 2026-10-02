@@ -637,7 +637,9 @@ these checks except the defer balance, which every build checks.
   `GcController::collect` cannot be named outside `patina-core`, so
   `safe_point` is the only way to collect. `heap::gc::collect_for_tests`
   (`#[doc(hidden)]`) serves unit tests that drive the collector against
-  hand-built state.
+  hand-built state; it is compiled only with `patina-core`'s `test-support`
+  feature, which only `patina-vm`'s dev-dependencies enable, so no build that
+  ships contains it.
 
 The positive controls make each check panic on purpose:
 `patina-core`'s `heap::gc::tests::protocol` (depth, holder, balance and poll)
