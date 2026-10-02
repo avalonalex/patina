@@ -696,18 +696,22 @@ across the call and why that is safe:
 - the state is in the machine: a frame it pushed, `Step::Call` and
   `resume_stub`;
 - the call runs on a nested loop that defers: every `apply_proc` a primitive
-  makes from a machine's dispatch, `%parameterize-swap!`'s among them.
+  makes from a machine's dispatch, `%parameterize-swap!`'s among them. The
+  tree-walker's detached `ApplyContext for Evaluator`, which an embedder
+  reaches through `Interpreter::evaluator()` with no loop above it, defers
+  the same calls with a holder's guard in each of its methods, and so covers
+  `run_synchronously`, which only it and an embedder's own context reach.
 
-Two sites are none of these, and their reasons say so: the detached
-`ApplyContext for Evaluator` (and `run_synchronously`, which only it and an
-embedder reach) runs an outermost trampoline beneath a primitive's Rust frame,
-though nothing in the workspace calls it; and `Interpreter::run_forms` holds
-the last form's value unrooted across the next form, returning it stale only
-when every later form fails under `-k` (#605's shape). A third went with the
-tree-walker's `-extras.scm` step, which ran a Rust-defined library's extras
-file, found on any search path, on an outermost trampoline while an
-environment no root reached held its definitions; no such file shipped, and
-the VM never had the step.
+One site is none of these, and its reason says so: `Interpreter::run_forms`
+holds the last form's value unrooted across the next form, returning it stale
+whenever every later form fails, on any continue-on-error entry (#605's
+shape). Two others were closed when this list was drawn up: the detached
+context ran an outermost trampoline beneath a primitive's Rust frame, which
+collected what the primitive held (`gc_tree_walker.rs` has the case), and the
+tree-walker's `-extras.scm` step ran a Rust-defined library's extras file,
+found on any search path, on an outermost trampoline while an environment no
+root reached held its definitions; no such file shipped, and the VM never had
+the step, which is gone.
 
 `expect` rather than `allow`: it fails clippy once its lint stops firing, so
 an entry that stops matching anything fails the build, and so does a

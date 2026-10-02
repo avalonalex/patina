@@ -51,7 +51,8 @@ impl Evaluator {
                 clippy::disallowed_methods,
                 reason = "holds nothing: `proc` and `args` move into the run's first step, which \
                           its trampoline roots. Reached only through the detached `ApplyContext \
-                          for Evaluator` (`apply_context_impl.rs`)"
+                          for Evaluator` (`apply_context_impl.rs`), whose `GcDeferGuard::holding` \
+                          defers the run for whatever a primitive above holds"
             )]
             let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
             Ok(super::EvalResult::Tagged(result_tagged))
@@ -74,7 +75,8 @@ impl Evaluator {
                             reason = "holds nothing: `proc` and `args` move into the run's first \
                                       step, which its trampoline roots. Reached only through the \
                                       detached `ApplyContext for Evaluator` \
-                                      (`apply_context_impl.rs`)"
+                                      (`apply_context_impl.rs`), whose `GcDeferGuard::holding` \
+                                      defers the run for whatever a primitive above holds"
                         )]
                         let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
                         Ok(super::EvalResult::Tagged(result_tagged))
@@ -115,7 +117,8 @@ impl Evaluator {
                                                   converted value into it after the call; the \
                                                   value converted moves into the call. Reached \
                                                   only through the detached `ApplyContext for \
-                                                  Evaluator`"
+                                                  Evaluator`, under its \
+                                                  `GcDeferGuard::holding`"
                                     )]
                                     let result = self.apply(conv, vec![args[0]], false)?;
                                     match result {

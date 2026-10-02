@@ -74,9 +74,10 @@ fn primitive_environment(
         #[expect(
             clippy::disallowed_methods,
             reason = "holds `env`, the environment being built, across each load. Its bindings so \
-                      far are imports, locations the registered libraries own (#406), so it holds \
-                      no value of its own; the load runs nested under the GcDeferGuard of the loop \
-                      that dispatched this primitive"
+                      far are imports only: shared locations the registered libraries own, or, \
+                      for an export that is not a plain binding, a copy of a value the library's \
+                      export table holds, both traced through the library registry (#406). So it \
+                      holds no value of its own, and nothing here needs the load deferred"
         )]
         let library = ctx.load_scheme_library(set.library_name())?;
         for binding in set.resolve_bindings(library.export_names()) {
@@ -565,9 +566,12 @@ fn primitive_scheme_report_environment(
     // audit's sweep of every `apply_proc`/`eval_expr` site found (F7).
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds `env`, which has `(scheme base)`'s imports by now: locations the \
-                  registered library owns (#406), so no value of its own. The load runs nested \
-                  under the GcDeferGuard of the loop that dispatched this primitive"
+        reason = "holds `env`, which has the imports of the libraries loaded so far: shared \
+                  locations the registered libraries own, or, for an export that is not a plain \
+                  binding, a copy of a value the library's export table holds, both traced \
+                  through the library registry (#406). `base_lib` and an `inexact_lib` are \
+                  copies of registered libraries, whose values the registry traces too. So the \
+                  frame holds no value of its own, and nothing here needs the load deferred"
     )]
     let optional_library =
         |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {

@@ -41,8 +41,12 @@ pub(super) fn call_with_values(
     // Call producer with no arguments to get values
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds `consumer` (and `args`) across the producer's call: safe while nested \
-                  loops defer, under the GcDeferGuard of the loop that dispatched this primitive"
+        reason = "holds `consumer` (and `args`) across the producer's call. Both machines \
+                  intercept `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, the \
+                  tree-walker's `apply_call_with_values`), so this registry fallback runs only \
+                  where neither does: the VM's unit tests (`install_primitives`), dispatched by a \
+                  loop whose nested run defers, and the tree-walker's detached `ApplyContext for \
+                  Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
     )]
     let produced_tv = ctx.apply_proc(producer, vec![])?;
 

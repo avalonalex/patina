@@ -252,9 +252,10 @@ fn read_parameter(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<TaggedVa
             reason = "holds `param`, and `parameterize_swap` above it holds the parameter and \
                       value lists and the old values read so far (`params`, `vals`, `olds`), \
                       across the call of a parameter-like procedure that is not a parameter \
-                      object: safe while nested loops defer, under the GcDeferGuard of the loop \
-                      that dispatched `%parameterize-swap!`. Stage 4a ends this call \
-                      (PRD/GC_PRD.md §11.3)"
+                      object. Deferred: under a machine, by the GcDeferGuard of the loop that \
+                      dispatched `%parameterize-swap!`, whose nested run cannot collect; on the \
+                      tree-walker's detached `ApplyContext for Evaluator`, by that context's \
+                      `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
         )]
         None => ctx.apply_proc(param, vec![]),
     }
@@ -283,9 +284,12 @@ fn install_parameter(
             clippy::disallowed_methods,
             reason = "`parameterize_swap` above it holds `params`, `vals` and `olds` across the \
                       call of a parameter-like procedure that is not a parameter object, which \
-                      validates the value by being set: safe while nested loops defer, under the \
-                      GcDeferGuard of the loop that dispatched `%parameterize-swap!`. Stage 4a \
-                      ends this call (PRD/GC_PRD.md §11.3)"
+                      validates the value by being set; once an earlier `install` has \
+                      overwritten a parameter object's top, `olds` holds the only reference to \
+                      its old value. Deferred: under a machine, by the GcDeferGuard of the loop \
+                      that dispatched `%parameterize-swap!`, whose nested run cannot collect; on \
+                      the tree-walker's detached `ApplyContext for Evaluator`, by that context's \
+                      `GcDeferGuard::holding`. Stage 4a ends this call (PRD/GC_PRD.md §11.3)"
         )]
         None => ctx.apply_proc(param, vec![value]).map(|_| ()),
     }
