@@ -401,8 +401,8 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),
         HeapObjectData::Library(lib) => write!(out, "{}", lib).unwrap(),
         // The rest are internal and should reach no program's output — a
-        // freed slot is a use-after-free that `get_object` debug-asserts
-        // against, so that arm only renders in a release build. They are
+        // freed slot is a use-after-free that `get_object` refuses in a check
+        // build, so that arm only renders in a plain release one. They are
         // spelled out anyway, because the point of the match is that the next
         // variant added cannot quietly become `#<unknown>`.
         HeapObjectData::MutableCell(_) => out.push_str("#<cell>"),

@@ -10,7 +10,7 @@ use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
 use patina_core::TaggedValue;
-use patina_core::tagged_value::HeapIndex;
+use patina_core::tagged_value::ObjectIndex;
 use std::rc::Rc;
 
 #[derive(Default)]
@@ -55,7 +55,7 @@ impl ExecutionState {
     pub(super) fn push_frame(
         &mut self,
         code: Rc<CodeObject>,
-        closure: Option<HeapIndex>,
+        closure: Option<ObjectIndex>,
         return_reg: u16,
     ) -> usize {
         let base = self.registers.len();
@@ -95,7 +95,7 @@ impl ExecutionState {
     pub(super) fn tail_replace(
         &mut self,
         code: Rc<CodeObject>,
-        closure: Option<HeapIndex>,
+        closure: Option<ObjectIndex>,
     ) -> usize {
         let frame = self
             .frames
@@ -113,7 +113,7 @@ impl ExecutionState {
         frame.register_base
     }
 
-    pub(super) fn restart_closure(&mut self, closure: Option<HeapIndex>) {
+    pub(super) fn restart_closure(&mut self, closure: Option<ObjectIndex>) {
         let frame = self
             .frames
             .last_mut()

@@ -33,13 +33,14 @@ use rustc_hash::FxHashSet;
 
 use std::cell::{Cell, RefCell};
 
+use super::check::SlotChecks;
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
 use crate::environment::Environment;
 use crate::library::Library;
 use crate::procedure::Procedure;
-use crate::tagged_value::{HeapIndex, TaggedValue};
+use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
 
 // ============================================================================
 // Bit-vectors
@@ -481,16 +482,27 @@ impl<'h> GcVisitor<'h> {
     /// The normal edge: mark and enqueue a heap reference; no-op for
     /// immediates (fixnum, special, char). Strings are leaves, so they are
     /// marked without a worklist round-trip.
+    ///
+    /// In a check build a reference whose slot was freed and reused since it
+    /// was made panics here (`heap/check.rs`): a root or a traced edge kept a
+    /// dead object's reference, and marking would otherwise retain the slot's
+    /// new tenant in its name. A reference to a slot that is free now is
+    /// reported by sweep's pre-mark check instead.
     #[inline]
     pub fn visit(&mut self, tv: TaggedValue) {
+        let heap = self.heap;
         let newly_marked = if tv.is_pair() {
+            heap.pair_checks.check_reached("pair", tv);
             self.marks.pairs.set(tv.heap_index() as usize)
         } else if tv.is_vector() {
+            heap.vector_checks.check_reached("vector", tv);
             self.marks.vectors.set(tv.heap_index() as usize)
         } else if tv.is_string() {
+            heap.string_checks.check_reached("string", tv);
             self.marks.strings.set(tv.heap_index() as usize);
             false
         } else if tv.is_object() {
+            heap.object_checks.check_reached("object", tv);
             self.marks.objects.set(tv.heap_index() as usize)
         } else {
             false
@@ -508,10 +520,13 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// For bare object-arena indices that are not stored as `TaggedValue`
-    /// (e.g. the VM's `CallFrame.closure`).
-    pub fn visit_object_index(&mut self, index: HeapIndex) {
-        if self.marks.objects.set(index as usize) {
-            self.worklist.push(TaggedValue::object(index));
+    /// (e.g. the VM's `CallFrame.closure`). Checked as [`Self::visit`]
+    /// checks a value, against the generation the index kept.
+    pub fn visit_object_index(&mut self, index: ObjectIndex) {
+        let value = index.value();
+        self.heap.object_checks.check_reached("object", value);
+        if self.marks.objects.set(index.index() as usize) {
+            self.worklist.push(value);
         }
     }
 
@@ -824,20 +839,26 @@ impl<'h> GcVisitor<'h> {
 /// Sweep one arena: pre-mark already-free slots (they are unmarked by
 /// definition; re-pushing them would double-free on reuse), then reclaim
 /// every remaining unmarked slot, reporting each to `record_freed` (the
-/// §9.1 diagnostics-pruning hook). Returns the number of slots reclaimed.
+/// §9.1 diagnostics-pruning hook) as the reference the dead object had,
+/// built by `reference`. Returns the number of slots reclaimed.
 ///
 /// In check builds ([`GC_CHECK`](super::GC_CHECK)) the pre-mark doubles as
 /// `docs/GC_DESIGN.md` §11 item 5's assertion: a free slot whose bit is
 /// already set was reached by marking, so a root or a traced edge names a
-/// slot that was free when this collection began.
+/// slot that was free when this collection began. `checks` records each slot
+/// freed here, and stamps the reported reference with the generation the
+/// slot had until now (`heap/check.rs`).
+#[allow(clippy::too_many_arguments)]
 fn sweep_arena<T>(
     arena_name: &'static str,
     arena: &mut [T],
     free_list: &mut Vec<HeapIndex>,
     marks: &mut BitSet,
+    checks: &mut SlotChecks,
+    reference: impl Fn(HeapIndex) -> TaggedValue,
     write_tombstone: bool,
     tombstone: impl Fn() -> T,
-    mut record_freed: impl FnMut(HeapIndex, &T),
+    mut record_freed: impl FnMut(TaggedValue, &T),
 ) -> usize {
     for &idx in free_list.iter() {
         if !marks.set(idx as usize) && super::GC_CHECK {
@@ -847,8 +868,9 @@ fn sweep_arena<T>(
     let mut swept = 0;
     for (i, slot) in arena.iter_mut().enumerate() {
         if !marks.get(i) {
+            let dead = checks.free(reference(i as HeapIndex));
             // Before the tombstone, so a consumer can see what died.
-            record_freed(i as HeapIndex, slot);
+            record_freed(dead, slot);
             if write_tombstone {
                 *slot = tombstone();
             }
@@ -893,13 +915,15 @@ impl Heap {
     /// and tombstone the slot. Tombstoning drops `Rc` payloads eagerly, which
     /// is what breaks closure ↔ environment cycles (design §8) — it is
     /// load-bearing for objects (`Rc` payloads) and vectors/strings (element
-    /// buffers). Pairs are `Copy` with nothing to drop, so release builds
-    /// skip the store; debug builds write a poison value that pair accessors
-    /// assert against.
+    /// buffers). Pairs are `Copy` with nothing to drop, so a plain release
+    /// build skips the store; a check build writes a poison value, so a
+    /// stale reference that marking reaches traces nothing from the dead
+    /// pair.
     ///
-    /// Use-after-free detectability by arena: objects panic in debug via
-    /// `get_object`; pairs panic in debug via the poison; vector/string
-    /// tombstones (empty) are legal values, so UAF there goes undetected.
+    /// Use-after-free detection does not depend on the tombstones: in a
+    /// check build every arena accessor refuses a reference to a freed slot,
+    /// or to a slot freed and reused since, by the slot's generation
+    /// (`heap/check.rs`).
     ///
     /// Consumes the mark bits as scratch space (read [`MarkBits::marked`]
     /// first) and resets the allocation counter and the collection-pending
@@ -925,43 +949,45 @@ impl Heap {
                 &mut self.pairs,
                 &mut self.free_pairs,
                 &mut marks.pairs,
-                cfg!(debug_assertions),
+                &mut self.pair_checks,
+                TaggedValue::pair,
+                super::GC_CHECK,
                 || (TaggedValue::GC_POISON, TaggedValue::GC_POISON),
-                |i, _| {
-                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::pair(i));
-                },
+                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
             ),
             vectors: sweep_arena(
                 "vector",
                 &mut self.vectors,
                 &mut self.free_vectors,
                 &mut marks.vectors,
+                &mut self.vector_checks,
+                TaggedValue::vector,
                 true,
                 Vec::new,
-                |i, _| {
-                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::vector(i));
-                },
+                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
             ),
             strings: sweep_arena(
                 "string",
                 &mut self.strings,
                 &mut self.free_strings,
                 &mut marks.strings,
+                &mut self.string_checks,
+                TaggedValue::string,
                 true,
                 Vec::new,
-                |i, _| {
-                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::string(i));
-                },
+                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
             ),
             objects: sweep_arena(
                 "object",
                 &mut self.objects,
                 &mut self.free_objects,
                 &mut marks.objects,
+                &mut self.object_checks,
+                TaggedValue::object,
                 true,
                 || HeapObjectData::Free,
-                |i, old| {
-                    record_freed_bits(&mut freed, &mut overflow, TaggedValue::object(i));
+                |dead, old| {
+                    record_freed_bits(&mut freed, &mut overflow, dead);
                     if let (Some(ids), HeapObjectData::VmClosure { code_id, .. }) =
                         (freed_closures.as_mut(), old)
                     {
@@ -1863,8 +1889,11 @@ mod tests {
         collect_with_a_root_naming_a_free_slot(|heap| heap.alloc_bytevector(vec![1, 2, 3]));
     }
 
-    #[cfg(debug_assertions)]
     #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
     #[should_panic(expected = "use-after-free")]
     fn swept_pair_access_panics_in_debug() {
         let mut heap = Heap::new();

@@ -305,8 +305,9 @@ already-free set):
 2. **tombstone the slot** — overwrite with a payload-free value:
    vectors/strings → `Vec::new()` (drops element storage); objects → the
    dedicated `HeapObjectData::Free` variant. Pairs are `Copy` with nothing to
-   drop, so release builds skip the store entirely; debug builds write a
-   reserved poison value (`TaggedValue::GC_POISON`) instead.
+   drop, so plain release builds skip the store entirely; check builds
+   (debug, or release with `gc-check`) write a reserved poison value
+   (`TaggedValue::GC_POISON`) instead.
 
 Tombstoning is not just hygiene: dropping the old `HeapObjectData` releases its
 `Rc` payloads (environments, ports, procedures) at sweep time rather than at
@@ -321,11 +322,17 @@ free.
 Arena `Vec`s are never shrunk; a "free list ratio" stat can inform future
 shrink heuristics but v1 does not shrink.
 
-**Use-after-free detectability by arena** (debug builds): object-arena UAF
-panics via the `Free` assert in `get_object`; pair UAF panics via the poison
-assert in `get_pair`/`set_car`/`set_cdr`; vector/string tombstones (empty) are
-legal values, so UAF in those two arenas goes undetected — the differential
-stress lane is the safety net there.
+**Use-after-free detectability by arena** (check builds: every debug build,
+and release with `patina-core`'s `gc-check` feature; #621): every arena
+accessor refuses a reference to a freed slot, and one to a slot freed and
+reused since the reference was made, by a per-slot generation that the heap
+stamps into each reference (`heap/check.rs`). Marking refuses the same two
+cases: a free slot at sweep's pre-mark (§11 item 5), a reused one in
+`GcVisitor::visit`. The tombstones are no longer what detects a use after
+free — before #621, vector and string tombstones (empty) were legal values and
+a reused slot read as its new tenant, so those cases went undetected. Check
+builds also write the pair poison, so a stale pair that marking reaches traces
+nothing.
 
 ---
 
@@ -830,7 +837,8 @@ visitor exists, and the stress lane is the real safety net.
    missed library-loading guard was diagnosed this way in one run.
 2. **Poison mode (debug):** tombstoned slots hold sentinels; accessors assert.
    Any missed root becomes a deterministic panic under stress, not a
-   heisenbug.
+   heisenbug. Superseded by #621's stale-reference checks (§4.5), which also
+   see vectors, strings and reused slots, and run in release `gc-check` builds.
 3. **Reclamation proofs:** cycle tests (`set-cdr!` self-loop, closure
    capturing its own env, `call/cc` captured and dropped); arena-length
    plateau test (allocate-and-drop in a loop; assert arena `len()` stabilizes).
