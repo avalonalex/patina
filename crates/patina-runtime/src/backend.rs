@@ -86,7 +86,10 @@ pub trait Backend {
     /// track positions evaluates the expression as `eval` does.
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: the source map records positions, not heap values"
+        reason = "holds nothing it reads as a value: the source map is keyed by raw bits it \
+                  never dereferences and owns no Scheme value, so a collection can only leave it \
+                  stale keys (docs/GC_DESIGN.md §9.1), which misattribute a diagnostic and free \
+                  nothing"
     )]
     fn eval_with_source_map(
         &self,

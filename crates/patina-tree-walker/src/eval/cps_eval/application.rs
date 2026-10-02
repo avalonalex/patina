@@ -78,10 +78,11 @@ impl<'a> CpsEvaluator<'a> {
                     // Create new environment for the lambda
                     #[expect(
                         clippy::disallowed_methods,
-                        reason = "the frame of a lambda's call: the arguments are bound in it and \
-                                  it goes into the step this function returns, which the \
-                                  trampoline roots at its safe point; no safe point comes in \
-                                  between"
+                        reason = "the frame of a lambda's call, in the machine: the arguments \
+                                  are bound in it and it goes into the step this function \
+                                  returns, which the trampoline roots at its safe point. A step \
+                                  polls no safe point of its own, and binding the arguments calls \
+                                  nothing"
                     )]
                     let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
 

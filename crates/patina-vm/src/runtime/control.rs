@@ -1909,10 +1909,12 @@ fn vm_step(
                 clippy::disallowed_methods,
                 reason = "holds `kept`, the primitive's state, and the step's `env` across the \
                           datum's expansion, which loads libraries and runs their bodies; the \
-                          caller holds the primitive's arguments. Safe while nested loops defer: \
-                          only a dispatching loop gets here, under its GcDeferGuard, and the \
-                          expansion and each library body run under `GcDeferGuard::holding` \
-                          (`desugar_with_imports`, `ParsedLibrary`)"
+                          caller holds the primitive's arguments. Guarded on the data: the \
+                          expansion runs under `desugar_with_imports`' `GcDeferGuard::holding` \
+                          and each library body under its `ParsedLibrary`'s, and the compile, \
+                          `load_unit` and the closure's allocation after it run no Scheme. \
+                          Besides, only a dispatching loop gets here, so any loop the load starts \
+                          is nested (point C, which PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
             )]
             let callee = across_reentry(
                 state,
@@ -2331,10 +2333,13 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing: `run_apply_proc` copies `proc`'s arguments into the callee's \
-                  frame. The primitive calling back holds its own values, each with its reason at \
-                  its call; the loop this starts is nested under the dispatching loop's \
-                  GcDeferGuard and cannot collect, which PRD/GC_PRD.md §11.3 keeps (`NoGcScope`)"
+        reason = "holds `args` until the call returns: a closure callee gets them copied into \
+                  its frame, but a primitive callee reads them from this frame \
+                  (`call_primitive_proc` on the borrowed slice), across any callback it makes in \
+                  turn. Deferred: the loop this starts is nested under the dispatching loop's \
+                  GcDeferGuard and cannot collect, which PRD/GC_PRD.md §11.3 keeps \
+                  (`NoGcScope`). The primitive calling back holds its own values, each with its \
+                  reason at its call"
     )]
     fn apply_proc(
         &self,

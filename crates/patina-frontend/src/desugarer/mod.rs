@@ -580,11 +580,13 @@ impl<'a> Desugarer<'a> {
         } else {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "a body's expansion environment: its binders are bound to `UNSPECIFIED`, \
-                          and an internal `define-syntax` binds its macro here. Expansion reaches \
-                          no safe point but an import's, which `desugar_with_imports` runs under \
-                          `GcDeferGuard::holding`; a macro outlives it only through a live macro's \
-                          definition environment, which the collector traces"
+                reason = "a body's expansion environment, held across no re-entry: a body is \
+                          not an import context (`top_level` is false, so \
+                          `desugar_import_tagged` refuses one), and expansion reaches no other \
+                          safe point, so no Scheme runs while it lives. Its binders are bound to \
+                          `UNSPECIFIED`; a macro an internal `define-syntax` binds here outlives \
+                          it only through a live macro's definition environment, which the \
+                          collector traces"
             )]
             let child = Rc::new(Environment::with_parent(self.env.clone()));
             for (name, as_written) in &binders {
@@ -707,9 +709,10 @@ impl<'a> Desugarer<'a> {
         // bindings should escape into the real expansion environment.
         #[expect(
             clippy::disallowed_methods,
-            reason = "a speculative scan's environment, dropped when the scan ends. What it binds \
-                      (keywords, macros) lives only during expansion, which reaches no safe point \
-                      but an import's, under `desugar_with_imports`' `GcDeferGuard::holding`"
+            reason = "a speculative scan's environment, dropped when the scan ends and held \
+                      across no re-entry: the scan only expands macros and reads names, over a \
+                      body, which is not an import context (`top_level` is false), and expansion \
+                      reaches no other safe point, so no Scheme runs while it lives"
         )]
         let mut probe = self.with_new_env(
             Rc::new(Environment::with_parent(self.env.clone())),
@@ -2370,10 +2373,11 @@ impl<'a> Desugarer<'a> {
                 #[expect(
                     clippy::disallowed_methods,
                     reason = "binds an internal `define-syntax`'s macro for the rest of the body's \
-                              expansion. Expansion reaches no safe point but an import's, which \
-                              `desugar_with_imports` runs under `GcDeferGuard::holding`; \
-                              afterwards the macro lives only through a live macro's definition \
-                              environment, which the collector traces"
+                              expansion, held across no re-entry: a body is not an import \
+                              context (`top_level` is false, so `desugar_import_tagged` refuses \
+                              one), and expansion reaches no other safe point. Afterwards the \
+                              macro lives only through a live macro's definition environment, \
+                              which the collector traces"
                 )]
                 let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                 let tv = new_env
@@ -3074,11 +3078,12 @@ impl<'a> Desugarer<'a> {
         // would strand those scoped helpers once the splice has ended.
         #[expect(
             clippy::disallowed_methods,
-            reason = "binds a `let-syntax` body's keywords to their macros for the body's \
-                      expansion. Expansion reaches no safe point but an import's, which \
-                      `desugar_with_imports` runs under `GcDeferGuard::holding`; afterwards a \
-                      macro lives only through a live macro's definition environment, which the \
-                      collector traces"
+            reason = "binds a non-splicing `let-syntax` body's keywords to their macros for the \
+                      body's expansion, held across no re-entry: that body is not an import \
+                      context (its `top_level` is set false below), and expansion reaches no \
+                      other safe point. A splicing body reuses `env` and builds nothing here. \
+                      Afterwards a macro lives only through a live macro's definition \
+                      environment, which the collector traces"
         )]
         let body_env = if splicing {
             env.clone()

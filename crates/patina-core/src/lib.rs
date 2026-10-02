@@ -17,9 +17,10 @@
     clippy::disallowed_macros,
     reason = "the crate's `thread_local!` statics, per thread and none a heap value: \
               `cont_value::EMPTY_CONT_ENV`, the shared empty node; `port`'s `STDIN_UNREAD`, \
-              `STDIN_POSITION`, `STDIN_FOLD_CASE` and `STDIN_CARRY`, standard input's state, which \
-              every port on it shares (two interpreters on one thread share it, #618), and \
-              `OUTPUT_FILES`, the open file output ports to flush at exit; `scope::SCOPE_ORIGINS` \
+              `STDIN_POSITION`, `STDIN_FOLD_CASE` and `STDIN_CARRY`, standard input's state, \
+              shared on purpose by every port that reads standard input, of which there is one \
+              (per thread, so a second thread would keep its own read-ahead of the one stream, \
+              C9), and `OUTPUT_FILES`, the open file output ports to flush at exit; `scope::SCOPE_ORIGINS` \
               and `scope_trace::PHASE`, debugging aids. Clippy takes this lint only at the crate \
               root, so a new `thread_local!` in the crate goes on this list (#622)"
 )]

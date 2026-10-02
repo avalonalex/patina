@@ -353,7 +353,9 @@ impl<B: Backend> Interpreter<B> {
         #[expect(
             clippy::disallowed_methods,
             reason = "the outermost entry, so the backend's loop may collect. Holds the source \
-                      map, which records positions, not heap values; the parser is dropped and the \
+                      map, keyed by raw bits it never dereferences, which owns no Scheme value: \
+                      a collection can only leave it stale keys (docs/GC_DESIGN.md §9.1), which \
+                      misattribute a diagnostic and free nothing. The parser is dropped and the \
                       datum is not read after the call"
         )]
         let result = self
@@ -560,8 +562,10 @@ impl<B: Backend> Interpreter<B> {
                               and the source map is pruned of freed slots before each read \
                               (docs/GC_DESIGN.md §9.1). `value`, the last result, is held across \
                               the form unrooted: overwritten if the form succeeds, and returned \
-                              stale only when every later form fails under `-k`, which the CLI \
-                              drops; an embedder that keeps it meets #605"
+                              stale whenever every later form fails, on any continue-on-error \
+                              entry (`-k`, `eval_program_resilient*`, an interrupted `exit`'s \
+                              `Stopped`). The CLI drops it; an embedder that keeps it meets #605: \
+                              unprotected"
                 )]
                 Ok(Some(expr)) => match self.backend.eval_with_source_map(expr, env, &source_map) {
                     Ok(result) => value = result,
@@ -758,7 +762,8 @@ impl<E: std::error::Error + patina_runtime::HasDiagnostic> patina_runtime::HasDi
 #[expect(
     clippy::disallowed_methods,
     reason = "unit tests evaluate through the interpreter from outside any loop, as an embedder \
-              does"
+              does, and none reads a value from one evaluation after another that may collect \
+              (#605's shape)"
 )]
 mod tests {
     use super::*;
