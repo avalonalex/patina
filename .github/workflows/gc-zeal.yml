@@ -85,8 +85,11 @@ jobs:
           *"(gc-check)") ;;
           *) echo "::error::target/release/patina was built without the stale-reference checks"; exit 1 ;;
         esac
-    # Each file must be byte-identical to GC-off, exit 0, print its SRFI 64
-    # summary, and have collected; the script fails the step otherwise.
+    # The script first probes the binary: a loop that allocates nothing must
+    # collect at every iteration under zeal and hardly at all with no GC
+    # variable, or zeal is not being honoured. Then each file must be
+    # byte-identical to GC-off, exit 0, print its SRFI 64 summary, and have
+    # collected. The script fails the step otherwise.
     - name: Zeal lane vs GC-off, both backends
       run: ./scripts/run_gc_zeal.sh target/release/patina
     # Under zeal the pending flag is raised again before a collection

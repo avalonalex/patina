@@ -10,7 +10,10 @@
 //! loop that allocates nothing, which only zeal collects in.
 //!
 //! The zeal lane (`scripts/run_gc_zeal.sh`) checks that each of its runs
-//! collected, which a decayed mode would pass. This is what it cannot see.
+//! collected, which a decayed mode, or a binary that ignored the variable,
+//! would pass. So it runs this loop on its own binary before it starts, with
+//! no GC variable as the control in place of stress 1; keep `SPIN` and the
+//! script's probe the same program.
 
 mod common;
 

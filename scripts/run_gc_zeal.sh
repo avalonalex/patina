@@ -20,11 +20,19 @@
 # the VM and 627 s on the tree-walker by itself, against 176 s and 275 s for
 # the other ten files together).
 #
-# Each run must also have collected: the script appends a form to each file
-# that writes the run's collection count, checks it is non-zero under zeal,
-# and removes that line before comparing. A zeal mode that had decayed into
-# stress would still collect here; `crates/patina-repl/tests/gc_zeal.rs` is
-# the control for that.
+# Before the lane, a probe checks that the binary honours zeal at all: the
+# loop of `crates/patina-repl/tests/gc_zeal.rs`, 1000 iterations that
+# allocate nothing, must collect at least 1000 times under zeal and fewer
+# than 100 times with no GC variable set, on both backends, or the script
+# fails before the lane starts. The lane's own check cannot tell: each run
+# must have collected (the script appends a form to each file that writes the
+# run's collection count, checks it is non-zero under zeal, and removes that
+# line before comparing), but every file collects at least once under the
+# default GC too, while it loads SRFI 64, so a binary that ignored
+# PATINA_GC_ZEAL would pass it. The probe also fails a zeal mode that had
+# decayed into stress, which collects only after allocations. gc_zeal.rs runs
+# the same loop in ci.yml's Test Suite, against that job's binary rather than
+# the one this lane tests; keep the two programs the same.
 #
 # Usage: scripts/run_gc_zeal.sh [path-to-patina-binary]
 # Default binary: target/release/patina (build it first).
@@ -57,6 +65,86 @@ esac
 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
+
+# The probe: gc_zeal.rs's loop, which allocates nothing, writing the
+# collections it ran through, measured by `gc-stats` before and after it.
+PROBE_ITERATIONS=1000
+PROBE_DEFAULT_MAX=100
+PROBE="(import (scheme base) (scheme write) (patina debug))
+(define (spin n) (if (> n 0) (spin (- n 1))))
+(define (collections) (cdr (assq 'collections (gc-stats))))
+(define before (collections))
+(spin $PROBE_ITERATIONS)
+(define after (collections))
+(write (- after before))
+(newline)"
+mkdir -p "$OUT/probe"
+printf '%s\n' "$PROBE" > "$OUT/probe/spin.scm"
+
+# Run the probe on the backend that $1 selects ("" for the VM), with the GC
+# variables given in the remaining arguments (none for the default GC).
+run_probe() {
+    local backend_flag=$1
+    shift
+    (cd "$OUT/probe" && env "$@" "$BIN" $backend_flag spin.scm) \
+        2> "$OUT/probe/stderr.txt"
+}
+
+probe_fail=0
+for backend_flag in "" "--tree-walker"; do
+    name=${backend_flag:-"vm"}
+    name=${name#--}
+    ok=1 zeal="" default=""
+    for mode in zeal default; do
+        rc=0
+        if [ "$mode" = zeal ]; then
+            count=$(run_probe "$backend_flag" PATINA_GC_ZEAL=entry) || rc=$?
+            vars="PATINA_GC_ZEAL=entry"
+        else
+            count=$(run_probe "$backend_flag") || rc=$?
+            vars="no GC variable"
+        fi
+        if [ "$rc" -ne 0 ]; then
+            echo "FAIL zeal probe, $name: the run under $vars exited $rc"
+            tail -5 "$OUT/probe/stderr.txt"
+            ok=0
+            continue
+        fi
+        case "$count" in
+            "" | *[!0-9]*)
+                echo "FAIL zeal probe, $name: the run under $vars printed '$count', not a count"
+                ok=0
+                continue ;;
+        esac
+        if [ "$mode" = zeal ]; then
+            zeal=$count
+            if [ "$count" -lt "$PROBE_ITERATIONS" ]; then
+                echo "FAIL zeal probe, $name: $count collections under $vars across" \
+                     "$PROBE_ITERATIONS iterations that allocate nothing, want at least" \
+                     "$PROBE_ITERATIONS; $BIN is not honouring zeal, and the lane would" \
+                     "test some other mode"
+                ok=0
+            fi
+        else
+            default=$count
+            if [ "$count" -ge "$PROBE_DEFAULT_MAX" ]; then
+                echo "FAIL zeal probe, $name: $count collections with $vars, want fewer" \
+                     "than $PROBE_DEFAULT_MAX; the loop allocates, or the default GC" \
+                     "collects without allocations, and the probe cannot tell zeal from it"
+                ok=0
+            fi
+        fi
+    done
+    if [ "$ok" -eq 1 ]; then
+        echo "OK   zeal probe, $name: $zeal collections under zeal, $default with no GC variable"
+    else
+        probe_fail=1
+    fi
+done
+if [ "$probe_fail" -ne 0 ]; then
+    echo "FAIL the zeal probe failed, so the lane would not be testing zeal; not running it"
+    exit 1
+fi
 
 # The suffix that reports the run's collections, after the file's own forms.
 FOOTER="(import (scheme base) (scheme write) (patina debug))

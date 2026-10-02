@@ -993,9 +993,15 @@ visitor exists, and the stress lane is the real safety net.
    finished form's code would be let go (#338). The positive control for the
    mode itself is `crates/patina-repl/tests/gc_zeal.rs`: a loop that
    allocates nothing collects at least once an iteration under zeal and
-   hardly at all at stress 1, on both backends. GC_PRD's zeal-`entry`
-   replaces this mode at stage 3, collecting at every poll site, nested ones
-   included.
+   hardly at all at stress 1, on both backends. That test runs in `ci.yml`,
+   not against the lane's binary, and the lane's check that each file
+   collected cannot see a binary that ignores the variable, since every
+   control file collects at least once under the default GC while it loads
+   SRFI 64; so the script first runs the same loop on its binary, on both
+   backends, and fails unless it collects at least 1000 times across its
+   1000 iterations under zeal and fewer than 100 with no GC variable set.
+   GC_PRD's zeal-`entry` replaces this mode at stage 3, collecting at every
+   poll site, nested ones included.
 
 ---
 
