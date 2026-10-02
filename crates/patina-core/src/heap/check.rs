@@ -471,11 +471,11 @@ mod tests {
     );
 
     control!(
-        /// The write's own check. With `inner`'s slot reused by another
+        /// The write into `inner`'s slot. With that slot reused by another
         /// promise, an unchecked `get_promise(inner)` would hand back the
         /// tenant's box and the write would re-point the tenant. The write
-        /// is dominated by `get_object`'s check on the same value, so this
-        /// control fails only with both removed (break-tested in #621).
+        /// has no check of its own: `get_object`'s, which `get_promise(inner)`
+        /// runs on the same value before anything is written, refuses it.
         promise_update_of_a_stale_promise,
         "stale object reference, slot 1 generation 0 (now 1): freed and reused since this value was made",
         {

@@ -1108,7 +1108,10 @@ impl Heap {
         };
         if !Rc::ptr_eq(&outer_cell, &self.get_promise(inner).expect("checked")) {
             *outer_cell.borrow_mut() = inner_state;
-            self.object_checks.check("object", inner);
+            // The write indexes the arena directly, but needs no check of
+            // its own in a check build (#621): `get_promise(inner)` above
+            // runs `get_object`'s on this same value before anything is
+            // written, and nothing since has freed or reused a slot.
             self.objects[inner.heap_index() as usize] = HeapObjectData::Promise(outer_cell);
         }
     }
