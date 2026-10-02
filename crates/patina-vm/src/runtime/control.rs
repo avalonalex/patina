@@ -118,6 +118,7 @@ use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
+use patina_core::AssertNoGc;
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
@@ -647,9 +648,14 @@ fn handle_control_primitive(
             // one raise per iteration retained nine heap objects per
             // iteration for the life of its frame (296 MB at 160k).
             state.set_reg(dst, TaggedValue::NULL);
-            // Capture a full continuation: snapshot of entire current state
-            let cont = state.execution.capture_full(dst, captured_reentry(state));
-            let cont_tv = state.alloc_vm_continuation(cont);
+            // Capture a full continuation: snapshot of entire current state.
+            // No safe point from the capture to the store entry: the
+            // weak-table rule (`gc_roots.rs`), asserted (#624).
+            let cont_tv = {
+                let _window = AssertNoGc::new(state.heap());
+                let cont = state.execution.capture_full(dst, captured_reentry(state));
+                state.alloc_vm_continuation(cont)
+            };
             // Call proc with the continuation object.
             // Proc could be a primitive or a VM closure.
             if let Some(result) = call_any(state, proc, &[cont_tv], dst)? {
@@ -673,6 +679,8 @@ fn handle_control_primitive(
                     message: e.to_string(),
                 }
             })?;
+            // The target's handle is held only here until the jump writes it.
+            let window = AssertNoGc::new(state.heap());
             let target = state.alloc_vm_continuation(VmContinuation {
                 frames: Vec::new(),
                 dynamic_winds: Vec::new(),
@@ -685,7 +693,7 @@ fn handle_control_primitive(
                 // Never read: arriving ends the process first.
                 reentry: captured_reentry(state),
             });
-            step_wind_jump(state, target, TaggedValue::UNSPECIFIED)?;
+            step_wind_jump(state, target, TaggedValue::UNSPECIFIED, window)?;
             return Err(park_escape(state, TaggedValue::UNSPECIFIED));
         }
 
@@ -1188,6 +1196,15 @@ pub(super) mod wind_step {
 /// does — park the value, return the sentinel — and the loop decides whether
 /// the frames now on the stack are its own to run.
 ///
+/// `window` is the caller's `AssertNoGc`, opened where `target` and `value`
+/// left the machine's roots — or before the lookup, if they never did. From
+/// the lookup in the weak store to the copy-back, no safe point may run: an
+/// unrooted `target` at a collecting one would have its payload pruned
+/// (`gc_roots.rs`). The window closes where they are back: at arrival, once
+/// the snapshot is restored and the value delivered; on a step, once
+/// `push_wind_step` has written them into the stub, before the thunk is
+/// called (#624).
+///
 /// # State contract
 ///
 /// Requires a live full-continuation handle. A scheduled step mutates winds,
@@ -1198,6 +1215,7 @@ pub(super) fn step_wind_jump(
     state: &mut VmState,
     target: TaggedValue,
     value: TaggedValue,
+    window: AssertNoGc,
 ) -> Result<(), VmError> {
     let cc = state
         .get_vm_continuation(target)
@@ -1219,6 +1237,7 @@ pub(super) fn step_wind_jump(
             TaggedValue::FALSE,
             record.after,
             &record.handlers,
+            window,
         );
     }
 
@@ -1235,6 +1254,7 @@ pub(super) fn step_wind_jump(
             entering,
             record.before,
             &record.handlers,
+            window,
         );
     }
 
@@ -1297,6 +1317,7 @@ pub(super) fn step_wind_jump(
         let top_base = top.register_base;
         state.execution.registers_mut()[top_base + cc.deliver_reg as usize] = value;
     }
+    drop(window);
     Ok(())
 }
 
@@ -1333,6 +1354,9 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
 /// Push a stub frame carrying the rest of the jump, install the handler stack
 /// the thunk's `dynamic-wind` call had, and call the thunk under it.
 ///
+/// Closes the jump's `window` once the stub holds the operands, before the
+/// call: a thunk may run a nested loop, which polls.
+///
 /// # State contract
 ///
 /// Requires a valid target handle and a popped exiting record, or an
@@ -1345,6 +1369,7 @@ fn push_wind_step(
     entering: TaggedValue,
     thunk: TaggedValue,
     handlers: &[ExceptionHandler],
+    window: AssertNoGc,
 ) -> Result<(), VmError> {
     install_thunk_handlers(state, handlers);
     let code = wind_jump_stub(state)?;
@@ -1354,6 +1379,7 @@ fn push_wind_step(
     state.set_reg_at(base, wind_step::TARGET, target);
     state.set_reg_at(base, wind_step::VALUE, value);
     state.set_reg_at(base, wind_step::ENTERING, entering);
+    drop(window);
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for `ResumeWindJump` to run.
     call_any(state, thunk, &[], wind_step::THUNK_RESULT)?;
@@ -2495,8 +2521,9 @@ fn try_invoke_full_continuation(
     if state.get_vm_continuation(func_val).is_none() {
         return Ok(None);
     }
+    let window = AssertNoGc::new(state.heap());
     let deliver_val = deliver_value(state, args);
-    step_wind_jump(state, func_val, deliver_val)?;
+    step_wind_jump(state, func_val, deliver_val, window)?;
     Ok(Some(deliver_val))
 }
 
@@ -2541,6 +2568,11 @@ pub(super) fn abort_to_prompt(
     dst: u16,
 ) -> VmError {
     let prompt = state.execution.prompts()[prompt_idx].clone();
+    // From the capture until the stub or the landing's snapshot holds the
+    // handle, `cont_tv` (and then `target_tv`) is in Rust locals alone: no
+    // safe point in between, asserted (#624). The window ends at the stub
+    // write on the fast path and is handed to the jump on the other.
+    let window = AssertNoGc::new(state.heap());
     // `dst` is this abort call's own destination — dead as a result slot, and
     // for that reason the hole the captured continuation resumes into.
     let cont = capture_delimited(state, prompt_idx, dst);
@@ -2589,6 +2621,7 @@ pub(super) fn abort_to_prompt(
         state
             .execution
             .push_abort_stub(stub, prompt.dst, prompt.handler, val, cont_tv);
+        drop(window);
         return park_transfer(state, val);
     }
 
@@ -2624,7 +2657,7 @@ pub(super) fn abort_to_prompt(
         reentry: captured_reentry(state),
     };
     let target_tv = state.alloc_vm_continuation(target);
-    match step_wind_jump(state, target_tv, val) {
+    match step_wind_jump(state, target_tv, val, window) {
         Ok(()) => park_transfer(state, val),
         Err(e) => e,
     }
@@ -2742,6 +2775,10 @@ fn invoke_step_stub(state: &mut VmState) -> Result<Rc<CodeObject>, VmError> {
 /// site's handlers and resurrects capture-site ones whose extent is over,
 /// which is pinned in `tests/scheme/control/prompts.scm` ("a re-entry thunk runs under the invoke site's handler").
 ///
+/// Closes the invoke's `window` (see [`invoke_delimited`]) once the stub
+/// holds `cont` and `value`, before the call: a thunk may run a nested loop,
+/// which polls.
+///
 /// # State contract
 ///
 /// Requires the delimited handle, a valid captured-wind index and its
@@ -2754,6 +2791,7 @@ pub(super) fn push_invoke_step(
     dst: u16,
     index: usize,
     thunk: TaggedValue,
+    window: AssertNoGc,
 ) -> Result<(), VmError> {
     let code = invoke_step_stub(state)?;
     let base = push_stub_frame(state, code, invoke_step::NUM_REGS);
@@ -2761,6 +2799,7 @@ pub(super) fn push_invoke_step(
     state.set_reg_at(base, invoke_step::VALUE, value);
     state.set_reg_at(base, invoke_step::DST, TaggedValue::fixnum(dst as i64));
     state.set_reg_at(base, invoke_step::INDEX, TaggedValue::fixnum(index as i64));
+    drop(window);
 
     // A primitive thunk returns here and now; its value is discarded either
     // way, and the stub frame is left on top for the instruction to run.
@@ -2953,6 +2992,13 @@ enum DelimitedInvoke {
 /// places that ran wind thunks. `cont` is the continuation's *handle*, not
 /// just its payload, because the stub carries it across those steps.
 ///
+/// `window` is the caller's `AssertNoGc`, opened at the weak-store lookup
+/// that produced `dc`, or where `cont` and `value` left the machine's roots
+/// if that came first. No safe point may run until the captured frames are
+/// appended, or until `push_invoke_step` has written `cont` and `value` into
+/// the stub, which closes it (#624): `dc` is held by `Rc`, but the heap
+/// values its snapshot names are traced only while `cont` is marked.
+///
 /// # State contract
 ///
 /// Requires a live caller, matching handle/payload and caller-relative dst.
@@ -2965,6 +3011,7 @@ fn invoke_delimited(
     dc: Rc<VmDelimitedContinuation>,
     value: TaggedValue,
     dst: u16,
+    window: AssertNoGc,
 ) -> Result<DelimitedInvoke, VmError> {
     if dc.deliver_reg.is_none() {
         // An empty capture is the identity continuation, and carries no
@@ -2978,7 +3025,7 @@ fn invoke_delimited(
         // Nothing to re-enter, which is the common case: finish here rather
         // than pay a stub frame to discover there is no thunk to run.
         None => finish_delimited_invoke(state, &dc, value, dst)?,
-        Some(record) => push_invoke_step(state, cont, value, dst, 0, record.before)?,
+        Some(record) => push_invoke_step(state, cont, value, dst, 0, record.before, window)?,
     }
     Ok(DelimitedInvoke::Resumed)
 }
@@ -3028,10 +3075,12 @@ pub(super) fn tail_invoke_delimited(
     value: TaggedValue,
     exit_depth: usize,
 ) -> Result<Option<TaggedValue>, VmError> {
+    // The pop frees the window that may have held `cont` and `value`.
+    let window = AssertNoGc::new(state.heap());
     let frame = state.execution.pop_frame();
     let return_reg = frame.return_reg;
 
-    match invoke_delimited(state, cont, dc, value, return_reg)? {
+    match invoke_delimited(state, cont, dc, value, return_reg, window)? {
         DelimitedInvoke::Resumed => Ok(None),
         // The identity continuation passes the value straight through, so
         // this is an ordinary tail return — the same close-out a primitive in
@@ -3196,9 +3245,10 @@ pub(super) fn call_value_with_probe(
             return Err(park_escape(state, delivered));
         }
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+            let window = AssertNoGc::new(state.heap());
             let value = deliver_value(state, arg_vals);
             if matches!(
-                invoke_delimited(state, func_val, dc, value, dst)?,
+                invoke_delimited(state, func_val, dc, value, dst, window)?,
                 DelimitedInvoke::Identity
             ) {
                 // The identity continuation resumes nothing, so nothing will

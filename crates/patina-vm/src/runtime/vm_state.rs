@@ -26,7 +26,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{GcController, GcDeferGuard};
+use patina_core::{AssertNoGc, GcController, GcDeferGuard, NoGcScopes};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
@@ -634,8 +634,12 @@ impl VmState {
     ///
     /// The ref object (which mints the id) and the store entry are created
     /// back-to-back within one instruction dispatch, so no safe point can
-    /// observe one without the other — required for the weak-table protocol.
+    /// observe one without the other — required for the weak-table protocol
+    /// (`gc_roots.rs`), and asserted by the `AssertNoGc` over them. The
+    /// handle returned is unrooted until the caller stores it; no safe point
+    /// may come before that either.
     pub(super) fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
+        let _no_gc = AssertNoGc::new(&self.heap);
         gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref();
         self.continuation_store
@@ -644,11 +648,13 @@ impl VmState {
         tv
     }
 
-    /// Allocate a delimited VM continuation, returning its heap `TaggedValue` handle.
+    /// Allocate a delimited VM continuation, returning its heap `TaggedValue`
+    /// handle. The same window as [`Self::alloc_vm_continuation`].
     pub(super) fn alloc_vm_delimited_continuation(
         &mut self,
         mut cont: VmDelimitedContinuation,
     ) -> TaggedValue {
+        let _no_gc = AssertNoGc::new(&self.heap);
         gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
         let (tv, id) = self.heap.borrow_mut().alloc_vm_delimited_continuation_ref();
         self.delimited_continuation_store
@@ -1154,6 +1160,8 @@ pub(super) fn run_loop_until_outcome(
     // Loop invariant, hoisted out of the safe point. The cached pending-flag
     // handle makes the per-instruction check a single load — no borrow.
     let is_outermost = gc_defer.is_outermost();
+    // The open `AssertNoGc` windows, checked at every poll (#624).
+    let no_gc_scopes = NoGcScopes::of(&state.heap);
 
     // Loop-resident copy of the top frame's code object: dispatch borrows it
     // instead of cloning the `Rc` out of the frame on every instruction (two
@@ -1203,6 +1211,13 @@ pub(super) fn run_loop_until_outcome(
         // `Cell` reads, where following every pending safe point would borrow
         // the heap on each instruction of a callback that crossed the
         // threshold.
+        //
+        // The poll asserts first that no `AssertNoGc` window is open, on
+        // every iteration of every loop, nested or not: `maybe_collect`
+        // returns before the shared safe point unless a collection is
+        // pending and this loop is outermost, so a check placed there would
+        // almost never run (#624).
+        no_gc_scopes.assert_none_open();
         let pending = state.gc_pending.get();
         maybe_collect(state, is_outermost);
         if pending && !state.gc_pending.get() {
@@ -1817,6 +1832,7 @@ fn dispatch_one_instruction(
                 .reg_at(base, invoke_step::INDEX)
                 .as_fixnum()
                 .ok_or_else(malformed)? as usize;
+            let window = AssertNoGc::new(state.heap());
             state.execution.pop_frame();
             // Freed, unlike `ResumeWindJump`'s — and copying that rule without
             // its reason is what made this leak. A jump's arrival *replaces*
@@ -1831,7 +1847,10 @@ fn dispatch_one_instruction(
             // nothing between here and the next write of `cont` — into the
             // next step's window, or nowhere if this was the last — reaches a
             // GC safe point. Those live in `run_loop_until_outcome`'s loop,
-            // one dispatch out.
+            // one dispatch out. `window`, opened before the pop, asserts it
+            // (#624): `push_invoke_step` closes it once the next stub holds
+            // `cont` and `value`, and the last step holds it until the
+            // captured frames are appended.
 
             let dc =
                 state
@@ -1852,7 +1871,9 @@ fn dispatch_one_instruction(
             state.execution.push_wind(record.clone());
 
             match dc.dynamic_winds.get(index + 1) {
-                Some(next) => push_invoke_step(state, cont, value, dst, index + 1, next.before)?,
+                Some(next) => {
+                    push_invoke_step(state, cont, value, dst, index + 1, next.before, window)?
+                }
                 None => finish_delimited_invoke(state, &dc, value, dst)?,
             }
         }
@@ -1863,6 +1884,7 @@ fn dispatch_one_instruction(
             let target = state.reg_at(base, wind_step::TARGET);
             let value = state.reg_at(base, wind_step::VALUE);
             let entering = state.reg_at(base, wind_step::ENTERING);
+            let window = AssertNoGc::new(state.heap());
             state.execution.finish_wind_step();
             // The stub's register window is deliberately **not** freed here.
             // It is the only root for `target` and `value` — and `target` is a
@@ -1875,6 +1897,9 @@ fn dispatch_one_instruction(
             // roots `pending_escape`. The window costs `NUM_REGS` per step and
             // is reclaimed wholesale when the travel ends: arrival replaces
             // the register file, and so does any jump that abandons this one.
+            //
+            // `window` asserts the "no safe point" half (#624): it runs from
+            // here to the next write, inside `step_wind_jump`, which closes it.
 
             // A before-thunk's record is pushed only now, after it returned:
             // while the thunk runs, its extent is not entered, so a jump out
@@ -1912,7 +1937,7 @@ fn dispatch_one_instruction(
             let abort_landing = state
                 .get_vm_continuation(target)
                 .is_some_and(|cc| cc.abort_landing);
-            step_wind_jump(state, target, value)?;
+            step_wind_jump(state, target, value, window)?;
             // Whether that pushed the next thunk's frames or arrived and
             // replaced the stack, the loop that owns what is now on the stack
             // decides — the same signal every continuation invoke sends.
@@ -1940,6 +1965,10 @@ fn dispatch_one_instruction(
             // `dst` is both where the continuation object goes and the hole
             // it delivers into: invoking it makes *this* call return again,
             // with the delivered value in place of the continuation.
+            //
+            // From capture to the write of the handle, no safe point: the
+            // weak-table rule (`gc_roots.rs`), asserted (#624).
+            let _window = AssertNoGc::new(state.heap());
             let cont = capture_delimited(state, prompt_idx, dst);
             let cont_tv = state.alloc_vm_delimited_continuation(cont);
             state.set_reg_at(base, dst, cont_tv);
@@ -1974,7 +2003,8 @@ fn dispatch_one_instruction(
                 // `step_wind_jump` makes the not-a-continuation check itself;
                 // repeating it here would only buy a second wording of the
                 // same error that no test can reach.
-                step_wind_jump(state, cont_tv, deliver_val)?;
+                let window = AssertNoGc::new(state.heap());
+                step_wind_jump(state, cont_tv, deliver_val, window)?;
                 return Err(park_escape(state, deliver_val));
             }
         }

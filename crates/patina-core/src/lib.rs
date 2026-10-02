@@ -71,7 +71,8 @@ pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scope
 // `Heap::sweep`, `GcController::collect` — is crate-private (#624): code
 // outside this crate collects only through `GcController::safe_point`.
 pub use heap::gc::{
-    ArenaCounts, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor, MarkBits,
+    ArenaCounts, AssertNoGc, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor,
+    MarkBits, NoGcScopes,
 };
 pub use heap::{
     GC_CHECK, GcFreedBits, Heap, SharedHeap, SpineEnd,

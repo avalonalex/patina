@@ -34,9 +34,11 @@
 //!
 //! The deferral protocol is asserted, not only described (#624, design §7):
 //! a collection runs only while the collecting loop's own [`GcDeferGuard`]
-//! is the only one alive, and a holder's guard ([`GcDeferGuard::holding`])
-//! panics on drop if a collection ran inside its extent. Both are compiled
-//! into check builds ([`GC_CHECK`]) only; the defer balance
+//! is the only one alive; a holder's guard ([`GcDeferGuard::holding`])
+//! panics on drop if a collection ran inside its extent; and every poll site
+//! panics inside an [`AssertNoGc`] scope, a window whose soundness rests on
+//! reaching no safe point. These three are compiled into check builds
+//! ([`GC_CHECK`]) only; the defer balance
 //! (`Heap::exit_gc_defer`) is checked in every build.
 
 use std::rc::Rc;
@@ -357,6 +359,97 @@ fn collected_under_another_guard(depth: u32) -> ! {
     panic!(
         "GC deferral violated: a collection ran with {depth} defer guard(s) \
          alive; only the collecting loop's own may be (docs/GC_DESIGN.md §7)"
+    )
+}
+
+// ============================================================================
+// No-collection windows
+// ============================================================================
+
+/// RAII scope over a window that must not reach a GC poll: a stretch of code
+/// whose soundness a comment argues from where the safe points are, such as
+/// a value held only in a Rust local until the next write, or a weak-table
+/// entry and its handle not yet both reachable (#624, design §7). Every poll
+/// site asserts that no scope is open ([`NoGcScopes::assert_none_open`]), so a
+/// poll added inside a window, or a dispatch loop entered from one, panics
+/// at once, even while it is nested and cannot collect, instead of freeing a
+/// live value on the day it can.
+///
+/// The rule it carries: a comment that argues "no safe point here" comes
+/// with an `AssertNoGc` over the same lines (AGENTS.md).
+///
+/// A depth counter on the heap, maintained in check builds
+/// ([`GC_CHECK`]) only: a plain release build keeps no count
+/// and checks nothing. The scope holds its own handle on the counter, so
+/// opening it takes one shared heap borrow and closing it takes none; it may
+/// be dropped while the heap is borrowed.
+///
+/// To end a window partway through a function, pass the scope on by value and
+/// drop it where the window closes, as the VM's stub pushers do once they
+/// have written a transfer's operands back.
+#[must_use = "an AssertNoGc covers the extent of the binding that holds it"]
+pub struct AssertNoGc {
+    open: Option<Rc<Cell<u32>>>,
+}
+
+impl AssertNoGc {
+    /// Open a window. Must not be called while the heap is mutably borrowed.
+    #[inline]
+    pub fn new(heap: &SharedHeap) -> Self {
+        let open = GC_CHECK.then(|| {
+            let open = heap.borrow().no_gc_scopes.clone();
+            open.set(open.get() + 1);
+            open
+        });
+        Self { open }
+    }
+}
+
+impl Drop for AssertNoGc {
+    #[inline]
+    fn drop(&mut self) {
+        if GC_CHECK && let Some(open) = &self.open {
+            open.set(open.get() - 1);
+        }
+    }
+}
+
+/// The poll-site half of [`AssertNoGc`]: the heap's count of open scopes,
+/// taken once at loop entry like the pending flag, so a poll's check is one
+/// load and one compare in a check build and nothing in a plain release.
+pub struct NoGcScopes {
+    open: Option<Rc<Cell<u32>>>,
+}
+
+impl NoGcScopes {
+    pub fn of(heap: &SharedHeap) -> Self {
+        Self {
+            open: GC_CHECK.then(|| heap.borrow().no_gc_scopes.clone()),
+        }
+    }
+
+    /// Panic if an [`AssertNoGc`] scope is open. Call at every poll site,
+    /// before its safe point, on every iteration: not inside
+    /// [`GcController::safe_point`], which returns before it would get there
+    /// unless a collection is pending and the loop is outermost, so a check
+    /// there would almost never run.
+    #[inline(always)]
+    pub fn assert_none_open(&self) {
+        if GC_CHECK && let Some(open) = &self.open {
+            let n = open.get();
+            if n != 0 {
+                polled_inside_a_no_gc_scope(n);
+            }
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn polled_inside_a_no_gc_scope(open: u32) -> ! {
+    panic!(
+        "GC poll inside an AssertNoGc scope ({open} open): a safe point was \
+         reached in a window whose soundness assumes none (docs/GC_DESIGN.md §7)"
     )
 }
 
@@ -2048,11 +2141,11 @@ mod tests {
         assert_eq!(heap.car(field_val), TaggedValue::fixnum(7));
     }
 
-    /// The deferral protocol (#624).
+    /// The deferral protocol and the no-collection windows (#624).
     ///
     /// The `#[should_panic]` tests are positive controls: each makes the
     /// mistake its check exists for and expects that check's panic. The
-    /// depth and holder checks are compiled into check builds only
+    /// depth, holder and poll checks are compiled into check builds only
     /// (`GC_CHECK`: debug, or release with `gc-check`); a build without them
     /// reports those controls ignored rather than compiling them out. The
     /// balance check is in every build, so its control runs in every build.
@@ -2149,6 +2242,34 @@ mod tests {
         #[should_panic(expected = "unbalanced GC defer: exit without a matching enter")]
         fn an_unbalanced_defer_exit_panics() {
             Heap::new().exit_gc_defer();
+        }
+
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "GC poll inside an AssertNoGc scope (1 open)")]
+        fn a_poll_inside_a_no_gc_scope_panics() {
+            let shared = new_shared_heap();
+            let polls = NoGcScopes::of(&shared);
+            let _window = AssertNoGc::new(&shared);
+            polls.assert_none_open();
+        }
+
+        #[test]
+        fn no_gc_scopes_nest_and_close() {
+            let shared = new_shared_heap();
+            let polls = NoGcScopes::of(&shared);
+            {
+                let _outer = AssertNoGc::new(&shared);
+                let inner = AssertNoGc::new(&shared);
+                // Closing one needs no heap borrow.
+                let held = shared.borrow_mut();
+                drop(inner);
+                drop(held);
+            }
+            polls.assert_none_open();
         }
     }
 }

@@ -442,6 +442,13 @@ pub struct Heap {
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
     gc_defer_depth: u32,
 
+    /// Open `AssertNoGc` scopes: windows that must not reach a GC poll
+    /// (`gc::AssertNoGc`, #624). Counted in check builds only
+    /// (`GC_CHECK`), and asserted zero at every poll site. Shared through an
+    /// `Rc<Cell>`, like `gc_pending`, so a scope opens and closes without a
+    /// heap borrow and a dispatch loop hoists the handle out of its loop.
+    no_gc_scopes: Rc<Cell<u32>>,
+
     /// Collections performed, and slots reclaimed by the last one. Recorded
     /// by `sweep` so `(gc-stats)` can report real collector activity without
     /// reaching into a backend-private collector.
@@ -578,6 +585,7 @@ impl Heap {
             gc_freed_overflow: false,
             gc_freed_closure_code_ids: None,
             gc_defer_depth: 0,
+            no_gc_scopes: Rc::new(Cell::new(0)),
             gc_collections: 0,
             gc_last_swept: 0,
             next_vm_continuation_id: 0,
