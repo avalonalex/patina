@@ -838,7 +838,10 @@ visitor exists, and the stress lane is the real safety net.
    per the project's established methodology; record `GcStats.last_pause`
    distribution on allocation-heavy benchmarks.
 5. **Paranoid pre-sweep assertion (debug):** after marking, assert no free-list
-   slot is marked and no marked slot is on a free list.
+   slot is marked and no marked slot is on a free list. Implemented by #621 in
+   every check build (`heap::GC_CHECK`: debug, or release with `gc-check`):
+   `sweep_arena`'s pre-mark panics with `dangling reference: <arena> slot N is
+   free, but marking reached it` when a free-list slot's bit is already set.
 
 ---
 

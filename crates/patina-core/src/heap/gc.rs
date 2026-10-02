@@ -825,7 +825,13 @@ impl<'h> GcVisitor<'h> {
 /// definition; re-pushing them would double-free on reuse), then reclaim
 /// every remaining unmarked slot, reporting each to `record_freed` (the
 /// §9.1 diagnostics-pruning hook). Returns the number of slots reclaimed.
+///
+/// In check builds ([`GC_CHECK`](super::GC_CHECK)) the pre-mark doubles as
+/// `docs/GC_DESIGN.md` §11 item 5's assertion: a free slot whose bit is
+/// already set was reached by marking, so a root or a traced edge names a
+/// slot that was free when this collection began.
 fn sweep_arena<T>(
+    arena_name: &'static str,
     arena: &mut [T],
     free_list: &mut Vec<HeapIndex>,
     marks: &mut BitSet,
@@ -834,7 +840,9 @@ fn sweep_arena<T>(
     mut record_freed: impl FnMut(HeapIndex, &T),
 ) -> usize {
     for &idx in free_list.iter() {
-        marks.set(idx as usize);
+        if !marks.set(idx as usize) && super::GC_CHECK {
+            free_slot_reached_by_marking(arena_name, idx);
+        }
     }
     let mut swept = 0;
     for (i, slot) in arena.iter_mut().enumerate() {
@@ -849,6 +857,14 @@ fn sweep_arena<T>(
         }
     }
     swept
+}
+
+/// The panic of `sweep_arena`'s pre-mark check, out of line so the loop
+/// stays a set and a branch.
+#[cold]
+#[inline(never)]
+fn free_slot_reached_by_marking(arena: &str, idx: HeapIndex) -> ! {
+    panic!("dangling reference: {arena} slot {idx} is free, but marking reached it")
 }
 
 /// Cap on the freed-bits recording buffer (§9.1). A consumer that lets more
@@ -905,6 +921,7 @@ impl Heap {
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
         let swept = ArenaCounts {
             pairs: sweep_arena(
+                "pair",
                 &mut self.pairs,
                 &mut self.free_pairs,
                 &mut marks.pairs,
@@ -915,6 +932,7 @@ impl Heap {
                 },
             ),
             vectors: sweep_arena(
+                "vector",
                 &mut self.vectors,
                 &mut self.free_vectors,
                 &mut marks.vectors,
@@ -925,6 +943,7 @@ impl Heap {
                 },
             ),
             strings: sweep_arena(
+                "string",
                 &mut self.strings,
                 &mut self.free_strings,
                 &mut marks.strings,
@@ -935,6 +954,7 @@ impl Heap {
                 },
             ),
             objects: sweep_arena(
+                "object",
                 &mut self.objects,
                 &mut self.free_objects,
                 &mut marks.objects,
@@ -1776,6 +1796,71 @@ mod tests {
         });
         assert_eq!(shared.borrow().gc_collections(), 1);
         assert!(!pending.get());
+    }
+
+    // ------------------------------------------------------------------------
+    // Positive controls for the stale-reference checks (#621). Each one runs
+    // in every check build (`GC_CHECK`: debug, or release with `gc-check`);
+    // a build without the checks reports it ignored instead of compiling it
+    // out, so a lane that meant to run the checks and did not is visible.
+    // ------------------------------------------------------------------------
+
+    /// Free the slot `make` allocates, then collect again with a root that
+    /// still names it. The slot is on the free list and not reused, so the
+    /// only check that can see it is the sweep's pre-mark (§11 item 5).
+    fn collect_with_a_root_naming_a_free_slot(make: impl FnOnce(&mut Heap) -> TaggedValue) {
+        let mut heap = Heap::new();
+        let dead = make(&mut heap);
+        collect(&mut heap, &TestRoots::default());
+        let roots = TestRoots {
+            values: vec![dead],
+            ..Default::default()
+        };
+        collect(&mut heap, &roots);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "dangling reference: pair slot 0 is free, but marking reached it")]
+    fn marking_a_free_pair_panics() {
+        collect_with_a_root_naming_a_free_slot(|heap| {
+            heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL)
+        });
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "dangling reference: vector slot 0 is free, but marking reached it")]
+    fn marking_a_free_vector_panics() {
+        collect_with_a_root_naming_a_free_slot(|heap| {
+            heap.alloc_vector(vec![TaggedValue::fixnum(1)])
+        });
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "dangling reference: string slot 0 is free, but marking reached it")]
+    fn marking_a_free_string_panics() {
+        collect_with_a_root_naming_a_free_slot(|heap| heap.alloc_str("dead"));
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(any(debug_assertions, feature = "gc-check")),
+        ignore = "needs a check build"
+    )]
+    #[should_panic(expected = "dangling reference: object slot 0 is free, but marking reached it")]
+    fn marking_a_free_object_panics() {
+        collect_with_a_root_naming_a_free_slot(|heap| heap.alloc_bytevector(vec![1, 2, 3]));
     }
 
     #[cfg(debug_assertions)]

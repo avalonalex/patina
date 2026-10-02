@@ -67,6 +67,17 @@ pub enum GcFreedBits {
 /// - `converter`: Optional converter procedure for the parameter
 pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
 
+/// Whether the stale-reference checks are compiled in (#621): every debug
+/// build, and a release build with `patina-core`'s `gc-check` feature, which
+/// the release GC lane enables. A plain release build — the shipped binary —
+/// has this `false`, and every check below folds away with it.
+///
+/// What it turns on, for every stale heap reference the collector can tell
+/// apart from a live one:
+/// - marking that reaches a slot already free when the collection began
+///   panics (`sweep_arena` in `gc.rs`, `docs/GC_DESIGN.md` §11 item 5).
+pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
+
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
     Rc::new(RefCell::new(Heap::new()))
