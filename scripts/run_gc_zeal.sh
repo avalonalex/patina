@@ -31,6 +31,11 @@
 set -euo pipefail
 
 export PATINA_ISOLATED_LIBRARIES=1
+# Each run sets the one GC variable it means, so clear all three first. Zeal
+# wins over stress and stress over PATINA_GC=0 (GcMode::from_env): one left
+# exported in the shell would turn the GC-off reference run into a collecting
+# one, and the comparison would prove nothing.
+unset PATINA_GC PATINA_GC_STRESS PATINA_GC_ZEAL
 
 cd "$(dirname "$0")/.."
 BIN="${1:-target/release/patina}"
