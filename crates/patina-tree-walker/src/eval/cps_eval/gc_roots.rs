@@ -26,9 +26,34 @@ use crate::eval::Evaluator;
 // Continuation-value tracing moved to patina-core with ContValue itself.
 use patina_core::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame};
 
+// Every provider here takes its struct apart by name (#623), so a new field
+// does not compile until it is traced or written `field: _` with the reason it
+// holds no value. The sentinel tests in `sentinel_tests` below put a fresh
+// value in each traced field and read it back after a collection.
+
 impl GcRoots for Evaluator {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-        visitor.visit_env(&self.global_env);
+        let Evaluator {
+            global_env,
+            // Which debug stages print.
+            debug: _,
+            // A root provider of its own: the safe point passes the registry
+            // beside the evaluator (`CpsEvaluator::maybe_collect`).
+            library_registry: _,
+            // Loaders, which hold no values.
+            loader_registry: _,
+            // Primitive functions and their names.
+            primitive_registry: _,
+            // The filesystem.
+            fs: _,
+            // The collector's policy and statistics.
+            gc: _,
+            // A flag.
+            gc_pending: _,
+            // An error report: strings and library names.
+            bootstrap_error: _,
+        } = self;
+        visitor.visit_env(global_env);
     }
 }
 
@@ -57,10 +82,11 @@ pub(super) struct StepRoots<'a> {
 
 impl GcRoots for StepRoots<'_> {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-        if let Some(expr) = self.expr {
+        let StepRoots { step, expr } = self;
+        if let Some(expr) = expr {
             visitor.visit_expr_literals(expr);
         }
-        trace_step(self.step, visitor);
+        trace_step(step, visitor);
     }
 }
 

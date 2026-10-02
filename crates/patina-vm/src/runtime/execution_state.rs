@@ -3,14 +3,15 @@
 //! Transfer policy (wind travel, re-entry, error routing) stays in `control`.
 
 use super::control::abort_step;
+use super::vm_state::gc_roots::{trace_frames, trace_handlers, trace_prompts, trace_winds};
 use crate::error::VmError;
 use crate::types::CallFrame;
 use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::TaggedValue;
 use patina_core::tagged_value::ObjectIndex;
+use patina_core::{GcVisitor, TaggedValue};
 use std::rc::Rc;
 
 #[derive(Default)]
@@ -23,6 +24,27 @@ pub(super) struct ExecutionState {
 }
 
 impl ExecutionState {
+    /// GC roots: all five components, every field named (#623), so a new one
+    /// does not compile here until it is traced. `VmState`'s provider calls
+    /// this; the sentinel test `every_vm_state_root_is_traced` pins each.
+    pub(super) fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+        let ExecutionState {
+            registers,
+            frames,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        } = self;
+        // The whole register file, after the safe point has retired completed
+        // expression temporaries (#423). Continuation snapshots are retired at
+        // capture, so they obey the same full-vector contract.
+        visitor.visit_slice(registers);
+        trace_frames(frames, visitor);
+        trace_prompts(prompt_stack, visitor);
+        trace_winds(dynamic_winds, visitor);
+        trace_handlers(exception_handlers, visitor);
+    }
+
     #[inline(always)]
     pub(super) fn registers(&self) -> &[TaggedValue] {
         &self.registers

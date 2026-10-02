@@ -52,9 +52,10 @@ use std::cell::{Cell, RefCell};
 
 use super::check::SlotChecks;
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
+use crate::compiled_macro::{CompiledMacro, CompiledRule};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
-use crate::environment::Environment;
+use crate::environment::{Environment, GcEdge};
 use crate::library::Library;
 use crate::procedure::Procedure;
 use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
@@ -663,6 +664,9 @@ pub struct GcVisitor<'h> {
     worklist: Vec<TaggedValue>,
     cont_worklist: Vec<Rc<CpsContinuation>>,
     cont_env_worklist: Vec<ContEnv>,
+    /// The environments `visit_env` has been shown and not yet walked. Kept
+    /// here between calls, always empty, so a walk allocates nothing.
+    env_worklist: Vec<Rc<Environment>>,
     seen_envs: FxHashSet<usize>,
     seen_conts: FxHashSet<usize>,
     seen_exprs: FxHashSet<usize>,
@@ -706,6 +710,7 @@ impl<'h> GcVisitor<'h> {
             worklist: Vec::new(),
             cont_worklist: Vec::new(),
             cont_env_worklist: Vec::new(),
+            env_worklist: Vec::new(),
             seen_envs: FxHashSet::default(),
             seen_conts: FxHashSet::default(),
             seen_exprs: FxHashSet::default(),
@@ -785,29 +790,37 @@ impl<'h> GcVisitor<'h> {
         self.marks.is_marked(tv).unwrap_or(true)
     }
 
-    /// Trace through an environment chain. Deduped by environment identity,
-    /// so the global environment is walked once no matter how many closures
-    /// point at it.
+    /// Trace an environment and every environment it keeps live: its parent
+    /// chain, its alias targets and the owners of its imports, and theirs.
+    /// Deduped by environment identity, so the global environment is walked
+    /// once no matter how many closures point at it. Iterative: what one
+    /// environment reaches is queued, not recursed into.
+    ///
+    /// What an environment reaches is `Environment::for_each_gc_edge`'s
+    /// answer, which names every field (#623).
     pub fn visit_env(&mut self, env: &Environment) {
-        let mut current = Some(env);
-        while let Some(e) = current {
-            // If this env was already walked, its parents were too.
-            if !self.seen_envs.insert(e.gc_identity()) {
-                break;
-            }
-            e.for_each_local_value(&mut |tv| self.visit(tv));
-            // Alias edges leave the parent tree, so collect them and walk them
-            // as separate roots rather than following the chain.
-            let mut alias_targets: Vec<Rc<Environment>> = Vec::new();
-            e.for_each_alias_target(&mut |target| alias_targets.push(Rc::clone(target)));
-            // The owners of imported bindings leave the parent tree the same
-            // way, and hold the values those bindings read.
-            e.for_each_shared_owner(&mut |owner| alias_targets.push(Rc::clone(owner)));
-            for target in &alias_targets {
-                self.visit_env(target);
-            }
-            current = e.parent().map(|p| p.as_ref());
+        let mut pending = std::mem::take(&mut self.env_worklist);
+        self.visit_env_edges(env, &mut pending);
+        while let Some(next) = pending.pop() {
+            self.visit_env_edges(&next, &mut pending);
         }
+        self.env_worklist = pending;
+    }
+
+    /// Mark `env`'s values and queue the environments it reaches, unless it
+    /// was walked already in this collection.
+    fn visit_env_edges(&mut self, env: &Environment, pending: &mut Vec<Rc<Environment>>) {
+        if !self.seen_envs.insert(env.gc_identity()) {
+            return;
+        }
+        env.for_each_gc_edge(&mut |edge| match edge {
+            GcEdge::Value(tv) => self.visit(tv),
+            GcEdge::Env(next) => {
+                if !self.seen_envs.contains(&next.gc_identity()) {
+                    pending.push(Rc::clone(next));
+                }
+            }
+        });
     }
 
     /// Trace a continuation held outside the heap. Root providers need this
@@ -854,9 +867,16 @@ impl<'h> GcVisitor<'h> {
         wind: &WindRecord<H>,
         mut trace_handler: impl FnMut(&H, &mut Self),
     ) {
-        self.visit(wind.before);
-        self.visit(wind.after);
-        for handler in wind.handlers.iter() {
+        let WindRecord {
+            // A number minted per `dynamic-wind` call.
+            id: _,
+            before,
+            after,
+            handlers,
+        } = wind;
+        self.visit(*before);
+        self.visit(*after);
+        for handler in handlers.iter() {
             trace_handler(handler, self);
         }
     }
@@ -877,12 +897,13 @@ impl<'h> GcVisitor<'h> {
         }
     }
 
-    /// Trace a library's two root sets: its exports and its environment.
+    /// Trace a library's two root sets: its exports and its environment
+    /// (`Library::for_each_gc_edge`, which names every field).
     pub fn visit_library(&mut self, library: &Library) {
-        for (_, tv) in library.exports_iter_tagged() {
-            self.visit(tv);
-        }
-        self.visit_env(&library.env);
+        library.for_each_gc_edge(&mut |edge| match edge {
+            GcEdge::Value(tv) => self.visit(tv),
+            GcEdge::Env(env) => self.visit_env(env),
+        });
     }
 
     /// Trace literals embedded in live code (`CpsExprKind::Literal` /
@@ -944,20 +965,52 @@ impl<'h> GcVisitor<'h> {
         }
     }
 
+    /// Trace one object's children.
+    ///
+    /// Every variant is matched, and every variant with named fields is taken
+    /// apart by name (#623): a new variant fails to compile here until it has
+    /// an arm, and a new field until the arm names it — traced, or written
+    /// `field: _` with the reason it holds no value. The sentinel tests in
+    /// `heap/trace_sentinels.rs` put a fresh value in each traced field and
+    /// read it back after a collection; deleting a field's trace fails its
+    /// test.
     fn trace_object_children(&mut self, data: &'h HeapObjectData, tv: TaggedValue) {
         match data {
-            // Leaves: no embedded heap references.
+            // Leaves: no embedded heap references. Filing a variant here that
+            // holds a value is a use-after-free, not a compile error
+            // (`HeapObjectData`'s doc comment), so each payload says what it
+            // holds instead.
+            //
+            // An arbitrary-precision integer.
             HeapObjectData::BigInt(_)
+            // A quotient of two of them.
             | HeapObjectData::Rational(_)
+            // An `f64`.
             | HeapObjectData::Real(_)
+            // The symbol's name.
             | HeapObjectData::Symbol(_)
+            // Bytes.
             | HeapObjectData::Bytevector(_)
+            // Buffers, a file handle, a position and flags: `port.rs` holds
+            // no `TaggedValue`.
             | HeapObjectData::Port(_)
+            // An id, a name and field names.
             | HeapObjectData::RecordType(_)
-            | HeapObjectData::Identifier { .. }
+            | HeapObjectData::Identifier {
+                // A spelling.
+                name: _,
+                // Scope ids.
+                scopes: _,
+                // A flag.
+                written: _,
+            }
+            // A name and an id.
             | HeapObjectData::PromptTag(_)
+            // A datum label's number.
             | HeapObjectData::LabelPlaceholder(_)
+            // Which syntactic keyword.
             | HeapObjectData::CoreSyntax(_)
+            // A swept slot.
             | HeapObjectData::Free => {}
 
             // Weak key, SRFI 124: neither field is traced here. The datum
@@ -983,28 +1036,50 @@ impl<'h> GcVisitor<'h> {
                 self.visit(*real);
                 self.visit(*imag);
             }
-            HeapObjectData::Exception { irritants, .. } => {
+            HeapObjectData::Exception {
+                // Which kind of condition; `Custom` carries a string.
+                kind: _,
+                // A string.
+                message: _,
+                irritants,
+            } => {
                 for &irritant in irritants {
                     self.visit(irritant);
                 }
             }
             HeapObjectData::Procedure(p) => match p.as_ref() {
-                Procedure::Primitive { .. } => {}
-                Procedure::CpsLambda { body, env, .. } => {
+                Procedure::Primitive {
+                    // A string.
+                    name: _,
+                    // Argument counts.
+                    arity: _,
+                    // A string.
+                    qualified_name: _,
+                    // An index into the primitive registry.
+                    registry_index: _,
+                } => {}
+                Procedure::CpsLambda {
+                    // Names and scope ids.
+                    params: _,
+                    // A name and scope ids.
+                    variadic: _,
+                    // A name.
+                    cont_param: _,
+                    body,
+                    env,
+                    // Scope ids.
+                    binding_scopes: _,
+                } => {
                     self.visit_expr_literals(body);
                     self.visit_env(env);
                 }
             },
-            HeapObjectData::Macro(m) => {
-                m.for_each_literal(&mut |tv| self.visit(tv));
-                // A live macro keeps its definition environment live: its
-                // templates may reference bindings that exist nowhere else.
-                if let Some(env) = &m.definition_env {
-                    let env = env.clone();
-                    self.visit_env(&env);
-                }
-            }
-            HeapObjectData::Record { fields, .. } => {
+            HeapObjectData::Macro(m) => self.trace_compiled_macro(m),
+            HeapObjectData::Record {
+                // An `Rc`'d descriptor: an id, a name and field names.
+                record_type: _,
+                fields,
+            } => {
                 for &field in fields.borrow().iter() {
                     self.visit(field);
                 }
@@ -1024,7 +1099,11 @@ impl<'h> GcVisitor<'h> {
                     self.visit(value);
                 }
             }
-            HeapObjectData::EnvironmentSpecifier { env, .. } => {
+            HeapObjectData::EnvironmentSpecifier {
+                env,
+                // A flag.
+                mutable: _,
+            } => {
                 self.visit_env(env);
             }
             HeapObjectData::MutableCell(cell) => {
@@ -1032,7 +1111,12 @@ impl<'h> GcVisitor<'h> {
                 self.visit(inner);
             }
             HeapObjectData::VmClosure {
-                free_vars, globals, ..
+                // The VM's code id. The code's constants are rooted by the
+                // VM's `code_store`, which keeps the code while a live
+                // closure can run it (#338).
+                code_id: _,
+                free_vars,
+                globals,
             } => {
                 for &free_var in free_vars {
                     self.visit(free_var);
@@ -1045,25 +1129,91 @@ impl<'h> GcVisitor<'h> {
         }
     }
 
+    /// Trace a compiled macro: the literals in its patterns and templates,
+    /// and the environments it keeps live. Every field is named (#623);
+    /// pinned by the sentinel test `compiled_macro_fields`.
+    fn trace_compiled_macro(&mut self, m: &CompiledMacro) {
+        let CompiledMacro {
+            // A string, for diagnostics.
+            name: _,
+            rules,
+            // A count.
+            max_pvars: _,
+            // Scope ids.
+            definition_scopes: _,
+            // A handle to the heap its literals live in, which the collector
+            // is already marking (design §9.6): not an edge into it.
+            heap: _,
+            // Names.
+            template_symbols: _,
+            // Names, each with the scope sets it arrived under.
+            inherited_identifiers: _,
+            definition_env,
+            // Untraced today: the environments here are the definition
+            // environments of macros from another library or program, which
+            // the library registry roots while their library stays
+            // registered. #614 lets a replaced library's environment go, and
+            // with it that assumption.
+            foreign_expansions: _,
+        } = m;
+        for rule in rules {
+            let CompiledRule {
+                pattern,
+                template,
+                // A count.
+                num_pvars: _,
+                // A depth.
+                max_level: _,
+                // Pattern-variable names, for diagnostics.
+                pvar_names: _,
+            } = rule;
+            pattern.for_each_literal(&mut |tv| self.visit(tv));
+            template.for_each_literal(&mut |tv| self.visit(tv));
+        }
+        // A live macro keeps its definition environment live: its templates
+        // may reference bindings that exist nowhere else (#38).
+        if let Some(env) = definition_env {
+            self.visit_env(env);
+        }
+    }
+
+    /// Trace a captured continuation. Every field is named (#623); pinned by
+    /// the sentinel test `cps_continuation_fields`.
     fn trace_continuation_children(&mut self, k: &CpsContinuation) {
-        self.visit_expr_literals(&k.body);
-        self.visit_env(&k.env);
-        self.visit_winds(&k.dynamic_winds);
-        for handler in &k.exception_handlers {
+        let CpsContinuation {
+            body,
+            // A name.
+            param: _,
+            env,
+            // A prompt id.
+            boundary: _,
+            // A trampoline id.
+            trampoline: _,
+            // A flag.
+            crosses_callback: _,
+            dynamic_winds,
+            prompt_stack,
+            exception_handlers,
+            captured_cont_env,
+            resume,
+        } = k;
+        self.visit_expr_literals(body);
+        self.visit_env(env);
+        self.visit_winds(dynamic_winds);
+        for handler in exception_handlers {
             trace_exception_handler(handler, self);
         }
-        for frame in &k.prompt_stack {
+        for frame in prompt_stack {
             trace_prompt_frame(frame, self);
         }
-        trace_cont_env(&k.captured_cont_env, self);
-        // Today `resume` always aliases a value that is also reachable through
-        // `captured_cont_env` — every reify site stores the wrapper it read out
-        // of that same cont_env — so this trace is redundant. But that is an
-        // aliasing accident of the current construction sites, not an invariant
-        // anything enforces. Trace it explicitly so cont-env pruning, or a
-        // wrapper constructed outside the cont_env, cannot silently unroot the
-        // consumer procedures, thunks, promises and exception payloads it holds.
-        if let Some(resume) = &k.resume {
+        trace_cont_env(captured_cont_env, self);
+        // Every reify site today stores in `resume` a wrapper it read out of
+        // `captured_cont_env`, so this trace looks redundant. That is an
+        // accident of the construction sites, not an invariant anything
+        // enforces, and it is what hid this edge untraced for 1.6 days (#47):
+        // the sentinel test puts a value here that `captured_cont_env` does
+        // not hold.
+        if let Some(resume) = resume {
             trace_cont_value(resume, self);
         }
     }
@@ -1449,6 +1599,9 @@ pub fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
 /// iteratively — most variants differ only in what they visit before handing
 /// off to the continuation they wrap. Local continuation environments and
 /// captured continuations are queued on the visitor's worklists as well.
+///
+/// Every variant's fields are named (#623); pinned by the sentinel test
+/// `cont_value_variants`.
 pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
     let mut cont = cont;
     loop {
@@ -1456,10 +1609,11 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
             ContValue::Halt => return,
 
             ContValue::Local {
+                // A name.
+                param: _,
                 body,
                 env,
                 cont_env,
-                ..
             } => {
                 visitor.visit_expr_literals(body);
                 visitor.visit_env(env);
@@ -1486,9 +1640,10 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
             }
 
             ContValue::ResumePrimitive {
+                // An index into the primitive registry.
+                index: _,
                 state,
                 original_cont,
-                ..
             } => {
                 visitor.visit(*state);
                 original_cont
@@ -1496,8 +1651,9 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
 
             ContValue::DynamicWindCleanup {
                 after,
+                // A number minted per `dynamic-wind` call.
+                wind_id: _,
                 original_cont,
-                ..
             } => {
                 visitor.visit(*after);
                 original_cont
@@ -1536,10 +1692,11 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
             ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,
 
             ContValue::RaiseHandlerReturn {
+                // A flag.
+                continuable: _,
                 original_exception,
                 original_cont,
                 popped_handler,
-                ..
             } => {
                 if let Some(exception) = original_exception {
                     visitor.visit(*exception);
@@ -1550,7 +1707,10 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 original_cont
             }
 
-            ContValue::PromptBoundary { .. } => return,
+            ContValue::PromptBoundary {
+                // A prompt id.
+                id: _,
+            } => return,
 
             ContValue::AbortLanding {
                 handler,
@@ -1562,13 +1722,18 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 cont
             }
 
-            ContValue::ExitLanding { .. } => return,
+            ContValue::ExitLanding {
+                // An exit status.
+                status: _,
+            } => return,
 
             ContValue::ComposableInvokeStep {
                 target,
                 value,
+                // A position in `target.dynamic_winds`, which `target`'s own
+                // trace covers.
+                index: _,
                 cont,
-                ..
             } => {
                 visitor.visit_continuation(target);
                 visitor.visit(*value);
@@ -1578,18 +1743,35 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
     }
 }
 
-/// Trace a prompt frame: its handler and the continuation below it. The tag
-/// is a plain Rust struct shared by `Rc`, not a heap value.
+/// Trace a prompt frame: its handler and the continuation below it. Every
+/// field is named (#623); pinned by the sentinel test `cps_continuation_fields`.
 pub fn trace_prompt_frame(frame: &PromptFrame, visitor: &mut GcVisitor<'_>) {
-    visitor.visit(frame.handler);
-    trace_cont_value(&frame.cont, visitor);
+    let PromptFrame {
+        // A prompt id.
+        id: _,
+        // A plain Rust struct shared by `Rc` (a name and an id), not a heap
+        // value.
+        tag: _,
+        handler,
+        cont,
+        // A depth.
+        wind_depth: _,
+        // A trampoline id.
+        trampoline: _,
+        // A depth.
+        handler_depth: _,
+    } = frame;
+    visitor.visit(*handler);
+    trace_cont_value(cont, visitor);
 }
 
 /// Trace an exception handler: the handler procedure it holds, which is all
 /// it holds. It used to carry the wind depth `raise` unwound to; no raise path
-/// unwinds now, so the field is gone and so is the retention.
+/// unwinds now, so the field is gone and so is the retention. Named by field
+/// (#623) so that a new one does not compile here until it is traced.
 pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
-    visitor.visit(handler.handler);
+    let ExceptionHandler { handler } = handler;
+    visitor.visit(*handler);
 }
 
 // ============================================================================

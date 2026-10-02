@@ -566,9 +566,21 @@ impl Default for LibraryRegistry {
 /// an environment (`docs/GC_DESIGN.md` §5.3). Implemented here so both
 /// backends root libraries identically — the rule lives with the registry
 /// rather than being restated in each backend's root provider.
+///
+/// Every field is named (#623); pinned by the sentinel test
+/// `a_registered_library_is_a_root`.
 impl patina_core::GcRoots for LibraryRegistry {
     fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
-        for library in self.iter_libraries() {
+        let LibraryRegistry {
+            libraries,
+            // Directories.
+            search_paths: _,
+            // Library names.
+            loading_stack: _,
+            // The filesystem.
+            fs: _,
+        } = self;
+        for library in libraries.values() {
             visitor.visit_library(library);
         }
     }

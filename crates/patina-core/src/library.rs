@@ -3,7 +3,7 @@
 //! This module defines the core types for representing Scheme libraries.
 //! The library loading and resolution logic is in the evaluator.
 
-use crate::environment::Environment;
+use crate::environment::{Environment, GcEdge};
 use crate::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -145,6 +145,31 @@ impl Library {
     /// Iterate over exports as (name, TaggedValue) pairs
     pub fn exports_iter_tagged(&self) -> impl Iterator<Item = (&String, TaggedValue)> + '_ {
         self.exports.iter().map(|(k, tv)| (k, *tv))
+    }
+
+    /// Report the collector's edges out of this library: each export's value
+    /// and the library's environment, its two root sets
+    /// (`docs/GC_DESIGN.md` §5.3). `GcVisitor::visit_library` is the caller.
+    ///
+    /// Every field is named (#623), so a new one does not compile here until
+    /// it is reported or written `field: _` with its reason. Pinned by the
+    /// sentinel test `library_exports_and_environment`
+    /// (`heap/trace_sentinels.rs`).
+    pub(crate) fn for_each_gc_edge(&self, f: &mut dyn FnMut(GcEdge<'_>)) {
+        let Library {
+            // Strings.
+            name: _,
+            exports,
+            env,
+            // Export name → internal name, as strings.
+            internal_names: _,
+            // A file path.
+            source: _,
+        } = self;
+        for &value in exports.values() {
+            f(GcEdge::Value(value));
+        }
+        f(GcEdge::Env(env));
     }
 }
 

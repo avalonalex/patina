@@ -541,15 +541,8 @@ pub struct CompiledMacro {
 }
 
 impl CompiledMacro {
-    /// Visit every heap value embedded in this macro's patterns and
-    /// templates. GC tracing hook: a live macro binding keeps its literal
-    /// values live.
-    pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
-        for rule in &self.rules {
-            rule.pattern.for_each_literal(f);
-            rule.template.for_each_literal(f);
-        }
-    }
+    // Tracing is `GcVisitor::trace_compiled_macro` (`heap/gc.rs`), which
+    // names every field of this struct and of `CompiledRule` (#623).
 
     /// Collect the free identifier names mentioned by every rule's template.
     pub fn collect_template_symbols(rules: &[CompiledRule]) -> HashSet<Rc<str>> {
