@@ -635,9 +635,16 @@ impl VmState {
     /// The ref object (which mints the id) and the store entry are created
     /// back-to-back within one instruction dispatch, so no safe point can
     /// observe one without the other — required for the weak-table protocol
-    /// (`gc_roots.rs`), and asserted by the `AssertNoGc` over them. The
-    /// handle returned is unrooted until the caller stores it; no safe point
-    /// may come before that either.
+    /// (`gc_roots.rs`), and asserted by the `AssertNoGc` over them.
+    ///
+    /// The handle returned is unrooted until the caller stores it, and no
+    /// *collecting* safe point may come before that. This scope ends here;
+    /// the caller covers the rest. A caller that writes the handle itself, or
+    /// hands it to a jump, keeps its own `AssertNoGc` open until then
+    /// (`CaptureComposable`; `abort_to_prompt` and `exit`, whose window the
+    /// jump closes). `call/cc` hands it to its procedure instead, and a
+    /// higher-order primitive may poll in a nested loop before storing it, so
+    /// there the deferral rule covers it: a nested loop cannot collect.
     pub(super) fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
         gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
@@ -1994,7 +2001,10 @@ fn dispatch_one_instruction(
                     .ok_or_else(|| VmError::TypeError {
                         message: "InvokeContinuation: not a delimited continuation".into(),
                     })?;
-                return tail_invoke_delimited(state, cont_tv, dc, deliver_val, exit_depth);
+                // The pop in `tail_invoke_delimited` frees the registers that
+                // hold `cont_tv` and `deliver_val`.
+                let window = AssertNoGc::new(state.heap());
+                return tail_invoke_delimited(state, cont_tv, dc, deliver_val, exit_depth, window);
             } else {
                 // Non-composable (call/cc): travel the winds and replace the
                 // stack. No pass emits this instruction — the live invoke

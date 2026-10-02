@@ -651,6 +651,15 @@ fn handle_control_primitive(
             // Capture a full continuation: snapshot of entire current state.
             // No safe point from the capture to the store entry: the
             // weak-table rule (`gc_roots.rs`), asserted (#624).
+            //
+            // The window ends at the store entry, not at the write of the
+            // handle. From there `cont_tv` is in Rust alone until `call_any`
+            // writes it into `proc`'s frame or a primitive `proc` returns,
+            // and a higher-order primitive may poll on the way, in a nested
+            // loop of its own. That poll cannot collect: the handle is
+            // covered by the deferral rule, which `safe_point` asserts at
+            // collection, rather than by the absence of polls, which an
+            // `AssertNoGc` would assert (and that poll would trip it).
             let cont_tv = {
                 let _window = AssertNoGc::new(state.heap());
                 let cont = state.execution.capture_full(dst, captured_reentry(state));
@@ -2966,7 +2975,11 @@ enum DelimitedInvoke {
     /// It captured no frames, so it is the identity continuation: the value
     /// it was invoked with *is* its result, and the caller places that value
     /// the way it places any other immediate one.
-    Identity,
+    ///
+    /// It hands back the caller's `AssertNoGc`, for the caller to drop once
+    /// it has placed the value: until then the value is in Rust alone, and
+    /// may be a `#<values>` built for this invoke that nothing else holds.
+    Identity(AssertNoGc),
 }
 
 /// Invoke a delimited (composable) continuation: re-enter the extents it
@@ -2992,12 +3005,16 @@ enum DelimitedInvoke {
 /// places that ran wind thunks. `cont` is the continuation's *handle*, not
 /// just its payload, because the stub carries it across those steps.
 ///
-/// `window` is the caller's `AssertNoGc`, opened at the weak-store lookup
-/// that produced `dc`, or where `cont` and `value` left the machine's roots
-/// if that came first. No safe point may run until the captured frames are
-/// appended, or until `push_invoke_step` has written `cont` and `value` into
-/// the stub, which closes it (#624): `dc` is held by `Rc`, but the heap
-/// values its snapshot names are traced only while `cont` is marked.
+/// `window` is the caller's `AssertNoGc`, opened before `value` was built
+/// and, in tail position, before the pop that took `cont` and `value` out of
+/// the invoking frame — after the weak-store lookup that produced `dc`, which
+/// only clones the payload's `Rc` while `cont` is still where the caller
+/// found it. No safe point may run until the captured frames are appended
+/// and `value` delivered, until `push_invoke_step` has written `cont` and
+/// `value` into the stub, which closes it, or, for the identity
+/// continuation, until the caller has placed `value` (#624): `dc` is held by
+/// `Rc`, but the heap values its snapshot names are traced only while `cont`
+/// is marked.
 ///
 /// # State contract
 ///
@@ -3019,7 +3036,7 @@ fn invoke_delimited(
         // `dynamic_winds` on the same `frames.is_empty()` test twelve lines
         // apart, so this is established by construction rather than checked
         // here — an assert restating it could not fail.
-        return Ok(DelimitedInvoke::Identity);
+        return Ok(DelimitedInvoke::Identity(window));
     }
     match dc.dynamic_winds.first() {
         // Nothing to re-enter, which is the common case: finish here rather
@@ -3068,15 +3085,18 @@ pub(super) fn finish_delimited_invoke(
 /// frame/window before invoking; may change all five dynamic components.
 /// Some is normal driver completion, None schedules/returns into a caller;
 /// propagate any escape before further cleanup.
+///
+/// `window` is the caller's `AssertNoGc`, open across the pop, which frees
+/// the register window that may have held `cont` and `value`, and opened
+/// before `value` was built if the caller built it ([`invoke_delimited`]).
 pub(super) fn tail_invoke_delimited(
     state: &mut VmState,
     cont: TaggedValue,
     dc: Rc<VmDelimitedContinuation>,
     value: TaggedValue,
     exit_depth: usize,
+    window: AssertNoGc,
 ) -> Result<Option<TaggedValue>, VmError> {
-    // The pop frees the window that may have held `cont` and `value`.
-    let window = AssertNoGc::new(state.heap());
     let frame = state.execution.pop_frame();
     let return_reg = frame.return_reg;
 
@@ -3087,11 +3107,12 @@ pub(super) fn tail_invoke_delimited(
         // tail position takes, `Return`'s empty-stack guard included: an
         // abort truncates to its prompt, which may be below this loop's exit
         // depth, and the frame just popped can be the last one.
-        DelimitedInvoke::Identity => {
+        DelimitedInvoke::Identity(window) => {
             if state.execution.frames().len() == exit_depth || state.execution.frames().is_empty() {
                 return Ok(Some(value));
             }
             state.set_reg(return_reg, value);
+            drop(window);
             pop_resolved_extents(state, exit_depth);
             Ok(None)
         }
@@ -3247,10 +3268,9 @@ pub(super) fn call_value_with_probe(
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
             let window = AssertNoGc::new(state.heap());
             let value = deliver_value(state, arg_vals);
-            if matches!(
-                invoke_delimited(state, func_val, dc, value, dst, window)?,
-                DelimitedInvoke::Identity
-            ) {
+            if let DelimitedInvoke::Identity(_window) =
+                invoke_delimited(state, func_val, dc, value, dst, window)?
+            {
                 // The identity continuation resumes nothing, so nothing will
                 // deliver `value` but this.
                 state.set_reg(dst, value);
@@ -3390,8 +3410,11 @@ pub(super) fn tail_call_value_with_probe(
             return Err(park_escape(state, delivered));
         }
         if let Some(dc) = state.get_vm_delimited_continuation(func_val) {
+            // Opened before `value` is built: a `#<values>` built here is
+            // held by nothing else.
+            let window = AssertNoGc::new(state.heap());
             let value = deliver_value(state, arg_vals);
-            return tail_invoke_delimited(state, func_val, dc, value, exit_depth);
+            return tail_invoke_delimited(state, func_val, dc, value, exit_depth, window);
         }
 
         // Parameters in tail position: same as primitives, and a set through

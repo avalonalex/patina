@@ -620,15 +620,25 @@ these checks except the defer balance, which every build checks.
   `maybe_collect` and on every iteration, nested or not. Inside `safe_point`
   the check would almost never run, since it returns at once unless a
   collection is pending and the loop is outermost. The VM's windows:
-  - a continuation's capture to its weak-store entry and the write of its
-    handle (`alloc_vm_continuation`, `alloc_vm_delimited_continuation` and
-    the capture sites), under the weak-table rule in `gc_roots.rs`;
-  - an invoke, from the weak-store lookup to the copy-back of the snapshot,
-    or to the write of its operands into the next step's stub
-    (`step_wind_jump`, `invoke_delimited`). The window is handed by value to
-    `push_wind_step` / `push_invoke_step`, which drop it once the stub holds
-    the operands and before they call the thunk, which may run a nested
-    loop;
+  - a continuation's capture to its weak-store entry
+    (`alloc_vm_continuation`, `alloc_vm_delimited_continuation`), under the
+    weak-table rule in `gc_roots.rs`, and on to the write of its handle
+    where the capture site writes it or hands it to a jump
+    (`CaptureComposable`, `abort_to_prompt`, `exit`). `call/cc` hands the
+    handle to its procedure instead, and a higher-order primitive may poll
+    in a nested loop before it stores it, so from the store entry on the
+    handle is covered by the deferral rule (no *collecting* safe point), not
+    by a window;
+  - an invoke, from where its handle and value leave the machine's roots,
+    or from before the value is built, to the copy-back of the snapshot, or
+    to the write of its operands into the next step's stub
+    (`step_wind_jump`, `invoke_delimited`). A full continuation's weak-store
+    lookup is inside the window; a delimited one's comes just before it,
+    while the handle is still where the caller found it. The window is
+    handed by value to `push_wind_step` / `push_invoke_step`, which drop it
+    once the stub holds the operands and before they call the thunk, which
+    may run a nested loop; the identity continuation hands it back to the
+    caller, which drops it once it has placed the value;
   - the composable invoke's freed stub window (#172, `ResumeComposableInvoke`);
   - `ResumeWindJump`'s retained target and value, from `finish_wind_step` to
     the next write (#156).
