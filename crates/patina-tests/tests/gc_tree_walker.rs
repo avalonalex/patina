@@ -36,14 +36,23 @@ fn closure_environment_survives_collection() {
 
 #[test]
 fn collection_inside_higher_order_primitive() {
-    // `map` re-enters the evaluator through a nested trampoline; the safe
-    // point there must defer rather than collect with the outer state
-    // unrooted.
+    // A Rust primitive that calls a procedure back runs it on a nested
+    // trampoline (`ApplyContext::apply_proc`) and keeps its own state in Rust
+    // locals meanwhile: here `(patina internal lists)`'s `member` walks, with
+    // the program's comparator, a fresh list that no root provider sees once
+    // the call's step has been taken apart. The safe point inside the
+    // comparator must defer rather than collect, or the walk's next step
+    // reads a freed pair, which panics in a check build.
+    //
+    // This was `map` until `map` became Scheme (`higher_order.scm`, #471): a
+    // Scheme procedure's calls are steps of the trampoline it runs on, so the
+    // test had stopped nesting one. `(scheme base)`'s `member` is Scheme for
+    // the same reason; the internal primitive under it still nests (#624).
     let code = r#"
-        (import (patina debug))
-        (map (lambda (x) (gc) (* x x)) '(1 2 3 4))
+        (import (patina debug) (only (patina internal lists) member))
+        (member 3 (list 1 2 3 4) (lambda (x y) (gc) (= x y)))
     "#;
-    assert_eq!(eval_program_tree_walker(code), "(1 4 9 16)");
+    assert_eq!(eval_program_tree_walker(code), "(3 4)");
 }
 
 #[test]
