@@ -134,9 +134,12 @@ mod checked {
         }
 
         /// [`Self::check`] for a bare object index (`CallFrame.closure`).
+        /// The `*_vm_closure_*` accessors that take one answer `None` or
+        /// `false` for an index past the arena, so this is
+        /// [`Self::check_if_present`]: it leaves such an index to them.
         #[inline(always)]
         pub(crate) fn check_index(&self, index: ObjectIndex) {
-            self.check("object", index.value());
+            self.check_if_present("object", index.value());
         }
 
         /// The marker's check (`GcVisitor::visit`): panic if a root or a
@@ -716,5 +719,18 @@ mod tests {
             panic!("two frees cannot overflow the cap");
         };
         assert_eq!(bits, vec![first.raw_bits(), second.raw_bits()]);
+    }
+
+    #[test]
+    fn closure_accessors_answer_an_index_past_the_arena() {
+        // Their documented answer for an index the arena does not have,
+        // which the frame-closure check leaves to them rather than
+        // panicking on its own table.
+        let mut heap = Heap::new();
+        let _ = vm_closure(&mut heap);
+        let past = ObjectIndex::of(TaggedValue::object(5)).unwrap();
+        assert!(heap.get_vm_closure_globals(past).is_none());
+        assert_eq!(heap.get_vm_closure_free_var(past, 0), None);
+        assert!(!heap.set_vm_closure_free_var(past, 0, TaggedValue::NULL));
     }
 }
