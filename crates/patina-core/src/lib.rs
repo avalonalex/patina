@@ -24,6 +24,14 @@
               and `scope_trace::PHASE`, debugging aids. Clippy takes this lint only at the crate \
               root, so a new `thread_local!` in the crate goes on this list (#622)"
 )]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "the core's unit tests build environments with `Environment::with_parent` and \
+                  evaluate nothing; the core's own code is linted like any crate's (#622)"
+    )
+)]
 
 pub mod compiled_macro;
 pub mod cont_value;

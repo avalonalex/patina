@@ -102,7 +102,7 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_resilient_with_source_name("", "");
 
-    // patina-core: outside the core, which is exempt (its Cargo.toml)
+    // patina-core
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |parent: Rc<Environment>| Environment::with_parent(parent);
 }

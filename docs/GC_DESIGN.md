@@ -684,9 +684,12 @@ tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
 and `eval`'s expansion (`expand_for_eval`, `eval_step`), which loads the
 libraries a datum imports while `resumable_step` holds a primitive's state and
 the step's stacks; `Backend::eval`, `eval_global` and `eval_with_source_map`;
-`Interpreter::eval_*`; and `Environment::with_parent` outside `patina-core`,
-since an environment built there is reachable from no root unless its caller
-makes it so (#620). Every call outside the exempt crates carries
+`Interpreter::eval_*`; and `Environment::with_parent`, since an environment
+built with it is reachable from no root unless its caller makes it so (#620).
+Only `with_parent` is listed, as #622 scoped it: an environment from
+`Environment::new` or `with_heap` that is held across a re-entry is named in
+that call's reason instead (the loaders' `lib_env`, the environment
+primitives' `env`). Every call outside the exempt crates carries
 `#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
 match arm or statement around it (a tail call bound in a `let`, which
 `let_and_return` then leaves alone; the function only for a wrapper whose one
@@ -722,9 +725,10 @@ an entry that stops matching anything fails the build, and so does a
 misspelled one, crate name included, which clippy otherwise skips without a
 word. `crates/patina-interpreter/src/reentry_lint_control.rs` matches every
 entry that crate can name, and each private entry is matched by its own call
-sites. `patina-core` allows the lint (its own environments), as do
-`patina-tests` and `patina-repl` through `[lints]` in their `Cargo.toml`, and
-the test and example targets of other crates through a crate-level `allow`.
+sites. `patina-tests` and `patina-repl` allow the lint through `[lints]` in
+their `Cargo.toml`, and the test and example targets of other crates through
+a crate-level `allow`, `patina-core`'s unit tests (`cfg(test)`) among them;
+the core's own code is linted like any other crate's.
 
 The reasons are the holder inventory the redesign walks: stage 2 opens loading
 points A, B and D once every loading site is rooted, guarded on its data or

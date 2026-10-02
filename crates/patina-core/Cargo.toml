@@ -35,12 +35,3 @@ gc-check = []
 # and resolver 2 keeps a dev-dependency's features out of normal builds, so
 # no build that ships can name a collector entry point.
 test-support = []
-
-# The workspace clippy.toml lists `Environment::with_parent` among the Rust
-# re-entries and environment constructors that need a reason at every call
-# (#622): an environment built outside the core is reachable from no root
-# unless its caller makes it so (#620). The core builds environments as part
-# of what it is, and owns their reachability, so its calls are exempt here.
-# No other entry in that list names a crate the core depends on.
-[lints.clippy]
-disallowed_methods = "allow"

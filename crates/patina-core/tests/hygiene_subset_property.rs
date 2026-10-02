@@ -1,6 +1,11 @@
 //! Family 38 historical non-vacuity probe. Nonempty proper-subset binders,
 //! 1..4 frames, equal-valued cells, fixed seed and bounded shrinking.
 //! Kept on public APIs so this exact harness can be ported before #137.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test crate: it builds environments with `Environment::with_parent` and evaluates \
+              nothing, so it allows the re-entry rule (#622) once"
+)]
 use patina_core::tagged_value::TaggedValue;
 use patina_core::{Environment, ScopeId, ScopeSet};
 use proptest::prelude::*;

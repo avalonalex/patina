@@ -18,9 +18,9 @@
 # anything, or is misspelled (crate name included, which clippy otherwise
 # ignores), fails the build. A test-only module matches every entry it can
 # name, crates/patina-interpreter/src/reentry_lint_control.rs, and each
-# private entry is matched by its own call sites. Exempt: patina-core
-# (for `with_parent`, below), patina-tests and patina-repl through `[lints]` in
-# their Cargo.toml, and the test and example targets of other crates through a
+# private entry is matched by its own call sites. Exempt: patina-tests and
+# patina-repl through `[lints]` in their Cargo.toml, and the test and example
+# targets of other crates, patina-core's unit tests among them, through a
 # crate-level `allow`. docs/GC_DESIGN.md §7 states the rule; stages 2 and 4e of
 # PRD/GC_PRD.md convert the sites.
 
@@ -83,7 +83,10 @@ disallowed-methods = [
     { path = "patina_interpreter::Interpreter::eval_program_resilient_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
 
-    # patina-core, outside the core: an environment no root reaches (#620)
+    # patina-core: an environment no root reaches (#620). Only `with_parent`,
+    # as #622 scoped it: an environment from `Environment::new` or
+    # `with_heap` held across a re-entry is named in that call's reason
+    # instead (the loaders' `lib_env`, the environment primitives' `env`).
     { path = "patina_core::environment::Environment::with_parent", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
 ]
 
