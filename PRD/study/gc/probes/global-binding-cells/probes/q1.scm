@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define (f) (call-with-values (lambda () (values 1 2)) list))
+(define (g) (dynamic-wind (lambda () #f) (lambda () 'body) (lambda () #f)))
+(define before (list (f) (g)))
+(define (call-with-values p c) 'mine)
+(define (dynamic-wind a b c) 'mine)
+(write (list before (f) (g))) (newline)

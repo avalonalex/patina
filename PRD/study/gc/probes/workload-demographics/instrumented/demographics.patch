@@ -1,0 +1,1477 @@
+diff --color -ruN -x target crates/patina-core/src/demog.rs demographics/crates/patina-core/src/demog.rs
+--- crates/patina-core/src/demog.rs	1969-12-31 16:00:00
++++ demographics/crates/patina-core/src/demog.rs	2026-10-01 00:20:54
+@@ -0,0 +1,839 @@
++//! Workload-demographics instrumentation. SCRATCH COPY ONLY — not part of
++//! Patina. Enabled by `PATINA_DEMOG`:
++//!   PATINA_DEMOG=full   allocation census, epochs, survival scan, store mix
++//!   PATINA_DEMOG=pause  per-collection pause timing only
++//! Outputs: PATINA_DEMOG_OUT (summary, key value lines; default stderr),
++//!          PATINA_DEMOG_GCLOG (one CSV row per collection),
++//!          PATINA_DEMOG_HEAPS (append "exe total max_live live_at_exit").
++//!
++//! The runtime is single-threaded; the global state below is touched only by
++//! the interpreter thread. Heap counting uses atomics (cargo test threads).
++
++use crate::tagged_value::TaggedValue;
++use std::cell::UnsafeCell;
++use std::io::Write;
++use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering::Relaxed};
++
++pub const MODE_OFF: u8 = 1;
++pub const MODE_FULL: u8 = 2;
++pub const MODE_PAUSE: u8 = 3;
++static MODE: AtomicU8 = AtomicU8::new(0);
++
++static HEAPS_TOTAL: AtomicUsize = AtomicUsize::new(0);
++static HEAPS_LIVE: AtomicUsize = AtomicUsize::new(0);
++static HEAPS_MAX: AtomicUsize = AtomicUsize::new(0);
++static PRIMARY: AtomicU32 = AtomicU32::new(u32::MAX);
++static HEAPS_ATEXIT: AtomicU8 = AtomicU8::new(0);
++
++unsafe extern "C" {
++    fn atexit(cb: extern "C" fn()) -> i32;
++}
++
++#[cold]
++fn init_mode() -> u8 {
++    let m = match std::env::var("PATINA_DEMOG").as_deref() {
++        Ok("full") | Ok("1") => MODE_FULL,
++        Ok("pause") => MODE_PAUSE,
++        _ => MODE_OFF,
++    };
++    MODE.store(m, Relaxed);
++    if m != MODE_OFF {
++        unsafe {
++            *G.0.get() = Some(Box::new(State::default()));
++            atexit(dump_at_exit);
++        }
++    }
++    m
++}
++
++#[inline(always)]
++pub fn mode() -> u8 {
++    let m = MODE.load(Relaxed);
++    if m != 0 { m } else { init_mode() }
++}
++
++#[inline(always)]
++pub fn full() -> bool {
++    mode() == MODE_FULL
++}
++
++struct Gs(UnsafeCell<Option<Box<State>>>);
++unsafe impl Sync for Gs {}
++static G: Gs = Gs(UnsafeCell::new(None));
++
++#[inline(always)]
++#[allow(clippy::mut_from_ref)]
++fn st() -> &'static mut State {
++    unsafe { (*G.0.get()).as_mut().unwrap_unchecked() }
++}
++
++// ---------------------------------------------------------------------------
++// Heap counting
++// ---------------------------------------------------------------------------
++
++#[derive(Debug)]
++pub struct HeapGuard {
++    pub id: u32,
++}
++
++extern "C" fn heaps_at_exit() {
++    if let Ok(path) = std::env::var("PATINA_DEMOG_HEAPS")
++        && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path)
++    {
++        let exe = std::env::current_exe()
++            .ok()
++            .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
++            .unwrap_or_default();
++        let _ = writeln!(
++            f,
++            "{} total={} max_live={} live_at_exit={}",
++            exe,
++            HEAPS_TOTAL.load(Relaxed),
++            HEAPS_MAX.load(Relaxed),
++            HEAPS_LIVE.load(Relaxed)
++        );
++    }
++}
++
++impl HeapGuard {
++    pub fn new() -> Self {
++        let id = HEAPS_TOTAL.fetch_add(1, Relaxed) as u32;
++        let live = HEAPS_LIVE.fetch_add(1, Relaxed) + 1;
++        HEAPS_MAX.fetch_max(live, Relaxed);
++        if std::env::var_os("PATINA_DEMOG_HEAPS").is_some()
++            && HEAPS_ATEXIT.swap(1, Relaxed) == 0
++        {
++            unsafe {
++                atexit(heaps_at_exit);
++            }
++        }
++        if mode() != MODE_OFF {
++            let _ = PRIMARY.compare_exchange(u32::MAX, id, Relaxed, Relaxed);
++        }
++        HeapGuard { id }
++    }
++    pub fn is_primary(&self) -> bool {
++        mode() != MODE_OFF && PRIMARY.load(Relaxed) == self.id
++    }
++}
++
++impl Default for HeapGuard {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++impl Drop for HeapGuard {
++    fn drop(&mut self) {
++        HEAPS_LIVE.fetch_sub(1, Relaxed);
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Kinds and buckets
++// ---------------------------------------------------------------------------
++
++pub const ARENA_PAIR: usize = 0;
++pub const ARENA_VECTOR: usize = 1;
++pub const ARENA_STRING: usize = 2;
++pub const ARENA_OBJECT: usize = 3;
++
++pub const NVARIANT: usize = 28;
++pub const VARIANT_NAMES: [&str; NVARIANT] = [
++    "BigInt", "Rational", "Real", "Complex", "Symbol", "Bytevector", "Exception", "Procedure",
++    "Port", "Macro", "RecordType", "Record", "Identifier", "Continuation", "Parameter", "Promise",
++    "Library", "Values", "EnvironmentSpecifier", "PromptTag", "LabelPlaceholder", "MutableCell",
++    "Ephemeron", "VmClosure", "VmContinuationRef", "VmDelimitedContinuationRef", "CoreSyntax",
++    "Free",
++];
++pub const V_REAL: usize = 2;
++pub const V_RECORD: usize = 11;
++pub const V_IDENT: usize = 12;
++pub const V_VALUES: usize = 17;
++pub const V_CELL: usize = 21;
++pub const V_CLOSURE: usize = 23;
++
++/// Survival classes.
++pub const NCLASS: usize = 9;
++pub const CLASS_NAMES: [&str; NCLASS] = [
++    "pair", "vector", "string", "flonum", "closure", "cell", "identifier", "record", "other",
++];
++pub fn class_of(arena: usize, variant: usize) -> usize {
++    match arena {
++        ARENA_PAIR => 0,
++        ARENA_VECTOR => 1,
++        ARENA_STRING => 2,
++        _ => match variant {
++            V_REAL => 3,
++            V_CLOSURE => 4,
++            V_CELL => 5,
++            V_IDENT => 6,
++            V_RECORD => 7,
++            _ => 8,
++        },
++    }
++}
++
++/// Length buckets: 0,1,2,3,4,5-8,9-16,17-32,33-64,65-128,129-256,257-1024,1025-8192,>8192
++pub const NLEN: usize = 14;
++pub const LEN_NAMES: [&str; NLEN] = [
++    "0", "1", "2", "3", "4", "5-8", "9-16", "17-32", "33-64", "65-128", "129-256", "257-1024",
++    "1025-8192", ">8192",
++];
++pub fn len_bucket(n: usize) -> usize {
++    match n {
++        0..=4 => n,
++        5..=8 => 5,
++        9..=16 => 6,
++        17..=32 => 7,
++        33..=64 => 8,
++        65..=128 => 9,
++        129..=256 => 10,
++        257..=1024 => 11,
++        1025..=8192 => 12,
++        _ => 13,
++    }
++}
++
++/// Size buckets (hypothetical bytes, upper bounds).
++pub const NSIZE: usize = 16;
++pub const SIZE_BOUNDS: [u64; NSIZE] = [
++    16, 24, 32, 48, 64, 96, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, u64::MAX,
++];
++pub fn size_bucket(b: u64) -> usize {
++    SIZE_BOUNDS.iter().position(|&ub| b <= ub).unwrap_or(NSIZE - 1)
++}
++
++pub fn round8(n: u64) -> u64 {
++    (n + 7) & !7
++}
++pub fn vector_bytes(len: usize) -> u64 {
++    8 + 8 * len as u64
++}
++pub fn string_bytes(len: usize) -> u64 {
++    8 + round8(4 * len as u64)
++}
++
++// ---------------------------------------------------------------------------
++// Stores
++// ---------------------------------------------------------------------------
++
++pub const NSITES: usize = 17;
++pub const SITE_NAMES: [&str; NSITES] = [
++    "set_car", "set_cdr", "vector_set", "vm_vector_set", "write_mutable_cell",
++    "set_vm_closure_free_var", "promise_update", "break_ephemeron", "record_set",
++    "parameter_install", "parameter_install_converted", "promise_force_prim",
++    "promise_force_vm", "env_define", "env_set_slot_value", "env_set_scoped", "tw_cont_define",
++];
++pub const S_SET_CAR: usize = 0;
++pub const S_SET_CDR: usize = 1;
++pub const S_VECTOR_SET: usize = 2;
++pub const S_VM_VECTOR_SET: usize = 3;
++pub const S_CELL: usize = 4;
++pub const S_CLOSURE_FV: usize = 5;
++pub const S_PROMISE_UPDATE: usize = 6;
++pub const S_BREAK_EPH: usize = 7;
++pub const S_RECORD_SET: usize = 8;
++pub const S_PARAM: usize = 9;
++pub const S_PARAM2: usize = 10;
++pub const S_PROMISE_PRIM: usize = 11;
++pub const S_PROMISE_VM: usize = 12;
++pub const S_ENV_DEFINE: usize = 13;
++pub const S_ENV_SET_SLOT: usize = 14;
++pub const S_ENV_SET_SCOPED: usize = 15;
++pub const S_TW_CONT_DEFINE: usize = 16;
++
++/// View 0 = "since the last actual collection"; views 1..=5 = a nursery
++/// emptied every N allocations.
++pub const NVIEWS: usize = 6;
++pub const NURSERY: [u64; 5] = [16_384, 65_536, 262_144, 1_048_576, 4_194_304];
++pub const VIEW_NAMES: [&str; NVIEWS] = ["actual", "16K", "64K", "256K", "1M", "4M"];
++
++#[derive(Default, Clone)]
++struct SiteStat {
++    total: u64,
++    imm: u64,
++    heapval: u64,
++    target_unknown: u64,
++    young_target: [u64; NVIEWS],
++    young_target_heapval: [u64; NVIEWS],
++    young_value: [u64; NVIEWS],
++    old_to_young: [u64; NVIEWS],
++    old_target_heapval: [u64; NVIEWS],
++}
++
++const FREE: u32 = u32::MAX;
++
++#[derive(Default)]
++struct State {
++    // allocation census
++    alloc_seq: u64,
++    alloc_by_arena: [u64; 4],
++    bytes_by_arena: [u64; 4],
++    vec_len: [u64; NLEN],
++    vec_len_bytes: [u64; NLEN],
++    str_len: [u64; NLEN],
++    str_len_bytes: [u64; NLEN],
++    obj_variant: [u64; NVARIANT],
++    obj_variant_bytes: [u64; NVARIANT],
++    closure_fv: [u64; NLEN],
++    record_fields: [u64; NLEN],
++    values_len: [u64; NLEN],
++    size_hist: [u64; NSIZE],
++    size_hist_bytes: [u64; NSIZE],
++    // per-slot epochs: allocation sequence number and collection number
++    seq: [Vec<u64>; 4],
++    gcno: [Vec<u32>; 4],
++    gc_count: u32,
++    // survival aggregates (all collections; and excluding the first)
++    young_alloc_class: [[u64; NCLASS]; 2],
++    young_surv_class: [[u64; NCLASS]; 2],
++    young_alloc_bytes_class: [[u64; NCLASS]; 2],
++    young_surv_bytes_class: [[u64; NCLASS]; 2],
++    age_hist: [u64; 8],
++    // stores
++    sites: Vec<SiteStat>,
++    rs_set: Vec<rustc_hash::FxHashSet<u64>>,
++    rs_epoch: [u64; NVIEWS],
++    rs_sum: [u64; NVIEWS],
++    rs_max: [u64; NVIEWS],
++    rs_nonempty: [u64; NVIEWS],
++    vm_instrs: u64,
++    skip_env_define: bool,
++    // hashing
++    idhash_imm: u64,
++    idhash_index: u64,
++    idhash_rc: u64,
++    equal_hash_calls: u64,
++    equal_hash_fallback: u64,
++    // continuations
++    cap_full: u64,
++    cap_full_frames: u64,
++    cap_full_regs: u64,
++    cap_full_max_regs: u64,
++    restore_full: u64,
++    restore_frames: u64,
++    restore_regs: u64,
++    cap_delim: u64,
++    cap_delim_frames: u64,
++    cap_delim_regs: u64,
++    // per-collection
++    sp_frames: u64,
++    sp_regs: u64,
++    max_frames: u64,
++    max_regs: u64,
++    pause_count: u64,
++    pause_total_us: u64,
++    pause_max_us: u64,
++    sp_total_us: u64,
++    sp_max_us: u64,
++    gclog: Option<std::io::BufWriter<std::fs::File>>,
++    gclog_init: bool,
++    marked_total_sum: u64,
++}
++
++impl State {
++    fn ensure_sites(&mut self) {
++        if self.sites.is_empty() {
++            self.sites = vec![SiteStat::default(); NSITES];
++            self.rs_set = (0..NVIEWS).map(|_| Default::default()).collect();
++        }
++    }
++
++    #[inline]
++    fn slot_epoch(&self, tv: TaggedValue) -> Option<(u64, u32, u64)> {
++        let arena = if tv.is_pair() {
++            ARENA_PAIR
++        } else if tv.is_vector() {
++            ARENA_VECTOR
++        } else if tv.is_string() {
++            ARENA_STRING
++        } else if tv.is_object() {
++            ARENA_OBJECT
++        } else {
++            return None;
++        };
++        let idx = tv.heap_index() as usize;
++        let seq = *self.seq[arena].get(idx)?;
++        let g = self.gcno[arena][idx];
++        Some((seq, g, ((arena as u64) << 32) | idx as u64))
++    }
++
++    #[inline]
++    fn young_in_view(&self, v: usize, seq: u64, g: u32) -> bool {
++        if v == 0 {
++            g == self.gc_count
++        } else {
++            let n = NURSERY[v - 1];
++            let now = self.alloc_seq;
++            seq >= now - (now % n)
++        }
++    }
++
++    fn view_epoch(&self, v: usize) -> u64 {
++        if v == 0 {
++            self.gc_count as u64
++        } else {
++            self.alloc_seq / NURSERY[v - 1]
++        }
++    }
++
++    fn rs_flush(&mut self, v: usize) {
++        let n = self.rs_set[v].len() as u64;
++        self.rs_sum[v] += n;
++        self.rs_max[v] = self.rs_max[v].max(n);
++        if n > 0 {
++            self.rs_nonempty[v] += 1;
++        }
++        self.rs_set[v].clear();
++    }
++}
++
++#[inline]
++pub fn on_alloc(arena: usize, idx: u32, variant: usize, len: usize, bytes: u64) {
++    let s = st();
++    let i = idx as usize;
++    if s.seq[arena].len() <= i {
++        s.seq[arena].resize(i + 1, 0);
++        s.gcno[arena].resize(i + 1, FREE);
++    }
++    s.seq[arena][i] = s.alloc_seq;
++    s.gcno[arena][i] = s.gc_count;
++    s.alloc_seq += 1;
++    s.alloc_by_arena[arena] += 1;
++    s.bytes_by_arena[arena] += bytes;
++    let sb = size_bucket(bytes);
++    s.size_hist[sb] += 1;
++    s.size_hist_bytes[sb] += bytes;
++    match arena {
++        ARENA_VECTOR => {
++            s.vec_len[len_bucket(len)] += 1;
++            s.vec_len_bytes[len_bucket(len)] += bytes;
++        }
++        ARENA_STRING => {
++            s.str_len[len_bucket(len)] += 1;
++            s.str_len_bytes[len_bucket(len)] += bytes;
++        }
++        ARENA_OBJECT => {
++            s.obj_variant[variant] += 1;
++            s.obj_variant_bytes[variant] += bytes;
++            match variant {
++                V_CLOSURE => s.closure_fv[len_bucket(len)] += 1,
++                V_RECORD => s.record_fields[len_bucket(len)] += 1,
++                V_VALUES => s.values_len[len_bucket(len)] += 1,
++                _ => {}
++            }
++        }
++        _ => {}
++    }
++}
++
++/// Record one store. `target` is `None` for a store into an off-heap
++/// environment slot.
++#[inline]
++pub fn store(site: usize, target: Option<TaggedValue>, value: TaggedValue) {
++    if mode() != MODE_FULL {
++        return;
++    }
++    let s = st();
++    if site == S_ENV_DEFINE && s.skip_env_define {
++        s.skip_env_define = false;
++        return;
++    }
++    s.ensure_sites();
++    let tinfo = target.and_then(|t| s.slot_epoch(t));
++    let vinfo = if value.is_heap_pointer() { s.slot_epoch(value) } else { None };
++    let heapval = value.is_heap_pointer();
++    let mut ty = [false; NVIEWS];
++    let mut vy = [false; NVIEWS];
++    for v in 0..NVIEWS {
++        ty[v] = tinfo.is_some_and(|(sq, g, _)| s.young_in_view(v, sq, g));
++        vy[v] = vinfo.is_some_and(|(sq, g, _)| s.young_in_view(v, sq, g));
++    }
++    let mut o2y = [false; NVIEWS];
++    {
++        let ss = &mut s.sites[site];
++        ss.total += 1;
++        if target.is_none() || tinfo.is_none() {
++            ss.target_unknown += 1;
++        }
++        for v in 0..NVIEWS {
++            if ty[v] {
++                ss.young_target[v] += 1;
++            }
++        }
++        if !heapval {
++            ss.imm += 1;
++            return;
++        }
++        ss.heapval += 1;
++        for v in 0..NVIEWS {
++            if ty[v] {
++                ss.young_target_heapval[v] += 1;
++            } else {
++                ss.old_target_heapval[v] += 1;
++            }
++            if vy[v] {
++                ss.young_value[v] += 1;
++            }
++            if !ty[v] && vy[v] {
++                ss.old_to_young[v] += 1;
++                o2y[v] = true;
++            }
++        }
++    }
++    if let Some((_, _, key)) = tinfo {
++        for v in 0..NVIEWS {
++            if o2y[v] {
++                let e = s.view_epoch(v);
++                if e != s.rs_epoch[v] {
++                    s.rs_flush(v);
++                    s.rs_epoch[v] = e;
++                }
++                s.rs_set[v].insert(key);
++            }
++        }
++    }
++}
++
++/// Make the next `env_define` store not count (a caller recorded it under
++/// its own site).
++pub fn skip_next_env_define() {
++    if mode() == MODE_FULL {
++        st().skip_env_define = true;
++    }
++}
++
++#[inline(always)]
++pub fn vm_instr() {
++    if MODE.load(Relaxed) == MODE_FULL {
++        st().vm_instrs += 1;
++    }
++}
++
++pub fn identity_hash(kind: u8) {
++    if mode() == MODE_FULL {
++        let s = st();
++        match kind {
++            0 => s.idhash_imm += 1,
++            1 => s.idhash_index += 1,
++            _ => s.idhash_rc += 1,
++        }
++    }
++}
++
++pub fn equal_hash_call() {
++    if mode() == MODE_FULL {
++        st().equal_hash_calls += 1;
++    }
++}
++
++pub fn equal_hash_fallback() {
++    if mode() == MODE_FULL {
++        st().equal_hash_fallback += 1;
++    }
++}
++
++pub fn capture_full(frames: usize, regs: usize) {
++    if mode() == MODE_FULL {
++        let s = st();
++        s.cap_full += 1;
++        s.cap_full_frames += frames as u64;
++        s.cap_full_regs += regs as u64;
++        s.cap_full_max_regs = s.cap_full_max_regs.max(regs as u64);
++    }
++}
++
++pub fn restore_full(frames: usize, regs: usize) {
++    if mode() == MODE_FULL {
++        let s = st();
++        s.restore_full += 1;
++        s.restore_frames += frames as u64;
++        s.restore_regs += regs as u64;
++    }
++}
++
++pub fn capture_delim(frames: usize, regs: usize) {
++    if mode() == MODE_FULL {
++        let s = st();
++        s.cap_delim += 1;
++        s.cap_delim_frames += frames as u64;
++        s.cap_delim_regs += regs as u64;
++    }
++}
++
++/// VM safe point: stack shape just before a collection.
++pub fn safepoint_stack(frames: usize, regs: usize) {
++    if mode() != MODE_OFF {
++        let s = st();
++        s.sp_frames = frames as u64;
++        s.sp_regs = regs as u64;
++        s.max_frames = s.max_frames.max(frames as u64);
++        s.max_regs = s.max_regs.max(regs as u64);
++    }
++}
++
++/// VM safe point total (retire + collect), microseconds.
++pub fn safepoint_time(us: u64) {
++    if mode() != MODE_OFF {
++        let s = st();
++        s.sp_total_us += us;
++        s.sp_max_us = s.sp_max_us.max(us);
++    }
++}
++
++/// Per-collection survival result produced by `Heap::demog_scan`.
++#[derive(Default)]
++pub struct Scan {
++    pub young_alloc: [u64; NCLASS],
++    pub young_alloc_bytes: [u64; NCLASS],
++    pub young_surv: [u64; NCLASS],
++    pub young_surv_bytes: [u64; NCLASS],
++    pub live: [u64; 4],
++    pub live_bytes: u64,
++    pub dead_old: u64,
++    pub dead_old_bytes: u64,
++    pub age: [u64; 8],
++    pub arena_len: [u64; 4],
++    pub free_slots: [u64; 4],
++}
++
++pub fn age_bucket(age: u32) -> usize {
++    match age {
++        0..=3 => age as usize,
++        4..=7 => 4,
++        8..=15 => 5,
++        16..=63 => 6,
++        _ => 7,
++    }
++}
++
++/// Direct access to the collection-number epochs and the current count.
++#[allow(clippy::mut_from_ref)]
++pub fn epochs_mut() -> (&'static mut [Vec<u32>; 4], u32) {
++    let s = st();
++    let c = s.gc_count;
++    (&mut s.gcno, c)
++}
++
++/// Epoch accessors for the scan (primary heap only).
++pub fn gc_count() -> u32 {
++    st().gc_count
++}
++pub fn slot_gcno(arena: usize, idx: usize) -> u32 {
++    st().gcno[arena].get(idx).copied().unwrap_or(FREE)
++}
++pub fn free_slot(arena: usize, idx: usize) {
++    let s = st();
++    if let Some(g) = s.gcno[arena].get_mut(idx) {
++        *g = FREE;
++    }
++}
++pub const FREE_EPOCH: u32 = FREE;
++
++/// Record one collection. `scan` is `None` in pause mode.
++pub fn on_collect(scan: Option<Scan>, mark_us: u64, sweep_us: u64, scan_us: u64) {
++    let m = mode();
++    if m == MODE_OFF {
++        return;
++    }
++    let s = st();
++    let pause = mark_us + sweep_us;
++    s.pause_count += 1;
++    s.pause_total_us += pause;
++    s.pause_max_us = s.pause_max_us.max(pause);
++    if !s.gclog_init {
++        s.gclog_init = true;
++        if let Ok(p) = std::env::var("PATINA_DEMOG_GCLOG")
++            && let Ok(f) = std::fs::File::create(p)
++        {
++            let mut w = std::io::BufWriter::new(f);
++            let _ = write!(
++                w,
++                "gc,alloc_seq,frames,regs,mark_us,sweep_us,scan_us,young_alloc,young_alloc_bytes,young_surv,young_surv_bytes,live_pairs,live_vectors,live_strings,live_objects,live_bytes,dead_old,dead_old_bytes,arena_pairs,arena_vectors,arena_strings,arena_objects"
++            );
++            for c in CLASS_NAMES {
++                let _ = write!(w, ",ya_{c},ys_{c}");
++            }
++            for a in 0..8 {
++                let _ = write!(w, ",age{a}");
++            }
++            let _ = writeln!(w);
++            s.gclog = Some(w);
++        }
++    }
++    let gc = s.gc_count;
++    let alloc_seq = s.alloc_seq;
++    let (frames, regs) = (s.sp_frames, s.sp_regs);
++    if let Some(sc) = &scan {
++        let ya: u64 = sc.young_alloc.iter().sum();
++        s.marked_total_sum += sc.live.iter().sum::<u64>();
++        for k in [0usize, 1] {
++            if k == 1 && gc == 0 {
++                continue;
++            }
++            for c in 0..NCLASS {
++                s.young_alloc_class[k][c] += sc.young_alloc[c];
++                s.young_surv_class[k][c] += sc.young_surv[c];
++                s.young_alloc_bytes_class[k][c] += sc.young_alloc_bytes[c];
++                s.young_surv_bytes_class[k][c] += sc.young_surv_bytes[c];
++            }
++        }
++        for a in 0..8 {
++            s.age_hist[a] += sc.age[a];
++        }
++        let _ = ya;
++    }
++    if let Some(w) = s.gclog.as_mut() {
++        let sc = scan.unwrap_or_default();
++        let _ = write!(
++            w,
++            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
++            gc,
++            alloc_seq,
++            frames,
++            regs,
++            mark_us,
++            sweep_us,
++            scan_us,
++            sc.young_alloc.iter().sum::<u64>(),
++            sc.young_alloc_bytes.iter().sum::<u64>(),
++            sc.young_surv.iter().sum::<u64>(),
++            sc.young_surv_bytes.iter().sum::<u64>(),
++            sc.live[0],
++            sc.live[1],
++            sc.live[2],
++            sc.live[3],
++            sc.live_bytes,
++            sc.dead_old,
++            sc.dead_old_bytes,
++            sc.arena_len[0],
++            sc.arena_len[1],
++            sc.arena_len[2],
++            sc.arena_len[3]
++        );
++        for c in 0..NCLASS {
++            let _ = write!(w, ",{},{}", sc.young_alloc[c], sc.young_surv[c]);
++        }
++        for a in 0..8 {
++            let _ = write!(w, ",{}", sc.age[a]);
++        }
++        let _ = writeln!(w);
++    }
++    s.gc_count += 1;
++    s.sp_frames = 0;
++    s.sp_regs = 0;
++}
++
++extern "C" fn dump_at_exit() {
++    let s = st();
++    if let Some(w) = s.gclog.as_mut() {
++        let _ = w.flush();
++    }
++    let mut out = String::new();
++    use std::fmt::Write as _;
++    let w = &mut out;
++    let _ = writeln!(w, "mode {}", MODE.load(Relaxed));
++    let _ = writeln!(
++        w,
++        "heaps_total {} heaps_max_live {}",
++        HEAPS_TOTAL.load(Relaxed),
++        HEAPS_MAX.load(Relaxed)
++    );
++    let _ = writeln!(w, "collections {}", s.pause_count);
++    let _ = writeln!(
++        w,
++        "pause_total_us {} pause_max_us {}",
++        s.pause_total_us, s.pause_max_us
++    );
++    let _ = writeln!(w, "sp_total_us {} sp_max_us {}", s.sp_total_us, s.sp_max_us);
++    let _ = writeln!(w, "max_frames {} max_regs {}", s.max_frames, s.max_regs);
++    if MODE.load(Relaxed) == MODE_FULL {
++        s.ensure_sites();
++        for v in 0..NVIEWS {
++            s.rs_flush(v);
++        }
++        let _ = writeln!(w, "alloc_total {}", s.alloc_seq);
++        let _ = writeln!(w, "vm_instrs {}", s.vm_instrs);
++        let _ = writeln!(w, "alloc_by_arena {:?}", s.alloc_by_arena);
++        let _ = writeln!(w, "bytes_by_arena {:?}", s.bytes_by_arena);
++        let _ = writeln!(w, "vec_len {:?}", s.vec_len);
++        let _ = writeln!(w, "vec_len_bytes {:?}", s.vec_len_bytes);
++        let _ = writeln!(w, "str_len {:?}", s.str_len);
++        let _ = writeln!(w, "str_len_bytes {:?}", s.str_len_bytes);
++        let _ = writeln!(w, "obj_variant {:?}", s.obj_variant);
++        let _ = writeln!(w, "obj_variant_bytes {:?}", s.obj_variant_bytes);
++        let _ = writeln!(w, "closure_fv {:?}", s.closure_fv);
++        let _ = writeln!(w, "record_fields {:?}", s.record_fields);
++        let _ = writeln!(w, "values_len {:?}", s.values_len);
++        let _ = writeln!(w, "size_hist {:?}", s.size_hist);
++        let _ = writeln!(w, "size_hist_bytes {:?}", s.size_hist_bytes);
++        for k in 0..2 {
++            let _ = writeln!(w, "young_alloc_class{} {:?}", k, s.young_alloc_class[k]);
++            let _ = writeln!(w, "young_surv_class{} {:?}", k, s.young_surv_class[k]);
++            let _ = writeln!(
++                w,
++                "young_alloc_bytes_class{} {:?}",
++                k, s.young_alloc_bytes_class[k]
++            );
++            let _ = writeln!(
++                w,
++                "young_surv_bytes_class{} {:?}",
++                k, s.young_surv_bytes_class[k]
++            );
++        }
++        let _ = writeln!(w, "age_hist {:?}", s.age_hist);
++        let _ = writeln!(w, "marked_total_sum {}", s.marked_total_sum);
++        for (i, ss) in s.sites.iter().enumerate() {
++            if ss.total == 0 {
++                continue;
++            }
++            let _ = writeln!(
++                w,
++                "site {} total {} imm {} heapval {} target_unknown {} young_target {:?} young_target_heapval {:?} young_value {:?} old_to_young {:?} old_target_heapval {:?}",
++                SITE_NAMES[i],
++                ss.total,
++                ss.imm,
++                ss.heapval,
++                ss.target_unknown,
++                ss.young_target,
++                ss.young_target_heapval,
++                ss.young_value,
++                ss.old_to_young,
++                ss.old_target_heapval
++            );
++        }
++        let _ = writeln!(
++            w,
++            "rs_sum {:?} rs_max {:?} rs_nonempty {:?}",
++            s.rs_sum, s.rs_max, s.rs_nonempty
++        );
++        let _ = writeln!(
++            w,
++            "idhash imm {} index {} rc {} equal_hash_calls {} equal_hash_fallback {}",
++            s.idhash_imm, s.idhash_index, s.idhash_rc, s.equal_hash_calls, s.equal_hash_fallback
++        );
++        let _ = writeln!(
++            w,
++            "cap_full {} frames {} regs {} max_regs {} restore {} rframes {} rregs {} cap_delim {} dframes {} dregs {}",
++            s.cap_full,
++            s.cap_full_frames,
++            s.cap_full_regs,
++            s.cap_full_max_regs,
++            s.restore_full,
++            s.restore_frames,
++            s.restore_regs,
++            s.cap_delim,
++            s.cap_delim_frames,
++            s.cap_delim_regs
++        );
++    }
++    match std::env::var("PATINA_DEMOG_OUT") {
++        Ok(p) => {
++            let _ = std::fs::write(p, out);
++        }
++        Err(_) => {
++            eprint!("{out}");
++        }
++    }
++}
+diff --color -ruN -x target crates/patina-core/src/environment.rs demographics/crates/patina-core/src/environment.rs
+--- crates/patina-core/src/environment.rs	2026-09-30 20:46:49
++++ demographics/crates/patina-core/src/environment.rs	2026-10-01 00:20:40
+@@ -618,6 +618,7 @@
+     /// is the one that keeps a location one location.
+     #[inline]
+     pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
++        crate::demog::store(crate::demog::S_ENV_SET_SLOT, None, value);
+         let forwarded = {
+             let mut bindings = self.bindings.borrow_mut();
+             let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
+@@ -710,6 +711,7 @@
+     /// Use this for top-level defines, built-ins, and other simple bindings.
+     /// This is the primary API - accepts TaggedValue directly.
+     pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
++        crate::demog::store(crate::demog::S_ENV_DEFINE, None, value);
+         let (slot, was_forwarded) = self.define_slot(name.into(), value);
+         // A definition is a new binding of this environment's own, whatever
+         // the name was before — so an importer that defines a name it
+@@ -937,6 +939,7 @@
+         if let Some(i) = self.visible_scoped_index(name)
+             && let Some(bindings) = self.scoped_bindings.borrow_mut().get_mut(name)
+         {
++            crate::demog::store(crate::demog::S_ENV_SET_SCOPED, None, value);
+             bindings[i].tagged_value = value;
+             return Ok(());
+         }
+diff --color -ruN -x target crates/patina-core/src/heap/gc.rs demographics/crates/patina-core/src/heap/gc.rs
+--- crates/patina-core/src/heap/gc.rs	2026-09-30 09:15:47
++++ demographics/crates/patina-core/src/heap/gc.rs	2026-10-01 00:20:54
+@@ -72,7 +72,7 @@
+     }
+ 
+     #[inline]
+-    fn get(&self, i: usize) -> bool {
++    pub(crate) fn get(&self, i: usize) -> bool {
+         debug_assert!(i < self.len, "bit index {i} out of range {}", self.len);
+         self.words[i / 64] & (1u64 << (i % 64)) != 0
+     }
+@@ -961,6 +961,112 @@
+     }
+ }
+ 
++impl Heap {
++    pub(crate) fn demog_on_flag(&self) -> bool {
++        self.demog_on
++    }
++
++    /// DEMOG: classify every non-free slot as live/dead, young/old, before
++    /// sweep frees the unmarked ones.
++    pub(crate) fn demog_scan(&self, marks: &MarkBits) -> crate::demog::Scan {
++        use crate::demog as d;
++        let mut sc = d::Scan::default();
++        let (gcno, cur) = d::epochs_mut();
++        let visit = |sc: &mut d::Scan,
++                         gcno: &mut Vec<u32>,
++                         arena: usize,
++                         i: usize,
++                         marked: bool,
++                         bytes: u64,
++                         class: usize| {
++            let g = gcno[i];
++            if marked {
++                sc.live[arena] += 1;
++                sc.live_bytes += bytes;
++                sc.age[d::age_bucket(cur.wrapping_sub(g))] += 1;
++                if g == cur {
++                    sc.young_alloc[class] += 1;
++                    sc.young_alloc_bytes[class] += bytes;
++                    sc.young_surv[class] += 1;
++                    sc.young_surv_bytes[class] += bytes;
++                }
++            } else {
++                if g == cur {
++                    sc.young_alloc[class] += 1;
++                    sc.young_alloc_bytes[class] += bytes;
++                } else {
++                    sc.dead_old += 1;
++                    sc.dead_old_bytes += bytes;
++                }
++                gcno[i] = d::FREE_EPOCH;
++            }
++        };
++        sc.arena_len = [
++            self.pairs.len() as u64,
++            self.vectors.len() as u64,
++            self.strings.len() as u64,
++            self.objects.len() as u64,
++        ];
++        {
++            let g = &mut gcno[d::ARENA_PAIR];
++            if g.len() < self.pairs.len() {
++                g.resize(self.pairs.len(), d::FREE_EPOCH);
++            }
++            for i in 0..self.pairs.len() {
++                if g[i] == d::FREE_EPOCH {
++                    sc.free_slots[0] += 1;
++                    continue;
++                }
++                visit(&mut sc, g, 0, i, marks.pairs.get(i), 16, 0);
++            }
++        }
++        {
++            let g = &mut gcno[d::ARENA_VECTOR];
++            if g.len() < self.vectors.len() {
++                g.resize(self.vectors.len(), d::FREE_EPOCH);
++            }
++            for i in 0..self.vectors.len() {
++                if g[i] == d::FREE_EPOCH {
++                    sc.free_slots[1] += 1;
++                    continue;
++                }
++                let b = d::vector_bytes(self.vectors[i].len());
++                visit(&mut sc, g, 1, i, marks.vectors.get(i), b, 1);
++            }
++        }
++        {
++            let g = &mut gcno[d::ARENA_STRING];
++            if g.len() < self.strings.len() {
++                g.resize(self.strings.len(), d::FREE_EPOCH);
++            }
++            for i in 0..self.strings.len() {
++                if g[i] == d::FREE_EPOCH {
++                    sc.free_slots[2] += 1;
++                    continue;
++                }
++                let b = d::string_bytes(self.strings[i].len());
++                visit(&mut sc, g, 2, i, marks.strings.get(i), b, 2);
++            }
++        }
++        {
++            let g = &mut gcno[d::ARENA_OBJECT];
++            if g.len() < self.objects.len() {
++                g.resize(self.objects.len(), d::FREE_EPOCH);
++            }
++            for i in 0..self.objects.len() {
++                if g[i] == d::FREE_EPOCH {
++                    sc.free_slots[3] += 1;
++                    continue;
++                }
++                let (variant, _len, b) = super::demog_obj_info(&self.objects[i]);
++                let class = d::class_of(d::ARENA_OBJECT, variant);
++                visit(&mut sc, g, 3, i, marks.objects.get(i), b, class);
++            }
++        }
++        sc
++    }
++}
++
+ // ============================================================================
+ // MarkSweepCollector
+ // ============================================================================
+@@ -1105,15 +1211,28 @@
+         let start = Instant::now();
+ 
+         let mut marks = run_mark_phase(heap, roots);
++        let mark_us = start.elapsed().as_micros() as u64;
+ 
+         let marked = marks.marked();
++        let (scan, scan_us) = if heap.demog_on_flag() {
++            let t = Instant::now();
++            let sc = heap.demog_scan(&marks);
++            (Some(sc), t.elapsed().as_micros() as u64)
++        } else {
++            (None, 0)
++        };
++        let t_sweep = Instant::now();
+         let swept = heap.sweep(&mut marks);
++        let sweep_us = t_sweep.elapsed().as_micros() as u64;
+ 
+         self.live_after_last = marked.total();
+         self.stats.collections += 1;
+         self.stats.last_marked = marked;
+         self.stats.last_swept = swept;
+-        self.stats.last_pause_micros = start.elapsed().as_micros();
++        self.stats.last_pause_micros = (mark_us + sweep_us) as u128;
++        if heap.demog_primary {
++            crate::demog::on_collect(scan, mark_us, sweep_us, scan_us);
++        }
+         self.stats
+     }
+ }
+diff --color -ruN -x target crates/patina-core/src/heap/mod.rs demographics/crates/patina-core/src/heap/mod.rs
+--- crates/patina-core/src/heap/mod.rs	2026-09-30 16:42:38
++++ demographics/crates/patina-core/src/heap/mod.rs	2026-10-01 00:20:12
+@@ -428,6 +428,11 @@
+     /// (design §9.5) key on these ids and must never see one alias two
+     /// entries. Monotonic, never reused.
+     next_vm_continuation_id: u64,
++
++    /// DEMOG instrumentation (scratch copy only).
++    demog_guard: crate::demog::HeapGuard,
++    demog_on: bool,
++    pub(crate) demog_primary: bool,
+ }
+ 
+ /// `eqv?` on two inexact reals: identical bit patterns, not IEEE `==`.
+@@ -551,9 +556,19 @@
+             gc_collections: 0,
+             gc_last_swept: 0,
+             next_vm_continuation_id: 0,
++            demog_on: false,
++            demog_primary: false,
++            demog_guard: crate::demog::HeapGuard::new(),
+         }
++        .demog_init()
+     }
+ 
++    fn demog_init(mut self) -> Self {
++        self.demog_primary = self.demog_guard.is_primary();
++        self.demog_on = self.demog_primary && crate::demog::full();
++        self
++    }
++
+     // =========================================================================
+     // GC bookkeeping (see heap/gc.rs and docs/GC_DESIGN.md)
+     // =========================================================================
+@@ -710,6 +725,9 @@
+             self.pairs.push((car, cdr));
+             index
+         };
++        if self.demog_on {
++            crate::demog::on_alloc(crate::demog::ARENA_PAIR, index, 0, 0, 16);
++        }
+         TaggedValue::pair(index)
+     }
+ 
+@@ -747,6 +765,9 @@
+             "use-after-free: pair slot {} was reclaimed by the GC",
+             ptr.heap_index()
+         );
++        if self.demog_on {
++            crate::demog::store(crate::demog::S_SET_CAR, Some(ptr), value);
++        }
+         self.pairs[ptr.heap_index() as usize].0 = value;
+     }
+ 
+@@ -759,6 +780,9 @@
+             "use-after-free: pair slot {} was reclaimed by the GC",
+             ptr.heap_index()
+         );
++        if self.demog_on {
++            crate::demog::store(crate::demog::S_SET_CDR, Some(ptr), value);
++        }
+         self.pairs[ptr.heap_index() as usize].1 = value;
+     }
+ 
+@@ -769,6 +793,7 @@
+     /// Allocate a new vector
+     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
+         self.note_alloc();
++        let demog_len = elements.len();
+         let index = if let Some(free) = self.free_vectors.pop() {
+             self.vectors[free as usize] = elements;
+             free
+@@ -777,6 +802,15 @@
+             self.vectors.push(elements);
+             index
+         };
++        if self.demog_on {
++            crate::demog::on_alloc(
++                crate::demog::ARENA_VECTOR,
++                index,
++                0,
++                demog_len,
++                crate::demog::vector_bytes(demog_len),
++            );
++        }
+         TaggedValue::vector(index)
+     }
+ 
+@@ -803,6 +837,9 @@
+     #[inline(always)]
+     pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
+         debug_assert!(ptr.is_vector());
++        if self.demog_on {
++            crate::demog::store(crate::demog::S_VECTOR_SET, Some(ptr), value);
++        }
+         self.vectors[ptr.heap_index() as usize][index] = value;
+     }
+ 
+@@ -830,6 +867,7 @@
+     /// Allocate a new string from Vec<char> (primary method)
+     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
+         self.note_alloc();
++        let demog_len = chars.len();
+         let index = if let Some(free) = self.free_strings.pop() {
+             self.strings[free as usize] = chars;
+             free
+@@ -838,6 +876,15 @@
+             self.strings.push(chars);
+             index
+         };
++        if self.demog_on {
++            crate::demog::on_alloc(
++                crate::demog::ARENA_STRING,
++                index,
++                0,
++                demog_len,
++                crate::demog::string_bytes(demog_len),
++            );
++        }
+         TaggedValue::string(index)
+     }
+ 
+@@ -1081,6 +1128,12 @@
+             _ => return,
+         };
+         if !Rc::ptr_eq(&outer_cell, &self.get_promise(inner).expect("checked")) {
++            if self.demog_on {
++                let v = match inner_state {
++                    PromiseState::Forced(v) | PromiseState::Delayed(v) => v,
++                };
++                crate::demog::store(crate::demog::S_PROMISE_UPDATE, Some(outer), v);
++            }
+             *outer_cell.borrow_mut() = inner_state;
+             self.objects[inner.heap_index() as usize] = HeapObjectData::Promise(outer_cell);
+         }
+@@ -1236,7 +1289,16 @@
+     /// heap immutably; the `RefCell` is what makes that sound.
+     pub fn break_ephemeron(&self, tv: TaggedValue) {
+         match self.get_object(tv) {
+-            HeapObjectData::Ephemeron(cell) => *cell.borrow_mut() = None,
++            HeapObjectData::Ephemeron(cell) => {
++                if self.demog_on {
++                    crate::demog::store(
++                        crate::demog::S_BREAK_EPH,
++                        Some(tv),
++                        TaggedValue::FALSE,
++                    );
++                }
++                *cell.borrow_mut() = None
++            }
+             // The collector only hands back a value it recorded while tracing
+             // an ephemeron, so anything else is a bookkeeping error — and a
+             // silent one would leave a pair unbroken with a key whose cells
+@@ -1276,6 +1338,9 @@
+         }
+         match self.get_object(ptr) {
+             HeapObjectData::MutableCell(cell) => {
++                if self.demog_on {
++                    crate::demog::store(crate::demog::S_CELL, Some(ptr), val);
++                }
+                 *cell.borrow_mut() = val;
+                 true
+             }
+@@ -1400,6 +1465,13 @@
+         match self.objects.get_mut(heap_index as usize) {
+             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
+                 free_vars[slot] = val;
++                if self.demog_on {
++                    crate::demog::store(
++                        crate::demog::S_CLOSURE_FV,
++                        Some(TaggedValue::object(heap_index)),
++                        val,
++                    );
++                }
+                 true
+             }
+             _ => false,
+@@ -1468,6 +1540,7 @@
+     /// Allocate a generic object
+     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
+         self.note_alloc();
++        let demog = if self.demog_on { Some(demog_obj_info(&data)) } else { None };
+         let index = if let Some(free) = self.free_objects.pop() {
+             self.objects[free as usize] = data;
+             free
+@@ -1476,6 +1549,9 @@
+             self.objects.push(data);
+             index
+         };
++        if let Some((variant, len, bytes)) = demog {
++            crate::demog::on_alloc(crate::demog::ARENA_OBJECT, index, variant, len, bytes);
++        }
+         TaggedValue::object(index)
+     }
+ 
+@@ -2550,13 +2626,19 @@
+                 HeapObjectData::Procedure(p) => Rc::as_ptr(p) as *const u8 as usize,
+                 HeapObjectData::RecordType(t) => Rc::as_ptr(t) as *const u8 as usize,
+                 HeapObjectData::Record { fields, .. } => Rc::as_ptr(fields) as *const u8 as usize,
+-                _ => return mix(tv.heap_index() as u64),
++                _ => {
++                    crate::demog::identity_hash(1);
++                    return mix(tv.heap_index() as u64);
++                }
+             };
++            crate::demog::identity_hash(2);
+             return mix(by_rc as u64);
+         }
+         if tv.is_heap_pointer() {
++            crate::demog::identity_hash(1);
+             return mix(tv.heap_index() as u64);
+         }
++        crate::demog::identity_hash(0);
+         self.tagged_value_hash(tv)
+     }
+ 
+@@ -2666,6 +2748,7 @@
+                     return h;
+                 }
+                 _ => {
++                    crate::demog::equal_hash_fallback();
+                     return tv.heap_index() as u64;
+                 }
+             }
+@@ -3541,5 +3624,47 @@
+         let result = heap.numeric_modulo(a, b).unwrap();
+         assert!(result.is_fixnum());
+         assert_eq!(result.as_fixnum_unchecked(), 3);
++    }
++}
++
++
++/// DEMOG: (variant index, length, hypothetical bytes) for an object payload.
++pub(crate) fn demog_obj_info(data: &HeapObjectData) -> (usize, usize, u64) {
++    use HeapObjectData as H;
++    fn digits(b: &BigInt) -> u64 {
++        b.bits().div_ceil(64).max(1)
++    }
++    match data {
++        H::BigInt(b) => (0, 0, 8 + 8 * digits(b)),
++        H::Rational(r) => (1, 0, 8 + 8 * (digits(r.numer()) + digits(r.denom()))),
++        H::Real(_) => (2, 0, 16),
++        H::Complex { .. } => (3, 0, 24),
++        H::Symbol(_) => (4, 0, 16),
++        H::Bytevector(v) => (5, v.len(), 8 + crate::demog::round8(v.len() as u64)),
++        H::Exception { irritants, .. } => (6, irritants.len(), 8 + 8 * (2 + irritants.len() as u64)),
++        H::Procedure(_) => (7, 0, 16),
++        H::Port(_) => (8, 0, 16),
++        H::Macro(_) => (9, 0, 16),
++        H::RecordType(_) => (10, 0, 16),
++        H::Record { fields, .. } => {
++            let n = fields.borrow().len();
++            (11, n, 8 + 8 * n as u64)
++        }
++        H::Identifier { .. } => (12, 0, 24),
++        H::Continuation(_) => (13, 0, 16),
++        H::Parameter { .. } => (14, 0, 24),
++        H::Promise(_) => (15, 0, 24),
++        H::Library(_) => (16, 0, 16),
++        H::Values(v) => (17, v.len(), 8 + 8 * v.len() as u64),
++        H::EnvironmentSpecifier { .. } => (18, 0, 16),
++        H::PromptTag(_) => (19, 0, 16),
++        H::LabelPlaceholder(_) => (20, 0, 16),
++        H::MutableCell(_) => (21, 0, 16),
++        H::Ephemeron(_) => (22, 0, 24),
++        H::VmClosure { free_vars, .. } => (23, free_vars.len(), 16 + 8 * free_vars.len() as u64),
++        H::VmContinuationRef(_) => (24, 0, 16),
++        H::VmDelimitedContinuationRef(_) => (25, 0, 16),
++        H::CoreSyntax(_) => (26, 0, 16),
++        H::Free => (27, 0, 0),
+     }
+ }
+diff --color -ruN -x target crates/patina-core/src/lib.rs demographics/crates/patina-core/src/lib.rs
+--- crates/patina-core/src/lib.rs	2026-09-30 09:15:47
++++ demographics/crates/patina-core/src/lib.rs	2026-10-01 00:19:02
+@@ -21,6 +21,7 @@
+ pub mod core_syntax;
+ pub mod cps_expr;
+ pub mod debug_format;
++pub mod demog;
+ pub mod environment;
+ pub mod error;
+ pub mod features;
+diff --color -ruN -x target crates/patina-primitives/src/primitives/equality.rs demographics/crates/patina-primitives/src/primitives/equality.rs
+--- crates/patina-primitives/src/primitives/equality.rs	2026-09-07 09:31:29
++++ demographics/crates/patina-primitives/src/primitives/equality.rs	2026-10-01 00:20:40
+@@ -58,6 +58,7 @@
+             actual: args.len(),
+         });
+     }
++    patina_core::demog::equal_hash_call();
+     let h = heap.borrow().tagged_value_hash(args[0]);
+     // Return as non-negative fixnum (mod a large prime < fixnum max)
+     Ok(TaggedValue::fixnum((h % 536870909) as i64))
+diff --color -ruN -x target crates/patina-primitives/src/primitives/lazy.rs demographics/crates/patina-primitives/src/primitives/lazy.rs
+--- crates/patina-primitives/src/primitives/lazy.rs	2026-09-24 10:37:29
++++ demographics/crates/patina-primitives/src/primitives/lazy.rs	2026-10-01 00:20:40
+@@ -131,6 +131,7 @@
+         if heap.borrow().is_promise(result) {
+             heap.borrow_mut().promise_update(obj, result);
+         } else {
++            patina_core::demog::store(patina_core::demog::S_PROMISE_PRIM, Some(obj), result);
+             *cell.borrow_mut() = PromiseState::Forced(result);
+             return Ok(result);
+         }
+diff --color -ruN -x target crates/patina-primitives/src/primitives/parameters.rs demographics/crates/patina-primitives/src/primitives/parameters.rs
+--- crates/patina-primitives/src/primitives/parameters.rs	2026-09-24 13:08:44
++++ demographics/crates/patina-primitives/src/primitives/parameters.rs	2026-10-01 00:20:40
+@@ -141,7 +141,7 @@
+             args: smallvec![value],
+             state: param,
+         }),
+-        None => Ok(install(&values, value)),
++        None => Ok(install(&values, value, param, patina_core::demog::S_PARAM)),
+     }
+ }
+ 
+@@ -152,7 +152,7 @@
+     value: TaggedValue,
+ ) -> Result<Step, EvalError> {
+     let (values, _) = parameter_parts(ctx, param)?;
+-    Ok(install(&values, value))
++    Ok(install(&values, value, param, patina_core::demog::S_PARAM2))
+ }
+ 
+ /// The value stack and converter of the parameter object `param`.
+@@ -164,7 +164,13 @@
+ }
+ 
+ /// Make `value` the current value of the parameter whose stack is `values`.
+-fn install(values: &RefCell<Vec<TaggedValue>>, value: TaggedValue) -> Step {
++fn install(
++    values: &RefCell<Vec<TaggedValue>>,
++    value: TaggedValue,
++    param: TaggedValue,
++    site: usize,
++) -> Step {
++    patina_core::demog::store(site, Some(param), value);
+     if let Some(top) = values.borrow_mut().last_mut() {
+         *top = value;
+     }
+diff --color -ruN -x target crates/patina-primitives/src/primitives/records.rs demographics/crates/patina-primitives/src/primitives/records.rs
+--- crates/patina-primitives/src/primitives/records.rs	2026-09-07 09:31:29
++++ demographics/crates/patina-primitives/src/primitives/records.rs	2026-10-01 00:20:40
+@@ -259,6 +259,7 @@
+                 fields_ref.len()
+             )));
+         }
++        patina_core::demog::store(patina_core::demog::S_RECORD_SET, Some(args[0]), args[2]);
+         fields_ref[index] = args[2];
+         Ok(TaggedValue::UNSPECIFIED)
+     } else {
+diff --color -ruN -x target crates/patina-tree-walker/src/eval/cps_eval/continuation.rs demographics/crates/patina-tree-walker/src/eval/cps_eval/continuation.rs
+--- crates/patina-tree-walker/src/eval/cps_eval/continuation.rs	2026-09-24 13:08:44
++++ demographics/crates/patina-tree-walker/src/eval/cps_eval/continuation.rs	2026-10-01 00:20:40
+@@ -236,6 +236,8 @@
+                 // like Scheme lambdas do. We define in the captured environment directly.
+                 // This is important because `Define` inside a continuation body should
+                 // go to the original lexical scope, not an artificially created child scope.
++                patina_core::demog::store(patina_core::demog::S_TW_CONT_DEFINE, None, value);
++                patina_core::demog::skip_next_env_define();
+                 captured_env.define(param, value);
+ 
+                 // Return Continue step instead of recursive call
+diff --color -ruN -x target crates/patina-vm/src/runtime/control.rs demographics/crates/patina-vm/src/runtime/control.rs
+--- crates/patina-vm/src/runtime/control.rs	2026-09-30 23:08:06
++++ demographics/crates/patina-vm/src/runtime/control.rs	2026-10-01 00:20:40
+@@ -2081,6 +2081,7 @@
+                     }
+                 }
+             } else {
++                patina_core::demog::store(patina_core::demog::S_PROMISE_VM, Some(promise), result);
+                 *cell.borrow_mut() = PromiseState::Forced(result);
+                 Some(result)
+             }
+@@ -2893,6 +2894,7 @@
+         .first()
+         .map_or(state.execution.registers().len(), |f| f.register_base);
+     let mut registers = state.execution.registers()[base_at_capture..].to_vec();
++    patina_core::demog::capture_delim(frames.len(), registers.len());
+     let deliver_reg = frames.last().map(|top| {
+         // Cleared, not copied as it stands: the hole is dead by construction
+         // — the capturing call never returns a value into it — so whatever it
+diff --color -ruN -x target crates/patina-vm/src/runtime/execution_state.rs demographics/crates/patina-vm/src/runtime/execution_state.rs
+--- crates/patina-vm/src/runtime/execution_state.rs	2026-09-30 23:08:06
++++ demographics/crates/patina-vm/src/runtime/execution_state.rs	2026-10-01 00:20:40
+@@ -237,6 +237,7 @@
+     /// Capture every dynamic component together; handle allocation retires
+     /// dead temporaries and installs the weak-store payload before a safe point.
+     pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
++        patina_core::demog::capture_full(self.frames.len(), self.registers.len());
+         VmContinuation {
+             frames: self.frames.clone(),
+             dynamic_winds: self.dynamic_winds.clone(),
+@@ -253,6 +254,7 @@
+     /// Full arrival replaces all five components. The control layer decides
+     /// which Rust re-entry boundaries it leaves and when to deliver the value.
+     pub(super) fn restore(&mut self, cc: &VmContinuation) {
++        patina_core::demog::restore_full(cc.frames.len(), cc.registers.len());
+         self.registers = cc.registers.clone();
+         self.frames = cc.frames.clone();
+         self.dynamic_winds = cc.dynamic_winds.clone();
+diff --color -ruN -x target crates/patina-vm/src/runtime/vm_state.rs demographics/crates/patina-vm/src/runtime/vm_state.rs
+--- crates/patina-vm/src/runtime/vm_state.rs	2026-09-30 23:08:06
++++ demographics/crates/patina-vm/src/runtime/vm_state.rs	2026-10-01 00:20:40
+@@ -1207,6 +1207,7 @@
+             state.after_collection();
+         }
+ 
++        patina_core::demog::vm_instr();
+         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
+             Ok(Some(val)) => {
+                 state.execution.close_handlers(handlers_at_entry);
+@@ -1288,6 +1289,12 @@
+     if !state.gc_pending.get() || !is_outermost {
+         return;
+     }
++    let demog_t0 = std::time::Instant::now();
++    patina_core::demog::safepoint_stack(
++        state.execution.frames().len(),
++        state.execution.registers().len(),
++    );
++    let _demog_timer = DemogSpTimer(demog_t0);
+     state.execution.retire_registers();
+     GcController::safe_point(
+         &state.gc,
+@@ -2379,6 +2386,11 @@
+                             let mut heap = state.heap.borrow_mut();
+                             let slot = heap.vector_slice_mut(vec).get_mut(i)?;
+                             *slot = x;
++                            patina_core::demog::store(
++                                patina_core::demog::S_VM_VECTOR_SET,
++                                Some(vec),
++                                x,
++                            );
+                             Some(TaggedValue::UNSPECIFIED)
+                         })
+                         .flatten()
+@@ -2586,3 +2598,12 @@
+ 
+ #[cfg(test)]
+ mod weak_continuation_tests;
++
++
++/// DEMOG: times the whole safe-point cold path (retire + collect).
++struct DemogSpTimer(std::time::Instant);
++impl Drop for DemogSpTimer {
++    fn drop(&mut self) {
++        patina_core::demog::safepoint_time(self.0.elapsed().as_micros() as u64);
++    }
++}

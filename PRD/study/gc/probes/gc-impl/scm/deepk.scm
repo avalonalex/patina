@@ -1,0 +1,8 @@
+(import (scheme base) (scheme write) (patina debug))
+(define saved #f)
+(define (deep n) (if (= n 0) (call/cc (lambda (k) (set! saved k) 0)) (+ 1 (deep (- n 1)))))
+(display (deep 200000)) (newline)
+(set! saved #f)
+(gc)
+(display "survived gc") (newline)
+(display (assq 'collections (gc-stats))) (newline)

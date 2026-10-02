@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write) (counter))
+(define (show) count)
+(set! count 50)
+(write (list 'a (show) count (get-count))) (newline)
+(bump!)
+(write (list 'b (show) count (get-count))) (newline)

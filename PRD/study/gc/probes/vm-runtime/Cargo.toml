@@ -1,0 +1,10 @@
+[package]
+name = "vm-runtime-sizes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+patina-vm = { path = "../../../../../crates/patina-vm" }
+
+[workspace]

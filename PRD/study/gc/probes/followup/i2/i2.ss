@@ -1,0 +1,8 @@
+(define n (string->number (cadr (command-line))))
+(define form '(case 3 ((1 2) 'a) ((3) 'b) (else 'c)))
+(let loop ((i 0))
+  (when (< i n)
+    (eval form (interaction-environment))
+    (loop (+ i 1))))
+(write (eval form (interaction-environment)))
+(newline)

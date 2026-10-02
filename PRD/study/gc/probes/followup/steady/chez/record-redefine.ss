@@ -1,0 +1,8 @@
+(define N (string->number (cadr (command-line))))
+(define env (interaction-environment))
+(let loop ((i 0))
+  (when (< i N)
+    (eval '(define-record-type point (fields x y)) env)
+    (eval '(point-x (make-point 1 2)) env)
+    (loop (+ i 1))))
+(display 'done) (newline)

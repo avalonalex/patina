@@ -72,7 +72,7 @@ Separate work remains outside this completed backlog:
 - Reporting: retain evidence for compatibility failures
   ([#379](https://github.com/avalonalex/patina/issues/379)) and remove timing-only
   churn from committed chibi reports ([#380](https://github.com/avalonalex/patina/issues/380)).
-- Broader collection work remains in the [GC stage 5 PRD](../future/GC_STAGE5_PRD.md).
+- Broader collection work remains in the [GC PRD](../GC_PRD.md).
 - Package resolution and public distribution remain deferred, as does FFI;
   see the [package-manager design](../future/PACKAGE_MANAGER_DESIGN.md) and
   [FFI design](../FFI_DESIGN.md).

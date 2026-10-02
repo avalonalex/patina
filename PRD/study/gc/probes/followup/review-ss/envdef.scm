@@ -1,0 +1,7 @@
+(import (scheme base) (scheme eval) (scheme write))
+(define e (environment '(scheme base)))
+(eval '(define (f) (g)) e)
+(eval '(define (g) 'g1) e)
+(write (eval '(f) e)) (newline)
+(eval '(define car 5) e)
+(write (list (eval 'car e) (car '(1)))) (newline)

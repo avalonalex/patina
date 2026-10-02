@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write) (scheme hash-table) (srfi 1) (patina debug))
+(define (show tag) (display tag) (display " ") (write (gc-stats)) (newline))
+(gc)
+(define (spin n) (if (> n 0) (spin (- n 1)) 'done))
+(spin 10)
+(show "after-gc-with-srfi125+srfi1")

@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(let loop ((i 0) (acc 0))
+  (if (< i N)
+      (let ((s (string->symbol (string-append "sym-churn-" (number->string i)))))
+        (loop (+ i 1) (+ acc (if (symbol? s) 1 0))))
+      (begin (display acc) (newline))))

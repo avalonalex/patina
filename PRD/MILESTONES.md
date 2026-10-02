@@ -18,7 +18,7 @@ suite passes 6 of 6; the archived full-lane Larceny totals predate that fix.
 
 Reporting improvements [#379](https://github.com/avalonalex/patina/issues/379)
 and [#380](https://github.com/avalonalex/patina/issues/380), broader
-[GC work](future/GC_STAGE5_PRD.md), package distribution and FFI remain
+[GC work](GC_PRD.md), package distribution and FFI remain
 separate efforts.
 
 ## 2026-09-12: Track H's Initial Hygiene Assurance Deliverables Complete
@@ -126,7 +126,7 @@ tree-walker and the VM.
 
 **Remaining:** pause work (weak continuation tables, immortal root sets,
 nested-loop collection, generational) tracked in
-`PRD/future/GC_STAGE5_PRD.md`.
+`PRD/ARCHIVE/GC_STAGE5_PRD.md`, superseded 2026-10-01 by `PRD/GC_PRD.md`.
 
 ## 2026-03-14: VM Backend 100% R7RS Compliance (1163/1163)
 

@@ -1,0 +1,7 @@
+(library (counter) (export count) (import (chezscheme)) (define count 0))
+(import (counter))
+(define (f) (reverse '(1 2)))
+(define (show) count)
+(define (reverse x) 'mine)
+(define count 100)
+(write (list (f) (show))) (newline)

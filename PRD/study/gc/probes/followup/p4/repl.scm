@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define s (open-output-string))
+(parameterize ((current-output-port s)) (display "in") (car 5))
+(display "after")
+(newline)
+(write (get-output-string s))
+(newline)

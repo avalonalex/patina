@@ -1,0 +1,10 @@
+[package]
+name = "chainprobe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-interpreter = { path = "../../../../../../../crates/patina-interpreter" }
+patina-core = { path = "../../../../../../../crates/patina-core" }
+
+[workspace]

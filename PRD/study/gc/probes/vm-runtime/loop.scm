@@ -1,0 +1,5 @@
+(define (count n)
+  (let loop ((i 0) (acc '()))
+    (if (= i n) (length acc) (loop (+ i 1) (cons i acc)))))
+(display (count 10))
+(newline)

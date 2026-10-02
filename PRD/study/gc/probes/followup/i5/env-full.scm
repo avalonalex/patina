@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme process-context) (patina debug))
+(define n (string->number (cadr (command-line))))
+(let loop ((i 0))
+  (when (< i n)
+    (environment '(scheme base))
+    (loop (+ i 1))))
+(write (gc-stats)) (newline)

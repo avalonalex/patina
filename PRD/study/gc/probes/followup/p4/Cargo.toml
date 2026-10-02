@@ -1,0 +1,9 @@
+[package]
+name = "p4-shared-ports"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-interpreter = { path = "../../../../../../crates/patina-interpreter" }
+
+[workspace]

@@ -1,0 +1,8 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme repl) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(define env (interaction-environment))
+(let loop ((i 0))
+  (when (< i N)
+    (eval (list 'define (string->symbol (string-append "fresh-var-" (number->string i))) i) env)
+    (loop (+ i 1))))
+(display (eval 'fresh-var-0 env)) (newline)

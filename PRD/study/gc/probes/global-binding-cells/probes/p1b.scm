@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write) (counter))
+(define (f) (list-copy '(1 2)))
+(define (show) count)
+(define (list-copy x) 'mine)
+(define count 100)
+(write (list (f) (show))) (newline)

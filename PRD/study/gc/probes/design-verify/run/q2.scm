@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write))
+(define (f p) (car p))
+(write (f '(1 2))) (newline)
+(import (rename (only (scheme base) cdr) (cdr car)))
+(write (f '(1 2))) (newline)

@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (srfi 69))
+(define ht (make-hash-table eq?))
+(hash-table-set! ht (current-output-port) 'found)
+(write (list (eq? (current-input-port) (current-input-port))
+             (eq? (current-error-port) (current-error-port))
+             (hash-table-ref/default ht (current-output-port) 'missing)))
+(newline)

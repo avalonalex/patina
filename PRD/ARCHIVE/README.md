@@ -2,11 +2,24 @@
 
 This directory contains completed research, analysis, and implementation documentation that is no longer actively needed but preserved for historical reference.
 
-**Last Updated:** 2026-09-30
+**Last Updated:** 2026-10-01
 
 ---
 
 ## Directory Structure
+
+### GC stage 5+ PRD
+
+**Status:** Superseded and archived 2026-10-01 by the [GC PRD](../GC_PRD.md).
+
+[`GC_STAGE5_PRD.md`](GC_STAGE5_PRD.md) tracked the pause work and collector
+upgrades planned after the first collector's stage 4. Its weak continuation
+tables ([#19](https://github.com/avalonalex/patina/pull/19)) and VM register
+precision ([#423](https://github.com/avalonalex/patina/issues/423)) items were
+complete; the open items moved to the GC PRD, whose §21 says where each went.
+It is kept for its dated measurements.
+
+---
 
 ### R7RS-large planning history
 

@@ -9,3 +9,4 @@ compat/vendor/**/*.html linguist-documentation
 # everything else in the same diff.
 compat/patches/*.patch -whitespace
 lib/srfi/160/*.patch -whitespace
+PRD/study/**/*.patch -whitespace

@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write))
+(define-library (tmp steady) (export f) (import (scheme base)) (begin (define (f x) (+ x 1))))
+(import (tmp steady))
+(display (f 1)) (newline)
+(define-library (tmp steady) (export f) (import (scheme base)) (begin (define (f x) (+ x 2))))
+(import (tmp steady))
+(display (f 1)) (newline)

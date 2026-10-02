@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write))
+(define tag (make-continuation-prompt-tag 'p))
+(define (deep d) (if (= d 0) (abort-current-continuation tag 1) (+ 1 (deep (- d 1)))))
+(define (run n acc) (if (= n 0) acc (run (- n 1) (+ acc (call-with-continuation-prompt (lambda () (deep 100)) tag (lambda (v k) v))))))
+(display (run 20000 0))

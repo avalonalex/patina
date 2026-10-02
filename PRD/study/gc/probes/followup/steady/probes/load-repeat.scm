@@ -1,0 +1,8 @@
+(import (scheme base) (scheme cxr) (scheme write) (scheme load) (scheme eval) (scheme repl) (scheme process-context))
+(define N (string->number (cadr (command-line))))
+(define path (caddr (command-line)))
+(let loop ((i 0))
+  (when (< i N)
+    (load path (interaction-environment))
+    (loop (+ i 1))))
+(display (eval '(lf3 4) (interaction-environment))) (newline)

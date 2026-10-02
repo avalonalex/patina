@@ -1,7 +1,7 @@
 # Track P — VM Performance (Clarity-Safe) PRD
 
 **Created:** 2026-06-20
-**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining work re-ranked by the 2026-08-03 r7rs sweep (§1.2): call path first (P7 phase 2, then P4), weak continuation tables (cross-track, `PRD/future/GC_STAGE5_PRD.md`), then P5 compiler passes. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Stage 5+ pause work tracked in `PRD/future/GC_STAGE5_PRD.md`. **P9 (2026-08-07, PR #20)** moved `not`, the car/cdr compositions, and the numeric predicates from Scheme into the registry — **geomean vs Chibi 1.44× → 1.16×** (§1.5), with compiler at near parity (1.09×).
+**Status:** In progress — first profile-driven wave landed 2026-07-25/26 (PRs #149, #150, #151, #152): **2.4× on call-heavy code, ~2–2.7× across the r7rs-benchmarks quick set**. See §1.1. Second wave, 2026-07-26/29: P0 (#154), P1.1 (#155), P7 phase 1 (#157), P2 `CallPrimitive` (#158), **P3 inline opcodes (#159) — the P2+P3 pair delivered 2–3.2× on arithmetic/list-heavy code in one day**. Remaining work re-ranked by the 2026-08-03 r7rs sweep (§1.2): call path first (P7 phase 2, then P4), weak continuation tables (cross-track, `PRD/ARCHIVE/GC_STAGE5_PRD.md`), then P5 compiler passes. **P6 GC: complete through stage 4c (PRs #4-#6, #8, #10, #11, 2026-08-01/03)** — both backends collect, **always on** at zero standing cost (safe point = one flag load; on-vs-off at parity on dispatch- and alloc-heavy workloads); CI enforces the byte-identical differential lanes, whose env hooks are the only remaining use of `PATINA_GC`/`PATINA_GC_STRESS`. Later GC work is planned in `PRD/GC_PRD.md`. **P9 (2026-08-07, PR #20)** moved `not`, the car/cdr compositions, and the numeric predicates from Scheme into the registry — **geomean vs Chibi 1.44× → 1.16×** (§1.5), with compiler at near parity (1.09×).
 **Scope decision:** clarity-safe optimizations only — aggressive, readability-costing items are explicitly deferred.
 **Umbrella:** `PRD/SNOW_AND_PERF_ROADMAP.md` (cross-track sequencing) · **Catalog:** `PRD/VM_OPTIMIZATION_ROADMAP.md` (P1–P10 superset)
 
@@ -91,7 +91,7 @@ prunes — GC design §9.5, live.
    globals-swap redesign that unblocks it), and whatever the fresh profile
    says about closure-call frame setup.
 2. **Weak continuation side tables** — GC stage 5 priority 1, tracked in
-   `PRD/future/GC_STAGE5_PRD.md`; cross-listed here because `ctak` shows it
+   `PRD/ARCHIVE/GC_STAGE5_PRD.md` (superseded 2026-10-01 by `PRD/GC_PRD.md`); cross-listed here because `ctak` shows it
    as a 4 GB correctness-of-memory cliff, not merely pause overhead.
 3. **P5 compiler passes** — constant folding, DCE, peephole; moderate,
    broad, and independent of the above.
@@ -614,7 +614,7 @@ the `App` site, so `(if (= n 0) …)` is already `NumEqImm` by the time the
 `If` arm looks, which is exactly why those 4 sites are unfused. Do the
 post-pass move together with the imm forms, with its own A/B.
 
-### P6 — Garbage collection  *(complete — stages 1-4, always on; stage 5 in `PRD/future/GC_STAGE5_PRD.md`)*
+### P6 — Garbage collection  *(complete — stages 1-4, always on; the redesign in `PRD/GC_PRD.md`)*
 Designed and tracked in **`docs/GC_DESIGN.md`**, which supersedes the sketch that used to live here — it covers both backends (not just the VM), adds a `Collector`/`GcRoots` pluggability seam, and carries the complete root inventory and staging plan.
 
 Both backends collect and reclaim cycles, verified by CI-enforced differential lanes (`PATINA_GC=0` vs the default adaptive mode vs `PATINA_GC_STRESS=1`, byte-identical, in release *and* in a debug build with use-after-free assertions live). Collection is **on by default** since stage 4c.

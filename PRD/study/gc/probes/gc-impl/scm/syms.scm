@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write) (scheme time) (patina debug))
+(define (loop i) (if (> i 0) (begin (string->symbol (string-append "s" (number->string i))) (loop (- i 1)))))
+(loop 1000000)
+(gc)
+(let ((t0 (current-jiffy))) (gc) (display (- (current-jiffy) t0)) (display "us "))
+(display (assq 'symbols (gc-stats))) (display (assq 'objects (gc-stats))) (display (assq 'free-objects (gc-stats))) (newline)

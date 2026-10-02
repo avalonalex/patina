@@ -1,0 +1,14 @@
+[package]
+name = "offheap-probe"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patina-core = { path = "../../../../../crates/patina-core" }
+patina-vm = { path = "../../../../../crates/patina-vm" }
+patina-tree-walker = { path = "../../../../../crates/patina-tree-walker" }
+patina-runtime = { path = "../../../../../crates/patina-runtime" }
+patina-interpreter = { path = "../../../../../crates/patina-interpreter" }
+rustc-hash = "2"
+
+[workspace]

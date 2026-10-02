@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write))
+(define (nest n) (let loop ((i 0) (x '())) (if (= i n) x (loop (+ i 1) (list x)))))
+(define a (nest 60000))
+(define b (nest 60000))
+(display (equal? a b))
+(newline)

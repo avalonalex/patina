@@ -36,7 +36,7 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 
 ## 3. Garbage Collection
 
-**Status (2026-08-03):** Done — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6), and **always on** since stage 4c (the `PATINA_GC`/`PATINA_GC_STRESS` env vars exist only for the differential test lanes). Design and staging: `docs/GC_DESIGN.md`; remaining pause work: `PRD/future/GC_STAGE5_PRD.md`.
+**Status (2026-08-03):** Done — non-moving mark-and-sweep over the typed arenas, on **both** backends, reclaiming cycles that `Rc` cannot (PRs #4-#6), and **always on** since stage 4c (the `PATINA_GC`/`PATINA_GC_STRESS` env vars exist only for the differential test lanes). Design and staging: `docs/GC_DESIGN.md`; remaining pause work: `PRD/ARCHIVE/GC_STAGE5_PRD.md`, superseded 2026-10-01 by `PRD/GC_PRD.md`.
 
 **Update (2026-08-03, PRs #8/#10 + the 4c flip):** the safe-point trigger redesign landed (collection decision at alloc time, safe point = one flag load; GC-off at parity with pre-GC `main`, the 13.7% GC-on standing penalty gone — `docs/GC_DESIGN.md` §6.1), CI enforces the differential lanes, and adaptive collection is on by default. Interleaved on-vs-off: parity on both dispatch- and alloc-heavy workloads.
 
@@ -48,7 +48,8 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 
 **Estimated impact:** Correctness for long-running programs. Required before production use.
 
-**Existing design doc:** `PRD/phase1/GC_DESIGN.md`
+**Existing design docs:** `docs/GC_DESIGN.md` (the collector as built) and `PRD/GC_PRD.md` (the redesign); the
+phase 1 design is archived at `PRD/ARCHIVE/phase1_optimization_2026_02/GC_DESIGN.md`.
 
 ---
 
@@ -140,6 +141,10 @@ This document catalogs the gaps between Patina's first-generation VM and state-o
 **Reference:** LuaJIT (tracing JIT), Chez (AOT native), Racket CS (via Chez), V8/SpiderMonkey (tiered).
 
 **Estimated impact:** 10-100x for hot loops. Enormous engineering effort. Long-term goal.
+
+**GC contract (2026-10-01):** no JIT PRD exists yet. Until one does, `PRD/GC_PRD.md` (§11.2, §13, §14 and stage 6)
+is the collector's contract with a Cranelift JIT: values published to VM register frames at every non-`Leaf` call,
+no Cranelift stack maps, and a throwaway ABI spike before the `Mutator` offsets freeze.
 
 ---
 

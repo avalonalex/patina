@@ -1,0 +1,10 @@
+(import (scheme base) (scheme file) (scheme write))
+(define count 0)
+(define result
+  (guard (e (#t (list 'failed-at count (if (file-error? e) 'file-error 'other-error)
+                      (if (error-object? e) (error-object-message e) e))))
+    (let loop ()
+      (if (< count 5000)
+          (let ((p (open-output-file "o.txt"))) (write-char #\x p) (set! count (+ count 1)) (loop))
+          (list 'ok count)))))
+(write result) (newline)

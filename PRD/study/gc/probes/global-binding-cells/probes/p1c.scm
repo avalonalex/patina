@@ -1,0 +1,6 @@
+(import (scheme base) (scheme write) (counter))
+(define (show) (if #f count 'skipped))
+(write (show)) (newline)
+(define count 100)
+(define (show2) count)
+(write (list (show2))) (newline)

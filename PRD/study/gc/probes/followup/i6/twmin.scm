@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write) (patina debug))
+(define big (make-list 100000 0))
+(set! big #f)
+(gc) (cons 1 2)
+(display (cdr (assq 'free-pairs (gc-stats)))) (newline)

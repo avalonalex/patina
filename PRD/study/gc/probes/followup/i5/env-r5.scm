@@ -1,0 +1,7 @@
+(import (scheme base) (scheme write) (scheme r5rs) (scheme process-context) (patina debug))
+(define n (string->number (cadr (command-line))))
+(let loop ((i 0))
+  (when (< i n)
+    (scheme-report-environment 5)
+    (loop (+ i 1))))
+(write (assq 'collections (gc-stats))) (newline)

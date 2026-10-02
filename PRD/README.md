@@ -43,7 +43,7 @@ All 5 priorities done. Archived at `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CL
 
 `patina-vm` compiles `CoreExpr` IR to bytecode and implements the `Backend`
 trait. See the [VM decisions](../docs/VM_DECISIONS.md),
-[Track P](TRACK_P_PERFORMANCE_PRD.md) and [GC stage 5](future/GC_STAGE5_PRD.md).
+[Track P](TRACK_P_PERFORMANCE_PRD.md) and the [GC PRD](GC_PRD.md).
 
 ### Phase 3: syntax-case (Procedural Macros)
 **Status**: Designed
@@ -72,10 +72,12 @@ miniKanren embedding.
 ```
 PRD/
 ├── MILESTONES.md                       # Achievement history
+├── GC_PRD.md                           # GC redesign: design and plan
 ├── phase2/
 │   └── README.md                      # Phase 2A completion and follow-ons
 ├── macro/
 │   └── SYNTAX_CASE_DESIGN.md           # Includes deferred mechanization (H5)
+└── study/                              # Research records; study/gc/ backs GC_PRD.md
 ```
 
 ## Deferred Ideas

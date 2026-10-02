@@ -1,0 +1,6 @@
+(define n (string->number (cadr (command-line))))
+(let loop ((i 0))
+  (when (< i n)
+    (environment '(rnrs base))
+    (loop (+ i 1))))
+(display "done") (newline)

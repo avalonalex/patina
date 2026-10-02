@@ -1,0 +1,15 @@
+(import (scheme base) (scheme write) (scheme eval) (scheme repl))
+(define (try thunk)
+  (call-with-current-continuation
+    (lambda (k)
+      (with-exception-handler
+        (lambda (x) (k (list 'error (if (error-object? x) (error-object-message x) x))))
+        thunk))))
+(define e (environment '(scheme base)))
+(write (try (lambda () (eval '(define zz 1) e) (eval 'zz e)))) (newline)
+(write (try (lambda () (eval '(set! list-copy cdr) e) (eval '(list-copy '(1 2)) e)))) (newline)
+(write (list-copy '(1 2))) (newline)
+(eval '(define (ie-f) (list-copy '(1))) (interaction-environment))
+(eval '(define (list-copy x) 'mine) (interaction-environment))
+(write (eval '(ie-f) (interaction-environment))) (newline)
+(write (try (lambda () (eval '(set! undefined-thing 1) (interaction-environment))))) (newline)

@@ -1,0 +1,5 @@
+(import (scheme base) (scheme write))
+(define (f p) (car p))
+(write (f '(1 2))) (newline)
+(define car (lambda (p) 'mine))
+(write (f '(1 2))) (newline)
