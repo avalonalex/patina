@@ -26,7 +26,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, GcController, GcDeferGuard, NoGcScopes};
+use patina_core::{AssertNoGc, GC_CHECK, GcController, GcDeferGuard, NoGcScopes};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
@@ -621,7 +621,35 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        self.execution.registers()[base + reg as usize]
+        let value = self.execution.registers()[base + reg as usize];
+        if GC_CHECK && value == TaggedValue::DEAD_SLOT {
+            self.read_of_a_retired_register(0, reg, "as an instruction's operand");
+        }
+        value
+    }
+
+    /// The panic of a read of a register the last retirement filled with
+    /// `DEAD_SLOT` (#625): its frame's liveness map, at the pc where a
+    /// collection or a capture retired it, called a register dead that was
+    /// still to be read. `frame_from_top` names the reading frame (0 for the
+    /// top one); the pc reported is the reading instruction's, the one its
+    /// frame's `pc` is one past.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn read_of_a_retired_register(
+        &self,
+        frame_from_top: usize,
+        reg: u16,
+        how: &str,
+    ) -> ! {
+        let frames = self.execution.frames();
+        let frame = &frames[frames.len() - 1 - frame_from_top];
+        panic!(
+            "read of a retired register {how}: r{reg} at pc {} of #{} \
+             (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
+            frame.pc.saturating_sub(1),
+            frame.code.id
+        )
     }
 
     #[inline(always)]

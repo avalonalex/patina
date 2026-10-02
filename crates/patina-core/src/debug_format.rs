@@ -509,6 +509,11 @@ fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &
         buf.push_str("#<unspecified>");
         return;
     }
+    if tv == TaggedValue::DEAD_SLOT {
+        // A retired VM register's fill, in a check build (#625).
+        buf.push_str("#<dead>");
+        return;
+    }
 
     // Native pairs
     if tv.is_pair() {

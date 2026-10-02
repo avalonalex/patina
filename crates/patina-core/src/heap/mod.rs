@@ -84,7 +84,33 @@ pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
 ///   (`heap/check.rs`);
 /// - marking panics on a root or traced edge whose slot was freed and reused
 ///   (`GcVisitor::visit`).
+///
+/// It also turns on the VM's check of its liveness maps (#625): a register a
+/// map calls dead is filled with [`TaggedValue::DEAD_SLOT`] rather than
+/// `UNSPECIFIED`, the VM panics where one is read, and the heap's write paths
+/// panic where one would be stored (`check_storable`).
 pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
+
+/// Panic, in a check build, if `value` is a retired register's fill about to
+/// be stored where a later read would find it: in a pair, a vector, a cell or
+/// a closure's free variable (#625). The VM checks its own reads; this covers
+/// a dead word that left a register by a path the VM does not check, so it
+/// fails at the store rather than at a read far from the wrong map.
+#[inline(always)]
+fn check_storable(value: TaggedValue, into: &'static str) {
+    if GC_CHECK && value == TaggedValue::DEAD_SLOT {
+        stored_a_retired_register(into);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn stored_a_retired_register(into: &str) -> ! {
+    panic!(
+        "store of a retired register into a {into}: the VM's liveness map \
+         called a live register dead (#625, docs/GC_DESIGN.md §11)"
+    )
+}
 
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
@@ -779,6 +805,7 @@ impl Heap {
     pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
+        check_storable(value, "pair");
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -787,6 +814,7 @@ impl Heap {
     pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
+        check_storable(value, "pair");
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 
@@ -834,6 +862,7 @@ impl Heap {
     pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
+        check_storable(value, "vector");
         self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
@@ -1317,6 +1346,7 @@ impl Heap {
         }
         match self.get_object(ptr) {
             HeapObjectData::MutableCell(cell) => {
+                check_storable(val, "cell");
                 *cell.borrow_mut() = val;
                 true
             }
@@ -1444,6 +1474,7 @@ impl Heap {
         self.object_checks.check_index(closure);
         match self.objects.get_mut(closure.index() as usize) {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
+                check_storable(val, "closure's free variable");
                 free_vars[slot] = val;
                 true
             }

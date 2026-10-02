@@ -108,6 +108,16 @@ impl TaggedValue {
     /// out: every read of a slot resolves it, so a program cannot see it and
     /// cannot forge one.
     pub(crate) const FORWARDED: Self = Self(0xF0 | Self::TAG_SPECIAL);
+    /// What the VM writes into a register its per-pc liveness map calls dead,
+    /// before a collection or a capture, in a check build
+    /// ([`GC_CHECK`](crate::heap::GC_CHECK)); a plain release build writes
+    /// [`TaggedValue::UNSPECIFIED`] (#625, GC_PRD §11.1 invariant 3). Never
+    /// produced by any constructor and never a value a program holds: the VM
+    /// panics when an instruction or a call reads one, and the heap's write
+    /// paths panic when one would be stored, so a wrong map is reported where
+    /// the dead register is read instead of reading as a legal value. Readers
+    /// that only display registers render it as `#<dead>`.
+    pub const DEAD_SLOT: Self = Self(0xE8 | Self::TAG_SPECIAL);
 
     // =========================================================================
     // Fixnum Constants and Operations
@@ -518,6 +528,8 @@ impl fmt::Debug for TaggedValue {
             write!(f, "TaggedValue::EOF")
         } else if *self == Self::UNSPECIFIED {
             write!(f, "TaggedValue::UNSPECIFIED")
+        } else if *self == Self::DEAD_SLOT {
+            write!(f, "TaggedValue::DEAD_SLOT")
         } else if self.is_char() {
             write!(f, "TaggedValue::character({:?})", self.as_char_unchecked())
         } else if self.is_heap_pointer() {
@@ -611,6 +623,8 @@ impl fmt::Display for TaggedValue {
             write!(f, "#<eof>")
         } else if *self == Self::UNSPECIFIED {
             write!(f, "#<unspecified>")
+        } else if *self == Self::DEAD_SLOT {
+            write!(f, "#<dead>")
         } else if self.is_char() {
             let c = self.as_char_unchecked();
             match c {
@@ -945,6 +959,31 @@ mod tests {
             "TaggedValue::pair(5)"
         };
         assert_eq!(format!("{:?}", TaggedValue::pair(5)), expected);
+        assert_eq!(
+            format!("{:?}", TaggedValue::DEAD_SLOT),
+            "TaggedValue::DEAD_SLOT"
+        );
+    }
+
+    /// A retired register's fill is a special immediate of its own: no heap
+    /// reference for the marker to follow, and equal to no value a program
+    /// can make, the GC's own markers included.
+    #[test]
+    fn dead_slot_is_a_distinct_immediate_shown_as_dead() {
+        let dead = TaggedValue::DEAD_SLOT;
+        assert!(dead.is_special() && dead.is_immediate());
+        for other in [
+            TaggedValue::FALSE,
+            TaggedValue::TRUE,
+            TaggedValue::NULL,
+            TaggedValue::EOF,
+            TaggedValue::UNSPECIFIED,
+            TaggedValue::GC_POISON,
+            TaggedValue::FORWARDED,
+        ] {
+            assert_ne!(dead, other);
+        }
+        assert_eq!(dead.to_string(), "#<dead>");
     }
 
     #[cfg(any(debug_assertions, feature = "gc-check"))]

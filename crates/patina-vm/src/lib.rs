@@ -25,6 +25,9 @@ pub mod compiler;
 pub mod disasm;
 pub mod error;
 pub mod runtime;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
 pub mod tracer;
 pub mod types;
 

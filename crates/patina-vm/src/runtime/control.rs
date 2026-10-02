@@ -118,12 +118,12 @@ use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
-use patina_core::AssertNoGc;
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
+use patina_core::{AssertNoGc, GC_CHECK};
 use patina_primitives::{CallArgs, Step};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
@@ -186,27 +186,39 @@ pub(super) fn call_closure_from_regs(
     if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
-            state.execution.registers_mut()[base + i] =
-                state.execution.registers()[caller_base + r as usize];
+            let value = argument_reg(state, caller_base, r);
+            state.execution.registers_mut()[base + i] = value;
         }
         // Cons the rest list straight from the caller's registers — no
         // staging Vec. Variadic calls are hot in practice: `map` and every
         // rest-arg stdlib procedure land here per call.
-        let regs = state.execution.registers();
         let rest = state.heap().borrow_mut().list_from_iter(
             arg_regs[fixed..]
                 .iter()
-                .map(|&r| regs[caller_base + r as usize]),
+                .map(|&r| argument_reg(state, caller_base, r)),
         );
         state.execution.registers_mut()[base + fixed] = rest;
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
-            state.execution.registers_mut()[base + i] =
-                state.execution.registers()[caller_base + r as usize];
+            let value = argument_reg(state, caller_base, r);
+            state.execution.registers_mut()[base + i] = value;
         }
     }
 
     Ok(())
+}
+
+/// A caller's register, read for `call_closure_from_regs`' argument copy.
+/// The copy does not go through `reg_at`, so it makes `reg_at`'s check of a
+/// retired register itself (#625). The callee's frame is already pushed, so
+/// the reading frame is the one below the top.
+#[inline(always)]
+fn argument_reg(state: &VmState, caller_base: usize, reg: u16) -> TaggedValue {
+    let value = state.execution.registers()[caller_base + reg as usize];
+    if GC_CHECK && value == TaggedValue::DEAD_SLOT {
+        state.read_of_a_retired_register(1, reg, "as a call's argument");
+    }
+    value
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -458,6 +470,12 @@ fn check_arity(arity: Arity, n: usize) -> Result<(), VmError> {
 /// Requires an allocated destination window and already checked arity.
 /// Writes argument/rest slots and may allocate a rest list; changes no stacks.
 fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals: &[TaggedValue]) {
+    // The arguments were read out of registers, or out of a list, before
+    // they got here. A retired register's fill among them came by a path
+    // that skipped the check of `reg_at` (#625).
+    if GC_CHECK && let Some(i) = arg_vals.iter().position(|&v| v == TaggedValue::DEAD_SLOT) {
+        retired_register_as_argument(i);
+    }
     if let Arity::Variadic(fixed) = arity {
         let fixed = fixed as usize;
         for (dst, &val) in state.execution.registers_mut()[base..base + fixed]
@@ -479,6 +497,16 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
             *dst = val;
         }
     }
+}
+
+#[cold]
+#[inline(never)]
+fn retired_register_as_argument(index: usize) -> ! {
+    panic!(
+        "a retired register reached a call as its argument {index}: it was \
+         read out of a register a liveness map said was dead, by a path that \
+         does not check (#625, docs/GC_DESIGN.md §11)"
+    )
 }
 
 /// The values a producer handed to `call-with-values`: the elements of a

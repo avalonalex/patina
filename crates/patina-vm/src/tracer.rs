@@ -552,6 +552,10 @@ impl Default for StepTracer {
 pub fn format_value(tv: TaggedValue, heap: &SharedHeap) -> String {
     if tv == TaggedValue::UNSPECIFIED {
         "#<void>".to_string()
+    } else if tv == TaggedValue::DEAD_SLOT {
+        // A register the last retirement called dead, in a check build
+        // (#625). Displaying it is not a read of it.
+        "#<dead>".to_string()
     } else if tv == TaggedValue::NULL {
         "()".to_string()
     } else if tv == TaggedValue::TRUE {

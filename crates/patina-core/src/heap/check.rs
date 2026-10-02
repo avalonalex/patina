@@ -734,4 +734,64 @@ mod tests {
         assert_eq!(heap.get_vm_closure_free_var(past, 0), None);
         assert!(!heap.set_vm_closure_free_var(past, 0, TaggedValue::NULL));
     }
+
+    // ------------------------------------------------------------------------
+    // A retired register's fill stored in the heap (#625)
+    // ------------------------------------------------------------------------
+    //
+    // `TaggedValue::DEAD_SLOT` is what the VM writes into a register its
+    // liveness map calls dead, in a check build. The VM panics where it reads
+    // one; these write paths panic where one would be stored, so a dead word
+    // that left a register some other way fails at the store rather than at
+    // a read far from the wrong map.
+
+    control!(
+        set_car_of_a_retired_register_panics,
+        "store of a retired register into a pair",
+        {
+            let mut heap = Heap::new();
+            let p = pair(&mut heap);
+            heap.set_car(p, TaggedValue::DEAD_SLOT);
+        }
+    );
+
+    control!(
+        set_cdr_of_a_retired_register_panics,
+        "store of a retired register into a pair",
+        {
+            let mut heap = Heap::new();
+            let p = pair(&mut heap);
+            heap.set_cdr(p, TaggedValue::DEAD_SLOT);
+        }
+    );
+
+    control!(
+        vector_set_of_a_retired_register_panics,
+        "store of a retired register into a vector",
+        {
+            let mut heap = Heap::new();
+            let v = vector(&mut heap);
+            heap.vector_set(v, 0, TaggedValue::DEAD_SLOT);
+        }
+    );
+
+    control!(
+        cell_write_of_a_retired_register_panics,
+        "store of a retired register into a cell",
+        {
+            let mut heap = Heap::new();
+            let cell = heap.alloc_mutable_cell(TaggedValue::NULL);
+            heap.write_mutable_cell(cell, TaggedValue::DEAD_SLOT);
+        }
+    );
+
+    control!(
+        free_variable_write_of_a_retired_register_panics,
+        "store of a retired register into a closure's free variable",
+        {
+            let mut heap = Heap::new();
+            let closure = ObjectIndex::of(vm_closure(&mut heap)).unwrap();
+            heap.set_vm_closure_free_var(closure, 0, TaggedValue::DEAD_SLOT);
+        }
+    );
 }
