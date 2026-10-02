@@ -92,4 +92,18 @@ criterion = { version = "0.8", features = ["html_reports"] }
 [profile.test]
 opt-level = 1
 
+# patina-core alone is optimized in a debug build. Its heap accessors and
+# `TaggedValue` methods are called on every step of either backend, and at
+# opt-level 0 each is an out-of-line call, so they dominate an unoptimized
+# run. Measured 2026-10-01 on the debug GC lane (the chibi suite under
+# PATINA_GC_STRESS=16, interleaved, two runs each): VM 76.6 s → 12.2 s,
+# tree-walker 116.7 s → 16.4 s. Debug assertions and the stale-reference
+# checks (#621) stay on — opt-level does not touch them — and test builds
+# already compile every crate at opt-level 1, so they do not change. An
+# incremental `cargo build` after an edit to patina-core took the same time
+# either way (about 7.3 s here); the cost is a debugger session inside
+# patina-core, where some locals are optimized out, as under `cargo test`.
+[profile.dev.package.patina-core]
+opt-level = 1
+
 # No main package anymore - workspace only
