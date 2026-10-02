@@ -284,12 +284,23 @@ mod tests {
         (heap, dead)
     }
 
-    /// As [`freed`], then allocate again with `make`, which takes the one
-    /// free slot: the returned reference names a slot freed and reused.
+    /// A reference to a slot freed and reused since. As [`freed`], then
+    /// allocate again with `make`, which takes the one free slot, and keep
+    /// that tenant's reference; collect with an empty root set and allocate
+    /// once more. The returned reference was made at generation 1, and the
+    /// slot is now at generation 2 with another tenant in it.
+    ///
+    /// The non-zero stamp is the point: a reference that lost its stamp on
+    /// the way — an `ObjectIndex` that dropped it, a reuse that did not
+    /// stamp — reads as generation 0, which is still refused but with a
+    /// message the control does not expect, so the control fails.
     fn reused(make: impl Fn(&mut Heap) -> TaggedValue) -> (Heap, TaggedValue) {
-        let (mut heap, dead) = freed(&make);
+        let (mut heap, first) = freed(&make);
+        let dead = make(&mut heap);
+        assert_eq!(dead.heap_index(), first.heap_index(), "the slot is reused");
+        collect(&mut heap, &[]);
         let tenant = make(&mut heap);
-        assert_eq!(tenant.heap_index(), dead.heap_index(), "the slot is reused");
+        assert_eq!(tenant.heap_index(), dead.heap_index(), "and reused again");
         (heap, dead)
     }
 
@@ -553,7 +564,7 @@ mod tests {
         /// Before #621 this read the new tenant: `(1 . 2)` from a reference
         /// to a dead pair, with no report in any build.
         stale_pair_read_after_its_slot_was_reused,
-        "stale pair reference, slot 0 generation 0 (now 1): freed and reused since this value was made",
+        "stale pair reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(pair);
             heap.get_pair(dead);
@@ -562,7 +573,7 @@ mod tests {
 
     control!(
         stale_vector_read_after_its_slot_was_reused,
-        "stale vector reference, slot 0 generation 0 (now 1): freed and reused since this value was made",
+        "stale vector reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(vector);
             heap.vector_ref(dead, 0);
@@ -571,7 +582,7 @@ mod tests {
 
     control!(
         stale_string_read_after_its_slot_was_reused,
-        "stale string reference, slot 0 generation 0 (now 1): freed and reused since this value was made",
+        "stale string reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(string);
             heap.get_string_chars(dead);
@@ -580,7 +591,7 @@ mod tests {
 
     control!(
         stale_object_read_after_its_slot_was_reused,
-        "stale object reference, slot 0 generation 0 (now 1): freed and reused since this value was made",
+        "stale object reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(bytevector);
             heap.get_object(dead);
@@ -593,7 +604,7 @@ mod tests {
 
     control!(
         marking_a_stale_pair_whose_slot_was_reused,
-        "dangling reference: pair slot 0 generation 0 (now 1) was freed and reused, but marking reached it",
+        "dangling reference: pair slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             let (mut heap, dead) = reused(pair);
             collect(&mut heap, &[dead]);
@@ -602,7 +613,7 @@ mod tests {
 
     control!(
         marking_a_stale_vector_whose_slot_was_reused,
-        "dangling reference: vector slot 0 generation 0 (now 1) was freed and reused, but marking reached it",
+        "dangling reference: vector slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             let (mut heap, dead) = reused(vector);
             collect(&mut heap, &[dead]);
@@ -611,7 +622,7 @@ mod tests {
 
     control!(
         marking_a_stale_string_whose_slot_was_reused,
-        "dangling reference: string slot 0 generation 0 (now 1) was freed and reused, but marking reached it",
+        "dangling reference: string slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             let (mut heap, dead) = reused(string);
             collect(&mut heap, &[dead]);
@@ -620,7 +631,7 @@ mod tests {
 
     control!(
         marking_a_stale_object_whose_slot_was_reused,
-        "dangling reference: object slot 0 generation 0 (now 1) was freed and reused, but marking reached it",
+        "dangling reference: object slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             let (mut heap, dead) = reused(bytevector);
             collect(&mut heap, &[dead]);
@@ -634,7 +645,7 @@ mod tests {
     control!(
         /// What a VM frame holds, through the accessor `LoadClosure` uses.
         frame_closure_read_after_its_slot_was_reused,
-        "stale object reference, slot 0 generation 0 (now 1): freed and reused since this value was made",
+        "stale object reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(vm_closure);
             heap.get_vm_closure_free_var(ObjectIndex::of(dead).unwrap(), 0);
@@ -644,7 +655,7 @@ mod tests {
     control!(
         /// What the VM's root provider does with each frame's closure.
         marking_a_frame_closure_whose_slot_was_reused,
-        "dangling reference: object slot 0 generation 0 (now 1) was freed and reused, but marking reached it",
+        "dangling reference: object slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             struct Frame(ObjectIndex);
             impl GcRoots for Frame {
