@@ -2,6 +2,14 @@
 //!
 //! This crate provides backend-agnostic primitive procedure implementations
 //! that can be used by both the tree-walker and the VM backend.
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's one `thread_local!`, `io::ports`' `CURRENT_INPUT_PORT`, \
+              `CURRENT_OUTPUT_PORT` and `CURRENT_ERROR_PORT`: Rust `Port`s, not heap values, per \
+              thread, so two interpreters on one thread share them (#618). Clippy takes this lint \
+              only at a crate root, so a new `thread_local!` in the crate goes on this list, which \
+              a test in `reentry_lint_control.rs` holds to the crate's sources (#622)"
+)]
 
 pub mod apply_context;
 pub mod primitives;

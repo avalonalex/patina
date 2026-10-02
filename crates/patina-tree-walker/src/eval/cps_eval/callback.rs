@@ -35,17 +35,29 @@ impl<'a> CallbackContext<'_, 'a, '_> {
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         if let patina_core::CoreExprKind::Import { .. } = &expr.kind {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds nothing of its own: `expr` is the caller's, and `eval_import` gives \
+                          the reason for what it holds across each load"
+            )]
             return self.eval_import(expr, env);
         }
         let expr = super::lower_quasiquotes_for(expr, self.cps.evaluator)?;
-        unhandled_is_final(super::eval_cps_with(
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds the lowered `expr`, not read after the call: the run roots the CPS tree \
+                      it is entered with, and copies of the caller's stacks move into its first \
+                      step"
+        )]
+        let value = super::eval_cps_with(
             &expr,
             env.clone(),
             self.cps.evaluator,
             self.prompt_stack.to_vec(),
             self.dynamic_winds.to_vec(),
             self.exception_handlers.to_vec(),
-        ))
+        );
+        unhandled_is_final(value)
     }
 
     pub(crate) fn eval_import(
@@ -65,6 +77,13 @@ impl<'a> CallbackContext<'_, 'a, '_> {
                 EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
                     .with_diagnostic(e.diagnostic())
             })?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds the import's later import-set datums (in `expr`) across each load. \
+                          A Scheme library's body runs while its `ParsedLibrary` holds \
+                          `GcDeferGuard::holding`, and a Rust-defined library runs no Scheme, so \
+                          no collection runs during the load"
+            )]
             self.cps
                 .evaluator
                 .process_import_for_eval_with(&import_set, env, self)?;
@@ -105,6 +124,13 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         self.cps.evaluator.fs()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: `proc`, `args` and copies of the step's stacks move into the run. \
+                  The step that dispatched the primitive holds its own stacks in Rust \
+                  (docs/GC_DESIGN.md §5.1), safe because this run is nested and its \
+                  `run_trampoline` defers"
+    )]
     fn apply_proc(
         &self,
         proc: TaggedValue,
@@ -125,11 +151,27 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         let evaluator = self.cps.evaluator;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: the datum moves into the expansion, whose imports \
+                      load under `desugar_with_imports`' `GcDeferGuard::holding`"
+        )]
         let core_expr = expand_for_eval(evaluator, expr, env, self)?;
 
-        self.eval_core(&core_expr, env)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds `core_expr`, the expanded datum, not read after the call: the run \
+                      roots the CPS tree it is entered with"
+        )]
+        let value = self.eval_core(&core_expr, env);
+        value
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing; a Scheme library's body runs while its `ParsedLibrary` holds \
+                  `GcDeferGuard::holding`"
+    )]
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
         self.cps
             .evaluator
@@ -162,6 +204,12 @@ pub(super) fn expand_for_eval(
 ) -> Result<patina_core::CoreExpr, EvalError> {
     let desugarer =
         patina_frontend::Desugarer::with_env(env.clone()).with_fs(evaluator.fs().clone());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the import callback loads libraries during the expansion, which holds the datum \
+                  and the partial expansion: guarded by `desugar_with_imports`' \
+                  `GcDeferGuard::holding`"
+    )]
     let core_expr = desugarer.desugar_with_imports(
         expr,
         evaluator.heap(),

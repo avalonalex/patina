@@ -423,13 +423,21 @@ where
     let heap = backend.global_env().heap().clone();
     let input = patina_runtime::Port::stdin();
     run_program_stream(&input, &heap, "<stdin>", keep_going, |datum, source_map| {
-        backend
-            .eval_with_source_map(datum, backend.global_env(), source_map)
-            .map(|_| ())
-            .map_err(|e| {
-                patina_runtime::diagnostic::emit(e.diagnostic());
-                format_error_with_source(&e, &source_map.borrow())
-            })
+        // The crate allows the re-entry rule (its Cargo.toml); this driver
+        // loop states its reason anyway, as `Interpreter::run_forms` does.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the outermost entry for each form, so the backend's loop may collect. \
+                      `run_program_stream` holds the reader, whose unread text and tokens are \
+                      not heap values, the input port (a Rust handle), and the source map, \
+                      keyed by raw bits it never dereferences and pruned of freed slots before \
+                      each read (docs/GC_DESIGN.md §9.1). The datum is not read after the call"
+        )]
+        let evaluated = backend.eval_with_source_map(datum, backend.global_env(), source_map);
+        evaluated.map(|_| ()).map_err(|e| {
+            patina_runtime::diagnostic::emit(e.diagnostic());
+            format_error_with_source(&e, &source_map.borrow())
+        })
     })
 }
 

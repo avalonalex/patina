@@ -71,6 +71,14 @@ fn primitive_environment(
     for set in &import_sets {
         // Loading stays behind ApplyContext so a Scheme initializer can
         // transfer control normally. Selection never copies binding values.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds `env`, the environment being built, across each load. Its bindings so \
+                      far are imports only: shared locations the registered libraries own, or, \
+                      for an export that is not a plain binding, a copy of a value the library's \
+                      export table holds, both traced through the library registry (#406). So it \
+                      holds no value of its own, and nothing here needs the load deferred"
+        )]
         let library = ctx.load_scheme_library(set.library_name())?;
         for binding in set.resolve_bindings(library.export_names()) {
             let (name, export) = binding.map_err(patina_runtime::LibraryError::into_eval_error)?;
@@ -481,6 +489,11 @@ fn primitive_null_environment(
     let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
 
     // Load scheme base to get the keywords
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `env`, an environment with nothing in it yet, so the load can free nothing \
+                  this frame holds"
+    )]
     let base_lib = ctx
         .load_scheme_library(&["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
@@ -527,6 +540,11 @@ fn primitive_scheme_report_environment(
     let env = Rc::new(Environment::with_heap(ctx.heap().clone()));
 
     // Load scheme base
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `env`, an environment with nothing in it yet, so the load can free nothing \
+                  this frame holds"
+    )]
     let base_lib = ctx
         .load_scheme_library(&["scheme".to_string(), "base".to_string()])
         .map_err(|e| EvalError::InternalError(format!("Cannot load scheme base: {}", e)))?;
@@ -546,6 +564,15 @@ fn primitive_scheme_report_environment(
     // next unrelated error. Unreachable today (nothing user-written runs while
     // `(scheme inexact)` loads), and the only sentinel-protocol break the
     // audit's sweep of every `apply_proc`/`eval_expr` site found (F7).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `env`, which has the imports of the libraries loaded so far: shared \
+                  locations the registered libraries own, or, for an export that is not a plain \
+                  binding, a copy of a value the library's export table holds, both traced \
+                  through the library registry (#406). `base_lib` and an `inexact_lib` are \
+                  copies of registered libraries, whose values the registry traces too. So the \
+                  frame holds no value of its own, and nothing here needs the load deferred"
+    )]
     let optional_library =
         |name: &str| -> Result<Option<Rc<patina_core::library::Library>>, EvalError> {
             match ctx.load_scheme_library(&["scheme".to_string(), name.to_string()]) {

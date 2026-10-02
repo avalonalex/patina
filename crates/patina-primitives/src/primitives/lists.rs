@@ -437,6 +437,16 @@ pub(super) fn member(
                 None => break,
             };
 
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `obj`, `compare_proc` and the list cursor across each comparator \
+                          call. Deferred: under a machine, by the dispatching loop's \
+                          GcDeferGuard, whose nested run cannot collect; on the tree-walker's \
+                          detached `ApplyContext for Evaluator`, by that context's \
+                          `GcDeferGuard::holding`. Reached only by importing `(patina internal \
+                          lists)`: the `(scheme base)` `member` calls its comparator as a frame \
+                          (#471)"
+            )]
             let result = ctx.apply_proc(compare_proc, vec![obj, car_tv])? != TaggedValue::FALSE;
 
             if result {
@@ -583,6 +593,16 @@ pub(super) fn assoc(
             // Get (entry_car, _) from entry pair
             let entry_car_tv = heap.borrow().try_pair(entry).map(|(c, _)| c);
             if let Some(entry_car_tv) = entry_car_tv {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "holds `obj`, `compare_proc` and the alist cursor across each \
+                              comparator call. Deferred: under a machine, by the dispatching \
+                              loop's GcDeferGuard, whose nested run cannot collect; on the \
+                              tree-walker's detached `ApplyContext for Evaluator`, by that \
+                              context's `GcDeferGuard::holding`. Reached only by importing \
+                              `(patina internal lists)`: the `(scheme base)` `assoc` calls its \
+                              comparator as a frame (#471)"
+                )]
                 let result =
                     ctx.apply_proc(compare_proc, vec![obj, entry_car_tv])? != TaggedValue::FALSE;
 

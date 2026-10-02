@@ -1,6 +1,11 @@
 //! Regression cases for the convenience API drift in #595.
 #![cfg(feature = "legacy-pipeline")]
 #![allow(deprecated)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test crate: it evaluates through `Interpreter::eval_*` as an embedder does, so it \
+              allows the re-entry rule (#622) once, as the test crates do in their Cargo.toml"
+)]
 
 use patina_interpreter::{SimpleInterpreter, TaggedValue, TreeWalkInterpreter};
 

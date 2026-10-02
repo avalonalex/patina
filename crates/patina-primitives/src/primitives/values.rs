@@ -32,6 +32,15 @@ pub(super) fn call_with_values(
     let consumer = args[1];
 
     // Call producer with no arguments to get values
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `consumer` (and `args`) across the producer's call. Both machines \
+                  intercept `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, the \
+                  tree-walker's `apply_call_with_values`), so this registry fallback runs only \
+                  where neither does: the VM's unit tests (`install_primitives`), dispatched by a \
+                  loop whose nested run defers, and the tree-walker's detached `ApplyContext for \
+                  Evaluator`, whose `GcDeferGuard::holding` defers it (#622)"
+    )]
     let produced_tv = ctx.apply_proc(producer, vec![])?;
 
     // Unpack multiple values if present, otherwise use single value
@@ -45,7 +54,13 @@ pub(super) fn call_with_values(
         }
     };
 
-    ctx.apply_proc(consumer, consumer_args)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the consumer's call, the last thing the frame does: it holds nothing it reads \
+                  after the call, and the consumer's arguments move into it"
+    )]
+    let consumed = ctx.apply_proc(consumer, consumer_args);
+    consumed
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {

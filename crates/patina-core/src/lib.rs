@@ -13,6 +13,26 @@
 //!
 //! By placing these types in a foundation crate, we avoid circular dependencies
 //! and enable type-safe representations (no `dyn Any` needed).
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's `thread_local!` statics, per thread and none a heap value: \
+              `cont_value::EMPTY_CONT_ENV`, the shared empty node; `port`'s `STDIN_UNREAD`, \
+              `STDIN_POSITION`, `STDIN_FOLD_CASE` and `STDIN_CARRY`, standard input's state, \
+              shared on purpose by every port that reads the one standard input (per thread, so a \
+              second thread would keep a read-ahead of its own, C9), and `OUTPUT_FILES`, the open \
+              file output ports to flush at exit; `scope::SCOPE_ORIGINS` and `scope_trace::PHASE`, \
+              debugging aids. Clippy takes this lint only at a crate root, so a new \
+              `thread_local!` in the crate goes on this list, which a test in \
+              `reentry_lint_control.rs` holds to the crate's sources (#622)"
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "the core's unit tests build environments with `Environment::with_parent` and \
+                  evaluate nothing; the core's own code is linted like any crate's (#622)"
+    )
+)]
 
 pub mod compiled_macro;
 pub mod cont_value;

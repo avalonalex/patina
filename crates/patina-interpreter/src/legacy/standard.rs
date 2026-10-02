@@ -41,6 +41,10 @@ impl Default for StandardPipeline {
 }
 
 impl Pipeline for StandardPipeline {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the deprecated adapter over `Interpreter::eval_str_in_env`: holds nothing"
+    )]
     fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
         self.interpreter
             .eval_str_in_env(code, "<eval>", env)
@@ -48,6 +52,10 @@ impl Pipeline for StandardPipeline {
             .map_err(Into::into)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the deprecated adapter over `Interpreter::eval_program_in_env`: holds nothing"
+    )]
     fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
         self.interpreter
             .eval_program_in_env(code, "<eval>", &mut false, env)
@@ -61,6 +69,11 @@ impl Pipeline for StandardPipeline {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests evaluate through the pipeline from outside any loop, as an embedder \
+              does, and none reads a value from one evaluation after another (#605's shape)"
+)]
 mod tests {
     use super::*;
 

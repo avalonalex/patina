@@ -47,6 +47,13 @@ impl Evaluator {
         let result = if proc.is_closure() {
             use crate::eval::cps_eval::CpsEvaluator;
             let cps_eval = CpsEvaluator::new(self);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds nothing: `proc` and `args` move into the run's first step, which \
+                          its trampoline roots. Reached only through the detached `ApplyContext \
+                          for Evaluator` (`apply_context_impl.rs`), whose `GcDeferGuard::holding` \
+                          defers the run for whatever a primitive above holds"
+            )]
             let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
             Ok(super::EvalResult::Tagged(result_tagged))
         }
@@ -63,6 +70,14 @@ impl Evaluator {
                     Procedure::CpsLambda { .. } => {
                         use crate::eval::cps_eval::CpsEvaluator;
                         let cps_eval = CpsEvaluator::new(self);
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "holds nothing: `proc` and `args` move into the run's first \
+                                      step, which its trampoline roots. Reached only through the \
+                                      detached `ApplyContext for Evaluator` \
+                                      (`apply_context_impl.rs`), whose `GcDeferGuard::holding` \
+                                      defers the run for whatever a primitive above holds"
+                        )]
                         let result_tagged = cps_eval.apply_from_direct_tagged(proc, args)?;
                         Ok(super::EvalResult::Tagged(result_tagged))
                     }
@@ -95,6 +110,16 @@ impl Evaluator {
                                 // Set value (replace top of stack after applying converter)
                                 let new_val = if let Some(conv) = converter {
                                     // Apply converter — conv and args[0] are already TaggedValue
+                                    #[expect(
+                                        clippy::disallowed_methods,
+                                        reason = "holds `values`, the parameter's value stack (an \
+                                                  `Rc`, which no collection frees), and writes the \
+                                                  converted value into it after the call; the \
+                                                  value converted moves into the call. Reached \
+                                                  only through the detached `ApplyContext for \
+                                                  Evaluator`, under its \
+                                                  `GcDeferGuard::holding`"
+                                    )]
                                     let result = self.apply(conv, vec![args[0]], false)?;
                                     match result {
                                         super::EvalResult::Tagged(tv) => tv,

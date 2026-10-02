@@ -62,6 +62,40 @@ fn collection_inside_higher_order_primitive() {
 }
 
 #[test]
+fn collection_inside_higher_order_primitive_on_the_detached_context() {
+    // The same walk, called from Rust through the evaluator's own
+    // `ApplyContext` rather than from a program (#622). No loop runs above
+    // it, so nothing deferred the comparator's trampoline: it was outermost,
+    // collected the list that only `member`'s Rust frame held, and the walk's
+    // next step read a freed pair. The detached context now defers its runs
+    // as a holder (`GcDeferGuard::holding`), as a machine's nested loop does.
+    use patina_core::TaggedValue;
+    use patina_primitives::ApplyContext;
+    let interp = tree_walker_interpreter();
+    interp
+        .eval_program(
+            "(import (patina debug) (only (patina internal lists) member))
+             (define compare (lambda (x y) (gc) (= x y)))",
+        )
+        .expect("setup");
+    let member = interp.eval_str("member").expect("member");
+    let compare = interp.eval_str("compare").expect("compare");
+    // Made in Rust, which cannot collect, so it is reachable from nothing
+    // but the call's arguments: not a global, and not the value of the last
+    // evaluation either.
+    let list = interp
+        .global_env()
+        .heap()
+        .borrow_mut()
+        .list_from_iter((1..=4).map(TaggedValue::fixnum).collect::<Vec<_>>());
+    let found = interp
+        .evaluator()
+        .apply_proc(member, vec![TaggedValue::fixnum(3), list, compare])
+        .expect("member");
+    assert_eq!(interp.display_tagged(found), "(3 4)");
+}
+
+#[test]
 fn collection_at_deep_call_depth_preserves_suspended_values() {
     // Larceny family 6: Local -> ContEnv -> Local was still traced
     // recursively despite the evaluator's trampoline. A collection while

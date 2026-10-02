@@ -151,6 +151,17 @@ impl<'a> CpsEvaluator<'a> {
                     if own_frame && Rc::strong_count(&current_env) == 1 {
                         current_env.define(Rc::clone(name), val);
                     } else {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "a `let` frame, in the machine: the value bound in it \
+                                      goes into `current_env`, which the step this function \
+                                      returns carries, and the trampoline roots that step at its \
+                                      safe point. A step polls no safe point of its own: the \
+                                      trampoline polls between steps, and inside a step only a \
+                                      trampoline a primitive's callback starts polls, which is \
+                                      nested and defers (docs/GC_DESIGN.md §7; PRD/GC_PRD.md \
+                                      §11.4 keeps it under `NoGcScope`)"
+                        )]
                         let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                         new_env.define(Rc::clone(name), val);
                         current_env = new_env;

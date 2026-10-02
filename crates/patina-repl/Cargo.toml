@@ -32,3 +32,12 @@ libc = "0.2"
 [[bin]]
 name = "patina"
 path = "src/main.rs"
+
+# The workspace clippy.toml asks for a reason at every Rust re-entry into the
+# evaluator (#622). The REPL and the script runner run every form and program
+# through `Interpreter::eval_*` and `Backend::eval`, as an embedder does, so the
+# crate allows the lint once instead of a reason at each call. Its own driver
+# loop over standard input (`stream_stdin`) states its reason anyway.
+# `thread_local!` (disallowed-macros) stays checked.
+[lints.clippy]
+disallowed_methods = "allow"

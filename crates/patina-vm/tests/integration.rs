@@ -2,6 +2,12 @@
 //!
 //! These tests exercise the full pipeline (Passes 1–5 + execution loop) for
 //! simple Scheme programs expressed directly as CoreExpr trees.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test crate: it runs compiled code with `execute` from outside any loop, as the \
+              backend's top level does, so it allows the re-entry rule (#622) once, as the \
+              test crates do in their Cargo.toml"
+)]
 
 use patina_core::core_expr::{CoreExpr, CoreExprKind, Formals, ScopedParam};
 use patina_core::environment::Environment;

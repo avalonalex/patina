@@ -438,6 +438,11 @@ mod ambiguous_literal_tests {
             .compile_macro("m".into(), parsed.rules)
             .expect("compiled");
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test's use-site environment, binding only `UNSPECIFIED`; the test \
+                      evaluates nothing"
+        )]
         let use_site_env = Rc::new(Environment::with_parent(definition_env));
         for scopes in bindings {
             use_site_env.define_with_scopes("else", scopes.clone(), TaggedValue::UNSPECIFIED);

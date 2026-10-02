@@ -663,6 +663,13 @@ pub(super) fn call_with_port(
     })?;
 
     // Call the procedure with the port — both already TaggedValues
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `port`, the Rust handle it closes afterwards (an `Rc<Port>`, which no \
+                  collection frees), and no heap value it reads after the call. Reached only by \
+                  importing `(patina internal io)`: the `(scheme base)` version runs its procedure \
+                  as a frame (#471)"
+    )]
     let result = ctx.apply_proc(args[1], vec![args[0]]);
 
     // R7RS 6.13.1: the port is closed if `proc` returns, and "must not be

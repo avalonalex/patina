@@ -109,10 +109,30 @@ fn run_synchronously(
                 args,
                 state,
             } => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "holds `state`, the value the primitive kept (a converter, a \
+                              parameter, `load`'s remaining forms), across the call, and the \
+                              caller holds the primitive's arguments; `resume` reads `state` \
+                              afterwards. Both machines start a resumable primitive themselves \
+                              (the VM's `start_resumable`, the tree-walker's \
+                              `apply_other_primitive`), so this runs only for a context with no \
+                              machine: the tree-walker's detached `ApplyContext for Evaluator`, \
+                              whose `apply_proc` holds `GcDeferGuard::holding`, so the call \
+                              cannot collect; an embedder's own context must defer likewise \
+                              (docs/GC_DESIGN.md §7)"
+                )]
                 let result = ctx.apply_proc(callee, args.into_vec())?;
                 step = resume(ctx, state, result)?;
             }
             Step::Eval { expr, env, state } => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "holds `state` and the environment `env` across the evaluation, \
+                              as the `Step::Call` arm above holds `state`, and deferred for the \
+                              same reason: no machine reaches this loop, and the detached \
+                              context's `eval_expr` holds `GcDeferGuard::holding`"
+                )]
                 let result = ctx.eval_expr(expr, &env)?;
                 step = resume(ctx, state, result)?;
             }
@@ -375,6 +395,15 @@ impl PrimitiveRegistry {
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args.to_vec()),
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `args`, the primitive's arguments, across its calls. A machine \
+                          never comes here for a resumable primitive (the VM's \
+                          `start_resumable`, the tree-walker's `apply_other_primitive` start it \
+                          themselves), so `ctx` is the tree-walker's detached `ApplyContext for \
+                          Evaluator`, whose methods defer each call as a holder, or an \
+                          embedder's own: see `run_synchronously`"
+            )]
             PrimitiveHandler::Resumable { start, resume } => {
                 run_synchronously(ctx, start(ctx, args)?, *resume)
             }
@@ -394,6 +423,13 @@ impl PrimitiveRegistry {
         match &primitive.handler {
             PrimitiveHandler::Heap(h) => h(ctx.heap(), &args),
             PrimitiveHandler::HigherOrder(h) => h(ctx, args),
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `args`, the primitive's arguments, across its calls. Reached \
+                          only as in `apply_by_index`: never by a machine, so `ctx` is the \
+                          detached `ApplyContext for Evaluator`, whose methods defer each call \
+                          as a holder, or an embedder's own: see `run_synchronously`"
+            )]
             PrimitiveHandler::Resumable { start, resume } => {
                 run_synchronously(ctx, start(ctx, &args)?, *resume)
             }

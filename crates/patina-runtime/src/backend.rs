@@ -67,6 +67,11 @@ pub trait Backend {
     ///
     /// This is equivalent to `self.eval(expr, self.global_env())` but provided
     /// as a convenience for the common case of top-level evaluation.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `global`, a clone of the backend's global environment, which the backend \
+                  roots: nothing the evaluation could free"
+    )]
     fn eval_global(&self, expr: TaggedValue) -> Result<TaggedValue, Self::Error> {
         let global = self.global_env().clone();
         self.eval(expr, &global)
@@ -79,6 +84,13 @@ pub trait Backend {
     /// input, a session — evaluates through this, which is what lets that
     /// reading be written once for all backends. A backend that does not
     /// track positions evaluates the expression as `eval` does.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing it reads as a value: the source map is keyed by raw bits it \
+                  never dereferences and owns no Scheme value, so a collection can only leave it \
+                  stale keys (docs/GC_DESIGN.md §9.1), which misattribute a diagnostic and free \
+                  nothing"
+    )]
     fn eval_with_source_map(
         &self,
         expr: TaggedValue,
@@ -91,6 +103,11 @@ pub trait Backend {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests of the trait's default methods against a mock backend that evaluates \
+              nothing"
+)]
 mod tests {
     use super::*;
     use crate::error::RuntimeError;

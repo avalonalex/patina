@@ -290,9 +290,11 @@ impl GcDeferGuard {
     /// number has changed: a collection inside the extent could have freed
     /// what the holder holds.
     ///
-    /// It does not reach the values a primitive holds across
-    /// `ApplyContext::apply_proc`, which takes no guard of its own: there the
-    /// nested loop's guard is the only deferral.
+    /// On a machine it does not reach the values a primitive holds across
+    /// `ApplyContext::apply_proc`, which takes no guard of its own there: the
+    /// nested loop's guard is the only deferral. The tree-walker's detached
+    /// `ApplyContext for Evaluator`, which no loop runs above, takes one of
+    /// these in each of its methods instead (#622).
     pub fn holding(heap: &SharedHeap) -> Self {
         Self::enter(heap, GC_CHECK)
     }

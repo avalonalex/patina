@@ -16,6 +16,13 @@
 //! - `Backend`: Trait for pluggable interpreter implementations
 //! - `LibraryRegistry`, `LibraryLoader`: Library management
 //! - Standard library implementations
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's one `thread_local!`, `diagnostic::OUTPUT`, the run's diagnostics stream: \
+              a file handle, no heap value. Clippy takes this lint only at a crate root, so a new \
+              `thread_local!` in the crate goes on this list, which a test in \
+              `reentry_lint_control.rs` holds to the crate's sources (#622)"
+)]
 
 // Runtime-specific modules
 pub mod backend;

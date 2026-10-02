@@ -142,6 +142,10 @@ impl<'a> CpsEvaluator<'a> {
     /// All CPS evaluation steps are processed iteratively in a single loop.
     ///
     /// Returns TaggedValue for efficient storage and to avoid Value round-trips.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: a copy of `expr` moves into the run, which roots it"
+    )]
     pub fn eval(&self, expr: &CpsExpr) -> Result<TaggedValue, EvalError> {
         self.eval_in_env(Rc::new(expr.clone()), self.evaluator.global_env.clone())
     }
@@ -158,6 +162,10 @@ impl<'a> CpsEvaluator<'a> {
     /// refcount bump rather than a deep clone of the subtree. It is also the
     /// node the trampoline's safe point roots, so the collector traces the
     /// tree the loop is actually walking rather than a copy of it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_in_env_with` with empty stacks: holds nothing"
+    )]
     pub fn eval_in_env(
         &self,
         expr: Rc<CpsExpr>,
@@ -169,6 +177,11 @@ impl<'a> CpsEvaluator<'a> {
     /// Evaluate `expr` on a trampoline that starts under the given dynamic
     /// environment — empty for a top-level form, the calling step's for the
     /// `eval` primitive (`callback.rs`).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: the first step carries `expr`, `env` and the stacks, and the run \
+                  roots `expr` for its literals at every safe point"
+    )]
     pub(super) fn eval_in_env_with(
         &self,
         expr: Rc<CpsExpr>,
@@ -472,6 +485,13 @@ pub fn eval_cps(
                         EvalError::InvalidSyntax(format!("Invalid import set: {}", e))
                             .with_diagnostic(e.diagnostic())
                     })?;
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds the import's later import-set datums (in `expr`) across each load. \
+                          A Scheme library's body runs while its `ParsedLibrary` holds \
+                          `GcDeferGuard::holding`, and a Rust-defined library runs no Scheme, so \
+                          no collection runs during the load"
+            )]
             evaluator.process_import_for_eval(&import_set, &env)?;
         }
         return Ok(TaggedValue::UNSPECIFIED);
@@ -487,11 +507,22 @@ pub fn eval_cps(
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
-    cps_evaluator.eval_in_env(Rc::new(cps_expr), env)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS \
+                  tree it is entered with"
+    )]
+    let value = cps_evaluator.eval_in_env(Rc::new(cps_expr), env);
+    value
 }
 
 /// [`eval_cps`], on a trampoline that starts under the given dynamic
 /// environment, for library initialization or an embedding callback.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "holds `expr`, not read after the call: the CPS tree moves into the run, which roots \
+              it, and the stacks move into its first step"
+)]
 pub(super) fn eval_cps_with(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
@@ -528,6 +559,10 @@ pub(super) fn eval_cps_with(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests run hand-built CPS trees from outside any loop"
+)]
 mod tests {
     use super::*;
     use patina_core::ScopeSet;

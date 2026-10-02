@@ -336,14 +336,24 @@ impl Evaluator {
     /// Load the bootstrap libraries into the global environment, returning
     /// why `(scheme base)` could not be loaded, if it could not.
     fn load_bootstrap(&self) -> Option<patina_runtime::LibraryError> {
-        // Load (scheme base) library
-        // This will load Rust primitives and automatically load base-extras.scm
+        // Load (scheme base) library, lib/scheme/base.sld
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap, from outside any loop: holds nothing. `(scheme base)` is an \
+                      `.sld`, whose body runs while its `ParsedLibrary` holds \
+                      `GcDeferGuard::holding`"
+        )]
         let base = self
             .load_library(&["scheme".to_string(), "base".to_string()])
             .err();
 
         // Load Patina debugging utilities
         // Auto-loaded in REPL for convenience (commonly used during development)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap: holds nothing. `(patina debug)` is built in Rust and runs no \
+                      Scheme"
+        )]
         let _ = self.load_library(&["patina".to_string(), "debug".to_string()]);
 
         // After loading libraries, import (scheme base) into global environment
@@ -383,176 +393,6 @@ impl Evaluator {
     pub fn bootstrap_error(&self) -> Option<&patina_runtime::LibraryError> {
         self.bootstrap_error.as_ref()
     }
-
-    /// Load Scheme-implemented extras for a library
-    ///
-    /// After loading Rust primitives, this checks for a corresponding `-extras.scm` file.
-    /// If found, it's evaluated in the library's environment.
-    ///
-    /// Convention:
-    /// - (scheme base) → lib/scheme/base-extras.scm
-    /// - (scheme lazy) → lib/scheme/lazy-extras.scm
-    ///
-    /// Note: Some libraries are fully defined as .sld files:
-    /// - (scheme case-lambda) → lib/scheme/case-lambda.sld
-    /// - (scheme r5rs) → lib/scheme/r5rs.sld
-    ///
-    /// This allows any library to have:
-    /// - Rust primitives (performance-critical operations)
-    /// - Scheme code (derived forms, macros, convenience functions)
-    fn load_library_extras(&self, name: &[String]) {
-        if name.is_empty() {
-            return;
-        }
-
-        // Construct relative extras file path: (scheme base) → scheme/base-extras.scm
-        let mut relative_path = std::path::PathBuf::new();
-        for part in &name[..name.len() - 1] {
-            relative_path.push(part);
-        }
-        relative_path.push(format!("{}-extras.scm", name.last().unwrap()));
-
-        // Search for the extras file in all library search paths
-        let search_paths = self.library_search_paths();
-        let extras_path = search_paths
-            .iter()
-            .map(|base| base.join(&relative_path))
-            .find(|path| self.fs.file_exists(path));
-
-        let extras_path = match extras_path {
-            Some(path) => path,
-            None => return, // No extras file - that's fine
-        };
-
-        // Read the extras file
-        let extras_content = match self.fs.read_to_string(&extras_path) {
-            Ok(content) => content,
-            Err(_) => return, // Can't read file - silently skip
-        };
-
-        // Get the library's environment
-        let lib_env = {
-            let registry = self.library_registry.borrow();
-            match registry.get(name) {
-                Some(lib) => lib.env.clone(),
-                None => {
-                    tracing::warn!(
-                        library = ?name,
-                        path = %extras_path.display(),
-                        "Library not loaded, cannot load extras"
-                    );
-                    return;
-                }
-            }
-        };
-
-        // Create an evaluation environment that has access to (scheme base) primitives
-        // The extras file needs these for macro definitions (display, write, newline, etc.)
-        let eval_env = {
-            // Start with library environment as base, sharing global heap for TaggedValue compatibility
-            let env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
-
-            // Import all (scheme base) exports if this isn't (scheme base) itself
-            let is_scheme_base = name == ["scheme".to_string(), "base".to_string()];
-            if !is_scheme_base {
-                let registry = self.library_registry.borrow();
-                if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
-                {
-                    // Add all (scheme base) exports to the evaluation environment
-                    for export_name in scheme_base.export_names() {
-                        scheme_base.import_into(&env, export_name, export_name);
-                    }
-                }
-            }
-
-            // Add all library's own definitions (these can shadow scheme base)
-            for (binding_name, value) in lib_env.bindings() {
-                env.define(binding_name, value);
-            }
-
-            env
-        };
-
-        // Parse and evaluate all expressions in the evaluation environment
-        // Use shared heap for parser allocations
-        let heap = self.global_env.heap();
-        let mut parser = match patina_frontend::Parser::new_with_heap(&extras_content, heap.clone())
-        {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    path = %extras_path.display(),
-                    error = ?e,
-                    "Failed to parse extras file"
-                );
-                return;
-            }
-        };
-
-        // Create desugarer with environment for macro expansion
-        let desugarer =
-            patina_frontend::Desugarer::with_env(eval_env.clone()).with_fs(self.fs.clone());
-
-        loop {
-            match parser.parse_next() {
-                Ok(Some(tagged)) => {
-                    // Desugar TaggedValue to CoreExpr - desugar_tagged manages heap borrows internally
-                    let core_expr = match desugarer.desugar_with_imports(
-                        tagged,
-                        heap,
-                        |set, env| self.process_import_for_eval(set, env),
-                        |e| EvalError::DesugarError(e.to_string()).with_diagnostic(e.diagnostic()),
-                    ) {
-                        Ok(ce) => ce,
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %extras_path.display(),
-                                error = %e,
-                                "Failed to desugar expression in extras file"
-                            );
-                            continue;
-                        }
-                    };
-
-                    // Evaluate using CPS evaluator so all lambdas become CpsLambdas
-                    if let Err(e) = eval_cps(&core_expr, eval_env.clone(), self) {
-                        tracing::warn!(
-                            path = %extras_path.display(),
-                            error = %e,
-                            "Failed to evaluate expression in extras file"
-                        );
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    tracing::warn!(
-                        path = %extras_path.display(),
-                        error = ?e,
-                        "Parse error in extras file"
-                    );
-                    break;
-                }
-            }
-        }
-
-        // Copy any new definitions from the evaluation environment back to the library environment
-        for (binding_name, value) in eval_env.bindings() {
-            // Skip (scheme base) primitives - only copy definitions created by the extras file
-            let is_from_extras = {
-                let registry = self.library_registry.borrow();
-                if let Some(scheme_base) = registry.get(&["scheme".to_string(), "base".to_string()])
-                {
-                    !scheme_base.exports.contains_key(&binding_name)
-                } else {
-                    true // If (scheme base) not loaded, copy everything
-                }
-            };
-
-            if is_from_extras {
-                lib_env.define(binding_name, value);
-            }
-        }
-    }
 }
 
 impl Default for Evaluator {
@@ -571,6 +411,10 @@ impl Evaluator {
     /// 3. Registers it in the library registry
     ///
     /// Returns the loaded library or an error.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `load_library_with` with a detached context: holds nothing"
+    )]
     pub fn load_library(
         &self,
         name: &[String],
@@ -654,22 +498,14 @@ impl Evaluator {
             registry.register(lib)?;
         }
 
-        // If loaded via Rust, load extras and update exports in-place
+        // A library built in Rust exports everything in its environment.
         if loaded_via_rust {
-            // Load extras file - this adds definitions to the library's environment
-            self.load_library_extras(name);
-
-            // Update the library's exports to include everything from the environment
-            {
-                let mut registry = self.library_registry.borrow_mut();
-                if let Some(library) = registry.get_mut(name) {
-                    let all_bindings = library.env.bindings();
-
-                    // Clear and re-export everything
-                    library.clear_exports();
-                    for (binding_name, value) in all_bindings {
-                        library.export_tagged(binding_name, value);
-                    }
+            let mut registry = self.library_registry.borrow_mut();
+            if let Some(library) = registry.get_mut(name) {
+                let all_bindings = library.env.bindings();
+                library.clear_exports();
+                for (binding_name, value) in all_bindings {
+                    library.export_tagged(binding_name, value);
                 }
             }
         }
@@ -775,6 +611,12 @@ impl Evaluator {
 
         // Step 1: Resolve imports
         for import_set in &parsed.imports {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
+                          `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
+                          collection runs"
+            )]
             self.process_import_set(import_set, &lib_env, context)?;
         }
 
@@ -791,6 +633,11 @@ impl Evaluator {
         // `ParsedLibrary`.
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the import callback loads libraries during the expansion: guarded by \
+                          `desugar_with_imports`' and `parsed`'s `GcDeferGuard::holding`"
+            )]
             let core_expr = desugarer.desugar_with_imports(
                 *tv,
                 &shared_heap,
@@ -808,6 +655,13 @@ impl Evaluator {
             // Initialization runs under the importing program's dynamic
             // context. A guard can leave the load here: preserve that escape
             // and do not evaluate later forms or register a partial library.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` (the body's later forms) and `lib_env`, which no root \
+                          reaches until the library is registered, across the form's run: `parsed` \
+                          holds `GcDeferGuard::holding` for as long as it lives, so no collection \
+                          runs"
+            )]
             context.eval_core(&core_expr, &lib_env).map_err(|e| {
                 patina_runtime::LibraryError::EvaluationError {
                     file: parsed
@@ -831,6 +685,11 @@ impl Evaluator {
         lib_env: &Rc<Environment>,
         context: &cps_eval::CallbackContext<'_, '_, '_>,
     ) -> Result<(), patina_runtime::LibraryError> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: `lib_env` is the caller's, and its call site gives \
+                      the reason"
+        )]
         let library = self.load_library_with(import_set.library_name(), context)?;
         for binding in import_set.resolve_bindings(library.export_names()) {
             let (name, export) = binding?;
@@ -843,6 +702,11 @@ impl Evaluator {
     ///
     /// This imports library identifiers into a regular environment (not building a library).
     /// Used by the `import` special form.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `process_import_for_eval_with` with a detached context: holds \
+                  nothing"
+    )]
     pub fn process_import_for_eval(
         &self,
         import_set: &patina_frontend::ImportSet,
@@ -856,6 +720,10 @@ impl Evaluator {
         )
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `process_import_set`: holds nothing"
+    )]
     fn process_import_for_eval_with(
         &self,
         import_set: &patina_frontend::ImportSet,
