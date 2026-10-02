@@ -322,9 +322,15 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         return;
     }
     // Pairs, vectors and strings are tagged too, and every caller has already
-    // handled them. Anything else non-object here has no rendering to give.
+    // handled them. Anything else non-object here has no rendering to give,
+    // except a retired VM register's fill, which a debugging reader of the
+    // registers may print (#625, GC_PRD §11.1); no program can hold one.
     if !tv.is_object() {
-        out.push_str("#<unknown>");
+        out.push_str(if tv == TaggedValue::DEAD_SLOT {
+            "#<dead>"
+        } else {
+            "#<unknown>"
+        });
         return;
     }
 

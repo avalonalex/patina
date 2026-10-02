@@ -27,7 +27,7 @@
 //! buffers, primitive argument vectors, the `saved_globals` swap windows) are
 //! handled by deferral rather than tracing — see `GcDeferGuard` and §7.
 
-use patina_core::{GcRoots, GcVisitor};
+use patina_core::{GC_CHECK, GcRoots, GcVisitor};
 use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
@@ -37,6 +37,19 @@ use crate::types::continuation::{
 use patina_core::TaggedValue;
 
 use super::VmState;
+
+/// What retirement writes into a register its frame's map calls dead. In a
+/// check build (`GC_CHECK`: debug, or release with `gc-check`) that is
+/// `DEAD_SLOT`, which the VM refuses to read (`VmState::reg_at`,
+/// `control::argument_reg`) and the heap refuses to store, so a map that
+/// calls a live register dead panics at the read rather than handing the
+/// program a legal `UNSPECIFIED` (#625, GC_PRD §11.1 invariant 3). A plain
+/// release build writes `UNSPECIFIED`.
+const RETIRED: TaggedValue = if GC_CHECK {
+    TaggedValue::DEAD_SLOT
+} else {
+    TaggedValue::UNSPECIFIED
+};
 
 /// Clear finished compiler temporaries before collection or snapshotting.
 /// Keeping the full-vector tracing contract means no captured snapshot or
@@ -56,16 +69,33 @@ pub(in crate::runtime) fn retire_registers(
         let Some(roots) = maps.get(frame.pc) else {
             continue;
         };
+        let dropped = wrong_maps::dropped(roots, frame.num_regs);
         let base = frame.register_base - base_at_capture;
         let window = &mut registers[base..base + frame.num_regs as usize];
         for (reg, value) in window.iter_mut().enumerate() {
             // A tail call can reuse a window larger than the new code needs.
-            if roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) == 0 {
-                *value = TaggedValue::UNSPECIFIED;
+            let live = roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) != 0;
+            if !live || dropped == Some(reg) {
+                *value = RETIRED;
             }
         }
     }
 }
+
+/// The register a wrong-map control drops from `roots` (#625): `None`
+/// unless `test-support` is compiled in and its switch is on
+/// (`test_support::DropHighestLive`). Without the feature this is a
+/// constant `None`, and the comparison in `retire_registers` folds away.
+#[cfg(not(feature = "test-support"))]
+mod wrong_maps {
+    #[inline(always)]
+    pub(super) fn dropped(_roots: &[u64], _num_regs: u16) -> Option<usize> {
+        None
+    }
+}
+
+#[cfg(feature = "test-support")]
+use crate::test_support as wrong_maps;
 
 impl GcRoots for VmState {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {

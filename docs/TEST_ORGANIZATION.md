@@ -27,6 +27,12 @@ checks, revisit this opt-out: [GitHub leaves required checks pending when a
 whole workflow is filtered out](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks).
 Such a policy needs a check that runs for every PR and accounts for skipped jobs.
 
+[`gc-zeal.yml`](../.github/workflows/gc-zeal.yml) is the one workflow
+filtered the other way: it runs when a change touches what its lane checks
+most directly (see "GC lanes" below), weekly on `main` for whatever the
+filter misses, and by hand (`workflow_dispatch`). The same caveat applies to
+it.
+
 ## Test Structure
 
 ```
@@ -888,6 +894,45 @@ legacy error categories and effects before a read error. These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
 not a separate equivalence generator. Both backend examples and the rustdoc
 examples should also run when this API changes.
+
+### GC lanes (`docs/GC_DESIGN.md` §11)
+
+The collector is held to output equality: a program prints the same with
+collection off as with it on, however often it collects. The lanes run against
+a check build — debug, or release with `--features patina-core/gc-check` —
+where a stale heap reference, a broken deferral rule or a register its
+liveness map wrongly retired panics where it is used, rather than surfacing
+later as a wrong answer or not at all (#621, #624, #625).
+
+| Lane | Script | What it compares | In CI |
+|---|---|---|---|
+| Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress (`PATINA_GC_STRESS_INTERVAL`, default 16), on both backends, with the tally pinned; plus reclamation proofs | `ci.yml`, every change: release `gc-check` at stress 1, and debug at 16 |
+| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and `PATINA_GC_ZEAL=entry`, which collects at every outermost safe point, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
+
+Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
+under zeal took 882–920 s on the VM alone (2026-10-01), and
+`tail-recursion.scm` alone 277 s on the VM and 627 s on the tree-walker.
+
+Each check has a positive control, a test that must panic with the check's
+message, and the release GC lane runs them in its `gc-check` build:
+`stale_references.rs`, `gc_protocol.rs` and `retired_registers.rs` in
+`patina-tests`, and `patina-core`'s `heap::check::` and
+`heap::gc::tests::protocol::`. A build without the checks reports them
+ignored. `crates/patina-repl/tests/gc_zeal.rs` is the control for zeal
+itself, in every build: a loop that allocates nothing collects at every
+iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
+Suite, not against the zeal lane's binary, so the lane runs the same loop on
+that binary before it starts, on both backends: at least 1000 collections
+under zeal and fewer than 100 with no GC variable set, or it fails there. Its
+per-file check that a run collected cannot stand in for this: every control
+file collects at least once under the default GC too, while it loads SRFI 64.
+
+```bash
+cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
+PATINA_GC_STRESS_INTERVAL=1 ./scripts/run_gc_differential.sh target/release/patina
+./scripts/run_gc_zeal.sh target/release/patina
+cargo build && ./scripts/run_gc_differential.sh target/debug/patina
+```
 
 ### Development Workflow
 ```bash

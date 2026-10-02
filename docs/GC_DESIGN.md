@@ -398,10 +398,12 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 **Temporary retirement (#423):** the compiler records possible-root bitsets at
 instruction boundaries (`docs/VM_COMPILER.md` §10.4). Before an outermost
 collection, the VM replaces excluded slots with `UNSPECIFIED`, including
-excess capacity in reused tail-call windows. Full and delimited continuation
-snapshots receive the same cleanup at capture, with the delimited base offset
-accounted for. Tracing still visits complete vectors, so snapshots and tracer
-register views never carry deliberately untraced pointers to swept objects.
+excess capacity in reused tail-call windows; a check build writes `DEAD_SLOT`
+instead and panics where one is read (#625, §11 item 6). Full and delimited
+continuation snapshots receive the same cleanup at capture, with the
+delimited base offset accounted for. Tracing still visits complete vectors,
+so snapshots and tracer register views never carry deliberately untraced
+pointers to swept objects.
 Runtime stubs without maps remain conservative. Local bindings are not
 retired at their last textual use: `reference-barrier` still roots its
 argument through the call, and a focused test pins that contract.
@@ -467,15 +469,17 @@ debug build is the lane that localizes failures like this one.
   it is raised. §6.1 has the measurements that forced this shape.
 - Adaptive collection is **always on** since stage 4c (before it, Off was
   the default while the trigger still had a standing cost — see §6.1 for the
-  measurements that justified the flip). The two environment variables are
+  measurements that justified the flip). The environment variables are
   **testing-lane hooks**, not supported user configuration; the grammar lives
   in `patina-core` (`GcMode::from_env`) because the variables are
-  process-global and both backends must agree on them:
+  process-global and both backends must agree on them. Zeal wins over stress,
+  and stress over `PATINA_GC=0`:
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
   | On (default) | — | adaptive threshold above |
   | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called |
   | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, **bypassing the adaptive `2 × live` floor** |
+  | Zeal | `PATINA_GC_ZEAL=entry` *(the zeal lane, §11 item 7)* | collect at **every** outermost safe point, allocation or not: the threshold is 0, so the collection that lowers the pending flag re-installs it and raises the flag again. Any other value panics; `entry` is GC_PRD §14's name, and the PRD's other zeal modes come with the redesign |
 
   Stress deliberately ignores the adaptive floor: after bootstrap the live set
   is large enough that `2 × live` would almost never fire, which is the
@@ -943,6 +947,61 @@ visitor exists, and the stress lane is the real safety net.
    every check build (`heap::GC_CHECK`: debug, or release with `gc-check`):
    `sweep_arena`'s pre-mark panics with `dangling reference: <arena> slot N is
    free, but marking reached it` when a free-list slot's bit is already set.
+6. **Retired registers are `DEAD_SLOT` (#625, GC_PRD §11.1 invariant 3):** in
+   every check build, register retirement (§5.2) writes
+   `TaggedValue::DEAD_SLOT` rather than `UNSPECIFIED` into each register its
+   frame's per-pc map calls dead, at a collection and at a continuation
+   capture. Every read of a register checks for it: `VmState::reg_at`, which
+   every instruction's operands go through (`read of a retired register as
+   an instruction's operand`); the closure-call fast path's argument copy and
+   its rest list, which read the caller's registers directly
+   (`call_closure_from_regs`: `... as a call's argument`); and
+   `store_args_in_window`, for arguments read out by any other path. The heap
+   refuses to store one, as a second line behind those reads: its mutators
+   (`set_car`, `set_cdr`, `vector_set`, a cell write and a closure's
+   free-variable write) and the constructors the VM moves register values
+   through (`alloc_pair`, and so a rest list; `alloc_vector`; `AllocCell`'s
+   cell; `MakeClosure`'s captures) panic with `store of a retired register
+   into a ...` (`check_storable` in `heap/mod.rs`). The VM's inline
+   `vector-set!` writes through a raw slice the heap cannot check, a value it
+   read through `reg_at`. So a map that calls a live register dead panics at
+   the read, where with `UNSPECIFIED` the program went wrong at an unrelated
+   instruction, or not at all. Readers that only display registers (the step
+   tracer, its watchpoints, the datum writer, `debug_format`) render it
+   `#<dead>`; `--dump` disassembles without running, so it shows no register
+   values. A plain release build writes `UNSPECIFIED` and checks
+   nothing. Controls: `crates/patina-tests/tests/retired_registers.rs`, which
+   drops the highest live register from every map with patina-vm's
+   test-only switch (`test_support::DropHighestLive`, under its
+   `test-support` feature, which only patina-tests' dev-dependencies
+   enable), and the store controls in `heap/check.rs`; the release GC lane
+   runs both. The check sees a wrong map only at a pc where a collection or
+   a capture happens, which is why item 7 exists.
+7. **Zeal lane (#625):** `scripts/run_gc_zeal.sh` runs the files of
+   `crates/patina-tests/tests/scheme/control/` except `tail-recursion.scm`
+   under `PATINA_GC_ZEAL=entry` (§6), on both backends, in a check build,
+   and requires each to be byte-identical to GC-off, to exit 0 and to have
+   collected. Stress collects only after allocations, so it never checks the
+   maps at a pc no allocation precedes; zeal collects at every outermost safe
+   point. It costs about 7× stress 1 (the full chibi suite under zeal: 882–920
+   s on the VM, measured 2026-10-01), so it runs on that subset, in CI's
+   `gc-zeal.yml`, path-filtered and weekly (docs/TEST_ORGANIZATION.md, "GC
+   lanes"). The
+   VM learns that a collection ran from `maybe_collect`'s answer, not from the
+   pending flag, which zeal raises again before the collection returns:
+   `finished_forms_release_code.rs` under zeal fails without it, since no
+   finished form's code would be let go (#338). The positive control for the
+   mode itself is `crates/patina-repl/tests/gc_zeal.rs`: a loop that
+   allocates nothing collects at least once an iteration under zeal and
+   hardly at all at stress 1, on both backends. That test runs in `ci.yml`,
+   not against the lane's binary, and the lane's check that each file
+   collected cannot see a binary that ignores the variable, since every
+   control file collects at least once under the default GC while it loads
+   SRFI 64; so the script first runs the same loop on its binary, on both
+   backends, and fails unless it collects at least 1000 times across its
+   1000 iterations under zeal and fewer than 100 with no GC variable set.
+   GC_PRD's zeal-`entry` replaces this mode at stage 3, collecting at every
+   poll site, nested ones included.
 
 ---
 

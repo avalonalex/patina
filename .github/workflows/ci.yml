@@ -95,7 +95,11 @@ jobs:
   # a lost root into a deterministic panic at the first use of the stale
   # value, or at the next collection that reaches it: every debug build has
   # them, and the release lane compiles them in with patina-core's gc-check
-  # feature, which makes stress 1 affordable there.
+  # feature, which makes stress 1 affordable there. The same builds fill a
+  # register a liveness map calls dead with DEAD_SLOT and panic where one is
+  # read (#625). The third GC lane, zeal, is gc-zeal.yml: it collects at
+  # every safe point, so it runs on a subset, and only for the changes that
+  # can break it.
   gc-differential:
     name: GC differential (release)
     runs-on: ubuntu-latest
@@ -124,9 +128,12 @@ jobs:
     # ignored; --include-ignored runs them anyway, so there they fail, and
     # the summary must show controls that ran and none ignored. One test
     # target per call, since the summary check reads one result line: the
-    # stale-reference checks (#621), and the GC protocol checks (#624) —
+    # stale-reference checks (#621); the GC protocol checks (#624) —
     # the defer depth at collection, a holder's extent, the defer balance and
-    # a poll inside an AssertNoGc window, the last on each backend.
+    # a poll inside an AssertNoGc window, the last on each backend; and the
+    # retired-register checks (#625), a DEAD_SLOT read by an instruction or a
+    # call's argument copy under a deliberately wrong liveness map, and one
+    # stored in the heap (the latter among the patina-core heap::check:: ones).
     #
     # The defer balance is the one check every build carries, so its control
     # also runs in the plain release build, without gc-check and without
@@ -143,6 +150,7 @@ jobs:
         controls cargo test --release -p patina-core --features gc-check --lib -- --include-ignored heap::check:: heap::gc::tests::marking_a_free heap::gc::tests::protocol::
         controls cargo test --release -p patina-tests --features gc-check --test stale_references -- --include-ignored
         controls cargo test --release -p patina-tests --features gc-check --test gc_protocol -- --include-ignored
+        controls cargo test --release -p patina-tests --features gc-check --test retired_registers -- --include-ignored
         controls cargo test --release -p patina-core --lib -- --exact heap::gc::tests::protocol::an_unbalanced_defer_exit_panics
     - name: Stress 1 + adaptive lanes vs baseline, both backends
       run: PATINA_GC_STRESS_INTERVAL=1 ./scripts/run_gc_differential.sh target/release/patina

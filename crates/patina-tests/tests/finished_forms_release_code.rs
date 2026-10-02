@@ -146,11 +146,15 @@ fn a_form_whose_closures_have_died_lets_its_code_go_at_a_collection() {
 /// A continuation that has died stops holding its form's code, which goes at
 /// the next collection even though no closure died with it — `keep` is made
 /// once, so these forms free none.
+///
+/// `keep` keeps every continuation, not only the last: one it let go of
+/// could die, and its form's code go, at a collection the collector's mode
+/// runs between the forms, which `PATINA_GC_STRESS` and `PATINA_GC_ZEAL` do.
 #[test]
 fn a_form_whose_continuation_has_died_lets_its_code_go_at_a_collection() {
     let interp = interpreter();
     interp
-        .eval_program("(define saved #f) (define (keep k) (set! saved k))")
+        .eval_program("(define saved '()) (define (keep k) (set! saved (cons k saved)))")
         .unwrap();
     collect(&interp);
     let before = loaded(&interp);
@@ -161,7 +165,7 @@ fn a_form_whose_continuation_has_died_lets_its_code_go_at_a_collection() {
         loaded(&interp) >= before + 199,
         "each form's code is held by the continuation it captured, while that lives"
     );
-    interp.eval_program("(set! saved #f)").unwrap();
+    interp.eval_program("(set! saved '())").unwrap();
     collect(&interp);
     let after = loaded(&interp);
     assert!(

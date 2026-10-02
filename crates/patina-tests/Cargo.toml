@@ -24,11 +24,14 @@ criterion = { workspace = true }
 patina-ir = { path = "../patina-ir" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The wrong-map switch the DEAD_SLOT controls drive (tests/retired_registers.rs,
+# #625). A dev-dependency, so the feature is never in a build that ships.
+patina-vm = { path = "../patina-vm", features = ["test-support"] }
 
 [features]
-# Run the stale-reference controls (tests/stale_references.rs) in a release
-# build: compiles patina-core's checks in (#621). Debug builds have them
-# without it.
+# Run the check-build controls (tests/stale_references.rs, gc_protocol.rs and
+# retired_registers.rs) in a release build: compiles patina-core's checks in
+# (#621, #624, #625). Debug builds have them without it.
 gc-check = ["patina-core/gc-check"]
 
 [[bench]]

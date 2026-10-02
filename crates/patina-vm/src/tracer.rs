@@ -552,6 +552,10 @@ impl Default for StepTracer {
 pub fn format_value(tv: TaggedValue, heap: &SharedHeap) -> String {
     if tv == TaggedValue::UNSPECIFIED {
         "#<void>".to_string()
+    } else if tv == TaggedValue::DEAD_SLOT {
+        // A register the last retirement called dead, in a check build
+        // (#625). Displaying it is not a read of it.
+        "#<dead>".to_string()
     } else if tv == TaggedValue::NULL {
         "()".to_string()
     } else if tv == TaggedValue::TRUE {
@@ -894,5 +898,21 @@ fn format_event_json(e: &TraceEvent) -> String {
                 step, op, depth
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_value;
+    use patina_core::new_shared_heap;
+    use patina_core::tagged_value::TaggedValue;
+
+    /// A register retirement filled with `DEAD_SLOT` (#625) displays as
+    /// `#<dead>` in the trace and its watchpoints: showing a register is not
+    /// a read of it, so the tracer does not panic on one.
+    #[test]
+    fn a_retired_register_displays_as_dead() {
+        let heap = new_shared_heap();
+        assert_eq!(format_value(TaggedValue::DEAD_SLOT, &heap), "#<dead>");
     }
 }

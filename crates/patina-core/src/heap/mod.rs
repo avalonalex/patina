@@ -84,7 +84,46 @@ pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
 ///   (`heap/check.rs`);
 /// - marking panics on a root or traced edge whose slot was freed and reused
 ///   (`GcVisitor::visit`).
+///
+/// It also turns on the VM's check of its liveness maps (#625): a register a
+/// map calls dead is filled with [`TaggedValue::DEAD_SLOT`] rather than
+/// `UNSPECIFIED`, the VM panics where one is read, and the heap's mutators and
+/// the constructors the VM stores register values through panic where one
+/// would be stored (`check_storable`).
 pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
+
+/// Panic, in a check build, if `value` is a retired register's fill about to
+/// be stored where a later read would find it (#625). The VM checks its own
+/// reads of registers; this is the second line, for a dead word that left a
+/// register by a path that skipped those checks, so that it fails at the
+/// store rather than at a read far from the wrong map.
+///
+/// It guards the mutators (`set_car`, `set_cdr`, `vector_set`,
+/// `write_mutable_cell`, `set_vm_closure_free_var`) and the constructors the
+/// VM moves register values into the heap through: `alloc_pair`, and with it
+/// `list_from_iter` and `list_from_iter_with_tail` (a call's rest list),
+/// `alloc_vector`, `alloc_mutable_cell` (`AllocCell`) and `alloc_vm_closure`
+/// (`MakeClosure`'s captures). It cannot see a write through the raw slice
+/// `vector_slice_mut` hands out; the one such writer, the VM's inline
+/// `vector-set!`, stores a value it read through `reg_at`, which panics on one.
+/// The other constructors (records, promises, `values` and the rest) are not
+/// checked: what they store is a primitive's arguments, which came through
+/// `reg_at` or out of the heap.
+#[inline(always)]
+fn check_storable(value: TaggedValue, into: &'static str) {
+    if GC_CHECK && value == TaggedValue::DEAD_SLOT {
+        stored_a_retired_register(into);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn stored_a_retired_register(into: &str) -> ! {
+    panic!(
+        "store of a retired register into a {into}: the VM's liveness map \
+         called a live register dead (#625, docs/GC_DESIGN.md §11)"
+    )
+}
 
 /// Create a new shared heap
 pub fn new_shared_heap() -> SharedHeap {
@@ -742,6 +781,8 @@ impl Heap {
     /// need no GC root.
     #[inline]
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        check_storable(car, "pair");
+        check_storable(cdr, "pair");
         self.note_alloc();
         if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
@@ -779,6 +820,7 @@ impl Heap {
     pub fn set_car(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
+        check_storable(value, "pair");
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -787,6 +829,7 @@ impl Heap {
     pub fn set_cdr(&mut self, ptr: TaggedValue, value: TaggedValue) {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
+        check_storable(value, "pair");
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 
@@ -796,6 +839,9 @@ impl Heap {
 
     /// Allocate a new vector
     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
+        if GC_CHECK {
+            elements.iter().for_each(|&e| check_storable(e, "vector"));
+        }
         self.note_alloc();
         if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
@@ -834,6 +880,7 @@ impl Heap {
     pub fn vector_set(&mut self, ptr: TaggedValue, index: usize, value: TaggedValue) {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
+        check_storable(value, "vector");
         self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
@@ -1292,6 +1339,7 @@ impl Heap {
 
     /// Allocate a `MutableCell` containing `val`.
     pub fn alloc_mutable_cell(&mut self, val: TaggedValue) -> TaggedValue {
+        check_storable(val, "cell");
         self.alloc_object(HeapObjectData::MutableCell(RefCell::new(val)))
     }
 
@@ -1317,6 +1365,7 @@ impl Heap {
         }
         match self.get_object(ptr) {
             HeapObjectData::MutableCell(cell) => {
+                check_storable(val, "cell");
                 *cell.borrow_mut() = val;
                 true
             }
@@ -1343,6 +1392,11 @@ impl Heap {
         free_vars: Vec<TaggedValue>,
         globals: Rc<crate::environment::Environment>,
     ) -> TaggedValue {
+        if GC_CHECK {
+            free_vars
+                .iter()
+                .for_each(|&v| check_storable(v, "closure's free variable"));
+        }
         self.alloc_object(HeapObjectData::VmClosure {
             code_id,
             free_vars,
@@ -1444,6 +1498,7 @@ impl Heap {
         self.object_checks.check_index(closure);
         match self.objects.get_mut(closure.index() as usize) {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
+                check_storable(val, "closure's free variable");
                 free_vars[slot] = val;
                 true
             }

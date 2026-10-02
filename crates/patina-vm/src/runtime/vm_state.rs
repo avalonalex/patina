@@ -26,7 +26,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, GcController, GcDeferGuard, NoGcScopes};
+use patina_core::{AssertNoGc, GC_CHECK, GcController, GcDeferGuard, NoGcScopes};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
@@ -621,7 +621,35 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        self.execution.registers()[base + reg as usize]
+        let value = self.execution.registers()[base + reg as usize];
+        if GC_CHECK && value == TaggedValue::DEAD_SLOT {
+            self.read_of_a_retired_register(0, reg, "as an instruction's operand");
+        }
+        value
+    }
+
+    /// The panic of a read of a register the last retirement filled with
+    /// `DEAD_SLOT` (#625): its frame's liveness map, at the pc where a
+    /// collection or a capture retired it, called a register dead that was
+    /// still to be read. `frame_from_top` names the reading frame (0 for the
+    /// top one); the pc reported is the reading instruction's, the one its
+    /// frame's `pc` is one past.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn read_of_a_retired_register(
+        &self,
+        frame_from_top: usize,
+        reg: u16,
+        how: &str,
+    ) -> ! {
+        let frames = self.execution.frames();
+        let frame = &frames[frames.len() - 1 - frame_from_top];
+        panic!(
+            "read of a retired register {how}: r{reg} at pc {} of #{} \
+             (a liveness map said it was dead; #625, docs/GC_DESIGN.md §11)",
+            frame.pc.saturating_sub(1),
+            frame.code.id
+        )
     }
 
     #[inline(always)]
@@ -1213,11 +1241,10 @@ pub(super) fn run_loop_until_outcome(
     loop {
         // GC safe point: all live state is on `VmState`, capture temporaries
         // are dead, buffers are restored, and no heap borrow is outstanding.
-        // A collection happened if one was pending and sweep has cleared the
-        // flag since: a nested loop never collects, and leaves it set. Two
-        // `Cell` reads, where following every pending safe point would borrow
-        // the heap on each instruction of a callback that crossed the
-        // threshold.
+        // `maybe_collect` says whether a collection ran. The pending flag
+        // cannot: under zeal the collection raises it again before it
+        // returns, so "pending before and lowered after" would never see one
+        // and the code a collection frees would never be let go (#625).
         //
         // The poll asserts first that no `AssertNoGc` window is open, on
         // every iteration of every loop, nested or not: `maybe_collect`
@@ -1225,9 +1252,7 @@ pub(super) fn run_loop_until_outcome(
         // pending and this loop is outermost, so a check placed there would
         // almost never run (#624).
         no_gc_scopes.assert_none_open();
-        let pending = state.gc_pending.get();
-        maybe_collect(state, is_outermost);
-        if pending && !state.gc_pending.get() {
+        if maybe_collect(state, is_outermost) {
             state.after_collection();
         }
 
@@ -1302,15 +1327,16 @@ pub(super) fn run_loop_until_outcome(
     }
 }
 
-/// GC safe point: the VM's root set, handed to the shared driver.
+/// GC safe point: the VM's root set, handed to the shared driver. Returns
+/// whether a collection ran.
 ///
 /// The protocol — `(gc)` honored in every mode, only the outermost guard
 /// collects, one borrow spans the collection — lives in
 /// `GcController::safe_point`; this supplies only what is VM-specific.
 #[inline]
-fn maybe_collect(state: &mut VmState, is_outermost: bool) {
+fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     if !state.gc_pending.get() || !is_outermost {
-        return;
+        return false;
     }
     state.execution.retire_registers();
     GcController::safe_point(
@@ -1330,7 +1356,7 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) {
                 None => collect(&[state]),
             }
         },
-    );
+    )
 }
 
 /// Attach a source location to an error if it doesn't already have one.
