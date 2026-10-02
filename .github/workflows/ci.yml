@@ -231,3 +231,9 @@ jobs:
       run: rustup show
     - uses: Swatinem/rust-cache@v2
     - run: cargo clippy --all-targets --all-features -- -D warnings
+    # The configuration that ships: release, without `gc-check`. The step
+    # above lints with debug assertions and every feature on, which compiles
+    # the stale-reference checks in (`patina-core/src/heap/check.rs`) and
+    # leaves their empty stand-ins unlinted.
+    - name: Clippy, plain release
+      run: cargo clippy --release --all-targets -- -D warnings

@@ -71,8 +71,10 @@ cargo test --package patina-tests
 # Specific crate
 cargo test --package patina-frontend
 
-# Lint / format
+# Lint / format (the release clippy lints the shipped build, without the
+# stale-reference checks that debug and --all-features compile in)
 cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --release --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
@@ -97,7 +99,7 @@ GitHub's path-filter limits and required-check considerations.
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`) |
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
 | GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the stale-reference checks' positive controls (#621), **and** on debug at stress 16 |
-| Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings` |
+| Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 For GC/rooting changes, also run `scripts/run_gc_differential.sh` against release

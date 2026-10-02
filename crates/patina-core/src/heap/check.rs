@@ -67,12 +67,17 @@ mod checked {
     use crate::tagged_value::{ObjectIndex, TaggedValue};
 
     /// One word per slot of an arena: the slot's generation, and `FREED`.
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub(crate) struct SlotChecks {
         slots: Vec<u32>,
     }
 
     impl SlotChecks {
+        /// The state of an empty arena.
+        pub(crate) const fn new() -> Self {
+            Self { slots: Vec::new() }
+        }
+
         /// A slot was appended to the arena. Its generation is 0, so the
         /// reference `alloc_*` returns for it needs no stamp.
         #[inline(always)]
@@ -184,10 +189,14 @@ mod checked {
 mod unchecked {
     use crate::tagged_value::{ObjectIndex, TaggedValue};
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     pub(crate) struct SlotChecks;
 
     impl SlotChecks {
+        pub(crate) const fn new() -> Self {
+            Self
+        }
+
         #[inline(always)]
         pub(crate) fn push(&mut self) {}
 
