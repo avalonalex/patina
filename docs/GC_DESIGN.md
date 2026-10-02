@@ -743,8 +743,12 @@ Clippy takes that lint only at a crate root: an `expect` on the invocation is
 an unused attribute, and one on the enclosing module, inner or outer, is
 unfulfilled while the lint still fires (measured with the pinned 1.97.1). So
 each crate that has one lists its statics, with what they hold, in a
-crate-root `expect`, and a new `thread_local!` in such a crate is caught by
-review of that list rather than by the lint.
+crate-root `expect`, a departure from #622, which asked for one on each
+invocation's module. That `expect` is fulfilled by every later invocation in
+the crate too, so the lint alone would pass a new one; a test in
+`crates/patina-interpreter/src/reentry_lint_control.rs` reads each crate's
+sources and fails when the statics they declare differ from the ones its
+crate root names.
 
 These checks detect violations on today's collector. The redesign replaces
 them with `NoGcScope` and the collect capability at stage 3, where a nested

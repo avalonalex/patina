@@ -104,7 +104,12 @@ disallowed-methods = [
 disallowed-macros = [
     # Threading readiness (PRD/GC_PRD.md §18.6, C9), brought forward by #622.
     # Clippy takes this lint only at a crate root: an `expect` on the
-    # invocation or on its module is unfulfilled and the lint still fires. Each
-    # crate with one lists its statics in a crate-level `expect`.
+    # invocation is an unused attribute, and one on its module, inner or
+    # outer, stays unfulfilled, while the lint still fires (1.97.1). #622
+    # asked for an `expect` on each invocation's module; instead each crate
+    # with one lists its statics in a crate-root `expect`, which every later
+    # invocation in the crate also fulfils, so
+    # crates/patina-interpreter/src/reentry_lint_control.rs holds each list to
+    # the statics the crate's sources declare.
     { path = "std::thread_local", reason = "per-thread state, which a second interpreter on the thread shares (#618) and threads will not; list the static in the crate root's `expect` with what it holds (#622)" },
 ]

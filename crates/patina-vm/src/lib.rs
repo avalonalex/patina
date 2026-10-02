@@ -24,8 +24,9 @@
     reason = "the crate's `thread_local!` statics, none a heap value: `runtime::control`'s \
               `EMPTY_REENTRY` and `EMPTY_HANDLERS`, the shared empty stacks that captures and wind \
               records point at, and `test_support::DROP_HIGHEST_LIVE`, a switch per test thread \
-              compiled only with `test-support`. Clippy takes this lint only at the crate root, so \
-              a new `thread_local!` in the crate goes on this list (#622)"
+              compiled only with `test-support`. Clippy takes this lint only at a crate root, so a \
+              new `thread_local!` in the crate goes on this list, which a test in \
+              `reentry_lint_control.rs` holds to the crate's sources (#622)"
 )]
 
 pub mod backend;
