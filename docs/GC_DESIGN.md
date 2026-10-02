@@ -281,7 +281,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `MutableCell` | inner value |
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
-| `Macro` | `CompiledMacro` pattern/template literal `TaggedValue`s (`compiled_macro.rs:78,:280`) |
+| `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`trace_compiled_macro`) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `prompt_stack` — each frame's handler and the continuation below it (`trace_prompt_frame`; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`trace_cont_value`), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |

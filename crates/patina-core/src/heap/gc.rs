@@ -1149,12 +1149,7 @@ impl<'h> GcVisitor<'h> {
             // Names, each with the scope sets it arrived under.
             inherited_identifiers: _,
             definition_env,
-            // Untraced today: the environments here are the definition
-            // environments of macros from another library or program, which
-            // the library registry roots while their library stays
-            // registered. #614 lets a replaced library's environment go, and
-            // with it that assumption.
-            foreign_expansions: _,
+            foreign_expansions,
         } = m;
         for rule in rules {
             let CompiledRule {
@@ -1173,6 +1168,22 @@ impl<'h> GcVisitor<'h> {
         // A live macro keeps its definition environment live: its templates
         // may reference bindings that exist nowhere else (#38).
         if let Some(env) = definition_env {
+            self.visit_env(env);
+        }
+        // The definition environments of the macros from another library or
+        // program whose expansions put this macro's inherited identifiers
+        // into its templates (#446). Early binding asks them only where a
+        // name's binding lives, never for a value, and today each is rooted
+        // another way as well: by the registry while its library is
+        // registered, and after a redefinition replaces the library, by the
+        // `owners` list of whatever imported the generator, which never
+        // shrinks (#614). Traced all the same, because the macro holds them by
+        // `Rc` for as long as it lives, and an environment kept alive with its
+        // values swept is #38's shape: #614's fix drops an owner once no link
+        // points into it, and this edge is then what keeps such an
+        // environment's values. Empty for a written macro, and otherwise one
+        // or two environments the walk has nearly always seen already.
+        for (_scope, env) in foreign_expansions {
             self.visit_env(env);
         }
     }

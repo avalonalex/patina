@@ -25,7 +25,14 @@
 mod check;
 pub mod gc;
 mod numeric;
+// Sentinel values for the collector's field tests (#623): patina-core's own
+// tests, and other crates' under `test-support`.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod sentinels;
 mod source;
+#[cfg(test)]
+pub(crate) mod trace_sentinels;
 
 use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
 use check::SlotChecks;
