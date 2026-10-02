@@ -17,6 +17,13 @@ pub(super) fn values(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
 ///
 /// Note: The CPS evaluator handles call-with-values for TCO. This registry
 /// version is a fallback for non-CPS call sites.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the consumer's call, in tail position, holds nothing the frame reads after it. \
+              Both machines intercept `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, \
+              the tree-walker's `apply_call_with_values`), so this registry fallback runs only \
+              where neither does"
+)]
 pub(super) fn call_with_values(
     ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
@@ -32,6 +39,11 @@ pub(super) fn call_with_values(
     let consumer = args[1];
 
     // Call producer with no arguments to get values
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `consumer` (and `args`) across the producer's call: safe while nested \
+                  loops defer, under the GcDeferGuard of the loop that dispatched this primitive"
+    )]
     let produced_tv = ctx.apply_proc(producer, vec![])?;
 
     // Unpack multiple values if present, otherwise use single value

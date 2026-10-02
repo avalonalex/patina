@@ -236,6 +236,13 @@ impl VmBackend {
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
         if patina_frontend::is_define_library_form(expr, &heap) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds the `define-library` datum, not read after the call: the library's \
+                          body forms are in its `ParsedLibrary`, which holds \
+                          `GcDeferGuard::holding` while it lives, so no collection runs during the \
+                          load"
+            )]
             self.eval_inline_define_library(expr).map_err(|e| {
                 VmBackendError::Runtime {
                     message: e.to_string(),
@@ -253,6 +260,12 @@ impl VmBackend {
             None => Desugarer::with_env(Rc::clone(&self.global_env))
                 .with_fs(self.state.borrow().fs().clone()),
         };
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the import callback loads libraries during the expansion, which holds the \
+                      datum and the partial expansion: guarded by `desugar_with_imports`' \
+                      `GcDeferGuard::holding`"
+        )]
         let core_expr = desugarer.desugar_with_imports(
             expr,
             &heap,
@@ -278,6 +291,12 @@ impl VmBackend {
 
         // Execute, then let go of the form's code unless something it left
         // behind can run it again (#338).
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
+                      `CoreExpr` and datum, neither read after the call; the form's constants are \
+                      in the loaded unit, which the code store roots while it runs"
+        )]
         let result = execute(&mut state, top_id);
         state.release_unit_if_unused(top_id);
         Ok(result?)
@@ -390,9 +409,20 @@ impl VmBackend {
     /// returning why `(scheme base)` could not be loaded, if it could not.
     fn load_bootstrap(&self) -> Option<LibraryError> {
         // Load (scheme base)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap, from outside any loop: holds nothing. `(scheme base)` is an \
+                      `.sld`, whose body runs while its `ParsedLibrary` holds \
+                      `GcDeferGuard::holding`"
+        )]
         let base = self.load_library(&["scheme".into(), "base".into()]).err();
 
         // Load Patina debug utilities
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap: holds nothing. `(patina debug)` is built in Rust and runs no \
+                      Scheme"
+        )]
         let _ = self.load_library(&["patina".into(), "debug".into()]);
 
         // Import (scheme base) into global environment
@@ -579,6 +609,12 @@ impl VmBackend {
 
         // Step 1: Resolve imports into lib_env
         for import_set in &parsed.imports {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
+                          `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
+                          collection runs"
+            )]
             self.process_import_set(import_set, &lib_env)?;
         }
 
@@ -597,6 +633,12 @@ impl VmBackend {
             let mut state = self.state.borrow_mut();
             state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
                 for tv in &parsed.body {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "the import callback loads libraries during the expansion: \
+                                  guarded by `desugar_with_imports`', `parsed`'s and \
+                                  `with_globals`' `GcDeferGuard::holding`"
+                    )]
                     let core_expr = desugarer.desugar_with_imports(
                         *tv,
                         &shared_heap,
@@ -626,6 +668,13 @@ impl VmBackend {
                     })?;
 
                     let top_id = state.load_unit(top, nested);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "holds `parsed` (the body's later forms), `lib_env` and, through \
+                                  `with_globals`, the saved globals across the form's run: \
+                                  `parsed` and `with_globals` each hold `GcDeferGuard::holding`, \
+                                  so no collection runs"
+                    )]
                     let result = execute(state, top_id);
                     state.release_unit_if_unused(top_id);
 
@@ -653,6 +702,11 @@ impl VmBackend {
         lib_env: &Rc<Environment>,
     ) -> Result<(), LibraryError> {
         // Loading may re-enter Scheme. Borrow state only after it completes.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: `lib_env` is the caller's, and its call site gives \
+                      the reason; the state is borrowed only after the load"
+        )]
         let library = self.load_library(import_set.library_name())?;
         let mut state = self.state.borrow_mut();
         for binding in import_set.resolve_bindings(library.export_names()) {
@@ -713,6 +767,11 @@ impl patina_runtime::HasDiagnostic for VmBackendError {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests evaluate through the interpreter from outside any loop, as an embedder \
+              does"
+)]
 mod tests {
     use super::*;
     use patina_interpreter::Interpreter;

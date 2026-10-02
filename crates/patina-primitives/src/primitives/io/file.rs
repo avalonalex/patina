@@ -213,6 +213,13 @@ pub(super) fn call_with_input_file(
     let port_tv = heap.borrow_mut().alloc_port(port.clone());
 
     // Call the procedure with the port
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `port`, the Rust handle it closes afterwards (an `Rc<Port>`, which no \
+                  collection frees), and no heap value it reads after the call. Reached only by \
+                  importing `(patina internal io)`: the `(scheme file)` version runs its procedure \
+                  as a frame (#471)"
+    )]
     let result = ctx.apply_proc(proc, vec![port_tv]);
 
     // Closed only if `proc` returns (R7RS 6.13.1) — see `call_with_port`.
@@ -260,6 +267,13 @@ pub(super) fn call_with_output_file(
     let port_tv = heap.borrow_mut().alloc_port(port.clone());
 
     // Call the procedure with the port
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `port`, the Rust handle it closes afterwards (an `Rc<Port>`, which no \
+                  collection frees), and no heap value it reads after the call. Reached only by \
+                  importing `(patina internal io)`: the `(scheme file)` version runs its procedure \
+                  as a frame (#471)"
+    )]
     let result = ctx.apply_proc(proc, vec![port_tv]);
 
     // Closed (and so flushed) only if `proc` returns (R7RS 6.13.1) — see

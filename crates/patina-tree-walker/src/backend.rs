@@ -96,6 +96,12 @@ impl TreeWalker {
 
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the backend's entry for a form, from outside any loop: holds `core_expr` and the \
+                  datum, neither read after the call; the run roots the CPS tree it is entered \
+                  with, literals included"
+    )]
     fn eval_datum(
         &self,
         expr: TaggedValue,
@@ -112,6 +118,13 @@ impl TreeWalker {
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
         if patina_frontend::is_define_library_form(expr, internal_heap) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds the `define-library` datum, not read after the call: the library's \
+                          body forms are in its `ParsedLibrary`, which holds \
+                          `GcDeferGuard::holding` while it lives, so no collection runs during the \
+                          load"
+            )]
             self.evaluator
                 .eval_inline_define_library(expr)
                 .map_err(|e| {
@@ -127,6 +140,12 @@ impl TreeWalker {
             None => Desugarer::with_env(env.clone()).with_fs(self.evaluator.fs.clone()),
         };
 
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the import callback loads libraries during the expansion, which holds the \
+                      datum and the partial expansion: guarded by `desugar_with_imports`' \
+                      `GcDeferGuard::holding`"
+        )]
         let core_expr = desugarer.desugar_with_imports(
             expr,
             internal_heap,
@@ -190,6 +209,10 @@ impl Backend for TreeWalker {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests evaluate through `Backend` from outside any loop, as an embedder does"
+)]
 mod tests {
     use super::*;
 

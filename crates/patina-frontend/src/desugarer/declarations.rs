@@ -24,6 +24,11 @@ pub(super) struct Declarations {
 impl Declarations {
     pub fn declare(&mut self, env: Rc<Environment>, name: Rc<str>, scopes: ScopeSet) {
         self.forget(&env, &name, &scopes);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a lookup-only marker for one declaration: it binds only `UNSPECIFIED`, an \
+                      immediate, so it holds no heap value, and it lives for one form's expansion"
+        )]
         let marker = Rc::new(Environment::with_parent(env.clone()));
         marker.define_with_scopes(name.clone(), scopes.clone(), TaggedValue::UNSPECIFIED);
         self.bindings.push(Declaration {
@@ -71,6 +76,11 @@ impl Declarations {
         let view = if declarations.is_empty() {
             env.clone()
         } else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a lookup-only view over `env`: it binds only `UNSPECIFIED` and shared \
+                          declaration markers, no heap value, and lives for one form's expansion"
+            )]
             let view = Rc::new(Environment::with_parent(env.clone()));
             for declaration in declarations.into_iter().rev() {
                 if declaration.scopes.is_empty() {

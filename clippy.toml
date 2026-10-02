@@ -1,0 +1,92 @@
+# Rust re-entries into the evaluator, under a lint (#622).
+#
+# Any Rust call that reaches a driver loop can collect, and nothing in its
+# type says so. Each entry below runs Scheme code from Rust: it starts a
+# driver loop (the VM's dispatch loop, the tree-walker's trampoline), crosses
+# the VM's re-entry boundary, or evaluates, applies or loads a library through
+# one. A heap value a Rust frame holds across such a call survives only if a
+# root reaches it, a guard on the data defers collection
+# (`GcDeferGuard::holding`), the state is in the machine (`Step::Call`,
+# `resume_stub`), or the call runs on a nested loop that defers.
+#
+# Every call outside the exempt crates carries
+#     #[expect(clippy::disallowed_methods, reason = "...")]
+# on the narrowest item or statement around it, whose reason says what the
+# frame holds across the call and why that is safe. `expect`, not `allow`:
+# it fails clippy once the lint stops firing, so an entry that stops matching
+# anything, or is misspelled (crate name included, which clippy otherwise
+# ignores), fails the build. A test-only module matches every entry it can
+# name, crates/patina-interpreter/src/reentry_lint_control.rs, and each
+# private entry is matched by its own call sites. Exempt: patina-core
+# (for `with_parent`, below), patina-tests and patina-repl through `[lints]` in
+# their Cargo.toml, and the test and example targets of other crates through a
+# crate-level `allow`. docs/GC_DESIGN.md §7 states the rule; stages 2 and 4e of
+# PRD/GC_PRD.md convert the sites.
+
+disallowed-methods = [
+    # patina-primitives: a primitive calling back into the program
+    { path = "patina_primitives::apply_context::ApplyContext::apply_proc", reason = "runs a procedure from Rust on a nested loop; what the caller holds across it is safe only while that loop defers. Prefer a resumable primitive (`Step::Call`), and give the reason in an `expect` (#622)" },
+    { path = "patina_primitives::apply_context::ApplyContext::eval_expr", reason = "evaluates a datum from Rust on a nested loop; prefer `Step::Eval`, and give the reason in an `expect` (#622)" },
+    { path = "patina_primitives::apply_context::ApplyContext::load_scheme_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_primitives::registry::run_synchronously", reason = "runs a resumable primitive's calls from Rust, holding its state; give the reason in an `expect` (#622)" },
+
+    # patina-vm: the driver loop, the re-entry boundary and library loading
+    { path = "patina_vm::runtime::control::across_reentry", reason = "re-enters the VM; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::execute", reason = "runs the VM's dispatch loop, outermost when nothing else runs, so it may collect; give the reason in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::execute_nested", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::run_loop_until", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::run_loop_until_outcome", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::vm_load_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::vm_process_import_set", reason = "loads an import's library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::backend::VmBackend::load_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::backend::VmBackend::process_import_set", reason = "loads an import's library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_vm::backend::VmBackend::eval_inline_define_library", reason = "evaluates a `define-library` form's body; give what the caller holds across it in an `expect` (#622)" },
+
+    # patina-tree-walker: the trampoline, every entry that starts one, and
+    # library loading. The VM routes each nested run through `across_reentry`;
+    # the tree-walker has no such boundary, so its entries are listed.
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::run_trampoline", reason = "runs the tree-walker's trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::eval", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::eval_in_env", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::eval_in_env_with", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::apply_from_direct_tagged", reason = "runs a procedure on a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::apply_from_direct_with", reason = "runs a procedure on a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::eval_cps", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::eval_cps_with", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::callback::CallbackContext::eval_core", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::apply", reason = "runs a procedure, on a trampoline for a closure; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::load_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::load_library_with", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::process_import_set", reason = "loads an import's library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::process_import_for_eval", reason = "loads an import's library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::process_import_for_eval_with", reason = "loads an import's library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::Evaluator::eval_inline_define_library", reason = "evaluates a `define-library` form's body; give what the caller holds across it in an `expect` (#622)" },
+
+    # patina-runtime and patina-interpreter: the embedding entries
+    { path = "patina_runtime::backend::Backend::eval", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_runtime::backend::Backend::eval_global", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_runtime::backend::Backend::eval_with_source_map", reason = "evaluates a form, outermost when nothing else runs, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_str", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_str_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_str_in_env", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_str_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_resilient", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_with_fold_case", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_in_env", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_resilient_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+
+    # patina-core, outside the core: an environment no root reaches (#620)
+    { path = "patina_core::environment::Environment::with_parent", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
+]
+
+disallowed-macros = [
+    # Threading readiness (PRD/GC_PRD.md §18.6, C9), brought forward by #622.
+    # Clippy takes this lint only at a crate root: an `expect` on the
+    # invocation or on its module is unfulfilled and the lint still fires. Each
+    # crate with one lists its statics in a crate-level `expect`.
+    { path = "std::thread_local", reason = "per-thread state, which a second interpreter on the thread shares (#618) and threads will not; list the static in the crate root's `expect` with what it holds (#622)" },
+]

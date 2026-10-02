@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "an embedding example evaluates from outside, as a host does; the workspace's \
+              re-entry rule (#622) is for the evaluator's own crates"
+)]
+
 use patina_interpreter::{VmInterpreter, format_interpreter_error};
 
 fn main() {

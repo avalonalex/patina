@@ -338,12 +338,23 @@ impl Evaluator {
     fn load_bootstrap(&self) -> Option<patina_runtime::LibraryError> {
         // Load (scheme base) library
         // This will load Rust primitives and automatically load base-extras.scm
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap, from outside any loop: holds nothing. `(scheme base)` is an \
+                      `.sld`, whose body runs while its `ParsedLibrary` holds \
+                      `GcDeferGuard::holding`"
+        )]
         let base = self
             .load_library(&["scheme".to_string(), "base".to_string()])
             .err();
 
         // Load Patina debugging utilities
         // Auto-loaded in REPL for convenience (commonly used during development)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "bootstrap: holds nothing. `(patina debug)` is built in Rust and runs no \
+                      Scheme"
+        )]
         let _ = self.load_library(&["patina".to_string(), "debug".to_string()]);
 
         // After loading libraries, import (scheme base) into global environment
@@ -497,6 +508,12 @@ impl Evaluator {
             match parser.parse_next() {
                 Ok(Some(tagged)) => {
                     // Desugar TaggedValue to CoreExpr - desugar_tagged manages heap borrows internally
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "the import callback loads libraries during the expansion, which \
+                                  holds the datum and the partial expansion: guarded by \
+                                  `desugar_with_imports`' `GcDeferGuard::holding`"
+                    )]
                     let core_expr = match desugarer.desugar_with_imports(
                         tagged,
                         heap,
@@ -515,6 +532,14 @@ impl Evaluator {
                     };
 
                     // Evaluate using CPS evaluator so all lambdas become CpsLambdas
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "holds `eval_env`, which no root reaches and which keeps the \
+                                  extras' definitions until they are copied to the library, across \
+                                  a run that is outermost at bootstrap and may collect: \
+                                  unprotected. Unreached today, since no library under lib/ has an \
+                                  `-extras.scm` file"
+                    )]
                     if let Err(e) = eval_cps(&core_expr, eval_env.clone(), self) {
                         tracing::warn!(
                             path = %extras_path.display(),
@@ -571,6 +596,10 @@ impl Evaluator {
     /// 3. Registers it in the library registry
     ///
     /// Returns the loaded library or an error.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `load_library_with` with a detached context: holds nothing"
+    )]
     pub fn load_library(
         &self,
         name: &[String],
@@ -775,6 +804,12 @@ impl Evaluator {
 
         // Step 1: Resolve imports
         for import_set in &parsed.imports {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
+                          `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
+                          collection runs"
+            )]
             self.process_import_set(import_set, &lib_env, context)?;
         }
 
@@ -791,6 +826,11 @@ impl Evaluator {
         // `ParsedLibrary`.
         for tv in &parsed.body {
             // Desugar TaggedValue to CoreExpr
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the import callback loads libraries during the expansion: guarded by \
+                          `desugar_with_imports`' and `parsed`'s `GcDeferGuard::holding`"
+            )]
             let core_expr = desugarer.desugar_with_imports(
                 *tv,
                 &shared_heap,
@@ -808,6 +848,13 @@ impl Evaluator {
             // Initialization runs under the importing program's dynamic
             // context. A guard can leave the load here: preserve that escape
             // and do not evaluate later forms or register a partial library.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` (the body's later forms) and `lib_env`, which no root \
+                          reaches until the library is registered, across the form's run: `parsed` \
+                          holds `GcDeferGuard::holding` for as long as it lives, so no collection \
+                          runs"
+            )]
             context.eval_core(&core_expr, &lib_env).map_err(|e| {
                 patina_runtime::LibraryError::EvaluationError {
                     file: parsed
@@ -831,6 +878,11 @@ impl Evaluator {
         lib_env: &Rc<Environment>,
         context: &cps_eval::CallbackContext<'_, '_, '_>,
     ) -> Result<(), patina_runtime::LibraryError> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: `lib_env` is the caller's, and its call site gives \
+                      the reason"
+        )]
         let library = self.load_library_with(import_set.library_name(), context)?;
         for binding in import_set.resolve_bindings(library.export_names()) {
             let (name, export) = binding?;
@@ -843,6 +895,11 @@ impl Evaluator {
     ///
     /// This imports library identifiers into a regular environment (not building a library).
     /// Used by the `import` special form.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `process_import_for_eval_with` with a detached context: holds \
+                  nothing"
+    )]
     pub fn process_import_for_eval(
         &self,
         import_set: &patina_frontend::ImportSet,
@@ -856,6 +913,10 @@ impl Evaluator {
         )
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `process_import_set`: holds nothing"
+    )]
     fn process_import_for_eval_with(
         &self,
         import_set: &patina_frontend::ImportSet,

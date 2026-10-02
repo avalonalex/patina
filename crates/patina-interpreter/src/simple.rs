@@ -23,11 +23,19 @@ impl SimpleInterpreter {
     }
 
     /// Evaluate one expression; reject an unreadable suffix (#329).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the deprecated adapter over `Interpreter::eval_str`: holds nothing"
+    )]
     pub fn eval_str(&self, code: &str) -> Result<TaggedValue, PipelineError> {
         self.interpreter.eval_str(code).map_err(Into::into)
     }
 
     /// Evaluate every form; return unspecified for an empty program.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the deprecated adapter over `Interpreter::eval_program`: holds nothing"
+    )]
     pub fn eval_program(&self, code: &str) -> Result<TaggedValue, PipelineError> {
         self.interpreter.eval_program(code).map_err(Into::into)
     }

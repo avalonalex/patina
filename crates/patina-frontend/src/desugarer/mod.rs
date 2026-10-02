@@ -578,6 +578,14 @@ impl<'a> Desugarer<'a> {
         let env = if new_scopes.is_empty() {
             self.env.clone()
         } else {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a body's expansion environment: its binders are bound to `UNSPECIFIED`, \
+                          and an internal `define-syntax` binds its macro here. Expansion reaches \
+                          no safe point but an import's, which `desugar_with_imports` runs under \
+                          `GcDeferGuard::holding`; a macro outlives it only through a live macro's \
+                          definition environment, which the collector traces"
+            )]
             let child = Rc::new(Environment::with_parent(self.env.clone()));
             for (name, as_written) in &binders {
                 // Each binder at the scopes it was *written* with plus this
@@ -697,6 +705,12 @@ impl<'a> Desugarer<'a> {
         // The scan may bind a splice's private keywords and define-syntax
         // forms to discover later definitions. None of those speculative
         // bindings should escape into the real expansion environment.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a speculative scan's environment, dropped when the scan ends. What it binds \
+                      (keywords, macros) lives only during expansion, which reaches no safe point \
+                      but an import's, under `desugar_with_imports`' `GcDeferGuard::holding`"
+        )]
         let mut probe = self.with_new_env(
             Rc::new(Environment::with_parent(self.env.clone())),
             self.current_scopes.clone(),
@@ -1853,6 +1867,13 @@ impl<'a> Desugarer<'a> {
                 // import can supersede its expansion binding. Stage the import
                 // to learn exactly which names it installs, preserving shared
                 // locations when bringing them into the real environment.
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "stages one import's bindings, locations the loaded library owns \
+                              (#406), before they are copied into `env`: no value of its own, and \
+                              the whole expansion runs under this function's \
+                              `GcDeferGuard::holding`"
+                )]
                 let staged = (!self.declarations.borrow().is_empty())
                     .then(|| Rc::new(Environment::with_parent(env.clone())));
                 if let Err(error) = import.borrow_mut()(&set, staged.as_ref().unwrap_or(env)) {
@@ -2346,6 +2367,14 @@ impl<'a> Desugarer<'a> {
                 )?;
 
                 // Create a new child environment with the macro binding
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "binds an internal `define-syntax`'s macro for the rest of the body's \
+                              expansion. Expansion reaches no safe point but an import's, which \
+                              `desugar_with_imports` runs under `GcDeferGuard::holding`; \
+                              afterwards the macro lives only through a live macro's definition \
+                              environment, which the collector traces"
+                )]
                 let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                 let tv = new_env
                     .heap()
@@ -3043,6 +3072,14 @@ impl<'a> Desugarer<'a> {
         // an escaping transformer retains access to its helpers, whereas a
         // surrounding source reference cannot see them. A child environment
         // would strand those scoped helpers once the splice has ended.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "binds a `let-syntax` body's keywords to their macros for the body's \
+                      expansion. Expansion reaches no safe point but an import's, which \
+                      `desugar_with_imports` runs under `GcDeferGuard::holding`; afterwards a \
+                      macro lives only through a live macro's definition environment, which the \
+                      collector traces"
+        )]
         let body_env = if splicing {
             env.clone()
         } else {

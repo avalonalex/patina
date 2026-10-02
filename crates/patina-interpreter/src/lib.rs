@@ -41,6 +41,8 @@ pub mod simple;
 #[cfg(feature = "legacy-pipeline")]
 #[allow(deprecated)]
 pub use simple::SimpleInterpreter;
+#[cfg(all(test, feature = "vm", feature = "tree-walker"))]
+mod reentry_lint_control;
 
 // Re-export types from workspace crates for convenience
 #[cfg(feature = "legacy-pipeline")]
@@ -275,6 +277,10 @@ impl<B: Backend> Interpreter<B> {
     /// assert_eq!(result.as_fixnum(), Some(42));
     /// # }
     /// ```
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_str_with_source_name`: holds nothing"
+    )]
     pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         self.eval_str_with_source_name(input, "<eval>").0
     }
@@ -284,6 +290,10 @@ impl<B: Backend> Interpreter<B> {
     /// This is useful for evaluating entire programs or test files.
     /// Each expression is parsed and evaluated in sequence, with the result
     /// of the last expression being returned.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_with_source_name`: holds nothing"
+    )]
     pub fn eval_program(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         self.eval_program_with_source_name(input, "<eval>").0
     }
@@ -295,6 +305,10 @@ impl<B: Backend> Interpreter<B> {
     /// This is useful for test suites where you want to see all failures.
     ///
     /// Returns the last successfully evaluated result, or Unspecified if all failed.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_resilient_tracked`: holds nothing"
+    )]
     pub fn eval_program_resilient(&self, input: &str) -> TaggedValue {
         self.eval_program_resilient_tracked(input)
     }
@@ -302,6 +316,10 @@ impl<B: Backend> Interpreter<B> {
     /// Evaluate a string containing one expression with its source positions,
     /// naming the source `source_name`, and return the source map that placed
     /// it for formatting an error. See [`Interpreter::eval_str`].
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
+    )]
     pub fn eval_str_with_source_name(
         &self,
         input: &str,
@@ -332,6 +350,12 @@ impl<B: Backend> Interpreter<B> {
             Err(e) => return (Err(e.into()), source_map),
         };
         drop(parser);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the outermost entry, so the backend's loop may collect. Holds the source \
+                      map, which records positions, not heap values; the parser is dropped and the \
+                      datum is not read after the call"
+        )]
         let result = self
             .backend
             .eval_with_source_map(expr, env, &source_map)
@@ -340,6 +364,10 @@ impl<B: Backend> Interpreter<B> {
     }
 
     /// [`Interpreter::eval_str_with_source_name`] for a source named `<eval>`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_str_with_source_name`: holds nothing"
+    )]
     pub fn eval_str_tracked(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
         self.eval_str_with_source_name(input, "<eval>").0
     }
@@ -347,6 +375,10 @@ impl<B: Backend> Interpreter<B> {
     /// Evaluate a program (multiple expressions) with its source positions,
     /// naming the source `source_name`; stop at the first error, and return
     /// the source map for formatting it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_with_fold_case`: holds nothing"
+    )]
     pub fn eval_program_with_source_name(
         &self,
         input: &str,
@@ -358,6 +390,10 @@ impl<B: Backend> Interpreter<B> {
     /// Evaluate one interactive submission, retaining directives for the next.
     /// Each submission has its own source positions. Only directives actually
     /// consumed before an error survive; parser lookahead must not change them.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_in_env` in the global environment: holds nothing"
+    )]
     pub fn eval_program_with_fold_case(
         &self,
         input: &str,
@@ -386,6 +422,10 @@ impl<B: Backend> Interpreter<B> {
 
     /// [`Interpreter::eval_program_with_source_name`] for a source named
     /// `<eval>`.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_with_source_name`: holds nothing"
+    )]
     pub fn eval_program_tracked(
         &self,
         input: &str,
@@ -513,6 +553,16 @@ impl<B: Backend> Interpreter<B> {
             let datum = parser.parse_next();
             *fold_case = parser.read_state().fold_case;
             match datum {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the outermost entry, so the backend's loop may collect. The parser \
+                              holds no heap value between data (it clears its labels after each), \
+                              and the source map is pruned of freed slots before each read \
+                              (docs/GC_DESIGN.md §9.1). `value`, the last result, is held across \
+                              the form unrooted: overwritten if the form succeeds, and returned \
+                              stale only when every later form fails under `-k`, which the CLI \
+                              drops; an embedder that keeps it meets #605"
+                )]
                 Ok(Some(expr)) => match self.backend.eval_with_source_map(expr, env, &source_map) {
                     Ok(result) => value = result,
                     Err(error) => {
@@ -705,6 +755,11 @@ impl<E: std::error::Error + patina_runtime::HasDiagnostic> patina_runtime::HasDi
 }
 
 #[cfg(all(test, feature = "tree-walker"))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "unit tests evaluate through the interpreter from outside any loop, as an embedder \
+              does"
+)]
 mod tests {
     use super::*;
 

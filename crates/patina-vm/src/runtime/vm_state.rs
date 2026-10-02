@@ -830,6 +830,12 @@ fn vm_evaluate_parsed_library(
 
     // Step 1: Resolve imports into lib_env
     for import_set in &parsed.imports {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
+                      `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
+                      collection runs"
+        )]
         vm_process_import_set(state, import_set, &lib_env)?;
     }
 
@@ -852,6 +858,12 @@ fn vm_evaluate_parsed_library(
 
     state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
         for tv in &parsed.body {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the import callback loads libraries during the expansion: guarded by \
+                          `desugar_with_imports`', `parsed`'s and `with_globals`' \
+                          `GcDeferGuard::holding`"
+            )]
             let core_expr = desugarer.desugar_with_imports(
                 *tv,
                 &shared_heap,
@@ -887,6 +899,12 @@ fn vm_evaluate_parsed_library(
             // the library must not be registered or its exports bound.
             let top_id = state.load_unit(top, nested);
             let depth_before = state.execution.frames().len();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `parsed` (the body's later forms), `lib_env` and, through \
+                          `with_globals`, the saved globals across the form's run: `parsed` and \
+                          `with_globals` each hold `GcDeferGuard::holding`, so no collection runs"
+            )]
             let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
                 .map_err(Reentry::into_vm_error);
             state.release_unit_if_unused(top_id);
@@ -913,6 +931,11 @@ pub(crate) fn vm_process_import_set(
     import_set: &ImportSet,
     lib_env: &Rc<Environment>,
 ) -> Result<(), LibraryError> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing of its own: `lib_env` is the caller's, and its call site gives the \
+                  reason"
+    )]
     let library = vm_load_library(state, import_set.library_name())?;
     for binding in import_set.resolve_bindings(library.export_names()) {
         let (name, export) = binding?;
@@ -945,6 +968,12 @@ pub(super) fn vm_eval_expr(
     // always being reached from inside a dispatch loop.
     state.with_globals(env.clone(), |state| {
         let top_id = state.load_unit(top, nested);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds the saved globals, in `with_globals` under its \
+                      `GcDeferGuard::holding`, across the run; the unit's constants are in the \
+                      code store, which the machine roots"
+        )]
         let result = execute_nested(state, top_id);
         state.release_unit_if_unused(top_id);
         result
@@ -974,6 +1003,12 @@ fn compile_for_eval(
     let desugarer = Desugarer::with_env(env.clone()).with_fs(state.fs.clone());
     let heap = state.globals.heap().clone();
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the import callback loads libraries during the expansion, which holds the datum \
+                  and the partial expansion: guarded by `desugar_with_imports`' \
+                  `GcDeferGuard::holding`"
+    )]
     let core_expr = desugarer.desugar_with_imports(
         expr,
         &heap,
@@ -1089,6 +1124,11 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 
     state.execution.push_frame(code, None, 0);
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the state is in the machine: the frame pushed above is the run's root, and this \
+                  frame holds nothing"
+    )]
     let result = run_loop_until(state, 0);
     // Nothing is left to resume: an escape that reached depth 0 *is* this
     // form's value, and a loop re-parks one on the way out for the boundary
@@ -1125,6 +1165,11 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
 /// caller's frame depth. Unlike `execute` (which always runs until the
 /// frame stack is empty), this variant is safe to call when the state
 /// already has in-flight frames (e.g. during library loading from `eval`).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the state is in the machine: the frame it pushes is the run's root, and it holds \
+              nothing"
+)]
 pub(super) fn execute_nested(
     state: &mut VmState,
     code_id: CodeObjectId,
@@ -1162,6 +1207,10 @@ impl LoopExit {
 /// — the top-level `execute`, which has no frame left to corrupt, and the
 /// nested entry points that route the distinction through `across_reentry`
 /// instead.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a wrapper over `run_loop_until_outcome`: holds nothing"
+)]
 pub(super) fn run_loop_until(
     state: &mut VmState,
     exit_depth: usize,

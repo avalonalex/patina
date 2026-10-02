@@ -23,6 +23,16 @@
 //! let backend = TreeWalker::new();
 //! let result = backend.eval_global(expr)?;
 //! ```
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's `thread_local!` statics, all in `cps_eval::types`: `PENDING_ESCAPE`, a \
+              continuation's value parked between its jump and the trampoline that resumes it, \
+              which the safe point roots (`trace_pending_escape`) and which leaves `thread_local!` \
+              in the redesign (PRD/GC_PRD.md §11.3); `ACTIVE_TRAMPOLINES`, `NEXT_TRAMPOLINE` and \
+              `UNHANDLED_IN_CALLBACK`, ids and flags of the running trampolines. Clippy takes this \
+              lint only at the crate root, so a new `thread_local!` in the crate goes on this list \
+              (#622)"
+)]
 
 pub mod backend;
 pub mod eval;

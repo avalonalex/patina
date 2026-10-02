@@ -12,6 +12,12 @@
 //! Hygiene is implemented using Racket's scope sets algorithm (based on
 //! "Binding as Sets of Scopes" by Matthew Flatt, 2016), using flip-scope
 //! operations to distinguish use-site vs introduced identifiers.
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's one `thread_local!`, `tracer::TRACER`, the macro expansion tracer: names \
+              and rendered forms, no heap value. Clippy takes this lint only at the crate root, so \
+              a new `thread_local!` in the crate goes on this list (#622)"
+)]
 
 pub mod error;
 pub mod macro_expander;

@@ -1905,6 +1905,15 @@ fn vm_step(
             // that escapes. The frames every caller is about to push onto or
             // rewrite are then gone (#482).
             let depth_before = state.execution.frames().len();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds `kept`, the primitive's state, and the step's `env` across the \
+                          datum's expansion, which loads libraries and runs their bodies; the \
+                          caller holds the primitive's arguments. Safe while nested loops defer: \
+                          only a dispatching loop gets here, under its GcDeferGuard, and the \
+                          expansion and each library body run under `GcDeferGuard::holding` \
+                          (`desugar_with_imports`, `ParsedLibrary`)"
+            )]
             let callee = across_reentry(
                 state,
                 depth_before,
@@ -2320,6 +2329,13 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         unsafe { (*self.state).fs() }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: `run_apply_proc` copies `proc`'s arguments into the callee's \
+                  frame. The primitive calling back holds its own values, each with its reason at \
+                  its call; the loop this starts is nested under the dispatching loop's \
+                  GcDeferGuard and cannot collect, which PRD/GC_PRD.md §11.3 keeps (`NoGcScope`)"
+    )]
     fn apply_proc(
         &self,
         proc: TaggedValue,
@@ -2337,6 +2353,12 @@ impl patina_primitives::ApplyContext for VmApplyContext {
         .map_err(Reentry::into_eval_error)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it with \
+                  the globals swapped under `with_globals`' `GcDeferGuard::holding`. Its one \
+                  caller, `run_synchronously`, is one this machine never reaches"
+    )]
     fn eval_expr(
         &self,
         expr: TaggedValue,
@@ -2348,6 +2370,12 @@ impl patina_primitives::ApplyContext for VmApplyContext {
             .map_err(Reentry::into_eval_error)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: the library comes back by value. The load runs nested under the \
+                  dispatching loop's GcDeferGuard, and a library's body while its `ParsedLibrary` \
+                  holds `GcDeferGuard::holding`"
+    )]
     fn load_scheme_library(
         &self,
         name: &[String],
@@ -2387,6 +2415,12 @@ impl patina_primitives::ApplyContext for VmApplyContext {
 /// Requires a live caller under across_reentry. Uses a scratch return slot
 /// and may run a nested loop, changing all dynamic state. Its caller must
 /// interpret transfer flags before accepting the returned value.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the state is in the machine: `call_any` put `proc`'s arguments in its frame, which \
+              the machine roots, and this frame holds nothing. The loop is nested inside a \
+              dispatching loop and defers"
+)]
 fn run_apply_proc(
     state: &mut VmState,
     proc: TaggedValue,

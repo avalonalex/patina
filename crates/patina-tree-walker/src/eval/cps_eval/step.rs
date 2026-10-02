@@ -151,6 +151,13 @@ impl<'a> CpsEvaluator<'a> {
                     if own_frame && Rc::strong_count(&current_env) == 1 {
                         current_env.define(Rc::clone(name), val);
                     } else {
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "a `let` frame: the value bound in it goes into \
+                                      `current_env`, which the next step carries and the \
+                                      trampoline roots at its safe point; no safe point comes in \
+                                      between"
+                        )]
                         let new_env = Rc::new(Environment::with_parent(current_env.clone()));
                         new_env.define(Rc::clone(name), val);
                         current_env = new_env;

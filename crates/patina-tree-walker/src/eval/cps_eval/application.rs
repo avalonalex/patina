@@ -76,6 +76,13 @@ impl<'a> CpsEvaluator<'a> {
                     binding_scopes,
                 } => {
                     // Create new environment for the lambda
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "the frame of a lambda's call: the arguments are bound in it and \
+                                  it goes into the step this function returns, which the \
+                                  trampoline roots at its safe point; no safe point comes in \
+                                  between"
+                    )]
                     let new_env = Rc::new(Environment::with_parent(lambda_env.clone()));
 
                     // Check arity - route through exception handlers

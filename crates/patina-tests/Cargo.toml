@@ -39,3 +39,11 @@ name = "scheme_benchmarks"
 harness = false
 
 # Note: This is a test-only crate, no lib or bin targets
+
+# The workspace clippy.toml asks for a reason at every Rust re-entry into the
+# evaluator (#622). The tests here run Scheme from Rust throughout, as an
+# embedder does (`Interpreter::eval_*`, `Backend::eval`, library loading), so
+# the crate allows the lint once instead of a reason at each call.
+# `thread_local!` (disallowed-macros) stays checked.
+[lints.clippy]
+disallowed_methods = "allow"

@@ -671,6 +671,65 @@ nested loops' deferral disabled, both fail.
 `AssertNoGc` at the same lines (AGENTS.md). An argued window with no scope is a
 missing assertion.
 
+**Every Rust re-entry carries its reason (#622).** A Rust call that reaches a
+driver loop can collect, and nothing in its type says so. The workspace
+`clippy.toml` lists each such entry under `disallowed-methods`:
+`ApplyContext::apply_proc`, `eval_expr` and `load_scheme_library`, and
+`run_synchronously`; the VM's `execute`, `execute_nested`, `run_loop_until`,
+`run_loop_until_outcome` and `across_reentry`, and its library loading; the
+tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
+`CpsEvaluator::eval_in_env`, `apply_from_direct_with`, `eval_core`,
+`Evaluator::apply` and their wrappers; the VM routes every nested run through
+`across_reentry`, the tree-walker has no such boundary), and its library
+loading; `Backend::eval`, `eval_global` and `eval_with_source_map`;
+`Interpreter::eval_*`; and `Environment::with_parent` outside `patina-core`,
+since an environment built there is reachable from no root unless its caller
+makes it so (#620). Every call outside the exempt crates carries
+`#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
+match arm, statement or function around it, saying what the frame holds
+across the call and why that is safe:
+
+- it holds nothing it reads after the call: a wrapper, or a call whose
+  arguments move into the run, which roots them;
+- a guard on the data defers collection: `ParsedLibrary`,
+  `desugar_with_imports` and `with_globals` hold `GcDeferGuard::holding`;
+- the state is in the machine: a frame it pushed, `Step::Call` and
+  `resume_stub`;
+- the call runs on a nested loop that defers: every `apply_proc` a primitive
+  makes from a machine's dispatch, `%parameterize-swap!`'s among them.
+
+Three sites are none of these, and their reasons say so: the detached
+`ApplyContext for Evaluator` (and `run_synchronously`, which only it and an
+embedder reach) runs an outermost trampoline beneath a primitive's Rust frame,
+though nothing in the workspace calls it; `load_library_extras` holds an
+environment no root reaches across a run, though no `-extras.scm` file exists;
+and `Interpreter::run_forms` holds the last form's value unrooted across the
+next form, returning it stale only when every later form fails under `-k`
+(#605's shape).
+
+`expect` rather than `allow`: it fails clippy once its lint stops firing, so
+an entry that stops matching anything fails the build, and so does a
+misspelled one, crate name included, which clippy otherwise skips without a
+word. `crates/patina-interpreter/src/reentry_lint_control.rs` matches every
+entry that crate can name, and each private entry is matched by its own call
+sites. `patina-core` allows the lint (its own environments), as do
+`patina-tests` and `patina-repl` through `[lints]` in their `Cargo.toml`, and
+the test and example targets of other crates through a crate-level `allow`.
+
+The reasons are the holder inventory the redesign walks: stage 2 opens loading
+points A, B and D once every loading site is rooted, guarded on its data or
+held in the machine, and stage 4e lets nested loops collect once every
+`apply_proc` and `across_reentry` site stays deferred or keeps its values in
+the machine (`PRD/GC_PRD.md` §11.3, §19).
+
+`std::thread_local` is under `disallowed-macros` (C9, `PRD/GC_PRD.md` §18.6).
+Clippy takes that lint only at a crate root: an `expect` on the invocation is
+an unused attribute, and one on the enclosing module, inner or outer, is
+unfulfilled while the lint still fires (measured with the pinned 1.97.1). So
+each crate that has one lists its statics, with what they hold, in a
+crate-root `expect`, and a new `thread_local!` in such a crate is caught by
+review of that list rather than by the lint.
+
 These checks detect violations on today's collector. The redesign replaces
 them with `NoGcScope` and the collect capability at stage 3, where a nested
 entry cannot collect by type, and stage 4e deletes the weak continuation

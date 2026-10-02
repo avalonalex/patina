@@ -19,6 +19,14 @@
 //! - `PRD/phase2/VM_COMPILER.md` — compiler passes
 //! - `PRD/phase2/VM_RUNTIME.md` — runtime structures and execution loop
 //! - `PRD/phase2/VM_DECISIONS.md` — all settled design decisions
+#![expect(
+    clippy::disallowed_macros,
+    reason = "the crate's `thread_local!` statics, none a heap value: `runtime::control`'s \
+              `EMPTY_REENTRY` and `EMPTY_HANDLERS`, the shared empty stacks that captures and wind \
+              records point at, and `test_support::DROP_HIGHEST_LIVE`, a switch per test thread \
+              compiled only with `test-support`. Clippy takes this lint only at the crate root, so \
+              a new `thread_local!` in the crate goes on this list (#622)"
+)]
 
 pub mod backend;
 pub mod compiler;

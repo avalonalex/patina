@@ -242,6 +242,10 @@ impl<'a> CpsEvaluator<'a> {
     /// because there is no caller's dynamic environment to inherit; a
     /// primitive's callback goes through [`Self::apply_from_direct_with`]
     /// instead, which inherits the step's.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `apply_from_direct_with` with empty stacks: holds nothing"
+    )]
     pub fn apply_from_direct_tagged(
         &self,
         proc: TaggedValue,
@@ -265,6 +269,11 @@ impl<'a> CpsEvaluator<'a> {
     /// escapes through the primitive, and the primitive is abandoned by the
     /// `?` on the step that made the call. Its `GcDeferGuard` is the loop's
     /// (`run_trampoline`): every nested trampoline defers for its extent.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds nothing: `proc`, `args` and the stacks move into the first step, which the \
+                  trampoline roots at its safe point"
+    )]
     pub(super) fn apply_from_direct_with(
         &self,
         proc: TaggedValue,
