@@ -333,14 +333,16 @@ impl VmState {
 
     /// Temporarily compile/evaluate in another environment on the same heap.
     /// Restore on every Result exit, including nonlocal-transfer errors. The
-    /// defer guard protects saved globals living only on this Rust stack.
+    /// defer guard protects saved globals living only on this Rust stack: a
+    /// holder's guard, so no collection may run until the swap is undone
+    /// (#624).
     pub(crate) fn with_globals<T>(
         &mut self,
         env: Rc<Environment>,
         run: impl FnOnce(&mut Self) -> T,
     ) -> T {
         debug_assert!(Rc::ptr_eq(env.heap(), &self.heap));
-        let _gc_defer = GcDeferGuard::new(&self.heap);
+        let _gc_defer = GcDeferGuard::holding(&self.heap);
         let saved = std::mem::replace(&mut self.globals, env);
         let result = run(self);
         self.globals = saved;

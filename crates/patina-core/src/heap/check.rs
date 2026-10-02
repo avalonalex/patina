@@ -246,9 +246,10 @@ mod unchecked {
 #[cfg(test)]
 mod tests {
     use crate::error::ExceptionKind;
+    use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::{Heap, PromiseState};
     use crate::tagged_value::{ObjectIndex, TaggedValue};
-    use crate::{Collector, Environment, GcRoots, GcVisitor, MarkSweepCollector};
+    use crate::{Environment, GcRoots, GcVisitor};
     use std::cell::RefCell;
     use std::rc::Rc;
 

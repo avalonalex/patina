@@ -180,7 +180,8 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Collector, GcRoots, GcVisitor, MarkSweepCollector, ScopeSet, SourceMap};
+    use crate::heap::gc::{Collector, MarkSweepCollector};
+    use crate::{GcRoots, GcVisitor, ScopeSet, SourceMap};
 
     #[test]
     fn syntax_copies_keep_independent_locations_and_child_spans() {

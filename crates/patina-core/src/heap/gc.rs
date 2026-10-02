@@ -10,11 +10,11 @@
 //! - [`GcRoots`] — implemented by anything that owns live values (backend
 //!   state, registries, transient loop state). Backends provide roots and
 //!   safe points; they never implement collection.
-//! - [`Collector`] — the swappable algorithm. [`MarkSweepCollector`] is the
+//! - `Collector` — the swappable algorithm. `MarkSweepCollector` is the
 //!   v1 implementation shared by both backends. Implementations must be
 //!   non-moving: live slots may never be relocated. The whole mark phase —
-//!   root tracing, the weak-table fixpoint, weak-entry pruning — is the
-//!   public [`run_mark_phase`]; a collector composes around it
+//!   root tracing, the weak-table fixpoint, weak-entry pruning — is
+//!   `run_mark_phase`; a collector composes around it
 //!   (`run_mark_phase` → `Heap::sweep`) and cannot mis-order its interior.
 //!
 //! Collection never happens on its own: a backend drives it by calling
@@ -25,6 +25,19 @@
 //! threshold (never, for the default `Off` mode), `Heap::request_gc` raises
 //! it for `(gc)`, and the safe point itself is a single flag load
 //! (design §6.1).
+//!
+//! `safe_point` is the only way in from outside this crate. The collector,
+//! the mark phase, `Heap::sweep` and `GcController::collect` are
+//! crate-private (#624), so no backend or host can collect without the
+//! deferral rule `safe_point` enforces; [`collect_for_tests`] is the one
+//! exception, for tests that drive the collector against hand-built state.
+//!
+//! The deferral protocol is asserted, not only described (#624, design §7):
+//! a collection runs only while the collecting loop's own [`GcDeferGuard`]
+//! is the only one alive, and a holder's guard ([`GcDeferGuard::holding`])
+//! panics on drop if a collection ran inside its extent. Both are compiled
+//! into check builds ([`GC_CHECK`]) only; the defer balance
+//! (`Heap::exit_gc_defer`) is checked in every build.
 
 use std::rc::Rc;
 use std::time::Instant;
@@ -34,7 +47,7 @@ use rustc_hash::FxHashSet;
 use std::cell::{Cell, RefCell};
 
 use super::check::SlotChecks;
-use super::{Heap, HeapObjectData, PromiseState, SharedHeap};
+use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
 use crate::environment::Environment;
@@ -84,7 +97,7 @@ impl BitSet {
 }
 
 /// Mark bits for all four arenas, sized to arena lengths at collection start.
-/// Produced by [`GcVisitor::finish`], consumed by [`Heap::sweep`].
+/// Produced by [`GcVisitor::finish`], consumed by `Heap::sweep`.
 #[derive(Debug)]
 pub struct MarkBits {
     pub(crate) pairs: BitSet,
@@ -179,7 +192,7 @@ pub trait GcRoots {
     fn trace_roots(&self, visitor: &mut GcVisitor<'_>);
 
     /// One round of the weak-table fixpoint (design §9.5), driven by
-    /// [`run_mark_phase`]: `ids` are continuation ids whose ref objects were
+    /// `run_mark_phase`: `ids` are continuation ids whose ref objects were
     /// just proven live by marking — trace the payloads this provider keys
     /// by them (ids it does not own are simply skipped). A payload may mark
     /// further ref objects; the driver re-drains and broadcasts the next
@@ -206,7 +219,11 @@ pub trait GcRoots {
 /// (`MarkSweepCollector::auto_threshold`), which [`GcController`] installs
 /// into the heap — the trigger *decision* happens in `Heap::note_alloc`, not
 /// by querying the collector (design §6.1).
-pub trait Collector {
+///
+/// Crate-private, with every other way to run a collection (#624): a
+/// collection outside [`GcController::safe_point`] skips the deferral rule,
+/// which is the one thing that makes a collection sound.
+pub(crate) trait Collector {
     /// Run a full collection. The caller must be at a safe point: every live
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
@@ -230,23 +247,63 @@ pub trait Collector {
 /// `ParsedLibrary`, which holds unevaluated forms and therefore defers for as
 /// long as it exists. The `Rc` clone is paid once per guard, on paths taken
 /// per dispatch-loop entry rather than per step.
+///
+/// Two kinds, by what the guard protects (#624):
+/// - a **loop's** own guard ([`GcDeferGuard::new`]), which every dispatch
+///   loop and trampoline takes for its extent. The outermost one is the only
+///   guard that may be alive when a collection runs, and `safe_point` asserts
+///   that in check builds.
+/// - a **holder's** guard ([`GcDeferGuard::holding`]), taken by a Rust scope
+///   or value that holds heap values across an evaluation call. No collection
+///   may run inside its extent at all, and in check builds its drop asserts
+///   that none did. Today that is guaranteed by the first kind: every loop
+///   entered under a holder is nested. A nested loop that is later allowed
+///   to collect (GC_PRD stage 4e) then fails at the holder that needed the
+///   deferral, rather than freeing what it holds.
 pub struct GcDeferGuard {
     heap: SharedHeap,
     /// Defer depth observed on entry. Zero means nothing outer is deferring.
     outer_depth: u32,
+    /// A holder's guard, in a check build: the heap's collection count when
+    /// it was taken, which must not have moved when it drops.
+    collections_at_entry: Option<u64>,
 }
 
 impl GcDeferGuard {
+    /// A dispatch loop's guard, for the loop's own extent.
     pub fn new(heap: &SharedHeap) -> Self {
-        let outer_depth = {
+        Self::enter(heap, false)
+    }
+
+    /// A holder's guard: for a scope or value that keeps heap values no root
+    /// provider sees across a call that can evaluate — a library's
+    /// unevaluated body (`ParsedLibrary`), a form being expanded while its
+    /// imports load (`desugar_with_imports`), the global environment a swap
+    /// set aside (`VmState::with_globals`).
+    ///
+    /// Defers like [`GcDeferGuard::new`]. In a check build it also records
+    /// how many collections the heap has run, and its drop panics if that
+    /// number has changed: a collection inside the extent could have freed
+    /// what the holder holds.
+    ///
+    /// It does not reach the values a primitive holds across
+    /// `ApplyContext::apply_proc`, which takes no guard of its own: there the
+    /// nested loop's guard is the only deferral.
+    pub fn holding(heap: &SharedHeap) -> Self {
+        Self::enter(heap, GC_CHECK)
+    }
+
+    fn enter(heap: &SharedHeap, check_extent: bool) -> Self {
+        let (outer_depth, collections) = {
             let mut h = heap.borrow_mut();
             let depth = h.gc_defer_depth();
             h.enter_gc_defer();
-            depth
+            (depth, h.gc_collections())
         };
         Self {
             heap: heap.clone(),
             outer_depth,
+            collections_at_entry: check_extent.then_some(collections),
         }
     }
 
@@ -264,8 +321,43 @@ impl GcDeferGuard {
 
 impl Drop for GcDeferGuard {
     fn drop(&mut self) {
-        self.heap.borrow_mut().exit_gc_defer();
+        let collections = {
+            let mut h = self.heap.borrow_mut();
+            h.exit_gc_defer();
+            h.gc_collections()
+        };
+        // Not while unwinding: a second panic would abort the process and
+        // lose the first one's message.
+        if GC_CHECK
+            && let Some(at_entry) = self.collections_at_entry
+            && collections != at_entry
+            && !std::thread::panicking()
+        {
+            collected_inside_a_holder(collections - at_entry);
+        }
     }
+}
+
+/// The panic of a holder's guard, out of line: the drop runs on every
+/// library load and every expanded form.
+#[cold]
+#[inline(never)]
+fn collected_inside_a_holder(collections: u64) -> ! {
+    panic!(
+        "GC deferral violated: {collections} collection(s) ran inside a \
+         GcDeferGuard::holding extent, whose holder keeps heap values no root \
+         provider sees (docs/GC_DESIGN.md §7)"
+    )
+}
+
+/// The panic of `safe_point`'s depth check.
+#[cold]
+#[inline(never)]
+fn collected_under_another_guard(depth: u32) -> ! {
+    panic!(
+        "GC deferral violated: a collection ran with {depth} defer guard(s) \
+         alive; only the collecting loop's own may be (docs/GC_DESIGN.md §7)"
+    )
 }
 
 // ============================================================================
@@ -336,7 +428,7 @@ impl GcController {
     /// The allocation threshold at which `Heap::note_alloc` should raise the
     /// collection-pending flag — the mode made concrete, and the single owner
     /// of that mapping. A backend installs this into its heap when the pair
-    /// is wired up (`Heap::set_gc_threshold`); [`GcController::collect`]
+    /// is wired up (`Heap::set_gc_threshold`); `GcController::collect`
     /// re-installs it after each collection, the only point the adaptive
     /// term changes. A heap with no controller attached keeps its inert
     /// `usize::MAX` default, where only `(gc)` raises the flag.
@@ -348,7 +440,9 @@ impl GcController {
         }
     }
 
-    pub fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+    /// Collect now, with no check of the deferral rule. Crate-private (#624):
+    /// a backend collects through [`GcController::safe_point`].
+    pub(crate) fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let stats = self.collector.collect(heap, roots);
         // Sweep lowered the pending flag; re-arm the threshold that raises it.
         // This is what lets `note_alloc` compare against a stored number
@@ -405,6 +499,17 @@ impl GcController {
     ) {
         with_roots(&mut |roots| {
             let mut h = heap.borrow_mut();
+            // The outermost loop's own guard, and no other. `is_outermost`
+            // is read once, at loop entry, so a guard that a callee took and
+            // kept past its instruction would not stop the running loop from
+            // collecting under it; this does (#624).
+            if GC_CHECK {
+                let depth = h.gc_defer_depth();
+                if depth != 1 {
+                    drop(h);
+                    collected_under_another_guard(depth);
+                }
+            }
             gc.borrow_mut().collect(&mut h, roots);
         });
     }
@@ -668,7 +773,7 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// Finish marking: drain the worklists to a fixed point and return the
-    /// mark bits, ready for [`Heap::sweep`].
+    /// mark bits, ready for `Heap::sweep`.
     pub fn finish(mut self) -> MarkBits {
         self.drain();
         self.marks
@@ -928,7 +1033,9 @@ impl Heap {
     /// Consumes the mark bits as scratch space (read [`MarkBits::marked`]
     /// first) and resets the allocation counter and the collection-pending
     /// flag — sweep completion is the "collection happened" boundary.
-    pub fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
+    ///
+    /// Crate-private with the rest of the collector (#624).
+    pub(crate) fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
         // Provenance is not a root. Prune it before slots can be reused,
         // inspecting only annotated syntax rather than every freed datum.
         self.syntax_sources
@@ -1017,7 +1124,7 @@ pub const DEFAULT_MIN_THRESHOLD: usize = 65_536;
 /// The v1 collector: stop-the-world mark-and-sweep, shared by both backends.
 /// Adaptive trigger: collect on a `(gc)` request, or once allocations since
 /// the last GC exceed `max(min_threshold, 2 × live-after-last-GC)`.
-pub struct MarkSweepCollector {
+pub(crate) struct MarkSweepCollector {
     min_threshold: usize,
     live_after_last: usize,
     stats: GcStats,
@@ -1060,12 +1167,13 @@ impl Default for MarkSweepCollector {
 /// breaking the ephemerons that fixpoint left unretained, and weak-entry
 /// pruning, in the one order that is sound.
 ///
-/// Public so alternative collectors compose *around* it (triggering, sweep
+/// One function so a collector composes *around* it (triggering, sweep
 /// strategy) without being able to mis-order its interior. Skipping the
 /// fixpoint would sweep live continuation payloads, skipping `sweep_weak`
 /// would reinstate the §9.5 monotonic leak, and the two weak kinds share one
-/// loop for the reason the comment on it gives.
-pub fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
+/// loop for the reason the comment on it gives. Crate-private, like every
+/// other way to run a collection (#624).
+pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
     let mut visitor = GcVisitor::new(heap);
     for provider in roots {
         provider.trace_roots(&mut visitor);
@@ -1162,6 +1270,19 @@ impl Collector for MarkSweepCollector {
         self.stats.last_pause_micros = start.elapsed().as_micros();
         self.stats
     }
+}
+
+/// Run one full collection of `heap` from `roots` alone, outside every safe
+/// point and every deferral rule.
+///
+/// **Not an API.** It exists for unit tests in other crates that drive the
+/// collector against hand-built state and assert on what it freed —
+/// `patina-vm`'s weak continuation table tests. A backend or a host collects
+/// through [`GcController::safe_point`], which is what keeps a collection
+/// from running while a Rust frame holds values no root provider sees.
+#[doc(hidden)]
+pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+    MarkSweepCollector::new().collect(heap, roots)
 }
 
 // ============================================================================
@@ -1797,6 +1918,9 @@ mod tests {
         let pending = shared.borrow().gc_pending_handle();
         let gc = RefCell::new(GcController::from_env());
         let no_roots = TestRoots::default();
+        // A safe point runs inside its loop's own guard, and a collection
+        // asserts it is the only one alive.
+        let _loop_guard = GcDeferGuard::new(&shared);
 
         shared
             .borrow_mut()
@@ -1922,5 +2046,109 @@ mod tests {
 
         assert_eq!(stats.last_swept.pairs, 0);
         assert_eq!(heap.car(field_val), TaggedValue::fixnum(7));
+    }
+
+    /// The deferral protocol (#624).
+    ///
+    /// The `#[should_panic]` tests are positive controls: each makes the
+    /// mistake its check exists for and expects that check's panic. The
+    /// depth and holder checks are compiled into check builds only
+    /// (`GC_CHECK`: debug, or release with `gc-check`); a build without them
+    /// reports those controls ignored rather than compiling them out. The
+    /// balance check is in every build, so its control runs in every build.
+    mod protocol {
+        use super::*;
+        use crate::heap::new_shared_heap;
+
+        /// Raise a `(gc)` request and run a safe point that would collect,
+        /// as the loop holding `loop_guard` would.
+        fn safe_point_that_collects(shared: &SharedHeap, loop_guard: &GcDeferGuard) {
+            let pending = shared.borrow().gc_pending_handle();
+            let gc = RefCell::new(GcController::from_env());
+            shared.borrow_mut().request_gc();
+            GcController::safe_point(
+                &gc,
+                shared,
+                &pending,
+                loop_guard.is_outermost(),
+                |collect| {
+                    collect(&[&TestRoots::default()]);
+                },
+            );
+        }
+
+        #[test]
+        fn the_outermost_loop_collects_under_its_own_guard_alone() {
+            let shared = new_shared_heap();
+            let loop_guard = GcDeferGuard::new(&shared);
+            safe_point_that_collects(&shared, &loop_guard);
+            assert_eq!(shared.borrow().gc_collections(), 1);
+        }
+
+        /// A guard a callee took and kept past its instruction: the running
+        /// loop read `is_outermost` at entry, so nothing but the depth check
+        /// stops it collecting under the second guard.
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "a collection ran with 2 defer guard(s) alive")]
+        fn a_collection_while_a_second_guard_is_alive_panics() {
+            let shared = new_shared_heap();
+            let loop_guard = GcDeferGuard::new(&shared);
+            let _kept = GcDeferGuard::new(&shared);
+            safe_point_that_collects(&shared, &loop_guard);
+        }
+
+        #[test]
+        fn a_holding_extent_with_no_collection_drops_quietly() {
+            let shared = new_shared_heap();
+            let holder = GcDeferGuard::holding(&shared);
+            // A loop entered under a holder is nested, and does not collect.
+            let loop_guard = GcDeferGuard::new(&shared);
+            assert!(!loop_guard.is_outermost());
+            safe_point_that_collects(&shared, &loop_guard);
+            drop(loop_guard);
+            drop(holder);
+            assert_eq!(shared.borrow().gc_collections(), 0);
+            assert_eq!(shared.borrow().gc_defer_depth(), 0);
+        }
+
+        /// What a nested loop allowed to collect (GC_PRD stage 4e) would do
+        /// under a holder: the collection itself is direct here, because the
+        /// depth check would stop one at a safe point first.
+        #[test]
+        #[cfg_attr(
+            not(any(debug_assertions, feature = "gc-check")),
+            ignore = "needs a check build"
+        )]
+        #[should_panic(expected = "ran inside a GcDeferGuard::holding extent")]
+        fn a_collection_inside_a_holding_extent_panics() {
+            let shared = new_shared_heap();
+            let holder = GcDeferGuard::holding(&shared);
+            collect(&mut shared.borrow_mut(), &TestRoots::default());
+            drop(holder);
+        }
+
+        /// A loop's guard does not check its extent: the outermost loop
+        /// collects inside its own.
+        #[test]
+        fn a_loop_guard_allows_a_collection_inside_its_extent() {
+            let shared = new_shared_heap();
+            let loop_guard = GcDeferGuard::new(&shared);
+            collect(&mut shared.borrow_mut(), &TestRoots::default());
+            drop(loop_guard);
+            assert_eq!(shared.borrow().gc_collections(), 1);
+        }
+
+        /// Runs in every build: the balance check is an `assert!`, where an
+        /// underflow in a release build would wrap the depth and stop
+        /// collection for good.
+        #[test]
+        #[should_panic(expected = "unbalanced GC defer: exit without a matching enter")]
+        fn an_unbalanced_defer_exit_panics() {
+            Heap::new().exit_gc_defer();
+        }
     }
 }

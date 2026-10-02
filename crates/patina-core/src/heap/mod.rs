@@ -701,8 +701,11 @@ impl Heap {
         self.gc_defer_depth += 1;
     }
 
+    /// Checked in every build, not only check builds: it runs once per guard
+    /// drop, off every hot path, and a release build that underflowed here
+    /// would wrap to `u32::MAX` and never collect again, with no report.
     pub(crate) fn exit_gc_defer(&mut self) {
-        debug_assert!(
+        assert!(
             self.gc_defer_depth > 0,
             "unbalanced GC defer: exit without a matching enter"
         );

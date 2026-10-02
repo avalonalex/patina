@@ -181,7 +181,7 @@ pub struct ParsedLibrary {
     pub body: Vec<TaggedValue>,
 
     /// The heap containing the body TaggedValues
-    pub heap: Option<SharedHeap>,
+    pub heap: SharedHeap,
 
     /// Export specifications
     pub exports: Vec<ExportSpec>,
@@ -191,21 +191,25 @@ pub struct ParsedLibrary {
 
     /// Defers collection while the unevaluated `body` forms are unrooted.
     /// Private so the only way to build a `ParsedLibrary` is [`Self::new`],
-    /// which cannot forget it.
-    _gc_defer: Option<patina_core::GcDeferGuard>,
+    /// which cannot forget it. A holder's guard: in a check build its drop
+    /// panics if a collection ran while the library existed (#624).
+    _gc_defer: patina_core::GcDeferGuard,
 }
 
 impl ParsedLibrary {
     /// Build a parsed library, installing the GC defer guard described above.
+    ///
+    /// The heap is required, not optional: the body's forms live in it, and a
+    /// library built without one would carry no guard at all (#624).
     pub fn new(
         name: Vec<String>,
         imports: Vec<ImportSet>,
         body: Vec<TaggedValue>,
-        heap: Option<SharedHeap>,
+        heap: SharedHeap,
         exports: Vec<ExportSpec>,
         source: Option<PathBuf>,
     ) -> Self {
-        let _gc_defer = heap.as_ref().map(patina_core::GcDeferGuard::new);
+        let _gc_defer = patina_core::GcDeferGuard::holding(&heap);
         Self {
             name,
             imports,

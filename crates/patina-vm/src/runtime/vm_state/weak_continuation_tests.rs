@@ -7,15 +7,17 @@
 //! heap values only its snapshot pinned become reclaimable in the same
 //! collection.
 //!
-//! These tests drive `MarkSweepCollector` directly against a hand-built
-//! `VmState` so they can assert on store contents and arena free lists —
-//! the Scheme-level behavior is covered in `patina-tests/tests/gc_vm.rs`.
+//! These tests drive the collector directly against a hand-built `VmState`,
+//! through `patina-core`'s test-only entry (`collect_for_tests`; the
+//! collector itself is crate-private, #624), so they can assert on store
+//! contents and arena free lists — the Scheme-level behavior is covered in
+//! `patina-tests/tests/gc_vm.rs`.
 
 use super::VmState;
 use crate::types::{ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation};
 use patina_core::environment::Environment;
+use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{Collector, MarkSweepCollector};
 use std::rc::Rc;
 
 // Root the fixture in an owned frame/window instead of exposing a raw
@@ -129,7 +131,7 @@ fn a_carried_prompt_and_handler_are_traced() {
 
 fn collect(state: &VmState) {
     let mut heap = state.heap.borrow_mut();
-    MarkSweepCollector::new().collect(&mut heap, &[state]);
+    collect_for_tests(&mut heap, &[state]);
 }
 
 #[test]
