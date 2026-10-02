@@ -466,11 +466,6 @@ fn contains_quasiquote(expr: &patina_core::CoreExpr) -> bool {
     finder.found
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS tree \
-              it is entered with"
-)]
 pub fn eval_cps(
     expr: &patina_core::CoreExpr,
     env: Rc<Environment>,
@@ -512,7 +507,13 @@ pub fn eval_cps(
 
     // Create CPS evaluator and evaluate in the specified environment
     let cps_evaluator = CpsEvaluator::new(evaluator);
-    cps_evaluator.eval_in_env(Rc::new(cps_expr), env)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "holds `expr`, the caller's tree, not read after the call: the run roots the CPS \
+                  tree it is entered with"
+    )]
+    let value = cps_evaluator.eval_in_env(Rc::new(cps_expr), env);
+    value
 }
 
 /// [`eval_cps`], on a trampoline that starts under the given dynamic

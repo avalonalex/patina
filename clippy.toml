@@ -11,8 +11,9 @@
 #
 # Every call outside the exempt crates carries
 #     #[expect(clippy::disallowed_methods, reason = "...")]
-# on the narrowest item or statement around it, whose reason says what the
-# frame holds across the call and why that is safe. `expect`, not `allow`:
+# on the narrowest `let` or statement around it (a tail call bound in a `let`;
+# the function only for a one-call wrapper), whose reason says what the frame
+# holds across the call and why that is safe. `expect`, not `allow`:
 # it fails clippy once the lint stops firing, so an entry that stops matching
 # anything, or is misspelled (crate name included, which clippy otherwise
 # ignores), fails the build. A test-only module matches every entry it can
@@ -54,6 +55,9 @@ disallowed-methods = [
     { path = "patina_tree_walker::eval::cps_eval::eval_cps", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_tree_walker::eval::cps_eval::eval_cps_with", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_tree_walker::eval::cps_eval::callback::CallbackContext::eval_core", reason = "runs a trampoline; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::callback::CallbackContext::eval_import", reason = "loads an import's libraries, which runs their bodies; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::callback::expand_for_eval", reason = "expands a datum, loading the libraries its imports name, which runs their bodies; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_tree_walker::eval::cps_eval::CpsEvaluator::eval_step", reason = "expands a `Step::Eval` datum, loading libraries, which runs their bodies; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_tree_walker::eval::Evaluator::apply", reason = "runs a procedure, on a trampoline for a closure; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_tree_walker::eval::Evaluator::load_library", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_tree_walker::eval::Evaluator::load_library_with", reason = "loads a library, which runs its body; give what the caller holds across it in an `expect` (#622)" },

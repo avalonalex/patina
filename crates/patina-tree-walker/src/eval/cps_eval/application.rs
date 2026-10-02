@@ -1087,6 +1087,17 @@ impl<'a> CpsEvaluator<'a> {
                     dynamic_winds: &dynamic_winds,
                     exception_handlers: &exception_handlers,
                 };
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "holds the primitive's `state` (in `resume`), `cont`, `cont_env`, \
+                              `env` and the step's three stacks across the datum's expansion, \
+                              which loads libraries and runs their bodies. Guarded on the data: \
+                              the whole expansion runs under `desugar_with_imports`' \
+                              `GcDeferGuard::holding`, and each library body under its \
+                              `ParsedLibrary`'s. Besides, a step runs inside a trampoline, so any \
+                              loop the load starts is nested (point C, which PRD/GC_PRD.md §11.3 \
+                              keeps under `NoGcScope`)"
+                )]
                 let evaluated = self.eval_step(expr, &env, &context);
                 let declined = super::types::take_unhandled_in_callback();
                 match evaluated {
@@ -1141,6 +1152,11 @@ impl<'a> CpsEvaluator<'a> {
         env: &Rc<Environment>,
         context: &super::callback::CallbackContext<'_, '_, '_>,
     ) -> Result<Rc<patina_core::CpsExpr>, EvalError> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: the datum moves into the expansion; the caller, \
+                      `resumable_step`, gives what it holds across this"
+        )]
         let core = super::callback::expand_for_eval(self.evaluator, expr, env, context)?;
         let cps = patina_ir::CpsTransformer::new().transform(&core, &EVAL_K.into());
         Ok(Rc::new(cps))

@@ -96,12 +96,6 @@ impl TreeWalker {
 
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the backend's entry for a form, from outside any loop: holds `core_expr` and the \
-                  datum, neither read after the call; the run roots the CPS tree it is entered \
-                  with, literals included"
-    )]
     fn eval_datum(
         &self,
         expr: TaggedValue,
@@ -158,7 +152,14 @@ impl TreeWalker {
             },
         )?;
 
-        eval_cps(&core_expr, env.clone(), &self.evaluator)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the backend's entry for a form, from outside any loop, so the run may \
+                      collect: holds `core_expr` and the datum, neither read after the call; the \
+                      run roots the CPS tree it is entered with, literals included"
+        )]
+        let value = eval_cps(&core_expr, env.clone(), &self.evaluator);
+        value
     }
 
     /// Add a library search path — counterpart of

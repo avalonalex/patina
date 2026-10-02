@@ -680,14 +680,18 @@ driver loop can collect, and nothing in its type says so. The workspace
 tree-walker's `run_trampoline`, every function that starts one (`eval_cps`,
 `CpsEvaluator::eval_in_env`, `apply_from_direct_with`, `eval_core`,
 `Evaluator::apply` and their wrappers; the VM routes every nested run through
-`across_reentry`, the tree-walker has no such boundary), and its library
-loading; `Backend::eval`, `eval_global` and `eval_with_source_map`;
+`across_reentry`, the tree-walker has no such boundary), its library loading,
+and `eval`'s expansion (`expand_for_eval`, `eval_step`), which loads the
+libraries a datum imports while `resumable_step` holds a primitive's state and
+the step's stacks; `Backend::eval`, `eval_global` and `eval_with_source_map`;
 `Interpreter::eval_*`; and `Environment::with_parent` outside `patina-core`,
 since an environment built there is reachable from no root unless its caller
 makes it so (#620). Every call outside the exempt crates carries
 `#[expect(clippy::disallowed_methods, reason = "…")]` on the narrowest `let`,
-match arm, statement or function around it, saying what the frame holds
-across the call and why that is safe:
+match arm or statement around it (a tail call bound in a `let`, which
+`let_and_return` then leaves alone; the function only for a wrapper whose one
+statement is the call), saying what the frame holds across the call and why
+that is safe:
 
 - it holds nothing it reads after the call: a wrapper, or a call whose
   arguments move into the run, which roots them;

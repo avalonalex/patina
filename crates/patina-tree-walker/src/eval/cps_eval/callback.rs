@@ -29,28 +29,35 @@ impl<'a> CallbackContext<'_, 'a, '_> {
     /// A library body, evaluated under the caller's handlers, winds and
     /// prompts. Only an error that actually leaves a nested run has already
     /// been offered to those handlers; import/expansion failures have not.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "holds the lowered `expr`, not read after the call: the run roots the CPS tree it \
-                  is entered with, and copies of the caller's stacks move into its first step"
-    )]
     pub(crate) fn eval_core(
         &self,
         expr: &patina_core::CoreExpr,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         if let patina_core::CoreExprKind::Import { .. } = &expr.kind {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "holds nothing of its own: `expr` is the caller's, and `eval_import` gives \
+                          the reason for what it holds across each load"
+            )]
             return self.eval_import(expr, env);
         }
         let expr = super::lower_quasiquotes_for(expr, self.cps.evaluator)?;
-        unhandled_is_final(super::eval_cps_with(
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds the lowered `expr`, not read after the call: the run roots the CPS tree \
+                      it is entered with, and copies of the caller's stacks move into its first \
+                      step"
+        )]
+        let value = super::eval_cps_with(
             &expr,
             env.clone(),
             self.cps.evaluator,
             self.prompt_stack.to_vec(),
             self.dynamic_winds.to_vec(),
             self.exception_handlers.to_vec(),
-        ))
+        );
+        unhandled_is_final(value)
     }
 
     pub(crate) fn eval_import(
@@ -138,20 +145,26 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
         ))
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "holds `core_expr`, the expanded datum, not read after the call: the run roots \
-                  the CPS tree it is entered with"
-    )]
     fn eval_expr(
         &self,
         expr: TaggedValue,
         env: &Rc<Environment>,
     ) -> Result<TaggedValue, EvalError> {
         let evaluator = self.cps.evaluator;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds nothing of its own: the datum moves into the expansion, whose imports \
+                      load under `desugar_with_imports`' `GcDeferGuard::holding`"
+        )]
         let core_expr = expand_for_eval(evaluator, expr, env, self)?;
 
-        self.eval_core(&core_expr, env)
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds `core_expr`, the expanded datum, not read after the call: the run \
+                      roots the CPS tree it is entered with"
+        )]
+        let value = self.eval_core(&core_expr, env);
+        value
     }
 
     #[expect(

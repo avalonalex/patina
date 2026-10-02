@@ -17,13 +17,6 @@ pub(super) fn values(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedVa
 ///
 /// Note: The CPS evaluator handles call-with-values for TCO. This registry
 /// version is a fallback for non-CPS call sites.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the consumer's call, in tail position, holds nothing the frame reads after it. \
-              Both machines intercept `call-with-values` (the VM's `VM_INTERCEPTED_PRIMITIVES`, \
-              the tree-walker's `apply_call_with_values`), so this registry fallback runs only \
-              where neither does"
-)]
 pub(super) fn call_with_values(
     ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
@@ -61,7 +54,13 @@ pub(super) fn call_with_values(
         }
     };
 
-    ctx.apply_proc(consumer, consumer_args)
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the consumer's call, the last thing the frame does: it holds nothing it reads \
+                  after the call, and the consumer's arguments move into it"
+    )]
+    let consumed = ctx.apply_proc(consumer, consumer_args);
+    consumed
 }
 
 pub(super) fn register(registry: &mut super::PrimitiveRegistry) {
