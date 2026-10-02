@@ -46,8 +46,14 @@ fn collection_inside_higher_order_primitive() {
     //
     // This was `map` until `map` became Scheme (`higher_order.scm`, #471): a
     // Scheme procedure's calls are steps of the trampoline it runs on, so the
-    // test had stopped nesting one. `(scheme base)`'s `member` is Scheme for
-    // the same reason; the internal primitive under it still nests (#624).
+    // test had stopped nesting one. It calls the internal library's `member`
+    // directly (#624): `(scheme base)`'s `member` is Scheme for the same
+    // reason, and hands a comparator to its own `%member-by`, never to this
+    // primitive, whose comparator path a program reaches only through
+    // `(patina internal lists)`. That path and `%parameterize-swap!` (the
+    // `parameterize` test in `gc_shared_tests!`) are what the deferral tests
+    // nest through; if the comparator path goes, repoint this test at
+    // another primitive that calls back through `apply_proc`.
     let code = r#"
         (import (patina debug) (only (patina internal lists) member))
         (member 3 (list 1 2 3 4) (lambda (x y) (gc) (= x y)))
