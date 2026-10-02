@@ -87,15 +87,28 @@ pub type ParameterData = (Rc<RefCell<Vec<TaggedValue>>>, Option<TaggedValue>);
 ///
 /// It also turns on the VM's check of its liveness maps (#625): a register a
 /// map calls dead is filled with [`TaggedValue::DEAD_SLOT`] rather than
-/// `UNSPECIFIED`, the VM panics where one is read, and the heap's write paths
-/// panic where one would be stored (`check_storable`).
+/// `UNSPECIFIED`, the VM panics where one is read, and the heap's mutators and
+/// the constructors the VM stores register values through panic where one
+/// would be stored (`check_storable`).
 pub const GC_CHECK: bool = cfg!(any(debug_assertions, feature = "gc-check"));
 
 /// Panic, in a check build, if `value` is a retired register's fill about to
-/// be stored where a later read would find it: in a pair, a vector, a cell or
-/// a closure's free variable (#625). The VM checks its own reads; this covers
-/// a dead word that left a register by a path the VM does not check, so it
-/// fails at the store rather than at a read far from the wrong map.
+/// be stored where a later read would find it (#625). The VM checks its own
+/// reads of registers; this is the second line, for a dead word that left a
+/// register by a path that skipped those checks, so that it fails at the
+/// store rather than at a read far from the wrong map.
+///
+/// It guards the mutators (`set_car`, `set_cdr`, `vector_set`,
+/// `write_mutable_cell`, `set_vm_closure_free_var`) and the constructors the
+/// VM moves register values into the heap through: `alloc_pair`, and with it
+/// `list_from_iter` and `list_from_iter_with_tail` (a call's rest list),
+/// `alloc_vector`, `alloc_mutable_cell` (`AllocCell`) and `alloc_vm_closure`
+/// (`MakeClosure`'s captures). It cannot see a write through the raw slice
+/// `vector_slice_mut` hands out; the one such writer, the VM's inline
+/// `vector-set!`, stores a value it read through `reg_at`, which panics on one.
+/// The other constructors (records, promises, `values` and the rest) are not
+/// checked: what they store is a primitive's arguments, which came through
+/// `reg_at` or out of the heap.
 #[inline(always)]
 fn check_storable(value: TaggedValue, into: &'static str) {
     if GC_CHECK && value == TaggedValue::DEAD_SLOT {
@@ -768,6 +781,8 @@ impl Heap {
     /// need no GC root.
     #[inline]
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
+        check_storable(car, "pair");
+        check_storable(cdr, "pair");
         self.note_alloc();
         if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
@@ -824,6 +839,9 @@ impl Heap {
 
     /// Allocate a new vector
     pub fn alloc_vector(&mut self, elements: Vec<TaggedValue>) -> TaggedValue {
+        if GC_CHECK {
+            elements.iter().for_each(|&e| check_storable(e, "vector"));
+        }
         self.note_alloc();
         if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
@@ -1321,6 +1339,7 @@ impl Heap {
 
     /// Allocate a `MutableCell` containing `val`.
     pub fn alloc_mutable_cell(&mut self, val: TaggedValue) -> TaggedValue {
+        check_storable(val, "cell");
         self.alloc_object(HeapObjectData::MutableCell(RefCell::new(val)))
     }
 
@@ -1373,6 +1392,11 @@ impl Heap {
         free_vars: Vec<TaggedValue>,
         globals: Rc<crate::environment::Environment>,
     ) -> TaggedValue {
+        if GC_CHECK {
+            free_vars
+                .iter()
+                .for_each(|&v| check_storable(v, "closure's free variable"));
+        }
         self.alloc_object(HeapObjectData::VmClosure {
             code_id,
             free_vars,

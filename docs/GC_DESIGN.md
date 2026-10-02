@@ -957,10 +957,15 @@ visitor exists, and the stress lane is the real safety net.
    its rest list, which read the caller's registers directly
    (`call_closure_from_regs`: `... as a call's argument`); and
    `store_args_in_window`, for arguments read out by any other path. The heap
-   refuses to store one (`set_car`, `set_cdr`, `vector_set`, a cell write and
-   a closure's free-variable write: `store of a retired register into a
-   ...`). So a map that calls a live register dead panics at the read,
-   where with `UNSPECIFIED` the program went wrong at an unrelated
+   refuses to store one, as a second line behind those reads: its mutators
+   (`set_car`, `set_cdr`, `vector_set`, a cell write and a closure's
+   free-variable write) and the constructors the VM moves register values
+   through (`alloc_pair`, and so a rest list; `alloc_vector`; `AllocCell`'s
+   cell; `MakeClosure`'s captures) panic with `store of a retired register
+   into a ...` (`check_storable` in `heap/mod.rs`). The VM's inline
+   `vector-set!` writes through a raw slice the heap cannot check, a value it
+   read through `reg_at`. So a map that calls a live register dead panics at
+   the read, where with `UNSPECIFIED` the program went wrong at an unrelated
    instruction, or not at all. Readers that only display registers (the step
    tracer, its watchpoints, `--dump`, the datum writer, `debug_format`)
    render it `#<dead>`. A plain release build writes `UNSPECIFIED` and checks
