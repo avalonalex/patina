@@ -908,7 +908,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 
 | Lane | Script | What it runs | Interval | Budget | In CI |
 |---|---|---|---|---|---|
-| Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus reclamation proofs | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
+| Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
 | Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
 | Stress, per PR | `scripts/run_gc_stress_tests.sh` | 13 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
@@ -928,8 +928,37 @@ iteration under zeal and hardly at all at stress 1. It runs in `ci.yml`'s Test
 Suite, not against the zeal lane's binary, so the lane runs the same loop on
 that binary before it starts, on both backends: at least 1000 collections
 under zeal and fewer than 100 with no GC variable set, or it fails there. Its
-per-file check that a run collected cannot stand in for this: every control
-file collects at least once under the default GC too, while it loads SRFI 64.
+per-file check that a run collected cannot stand in for this: a control file
+can collect under the default GC too (`cps-features.scm` does, once; before
+the byte trigger, #606, every one did, while it loaded SRFI 64).
+
+**The reclamation proofs are in bytes, and none can pass without collecting
+(#606).** `(gc-stats)` reports `bytes-reclaimed`, every byte a collection has
+freed, which grows only when a collection frees something; each proof
+requires it to grow across its workload. In `run_gc_differential.sh`, the
+stress proof churns 20,000 conses at the lane's interval and requires more
+than 1000 collections and at least 90% of the bytes the churn allocated
+(`bytes-allocated`) reclaimed; the default-mode proof churns 20,000 vectors of
+1000 elements, about 160 MB, with no GC variable, and requires a collection,
+half of those bytes reclaimed and `committed-bytes` under a quarter of them
+(an object-count trigger collected nothing there: 20,000 allocations were
+under its floor of 65,536). In the shared GC tests (`gc_shared_tests!` in
+`crates/patina-tests/tests/common/mod.rs`, run by `gc_vm` and
+`gc_tree_walker`), the pair, cycle and arena-plateau proofs measure
+`bytes-reclaimed` across their churn, after a `(gc)` that takes the garbage
+the libraries left (the default mode does not collect while they load, and
+the 940 KB it frees would satisfy a bound of thousands of pairs on its own);
+the cycle proof also requires the pairs in use not to grow by the cycles,
+since each iteration's other garbage outweighs its pair, and the arena
+comparison requires `bytes-reclaimed` to grow in the run it measures.
+`crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite, runs #606's
+shapes through the CLI with no GC variable, each bound on the growth of a key
+across the workload, after the same `(gc)`, so that the bootstrap counts
+against none of them: 200 garbage vectors of 100,000 elements and 1,000 VM
+captures 1,000 frames deep each collect about every 8 MiB and grow the heap
+by a few MB, and 600 kept captures collect three times, because L counts
+their snapshots (with them left out of L it collects eleven times, and the
+test fails).
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).

@@ -5,6 +5,7 @@
 
 use super::{CallFrame, Reg};
 use patina_core::tagged_value::TaggedValue;
+use std::mem::size_of;
 use std::rc::Rc;
 
 /// An entry on the prompt stack, recording the dynamic context needed to
@@ -193,4 +194,62 @@ pub struct VmContinuation {
     /// boundaries it does not share leaves them — their Rust primitives are
     /// abandoned — whatever the frame depths say; see `step_wind_jump`.
     pub reentry: Rc<[u64]>,
+}
+
+/// The bytes of a buffer of `T`, at capacity.
+fn buffer_bytes<T>(items: &Vec<T>) -> usize {
+    items.capacity() * size_of::<T>()
+}
+
+impl VmContinuation {
+    /// The bytes this snapshot holds, which its heap handle is charged
+    /// (`Heap::alloc_vm_continuation_ref`, #606): the `Rc` box it is stored
+    /// in and its buffers. A wind record's handler slice is an `Rc` shared
+    /// with the live stack, and is not counted.
+    pub fn payload_bytes(&self) -> usize {
+        let VmContinuation {
+            frames,
+            dynamic_winds,
+            prompt_stack,
+            exception_handlers,
+            registers,
+            deliver_reg: _,
+            exit_status: _,
+            abort_landing: _,
+            reentry,
+        } = self;
+        size_of::<Rc<()>>() * 2
+            + size_of::<Self>()
+            + buffer_bytes(frames)
+            + buffer_bytes(dynamic_winds)
+            + buffer_bytes(prompt_stack)
+            + buffer_bytes(exception_handlers)
+            + buffer_bytes(registers)
+            + std::mem::size_of_val::<[u64]>(reentry)
+    }
+}
+
+impl VmDelimitedContinuation {
+    /// As [`VmContinuation::payload_bytes`].
+    pub fn payload_bytes(&self) -> usize {
+        let VmDelimitedContinuation {
+            frames,
+            dynamic_winds,
+            registers,
+            base_at_capture: _,
+            deliver_reg: _,
+            depth_at_capture: _,
+            wind_depth_at_capture: _,
+            handler_depth_at_capture: _,
+            prompt_stack,
+            exception_handlers,
+        } = self;
+        size_of::<Rc<()>>() * 2
+            + size_of::<Self>()
+            + buffer_bytes(frames)
+            + buffer_bytes(dynamic_winds)
+            + buffer_bytes(prompt_stack)
+            + buffer_bytes(exception_handlers)
+            + buffer_bytes(registers)
+    }
 }

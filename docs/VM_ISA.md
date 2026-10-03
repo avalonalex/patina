@@ -449,9 +449,10 @@ Continuations use **side tables** on VmState (not heap objects directly):
 - `continuation_store: HashMap<u64, Rc<VmContinuation>>`
 - `delimited_continuation_store: HashMap<u64, Rc<VmDelimitedContinuation>>`
 
-Opaque handles (`VmContinuationRef(u64)`, `VmDelimitedContinuationRef(u64)`)
-are stored as `HeapObjectData` variants, avoiding circular dependencies between
-`patina-core` and `patina-vm`.
+Opaque handles (`VmContinuationRef { id, bytes }`,
+`VmDelimitedContinuationRef { id, bytes }`) are stored as `HeapObjectData`
+variants, avoiding circular dependencies between `patina-core` and
+`patina-vm`; `bytes` is the snapshot's size, charged to the handle (#606).
 
 ---
 

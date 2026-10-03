@@ -1122,7 +1122,8 @@ about 5.8× below that model, with a bare `memcpy` and 24 B frames) corrected fo
 stage 4e re-runs the toy with the real pass before fixing per-probe targets. **What this deletes:**
 `VmContinuationRef`, `VmDelimitedContinuationRef`, both weak side tables, the VM's `trace_weak_ids`/`sweep_weak`, and
 the rule "store touched within one dispatch", with it the reason nested VM loops must defer. **What it fixes:** captures
-become byte-accounted (today 80 K captures at depth 1000 reach 5.7 GB unseen by the trigger [P], [#606]).
+become heap bytes, where stage 1 charges a side-table snapshot to its handle (`VmContinuationRef { id, bytes }`, [#606];
+before it, 80 K captures at depth 1000 reached 5.7 GB unseen by the trigger [P]).
 Continuations are born young and written only by initializing stores, so they need no barrier; reinstatement copies
 frames out and resets the watermark to the base; a future incremental mode must darken a continuation on reinstatement
 (OCaml's fibers).

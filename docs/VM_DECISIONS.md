@@ -95,9 +95,10 @@ pub struct CallFrame {
 ### Continuation Storage
 
 Continuations use **side tables** on VmState (`continuation_store`,
-`delimited_continuation_store`) with opaque `VmContinuationRef(u64)` handles
-stored as `HeapObjectData` variants. This avoids circular dependencies between
-`patina-core` and `patina-vm`.
+`delimited_continuation_store`) with opaque `VmContinuationRef { id, bytes }`
+handles stored as `HeapObjectData` variants. This avoids circular dependencies
+between `patina-core` and `patina-vm`. `bytes` is the snapshot's size, charged
+to the handle for the collection trigger's byte account (#606).
 
 ---
 
@@ -111,7 +112,7 @@ slots at sweep, which drops those `Rc`s.
 
 The VM roots `VmState` (`runtime/vm_state/gc_roots.rs`), including two members no heap
 scan can reach: the continuation side tables (the heap holds only an opaque
-`VmContinuationRef(u64)`) and `CallFrame::closure` (a bare `ObjectIndex`).
+`VmContinuationRef { id, bytes }`) and `CallFrame::closure` (a bare `ObjectIndex`).
 
 **On by default** since stage 4c (`PATINA_GC=0` opts out), at zero standing
 cost since stage 4a's trigger redesign (the safe point reads one pending

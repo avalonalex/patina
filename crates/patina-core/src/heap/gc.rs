@@ -21,9 +21,10 @@
 //! [`GcController::safe_point`] at a point where every live value is
 //! reachable from the roots it supplies. Whether that collects is decided
 //! *ahead of time*, where the answer changes: `Heap::note_alloc` raises a
-//! shared pending flag when allocations cross the [`GcMode`]-derived
-//! threshold (never, for the default `Off` mode), `Heap::request_gc` raises
-//! it for `(gc)`, and the safe point itself is a single flag load
+//! shared pending flag when allocation crosses the [`GcMode`]-derived
+//! threshold — in bytes for the adaptive default, in allocations for stress,
+//! never for `Off` (`heap/account.rs`, #606) — `Heap::request_gc` raises it
+//! for `(gc)`, and the safe point itself is a single flag load
 //! (design §6.1).
 //!
 //! `safe_point` is the only way in from outside this crate. The collector,
@@ -50,6 +51,9 @@ use rustc_hash::FxHashSet;
 
 use std::cell::{Cell, RefCell};
 
+use super::account::{
+    self, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
+};
 use super::check::SlotChecks;
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
@@ -101,14 +105,20 @@ impl BitSet {
     }
 }
 
-/// Mark bits for all four arenas, sized to arena lengths at collection start.
-/// Produced by [`GcVisitor::finish`], consumed by `Heap::sweep`.
+/// Mark bits for all four arenas, sized to arena lengths at collection start,
+/// and the payload bytes of the objects marked. Produced by
+/// [`GcVisitor::finish`], consumed by `Heap::sweep`.
 #[derive(Debug)]
 pub struct MarkBits {
     pub(crate) pairs: BitSet,
     pub(crate) vectors: BitSet,
     pub(crate) strings: BitSet,
     pub(crate) objects: BitSet,
+    /// The payloads of the marked objects (`heap/account.rs`), counted as
+    /// marking reaches each one: a vector's elements when it is traced, a
+    /// string's characters when it is marked, an object's payload when it
+    /// is traced, an interned symbol's name when the visitor roots it.
+    pub(crate) live_payload: usize,
 }
 
 impl MarkBits {
@@ -139,7 +149,20 @@ impl MarkBits {
             vectors: BitSet::new(heap.vectors.len()),
             strings: BitSet::new(heap.strings.len()),
             objects: BitSet::new(heap.objects.len()),
+            live_payload: 0,
         }
+    }
+
+    /// The bytes marking found live: each marked slot, and the payloads of
+    /// the marked objects. Read it before `Heap::sweep`, as
+    /// [`MarkBits::marked`].
+    pub fn live_bytes(&self) -> usize {
+        let marked = self.marked();
+        marked.pairs * PAIR_SLOT_BYTES
+            + marked.vectors * VECTOR_SLOT_BYTES
+            + marked.strings * STRING_SLOT_BYTES
+            + marked.objects * OBJECT_SLOT_BYTES
+            + self.live_payload
     }
 
     /// Live slots per arena. Read this before `Heap::sweep`, which reuses the
@@ -220,10 +243,11 @@ pub trait GcRoots {
 /// `TaggedValue` (symbol table, `SourceMap` keys, `eq?` semantics, VM
 /// constants — design §3.4).
 ///
-/// A collector expresses its automatic policy as an allocation threshold
-/// (`MarkSweepCollector::auto_threshold`), which [`GcController`] installs
-/// into the heap — the trigger *decision* happens in `Heap::note_alloc`, not
-/// by querying the collector (design §6.1).
+/// A collector expresses its automatic policy as a threshold
+/// ([`GcThreshold`]: bytes for the adaptive default,
+/// `MarkSweepCollector::auto_threshold`; allocations for stress), which
+/// [`GcController`] installs into the heap — the trigger *decision* happens
+/// in `Heap::note_alloc`, not by querying the collector (design §6.1).
 ///
 /// Crate-private, with every other way to run a collection (#624): a
 /// collection outside [`GcController::safe_point`] skips the deferral rule,
@@ -478,13 +502,15 @@ pub enum GcMode {
     /// reference run to diff the collecting modes against. Not a supported
     /// user configuration — Patina always runs with GC.
     Off,
-    /// Collect on the collector's adaptive threshold. The default since
-    /// stage 4c: the §6.1 trigger redesign made the standing cost of an
-    /// enabled collector indistinguishable from off, so enabling costs only
-    /// the pauses themselves.
+    /// Collect on the collector's adaptive threshold, in bytes: after
+    /// `max(8 MiB, 2·L)` of allocation (#606). The default since stage 4c:
+    /// the §6.1 trigger redesign made the standing cost of an enabled
+    /// collector indistinguishable from off, so enabling costs only the
+    /// pauses themselves.
     On,
     /// Collect once `n` allocations have happened since the last collection,
-    /// ignoring the adaptive floor. The differential-testing lane.
+    /// whatever their size, ignoring the adaptive floor. The
+    /// differential-testing lane.
     Stress(usize),
     /// Collect at every outermost safe point, allocation or not
     /// (`PATINA_GC_ZEAL=entry`, #625). Its threshold is 0, so the pending
@@ -587,21 +613,24 @@ impl GcController {
         count_log::note_backend(backend);
     }
 
-    /// The allocation threshold at which `Heap::note_alloc` should raise the
+    /// The threshold at which `Heap::note_alloc` should raise the
     /// collection-pending flag — the mode made concrete, and the single owner
     /// of that mapping. A backend installs this into its heap when the pair
     /// is wired up (`Heap::set_gc_threshold`); `GcController::collect`
     /// re-installs it after each collection, the only point the adaptive
     /// term changes. A heap with no controller attached keeps its inert
-    /// `usize::MAX` default, where only `(gc)` raises the flag.
-    pub fn current_threshold(&self) -> usize {
+    /// [`GcThreshold::NEVER`] default, where only `(gc)` raises the flag.
+    ///
+    /// The adaptive default counts bytes (#606); stress counts allocations,
+    /// as its lanes' pinned collection counts assume.
+    pub fn current_threshold(&self) -> GcThreshold {
         match self.mode {
-            GcMode::Off => usize::MAX,
-            GcMode::On => self.collector.auto_threshold(),
-            GcMode::Stress(n) => n,
+            GcMode::Off => GcThreshold::NEVER,
+            GcMode::On => GcThreshold::bytes(self.collector.auto_threshold()),
+            GcMode::Stress(n) => GcThreshold::allocations(n),
             // Already crossed: installing it raises the pending flag, and
             // `collect` re-installs it after every sweep.
-            GcMode::Zeal => 0,
+            GcMode::Zeal => GcThreshold::allocations(0),
         }
     }
 
@@ -879,9 +908,11 @@ impl<'h> GcVisitor<'h> {
         // than by the collector because a dangling intern-table index would
         // break any collector — it is a heap invariant, not policy. Mark-only:
         // symbol_table entries are Symbol leaves by construction, so the
-        // worklist round-trip would be pure overhead.
-        for &idx in heap.symbol_table.values() {
+        // worklist round-trip would be pure overhead. Never traced, so their
+        // payload, the name, is counted here: the key is the same name.
+        for (name, &idx) in &heap.symbol_table {
             marks.objects.set(idx as usize);
+            marks.live_payload += name.len();
         }
         // Syntactic-keyword markers are roots on the same terms: a marker is
         // the identity of a form, so collecting one would let the next intern
@@ -926,7 +957,10 @@ impl<'h> GcVisitor<'h> {
             self.marks.vectors.set(tv.heap_index() as usize)
         } else if tv.is_string() {
             heap.string_checks.check_reached("string", tv);
-            self.marks.strings.set(tv.heap_index() as usize);
+            let index = tv.heap_index() as usize;
+            if self.marks.strings.set(index) {
+                self.marks.live_payload += account::string_payload(&heap.strings[index]);
+            }
             false
         } else if tv.is_object() {
             heap.object_checks.check_reached("object", tv);
@@ -1148,7 +1182,9 @@ impl<'h> GcVisitor<'h> {
             self.visit(car);
             self.visit(cdr);
         } else if tv.is_vector() {
-            for &element in &heap.vectors[idx] {
+            let elements = &heap.vectors[idx];
+            self.marks.live_payload += account::vector_payload(elements);
+            for &element in elements {
                 self.visit(element);
             }
         } else if tv.is_object() {
@@ -1166,6 +1202,10 @@ impl<'h> GcVisitor<'h> {
     /// read it back after a collection; deleting a field's trace fails its
     /// test.
     fn trace_object_children(&mut self, data: &'h HeapObjectData, tv: TaggedValue) {
+        // The byte account (`heap/account.rs`): a VM continuation's snapshot
+        // is its handle's payload, so it is counted live here with the
+        // handle, which is when the weak-id fixpoint traces it.
+        self.marks.live_payload += data.payload_bytes();
         match data {
             // Leaves: no embedded heap references. Filing a variant here that
             // holds a value is a use-after-free, not a compile error
@@ -1216,8 +1256,16 @@ impl<'h> GcVisitor<'h> {
             // traced only if the ref object itself is live — record the id
             // for the trace_weak_ids fixpoint (design §9.5). The set-guard
             // keeps the queue duplicate-free so each id is broadcast once.
-            HeapObjectData::VmContinuationRef(id)
-            | HeapObjectData::VmDelimitedContinuationRef(id) => {
+            HeapObjectData::VmContinuationRef {
+                id,
+                // A size, for the byte account, counted above.
+                bytes: _,
+            }
+            | HeapObjectData::VmDelimitedContinuationRef {
+                id,
+                // A size, as above.
+                bytes: _,
+            } => {
                 if self.live_weak_ids.insert(*id) {
                     self.new_weak_ids.push(*id);
                 }
@@ -1515,11 +1563,17 @@ impl Heap {
     /// (`heap/check.rs`).
     ///
     /// Consumes the mark bits as scratch space (read [`MarkBits::marked`]
-    /// first) and resets the allocation counter and the collection-pending
-    /// flag — sweep completion is the "collection happened" boundary.
+    /// first) and resets the allocation counters and the collection-pending
+    /// flag — sweep completion is the "collection happened" boundary. Settles
+    /// the byte account (`heap/account.rs`): L becomes the bytes marking
+    /// found live, plus the external bytes held now, and each freed slot's
+    /// bytes, its payload's included, are added to the bytes reclaimed.
     ///
     /// Crate-private with the rest of the collector (#624).
     pub(crate) fn sweep(&mut self, marks: &mut MarkBits) -> ArenaCounts {
+        // Before the arenas are swept: `sweep_arena` sets the free slots'
+        // bits, which are not live.
+        let live = marks.live_bytes();
         // Provenance is not a root. Prune it before slots can be reused,
         // inspecting only annotated syntax rather than every freed datum.
         self.syntax_sources
@@ -1534,6 +1588,9 @@ impl Heap {
         let mut freed = self.gc_freed_bits.take();
         let mut overflow = self.gc_freed_overflow;
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
+        // The payloads of the slots freed, measured before their tombstones
+        // drop them.
+        let mut freed_payload = 0usize;
         let swept = ArenaCounts {
             pairs: sweep_arena(
                 "pair",
@@ -1555,7 +1612,10 @@ impl Heap {
                 TaggedValue::vector,
                 true,
                 Vec::new,
-                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
+                |dead, elements| {
+                    record_freed_bits(&mut freed, &mut overflow, dead);
+                    freed_payload += account::vector_payload(elements);
+                },
             ),
             strings: sweep_arena(
                 "string",
@@ -1566,7 +1626,10 @@ impl Heap {
                 TaggedValue::string,
                 true,
                 Vec::new,
-                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
+                |dead, chars| {
+                    record_freed_bits(&mut freed, &mut overflow, dead);
+                    freed_payload += account::string_payload(chars);
+                },
             ),
             objects: sweep_arena(
                 "object",
@@ -1579,6 +1642,7 @@ impl Heap {
                 || HeapObjectData::Free,
                 |dead, old| {
                     record_freed_bits(&mut freed, &mut overflow, dead);
+                    freed_payload += old.payload_bytes();
                     if let (Some(ids), HeapObjectData::VmClosure { code_id, .. }) =
                         (freed_closures.as_mut(), old)
                     {
@@ -1590,6 +1654,20 @@ impl Heap {
         self.gc_freed_bits = freed;
         self.gc_freed_overflow = overflow;
         self.gc_freed_closure_code_ids = freed_closures;
+        let freed_bytes = swept.pairs * PAIR_SLOT_BYTES
+            + swept.vectors * VECTOR_SLOT_BYTES
+            + swept.strings * STRING_SLOT_BYTES
+            + swept.objects * OBJECT_SLOT_BYTES
+            + freed_payload;
+        let account = &mut self.account;
+        account.reclaimed += freed_bytes as u64;
+        account.through_last_gc = account
+            .through_last_gc
+            .saturating_add(account.since_gc as u64);
+        account.since_gc = 0;
+        // Read after the arenas are swept: external bytes that the dead
+        // slots' payloads gave back as they dropped are not live.
+        account.live = live.saturating_add(account.external.get());
         self.allocs_since_gc = 0;
         self.gc_pending.set(false);
         self.gc_collections += 1;
@@ -1602,41 +1680,46 @@ impl Heap {
 // MarkSweepCollector
 // ============================================================================
 
-/// Default allocation-count floor before a collection is considered.
-pub const DEFAULT_MIN_THRESHOLD: usize = 65_536;
+/// The floor of the adaptive interval, in bytes of allocation: GC_PRD §15's
+/// 8 MiB, which keeps a small program's collections few while bounding its
+/// garbage at a few times the size of its live data.
+pub const DEFAULT_MIN_BYTES: usize = 8 << 20;
 
 /// The v1 collector: stop-the-world mark-and-sweep, shared by both backends.
-/// Adaptive trigger: collect on a `(gc)` request, or once allocations since
-/// the last GC exceed `max(min_threshold, 2 × live-after-last-GC)`.
+/// Adaptive trigger: collect on a `(gc)` request, or once the bytes allocated
+/// since the last GC reach `max(8 MiB, 2·L)`, L being the bytes the last
+/// collection found live (GC_PRD §15; `heap/account.rs`). The peak heap then
+/// stays near three times what is live.
 pub(crate) struct MarkSweepCollector {
-    min_threshold: usize,
-    live_after_last: usize,
+    min_bytes: usize,
+    live_bytes_after_last: usize,
     stats: GcStats,
 }
 
 impl MarkSweepCollector {
     pub fn new() -> Self {
-        Self::with_min_threshold(DEFAULT_MIN_THRESHOLD)
+        Self::with_min_bytes(DEFAULT_MIN_BYTES)
     }
 
-    /// A custom allocation floor. Note this is only a *floor*: the adaptive
-    /// `2 × live` term still applies, so a small value does not by itself
-    /// produce stress-test behavior — that is [`GcMode::Stress`], which
-    /// bypasses the adaptive term entirely.
-    pub fn with_min_threshold(min_threshold: usize) -> Self {
+    /// A custom byte floor. Note this is only a *floor*: the adaptive `2·L`
+    /// term still applies, so a small value does not by itself produce
+    /// stress-test behavior — that is [`GcMode::Stress`], which counts
+    /// allocations and bypasses the adaptive term entirely.
+    pub fn with_min_bytes(min_bytes: usize) -> Self {
         Self {
-            min_threshold,
-            live_after_last: 0,
+            min_bytes,
+            live_bytes_after_last: 0,
             stats: GcStats::default(),
         }
     }
 
-    /// The adaptive trigger: allocations since the last collection at which
-    /// the next one fires. Installed into the heap via
+    /// The adaptive trigger: bytes of allocation since the last collection at
+    /// which the next one fires. Installed into the heap via
     /// `GcController::current_threshold` so `note_alloc` can raise the
     /// pending flag without consulting policy.
     pub fn auto_threshold(&self) -> usize {
-        self.min_threshold.max(2 * self.live_after_last)
+        self.min_bytes
+            .max(self.live_bytes_after_last.saturating_mul(2))
     }
 }
 
@@ -1747,7 +1830,7 @@ impl Collector for MarkSweepCollector {
         let marked = marks.marked();
         let swept = heap.sweep(&mut marks);
 
-        self.live_after_last = marked.total();
+        self.live_bytes_after_last = heap.live_bytes();
         self.stats.collections += 1;
         self.stats.last_marked = marked;
         self.stats.last_swept = swept;
@@ -1987,6 +2070,7 @@ mod tests {
     use crate::cps_expr::{CpsExpr, CpsExprKind};
     use crate::heap::GcFreedBits;
     use std::cell::RefCell;
+    use std::mem::size_of;
 
     /// Synthetic root provider for tests.
     #[derive(Default)]
@@ -2275,26 +2359,335 @@ mod tests {
     }
 
     #[test]
-    fn alloc_counter_and_adaptive_threshold() {
+    fn byte_counter_and_adaptive_threshold() {
         let mut heap = Heap::new();
-        let mut collector = MarkSweepCollector::with_min_threshold(10);
-        assert_eq!(collector.auto_threshold(), 10);
+        let mut collector = MarkSweepCollector::with_min_bytes(10 * PAIR_SLOT_BYTES);
+        assert_eq!(collector.auto_threshold(), 10 * PAIR_SLOT_BYTES);
 
         for i in 0..9 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }
         assert_eq!(heap.allocs_since_gc(), 9);
-        assert!(heap.allocs_since_gc() < collector.auto_threshold());
+        assert_eq!(heap.bytes_since_gc(), 9 * PAIR_SLOT_BYTES);
+        assert!(heap.bytes_since_gc() < collector.auto_threshold());
 
         heap.alloc_pair(TaggedValue::fixnum(9), TaggedValue::NULL);
-        assert!(heap.allocs_since_gc() >= collector.auto_threshold());
+        assert!(heap.bytes_since_gc() >= collector.auto_threshold());
 
-        let roots = TestRoots::default();
-        collector.collect(&mut heap, &[&roots]);
+        collector.collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.allocs_since_gc(), 0);
-        // 10 pairs survived nothing (no roots), so the adaptive term stays at
-        // the floor.
-        assert_eq!(collector.auto_threshold(), 10);
+        assert_eq!(heap.bytes_since_gc(), 0);
+        // Nothing survived (no roots), so the adaptive term stays at the
+        // floor.
+        assert_eq!(heap.live_bytes(), 0);
+        assert_eq!(collector.auto_threshold(), 10 * PAIR_SLOT_BYTES);
+
+        // A live vector of 100 elements: L is its slot and its elements, and
+        // the next interval is twice that.
+        let kept = heap.alloc_vector_fill(100, TaggedValue::NULL);
+        let roots = TestRoots {
+            values: vec![kept],
+            ..Default::default()
+        };
+        collector.collect(&mut heap, &[&roots]);
+        let live = VECTOR_SLOT_BYTES + 100 * size_of::<TaggedValue>();
+        assert_eq!(heap.live_bytes(), live);
+        assert_eq!(collector.auto_threshold(), 2 * live);
+    }
+
+    /// #606: one object's payload is charged with its slot, so a large
+    /// vector costs the trigger what it occupies, not what a pair does.
+    #[test]
+    fn allocation_charges_the_slot_and_the_payload() {
+        /// The bytes `alloc` charged the trigger.
+        fn charged(heap: &mut Heap, alloc: impl FnOnce(&mut Heap)) -> usize {
+            let before = heap.bytes_since_gc();
+            alloc(heap);
+            heap.bytes_since_gc() - before
+        }
+        let shared = crate::heap::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let heap = &mut *shared.borrow_mut();
+        let value = size_of::<TaggedValue>();
+        let pair = charged(heap, |h| {
+            h.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+        });
+        assert_eq!(pair, PAIR_SLOT_BYTES);
+        let vector = charged(heap, |h| {
+            h.alloc_vector_fill(100_000, TaggedValue::fixnum(0));
+        });
+        assert_eq!(vector, VECTOR_SLOT_BYTES + 100_000 * value);
+        let string = charged(heap, |h| {
+            h.alloc_string_chars(vec!['x'; 1000]);
+        });
+        assert_eq!(string, STRING_SLOT_BYTES + 1000 * 4);
+        let bytevector = charged(heap, |h| {
+            h.alloc_bytevector(vec![0; 5000]);
+        });
+        assert_eq!(bytevector, OBJECT_SLOT_BYTES + 5000);
+        // 2^200 has 201 bits: four 64-bit limbs.
+        let bignum = charged(heap, |h| {
+            h.alloc_bigint(num_bigint::BigInt::from(1) << 200);
+        });
+        assert_eq!(bignum, OBJECT_SLOT_BYTES + 32);
+        let real = charged(heap, |h| {
+            h.alloc_real(1.5);
+        });
+        assert_eq!(real, OBJECT_SLOT_BYTES);
+        let values = charged(heap, |h| {
+            h.alloc_values(vec![TaggedValue::NULL; 3]);
+        });
+        assert_eq!(values, OBJECT_SLOT_BYTES + 3 * value);
+        let closure = charged(heap, |h| {
+            h.alloc_vm_closure(1, vec![TaggedValue::NULL; 7], env.clone());
+        });
+        assert_eq!(closure, OBJECT_SLOT_BYTES + 7 * value);
+        let continuation = charged(heap, |h| {
+            h.alloc_vm_continuation_ref(160_000);
+        });
+        assert_eq!(continuation, OBJECT_SLOT_BYTES + 160_000);
+        assert_eq!(heap.allocs_since_gc(), 9);
+    }
+
+    /// Every byte allocation charges is either reclaimed by a sweep or still
+    /// occupied, and after a collection what is occupied is L: allocation,
+    /// marking and sweep measure each payload the same way.
+    #[test]
+    fn the_byte_account_balances() {
+        fn occupied(heap: &Heap) -> u64 {
+            let slots = (heap.pairs.len() - heap.free_pairs.len()) * PAIR_SLOT_BYTES
+                + (heap.vectors.len() - heap.free_vectors.len()) * VECTOR_SLOT_BYTES
+                + (heap.strings.len() - heap.free_strings.len()) * STRING_SLOT_BYTES
+                + (heap.objects.len() - heap.free_objects.len()) * OBJECT_SLOT_BYTES;
+            // A free slot holds a tombstone, whose payload is zero.
+            let payloads = heap
+                .vectors
+                .iter()
+                .map(account::vector_payload)
+                .sum::<usize>()
+                + heap
+                    .strings
+                    .iter()
+                    .map(account::string_payload)
+                    .sum::<usize>()
+                + heap
+                    .objects
+                    .iter()
+                    .map(HeapObjectData::payload_bytes)
+                    .sum::<usize>();
+            (slots + payloads) as u64
+        }
+
+        let shared = crate::heap::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let mut heap = shared.borrow_mut();
+        let mut roots = TestRoots::default();
+        // Each kind twice: one kept, one garbage.
+        for keep in [true, false] {
+            let mut scopes = crate::ScopeSet::new();
+            for id in 0..5 {
+                scopes.add_scope(crate::ScopeId(1000 + id));
+            }
+            let rtd = Rc::new(crate::record_type::RecordTypeDescriptor {
+                id: 0,
+                name: Rc::from("point"),
+                fields: vec![Rc::from("x"), Rc::from("y")],
+            });
+            let made = [
+                heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL),
+                heap.alloc_vector_fill(300, TaggedValue::NULL),
+                heap.alloc_str("payload"),
+                heap.alloc_bytevector(vec![7; 77]),
+                heap.alloc_bigint(num_bigint::BigInt::from(3) << 300),
+                heap.alloc_rational(num_rational::BigRational::new(
+                    num_bigint::BigInt::from(1) << 100,
+                    num_bigint::BigInt::from(3),
+                )),
+                heap.alloc_record(rtd, Rc::new(RefCell::new(vec![TaggedValue::NULL; 2]))),
+                heap.alloc_exception(
+                    crate::error::ExceptionKind::Custom("kind".into()),
+                    "message".into(),
+                    vec![TaggedValue::NULL; 4],
+                ),
+                heap.alloc_identifier(Rc::from("x"), scopes),
+                heap.alloc_values(vec![TaggedValue::NULL; 5]),
+                heap.alloc_vm_closure(1, vec![TaggedValue::NULL; 6], env.clone()),
+                heap.alloc_vm_continuation_ref(4096).0,
+                heap.alloc_vm_delimited_continuation_ref(2048).0,
+            ];
+            if keep {
+                roots.values.extend(made);
+            }
+        }
+        heap.intern_symbol("a-symbol-the-table-roots");
+        assert_eq!(heap.bytes_allocated(), occupied(&heap));
+        assert_eq!(heap.bytes_reclaimed(), 0);
+
+        MarkSweepCollector::new().collect(&mut heap, &[&roots]);
+        assert!(heap.bytes_reclaimed() > 0);
+        assert_eq!(
+            heap.bytes_allocated() - heap.bytes_reclaimed(),
+            occupied(&heap)
+        );
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap));
+
+        // Dropping the roots frees the rest, and the account still balances.
+        let allocated = heap.bytes_allocated();
+        MarkSweepCollector::new().collect(&mut heap, &[&TestRoots::default()]);
+        assert_eq!(heap.bytes_allocated(), allocated);
+        assert_eq!(
+            heap.bytes_allocated() - heap.bytes_reclaimed(),
+            occupied(&heap)
+        );
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap));
+    }
+
+    /// #606's first program in miniature: large vectors, each garbage at
+    /// once, raise the pending flag after 8 MiB of them, where an object
+    /// count would have waited for 65,536 of them.
+    #[test]
+    fn the_adaptive_trigger_counts_bytes() {
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        let controller = GcController::new(GcMode::On);
+        heap.set_gc_threshold(controller.current_threshold());
+
+        // 8 MiB of pairs is half a million of them; a few thousand do not
+        // cross it.
+        for i in 0..5000 {
+            heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
+        }
+        assert!(!pending.get());
+        // Ten 100,000-element vectors are 8 MB of elements: the eleventh
+        // crosses the floor.
+        for _ in 0..10 {
+            heap.alloc_vector_fill(100_000, TaggedValue::fixnum(0));
+        }
+        assert!(!pending.get(), "{} bytes", heap.bytes_since_gc());
+        heap.alloc_vector_fill(100_000, TaggedValue::fixnum(0));
+        assert!(pending.get(), "{} bytes", heap.bytes_since_gc());
+    }
+
+    /// Stress counts allocations, whatever their size, so its lanes' pinned
+    /// collection counts do not move with the byte trigger.
+    #[test]
+    fn stress_counts_allocations_not_bytes() {
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        let controller = GcController::new(GcMode::Stress(3));
+        heap.set_gc_threshold(controller.current_threshold());
+
+        heap.alloc_vector_fill(2_000_000, TaggedValue::fixnum(0));
+        heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+        assert!(!pending.get(), "16 MB in two allocations");
+        heap.alloc_pair(TaggedValue::NULL, TaggedValue::NULL);
+        assert!(pending.get(), "the third allocation");
+    }
+
+    /// L counts the payloads of the VM continuations a collection proves
+    /// live, so a program that keeps its captures raises its interval with
+    /// them instead of collecting every 8 MiB of capture; a capture that
+    /// dies is reclaimed with its handle.
+    #[test]
+    fn live_continuation_snapshots_count_in_l() {
+        let mut heap = Heap::new();
+        let mut controller = GcController::new(GcMode::On);
+        let snapshot = 4 << 20;
+        let mut roots = TestRoots::default();
+        for _ in 0..3 {
+            roots
+                .values
+                .push(heap.alloc_vm_continuation_ref(snapshot).0);
+        }
+        let (_dead, _) = heap.alloc_vm_continuation_ref(snapshot);
+
+        controller.collect(&mut heap, &[&roots]);
+        assert!(heap.live_bytes() >= 3 * snapshot);
+        assert!(heap.live_bytes() < 3 * snapshot + 4096);
+        assert!(heap.bytes_reclaimed() >= snapshot as u64);
+        // The interval is twice the snapshots kept, not the 8 MiB floor.
+        let threshold = controller.current_threshold();
+        assert_eq!(threshold.bytes, 2 * heap.live_bytes());
+        assert!(threshold.bytes > 3 * DEFAULT_MIN_BYTES);
+    }
+
+    /// External bytes (GC_PRD §15): charged like an allocation, counted in L
+    /// at each collection until they are released, and never counted as
+    /// reclaimed. `committed-bytes` is the arenas' alone: GC_PRD's footprint
+    /// adds the external bytes to it, so it must not hold them already.
+    #[test]
+    fn external_bytes_count_toward_the_trigger_and_l() {
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        heap.set_gc_threshold(GcThreshold::bytes(1 << 20));
+        heap.charge_external_bytes(1 << 20);
+        assert!(pending.get());
+        assert_eq!(heap.external_bytes(), 1 << 20);
+        assert_eq!(heap.bytes_allocated(), 1 << 20);
+
+        let mut collector = MarkSweepCollector::new();
+        collector.collect(&mut heap, &[&TestRoots::default()]);
+        assert_eq!(heap.live_bytes(), 1 << 20);
+        assert_eq!(heap.committed_bytes(), 0, "an empty heap's arenas");
+        assert_eq!(heap.stats().external_bytes, 1 << 20);
+
+        heap.release_external_bytes(1 << 20);
+        collector.collect(&mut heap, &[&TestRoots::default()]);
+        assert_eq!(heap.live_bytes(), 0);
+        assert_eq!(heap.bytes_reclaimed(), 0);
+
+        // A size an embedder got wrong saturates the count the trigger
+        // compares rather than wrapping it past the threshold, and the
+        // collection it brings on settles the account without overflowing.
+        heap.charge_external_bytes(1);
+        heap.charge_external_bytes(usize::MAX);
+        assert_eq!(heap.bytes_since_gc(), usize::MAX);
+        assert_eq!(heap.external_bytes(), usize::MAX);
+        assert!(pending.get());
+        collector.collect(&mut heap, &[&TestRoots::default()]);
+        assert_eq!(heap.bytes_allocated(), u64::MAX);
+        assert_eq!(heap.live_bytes(), usize::MAX);
+        heap.release_external_bytes(usize::MAX);
+        assert_eq!(heap.external_bytes(), 0);
+    }
+
+    /// A holder of external bytes usually dies inside a sweep, which holds
+    /// the heap mutably while it drops the dead slots' `Rc` payloads, so it
+    /// gives its bytes back through a handle that needs no heap borrow; the
+    /// collection's L then leaves them out.
+    #[test]
+    fn external_bytes_released_during_a_collection_are_not_live() {
+        /// Gives external bytes back from inside the collection, as a
+        /// holder's `Drop` would while the sweep runs.
+        struct ReleasingRoots {
+            handle: crate::heap::ExternalBytes,
+            bytes: usize,
+        }
+        impl GcRoots for ReleasingRoots {
+            fn trace_roots(&self, _visitor: &mut GcVisitor<'_>) {}
+            fn sweep_weak(&self, _visitor: &GcVisitor<'_>) {
+                self.handle.release(self.bytes);
+            }
+        }
+
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let handle = shared.borrow().external_bytes_handle();
+        shared.borrow_mut().charge_external_bytes(3 << 20);
+        {
+            // What a `Drop` during a sweep sees: the heap borrowed mutably.
+            let _sweeping = shared.borrow_mut();
+            handle.release(1 << 20);
+        }
+        assert_eq!(shared.borrow().external_bytes(), 2 << 20);
+
+        let roots = ReleasingRoots {
+            handle: handle.clone(),
+            bytes: 1 << 20,
+        };
+        let mut controller = GcController::new(GcMode::On);
+        controller.collect(&mut shared.borrow_mut(), &[&roots]);
+        assert_eq!(handle.held(), 1 << 20);
+        assert_eq!(shared.borrow().live_bytes(), 1 << 20);
     }
 
     #[test]
@@ -2357,7 +2750,7 @@ mod tests {
     fn alloc_crossing_threshold_raises_pending_flag() {
         let mut heap = Heap::new();
         let pending = heap.gc_pending_handle();
-        heap.set_gc_threshold(3);
+        heap.set_gc_threshold(GcThreshold::allocations(3));
 
         heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
         heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
@@ -2399,7 +2792,7 @@ mod tests {
         }
         assert!(!pending.get());
 
-        heap.set_gc_threshold(4);
+        heap.set_gc_threshold(GcThreshold::allocations(4));
         assert!(pending.get());
     }
 
@@ -2407,11 +2800,11 @@ mod tests {
     fn controller_collect_rearms_adaptive_threshold() {
         let mut heap = Heap::new();
         let pending = heap.gc_pending_handle();
-        // Simulate GcMode::On with a tiny floor so the adaptive `2 × live`
-        // term dominates.
+        // Simulate GcMode::On with a tiny floor so the adaptive `2·L` term
+        // dominates.
         let mut controller = GcController {
             mode: GcMode::On,
-            collector: MarkSweepCollector::with_min_threshold(1),
+            collector: MarkSweepCollector::with_min_bytes(1),
         };
 
         // Two live pairs held by a root, one garbage.
@@ -2425,8 +2818,9 @@ mod tests {
         controller.collect(&mut heap, &[&roots]);
         assert!(!pending.get());
 
-        // live = 2, so the re-armed threshold is max(1, 2 × 2) = 4: three
-        // allocations stay quiet, the fourth raises the flag.
+        // L is two pairs, so the re-armed threshold is max(1, 2·L), four
+        // pairs' worth: three allocations stay quiet, the fourth raises the
+        // flag.
         for i in 0..3 {
             heap.alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
         }

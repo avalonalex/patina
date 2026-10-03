@@ -40,10 +40,11 @@ BIN="${1:-target/release/patina}"
 # hand-written subset it replaced -- at `1` the suite goes from 0.15s to 103s,
 # and the debug lane from minutes to over half an hour.
 #
-# 16 keeps collection roughly 4000x more frequent than the adaptive default
-# (which collects about every 65k allocations) for 13x less runtime. Override
-# to 1 when hunting a specific lost root; CI's release lane does, on the
-# gc-check build, where it costs a few minutes.
+# 16 keeps collection tens of thousands of times more frequent than the
+# adaptive default on small objects (which collects after max(8 MiB, 2 x
+# live) bytes, half a million pairs at the floor) for 13x less runtime.
+# Override to 1 when hunting a specific lost root; CI's release lane does, on
+# the gc-check build, where it costs a few minutes.
 #
 # Note the reclamation proof below asserts >1000 collections over 20k
 # allocations, so it holds only while this stays <= 16.
@@ -137,27 +138,34 @@ for backend_flag in "" "--tree-walker"; do
 
     # The lanes above prove nothing if collection never ran (a broken env-var
     # path would pass vacuously): assert both the stress lane and the default
-    # adaptive mode actually collect and reclaim on churn workloads.
-    # The reclamation property is a *delta*: the churn itself must not grow
-    # the pairs arena. An absolute arena bound would really be measuring the
-    # bootstrap live-peak, which legitimately grows whenever lib/scheme
-    # grows (it crossed a 10000-pair bound when base's higher-order file
-    # gained its fast paths) — the churn delta is what stress collection
-    # actually guarantees.
+    # adaptive mode actually collect and reclaim on churn workloads. Each
+    # proof is in bytes (#606), and each requires `bytes-reclaimed` to have
+    # grown, which only a collection that freed something does, so none can
+    # pass without collecting.
+    #
+    # The stress proof: 20000 conses, each garbage at once, under stress.
+    # What they allocated must have been reclaimed, to within the last
+    # interval's worth, by more than a thousand collections. Measured as
+    # deltas across the churn, so the bootstrap's own allocation, which grows
+    # whenever lib/scheme grows, is not what is being bounded.
     cat > "$OUT/churn-stress.scm" <<'EOF'
 (import (scheme base) (scheme write) (scheme process-context) (patina debug))
-(define arena-before (cdr (assq 'pairs (gc-stats))))
+(define before (gc-stats))
 (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
 (churn 20000)
 (let* ((stats (gc-stats))
+       (delta (lambda (key) (- (cdr (assq key stats)) (cdr (assq key before)))))
        (collections (cdr (assq 'collections stats)))
-       (grown (- (cdr (assq 'pairs stats)) arena-before)))
-  (if (and (> collections 1000) (< grown 256))
+       (allocated (delta 'bytes-allocated))
+       (reclaimed (delta 'bytes-reclaimed)))
+  (if (and (> collections 1000) (> reclaimed 0) (>= (* 10 reclaimed) (* 9 allocated)))
       (begin (display "stress reclamation ok: ") (write collections)
-             (display " collections, arena grew ") (write grown)
-             (display " pairs across 20000 churned conses") (newline))
-      (begin (display "STRESS RECLAMATION BROKEN (arena grew ") (write grown)
-             (display "): ") (write stats) (newline)
+             (display " collections reclaimed ") (write reclaimed)
+             (display " of the ") (write allocated)
+             (display " bytes 20000 churned conses allocated") (newline))
+      (begin (display "STRESS RECLAMATION BROKEN (reclaimed ") (write reclaimed)
+             (display " of ") (write allocated) (display " bytes): ")
+             (write stats) (newline)
              (exit 1))))
 EOF
     if PATINA_GC_STRESS="$STRESS" "$BIN" $backend_flag "$OUT/churn-stress.scm"; then
@@ -167,19 +175,30 @@ EOF
         fail=1
     fi
 
-    # 200k allocations cross the 65 536 adaptive floor: the default mode must
-    # have collected on its own and kept the arena bounded.
+    # The default-mode proof: 20000 vectors of 1000 elements, each garbage at
+    # once, about 160 MB. The adaptive trigger counts bytes, so the default
+    # mode must have collected on its own, reclaimed most of it, and kept
+    # what the heap holds (`committed-bytes`) under a quarter of what the
+    # churn allocated. A trigger that counted objects would not collect at
+    # all: 20000 allocations are under its old floor of 65536 (#606).
     cat > "$OUT/churn-default.scm" <<'EOF'
 (import (scheme base) (scheme write) (scheme process-context) (patina debug))
-(define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
-(churn 200000)
+(define before (gc-stats))
+(define (churn n) (if (> n 0) (begin (make-vector 1000 n) (churn (- n 1)))))
+(churn 20000)
 (let* ((stats (gc-stats))
-       (collections (cdr (assq 'collections stats)))
-       (pairs (cdr (assq 'pairs stats))))
-  (if (and (> collections 0) (< pairs 150000))
+       (delta (lambda (key) (- (cdr (assq key stats)) (cdr (assq key before)))))
+       (collections (delta 'collections))
+       (allocated (delta 'bytes-allocated))
+       (reclaimed (delta 'bytes-reclaimed))
+       (committed (cdr (assq 'committed-bytes stats))))
+  (if (and (> collections 0) (> reclaimed 0)
+           (>= (* 2 reclaimed) allocated) (< (* 4 committed) allocated))
       (begin (display "default-mode reclamation ok: ") (write collections)
-             (display " collections, arena ") (write pairs)
-             (display " pairs") (newline))
+             (display " collections reclaimed ") (write reclaimed)
+             (display " of ") (write allocated)
+             (display " bytes, ") (write committed)
+             (display " committed") (newline))
       (begin (display "DEFAULT MODE DID NOT COLLECT: ") (write stats) (newline)
              (exit 1))))
 EOF

@@ -402,8 +402,8 @@ fn format_leaf_object(tv: TaggedValue, heap: &Heap, display_mode: bool, out: &mu
         // `Continuation`, the VM into a store it reaches by handle, and a
         // program cannot tell which backend it is running on.
         HeapObjectData::Continuation(_)
-        | HeapObjectData::VmContinuationRef(_)
-        | HeapObjectData::VmDelimitedContinuationRef(_) => out.push_str("#<continuation>"),
+        | HeapObjectData::VmContinuationRef { .. }
+        | HeapObjectData::VmDelimitedContinuationRef { .. } => out.push_str("#<continuation>"),
         HeapObjectData::PromptTag(tag) => write!(out, "{}", tag).unwrap(),
         HeapObjectData::Library(lib) => write!(out, "{}", lib).unwrap(),
         // The rest are internal and should reach no program's output — a
