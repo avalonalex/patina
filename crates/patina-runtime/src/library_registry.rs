@@ -805,3 +805,42 @@ mod tests {
         assert!(registry.loaded_libraries().is_empty());
     }
 }
+
+/// The registry's root provider (#623): built by a struct literal, so a new
+/// field breaks this test as well as `trace_roots`, with a registered
+/// library whose export and environment each hold a value nothing else
+/// reaches. `Library`'s own fields are pinned in patina-core
+/// (`library_exports_and_environment`).
+#[cfg(test)]
+mod gc_root_tests {
+    use super::*;
+    use patina_core::Environment;
+    use patina_core::heap::gc::collect_for_tests;
+    use patina_core::heap::sentinels::Sentinels;
+
+    #[test]
+    fn a_registered_library_is_a_root() {
+        let env = Rc::new(Environment::new());
+        let shared = env.heap().clone();
+        let mut heap = shared.borrow_mut();
+        let mut s = Sentinels::new(&mut heap);
+        let exported = s.pair(&mut heap, "LibraryRegistry.libraries: Library.exports");
+        let private = s.vector(&mut heap, "LibraryRegistry.libraries: Library.env");
+        drop(heap);
+        env.define("private", private);
+
+        let name = vec!["sentinel".to_string()];
+        let mut library = Library::with_env(name.clone(), env);
+        library.export_tagged("exported".to_string(), exported);
+        let registry = LibraryRegistry {
+            libraries: HashMap::from([(name, library)]),
+            search_paths: Vec::new(),
+            loading_stack: Vec::new(),
+            fs: Arc::new(patina_core::NativeFs),
+        };
+
+        let mut heap = shared.borrow_mut();
+        collect_for_tests(&mut heap, &[&registry]);
+        s.assert_survived(&heap);
+    }
+}

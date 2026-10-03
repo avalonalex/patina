@@ -3462,3 +3462,95 @@ mod layout_tests {
         );
     }
 }
+
+/// Every edge the collector follows out of an environment, each to a value
+/// nothing else reaches (#623): a plain binding, a scoped one, the binding an
+/// alias forwards to (#38), an imported binding's owner, and the parent's
+/// binding. The environment is built by a struct literal, so a new field
+/// breaks this test as well as `for_each_gc_edge`; the reads before the
+/// collection show the literal is the environment the API would build.
+#[cfg(test)]
+mod gc_edge_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::sentinels::Sentinels;
+    use crate::heap::trace_sentinels::collect_only;
+    use crate::scope::ScopeId;
+    use smallvec::smallvec;
+
+    #[test]
+    fn environment_edges() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let plain = s.pair(&mut h, "Environment.bindings");
+        let scoped = s.vector(&mut h, "Environment.scoped_bindings");
+        let aliased = s.string(&mut h, "Environment.alias_bindings");
+        let imported = s.object(&mut h, "Environment.rare: RareTables.owners");
+        let inherited = s.pair(&mut h, "Environment.parent");
+        drop(h);
+
+        let parent = Rc::new(Environment::with_heap(heap.clone()));
+        parent.define("inherited", inherited);
+        let alias_target = Rc::new(Environment::with_heap(heap.clone()));
+        alias_target.define("private", aliased);
+        let library = Rc::new(Environment::with_heap(heap.clone()));
+        library.define("exported", imported);
+        let owner_slot = library.local_slot("exported").unwrap();
+
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(ScopeId(7));
+        let mut scoped_table = ScopedTable::default();
+        scoped_table.insert(
+            Rc::from("hidden"),
+            smallvec![ScopedBinding {
+                scopes: scopes.clone(),
+                tagged_value: scoped,
+                visible_by_name: true,
+            }],
+        );
+        let mut aliases = AliasBindings::default();
+        aliases.insert(
+            Rc::from("alias"),
+            AliasTarget {
+                env: Some(Rc::clone(&alias_target)),
+                name: Rc::from("private"),
+                scopes: None,
+            },
+        );
+        let env = Environment {
+            heap: heap.clone(),
+            bindings: RefCell::new(Bindings {
+                slots: smallvec![
+                    (Rc::from("plain"), plain),
+                    (Rc::from("exported"), TaggedValue::FORWARDED),
+                ],
+                index: None,
+            }),
+            env_id: fresh_env_id(),
+            scoped_bindings: RefCell::new(scoped_table),
+            alias_bindings: RefCell::new(aliases),
+            has_aliases: Cell::new(true),
+            has_visible_scoped: Cell::new(true),
+            rare: OnceCell::from(Box::new(RareTables {
+                introduced_global_names: RefCell::default(),
+                links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
+                import_aliases: RefCell::default(),
+                owners: RefCell::new(vec![Rc::clone(&library)]),
+            })),
+            parent: Some(parent),
+        };
+        assert_eq!(env.get("plain"), Some(plain));
+        assert_eq!(
+            env.get_with_scopes("hidden", &scopes).unwrap(),
+            Some(scoped)
+        );
+        assert_eq!(env.get("alias"), Some(aliased));
+        assert_eq!(env.get("exported"), Some(imported));
+        assert_eq!(env.get("inherited"), Some(inherited));
+
+        let mut h = heap.borrow_mut();
+        collect_only(&mut h, |visitor| visitor.visit_env(&env));
+        s.assert_survived(&h);
+    }
+}

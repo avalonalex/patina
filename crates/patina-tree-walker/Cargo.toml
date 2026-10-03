@@ -28,6 +28,12 @@ unicode-casefold = "0.2"
 # Logging/tracing
 tracing = { workspace = true }
 
+[dev-dependencies]
+# The sentinel tests of the root providers (#623) drive the collector
+# directly, through patina-core's test-only entry (`collect_for_tests`) and
+# its `heap::sentinels`.
+patina-core = { path = "../patina-core", features = ["test-support"] }
+
 [features]
 default = []
 # Enable verbose debug tracing output

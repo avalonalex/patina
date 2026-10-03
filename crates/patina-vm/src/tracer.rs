@@ -305,6 +305,23 @@ impl patina_core::GcRoots for StepTracer {
 }
 
 impl StepTracer {
+    /// A tracer between its hooks, holding these register snapshots, for
+    /// the sentinel test of `VmState`'s roots (#623). A struct literal, so a
+    /// new field breaks the test as well as `trace_roots`.
+    #[cfg(test)]
+    pub(crate) fn holding(pre_regs: Vec<TaggedValue>, pre_all_regs: Vec<TaggedValue>) -> Self {
+        StepTracer {
+            events: Vec::new(),
+            filter: TraceFilter::default(),
+            print_live: false,
+            step: 0,
+            pre_regs,
+            pre_all_regs,
+            pre_code_id: CodeObjectId(0),
+            pre_pc: 0,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             events: Vec::new(),

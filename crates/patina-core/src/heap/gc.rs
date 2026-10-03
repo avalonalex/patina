@@ -1570,14 +1570,15 @@ impl Collector for MarkSweepCollector {
 ///
 /// **Not an API.** It exists for unit tests in other crates that drive the
 /// collector against hand-built state and assert on what it freed —
-/// `patina-vm`'s weak continuation table tests. A backend or a host collects
-/// through [`GcController::safe_point`], which is what keeps a collection
-/// from running while a Rust frame holds values no root provider sees.
+/// `patina-vm`'s weak continuation table tests, and the sentinel tests of
+/// each crate's root providers (#623). A backend or a host collects through
+/// [`GcController::safe_point`], which is what keeps a collection from
+/// running while a Rust frame holds values no root provider sees.
 ///
-/// Compiled only with the `test-support` feature, which `patina-vm` enables
-/// for its tests alone (a dev-dependency feature, which resolver 2 keeps out
-/// of every normal build): a build that ships has no way to collect outside
-/// `safe_point`.
+/// Compiled only with the `test-support` feature, which patina-vm,
+/// patina-tree-walker and patina-runtime enable for their tests alone (a
+/// dev-dependency feature, which resolver 2 keeps out of every normal
+/// build): a build that ships has no way to collect outside `safe_point`.
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {

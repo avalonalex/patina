@@ -28,7 +28,7 @@ pub struct Sentinels {
 
 struct Sentinel {
     /// The field the value stands in, as the failure names it.
-    field: &'static str,
+    field: String,
     value: TaggedValue,
 }
 
@@ -48,31 +48,34 @@ impl Sentinels {
         self.made.len() as i64
     }
 
-    fn keep(&mut self, field: &'static str, value: TaggedValue) -> TaggedValue {
-        self.made.push(Sentinel { field, value });
+    fn keep(&mut self, field: impl Into<String>, value: TaggedValue) -> TaggedValue {
+        self.made.push(Sentinel {
+            field: field.into(),
+            value,
+        });
         value
     }
 
     /// A fresh pair for `field`, whose car is its number.
-    pub fn pair(&mut self, heap: &mut Heap, field: &'static str) -> TaggedValue {
+    pub fn pair(&mut self, heap: &mut Heap, field: impl Into<String>) -> TaggedValue {
         let value = heap.alloc_pair(TaggedValue::fixnum(self.next()), TaggedValue::NULL);
         self.keep(field, value)
     }
 
     /// A fresh one-element vector for `field`, holding its number.
-    pub fn vector(&mut self, heap: &mut Heap, field: &'static str) -> TaggedValue {
+    pub fn vector(&mut self, heap: &mut Heap, field: impl Into<String>) -> TaggedValue {
         let value = heap.alloc_vector(vec![TaggedValue::fixnum(self.next())]);
         self.keep(field, value)
     }
 
     /// A fresh string for `field`, spelling its number.
-    pub fn string(&mut self, heap: &mut Heap, field: &'static str) -> TaggedValue {
+    pub fn string(&mut self, heap: &mut Heap, field: impl Into<String>) -> TaggedValue {
         let value = heap.alloc_string(format!("sentinel {}", self.next()));
         self.keep(field, value)
     }
 
     /// A fresh object for `field`: a `values` object holding its number.
-    pub fn object(&mut self, heap: &mut Heap, field: &'static str) -> TaggedValue {
+    pub fn object(&mut self, heap: &mut Heap, field: impl Into<String>) -> TaggedValue {
         let value = heap.alloc_values(vec![TaggedValue::fixnum(self.next())]);
         self.keep(field, value)
     }

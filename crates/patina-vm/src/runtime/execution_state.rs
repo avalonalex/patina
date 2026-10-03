@@ -45,6 +45,26 @@ impl ExecutionState {
         trace_handlers(exception_handlers, visitor);
     }
 
+    /// Build a state from its five components, for tests that fill each with
+    /// a value nothing else holds. A struct literal, so a new component fails
+    /// to compile here too.
+    #[cfg(test)]
+    pub(super) fn from_parts(
+        registers: Vec<TaggedValue>,
+        frames: Vec<CallFrame>,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    ) -> Self {
+        ExecutionState {
+            registers,
+            frames,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        }
+    }
+
     #[inline(always)]
     pub(super) fn registers(&self) -> &[TaggedValue] {
         &self.registers

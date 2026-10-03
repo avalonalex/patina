@@ -248,3 +248,37 @@ mod tests {
         assert_eq!(lib.to_string(), "#<library:(mylib utils)>");
     }
 }
+
+/// A library's two root sets, each with a value nothing else reaches (#623):
+/// an export and a binding of its environment. Built by a struct literal, so
+/// a new field breaks this test as well as `for_each_gc_edge`, and rooted
+/// through a `Library` heap object, so the object arm is covered too.
+#[cfg(test)]
+mod gc_edge_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::sentinels::Sentinels;
+    use crate::heap::trace_sentinels::{collect_from, env_holding};
+
+    #[test]
+    fn library_exports_and_environment() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let exported = s.pair(&mut h, "Library.exports");
+        let private = s.vector(&mut h, "Library.env");
+        drop(h);
+
+        let library = Library {
+            name: vec!["sentinel".to_string()],
+            exports: HashMap::from([("exported".to_string(), exported)]),
+            env: env_holding(&heap, private),
+            internal_names: HashMap::new(),
+            source: None,
+        };
+        let mut h = heap.borrow_mut();
+        let root = h.alloc_library(Rc::new(library));
+        collect_from(&mut h, &[root]);
+        s.assert_survived(&h);
+    }
+}

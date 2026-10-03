@@ -158,3 +158,6 @@ fn trace_stacks(
         trace_exception_handler(handler, visitor);
     }
 }
+
+#[cfg(test)]
+mod sentinel_tests;
