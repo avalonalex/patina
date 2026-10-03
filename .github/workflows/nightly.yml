@@ -1,0 +1,148 @@
+name: Nightly
+
+# Lanes too slow, or too dependent on an outside source, for every pull
+# request (#626; docs/TEST_ORGANIZATION.md, "GC lanes"). Its own workflow
+# rather than a job in gc-zeal.yml, which runs on every pull request that
+# touches the collector: these lanes would add half an hour there. Later
+# periodic lanes belong here too: #587's generator, #591's sweeps.
+#
+# It also runs on a pull request that changes a lane's own inputs, so a change
+# to the script, its baseline or this file is tested before it merges. The
+# filter has the limits ci.yml's has (docs/TEST_ORGANIZATION.md, "CI trigger
+# scope"); no check here is required.
+on:
+  # Daily, 05:43 UTC; GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: '43 5 * * *'
+  workflow_dispatch:
+    inputs:
+      update-baseline:
+        # For a row the runner disagrees with that is not the collector's
+        # doing (the lane re-runs a suite that differs without stress, and
+        # says which): the jobs rewrite the rows they ran, each into its
+        # artifact, and commit nothing. Review the rows, then commit them.
+        description: Re-pin the rows from this run (uploaded, not committed)
+        type: boolean
+        default: false
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'scripts/run_larceny_gc_stress.sh'
+      - 'scripts/run_larceny_tests.sh'
+      - 'scripts/larceny_report.py'
+      - 'scheme_tests/reports/larceny_gc_stress.tsv'
+      - '.github/workflows/nightly.yml'
+
+# Checkout and the caches need nothing more.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run; a scheduled or manual
+# run on main waits for the one before it.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Larceny's suites are LGPL and not vendored (scripts/run_larceny_tests.sh).
+  # The commit scheme_tests/reports/larceny*.md and the stress lane's baseline
+  # were measured at; the lane fails on any other.
+  LARCENY_COMMIT: fef550c7d3923deb7a5a1ccd5a628e54cf231c75
+  LARCENY: /home/runner/larceny
+
+jobs:
+  # Larceny's suites, R7RS and (r6rs ...), under PATINA_GC_STRESS in the
+  # release check build, each suite's tally held to
+  # scheme_tests/reports/larceny_gc_stress.tsv (scripts/run_larceny_gc_stress.sh
+  # has the intervals and what fails it). One job per backend, so they run
+  # side by side. On the runner (2026-10-03, #633's first run) the VM's two
+  # lanes took 434 s and 24 s, a job of 9 minutes, and the tree-walker's
+  # 1774 s and 51 s, a job of 31 minutes: about 2.2 times the time on an
+  # M-series Mac, where they took 307 s, 20-22 s, 757-1008 s and 29-36 s.
+  # The limit leaves room for one suite to run to its budget and for the
+  # re-run without stress of a suite whose tally moved. Each step prints
+  # every suite's time, and results.tsv, uploaded below, has them too.
+  larceny-gc-stress:
+    name: GC stress, Larceny suites (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vm
+            flag: ''
+            # Seconds a suite may take before it counts as a timeout. The
+            # slowest VM suite, text, took 180 s on the runner.
+            suite_timeout: 600
+          - backend: tree-walker
+            flag: --tree-walker
+            # stream took 783 s on the runner (321-486 s on a Mac), text
+            # 414 s and char 394 s; 900 s left stream 13% headroom.
+            suite_timeout: 1500
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release with the stale-reference checks
+      run: cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
+    # The lane refuses a binary without the checks too; this says so before
+    # the fetch.
+    - name: Require the checks in the binary
+      run: |
+        version=$(./target/release/patina --version)
+        echo "$version"
+        case "$version" in
+          *"(gc-check)") ;;
+          *) echo "::error::target/release/patina was built without the stale-reference checks"; exit 1 ;;
+        esac
+    - name: Cache the Larceny suites
+      id: larceny-cache
+      uses: actions/cache@v4
+      with:
+        path: /home/runner/larceny
+        # The trailing number is the recipe's: bump it when the fetch below
+        # changes.
+        key: larceny-${{ env.LARCENY_COMMIT }}-1
+    # A shallow, sparse fetch of the one pinned commit: about a megabyte of
+    # Scheme, where the repository is far larger.
+    - name: Fetch the Larceny suites at the pinned commit
+      if: steps.larceny-cache.outputs.cache-hit != 'true'
+      run: |
+        git init -q "$LARCENY"
+        cd "$LARCENY"
+        git remote add origin https://github.com/larcenists/larceny.git
+        git sparse-checkout set test/R7RS/Lib
+        git fetch -q --depth 1 --filter=blob:none origin "$LARCENY_COMMIT"
+        git checkout -q FETCH_HEAD
+    - name: GC stress lane, R7RS suites
+      env:
+        LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
+        LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
+        LARCENY_GC_STRESS_OUT: ${{ runner.temp }}/gc-stress-r7rs
+      run: >-
+        ./scripts/run_larceny_gc_stress.sh ${{ matrix.flag }}
+        ${{ inputs.update-baseline && '--update-baseline' || '' }}
+    - name: GC stress lane, (r6rs ...) suites
+      if: ${{ !cancelled() }}
+      env:
+        LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
+        LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
+        LARCENY_GC_STRESS_OUT: ${{ runner.temp }}/gc-stress-r6rs
+      run: >-
+        ./scripts/run_larceny_gc_stress.sh --r6rs ${{ matrix.flag }}
+        ${{ inputs.update-baseline && '--update-baseline' || '' }}
+    # Each suite's tally, collections, interval and seconds on the runner,
+    # and the baseline, which update-baseline has rewritten. Neither quotes
+    # the suite; its logs, which do, stay on the runner.
+    - name: Keep the results
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: larceny-gc-stress-${{ matrix.backend }}
+        path: |
+          ${{ runner.temp }}/gc-stress-*/results.tsv
+          scheme_tests/reports/larceny_gc_stress.tsv
+        retention-days: 30

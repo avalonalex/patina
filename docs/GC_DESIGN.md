@@ -542,6 +542,16 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   Stress deliberately ignores the adaptive floor: after bootstrap the live set
   is large enough that `2 × live` would almost never fire, which is the
   opposite of what a stress lane wants.
+
+  A backend reads the mode once, when it is made. A test that compares
+  collecting with not collecting names its mode instead
+  (`VmBackend::with_gc_mode`, `TreeWalker::with_gc_mode` and
+  `Evaluator::with_gc_mode`, hidden from the docs; `vm_interpreter_gc_off`
+  and `tree_walker_interpreter_gc_off` in `patina-tests`' common module):
+  under a stress lane's variable its not-collecting side would collect too,
+  and fail without anything being wrong (#626). `PATINA_GC_COUNT_DIR=<dir>`
+  asks each process for a record of how many collections it ran, which the
+  stress lanes read to fail a run that did not collect (§11 item 9).
 - Manual entry points for testing and users: `(gc)` and `(gc-stats)`
   primitives, honored in **every** mode. `(gc)` records a request; the next
   safe point services it. This is what makes collection testable without
@@ -1155,6 +1165,42 @@ visitor exists, and the stress lane is the real safety net.
    line deleted; that break-test was run for every traced field, and for
    each branch of the pattern, template and expression-literal walks, when
    the tests landed.
+9. **Stress beyond the chibi suite, and every run collected (#626).** The
+   differential lanes run one suite through the CLI; #130 needed an
+   ephemeron holding a continuation, which that suite never builds, and
+   #605 and #620 are reachable only through the embedding API. So two more
+   lanes run under stress in a check build. Per pull request,
+   `scripts/run_gc_stress_tests.sh` runs thirteen `cargo test` targets that
+   drive the collector, control flow and library loading from Rust at
+   `PATINA_GC_STRESS=16`, and `scheme_suite.rs` at 4096 (one of its files,
+   `srfi/regex-graphemes.scm`, kept it from finishing at 16), in the Test
+   Suite job's debug build. Nightly,
+   `scripts/run_larceny_gc_stress.sh` runs Larceny's suites (R7RS and
+   `(r6rs ...)`, on both backends) in the release `gc-check` build, each
+   suite at its own interval, and holds each tally to
+   `scheme_tests/reports/larceny_gc_stress.tsv`. A lane that passes without
+   collecting has tested nothing, and four have (#5, #164, #200, #201), so
+   each run must also collect: every process asked by
+   `PATINA_GC_COUNT_DIR` writes `gc-count.<pid>` into that directory, one
+   line naming the mode its environment selects, the backends it has made
+   and the collections it has run, rewritten at every collection, since
+   neither a test binary nor the CLI (which leaves through `process::exit`)
+   has a hook at its end. Each lane requires a record from every run, under
+   its interval, with at least the run's pinned minimum, half the
+   deterministic count measured when it was pinned; the nightly lane also
+   requires its job's backend. The positive controls
+   (docs/TEST_ORGANIZATION.md, "GC lanes"): with the variable kept from the
+   process, every target passes its tests and fails the lane on its record;
+   a filtered run fails the per-PR lane on each target's pinned test count,
+   and a changed pinned tally the nightly lane; and a library load without
+   its deferral fails both, #6's shape. The literal shape, `ParsedLibrary`
+   without its `GcDeferGuard::holding`, fails nine of the thirteen targets
+   with a use-after-free (that section names them), but not the VM's Larceny
+   suites, whose library bodies also run inside `VmState::with_globals`'
+   guard; without that one as well, every suite panics at bootstrap.
+   `scripts/tests/test_gc_stress_lanes.py` keeps the failure paths of both
+   scripts under test against fake binaries. `docs/TEST_ORGANIZATION.md`,
+   "GC lanes", has each lane's interval and budget.
 
 ---
 

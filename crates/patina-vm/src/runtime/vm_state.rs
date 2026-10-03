@@ -26,7 +26,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, GC_CHECK, GcController, GcDeferGuard, NoGcScopes};
+use patina_core::{AssertNoGc, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
@@ -219,7 +219,15 @@ pub struct VmState {
 }
 
 impl VmState {
+    /// A machine over `globals`'s heap, collecting in the mode the
+    /// environment selects.
     pub fn new(globals: Rc<Environment>) -> Self {
+        Self::with_gc_mode(globals, GcMode::from_env())
+    }
+
+    /// A machine collecting in `mode`, whatever the environment says: for a
+    /// test that compares collecting with not collecting (#626).
+    pub(crate) fn with_gc_mode(globals: Rc<Environment>, mode: GcMode) -> Self {
         let mut registry = PrimitiveRegistry::new();
         patina_primitives::register_all(&mut registry);
         // Share the heap with the environment so TaggedValue indices produced by
@@ -228,7 +236,8 @@ impl VmState {
         // Pairing heap with controller: install the policy's trigger
         // threshold (a bare heap defaults to inert) and cache the pending
         // flag the safe point reads.
-        let gc = GcController::from_env();
+        let gc = GcController::new(mode);
+        GcController::note_backend("vm");
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let gc_pending = heap.borrow().gc_pending_handle();
         heap.borrow_mut().enable_gc_freed_closure_tracking();

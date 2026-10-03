@@ -14,6 +14,11 @@
 #
 # Environment:
 #   LARCENY_TESTS_DIR     the Lib directory (default: ~/Project/reference/larceny/test/R7RS/Lib)
+#   PATINA_BIN            the binary to run (default: target/release/patina)
+#   LARCENY_REPORT_DIR    where the per-suite logs and the report go (default:
+#                         scheme_tests/reports, whose reports are tracked). The
+#                         GC stress lane points it elsewhere, so that a run
+#                         under stress does not rewrite them.
 #   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). Two suites floor
 #                         it instead of obeying it: `stream` and `ephemeron`
 #                         on the tree-walker get at least 600 s, because both
@@ -28,6 +33,12 @@
 # passed" / "N of M tests failed."), never re-derived. Each suite's status
 # comes from parse_log in scripts/larceny_report.py, the code that also renders
 # the report, so python3 is required.
+#
+# The nightly GC stress lane (scripts/run_larceny_gc_stress.sh) holds every
+# suite to its row in scheme_tests/reports/larceny_gc_stress.tsv, so a change
+# that moves a tally re-pins its rows there in the same pull request, or the
+# nightly fails the morning after it merges. This script warns, without
+# failing, when a suite's tally differs from its row.
 
 set -eo pipefail
 
@@ -60,7 +71,7 @@ for arg in "$@"; do
         --r6rs) LANE="r6rs" ;;
         --r7rs) LANE="r7rs" ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         --*)
@@ -73,8 +84,9 @@ done
 [ "$LANE" = "r6rs" ] && SUFFIX="_r6rs"
 [ "$BACKEND_NAME" = "tree-walker" ] && SUFFIX="${SUFFIX}_tree_walker"
 
-PATINA_BIN="$PWD/target/release/patina"
-REPORT_DIR="scheme_tests/reports"
+PATINA_BIN="${PATINA_BIN:-$PWD/target/release/patina}"
+case "$PATINA_BIN" in /*) ;; *) PATINA_BIN="$PWD/$PATINA_BIN" ;; esac
+REPORT_DIR="${LARCENY_REPORT_DIR:-scheme_tests/reports}"
 LOG_DIR="${REPORT_DIR}/larceny${SUFFIX}"
 REPORT="${REPORT_DIR}/larceny${SUFFIX}.md"
 
@@ -145,6 +157,7 @@ TOTAL_ASSERTED=0
 SUITES_CLEAN=0
 SUITES_RUN=0
 FAILING=()
+TALLIES=()
 
 # Larceny's convention is to run from the Lib directory: base.sld includes
 # "tests/scheme/base-test1.scm" cwd-relative, and -I . is how upstream's own
@@ -215,6 +228,7 @@ run_suite() {
     set -e
 
     SUITES_RUN=$((SUITES_RUN + 1))
+    TALLIES+=("$suite"$'\t'"$status"$'\t'"$passed"$'\t'"$total")
     TOTAL_PASSED=$((TOTAL_PASSED + passed))
     TOTAL_ASSERTED=$((TOTAL_ASSERTED + total))
     case "$status" in
@@ -245,6 +259,35 @@ echo "  Suites fully passing: ${SUITES_CLEAN} of ${SUITES_RUN}"
 echo "  Assertions passed:    ${TOTAL_PASSED} of ${TOTAL_ASSERTED} ($(pct "$TOTAL_PASSED" "$TOTAL_ASSERTED"))"
 echo ""
 echo "Report: $REPORT"
+
+# Each tally against the GC stress lane's row for it (see the header). A row
+# holds `-` for a field it does not hold; a suite with no row (ephemeron,
+# left out of that lane) is not compared.
+GC_STRESS_BASELINE=scheme_tests/reports/larceny_gc_stress.tsv
+if [ -f "$GC_STRESS_BASELINE" ] && [ ${#TALLIES[@]} -gt 0 ]; then
+    if [ "$BACKEND_NAME" = "tree-walker" ]; then
+        stress_lane="$LANE-tree-walker"
+    else
+        stress_lane="$LANE-vm"
+    fi
+    moved=$(printf '%s\n' "${TALLIES[@]}" | awk -F'\t' -v lane="$stress_lane" '
+        NR == FNR { if ($1 == lane) { status[$2] = $3; passed[$2] = $4; total[$2] = $5 }; next }
+        $1 in status {
+            s = status[$1]; p = passed[$1]
+            held = $4 == total[$1] && (p == "-" || $3 == p) &&
+                (s == "-" ? ($2 == "pass" || $2 == "fail") : $2 == s)
+            if (!held) printf "  %s: %s %s/%s, pinned %s %s/%s\n", $1, $2, $3, $4, s, p, total[$1]
+        }' "$GC_STRESS_BASELINE" -)
+    if [ -n "$moved" ]; then
+        echo ""
+        echo -e "${YELLOW}Warning: tallies that differ from their rows in ${GC_STRESS_BASELINE}:${NC}"
+        echo "$moved"
+        echo "The nightly GC stress lane holds each suite to its row ($stress_lane). If the"
+        echo "change is meant, re-pin the rows of every lane it moves in the same PR: edit"
+        echo "their status, passed and total, or run scripts/run_larceny_gc_stress.sh"
+        echo "--update-baseline on those suites (its header has how)."
+    fi
+fi
 
 if [ ${#FAILING[@]} -gt 0 ]; then
     exit 1

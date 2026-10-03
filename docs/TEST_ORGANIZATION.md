@@ -27,11 +27,13 @@ checks, revisit this opt-out: [GitHub leaves required checks pending when a
 whole workflow is filtered out](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#handling-skipped-but-required-checks).
 Such a policy needs a check that runs for every PR and accounts for skipped jobs.
 
-[`gc-zeal.yml`](../.github/workflows/gc-zeal.yml) is the one workflow
-filtered the other way: it runs when a change touches what its lane checks
-most directly (see "GC lanes" below), weekly on `main` for whatever the
-filter misses, and by hand (`workflow_dispatch`). The same caveat applies to
-it.
+[`gc-zeal.yml`](../.github/workflows/gc-zeal.yml) is filtered the other way:
+it runs when a change touches what its lane checks most directly (see "GC
+lanes" below), weekly on `main` for whatever the filter misses, and by hand
+(`workflow_dispatch`). [`nightly.yml`](../.github/workflows/nightly.yml)
+runs daily on `main`, by hand, and on a pull request that changes one of its
+lanes' own inputs (the scripts, the pinned baseline, the workflow). The same
+caveat applies to both.
 
 ## Test Structure
 
@@ -904,10 +906,12 @@ where a stale heap reference, a broken deferral rule or a register its
 liveness map wrongly retired panics where it is used, rather than surfacing
 later as a wrong answer or not at all (#621, #624, #625).
 
-| Lane | Script | What it compares | In CI |
-|---|---|---|---|
-| Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress (`PATINA_GC_STRESS_INTERVAL`, default 16), on both backends, with the tally pinned; plus reclamation proofs | `ci.yml`, every change: release `gc-check` at stress 1, and debug at 16 |
-| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and `PATINA_GC_ZEAL=entry`, which collects at every outermost safe point, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
+| Lane | Script | What it runs | Interval | Budget | In CI |
+|---|---|---|---|---|---|
+| Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus reclamation proofs | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
+| Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
+| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 13 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
+| Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
 under zeal took 882–920 s on the VM alone (2026-10-01), and
@@ -939,11 +943,107 @@ with its field's trace line deleted. They live beside the code they test:
 tree-walker's `gc_roots::sentinel_tests` and `patina-runtime`'s
 `gc_root_tests`.
 
+**Every stress run must have collected (#626).** A lane that passes
+without collecting has tested nothing, and four have (#5, #164, #200, #201):
+the variable that sets the mode did not reach the process, or the program
+allocated too little to cross the interval, and neither shows in the output.
+`PATINA_GC_COUNT_DIR=<dir>` makes each process write `gc-count.<pid>` there:
+one line with the mode its environment selects, the backends it has made and
+the collections it has run, rewritten at every collection
+(`crates/patina-core/src/heap/gc.rs`), and written with a count of zero as
+soon as it makes a collector, so a process that never collects says so. Both
+stress lanes require a record from every run, under the run's interval, with
+at least the pinned minimum: half the count measured when it was pinned,
+which is deterministic for a program at an interval, never below 1, and
+above what the run makes without stress. The nightly lane also requires the
+record to name its job's backend and no other: a tree-walker job that ran the
+VM would pass nearly every row, since the two backends' tallies differ only
+in `time`. One per-PR target pins a minimum near zero on purpose:
+`library_loading` does nearly all its work inside library loads, and a load
+defers collection for as long as its unevaluated body exists; it is in the
+set for the day that deferral is lost. `macro_definition_env` works inside
+library loads too, but one of its tests expands a library's macro after a
+collection, so it collects.
+
+**A change that moves a Larceny tally re-pins its stress rows in the same
+pull request.** The nightly lane holds each suite on each lane to its row in
+`scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue
+(`scheme_tests/reports/larceny_triage.md`) that changes a suite's status,
+passed or total count fails the nightly the morning after it merges unless
+the rows move with it, on every lane it moves. Edit their status, passed and
+total to the regenerated reports', or re-pin them with
+`run_larceny_gc_stress.sh --update-baseline`; `run_larceny_tests.sh` warns
+when a fresh tally differs from its row. Where the nightly finds a tally
+that differs, it runs the suite again without stress and says which it is:
+the same tally without stress is a stale baseline, a different one is the
+collector changing what a program computes. The baseline was measured on
+macOS and checked on the nightly's ubuntu x86_64 runner, whose tallies it
+holds: `flonum` fails one more assertion on x86_64 than on arm64 (#634), so a
+local macOS run reports that row as "not the collector". A row that differs
+on the runner for the platform's sake (a libm result, the clock) is
+re-pinned from it, with `nightly.yml`'s `update-baseline` input, which
+uploads the rewritten rows rather than committing them.
+
+The positive controls, run when the lanes landed (#626): with the stress
+variable misspelled in the per-PR script, every target passed its tests and
+failed the lane on its record's mode, and all but `macro_definition_env`,
+whose minimum was then zero, on its count too; the per-PR lane run with a test
+filter failed every target on its test count (#201's lesson, a run cut
+short); a nightly suite run by a binary wrapped to drop the variable failed
+on its mode and its count; one tally edited in the baseline failed its
+suite; and a library load without its deferral, #6's shape, failed both.
+Without `ParsedLibrary`'s `GcDeferGuard::holding`, nine of the 13 targets
+failed with a use-after-free (`callability`, `control_flow_matrix`,
+`ephemerons`, `escape_from_primitive`, `gc_tree_walker`, `hygiene_matrix`,
+`interpreter_api`, `library_loading` and `macro_definition_env`), and so did
+`scheme_suite.rs`; the VM's Larceny suites did not, because a VM library
+body also runs inside `VmState::with_globals`' guard, and with that one gone
+too every suite panicked at bootstrap. The tree-walker's bootstrap panics
+without the first alone. Three more were run when review found holes, each
+failing the lane where the lane before it passed: a tree-walker job whose
+runner dropped `--tree-walker` failed every suite on its record's backend;
+a binary that printed its whole tally and then died of SIGSEGV failed every
+suite on its exit status; and with stress never firing,
+`macro_definition_env` now fails on its count like the rest.
+`scripts/tests/test_gc_stress_lanes.py`, in the Test Suite's offline script
+tests, keeps each failure path of both scripts under test against fake
+binaries.
+
+`scheme_suite.rs` runs at 4096 because of one file. At 16 the whole target
+had not finished after 25 minutes; run through the debug CLI, one file at a
+time, `srfi/regex-graphemes.scm` had not finished after 300 s on either
+backend, while every other file together took about 90 s on the VM and 130 s
+on the tree-walker. It compiles SRFI 115's grapheme regex, a large live heap
+of character sets, and matches it against 400 syllables: 9 s on the VM and
+22 s on the tree-walker without stress, 12 s and 28 s at 4096, 58 s and 81 s
+at 256. The whole target took 20 s without stress, 27 s at 4096, 47 s at
+1024 and 125 s at 256 (2026-10-02).
+
+Four tests compare collecting with not collecting, and under a stress lane's
+variable a backend made from the environment collects on the side that must
+not. They name their mode instead: `gc_shared_tests!`'s
+`collecting_keeps_the_arena_smaller_than_not_collecting` and
+`unreachable_cycles_are_reclaimed`, on each backend, use
+`vm_interpreter_gc_off` and `tree_walker_interpreter_gc_off`, where only
+`(gc)` collects. #626 named a fifth,
+`a_form_whose_continuation_has_died_lets_its_code_go_at_a_collection`, which
+since #629 keeps every continuation it captures and passes in every mode, so
+it still reads the environment, and the zeal lane still runs it under zeal.
+
+The nightly lane's `time` suite measures wall-clock time: one assertion
+requires a one-second loop to stop within 100 ms of its deadline. It passes
+on the VM and fails on the tree-walker here, with or without stress, as the
+tracked reports also record, and a slower or busier runner could move it
+either way, so its rows hold only its total and that it reached a tally
+(`-` for its status and passed count).
+
 ```bash
 cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
 PATINA_GC_STRESS_INTERVAL=1 ./scripts/run_gc_differential.sh target/release/patina
 ./scripts/run_gc_zeal.sh target/release/patina
+./scripts/run_larceny_gc_stress.sh                 # and --tree-walker, --r6rs
 cargo build && ./scripts/run_gc_differential.sh target/debug/patina
+cargo test --all --lib --tests && ./scripts/run_gc_stress_tests.sh
 ```
 
 ### Development Workflow

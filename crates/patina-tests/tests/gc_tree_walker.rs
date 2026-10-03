@@ -13,7 +13,7 @@
 mod common;
 use common::*;
 
-gc_shared_tests!(eval_program_tree_walker);
+gc_shared_tests!(eval_program_tree_walker, eval_program_tree_walker_gc_off);
 
 #[test]
 fn closure_environment_survives_collection() {

@@ -47,6 +47,21 @@ jobs:
         SKIP_CHIBI_TESTS: 1
       run: cargo test --all --lib --tests
 
+    # The per-PR GC stress lane (#626; docs/TEST_ORGANIZATION.md, "GC
+    # lanes"): thirteen targets that drive the collector, control flow and
+    # library loading through the embedding API, which the chibi lanes never
+    # reach, under PATINA_GC_STRESS=16, and scheme_suite.rs at 4096, in this
+    # debug build, whose stale-reference checks turn a lost root into a
+    # panic. Each target must pass and report at least its pinned number of
+    # collections. It reuses the build above: the script names the workspace
+    # as that command does, so nothing recompiles. It took about a minute
+    # locally (2026-10-02); the limit, near ten times that, stops a target
+    # that a collector regression makes crawl, and the targets that finished
+    # are in the log above the one that did not.
+    - name: GC stress lane (debug, collector and control-flow targets)
+      timeout-minutes: 15
+      run: ./scripts/run_gc_stress_tests.sh
+
     - name: Embedding examples and feature combinations
       run: |
         cargo test -p patina-interpreter -p patina-pipeline --doc
