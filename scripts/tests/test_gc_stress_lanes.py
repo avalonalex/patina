@@ -4,11 +4,12 @@ run_gc_stress_tests.sh (per PR) and run_larceny_gc_stress.sh (nightly) each
 pass only when every run passed, ran under its interval, and collected at
 least its pinned minimum; the per-PR one also requires every test of a
 target to have run, and the nightly one holds each suite's tally to its
-pinned row. These run both scripts against a fake `cargo` and a fake
-`patina` that write the collection record PATINA_GC_COUNT_DIR asks for, so
-each way a lane can fail is shown failing it: the positive controls for a
-run that reports no collections (#5) and a changed tally (#201). No
-compiler, interpreter or Larceny checkout is needed.
+pinned row, its exit status to its tally, and its process to the lane's
+backend. These run both scripts against a fake `cargo` and a fake `patina`
+that write the collection record PATINA_GC_COUNT_DIR asks for, so each way
+a lane can fail is shown failing it: the positive controls for a run that
+reports no collections (#5) and a changed tally (#201). No compiler,
+interpreter or Larceny checkout is needed.
 """
 
 import os
@@ -32,7 +33,8 @@ env = 'adaptive' if mode == 'other-mode' or not stress else 'PATINA_GC_STRESS=' 
 count = 0 if mode == 'zero' else 100000
 if directory and mode != 'no-record':
     with open(os.path.join(directory, 'gc-count.%d' % os.getpid()), 'w') as f:
-        f.write('pid=%d exe=%s-0123abcd env=%s collections=%020d\n' % (os.getpid(), target, env, count))
+        f.write('pid=%d exe=%s-0123abcd env=%s backends=tree-walker,vm collections=%020d\n'
+                % (os.getpid(), target, env, count))
 if mode == 'fail':
     print('test some_test ... FAILED')
     print('test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out')
@@ -43,7 +45,8 @@ else:
     print('test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out')
 '''
 
-# A suite run: the record, then what Larceny's runner prints.
+# A suite run: the record, then what Larceny's runner prints. A failing
+# tally names one failing assertion, which each fake suite's source has.
 FAKE_PATINA = r'''
 import os, sys, time
 if sys.argv[1:] == ['--version']:
@@ -54,10 +57,14 @@ suite = os.path.basename(sys.argv[-1])[:-len('.sps')]
 directory = os.environ.get('PATINA_GC_COUNT_DIR')
 stress = os.environ.get('PATINA_GC_STRESS')
 env = 'adaptive' if mode == 'other-mode' or not stress else 'PATINA_GC_STRESS=' + stress
-count = 0 if mode == 'zero' else 1000
+count = {'zero': 0, 'one': 1}.get(mode, 1000)
+backend = 'tree-walker' if '--tree-walker' in sys.argv else 'vm'
+if mode == 'other-backend':
+    backend = {'vm': 'tree-walker', 'tree-walker': 'vm'}[backend]
 if directory and mode != 'no-record':
     with open(os.path.join(directory, 'gc-count.%d' % os.getpid()), 'w') as f:
-        f.write('pid=%d exe=patina env=%s collections=%020d\n' % (os.getpid(), env, count))
+        f.write('pid=%d exe=patina env=%s backends=%s collections=%020d\n'
+                % (os.getpid(), env, backend, count))
 print('Running tests for (scheme %s)' % suite)
 sys.stdout.flush()
 if mode == 'hang':
@@ -66,7 +73,14 @@ if mode == 'panic':
     print("thread 'main' panicked at crates/patina-core/src/heap/check.rs:1:1:", file=sys.stderr)
     print('read of a freed pair slot', file=sys.stderr)
     sys.exit(101)
-print('1 of 10 tests failed.' if mode == 'tally' else '10 tests passed')
+if mode == 'tally' or mode == 'stress-tally' and stress:
+    print('Expression:\n (%s-probe 1)\nResult:\n 2\n' % suite)
+    print('1 of 10 tests failed.')
+else:
+    print('10 tests passed')
+sys.stdout.flush()
+if mode == 'crash-after-tally':
+    os._exit(139)
 '''
 
 # `git -C <dir> rev-parse HEAD`, answering for the Larceny checkout.
@@ -95,6 +109,9 @@ class Lanes(unittest.TestCase):
         runs.mkdir(parents=True)
         for suite in ('alpha', 'beta', 'stream', 'ephemeron'):
             (runs / (suite + '.sps')).write_text('(display "fake")\n')
+            (runs.parent / (suite + '.sld')).write_text(
+                '(define-library (tests scheme %s)\n  (begin\n    (test (%s-probe 1) 1)))\n'
+                % (suite, suite))
         self.baseline = self.root / 'scheme_tests/reports/larceny_gc_stress.tsv'
         self.baseline.parent.mkdir(parents=True)
         self.pin(['alpha', 'beta', 'stream'])
@@ -109,8 +126,9 @@ class Lanes(unittest.TestCase):
         path.write_text('#!/usr/bin/env python3\n' + body)
         path.chmod(0o755)
 
-    def pin(self, suites, minimum=500):
-        rows = ''.join('r7rs-vm\t%s\tpass\t10\t10\t%d\n' % (suite, minimum) for suite in suites)
+    def pin(self, suites, minimum=500, lane='r7rs-vm', status='pass', passed='10'):
+        rows = ''.join('%s\t%s\t%s\t%s\t10\t%d\n' % (lane, suite, status, passed, minimum)
+                       for suite in suites)
         self.baseline.write_text('# a comment\n' + rows)
 
     def run_script(self, script, *args, mode='ok', **env):
@@ -162,8 +180,44 @@ class Lanes(unittest.TestCase):
         self.assertIn('SKIP ephemeron', result.stdout)
 
     def test_nightly_lane_fails_a_changed_tally(self):
+        result = self.run_script('run_larceny_gc_stress.sh', mode='tally')
+        self.assert_lane_fails(result, 'tally fail 9/10, pinned pass 10/10')
+        # What failed, as a permalink rather than the suite's text.
+        self.assertIn('[alpha.sld:3](https://github.com/larcenists/larceny/blob/%s/'
+                      'test/R7RS/Lib/tests/scheme/alpha.sld#L3)' % PINNED, result.stdout)
+        self.assertNotIn('Expression', result.stdout)
+
+    def test_nightly_lane_says_whether_stress_or_the_baseline_moved_a_tally(self):
         self.assert_lane_fails(self.run_script('run_larceny_gc_stress.sh', mode='tally'),
-                               'tally fail 9/10, pinned pass 10/10')
+                               'without stress the same fail 9/10: not the collector')
+        self.assert_lane_fails(self.run_script('run_larceny_gc_stress.sh', mode='stress-tally'),
+                               'without stress pass 10/10: stress changed the tally')
+
+    def test_nightly_lane_holds_only_the_total_of_a_row_with_dashes(self):
+        self.pin(['alpha', 'beta', 'stream'], status='-', passed='-')
+        for mode in ('ok', 'tally'):
+            result = self.run_script('run_larceny_gc_stress.sh', mode=mode)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # A run that reached no tally is still not a pass or a fail.
+        self.assert_lane_fails(self.run_script('run_larceny_gc_stress.sh', mode='panic'),
+                               'pinned - -/10')
+
+    def test_nightly_lane_fails_an_exit_status_its_tally_does_not_explain(self):
+        self.assert_lane_fails(
+            self.run_script('run_larceny_gc_stress.sh', mode='crash-after-tally'),
+            'exit status 139 after a pass tally, which exits 0')
+
+    def test_nightly_lane_fails_a_run_on_the_other_backend(self):
+        self.pin(['alpha', 'beta', 'stream'], lane='r7rs-tree-walker')
+        result = self.run_script('run_larceny_gc_stress.sh', '--tree-walker')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_lane_fails(
+            self.run_script('run_larceny_gc_stress.sh', '--tree-walker', mode='other-backend'),
+            'the process ran other than the tree-walker backend')
+        self.pin(['alpha', 'beta', 'stream'])
+        self.assert_lane_fails(
+            self.run_script('run_larceny_gc_stress.sh', mode='other-backend'),
+            'the process ran other than the vm backend')
 
     def test_nightly_lane_fails_a_check_panic(self):
         self.assert_lane_fails(self.run_script('run_larceny_gc_stress.sh', mode='panic'),
@@ -208,9 +262,45 @@ class Lanes(unittest.TestCase):
     def test_nightly_lane_update_does_not_pin_a_failed_run(self):
         self.pin([])
         before = self.baseline.read_text()
-        result = self.run_script('run_larceny_gc_stress.sh', '--update-baseline', mode='panic')
-        self.assert_lane_fails(result, 'Not rewriting')
-        self.assertEqual(self.baseline.read_text(), before)
+        for mode, diagnostic in (('panic', 'a panic'),
+                                 ('zero', 'no collections: a run that did not collect'),
+                                 ('stress-tally', 'stress changed the tally'),
+                                 ('crash-after-tally', 'exit status 139')):
+            result = self.run_script('run_larceny_gc_stress.sh', '--update-baseline', mode=mode)
+            self.assert_lane_fails(result, 'Not rewriting')
+            self.assertIn(diagnostic, result.stdout)
+            self.assertEqual(self.baseline.read_text(), before)
+
+    def test_nightly_lane_update_pins_a_minimum_of_at_least_one(self):
+        self.pin(['alpha'])
+        result = self.run_script('run_larceny_gc_stress.sh', '--update-baseline', 'alpha',
+                                 mode='one')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('r7rs-vm\talpha\tpass\t10\t10\t1', self.baseline.read_text().splitlines())
+
+    def test_nightly_lane_update_keeps_a_rows_dashes(self):
+        self.pin(['alpha'], status='-', passed='-')
+        result = self.run_script('run_larceny_gc_stress.sh', '--update-baseline', 'alpha',
+                                 mode='tally')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('r7rs-vm\talpha\t-\t-\t10\t500', self.baseline.read_text().splitlines())
+
+    # The plain runner, which warns when a tally leaves its stress row.
+
+    def test_runner_warns_when_a_tally_differs_from_its_stress_row(self):
+        result = subprocess.run(['bash', str(self.root / 'scripts/run_larceny_tests.sh'), 'alpha', 'beta'],
+                                cwd=self.temporary.name, env=dict(self.env, FAKE_MODE='ok'),
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('Warning: tallies', result.stdout)
+        self.pin(['alpha', 'beta'], status='fail', passed='9')
+        result = subprocess.run(['bash', str(self.root / 'scripts/run_larceny_tests.sh'), 'alpha', 'beta'],
+                                cwd=self.temporary.name, env=dict(self.env, FAKE_MODE='ok'),
+                                text=True, capture_output=True)
+        # A warning, not a failure: the run itself was clean.
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Warning: tallies that differ from their rows', result.stdout)
+        self.assertIn('  alpha: pass 10/10, pinned fail 9/10', result.stdout)
 
 
 if __name__ == '__main__':

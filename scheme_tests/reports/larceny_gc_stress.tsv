@@ -6,10 +6,18 @@
 # passed, total, min_collections. status, passed and total are
 # scripts/larceny_report.py's classification of the suite's log, and are a
 # plain release run's: collection must not change what a suite computes.
+# `-` for status and passed holds only the total, and that the suite reached
+# a tally: `time`, whose passed count measures the machine's clock and speed.
 # min_collections is half the collections the row's run made, a count that
-# is deterministic for a suite at a given interval.
+# is deterministic for a suite at a given interval, and at least 1.
 #
-# Measured against larcenists/larceny at fef550c7d392.
+# A change that moves a suite's tally moves its rows here in the same pull
+# request, on every lane it moves; scripts/run_larceny_tests.sh warns when a
+# tally differs from its row.
+#
+# Measured against larcenists/larceny at fef550c7d392, on macOS arm64
+# (2026-10-02). The nightly runs on ubuntu x86_64; its first run there
+# confirms these rows or re-pins them (scripts/run_larceny_gc_stress.sh).
 r7rs-vm	base	fail	1086	1094	531
 r7rs-vm	box	pass	10	10	4
 r7rs-vm	case-lambda	pass	5	5	3
@@ -39,7 +47,7 @@ r7rs-vm	set	truncated	16	16	132
 r7rs-vm	sort	pass	2562	2562	696
 r7rs-vm	stream	pass	81	81	32446
 r7rs-vm	text	pass	1069	1069	25883
-r7rs-vm	time	pass	2	2	4
+r7rs-vm	time	-	-	2	4
 r7rs-vm	vector	pass	103	103	71
 r7rs-vm	write	fail	60	63	95
 r7rs-tree-walker	base	fail	1086	1094	506
@@ -71,7 +79,7 @@ r7rs-tree-walker	set	truncated	16	16	108
 r7rs-tree-walker	sort	pass	2562	2562	619
 r7rs-tree-walker	stream	pass	81	81	29025
 r7rs-tree-walker	text	pass	1069	1069	25369
-r7rs-tree-walker	time	fail	1	2	4
+r7rs-tree-walker	time	-	-	2	4
 r7rs-tree-walker	vector	pass	103	103	67
 r7rs-tree-walker	write	fail	60	63	92
 r6rs-vm	arithmetic/fixnums	pass	3379	3379	5378
