@@ -69,7 +69,8 @@ unset PATINA_GC PATINA_GC_STRESS PATINA_GC_ZEAL PATINA_GC_COUNT_DIR
 # the count without stress, re-measured 2026-10-03 under the byte trigger,
 # #606, which left every count under stress as it was; gc_tree_walker's and
 # gc_vm's counts re-measured that day too, when their reclamation proofs
-# moved to bytes, which raised them slightly)
+# moved to bytes, which raised them slightly, and again when the arena
+# comparison stopped making a third run, which lowered them)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -77,8 +78,8 @@ TARGETS=(
     "ephemerons 16 62 15"                     # 124 (28)
     "escape_from_primitive 16 364 12"         # 728 (0)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
-    "gc_tree_walker 16 11421 19"              # 22979 (64)
-    "gc_vm 16 8001 23"                        # 16140 (75)
+    "gc_tree_walker 16 11421 19"              # 22851 (55)
+    "gc_vm 16 8001 23"                        # 16012 (66)
     "hygiene_matrix 16 400 13"                # 800 (2)
     "interpreter_api 16 37 27"                # 74 (5)
     "library_loading 16 1 9"                  # 3 (0): see the header
