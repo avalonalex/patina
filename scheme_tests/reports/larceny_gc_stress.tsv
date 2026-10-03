@@ -16,8 +16,11 @@
 # tally differs from its row.
 #
 # Measured against larcenists/larceny at fef550c7d392, on macOS arm64
-# (2026-10-02). The nightly runs on ubuntu x86_64; its first run there
-# confirms these rows or re-pins them (scripts/run_larceny_gc_stress.sh).
+# (2026-10-02), and checked on the nightly's ubuntu x86_64 runner
+# (2026-10-03, #633's first run). The rows are the runner's: on x86_64,
+# flonum fails one more assertion than on arm64 (flonum.sld:693, #634), with
+# or without stress, so on macOS arm64 the lane reports flonum as "not the
+# collector". Every other row and every collection count held on both.
 r7rs-vm	base	fail	1086	1094	531
 r7rs-vm	box	pass	10	10	4
 r7rs-vm	case-lambda	pass	5	5	3
@@ -28,7 +31,7 @@ r7rs-vm	complex	fail	68	69	41
 r7rs-vm	cxr	pass	28	28	10
 r7rs-vm	eval	pass	5	5	4
 r7rs-vm	file	fail	70	75	44
-r7rs-vm	flonum	fail	1279	1280	289
+r7rs-vm	flonum	fail	1278	1280	289
 r7rs-vm	generator	pass	49	49	126
 r7rs-vm	hash-table	pass	82	82	1460
 r7rs-vm	ideque	pass	114	114	4772
@@ -60,7 +63,7 @@ r7rs-tree-walker	complex	fail	68	69	37
 r7rs-tree-walker	cxr	pass	28	28	10
 r7rs-tree-walker	eval	pass	5	5	4
 r7rs-tree-walker	file	fail	70	75	42
-r7rs-tree-walker	flonum	fail	1279	1280	255
+r7rs-tree-walker	flonum	fail	1278	1280	255
 r7rs-tree-walker	generator	pass	49	49	112
 r7rs-tree-walker	hash-table	pass	82	82	1226
 r7rs-tree-walker	ideque	pass	114	114	4268

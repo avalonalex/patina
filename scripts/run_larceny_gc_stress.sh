@@ -50,12 +50,15 @@
 # load, the R7RS lane took 307 s on the VM, the slowest suites text (165 s
 # at 16), stream (56 s) and char (54 s), and 855-1008 s on the tree-walker,
 # with stream (338-486 s), text (276-281 s) and char (155 s); the
-# (r6rs ...) lane took 20-22 s and 32-36 s. The baseline was measured there
-# too, on macOS: the nightly runs on ubuntu x86_64, where a suite that leans
-# on the platform's libm or clock may differ. Its first run there is the
-# measurement; a row that differs and is not the collector's doing (the
-# plain re-run above says which) is re-pinned from the runner, with
-# nightly.yml's update-baseline input.
+# (r6rs ...) lane took 20-22 s and 32-36 s. On the nightly's ubuntu runner
+# (2026-10-03) each took about 2.2 times as long: the VM's R7RS lane 434 s
+# (text 180 s), the tree-walker's 1774 s (stream 783 s, text 414 s, char
+# 394 s), and the (r6rs ...) lanes 24 s and 51 s. The baseline was measured
+# on the Mac and checked on the runner, whose tallies it holds: flonum fails
+# one more assertion on x86_64 than on arm64 (#634). A row that differs on a
+# platform and is not the collector's doing (the plain re-run above says
+# which) is re-pinned from the runner, with nightly.yml's update-baseline
+# input.
 #
 # Run it against a check build, where a stale reference panics at its first
 # use instead of reading whatever reused the slot: release built with

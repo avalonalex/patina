@@ -56,18 +56,17 @@ jobs:
   # release check build, each suite's tally held to
   # scheme_tests/reports/larceny_gc_stress.tsv (scripts/run_larceny_gc_stress.sh
   # has the intervals and what fails it). One job per backend, so they run
-  # side by side. Not yet measured on the runner: on an M-series Mac under
-  # other load (2026-10-02) the VM's two lanes took 307 s and 20-22 s and
-  # the tree-walker's 855-1008 s and 32-36 s, and the zeal lane runs about
-  # 1.35 times slower on the runner than there, so the tree-walker's job may
-  # take 30 minutes or more. The limit leaves room for one suite to run to
-  # its budget and for the re-run without stress of a suite whose tally
-  # moved. Each step prints every suite's time, and results.tsv, uploaded
-  # below, has them too.
+  # side by side. On the runner (2026-10-03, #633's first run) the VM's two
+  # lanes took 434 s and 24 s, a job of 9 minutes, and the tree-walker's
+  # 1774 s and 51 s, a job of 31 minutes: about 2.2 times the time on an
+  # M-series Mac, where they took 307 s, 20-22 s, 757-1008 s and 29-36 s.
+  # The limit leaves room for one suite to run to its budget and for the
+  # re-run without stress of a suite whose tally moved. Each step prints
+  # every suite's time, and results.tsv, uploaded below, has them too.
   larceny-gc-stress:
     name: GC stress, Larceny suites (${{ matrix.backend }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -75,12 +74,13 @@ jobs:
           - backend: vm
             flag: ''
             # Seconds a suite may take before it counts as a timeout. The
-            # slowest VM suite, text, took 165 s.
+            # slowest VM suite, text, took 180 s on the runner.
             suite_timeout: 600
           - backend: tree-walker
             flag: --tree-walker
-            # stream took 338-486 s here, and 270 s without stress.
-            suite_timeout: 900
+            # stream took 783 s on the runner (321-486 s on a Mac), text
+            # 414 s and char 394 s; 900 s left stream 13% headroom.
+            suite_timeout: 1500
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust
