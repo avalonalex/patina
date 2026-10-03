@@ -247,6 +247,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    # The collector's trace code names every field of what it traces (#623):
+    # no `..` and no wildcard arm in the trace functions, and a reason beside
+    # every `field: _`. Needs no build, so it runs first.
+    - name: Trace code names every field
+      run: python3 -B scripts/check_gc_trace_names.py
     - name: Install Rust
       run: rustup show
     - uses: Swatinem/rust-cache@v2

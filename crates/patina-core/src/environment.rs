@@ -2190,9 +2190,9 @@ impl Environment {
     /// Every field of this struct, of [`RareTables`] and of the binding
     /// records is named below (#623), so a new field does not compile here
     /// until it is reported or written `field: _` with the reason it holds no
-    /// edge. The sentinel test `environment_edges` (`heap/trace_sentinels.rs`)
-    /// puts a value behind each edge that nothing else reaches; deleting the
-    /// line that reports an edge fails it.
+    /// edge. The sentinel test `gc_edge_tests::environment_edges`, below, puts
+    /// a value behind each edge that nothing else reaches; deleting the line
+    /// that reports an edge fails it.
     ///
     /// `f` runs with the binding tables borrowed, so it must not write to
     /// this environment. The collector's visitor only marks.

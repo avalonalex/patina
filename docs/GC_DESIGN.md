@@ -123,15 +123,18 @@ There is no traversal API today; the tracer needs a new
 `Environment::for_each_value(&self, f: &mut dyn FnMut(TaggedValue))` that walks
 `bindings` + `scoped_bindings` + the parent chain.
 
-*As built:* `for_each_local_value` walks one environment's values and
-`GcVisitor::visit_env` walks the parent chain. Two kinds of edge leave that
-chain, both an `Rc<Environment>` in a side table rather than a value in a
-slot, and `visit_env` follows each as a separate root:
-`for_each_alias_target` (a macro-expansion alias into the environment the
-macro was defined in) and `for_each_shared_owner` (an imported binding, whose
-slot here holds only a marker — the value is in the slot of the library that
-owns the location, #406). Anything that gives an environment another way to
-reach a value held elsewhere needs a third.
+*As built:* `Environment::for_each_gc_edge` reports one environment's edges,
+naming every field of the struct and of its side tables (#623): the value in
+each slot, plain and scoped, and each environment it keeps live — its parent,
+and two kinds of edge that leave the parent chain, both an `Rc<Environment>`
+in a side table rather than a value in a slot: a macro-expansion alias into
+the environment the macro was defined in, and the owner of an imported
+binding, whose slot here holds only a marker — the value is in the slot of the
+library that owns the location (#406). `GcVisitor::visit_env` walks what it
+reports from a worklist, deduplicated by `gc_identity`, without recursing.
+Anything that gives an environment another way to reach a value held
+elsewhere is a new field, which does not compile there until it is reported
+or written `field: _` with its reason.
 
 ### 3.4 Why moving/compacting GC is off the table
 
@@ -443,8 +446,52 @@ debug build is the lane that localizes failures like this one.
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
-| `CompiledMacro` literals | `compiled_macro.rs:78,:280,:439` | Reached via the `Macro` heap-variant trace rule when the macro binding is live |
+| `CompiledMacro` literals and environments | `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: pattern and template literals, `definition_env`, and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
+
+### 5.4 A new field, variant or root provider (#623)
+
+The tables above say what is traced; the trace code is where a new field goes
+missing. A field that holds a value but has no trace rule is a premature free
+that no dynamic check sees while another path still reaches the value: #38
+added `CompiledMacro.definition_env` and `Environment.alias_bindings` without
+one, and #47 traced `CpsContinuation.resume` after 1.6 days untraced, hidden
+because every construction site also stored the value in the traced
+`captured_cont_env`. So every change that adds a heap object type, a field to
+a traced struct, or a root provider meets two rules:
+
+1. **A full destructure.** The trace function takes the struct (or variant)
+   apart by name, with no `..` and no wildcard arm. A field that is
+   deliberately not traced is written `field: _` with a comment, on its line
+   or the line above, saying what it holds instead of a value or which test
+   pins the decision. A new field is then error E0027 until someone decides.
+   `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
+   the functions it lists: `trace_object_children` and the functions it calls
+   (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
+   `visit_library`, the wind, prompt and handler traces, `trace_cont_value`)
+   in `heap/gc.rs`; `Environment::for_each_gc_edge` and
+   `Library::for_each_gc_edge`; every root provider — `VmState` with
+   `ExecutionState` and the VM's frame, record, code and continuation traces,
+   the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
+   registry and the VM's step tracer. A new trace function joins that list.
+2. **A sentinel test whose value is reachable only through the new edge**
+   (#164's rule). The test builds the struct by a struct literal, so a new
+   field breaks the test as well; puts a fresh value in every field that can
+   hold one; roots the struct and nothing else; collects; and asks
+   `heap::sentinels::Sentinels` whether each value survived, which names the
+   field of one that did not, in any build. Deleting the trace line must
+   fail the test: run that once. The destructure forces a decision but
+   cannot judge it (`resume: _ // aliased` compiles); the sentinel is what
+   judges it. The tests live beside the code: `heap/trace_sentinels.rs` for
+   heap kinds, `CompiledMacro`, `CpsContinuation` and `ContValue`; the
+   `gc_edge_tests` modules of `environment.rs` and `library.rs`;
+   `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM;
+   `cps_eval/gc_roots/sentinel_tests.rs` for the tree-walker's, on the
+   tree-walker; and `library_registry.rs`'s `gc_root_tests`.
+
+This is detection on today's collector. `PRD/GC_PRD.md` replaces it with
+generated tracing: `declare_layouts!` for heap kinds (stage 5a) and a `Trace`
+derive for the Rust structures that stay off-heap (§14, stage 2).
 
 ---
 
@@ -1082,6 +1129,15 @@ visitor exists, and the stress lane is the real safety net.
    1000 iterations under zeal and fewer than 100 with no GC variable set.
    GC_PRD's zeal-`entry` replaces this mode at stage 3, collecting at every
    poll site, nested ones included.
+8. **Every traced field named, and tested with a sentinel (#623, §5.4).**
+   The differential and zeal lanes see a missed trace edge only when no
+   other path reaches the value; #47's `resume` was also stored in the
+   traced `captured_cont_env` and went unseen for 1.6 days. So every trace
+   function destructures its struct by name (`scripts/check_gc_trace_names.py`
+   in CI), and every traced struct has a sentinel test with a value reachable
+   only through each field. Each sentinel test fails with its field's trace
+   line deleted; that break-test was run for every traced field when the
+   tests landed.
 
 ---
 

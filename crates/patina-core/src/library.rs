@@ -153,8 +153,7 @@ impl Library {
     ///
     /// Every field is named (#623), so a new one does not compile here until
     /// it is reported or written `field: _` with its reason. Pinned by the
-    /// sentinel test `library_exports_and_environment`
-    /// (`heap/trace_sentinels.rs`).
+    /// sentinel test `gc_edge_tests::library_exports_and_environment`, below.
     pub(crate) fn for_each_gc_edge(&self, f: &mut dyn FnMut(GcEdge<'_>)) {
         let Library {
             // Strings.
