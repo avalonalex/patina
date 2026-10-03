@@ -536,6 +536,19 @@ impl GcMode {
     }
 }
 
+/// The variable that sets each mode, spelled as a lane sets it: what the
+/// collection-count record (`PATINA_GC_COUNT_DIR`) says the process ran under.
+impl std::fmt::Display for GcMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GcMode::Off => f.write_str("PATINA_GC=0"),
+            GcMode::On => f.write_str("adaptive"),
+            GcMode::Stress(n) => write!(f, "PATINA_GC_STRESS={n}"),
+            GcMode::Zeal => f.write_str("PATINA_GC_ZEAL=entry"),
+        }
+    }
+}
+
 /// A GC mode paired with the collector instance a backend owns.
 ///
 /// Shared by both backends so the mode table, the `(gc)`-request rule, and the
@@ -554,6 +567,7 @@ impl GcController {
 
     /// A controller in `mode`, whatever the environment says.
     pub fn new(mode: GcMode) -> Self {
+        count_log::open_if_asked();
         Self {
             mode,
             collector: MarkSweepCollector::new(),
@@ -582,6 +596,7 @@ impl GcController {
     /// a backend collects through [`GcController::safe_point`].
     pub(crate) fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let stats = self.collector.collect(heap, roots);
+        count_log::note_collection();
         // Sweep lowered the pending flag; re-arm the threshold that raises it.
         // This is what lets `note_alloc` compare against a stored number
         // instead of safe points re-deriving the policy per instruction.
@@ -658,6 +673,120 @@ impl GcController {
             collected = true;
         });
         collected
+    }
+}
+
+/// `PATINA_GC_COUNT_DIR`: a record of how many collections the process ran,
+/// for a stress lane to assert that its run collected (#626).
+///
+/// A lane that passes with no collections has tested nothing, and four have
+/// (#5, #164, #200, #201): the variable that sets the mode did not reach the
+/// process, or the program allocated too little to cross the interval. Each
+/// is invisible in the program's output. A test binary has no hook at its
+/// exit and the CLI leaves through `process::exit`, so the record is
+/// rewritten at every collection rather than written once at the end.
+///
+/// When the variable names a directory, the first collector the process
+/// makes creates `gc-count.<pid>` there, holding one line,
+/// `pid=<pid> exe=<executable> env=<mode> collections=<n>`, `n` zero-padded
+/// to 20 digits so that each rewrite covers the last. The record is written
+/// at once with a count of zero, so a process that never collects leaves a
+/// zero rather than no file, and a directory with no record means the
+/// variable never reached a process. `env` is the mode the environment
+/// selects ([`GcMode`]'s `Display`): a backend made with an explicit mode
+/// still counts, so a lane pins a minimum well above what those reach.
+///
+/// The count is of the whole process, every backend in it: a test binary
+/// running tests on parallel threads writes one record. The cost when the
+/// variable is set is a seek and a write per collection, small beside the
+/// collection; unset, a `OnceLock` read.
+mod count_log {
+    use super::GcMode;
+    use std::io::{Seek, SeekFrom, Write};
+    use std::sync::{Mutex, OnceLock};
+
+    struct Log {
+        file: std::fs::File,
+        /// The record up to the count, fixed for the process.
+        prefix: String,
+        collections: u64,
+    }
+
+    impl Log {
+        fn write(&mut self) {
+            let record = format!("{}collections={:020}\n", self.prefix, self.collections);
+            // A diagnostic: a failed write leaves an older count, which only
+            // a lane reads, and it reads it as fewer collections.
+            let _ = self
+                .file
+                .seek(SeekFrom::Start(0))
+                .and_then(|_| self.file.write_all(record.as_bytes()));
+        }
+    }
+
+    fn log() -> Option<&'static Mutex<Log>> {
+        static LOG: OnceLock<Option<Mutex<Log>>> = OnceLock::new();
+        LOG.get_or_init(open).as_ref()
+    }
+
+    fn open() -> Option<Mutex<Log>> {
+        // An empty value is what a shell script makes of an unset variable;
+        // the same guard `GcMode::from_env` uses.
+        let dir = std::env::var("PATINA_GC_COUNT_DIR")
+            .ok()
+            .filter(|v| !v.is_empty() && v != "0")?;
+        let pid = std::process::id();
+        // A new file, never an old one: a pid reused within one directory
+        // gets a suffix rather than adding to another process's count.
+        let mut suffix = String::new();
+        let mut attempt = 0;
+        let file = loop {
+            let path = std::path::Path::new(&dir).join(format!("gc-count.{pid}{suffix}"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => break file,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => {
+                    attempt += 1;
+                    suffix = format!(".{attempt}");
+                }
+                Err(e) => {
+                    // Loud: a lane reads a missing record as a process that
+                    // was never watched, and says so, but not why.
+                    eprintln!("patina: PATINA_GC_COUNT_DIR={dir}: {}: {e}", path.display());
+                    return None;
+                }
+            }
+        };
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let mut log = Log {
+            file,
+            prefix: format!("pid={pid} exe={exe} env={} ", GcMode::from_env()),
+            collections: 0,
+        };
+        log.write();
+        Some(Mutex::new(log))
+    }
+
+    /// Create the record, with no collections, if the variable asks for one.
+    pub(super) fn open_if_asked() {
+        log();
+    }
+
+    /// Count a collection, if the variable asks for a record.
+    pub(super) fn note_collection() {
+        if let Some(log) = log() {
+            // Never poison-panic: a count has no invariant a panic elsewhere
+            // can have broken.
+            let mut log = log.lock().unwrap_or_else(|e| e.into_inner());
+            log.collections += 1;
+            log.write();
+        }
     }
 }
 
