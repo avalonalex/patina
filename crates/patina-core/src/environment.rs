@@ -2276,8 +2276,12 @@ impl Environment {
                 // Spellings, scope sets and the names of renamed globals.
                 introduced_global_names: _,
                 // Each `Owner` here is also in `owners`: `set_owner`, the one
-                // writer of `links`, records the owner there first. Pinned by
-                // `environment_edges`, whose imported value has no other path.
+                // writer of a `Some` link, records the owner there first.
+                // Pinned by `shared_binding_tests`, which share bindings
+                // through `set_owner` and check the owners the collector is
+                // shown (`the_collector_is_shown_each_owner_once` and its
+                // neighbours); `environment_edges` pins that `owners` is the
+                // edge that carries the imported value.
                 links: _,
                 // Environment ids, slot numbers and names.
                 import_aliases: _,
