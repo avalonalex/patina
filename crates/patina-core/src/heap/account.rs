@@ -30,15 +30,20 @@
 //! promises), a tree-walker continuation (whose frames are `Rc` links shared
 //! with every other capture). Attributing them to one slot would charge the
 //! same memory once per object that names it, and what they hold belongs to
-//! code and environments, which GC_PRD §15 charges as **external bytes**:
-//! [`Heap::charge_external_bytes`] is that entry point, for the environment
-//! tables of #615, the ports' buffers and whatever else holds memory on a heap
-//! object's behalf outside the arenas. They are given back through an
-//! [`ExternalBytes`] handle, which needs no heap borrow: such a holder
+//! code and environments, which GC_PRD §15 charges as **external bytes**,
+//! once per holder rather than once per object that names it. A namespace —
+//! an environment made without a parent: the global environment, a
+//! library's, and those `environment` and the R5RS constructors build —
+//! charges its own tables, once when it is made and again as they grow, and
+//! gives them back when it drops (#615; `Environment`'s `NamespaceCharge`
+//! says what it counts). [`Heap::charge_external_bytes`] is the entry point
+//! for a holder with the heap in hand, and an [`ExternalBytes`] handle for
+//! one without: the handle needs no heap borrow, because such a holder
 //! usually dies when the last `Rc` naming it drops, and that is often inside
 //! a sweep, which holds the heap's `RefCell` mutably while it drops the
-//! tombstoned slots' payloads. The sweep settles L after the arenas are
-//! swept, so what those drops give back is out of the L it sets.
+//! tombstoned slots' payloads, and a namespace's tables grow wherever a
+//! definition lands. The sweep settles L after the arenas are swept, so what
+//! those drops give back is out of the L it sets.
 //!
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
@@ -185,13 +190,14 @@ impl GcThreshold {
     }
 }
 
-/// The heap's byte totals. Allocation adds to `since_gc`; a sweep moves that
-/// into `through_last_gc`, adds what it freed to `reclaimed` and records what
-/// marking found live as `live`.
-#[derive(Debug, Default)]
+/// The heap's byte totals. Allocation adds to the shared `since_gc`; a sweep
+/// moves that into `through_last_gc`, adds what it freed to `reclaimed` and
+/// records what marking found live as `live`.
+#[derive(Debug)]
 pub(super) struct ByteAccount {
-    /// Bytes charged since the last collection: what the trigger compares.
-    pub(super) since_gc: usize,
+    /// The counts a holder of external bytes writes, shared with every
+    /// [`ExternalBytes`] handle.
+    pub(super) shared: Rc<SharedCounts>,
     /// Bytes charged before the last collection.
     pub(super) through_last_gc: u64,
     /// Bytes the collections have freed: each dead object's slot and
@@ -200,14 +206,72 @@ pub(super) struct ByteAccount {
     /// L: the bytes the last collection found live, the external bytes held
     /// at that time included. Zero before the first collection.
     pub(super) live: usize,
-    /// Bytes held outside the arenas on behalf of heap objects, now. Shared
-    /// with every [`ExternalBytes`] handle, so a holder gives its bytes back
-    /// without borrowing the heap.
-    pub(super) external: Rc<Cell<usize>>,
+}
+
+impl ByteAccount {
+    /// An empty account that raises `pending`, the heap's collection-pending
+    /// flag, when an external charge crosses the byte threshold.
+    pub(super) fn new(pending: Rc<Cell<bool>>) -> Self {
+        Self {
+            shared: Rc::new(SharedCounts {
+                since_gc: Cell::new(0),
+                external: Cell::new(0),
+                threshold: Cell::new(usize::MAX),
+                pending,
+            }),
+            through_last_gc: 0,
+            reclaimed: 0,
+            live: 0,
+        }
+    }
+}
+
+/// The part of the byte account that a holder outside the heap writes, so
+/// that charging or giving back external bytes needs no heap borrow (#615).
+///
+/// The trigger's count is here and not on the heap because a namespace
+/// charges as its tables grow, and a table grows wherever a definition
+/// lands, some of them under a heap borrow; the byte threshold and the
+/// pending flag are here so that such a charge raises the flag the moment
+/// it crosses, as an allocation does, rather than at the next allocation.
+#[derive(Debug)]
+pub(super) struct SharedCounts {
+    /// Bytes charged since the last collection, by allocations and external
+    /// charges both: what the trigger compares.
+    pub(super) since_gc: Cell<usize>,
+    /// Bytes held outside the arenas on behalf of heap objects, now.
+    pub(super) external: Cell<usize>,
+    /// The installed [`GcThreshold::bytes`]: `Heap::set_gc_threshold` writes
+    /// it, and an external charge compares `since_gc` against it.
+    pub(super) threshold: Cell<usize>,
+    /// The heap's collection-pending flag (`Heap::gc_pending`).
+    pub(super) pending: Rc<Cell<bool>>,
+}
+
+impl SharedCounts {
+    /// Count `bytes` toward the next collection, and answer the count for
+    /// the caller to compare. Saturating, so a size an embedder got wrong
+    /// cannot wrap the count past the threshold and put the collection off.
+    #[inline]
+    pub(super) fn count(&self, bytes: usize) -> usize {
+        let since_gc = self.since_gc.get().saturating_add(bytes);
+        self.since_gc.set(since_gc);
+        since_gc
+    }
+
+    /// Hold `bytes` more outside the arenas and count them like an
+    /// allocation, raising the pending flag if they cross the byte threshold.
+    fn charge_external(&self, bytes: usize) {
+        self.external.set(self.external.get().saturating_add(bytes));
+        if self.count(bytes) >= self.threshold.get() {
+            self.pending.set(true);
+        }
+    }
 }
 
 /// A handle to the heap's external bytes ([`Heap::external_bytes_handle`]),
-/// for a holder to give back what it was charged when it dies.
+/// through which a holder charges what it holds and gives it back when it
+/// dies, with no heap borrow either way.
 ///
 /// A holder of external bytes — an environment's tables, a port's buffer —
 /// usually dies when the last `Rc` naming it drops, and that is often inside
@@ -215,27 +279,38 @@ pub(super) struct ByteAccount {
 /// holds the heap mutably, so a `Drop` that borrowed the heap would panic.
 /// The handle shares the total with the heap instead, and the sweep reads it
 /// after the arenas are swept, so bytes given back by the drops a sweep
-/// causes are out of the L that collection sets.
+/// causes are out of the L that collection sets. A namespace charges its
+/// tables as they grow (`Environment`'s `NamespaceCharge`), which can be
+/// under a heap borrow too, so a charge goes through the handle as well.
 #[derive(Debug, Clone)]
-pub struct ExternalBytes(Rc<Cell<usize>>);
+pub struct ExternalBytes(Rc<SharedCounts>);
 
 impl ExternalBytes {
     /// The external bytes held now.
     pub fn held(&self) -> usize {
-        self.0.get()
+        self.0.external.get()
     }
 
-    /// Give back `bytes` charged with [`Heap::charge_external_bytes`]. Not a
-    /// reclamation: `bytes-reclaimed` counts only what collections free.
-    /// Giving back more than is held is a bug in the holder: it panics in
-    /// debug builds and gives back what is held in release.
+    /// Charge `bytes` held outside the arenas: [`Heap::charge_external_bytes`]
+    /// without the heap. They count toward the next collection like an
+    /// allocation, raising the pending flag if they cross the threshold, and
+    /// into L at every collection until they are given back.
+    pub fn charge(&self, bytes: usize) {
+        self.0.charge_external(bytes);
+    }
+
+    /// Give back `bytes` charged with [`ExternalBytes::charge`] or
+    /// [`Heap::charge_external_bytes`]. Not a reclamation: `bytes-reclaimed`
+    /// counts only what collections free. Giving back more than is held is a
+    /// bug in the holder: it panics in debug builds and gives back what is
+    /// held in release.
     pub fn release(&self, bytes: usize) {
-        let held = self.0.get();
+        let held = self.0.external.get();
         debug_assert!(
             bytes <= held,
             "released {bytes} external bytes, but only {held} are charged"
         );
-        self.0.set(held.saturating_sub(bytes));
+        self.0.external.set(held.saturating_sub(bytes));
     }
 }
 
@@ -243,7 +318,7 @@ impl Heap {
     /// Bytes charged since the last collection: what the adaptive trigger
     /// compares against `max(8 MiB, 2·L)`.
     pub fn bytes_since_gc(&self) -> usize {
-        self.account.since_gc
+        self.account.shared.since_gc.get()
     }
 
     /// L: the bytes the last collection found live — the slots of the
@@ -259,7 +334,7 @@ impl Heap {
     pub fn bytes_allocated(&self) -> u64 {
         self.account
             .through_last_gc
-            .saturating_add(self.account.since_gc as u64)
+            .saturating_add(self.bytes_since_gc() as u64)
     }
 
     /// Every byte the collections have freed since the heap was made: each
@@ -272,13 +347,13 @@ impl Heap {
     /// Bytes held outside the arenas on behalf of heap objects
     /// ([`Heap::charge_external_bytes`]), now.
     pub fn external_bytes(&self) -> usize {
-        self.account.external.get()
+        self.account.shared.external.get()
     }
 
     /// A handle through which a holder of external bytes gives them back
     /// without borrowing the heap ([`ExternalBytes`]).
     pub fn external_bytes_handle(&self) -> ExternalBytes {
-        ExternalBytes(self.account.external.clone())
+        ExternalBytes(Rc::clone(&self.account.shared))
     }
 
     /// The memory the arenas hold now, live or not: every arena's capacity in
@@ -311,15 +386,13 @@ impl Heap {
     /// every collection until they are given back, through
     /// [`Heap::release_external_bytes`] or, from a holder's `Drop`, an
     /// [`ExternalBytes`] handle. GC_PRD §15's external bytes: environment
-    /// tables (#615), port buffers, code, and what an embedder reports.
+    /// tables (#615, which charge through a handle as they grow), port
+    /// buffers, code, and what an embedder reports.
     ///
     /// Saturating, so a size an embedder got wrong cannot wrap the count the
     /// trigger compares and put off the next collection.
     pub fn charge_external_bytes(&mut self, bytes: usize) {
-        let external = &self.account.external;
-        external.set(external.get().saturating_add(bytes));
-        self.account.since_gc = self.account.since_gc.saturating_add(bytes);
-        self.refresh_gc_pending();
+        self.account.shared.charge_external(bytes);
     }
 
     /// Give back external bytes charged with

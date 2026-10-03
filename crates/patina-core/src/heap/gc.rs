@@ -1663,11 +1663,12 @@ impl Heap {
         account.reclaimed += freed_bytes as u64;
         account.through_last_gc = account
             .through_last_gc
-            .saturating_add(account.since_gc as u64);
-        account.since_gc = 0;
+            .saturating_add(account.shared.since_gc.get() as u64);
+        account.shared.since_gc.set(0);
         // Read after the arenas are swept: external bytes that the dead
-        // slots' payloads gave back as they dropped are not live.
-        account.live = live.saturating_add(account.external.get());
+        // slots' payloads gave back as they dropped — a dead environment
+        // specifier's namespace, say — are not live.
+        account.live = live.saturating_add(account.shared.external.get());
         self.allocs_since_gc = 0;
         self.gc_pending.set(false);
         self.gc_collections += 1;
@@ -2520,16 +2521,20 @@ mod tests {
             }
         }
         heap.intern_symbol("a-symbol-the-table-roots");
-        assert_eq!(heap.bytes_allocated(), occupied(&heap));
+        // The closures' namespace, charged once however many name it: in the
+        // bytes allocated and in L, and never reclaimed while it lives.
+        let external = heap.external_bytes() as u64;
+        assert_eq!(Some(external as usize), env.charged_bytes());
+        assert_eq!(heap.bytes_allocated(), occupied(&heap) + external);
         assert_eq!(heap.bytes_reclaimed(), 0);
 
         MarkSweepCollector::new().collect(&mut heap, &[&roots]);
         assert!(heap.bytes_reclaimed() > 0);
         assert_eq!(
             heap.bytes_allocated() - heap.bytes_reclaimed(),
-            occupied(&heap)
+            occupied(&heap) + external
         );
-        assert_eq!(heap.live_bytes() as u64, occupied(&heap));
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
 
         // Dropping the roots frees the rest, and the account still balances.
         let allocated = heap.bytes_allocated();
@@ -2537,9 +2542,9 @@ mod tests {
         assert_eq!(heap.bytes_allocated(), allocated);
         assert_eq!(
             heap.bytes_allocated() - heap.bytes_reclaimed(),
-            occupied(&heap)
+            occupied(&heap) + external
         );
-        assert_eq!(heap.live_bytes() as u64, occupied(&heap));
+        assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
     }
 
     /// #606's first program in miniature: large vectors, each garbage at
@@ -2688,6 +2693,64 @@ mod tests {
         controller.collect(&mut shared.borrow_mut(), &[&roots]);
         assert_eq!(handle.held(), 1 << 20);
         assert_eq!(shared.borrow().live_bytes(), 1 << 20);
+    }
+
+    /// A charge through the handle needs no heap, and raises the pending
+    /// flag when it crosses the byte threshold, as an allocation does: a
+    /// namespace charges as its tables grow, wherever a definition lands.
+    #[test]
+    fn an_external_charge_through_the_handle_raises_the_pending_flag() {
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let handle = shared.borrow().external_bytes_handle();
+        let pending = shared.borrow().gc_pending_handle();
+        shared
+            .borrow_mut()
+            .set_gc_threshold(GcThreshold::bytes(1 << 20));
+        // What a definition under a heap borrow sees.
+        let borrowed = shared.borrow_mut();
+        handle.charge((1 << 20) - 1);
+        assert!(!pending.get());
+        handle.charge(1);
+        assert!(pending.get());
+        assert_eq!(handle.held(), 1 << 20);
+        drop(borrowed);
+        assert_eq!(shared.borrow().bytes_since_gc(), 1 << 20);
+        handle.release(1 << 20);
+    }
+
+    /// A namespace a dead specifier held drops inside the sweep that frees
+    /// the specifier, with the heap borrowed mutably, and gives back its
+    /// tables through its handle; the collection's L leaves them out, and the
+    /// live namespace's tables stay in it.
+    #[test]
+    fn a_namespace_dropped_by_a_sweep_gives_its_tables_back() {
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let kept = Rc::new(Environment::with_heap(shared.clone()));
+        let dead = Rc::new(Environment::with_heap(shared.clone()));
+        for i in 0..100 {
+            dead.define(format!("binding-{i}"), TaggedValue::fixnum(i));
+        }
+        let kept_charge = kept.charged_bytes().unwrap();
+        assert_eq!(
+            shared.borrow().external_bytes(),
+            kept_charge + dead.charged_bytes().unwrap()
+        );
+        let mut roots = TestRoots::default();
+        {
+            let mut heap = shared.borrow_mut();
+            roots
+                .values
+                .push(heap.alloc_environment_specifier(Rc::clone(&kept), false));
+            heap.alloc_environment_specifier(dead, false);
+        }
+        drop(kept);
+
+        let mut controller = GcController::new(GcMode::On);
+        controller.collect(&mut shared.borrow_mut(), &[&roots]);
+        let heap = shared.borrow();
+        assert_eq!(heap.external_bytes(), kept_charge);
+        assert!(heap.live_bytes() >= kept_charge + OBJECT_SLOT_BYTES);
+        assert!(heap.live_bytes() < kept_charge + 4 * OBJECT_SLOT_BYTES);
     }
 
     #[test]

@@ -130,7 +130,10 @@ each slot, plain and scoped, and two kinds of edge that leave the parent
 chain, both an `Rc<Environment>` in a side table rather than a value in a
 slot: a macro-expansion alias into the environment the macro was defined in,
 and the owner of an imported binding, whose slot here holds only a marker —
-the value is in the slot of the library that owns the location (#406). It
+the value is in the slot of the library that owns the location (#406). One
+more value sits beside the slots: the environment's mutable specifier, which
+`interaction-environment` and `load` hand out again rather than allocate per
+call (#615), and which is live exactly as long as the bindings are. It
 returns the parent. `GcVisitor::visit_env` follows the parent chain by
 reference and walks the other environments from a worklist, all deduplicated
 by `gc_identity`, without recursing. Anything that gives an environment
@@ -547,11 +550,31 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   total with the heap and needs no heap borrow: a holder usually dies when
   its last `Rc` drops, often inside a sweep, which holds the heap mutably
   while it drops the dead slots' payloads, and sweep reads the total after
-  the arenas are swept, so those bytes are out of the L it sets. No holder
-  reports any yet: environment tables are #615's. Until they do, a program
-  whose memory sits mostly behind those `Rc`s — closure-heavy tree-walker
-  code (a procedure's environment), string-port churn — is charged only
-  slots, and the 8 MiB floor is more slots than the 65,536 objects that
+  the arenas are swept, so those bytes are out of the L it sets. The
+  trigger's count is shared with the handle too, beside the installed byte
+  threshold and the pending flag, so a holder can also *charge* without the
+  heap and raise the flag the moment it crosses.
+
+  **Namespaces are the holders that charge today (#615).** An environment
+  made without a parent (`Environment::with_heap`) — the global environment,
+  a library's, and the ones `environment`, `scheme-report-environment` and
+  `null-environment` build — charges its tables once when it is made and
+  again whenever one reallocates, and gives them back in `Drop`
+  (`NamespaceCharge` in `environment.rs` says what is counted: the struct,
+  each table's buffer at capacity, and each slot's name). An
+  `(environment '(scheme base))` is charged about 40 KiB, so a loop of them
+  collects every 8 MiB of namespaces and peaks near 21 MB on either backend
+  at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
+  keeps its namespaces raises L with them. Frames (`Environment::with_parent`,
+  the tree-walker's per call and per `let`) never charge, and pay a compare
+  per binding to learn that no table grew. Each namespace is charged once
+  however many specifiers name it, and `interaction-environment` answers one
+  specifier, cached on the environment (§3.3), so a loop of it allocates
+  nothing. Measured 2026-10-03, release, macOS arm64.
+
+  Nothing else charges yet. A program whose memory sits mostly behind those
+  `Rc`s — closure-heavy tree-walker code (a procedure's environment, which is
+  a frame), string-port churn — is charged only slots, and the 8 MiB floor is more slots than the 65,536 objects that
   bounded it before #606 (524,288 pairs, or 116,508 of the 72-byte object
   slots that procedures and ports take), so it keeps more garbage between
   collections than it did. Measured against the commit before #606
@@ -609,7 +632,8 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   something), `committed-bytes` (every arena's capacity in slots and the
   payloads of the occupied slots: what the arenas hold now, live or not) and
   `external-bytes` (what holders outside the arenas have charged and not
-  given back, 0 until #615). GC_PRD's footprint is the last two together.
+  given back: the live namespaces' tables, #615). GC_PRD's footprint is the
+  last two together.
 
 ### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 
