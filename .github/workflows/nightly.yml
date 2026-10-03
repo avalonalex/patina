@@ -15,6 +15,15 @@ on:
   schedule:
     - cron: '43 5 * * *'
   workflow_dispatch:
+    inputs:
+      update-baseline:
+        # For a row the runner disagrees with that is not the collector's
+        # doing (the lane re-runs a suite that differs without stress, and
+        # says which): the jobs rewrite the rows they ran, each into its
+        # artifact, and commit nothing. Review the rows, then commit them.
+        description: Re-pin the rows from this run (uploaded, not committed)
+        type: boolean
+        default: false
   pull_request:
     branches: [ main ]
     paths:
@@ -23,6 +32,16 @@ on:
       - 'scripts/larceny_report.py'
       - 'scheme_tests/reports/larceny_gc_stress.tsv'
       - '.github/workflows/nightly.yml'
+
+# Checkout and the caches need nothing more.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels its older run; a scheduled or manual
+# run on main waits for the one before it.
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,14 +56,18 @@ jobs:
   # release check build, each suite's tally held to
   # scheme_tests/reports/larceny_gc_stress.tsv (scripts/run_larceny_gc_stress.sh
   # has the intervals and what fails it). One job per backend, so they run
-  # side by side. The budget is 30 minutes a job on the runner: measured on
-  # an M-series Mac under other load (2026-10-02), the VM's two lanes took
-  # 307 s and 20-22 s and the tree-walker's 855-1008 s and 32-36 s, and the
-  # zeal lane runs about 1.35 times slower on the runner than there.
+  # side by side. Not yet measured on the runner: on an M-series Mac under
+  # other load (2026-10-02) the VM's two lanes took 307 s and 20-22 s and
+  # the tree-walker's 855-1008 s and 32-36 s, and the zeal lane runs about
+  # 1.35 times slower on the runner than there, so the tree-walker's job may
+  # take 30 minutes or more. The limit leaves room for one suite to run to
+  # its budget and for the re-run without stress of a suite whose tally
+  # moved. Each step prints every suite's time, and results.tsv, uploaded
+  # below, has them too.
   larceny-gc-stress:
     name: GC stress, Larceny suites (${{ matrix.backend }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -98,10 +121,28 @@ jobs:
       env:
         LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
         LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
-      run: ./scripts/run_larceny_gc_stress.sh ${{ matrix.flag }}
+        LARCENY_GC_STRESS_OUT: ${{ runner.temp }}/gc-stress-r7rs
+      run: >-
+        ./scripts/run_larceny_gc_stress.sh ${{ matrix.flag }}
+        ${{ inputs.update-baseline && '--update-baseline' || '' }}
     - name: GC stress lane, (r6rs ...) suites
       if: ${{ !cancelled() }}
       env:
         LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
         LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
-      run: ./scripts/run_larceny_gc_stress.sh --r6rs ${{ matrix.flag }}
+        LARCENY_GC_STRESS_OUT: ${{ runner.temp }}/gc-stress-r6rs
+      run: >-
+        ./scripts/run_larceny_gc_stress.sh --r6rs ${{ matrix.flag }}
+        ${{ inputs.update-baseline && '--update-baseline' || '' }}
+    # Each suite's tally, collections, interval and seconds on the runner,
+    # and the baseline, which update-baseline has rewritten. Neither quotes
+    # the suite; its logs, which do, stay on the runner.
+    - name: Keep the results
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: larceny-gc-stress-${{ matrix.backend }}
+        path: |
+          ${{ runner.temp }}/gc-stress-*/results.tsv
+          scheme_tests/reports/larceny_gc_stress.tsv
+        retention-days: 30
