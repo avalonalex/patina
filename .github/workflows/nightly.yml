@@ -1,0 +1,107 @@
+name: Nightly
+
+# Lanes too slow, or too dependent on an outside source, for every pull
+# request (#626; docs/TEST_ORGANIZATION.md, "GC lanes"). Its own workflow
+# rather than a job in gc-zeal.yml, which runs on every pull request that
+# touches the collector: these lanes would add half an hour there. Later
+# periodic lanes belong here too: #587's generator, #591's sweeps.
+#
+# It also runs on a pull request that changes a lane's own inputs, so a change
+# to the script, its baseline or this file is tested before it merges. The
+# filter has the limits ci.yml's has (docs/TEST_ORGANIZATION.md, "CI trigger
+# scope"); no check here is required.
+on:
+  # Daily, 05:43 UTC; GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: '43 5 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'scripts/run_larceny_gc_stress.sh'
+      - 'scripts/run_larceny_tests.sh'
+      - 'scripts/larceny_report.py'
+      - 'scheme_tests/reports/larceny_gc_stress.tsv'
+      - '.github/workflows/nightly.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Larceny's suites are LGPL and not vendored (scripts/run_larceny_tests.sh).
+  # The commit scheme_tests/reports/larceny*.md and the stress lane's baseline
+  # were measured at; the lane fails on any other.
+  LARCENY_COMMIT: fef550c7d3923deb7a5a1ccd5a628e54cf231c75
+  LARCENY: /home/runner/larceny
+
+jobs:
+  # Larceny's suites, R7RS and (r6rs ...), under PATINA_GC_STRESS in the
+  # release check build, each suite's tally held to
+  # scheme_tests/reports/larceny_gc_stress.tsv (scripts/run_larceny_gc_stress.sh
+  # has the intervals and what fails it). One job per backend, so they run
+  # side by side. The budget is 30 minutes a job on the runner: measured on
+  # an M-series Mac under other load (2026-10-02), the VM's two lanes took
+  # 307 s and 20-22 s and the tree-walker's 855-1008 s and 32-36 s, and the
+  # zeal lane runs about 1.35 times slower on the runner than there.
+  larceny-gc-stress:
+    name: GC stress, Larceny suites (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vm
+            flag: ''
+            # Seconds a suite may take before it counts as a timeout. The
+            # slowest VM suite, text, took 165 s.
+            suite_timeout: 600
+          - backend: tree-walker
+            flag: --tree-walker
+            # stream took 338-486 s here, and 270 s without stress.
+            suite_timeout: 900
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release with the stale-reference checks
+      run: cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
+    # The lane refuses a binary without the checks too; this says so before
+    # the fetch.
+    - name: Require the checks in the binary
+      run: |
+        version=$(./target/release/patina --version)
+        echo "$version"
+        case "$version" in
+          *"(gc-check)") ;;
+          *) echo "::error::target/release/patina was built without the stale-reference checks"; exit 1 ;;
+        esac
+    - name: Cache the Larceny suites
+      id: larceny-cache
+      uses: actions/cache@v4
+      with:
+        path: /home/runner/larceny
+        # The trailing number is the recipe's: bump it when the fetch below
+        # changes.
+        key: larceny-${{ env.LARCENY_COMMIT }}-1
+    # A shallow, sparse fetch of the one pinned commit: about a megabyte of
+    # Scheme, where the repository is far larger.
+    - name: Fetch the Larceny suites at the pinned commit
+      if: steps.larceny-cache.outputs.cache-hit != 'true'
+      run: |
+        git init -q "$LARCENY"
+        cd "$LARCENY"
+        git remote add origin https://github.com/larcenists/larceny.git
+        git sparse-checkout set test/R7RS/Lib
+        git fetch -q --depth 1 --filter=blob:none origin "$LARCENY_COMMIT"
+        git checkout -q FETCH_HEAD
+    - name: GC stress lane, R7RS suites
+      env:
+        LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
+        LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
+      run: ./scripts/run_larceny_gc_stress.sh ${{ matrix.flag }}
+    - name: GC stress lane, (r6rs ...) suites
+      if: ${{ !cancelled() }}
+      env:
+        LARCENY_TESTS_DIR: ${{ env.LARCENY }}/test/R7RS/Lib
+        LARCENY_TEST_TIMEOUT: ${{ matrix.suite_timeout }}
+      run: ./scripts/run_larceny_gc_stress.sh --r6rs ${{ matrix.flag }}

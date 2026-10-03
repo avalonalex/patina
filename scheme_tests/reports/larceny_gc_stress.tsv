@@ -1,0 +1,108 @@
+# The GC stress lane's pinned rows (#626), which scripts/run_larceny_gc_stress.sh
+# holds each suite's run under PATINA_GC_STRESS to; its header has the
+# intervals and what fails the lane.
+#
+# Columns, tab-separated: lane (<r7rs|r6rs>-<vm|tree-walker>), suite, status,
+# passed, total, min_collections. status, passed and total are
+# scripts/larceny_report.py's classification of the suite's log, and are a
+# plain release run's: collection must not change what a suite computes.
+# min_collections is half the collections the row's run made, a count that
+# is deterministic for a suite at a given interval.
+#
+# Measured against larcenists/larceny at fef550c7d392.
+r7rs-vm	base	fail	1086	1094	531
+r7rs-vm	box	pass	10	10	4
+r7rs-vm	case-lambda	pass	5	5	3
+r7rs-vm	char	pass	139	139	1107
+r7rs-vm	charset	pass	93	93	1218
+r7rs-vm	comparator	pass	158	158	115
+r7rs-vm	complex	fail	68	69	41
+r7rs-vm	cxr	pass	28	28	10
+r7rs-vm	eval	pass	5	5	4
+r7rs-vm	file	fail	70	75	44
+r7rs-vm	flonum	fail	1279	1280	289
+r7rs-vm	generator	pass	49	49	126
+r7rs-vm	hash-table	pass	82	82	1460
+r7rs-vm	ideque	pass	114	114	4772
+r7rs-vm	ilist	fail	337	345	885
+r7rs-vm	inexact	pass	592	592	352
+r7rs-vm	lazy	pass	33	33	6836
+r7rs-vm	list	fail	171	172	223
+r7rs-vm	list-queue	pass	40	40	36
+r7rs-vm	load	pass	4	4	11
+r7rs-vm	lseq	pass	109	109	108
+r7rs-vm	process-context	pass	2	2	1
+r7rs-vm	read	pass	44	44	60
+r7rs-vm	repl	pass	10	10	11
+r7rs-vm	rlist	pass	82	82	436
+r7rs-vm	set	truncated	16	16	132
+r7rs-vm	sort	pass	2562	2562	696
+r7rs-vm	stream	pass	81	81	32446
+r7rs-vm	text	pass	1069	1069	25883
+r7rs-vm	time	pass	2	2	4
+r7rs-vm	vector	pass	103	103	71
+r7rs-vm	write	fail	60	63	95
+r7rs-tree-walker	base	fail	1086	1094	506
+r7rs-tree-walker	box	pass	10	10	4
+r7rs-tree-walker	case-lambda	pass	5	5	3
+r7rs-tree-walker	char	pass	139	139	1107
+r7rs-tree-walker	charset	pass	93	93	1021
+r7rs-tree-walker	comparator	pass	158	158	105
+r7rs-tree-walker	complex	fail	68	69	37
+r7rs-tree-walker	cxr	pass	28	28	10
+r7rs-tree-walker	eval	pass	5	5	4
+r7rs-tree-walker	file	fail	70	75	42
+r7rs-tree-walker	flonum	fail	1279	1280	255
+r7rs-tree-walker	generator	pass	49	49	112
+r7rs-tree-walker	hash-table	pass	82	82	1226
+r7rs-tree-walker	ideque	pass	114	114	4268
+r7rs-tree-walker	ilist	fail	337	345	761
+r7rs-tree-walker	inexact	pass	592	592	330
+r7rs-tree-walker	lazy	pass	33	33	6836
+r7rs-tree-walker	list	fail	171	172	201
+r7rs-tree-walker	list-queue	pass	40	40	32
+r7rs-tree-walker	load	pass	4	4	11
+r7rs-tree-walker	lseq	pass	109	109	99
+r7rs-tree-walker	process-context	pass	2	2	1
+r7rs-tree-walker	read	pass	44	44	59
+r7rs-tree-walker	repl	pass	10	10	11
+r7rs-tree-walker	rlist	pass	82	82	385
+r7rs-tree-walker	set	truncated	16	16	108
+r7rs-tree-walker	sort	pass	2562	2562	619
+r7rs-tree-walker	stream	pass	81	81	29025
+r7rs-tree-walker	text	pass	1069	1069	25369
+r7rs-tree-walker	time	fail	1	2	4
+r7rs-tree-walker	vector	pass	103	103	67
+r7rs-tree-walker	write	fail	60	63	92
+r6rs-vm	arithmetic/fixnums	pass	3379	3379	5378
+r6rs-vm	base	fail	2026	2035	1813
+r6rs-vm	bytevectors	pass	469	469	574
+r6rs-vm	control	pass	11	11	5
+r6rs-vm	enums	pass	26	26	171
+r6rs-vm	eval	pass	2	2	1
+r6rs-vm	exceptions	pass	9	9	13
+r6rs-vm	hashtables	pass	249	249	337
+r6rs-vm	io/simple	fail	49	56	31
+r6rs-vm	lists	pass	72	72	97
+r6rs-vm	mutable-pairs	pass	3	3	2
+r6rs-vm	mutable-strings	pass	3	3	2
+r6rs-vm	programs	pass	2	2	1
+r6rs-vm	r5rs	pass	71	71	27
+r6rs-vm	sorting	pass	4	4	8
+r6rs-vm	unicode	pass	118	118	126
+r6rs-tree-walker	arithmetic/fixnums	pass	3379	3379	5300
+r6rs-tree-walker	base	fail	2026	2035	1735
+r6rs-tree-walker	bytevectors	pass	469	469	528
+r6rs-tree-walker	control	pass	11	11	5
+r6rs-tree-walker	enums	pass	26	26	144
+r6rs-tree-walker	eval	pass	2	2	1
+r6rs-tree-walker	exceptions	pass	9	9	12
+r6rs-tree-walker	hashtables	pass	249	249	289
+r6rs-tree-walker	io/simple	fail	49	56	29
+r6rs-tree-walker	lists	pass	72	72	81
+r6rs-tree-walker	mutable-pairs	pass	3	3	2
+r6rs-tree-walker	mutable-strings	pass	3	3	2
+r6rs-tree-walker	programs	pass	2	2	1
+r6rs-tree-walker	r5rs	pass	71	71	26
+r6rs-tree-walker	sorting	pass	4	4	7
+r6rs-tree-walker	unicode	pass	118	118	117

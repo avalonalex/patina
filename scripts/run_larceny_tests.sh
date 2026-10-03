@@ -14,6 +14,11 @@
 #
 # Environment:
 #   LARCENY_TESTS_DIR     the Lib directory (default: ~/Project/reference/larceny/test/R7RS/Lib)
+#   PATINA_BIN            the binary to run (default: target/release/patina)
+#   LARCENY_REPORT_DIR    where the per-suite logs and the report go (default:
+#                         scheme_tests/reports, whose reports are tracked). The
+#                         GC stress lane points it elsewhere, so that a run
+#                         under stress does not rewrite them.
 #   LARCENY_TEST_TIMEOUT  seconds per suite (default: 300). Two suites floor
 #                         it instead of obeying it: `stream` and `ephemeron`
 #                         on the tree-walker get at least 600 s, because both
@@ -60,7 +65,7 @@ for arg in "$@"; do
         --r6rs) LANE="r6rs" ;;
         --r7rs) LANE="r7rs" ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         --*)
@@ -73,8 +78,9 @@ done
 [ "$LANE" = "r6rs" ] && SUFFIX="_r6rs"
 [ "$BACKEND_NAME" = "tree-walker" ] && SUFFIX="${SUFFIX}_tree_walker"
 
-PATINA_BIN="$PWD/target/release/patina"
-REPORT_DIR="scheme_tests/reports"
+PATINA_BIN="${PATINA_BIN:-$PWD/target/release/patina}"
+case "$PATINA_BIN" in /*) ;; *) PATINA_BIN="$PWD/$PATINA_BIN" ;; esac
+REPORT_DIR="${LARCENY_REPORT_DIR:-scheme_tests/reports}"
 LOG_DIR="${REPORT_DIR}/larceny${SUFFIX}"
 REPORT="${REPORT_DIR}/larceny${SUFFIX}.md"
 
