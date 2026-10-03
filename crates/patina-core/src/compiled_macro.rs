@@ -106,11 +106,16 @@ impl Pattern {
         }
     }
 
-    /// Visit every heap value embedded in this pattern. GC tracing hook.
+    /// Visit every heap value embedded in this pattern. GC tracing hook,
+    /// called by `trace_compiled_macro`: every field of every variant is
+    /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
+    /// literal through each walk below.
     pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
         match self {
             Pattern::Literal(tv) => f(*tv),
-            Pattern::Wildcard | Pattern::Var(_) => {}
+            Pattern::Wildcard => {}
+            // A pattern variable's depth and index.
+            Pattern::Var(_) => {}
             Pattern::List(patterns) | Pattern::Vector(patterns) => {
                 for pattern in patterns {
                     pattern.for_each_literal(f);
@@ -122,7 +127,15 @@ impl Pattern {
                 }
                 tail.for_each_literal(f);
             }
-            Pattern::Ellipsis { subpattern, .. } => subpattern.for_each_literal(f),
+            Pattern::Ellipsis {
+                subpattern,
+                // A depth.
+                level: _,
+                // A count.
+                num_following: _,
+                // Pattern-variable references.
+                vars: _,
+            } => subpattern.for_each_literal(f),
         }
     }
 }
@@ -331,11 +344,17 @@ impl Template {
         }
     }
 
-    /// Visit every heap value embedded in this template. GC tracing hook.
+    /// Visit every heap value embedded in this template. GC tracing hook,
+    /// called by `trace_compiled_macro`: every field of every variant is
+    /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
+    /// literal through each walk below.
     pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
         match self {
             Template::Literal(tv) => f(*tv),
-            Template::Symbol(_) | Template::Var(_) => {}
+            // A name, a source position and scope sets.
+            Template::Symbol(_) => {}
+            // A pattern variable's depth and index.
+            Template::Var(_) => {}
             Template::List(templates) | Template::Vector(templates) => {
                 for template in templates {
                     template.for_each_literal(f);
@@ -347,7 +366,15 @@ impl Template {
                 }
                 tail.for_each_literal(f);
             }
-            Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_literal(f),
+            Template::Ellipsis {
+                subtemplate,
+                // A depth.
+                level: _,
+                // A count of consecutive ellipses.
+                nesting: _,
+                // Pattern-variable references.
+                vars: _,
+            } => subtemplate.for_each_literal(f),
         }
     }
 

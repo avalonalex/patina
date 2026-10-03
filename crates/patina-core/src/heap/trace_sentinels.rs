@@ -17,7 +17,7 @@ use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule, Pattern, Template};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, WindRecord};
-use crate::cps_expr::{CpsExpr, CpsExprKind};
+use crate::cps_expr::{CpsExpr, CpsExprKind, CpsParam, CpsPrimitive};
 use crate::environment::Environment;
 use crate::error::ExceptionKind;
 use crate::procedure::Procedure;
@@ -51,58 +51,205 @@ pub(crate) fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environme
     env
 }
 
-/// `CompiledMacro`, every edge: the literals of its patterns and templates
-/// (nested, so the walks below the rule are covered too), `definition_env`
-/// (#38) and `foreign_expansions` (#462).
+/// `CompiledMacro`, every edge: a literal through each walk of
+/// `Pattern::for_each_literal` and `Template::for_each_literal` (a list's and
+/// a vector's elements, a dotted list's elements and its tail, an ellipsis's
+/// body), the pattern and template of a second rule, `definition_env` (#38)
+/// and each of two `foreign_expansions` environments (#462).
 #[test]
 fn compiled_macro_fields() {
     let shared = new_shared_heap();
     let mut heap = shared.borrow_mut();
-    let mut sentinels = Sentinels::new(&mut heap);
-    let pattern_literal = sentinels.pair(&mut heap, "CompiledRule.pattern");
-    let template_literal = sentinels.vector(&mut heap, "CompiledRule.template");
-    let definition_value = sentinels.string(&mut heap, "CompiledMacro.definition_env");
-    let foreign_value = sentinels.pair(&mut heap, "CompiledMacro.foreign_expansions");
+    let mut s = Sentinels::new(&mut heap);
+    let h = &mut *heap;
+    let p_list = s.pair(h, "CompiledRule.pattern: Pattern::List");
+    let p_vector = s.vector(h, "CompiledRule.pattern: Pattern::Vector");
+    let p_dotted = s.string(h, "CompiledRule.pattern: Pattern::DottedList.patterns");
+    let p_tail = s.object(h, "CompiledRule.pattern: Pattern::DottedList.tail");
+    let p_ellipsis = s.pair(h, "CompiledRule.pattern: Pattern::Ellipsis.subpattern");
+    let t_list = s.vector(h, "CompiledRule.template: Template::List");
+    let t_vector = s.string(h, "CompiledRule.template: Template::Vector");
+    let t_dotted = s.object(h, "CompiledRule.template: Template::DottedList.templates");
+    let t_tail = s.pair(h, "CompiledRule.template: Template::DottedList.tail");
+    let t_ellipsis = s.vector(h, "CompiledRule.template: Template::Ellipsis.subtemplate");
+    let second_pattern = s.string(h, "CompiledMacro.rules[1]: CompiledRule.pattern");
+    let second_template = s.object(h, "CompiledMacro.rules[1]: CompiledRule.template");
+    let definition_value = s.pair(h, "CompiledMacro.definition_env");
+    let foreign_first = s.vector(h, "CompiledMacro.foreign_expansions[0]");
+    let foreign_second = s.string(h, "CompiledMacro.foreign_expansions[1]");
     drop(heap);
 
+    let rule = |pattern, template| CompiledRule {
+        pattern,
+        template,
+        num_pvars: 0,
+        max_level: 0,
+        pvar_names: HashMap::new(),
+    };
     let compiled = CompiledMacro {
         name: Rc::from("m"),
-        rules: vec![CompiledRule {
-            pattern: Pattern::DottedList {
-                patterns: vec![Pattern::Ellipsis {
-                    subpattern: Box::new(Pattern::List(vec![Pattern::Literal(pattern_literal)])),
-                    level: 1,
-                    num_following: 0,
-                    vars: vec![],
-                }],
-                tail: Box::new(Pattern::Wildcard),
-            },
-            template: Template::Vector(vec![Template::Ellipsis {
-                subtemplate: Box::new(Template::DottedList {
-                    templates: vec![],
-                    tail: Box::new(Template::Literal(template_literal)),
-                }),
-                level: 1,
-                nesting: 1,
-                vars: vec![],
-            }]),
-            num_pvars: 0,
-            max_level: 0,
-            pvar_names: HashMap::new(),
-        }],
+        rules: vec![
+            rule(
+                Pattern::List(vec![
+                    Pattern::Literal(p_list),
+                    Pattern::Vector(vec![Pattern::Literal(p_vector)]),
+                    Pattern::DottedList {
+                        patterns: vec![Pattern::Literal(p_dotted)],
+                        tail: Box::new(Pattern::Literal(p_tail)),
+                    },
+                    Pattern::Ellipsis {
+                        subpattern: Box::new(Pattern::Literal(p_ellipsis)),
+                        level: 1,
+                        num_following: 0,
+                        vars: vec![],
+                    },
+                ]),
+                Template::List(vec![
+                    Template::Literal(t_list),
+                    Template::Vector(vec![Template::Literal(t_vector)]),
+                    Template::DottedList {
+                        templates: vec![Template::Literal(t_dotted)],
+                        tail: Box::new(Template::Literal(t_tail)),
+                    },
+                    Template::Ellipsis {
+                        subtemplate: Box::new(Template::Literal(t_ellipsis)),
+                        level: 1,
+                        nesting: 1,
+                        vars: vec![],
+                    },
+                ]),
+            ),
+            rule(
+                Pattern::Literal(second_pattern),
+                Template::Literal(second_template),
+            ),
+        ],
         max_pvars: 0,
         definition_scopes: ScopeSet::new(),
         heap: shared.clone(),
         template_symbols: HashSet::new(),
         inherited_identifiers: HashMap::new(),
         definition_env: Some(env_holding(&shared, definition_value)),
-        foreign_expansions: vec![(ScopeId(1), env_holding(&shared, foreign_value))],
+        foreign_expansions: vec![
+            (ScopeId(1), env_holding(&shared, foreign_first)),
+            (ScopeId(2), env_holding(&shared, foreign_second)),
+        ],
     };
 
     let mut heap = shared.borrow_mut();
     let root = heap.alloc_macro(Rc::new(compiled));
     collect_from(&mut heap, &[root]);
-    sentinels.assert_survived(&heap);
+    s.assert_survived(&heap);
+}
+
+/// Every walk of `CpsExpr::for_each_literal`, each with a literal of its
+/// own: a lambda's body, both parts of a `LetVal` and of a `LetCont`, the
+/// operator and an argument of an `App` and of an `Apply`, a `Continue`'s
+/// value, the three parts of an `If`, both parts of a `Set` and of a
+/// `Define`, and a `PrimOp`'s arguments, all under a `Halt`. The other tests
+/// put a bare literal in each expression field; this one roots the tree
+/// through `visit_expr_literals`, the collector's one entry to the walk, for
+/// procedures, continuations, continuation values and the tree-walker's
+/// steps alike.
+#[test]
+fn expression_literals_under_every_node() {
+    let mut heap = Heap::new();
+    let mut s = Sentinels::new(&mut heap);
+    let h = &mut heap;
+    let lambda_body = s.pair(h, "CpsExprKind::Lambda.body");
+    let let_value = s.vector(h, "CpsExprKind::LetVal.value");
+    let let_body = s.string(h, "CpsExprKind::LetVal.body");
+    let cont_body = s.object(h, "CpsExprKind::LetCont.cont_body");
+    let let_cont_body = s.pair(h, "CpsExprKind::LetCont.body");
+    let app_func = s.vector(h, "CpsExprKind::App.func");
+    let app_arg = s.string(h, "CpsExprKind::App.args");
+    let apply_func = s.object(h, "CpsExprKind::Apply.func");
+    let apply_arg = s.pair(h, "CpsExprKind::Apply.args");
+    let continue_value = s.vector(h, "CpsExprKind::Continue.value");
+    let test = s.string(h, "CpsExprKind::If.test");
+    let consequent = s.object(h, "CpsExprKind::If.consequent");
+    let alternate = s.pair(h, "CpsExprKind::If.alternate");
+    let set_value = s.vector(h, "CpsExprKind::Set.value");
+    let set_cont = s.string(h, "CpsExprKind::Set.cont");
+    let define_value = s.object(h, "CpsExprKind::Define.value");
+    let define_cont = s.pair(h, "CpsExprKind::Define.cont");
+    let primop_arg = s.vector(h, "CpsExprKind::PrimOp.args");
+
+    let node = CpsExpr::new;
+    let literal = |value| CpsExpr::new(CpsExprKind::Literal(value));
+    let shared = |value| Rc::new(literal(value));
+    let name = || -> Rc<str> { Rc::from("x") };
+    // A leaf first in each argument list, so a walk that stopped after the
+    // first argument would miss the literal.
+    let var = || {
+        node(CpsExprKind::Var {
+            name: name(),
+            scopes: ScopeSet::new(),
+        })
+    };
+    let every_node = vec![
+        var(),
+        literal(primop_arg),
+        node(CpsExprKind::ContRef(name())),
+        node(CpsExprKind::Lambda {
+            params: vec![CpsParam::simple("x")],
+            variadic: None,
+            cont_param: name(),
+            body: shared(lambda_body),
+            binding_scopes: Rc::new(ScopeSet::new()),
+        }),
+        node(CpsExprKind::LetVal {
+            name: name(),
+            value: shared(let_value),
+            body: shared(let_body),
+        }),
+        node(CpsExprKind::LetCont {
+            name: name(),
+            param: name(),
+            cont_body: shared(cont_body),
+            body: shared(let_cont_body),
+        }),
+        node(CpsExprKind::App {
+            func: shared(app_func),
+            args: vec![var(), literal(app_arg)],
+            cont: name(),
+        }),
+        node(CpsExprKind::Apply {
+            func: shared(apply_func),
+            args: vec![var(), literal(apply_arg)],
+            cont: name(),
+        }),
+        node(CpsExprKind::Continue {
+            cont: name(),
+            value: shared(continue_value),
+        }),
+        node(CpsExprKind::If {
+            test: shared(test),
+            consequent: shared(consequent),
+            alternate: shared(alternate),
+        }),
+        node(CpsExprKind::Set {
+            var: name(),
+            scopes: ScopeSet::new(),
+            value: shared(set_value),
+            cont: shared(set_cont),
+        }),
+        node(CpsExprKind::Define {
+            name: name(),
+            scopes: ScopeSet::new(),
+            visible_by_name: true,
+            value: shared(define_value),
+            cont: shared(define_cont),
+        }),
+    ];
+    let expr = node(CpsExprKind::Halt(Rc::new(node(CpsExprKind::PrimOp {
+        op: CpsPrimitive::Cons,
+        args: every_node,
+        cont: name(),
+    }))));
+
+    collect_only(&mut heap, |visitor| visitor.visit_expr_literals(&expr));
+    s.assert_survived(&heap);
 }
 
 /// An expression whose one literal is `value`.

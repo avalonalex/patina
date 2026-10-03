@@ -471,7 +471,9 @@ a traced struct, or a root provider meets two rules:
    the functions it lists: `trace_object_children` and the functions it calls
    (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
    `visit_library`, the wind, prompt and handler traces, `trace_cont_value`)
-   in `heap/gc.rs`; `Environment::for_each_gc_edge` and
+   in `heap/gc.rs`; the literal walks those reach, `Pattern`'s and
+   `Template`'s `for_each_literal` and `CpsExpr::for_each_literal`;
+   `Environment::for_each_gc_edge` and
    `Library::for_each_gc_edge`; every root provider — `VmState` with
    `ExecutionState` and the VM's frame, record, code and continuation traces,
    the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
@@ -487,8 +489,11 @@ a traced struct, or a root provider meets two rules:
    field of one that did not, in any build. Deleting the trace line must
    fail the test: run that once. The destructure forces a decision but
    cannot judge it (`resume: _ // aliased` compiles); the sentinel is what
-   judges it. The tests live beside the code: `heap/trace_sentinels.rs` for
-   heap kinds, `CompiledMacro`, `CpsContinuation` and `ContValue`; the
+   judges it. A walk that recurses gets a sentinel down each of its
+   branches, not only one. The tests live beside the code:
+   `heap/trace_sentinels.rs` for heap kinds, `CompiledMacro` with each
+   branch of its pattern and template walks, `CpsContinuation`, `ContValue`
+   and each branch of the expression-literal walk; the
    `gc_edge_tests` modules of `environment.rs` and `library.rs`;
    `vm_state/trace_sentinel_tests.rs` for the VM's records, on the VM;
    `cps_eval/gc_roots/sentinel_tests.rs` for the tree-walker's, on the
@@ -1141,8 +1146,9 @@ visitor exists, and the stress lane is the real safety net.
    function destructures its struct by name (`scripts/check_gc_trace_names.py`
    in CI), and every traced struct has a sentinel test with a value reachable
    only through each field. Each sentinel test fails with its field's trace
-   line deleted; that break-test was run for every traced field when the
-   tests landed.
+   line deleted; that break-test was run for every traced field, and for
+   each branch of the pattern, template and expression-literal walks, when
+   the tests landed.
 
 ---
 

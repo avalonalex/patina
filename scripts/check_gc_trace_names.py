@@ -60,6 +60,9 @@ TRACE_FUNCTIONS = {
         "trace_prompt_frame",
         "trace_exception_handler",
     ],
+    # The literal walks under trace_compiled_macro and visit_expr_literals.
+    "crates/patina-core/src/compiled_macro.rs": ["for_each_literal"],
+    "crates/patina-core/src/cps_expr.rs": ["for_each_literal"],
     "crates/patina-core/src/environment.rs": ["for_each_gc_edge"],
     "crates/patina-core/src/library.rs": ["for_each_gc_edge"],
     "crates/patina-vm/src/runtime/vm_state/gc_roots.rs": [
