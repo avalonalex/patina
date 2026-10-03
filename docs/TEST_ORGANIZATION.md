@@ -945,13 +945,20 @@ half of those bytes reclaimed and `committed-bytes` under a quarter of them
 under its floor of 65,536). In the shared GC tests (`gc_shared_tests!` in
 `crates/patina-tests/tests/common/mod.rs`, run by `gc_vm` and
 `gc_tree_walker`), the pair, cycle and arena-plateau proofs measure
-`bytes-reclaimed` across their churn, and the arena comparison requires it
-above 0. `crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite,
-runs #606's shapes through the CLI with no GC variable: 200 garbage vectors
-of 100,000 elements and 1,000 VM captures 1,000 frames deep each collect
-about every 8 MiB and end with a few MB committed, and 600 kept captures
-collect three times, because L counts their snapshots (with them left out of
-L it collects eleven times, and the test fails).
+`bytes-reclaimed` across their churn, after a `(gc)` that takes the garbage
+the libraries left (the default mode does not collect while they load, and
+the 940 KB it frees would satisfy a bound of thousands of pairs on its own);
+the cycle proof also requires the pairs in use not to grow by the cycles,
+since each iteration's other garbage outweighs its pair, and the arena
+comparison requires `bytes-reclaimed` to grow in the run it measures.
+`crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite, runs #606's
+shapes through the CLI with no GC variable, each bound on the growth of a key
+across the workload, after the same `(gc)`, so that the bootstrap counts
+against none of them: 200 garbage vectors of 100,000 elements and 1,000 VM
+captures 1,000 frames deep each collect about every 8 MiB and grow the heap
+by a few MB, and 600 kept captures collect three times, because L counts
+their snapshots (with them left out of L it collects eleven times, and the
+test fails).
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).

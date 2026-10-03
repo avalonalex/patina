@@ -15,16 +15,28 @@ mod common;
 use common::{BOTH_BACKENDS, patina_command};
 use tempfile::TempDir;
 
-/// The byte keys a program writes after its workload, in this order.
-const REPORT: &str = "(define stats (gc-stats))
-(write (map (lambda (key) (cdr (assq key stats)))
-            '(collections bytes-allocated bytes-reclaimed live-bytes committed-bytes)))
+/// Before the workload: a collection that takes the garbage the libraries
+/// left, which the default mode does not collect while they load, and the
+/// counts after it.
+const PRELUDE: &str = "(gc)
+(define before (gc-stats))
+";
+
+/// The byte keys a program writes before and after its workload, in this
+/// order.
+const REPORT: &str = "(define after (gc-stats))
+(define keys '(collections bytes-allocated bytes-reclaimed live-bytes committed-bytes))
+(write (map (lambda (key) (cdr (assq key before))) keys))
+(write (map (lambda (key) (cdr (assq key after))) keys))
 (newline)
 ";
 
 /// The adaptive interval's floor, `heap::gc::DEFAULT_MIN_BYTES`.
 const FLOOR: u64 = 8 << 20;
 
+/// What the workload did to the heap: each key's growth across it, so the
+/// bootstrap's allocation, its garbage and its live set count against no
+/// bound, however `lib/scheme` grows.
 #[derive(Debug)]
 struct Report {
     collections: u64,
@@ -34,12 +46,13 @@ struct Report {
     committed: u64,
 }
 
-/// Run `workload` followed by [`REPORT`] on `backend`, in the default GC
-/// mode, and parse what it wrote.
+/// Run [`PRELUDE`], `workload` and [`REPORT`] on `backend`, in the default
+/// GC mode, and parse what it wrote.
 fn run(backend: &[&str], workload: &str) -> Report {
     let dir = TempDir::new().unwrap();
-    let program =
-        format!("(import (scheme base) (scheme write) (patina debug))\n{workload}\n{REPORT}");
+    let program = format!(
+        "(import (scheme base) (scheme write) (patina debug))\n{PRELUDE}{workload}\n{REPORT}"
+    );
     std::fs::write(dir.path().join("program.scm"), &program).unwrap();
     let mut args = backend.to_vec();
     args.push("program.scm");
@@ -56,30 +69,28 @@ fn run(backend: &[&str], workload: &str) -> Report {
         String::from_utf8_lossy(&output.stderr)
     );
     let counts: Vec<u64> = stdout
-        .trim()
-        .trim_start_matches('(')
-        .trim_end_matches(')')
+        .replace(['(', ')'], " ")
         .split_whitespace()
         .map(|n| {
             n.parse()
                 .unwrap_or_else(|_| panic!("not a count in {stdout:?}"))
         })
         .collect();
-    let [collections, allocated, reclaimed, live, committed] = counts[..] else {
-        panic!("{backend:?}: want five counts, got {stdout:?}")
+    let [c0, a0, r0, l0, m0, c1, a1, r1, l1, m1] = counts[..] else {
+        panic!("{backend:?}: want ten counts, got {stdout:?}")
     };
     Report {
-        collections,
-        allocated,
-        reclaimed,
-        live,
-        committed,
+        collections: c1 - c0,
+        allocated: a1 - a0,
+        reclaimed: r1 - r0,
+        live: l1.saturating_sub(l0),
+        committed: m1.saturating_sub(m0),
     }
 }
 
 /// #606's first program, at 200 vectors: 160 MB in 200 allocations, which an
 /// object count never collected on. The bytes collect it about every 8 MiB,
-/// and the heap holds a few vectors' worth at the end, not all of them.
+/// and the heap grows by a few vectors' worth across it, not all of them.
 #[test]
 fn large_garbage_vectors_collect_by_bytes() {
     let workload = "(let loop ((i 0))

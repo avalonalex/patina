@@ -705,12 +705,20 @@ macro_rules! gc_shared_tests {
             // pairs'. A delta of `bytes-reclaimed`, which grows only when a
             // collection frees something, so it holds however often the
             // mode collected along the way (#606).
+            //
+            // The first `(gc)` takes the garbage the program made before the
+            // churn. Without it the default mode, which does not collect
+            // while the libraries load, frees about 940 KB of their garbage
+            // at the last `(gc)`, and the bound below would hold with no
+            // pair churned at all; with it, a run without the churn reclaims
+            // about 3 KB.
             let [reclaimed] = integers(
                 $eval,
                 r#"(import (patina debug))
                    (define (reclaimed) (cdr (assq 'bytes-reclaimed (gc-stats))))
-                   (define before (reclaimed))
                    (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
+                   (gc)
+                   (define before (reclaimed))
                    (churn 5000)
                    (gc)
                    (list (- (reclaimed) before))"#,
@@ -770,10 +778,14 @@ macro_rules! gc_shared_tests {
             //
             // With collection off but for `(gc)`, so that exactly one
             // collection runs across the cycles: a first `(gc)` takes the
-            // garbage the program made before them, and what the second
-            // reclaims is the cycles' bytes and the little the forms between
-            // made. Its count says it ran once, and `bytes-reclaimed` that
-            // it freed the cycles (#606).
+            // garbage the program made before them, and the second must
+            // free them. Its count says it ran once, `bytes-reclaimed` that
+            // it freed something (#606), and the pairs in use that what it
+            // freed was the cycles: bytes alone would not, since each
+            // iteration's other garbage is several times a pair's size.
+            // The pairs in use grow only by `before`'s alist, allocated
+            // after its counts were taken, which is subtracted; were the
+            // cycles kept, they would grow by 1000 more.
             let code = r#"
                 (import (patina debug))
                 (define (make-cycles n)
@@ -781,24 +793,30 @@ macro_rules! gc_shared_tests {
                       (let ((x (cons n '())))
                         (set-cdr! x x)
                         (make-cycles (- n 1)))))
+                (define (stat stats key) (cdr (assq key stats)))
+                (define (in-use stats) (- (stat stats 'pairs) (stat stats 'free-pairs)))
                 (gc)
-                (define (stat key) (cdr (assq key (gc-stats))))
-                (define collections (stat 'collections))
-                (define reclaimed (stat 'bytes-reclaimed))
+                (define before (gc-stats))
                 (make-cycles 1000)
                 (gc)
-                (list collections
-                      (- (stat 'collections) collections)
-                      (- (stat 'bytes-reclaimed) reclaimed))
+                (define after (gc-stats))
+                (list (stat before 'collections)
+                      (- (stat after 'collections) (stat before 'collections))
+                      (- (stat after 'bytes-reclaimed) (stat before 'bytes-reclaimed))
+                      (- (in-use after) (in-use before) (* 2 (length before))))
                 "#;
-            let [before, ran, freed] = integers($eval_gc_off, code)[..] else {
-                panic!("expected three counts from\n{code}")
+            let [before, ran, freed, grown] = integers($eval_gc_off, code)[..] else {
+                panic!("expected four counts from\n{code}")
             };
             assert!(before >= 1, "the first (gc) had not run: {before}");
             assert_eq!(ran, 1, "collections across the cycles");
             assert!(
                 freed >= 1000 * PAIR_BYTES,
                 "the collection freed {freed} bytes, under the 1000 cycles' pairs"
+            );
+            assert!(
+                grown < 100,
+                "the pairs in use grew by {grown} across 1000 cycles and a collection"
             );
         }
 
@@ -925,15 +943,27 @@ macro_rules! gc_shared_tests {
                        (round 10)"#
                 )
             };
-            let with_gc = stat(&workload("(gc)"), "pairs");
+            // The side with them also reports what its collections freed
+            // across the workload: only a collection that freed something
+            // reclaims a byte (#606).
+            let [with_gc, reclaimed] = integers(
+                $eval,
+                &format!(
+                    r#"(import (patina debug))
+                       (define (stat key) (cdr (assq key (gc-stats))))
+                       (define reclaimed (stat 'bytes-reclaimed))
+                       {}
+                       (list (stat 'pairs) (- (stat 'bytes-reclaimed) reclaimed))"#,
+                    workload("(gc)")
+                ),
+            )[..] else {
+                panic!("expected an arena size and a byte count")
+            };
             let without_gc = stat_on($eval_gc_off, &workload(""), "pairs");
             assert!(
                 with_gc < without_gc,
                 "collecting did not shrink the arena: {with_gc} with gc vs {without_gc} without"
             );
-            // And it collected: only a collection that freed something
-            // reclaims a byte (#606).
-            let reclaimed = stat(&workload("(gc)"), "bytes-reclaimed");
             assert!(reclaimed > 0, "the side with (gc) reclaimed nothing");
         }
 
