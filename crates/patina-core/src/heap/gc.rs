@@ -945,6 +945,7 @@ impl<'h> GcVisitor<'h> {
             } else if let Some(k) = self.cont_worklist.pop() {
                 self.trace_continuation_children(&k);
             } else if let Some(env) = self.cont_env_worklist.pop() {
+                // Each entry is a continuation variable's name and its value.
                 for (_, value) in env.iter() {
                     trace_cont_value(value, self);
                 }

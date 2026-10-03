@@ -461,10 +461,12 @@ because every construction site also stored the value in the traced
 a traced struct, or a root provider meets two rules:
 
 1. **A full destructure.** The trace function takes the struct (or variant)
-   apart by name, with no `..` and no wildcard arm. A field that is
-   deliberately not traced is written `field: _` with a comment, on its line
-   or the line above, saying what it holds instead of a value or which test
-   pins the decision. A new field is then error E0027 until someone decides.
+   apart by name, with no `..` and no catch-all arm (`_` or a lone binding
+   before `=>`, guarded or not). A field or positional payload that is
+   deliberately not traced is written `field: _` or `Variant(_)` (or bound
+   to an unused `_name`) with a comment, on its line or the line above,
+   saying what it holds instead of a value or which test pins the decision.
+   A new field is then error E0027 until someone decides.
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
    the functions it lists: `trace_object_children` and the functions it calls
    (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
@@ -473,7 +475,10 @@ a traced struct, or a root provider meets two rules:
    `Library::for_each_gc_edge`; every root provider — `VmState` with
    `ExecutionState` and the VM's frame, record, code and continuation traces,
    the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
-   registry and the VM's step tracer. A new trace function joins that list.
+   registry and the VM's step tracer. A new trace function joins that list,
+   and an `impl GcRoots for` outside test code in a file the list does not
+   name with `trace_roots` fails the script, so a new root provider cannot
+   go unread.
 2. **A sentinel test whose value is reachable only through the new edge**
    (#164's rule). The test builds the struct by a struct literal, so a new
    field breaks the test as well; puts a fresh value in every field that can

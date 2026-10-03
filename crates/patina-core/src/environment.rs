@@ -2228,9 +2228,10 @@ impl Environment {
                 // Name → slot number; the values are in `slots`.
                 index: _,
             } = &*bindings;
-            // An imported binding's slot holds `TaggedValue::FORWARDED`, an
-            // immediate that marks nothing; its value is in its owner's slot,
-            // and the owner is reported through `owners` below.
+            // Each slot is a name and its value. An imported binding's slot
+            // holds `TaggedValue::FORWARDED`, an immediate that marks nothing;
+            // its value is in its owner's slot, and the owner is reported
+            // through `owners` below.
             for &(_, value) in slots.iter() {
                 f(GcEdge::Value(value));
             }

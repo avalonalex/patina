@@ -256,8 +256,9 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
 4. Update GC tracing/root handling and test collection in both backends; read `docs/GC_DESIGN.md`.
 5. Trace it by name (#623, `docs/GC_DESIGN.md` §5.4): its arm in
    `trace_object_children`, and any trace function it calls, takes every
-   field apart with no `..`, and a field that holds no value is written
-   `field: _` with a comment saying what it holds instead.
+   field apart with no `..` and no catch-all arm, and a field or payload
+   that holds no value is written `field: _` or `Variant(_)` with a comment
+   saying what it holds instead.
    `scripts/check_gc_trace_names.py` enforces both and lists the trace
    functions; a new one joins the list. Then add a sentinel test that builds
    the variant by a literal with a fresh value in each traced field, reachable
