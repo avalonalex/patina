@@ -964,9 +964,13 @@ an `eval`, of `scheme-report-environment` and of `null-environment`, at a
 size and four times it, each collect about every 8 MiB of namespaces, hold
 under 16 MiB of external bytes between collections at either size, and leave
 `external-bytes` where it started after a `(gc)`; `interaction-environment`
-answers one specifier and allocates no more than `(cons 1 2)`; 2,000 kept
+answers one specifier, and 1,000,000 calls of it collect no more often and
+allocate no more than 1,000,000 of `(cons 1 2)`, which collect; 2,000 kept
 environments collect three times, not nine; and the global environment's
-growth under `eval` is charged, while frames charge nothing.
+growth under `eval` is charged, while frames charge nothing, read while
+they are alive. A replaced library's namespace (#614's path) keeps its
+charge while an importer holds it and gives it back when the last holder
+drops (`library_registry.rs`).
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).

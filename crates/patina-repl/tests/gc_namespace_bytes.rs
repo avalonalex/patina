@@ -75,21 +75,29 @@ struct Loop {
     left: i64,
 }
 
+/// Every global the measurement uses is defined, and the loop expanded,
+/// before the first count is read: a definition can grow the global
+/// environment's tables, and a namespace charges the names defined since its
+/// last growth when a table next grows (`NamespaceCharge`), so a definition
+/// between the two reads of `external-bytes` could charge the global
+/// environment there and leave `left` above zero with nothing wrong.
 fn run_loop(backend: &[&str], form: &str, n: usize) -> Loop {
     let program = format!(
-        "(gc)
-(define c0 (stat 'collections))
-(define a0 (stat 'bytes-allocated))
-(define e0 (stat 'external-bytes))
-(define peak 0)
-(let loop ((i 0))
-  (when (< i {n})
-    {form}
-    (when (= 0 (modulo i 16))
-      (set! peak (max peak (- (stat 'external-bytes) e0))))
-    (loop (+ i 1))))
-(define c1 (stat 'collections))
-(define a1 (stat 'bytes-allocated))
+        "(define c0 0) (define a0 0) (define e0 0) (define peak 0) (define c1 0) (define a1 0)
+(define (run)
+  (let loop ((i 0))
+    (when (< i {n})
+      {form}
+      (when (= 0 (modulo i 16))
+        (set! peak (max peak (- (stat 'external-bytes) e0))))
+      (loop (+ i 1)))))
+(gc)
+(set! c0 (stat 'collections))
+(set! a0 (stat 'bytes-allocated))
+(set! e0 (stat 'external-bytes))
+(run)
+(set! c1 (stat 'collections))
+(set! a1 (stat 'bytes-allocated))
 (gc)
 (write (list (- c1 c0) (- a1 a0) peak (- (stat 'external-bytes) e0)))
 (newline)"
@@ -141,13 +149,16 @@ fn discarded_namespaces_collect_by_their_tables() {
 /// `interaction-environment` answers one specifier for the one global
 /// environment, which is charged once: a loop of it allocates nothing, so it
 /// collects no more often than a loop of `(cons 1 2)`, and holds no more.
+/// The issue's 1,000,000 calls, so that the `cons` loop, 16 MB of pairs,
+/// collects and the comparison can fail: a specifier a call, 72 MB of them,
+/// collected eight times.
 #[test]
 fn the_interaction_environment_is_charged_once() {
     let program = "(define (measure thunk)
   (gc)
   (let ((c0 (stat 'collections)) (a0 (stat 'bytes-allocated)) (e0 (stat 'external-bytes)))
     (let loop ((i 0))
-      (when (< i 50000) (thunk) (loop (+ i 1))))
+      (when (< i 1000000) (thunk) (loop (+ i 1))))
     (list (- (stat 'collections) c0) (- (stat 'bytes-allocated) a0)
           (- (stat 'external-bytes) e0))))
 (write (list (if (eq? (interaction-environment) (interaction-environment)) 1 0)
@@ -170,6 +181,7 @@ fn the_interaction_environment_is_charged_once() {
         };
         let what = format!("{backend:?}: {counts:?}");
         assert_eq!(same, 1, "{what}");
+        assert!(cons_collections >= 1, "{what}");
         assert!(ie_collections <= cons_collections, "{what}");
         assert!(ie_allocated <= cons_allocated, "{what}");
         assert_eq!(ie_external, 0, "{what}");
@@ -213,16 +225,22 @@ fn kept_namespaces_raise_the_interval() {
 /// A namespace charges for its tables as they grow after it is made: the
 /// global environment, defined into under `eval`, is charged each slot and
 /// its name. Frames are not namespaces, and a program that only calls and
-/// binds charges nothing.
+/// binds charges nothing: read at the bottom of a recursion, where the
+/// tree-walker holds 200 frames, each a call's or a `let`'s, that the
+/// pending `(+ n …)` needs.
 #[test]
 fn a_namespace_charges_its_growth_and_a_frame_nothing() {
     // Each measurement is a procedure, expanded before it runs, so that what
     // expanding a form installs in the global environment is not counted.
-    let program = "(define (deep n) (if (= n 0) 0 (+ 1 (let ((m (- n 1))) (deep m)))))
+    let program = "(define frame-peak 0)
+(define (deep n e0)
+  (if (= n 0)
+      (begin (set! frame-peak (max frame-peak (- (stat 'external-bytes) e0))) 0)
+      (+ n (let ((m (- n 1))) (deep m e0)))))
 (define (frames)
   (let ((e0 (stat 'external-bytes)))
-    (let loop ((i 0)) (when (< i 1000) (deep 100) (loop (+ i 1))))
-    (- (stat 'external-bytes) e0)))
+    (let loop ((i 0)) (when (< i 1000) (deep 100 e0) (loop (+ i 1))))
+    frame-peak))
 (define (globals)
   (let ((e0 (stat 'external-bytes)))
     (let loop ((i 0))

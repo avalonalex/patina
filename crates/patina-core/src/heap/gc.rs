@@ -2731,6 +2731,10 @@ mod tests {
             dead.define(format!("binding-{i}"), TaggedValue::fixnum(i));
         }
         let kept_charge = kept.charged_bytes().unwrap();
+        // So that the account's falling to `kept_charge` below shows a
+        // release: the hundred bindings are charged on top of what an empty
+        // namespace is.
+        assert!(dead.charged_bytes().unwrap() > kept_charge);
         assert_eq!(
             shared.borrow().external_bytes(),
             kept_charge + dead.charged_bytes().unwrap()

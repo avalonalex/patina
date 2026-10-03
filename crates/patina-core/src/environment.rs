@@ -3912,6 +3912,9 @@ mod namespace_charge_tests {
 
     /// The tree-walker builds a frame per call and per `let`-bound
     /// temporary; none of them is a namespace, whatever is bound in it.
+    /// Read while each frame is alive, with every table it has grown: a
+    /// frame that charged and gave the charge back when it dropped would
+    /// leave the account where it started all the same.
     #[test]
     fn a_frame_charges_nothing() {
         let heap = new_shared_heap();
