@@ -142,6 +142,44 @@ fn compiled_macro_fields() {
     s.assert_survived(&heap);
 }
 
+/// Tracing `foreign_expansions` keeps an environment no longer than its
+/// macro: once the macro is unreachable, the sweep frees its slot, and that
+/// drops the environment's last `Rc`. So the edge cannot keep a replaced
+/// library's environment alive past the last macro it generated (#614).
+#[test]
+fn a_foreign_expansion_environment_dies_with_its_macro() {
+    let shared = new_shared_heap();
+    let held = shared
+        .borrow_mut()
+        .alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
+    let foreign = env_holding(&shared, held);
+    let weak = Rc::downgrade(&foreign);
+    let compiled = CompiledMacro {
+        name: Rc::from("m"),
+        rules: vec![],
+        max_pvars: 0,
+        definition_scopes: ScopeSet::new(),
+        heap: shared.clone(),
+        template_symbols: HashSet::new(),
+        inherited_identifiers: HashMap::new(),
+        definition_env: None,
+        foreign_expansions: vec![(ScopeId(1), foreign)],
+    };
+
+    let mut heap = shared.borrow_mut();
+    let root = heap.alloc_macro(Rc::new(compiled));
+    collect_from(&mut heap, &[root]);
+    assert!(
+        weak.upgrade().is_some(),
+        "the macro is rooted, so its foreign expansion environment lives"
+    );
+    collect_from(&mut heap, &[]);
+    assert!(
+        weak.upgrade().is_none(),
+        "the macro was swept, and its foreign expansion environment is still alive"
+    );
+}
+
 /// Every walk of `CpsExpr::for_each_literal`, each with a literal of its
 /// own: a lambda's body, both parts of a `LetVal` and of a `LetCont`, the
 /// operator and an argument of an `App` and of an `Apply`, a `Continue`'s
