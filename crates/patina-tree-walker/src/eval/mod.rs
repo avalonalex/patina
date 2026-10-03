@@ -112,6 +112,7 @@ impl Evaluator {
         // threshold (a bare heap defaults to inert) and cache the pending
         // flag the safe point reads.
         let gc = patina_core::GcController::new(mode);
+        patina_core::GcController::note_backend("tree-walker");
         global_env
             .heap()
             .borrow_mut()

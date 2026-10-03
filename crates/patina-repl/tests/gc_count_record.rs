@@ -2,13 +2,15 @@
 //! ran, which the stress lanes read to fail a run that did not collect
 //! (`scripts/run_gc_stress_tests.sh`, `scripts/run_larceny_gc_stress.sh`).
 //!
-//! The lanes trust three things about the record, pinned here on both
+//! The lanes trust four things about the record, pinned here on both
 //! backends: its count is the collections the process ran, the count the
 //! heap reports through `gc-stats`, although the CLI leaves through
 //! `process::exit` and so the record cannot be written at the end; it names
-//! the mode the environment selected; and a process that never collected
-//! still leaves one, with a count of zero, since a lane reads a missing
-//! record as a process the variable never reached.
+//! the mode the environment selected; it names the backend the process ran,
+//! and only that one, which is how the nightly lane knows its tree-walker job
+//! did not run the VM; and a process that never collected still leaves one,
+//! with a count of zero, since a lane reads a missing record as a process
+//! the variable never reached.
 
 mod common;
 
@@ -60,7 +62,16 @@ fn run(backend: &[&str], mode: (&str, &str)) -> (u64, Vec<String>) {
     (printed, records)
 }
 
-/// The one record's mode and count.
+/// The backend kind a record names for a run with these arguments.
+fn kind(backend: &[&str]) -> &'static str {
+    if backend.contains(&"--tree-walker") {
+        "tree-walker"
+    } else {
+        "vm"
+    }
+}
+
+/// The one record's mode and count, once its backends are checked.
 fn the_record(backend: &[&str], records: &[String]) -> (String, u64) {
     let [record] = records else {
         panic!("{backend:?}: want one record, got {records:?}");
@@ -73,6 +84,8 @@ fn the_record(backend: &[&str], records: &[String]) -> (String, u64) {
             .to_string()
     };
     assert!(record.ends_with('\n'), "{backend:?}: {record:?}");
+    assert_eq!(record.lines().count(), 1, "{backend:?}: {record:?}");
+    assert_eq!(field("backends="), kind(backend), "{backend:?}: {record:?}");
     let collections = field("collections=")
         .parse()
         .unwrap_or_else(|_| panic!("{backend:?}: not a count in {record:?}"));

@@ -237,6 +237,7 @@ impl VmState {
         // threshold (a bare heap defaults to inert) and cache the pending
         // flag the safe point reads.
         let gc = GcController::new(mode);
+        GcController::note_backend("vm");
         heap.borrow_mut().set_gc_threshold(gc.current_threshold());
         let gc_pending = heap.borrow().gc_pending_handle();
         heap.borrow_mut().enable_gc_freed_closure_tracking();

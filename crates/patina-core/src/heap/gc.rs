@@ -565,13 +565,26 @@ impl GcController {
         Self::new(GcMode::from_env())
     }
 
-    /// A controller in `mode`, whatever the environment says.
+    /// A controller in `mode`, whatever the environment says: for the
+    /// backends' `with_gc_mode` constructors, which a test that compares
+    /// collecting with not collecting uses (#626). Not an interface: an
+    /// embedder's interpreter collects in the mode the environment selects.
+    #[doc(hidden)]
     pub fn new(mode: GcMode) -> Self {
         count_log::open_if_asked();
         Self {
             mode,
             collector: MarkSweepCollector::new(),
         }
+    }
+
+    /// Name `backend` in the collection-count record (`PATINA_GC_COUNT_DIR`)
+    /// as one this process made, so that the nightly stress lane can check
+    /// that its tree-walker job ran the tree-walker (#626). Each backend
+    /// calls it when it makes its controller. Not an interface.
+    #[doc(hidden)]
+    pub fn note_backend(backend: &'static str) {
+        count_log::note_backend(backend);
     }
 
     /// The allocation threshold at which `Heap::note_alloc` should raise the
@@ -688,13 +701,17 @@ impl GcController {
 ///
 /// When the variable names a directory, the first collector the process
 /// makes creates `gc-count.<pid>` there, holding one line,
-/// `pid=<pid> exe=<executable> env=<mode> collections=<n>`, `n` zero-padded
-/// to 20 digits so that each rewrite covers the last. The record is written
-/// at once with a count of zero, so a process that never collects leaves a
-/// zero rather than no file, and a directory with no record means the
-/// variable never reached a process. `env` is the mode the environment
-/// selects ([`GcMode`]'s `Display`): a backend made with an explicit mode
-/// still counts, so a lane pins a minimum well above what those reach.
+/// `pid=<pid> exe=<executable> env=<mode> backends=<kinds> collections=<n>`,
+/// `n` zero-padded to 20 digits. The record is written at once with a count
+/// of zero, so a process that never collects leaves a zero rather than no
+/// file, and a directory with no record means the variable never reached a
+/// process. `env` is the mode the environment selects ([`GcMode`]'s
+/// `Display`): a backend made with an explicit mode still counts, so a lane
+/// pins a minimum well above what those reach. `backends` is the kinds of
+/// backend the process has made, sorted and comma-separated (`vm`,
+/// `tree-walker`), or `none`, so that a lane can check that it ran the
+/// backend it meant to: the tree-walker's Larceny job would otherwise pass on
+/// the VM, whose tallies are nearly all the same.
 ///
 /// The count is of the whole process, every backend in it: a test binary
 /// running tests on parallel threads writes one record. The cost when the
@@ -702,25 +719,38 @@ impl GcController {
 /// collection; unset, a `OnceLock` read.
 mod count_log {
     use super::GcMode;
+    use std::collections::BTreeSet;
     use std::io::{Seek, SeekFrom, Write};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
     struct Log {
         file: std::fs::File,
-        /// The record up to the count, fixed for the process.
+        /// The record up to the backends, fixed for the process.
         prefix: String,
+        backends: BTreeSet<&'static str>,
         collections: u64,
     }
 
     impl Log {
         fn write(&mut self) {
-            let record = format!("{}collections={:020}\n", self.prefix, self.collections);
-            // A diagnostic: a failed write leaves an older count, which only
-            // a lane reads, and it reads it as fewer collections.
+            let backends = if self.backends.is_empty() {
+                "none".to_string()
+            } else {
+                self.backends.iter().copied().collect::<Vec<_>>().join(",")
+            };
+            let record = format!(
+                "{}backends={backends} collections={:020}\n",
+                self.prefix, self.collections
+            );
+            // A diagnostic: a failed write leaves an older record, which only
+            // a lane reads, and it reads it as fewer collections. The length
+            // is set after the write, since naming the first backend makes
+            // the record shorter than the `none` before it.
             let _ = self
                 .file
                 .seek(SeekFrom::Start(0))
-                .and_then(|_| self.file.write_all(record.as_bytes()));
+                .and_then(|_| self.file.write_all(record.as_bytes()))
+                .and_then(|_| self.file.set_len(record.len() as u64));
         }
     }
 
@@ -767,10 +797,17 @@ mod count_log {
         let mut log = Log {
             file,
             prefix: format!("pid={pid} exe={exe} env={} ", GcMode::from_env()),
+            backends: BTreeSet::new(),
             collections: 0,
         };
         log.write();
         Some(Mutex::new(log))
+    }
+
+    /// The record, if the variable asks for one. Never poison-panics: a
+    /// record has no invariant a panic elsewhere can have broken.
+    fn locked() -> Option<MutexGuard<'static, Log>> {
+        log().map(|log| log.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Create the record, with no collections, if the variable asks for one.
@@ -780,11 +817,17 @@ mod count_log {
 
     /// Count a collection, if the variable asks for a record.
     pub(super) fn note_collection() {
-        if let Some(log) = log() {
-            // Never poison-panic: a count has no invariant a panic elsewhere
-            // can have broken.
-            let mut log = log.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut log) = locked() {
             log.collections += 1;
+            log.write();
+        }
+    }
+
+    /// Name a backend the process made, if the variable asks for a record.
+    pub(super) fn note_backend(backend: &'static str) {
+        if let Some(mut log) = locked()
+            && log.backends.insert(backend)
+        {
             log.write();
         }
     }
