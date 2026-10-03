@@ -67,6 +67,11 @@ cargo test --package patina-tests
 # from ~/Project/reference/larceny, which the script tells you how to fetch)
 ./scripts/run_larceny_tests.sh            # R7RS-small + Red edition, VM
 ./scripts/run_larceny_tests.sh --r6rs     # (r6rs …) emulation libraries
+# A change that moves a Larceny tally re-pins that suite's rows in
+# scheme_tests/reports/larceny_gc_stress.tsv, on every lane it moves, in the
+# same PR: the nightly GC stress lane holds each suite to them. The script
+# above warns when they differ; edit the rows' tallies, or re-pin them with
+./scripts/run_larceny_gc_stress.sh --update-baseline [--tree-walker] [--r6rs] SUITE...
 
 # Specific crate
 cargo test --package patina-frontend
