@@ -2182,10 +2182,14 @@ impl Environment {
     }
 
     /// Report every edge the collector follows out of this environment: the
-    /// value in each of its slots, and each environment it keeps live — its
-    /// parent, the target of each macro-expansion alias, and the owner of
-    /// each binding it imported. One level only: `GcVisitor::visit_env`
-    /// walks the environments reported, deduplicated, without recursion.
+    /// value in each of its slots and each environment it keeps live — the
+    /// target of each macro-expansion alias and the owner of each binding it
+    /// imported — and return the last, its parent. One level only:
+    /// `GcVisitor::visit_env` walks the environments reported, deduplicated,
+    /// without recursion, and follows the parent chain by reference, since
+    /// that is the edge nearly every environment has: queueing it as well
+    /// cost a hash lookup and a reference count per environment, about 1% of
+    /// the tree-walker's chibi suite under stress 1.
     ///
     /// Every field of this struct, of [`RareTables`] and of the binding
     /// records is named below (#623), so a new field does not compile here
@@ -2196,7 +2200,11 @@ impl Environment {
     ///
     /// `f` runs with the binding tables borrowed, so it must not write to
     /// this environment. The collector's visitor only marks.
-    pub(crate) fn for_each_gc_edge(&self, f: &mut dyn FnMut(GcEdge<'_>)) {
+    #[must_use = "the parent is an edge too"]
+    pub(crate) fn for_each_gc_edge(
+        &self,
+        f: &mut dyn FnMut(GcEdge<'_>),
+    ) -> Option<&Rc<Environment>> {
         let Environment {
             // A handle to the arenas these values live in, which the collector
             // is already marking: not an edge into them.
@@ -2281,9 +2289,7 @@ impl Environment {
                 f(GcEdge::Env(owner));
             }
         }
-        if let Some(parent) = parent {
-            f(GcEdge::Env(parent));
-        }
+        parent.as_ref()
     }
 }
 
@@ -2293,8 +2299,9 @@ impl Environment {
 pub(crate) enum GcEdge<'a> {
     /// A value held in a slot.
     Value(TaggedValue),
-    /// An environment kept live: a parent, an alias target, the owner of an
-    /// imported binding, or a library's own environment.
+    /// An environment kept live: an alias target, the owner of an imported
+    /// binding, or a library's own environment. An environment's parent is
+    /// `for_each_gc_edge`'s return value instead.
     Env(&'a Rc<Environment>),
 }
 
@@ -2856,11 +2863,12 @@ mod shared_binding_tests {
     /// tests gives an importer a parent or an alias, so these are its owners.
     fn edges_to_environments(env: &Environment) -> Vec<*const Environment> {
         let mut envs = Vec::new();
-        env.for_each_gc_edge(&mut |edge| {
+        let parent = env.for_each_gc_edge(&mut |edge| {
             if let GcEdge::Env(target) = edge {
                 envs.push(Rc::as_ptr(target));
             }
         });
+        envs.extend(parent.map(Rc::as_ptr));
         envs
     }
 

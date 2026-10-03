@@ -800,27 +800,32 @@ impl<'h> GcVisitor<'h> {
     /// answer, which names every field (#623).
     pub fn visit_env(&mut self, env: &Environment) {
         let mut pending = std::mem::take(&mut self.env_worklist);
-        self.visit_env_edges(env, &mut pending);
+        self.visit_env_chain(env, &mut pending);
         while let Some(next) = pending.pop() {
-            self.visit_env_edges(&next, &mut pending);
+            self.visit_env_chain(&next, &mut pending);
         }
         self.env_worklist = pending;
     }
 
-    /// Mark `env`'s values and queue the environments it reaches, unless it
-    /// was walked already in this collection.
-    fn visit_env_edges(&mut self, env: &Environment, pending: &mut Vec<Rc<Environment>>) {
-        if !self.seen_envs.insert(env.gc_identity()) {
-            return;
-        }
-        env.for_each_gc_edge(&mut |edge| match edge {
-            GcEdge::Value(tv) => self.visit(tv),
-            GcEdge::Env(next) => {
-                if !self.seen_envs.contains(&next.gc_identity()) {
-                    pending.push(Rc::clone(next));
-                }
+    /// Mark the values of `env` and of its parents, and queue the other
+    /// environments they reach. The chain stops at the first environment
+    /// this collection has walked already: its parents were walked with it.
+    fn visit_env_chain(&mut self, env: &Environment, pending: &mut Vec<Rc<Environment>>) {
+        let mut current = Some(env);
+        while let Some(env) = current {
+            if !self.seen_envs.insert(env.gc_identity()) {
+                break;
             }
-        });
+            let parent = env.for_each_gc_edge(&mut |edge| match edge {
+                GcEdge::Value(tv) => self.visit(tv),
+                GcEdge::Env(next) => {
+                    if !self.seen_envs.contains(&next.gc_identity()) {
+                        pending.push(Rc::clone(next));
+                    }
+                }
+            });
+            current = parent.map(|parent| parent.as_ref());
+        }
     }
 
     /// Trace a continuation held outside the heap. Root providers need this

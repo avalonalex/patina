@@ -34,7 +34,7 @@ from pathlib import Path
 TRACE_FUNCTIONS = {
     "crates/patina-core/src/heap/gc.rs": [
         "visit_env",
-        "visit_env_edges",
+        "visit_env_chain",
         "visit_promise",
         "visit_wind",
         "visit_wind_with",

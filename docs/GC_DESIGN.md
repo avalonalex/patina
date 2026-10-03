@@ -125,16 +125,16 @@ There is no traversal API today; the tracer needs a new
 
 *As built:* `Environment::for_each_gc_edge` reports one environment's edges,
 naming every field of the struct and of its side tables (#623): the value in
-each slot, plain and scoped, and each environment it keeps live — its parent,
-and two kinds of edge that leave the parent chain, both an `Rc<Environment>`
-in a side table rather than a value in a slot: a macro-expansion alias into
-the environment the macro was defined in, and the owner of an imported
-binding, whose slot here holds only a marker — the value is in the slot of the
-library that owns the location (#406). `GcVisitor::visit_env` walks what it
-reports from a worklist, deduplicated by `gc_identity`, without recursing.
-Anything that gives an environment another way to reach a value held
-elsewhere is a new field, which does not compile there until it is reported
-or written `field: _` with its reason.
+each slot, plain and scoped, and two kinds of edge that leave the parent
+chain, both an `Rc<Environment>` in a side table rather than a value in a
+slot: a macro-expansion alias into the environment the macro was defined in,
+and the owner of an imported binding, whose slot here holds only a marker —
+the value is in the slot of the library that owns the location (#406). It
+returns the parent. `GcVisitor::visit_env` follows the parent chain by
+reference and walks the other environments from a worklist, all deduplicated
+by `gc_identity`, without recursing. Anything that gives an environment
+another way to reach a value held elsewhere is a new field, which does not
+compile there until it is reported or written `field: _` with its reason.
 
 ### 3.4 Why moving/compacting GC is off the table
 
