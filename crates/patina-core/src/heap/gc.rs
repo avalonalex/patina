@@ -243,10 +243,11 @@ pub trait GcRoots {
 /// `TaggedValue` (symbol table, `SourceMap` keys, `eq?` semantics, VM
 /// constants — design §3.4).
 ///
-/// A collector expresses its automatic policy as an allocation threshold
-/// (`MarkSweepCollector::auto_threshold`), which [`GcController`] installs
-/// into the heap — the trigger *decision* happens in `Heap::note_alloc`, not
-/// by querying the collector (design §6.1).
+/// A collector expresses its automatic policy as a threshold
+/// ([`GcThreshold`]: bytes for the adaptive default,
+/// `MarkSweepCollector::auto_threshold`; allocations for stress), which
+/// [`GcController`] installs into the heap — the trigger *decision* happens
+/// in `Heap::note_alloc`, not by querying the collector (design §6.1).
 ///
 /// Crate-private, with every other way to run a collection (#624): a
 /// collection outside [`GcController::safe_point`] skips the deferral rule,
@@ -1662,7 +1663,9 @@ impl Heap {
         account.reclaimed += freed_bytes as u64;
         account.through_last_gc += account.since_gc as u64;
         account.since_gc = 0;
-        account.live = live + account.external;
+        // Read after the arenas are swept: external bytes that the dead
+        // slots' payloads gave back as they dropped are not live.
+        account.live = live.saturating_add(account.external.get());
         self.allocs_since_gc = 0;
         self.gc_pending.set(false);
         self.gc_collections += 1;
@@ -2608,7 +2611,8 @@ mod tests {
 
     /// External bytes (GC_PRD §15): charged like an allocation, counted in L
     /// at each collection until they are released, and never counted as
-    /// reclaimed.
+    /// reclaimed. `committed-bytes` is the arenas' alone: GC_PRD's footprint
+    /// adds the external bytes to it, so it must not hold them already.
     #[test]
     fn external_bytes_count_toward_the_trigger_and_l() {
         let mut heap = Heap::new();
@@ -2622,12 +2626,60 @@ mod tests {
         let mut collector = MarkSweepCollector::new();
         collector.collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.live_bytes(), 1 << 20);
-        assert!(heap.committed_bytes() >= 1 << 20);
+        assert_eq!(heap.committed_bytes(), 0, "an empty heap's arenas");
+        assert_eq!(heap.stats().external_bytes, 1 << 20);
 
         heap.release_external_bytes(1 << 20);
         collector.collect(&mut heap, &[&TestRoots::default()]);
         assert_eq!(heap.live_bytes(), 0);
         assert_eq!(heap.bytes_reclaimed(), 0);
+
+        // A size an embedder got wrong saturates the count the trigger
+        // compares rather than wrapping it past the threshold.
+        heap.charge_external_bytes(1);
+        heap.charge_external_bytes(usize::MAX);
+        assert_eq!(heap.bytes_since_gc(), usize::MAX);
+        assert_eq!(heap.external_bytes(), usize::MAX);
+        assert!(pending.get());
+    }
+
+    /// A holder of external bytes usually dies inside a sweep, which holds
+    /// the heap mutably while it drops the dead slots' `Rc` payloads, so it
+    /// gives its bytes back through a handle that needs no heap borrow; the
+    /// collection's L then leaves them out.
+    #[test]
+    fn external_bytes_released_during_a_collection_are_not_live() {
+        /// Gives external bytes back from inside the collection, as a
+        /// holder's `Drop` would while the sweep runs.
+        struct ReleasingRoots {
+            handle: crate::heap::ExternalBytes,
+            bytes: usize,
+        }
+        impl GcRoots for ReleasingRoots {
+            fn trace_roots(&self, _visitor: &mut GcVisitor<'_>) {}
+            fn sweep_weak(&self, _visitor: &GcVisitor<'_>) {
+                self.handle.release(self.bytes);
+            }
+        }
+
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let handle = shared.borrow().external_bytes_handle();
+        shared.borrow_mut().charge_external_bytes(3 << 20);
+        {
+            // What a `Drop` during a sweep sees: the heap borrowed mutably.
+            let _sweeping = shared.borrow_mut();
+            handle.release(1 << 20);
+        }
+        assert_eq!(shared.borrow().external_bytes(), 2 << 20);
+
+        let roots = ReleasingRoots {
+            handle: handle.clone(),
+            bytes: 1 << 20,
+        };
+        let mut controller = GcController::new(GcMode::On);
+        controller.collect(&mut shared.borrow_mut(), &[&roots]);
+        assert_eq!(handle.held(), 1 << 20);
+        assert_eq!(shared.borrow().live_bytes(), 1 << 20);
     }
 
     #[test]

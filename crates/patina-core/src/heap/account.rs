@@ -33,7 +33,12 @@
 //! code and environments, which GC_PRD §15 charges as **external bytes**:
 //! [`Heap::charge_external_bytes`] is that entry point, for the environment
 //! tables of #615, the ports' buffers and whatever else holds memory on a heap
-//! object's behalf outside the arenas.
+//! object's behalf outside the arenas. They are given back through an
+//! [`ExternalBytes`] handle, which needs no heap borrow: such a holder
+//! usually dies when the last `Rc` naming it drops, and that is often inside
+//! a sweep, which holds the heap's `RefCell` mutably while it drops the
+//! tombstoned slots' payloads. The sweep settles L after the arenas are
+//! swept, so what those drops give back is out of the L it sets.
 //!
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
@@ -41,7 +46,9 @@
 //! found live. `PATINA_GC_STRESS` still counts allocations, not bytes
 //! ([`GcThreshold`]).
 
+use std::cell::Cell;
 use std::mem::size_of;
+use std::rc::Rc;
 
 use num_bigint::BigInt;
 
@@ -193,8 +200,43 @@ pub(super) struct ByteAccount {
     /// L: the bytes the last collection found live, the external bytes held
     /// at that time included. Zero before the first collection.
     pub(super) live: usize,
-    /// Bytes held outside the arenas on behalf of heap objects, now.
-    pub(super) external: usize,
+    /// Bytes held outside the arenas on behalf of heap objects, now. Shared
+    /// with every [`ExternalBytes`] handle, so a holder gives its bytes back
+    /// without borrowing the heap.
+    pub(super) external: Rc<Cell<usize>>,
+}
+
+/// A handle to the heap's external bytes ([`Heap::external_bytes_handle`]),
+/// for a holder to give back what it was charged when it dies.
+///
+/// A holder of external bytes — an environment's tables, a port's buffer —
+/// usually dies when the last `Rc` naming it drops, and that is often inside
+/// a sweep: tombstoning a dead slot drops its `Rc` payload while the sweep
+/// holds the heap mutably, so a `Drop` that borrowed the heap would panic.
+/// The handle shares the total with the heap instead, and the sweep reads it
+/// after the arenas are swept, so bytes given back by the drops a sweep
+/// causes are out of the L that collection sets.
+#[derive(Debug, Clone)]
+pub struct ExternalBytes(Rc<Cell<usize>>);
+
+impl ExternalBytes {
+    /// The external bytes held now.
+    pub fn held(&self) -> usize {
+        self.0.get()
+    }
+
+    /// Give back `bytes` charged with [`Heap::charge_external_bytes`]. Not a
+    /// reclamation: `bytes-reclaimed` counts only what collections free.
+    /// Giving back more than is held is a bug in the holder: it panics in
+    /// debug builds and gives back what is held in release.
+    pub fn release(&self, bytes: usize) {
+        let held = self.0.get();
+        debug_assert!(
+            bytes <= held,
+            "released {bytes} external bytes, but only {held} are charged"
+        );
+        self.0.set(held.saturating_sub(bytes));
+    }
 }
 
 impl Heap {
@@ -226,16 +268,24 @@ impl Heap {
     }
 
     /// Bytes held outside the arenas on behalf of heap objects
-    /// ([`Heap::charge_external_bytes`]).
+    /// ([`Heap::charge_external_bytes`]), now.
     pub fn external_bytes(&self) -> usize {
-        self.account.external
+        self.account.external.get()
     }
 
-    /// The memory the heap holds now, live or not: every arena's capacity in
-    /// slots (occupied, free, or reserved by its `Vec`), the payloads of the
-    /// occupied slots, and the external bytes. A free slot holds a tombstone
-    /// and no payload. It does not count the free lists, the mark bits of a
-    /// collection in progress, the symbol table or the check build's stamps.
+    /// A handle through which a holder of external bytes gives them back
+    /// without borrowing the heap ([`ExternalBytes`]).
+    pub fn external_bytes_handle(&self) -> ExternalBytes {
+        ExternalBytes(self.account.external.clone())
+    }
+
+    /// The memory the arenas hold now, live or not: every arena's capacity in
+    /// slots (occupied, free, or reserved by its `Vec`) and the payloads of
+    /// the occupied slots. A free slot holds a tombstone and no payload. It
+    /// does not count the external bytes, which [`Heap::external_bytes`]
+    /// reports apart (GC_PRD's footprint is the two together), the free
+    /// lists, the mark bits of a collection in progress, the symbol table or
+    /// the check build's stamps.
     ///
     /// A walk of the arenas, not a running total: for `(gc-stats)`, not for a
     /// hot path.
@@ -251,29 +301,29 @@ impl Heap {
                 .iter()
                 .map(HeapObjectData::payload_bytes)
                 .sum::<usize>();
-        slots + payloads + self.account.external
+        slots + payloads
     }
 
     /// Charge `bytes` held outside the arenas on a heap object's behalf: they
     /// count toward the next collection like an allocation, and into L at
-    /// every collection until [`Heap::release_external_bytes`] gives them
-    /// back. GC_PRD §15's external bytes: environment tables (#615), port
-    /// buffers, code, and what an embedder reports.
+    /// every collection until they are given back, through
+    /// [`Heap::release_external_bytes`] or, from a holder's `Drop`, an
+    /// [`ExternalBytes`] handle. GC_PRD §15's external bytes: environment
+    /// tables (#615), port buffers, code, and what an embedder reports.
+    ///
+    /// Saturating, so a size an embedder got wrong cannot wrap the count the
+    /// trigger compares and put off the next collection.
     pub fn charge_external_bytes(&mut self, bytes: usize) {
-        self.account.external += bytes;
-        self.account.since_gc += bytes;
+        let external = &self.account.external;
+        external.set(external.get().saturating_add(bytes));
+        self.account.since_gc = self.account.since_gc.saturating_add(bytes);
         self.refresh_gc_pending();
     }
 
     /// Give back external bytes charged with
-    /// [`Heap::charge_external_bytes`]. Not a reclamation: `bytes-reclaimed`
-    /// counts only what collections free.
+    /// [`Heap::charge_external_bytes`]: [`ExternalBytes::release`], for a
+    /// caller that holds the heap.
     pub fn release_external_bytes(&mut self, bytes: usize) {
-        debug_assert!(
-            bytes <= self.account.external,
-            "released {bytes} external bytes, but only {} are charged",
-            self.account.external
-        );
-        self.account.external = self.account.external.saturating_sub(bytes);
+        self.external_bytes_handle().release(bytes);
     }
 }

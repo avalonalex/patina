@@ -217,9 +217,10 @@ pub trait GcRoots {
 }
 
 /// Swappable algorithm. Non-moving is a contract: implementations may not
-/// relocate live slots. Automatic policy is expressed as an allocation
-/// threshold the controller installs into the heap (§6), not a per-query
-/// method — the safe point never asks the collector anything. Crate-private
+/// relocate live slots. Automatic policy is expressed as a threshold (bytes
+/// for the adaptive default, allocations for stress; `GcThreshold`) the
+/// controller installs into the heap (§6), not a per-query method — the
+/// safe point never asks the collector anything. Crate-private
 /// since #624, with every other way to run a collection (§7).
 pub(crate) trait Collector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
@@ -540,9 +541,20 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   vectors, strings and bytevectors hand out slices, never their `Vec`.
   Shared `Rc` payloads (procedures, macros, libraries, environments, ports,
   tree-walker continuations) are not charged; GC_PRD §15 charges what they
-  hold as **external bytes**, through `Heap::charge_external_bytes` and
-  `release_external_bytes`, which count toward the trigger and into L. No
-  holder reports any yet: environment tables are #615's.
+  hold as **external bytes**, through `Heap::charge_external_bytes`, which
+  counts toward the trigger and into L. A holder gives them back through an
+  `ExternalBytes` handle (`Heap::external_bytes_handle`), which shares the
+  total with the heap and needs no heap borrow: a holder usually dies when
+  its last `Rc` drops, often inside a sweep, which holds the heap mutably
+  while it drops the dead slots' payloads, and sweep reads the total after
+  the arenas are swept, so those bytes are out of the L it sets. No holder
+  reports any yet: environment tables are #615's. Until they do, a program
+  whose memory sits mostly behind those `Rc`s — closure-heavy tree-walker
+  code (a procedure's environment), string-port churn — is charged only
+  slots, and the 8 MiB floor is more slots than the 65,536 objects that
+  bounded it before #606 (524,288 pairs, or 116,508 of the 72-byte object
+  slots that procedures and ports take), so it keeps more garbage between
+  collections than it did.
   It was an allocation count until #606: a 100,000-element vector cost the
   trigger what a pair costs, so 500 of them peaked at 414 MB with no
   collection, and 20,000 VM captures 1,000 frames deep at 3.2 GB. Both now
@@ -586,12 +598,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   primitives, honored in **every** mode. `(gc)` records a request; the next
   safe point services it. This is what makes collection testable without
   process-global environment variables. `(gc-stats)` reports the arenas'
-  slot counts and four byte keys: `live-bytes` (L, 0 before the first
+  slot counts and five byte keys: `live-bytes` (L, 0 before the first
   collection), `bytes-allocated` (every byte charged), `bytes-reclaimed`
   (every byte a collection freed, so it grows only when one frees
-  something) and `committed-bytes` (every arena's capacity in slots, the
-  payloads of the occupied slots and the external bytes: what the heap holds
-  now, live or not).
+  something), `committed-bytes` (every arena's capacity in slots and the
+  payloads of the occupied slots: what the arenas hold now, live or not) and
+  `external-bytes` (what holders outside the arenas have charged and not
+  given back, 0 until #615). GC_PRD's footprint is the last two together.
 
 ### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 

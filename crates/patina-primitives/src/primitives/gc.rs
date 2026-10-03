@@ -15,9 +15,11 @@
 //! - `bytes-reclaimed`: every byte the collections have freed. It grows only
 //!   when a collection frees something, so a reclamation proof that sees it
 //!   above 0 cannot have passed without collecting.
-//! - `committed-bytes`: what the heap holds now, live or not: every arena's
-//!   capacity in slots, the payloads of the occupied slots, and the external
-//!   bytes.
+//! - `committed-bytes`: what the arenas hold now, live or not: every arena's
+//!   capacity in slots and the payloads of the occupied slots.
+//! - `external-bytes`: what is held outside the arenas on heap objects'
+//!   behalf now (GC_PRD §15), charged by its holders; 0 until one does
+//!   (#615). GC_PRD's footprint is `committed-bytes` plus `external-bytes`.
 //!
 //! The slot counts before them (`pairs`, `free-pairs`, `allocs-since-gc`,
 //! `last-swept` and the rest) stay, as diagnostics of the arenas.
@@ -76,6 +78,7 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         ("bytes-allocated", stats.bytes_allocated as usize),
         ("bytes-reclaimed", stats.bytes_reclaimed as usize),
         ("committed-bytes", stats.committed_bytes),
+        ("external-bytes", stats.external_bytes),
     ];
 
     let alist: Vec<TaggedValue> = entries

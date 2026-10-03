@@ -38,7 +38,8 @@ pub(crate) mod trace_sentinels;
 use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
 use account::ByteAccount;
 pub use account::{
-    GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
+    ExternalBytes, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES,
+    VECTOR_SLOT_BYTES,
 };
 use check::SlotChecks;
 use num_bigint::BigInt;
@@ -3283,6 +3284,7 @@ impl Heap {
             bytes_allocated: self.bytes_allocated(),
             bytes_reclaimed: self.bytes_reclaimed(),
             committed_bytes: self.committed_bytes(),
+            external_bytes: self.external_bytes(),
         }
     }
 }
@@ -3314,8 +3316,11 @@ pub struct HeapStats {
     pub bytes_allocated: u64,
     /// [`Heap::bytes_reclaimed`]: every byte the collections have freed.
     pub bytes_reclaimed: u64,
-    /// [`Heap::committed_bytes`]: what the heap holds now, live or not.
+    /// [`Heap::committed_bytes`]: what the arenas hold now, live or not.
     pub committed_bytes: usize,
+    /// [`Heap::external_bytes`]: what is held outside the arenas on heap
+    /// objects' behalf, now.
+    pub external_bytes: usize,
 }
 
 // ============================================================================

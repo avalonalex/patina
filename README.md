@@ -108,8 +108,8 @@ The architecture is designed to support future exploration:
   collector runs on both backends, after `max(8 MiB, 2 × live)` bytes of
   allocation. `(gc)` and `(gc-stats)` in `(patina debug)` give manual
   control; `(gc-stats)` reports `live-bytes`, `bytes-allocated`,
-  `bytes-reclaimed` and `committed-bytes` beside its arena counts
-  (`docs/GC_DESIGN.md` §6). Pauses are not yet bounded;
+  `bytes-reclaimed`, `committed-bytes` and `external-bytes` beside its
+  arena counts (`docs/GC_DESIGN.md` §6). Pauses are not yet bounded;
   `PRD/GC_PRD.md` plans a mark-region collector with budgeted
   stop-the-world pauses.
 - Performance is that of a young interpreter: far beyond a naive
