@@ -1,11 +1,11 @@
 """Failure paths of the per-PR GC stress lane (#626), against a fake cargo.
 
-run_gc_stress_tests.sh passes only when every target passed, ran under its
-interval, and collected at least its pinned minimum. These run it against a
+run_gc_stress_tests.sh passes only when every target ran all its tests,
+passed, ran under its interval, and collected at least its pinned minimum. These run it against a
 fake `cargo` that writes the collection record PATINA_GC_COUNT_DIR asks for,
 so each way the lane can fail is shown failing it, among them the positive
-control for a run that reports no collections (#5). No compiler or
-interpreter is needed.
+controls for a run that reports no collections (#5) and one that did not
+run every test (#201). No compiler or interpreter is needed.
 """
 
 import os
@@ -33,7 +33,10 @@ if mode == 'fail':
     print('test some_test ... FAILED')
     print('test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out')
     sys.exit(101)
-print('test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out')
+if mode == 'filtered':
+    print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out')
+else:
+    print('test result: ok. 99 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out')
 '''
 
 
@@ -68,12 +71,12 @@ class Lanes(unittest.TestCase):
     def test_per_pr_lane_passes_when_every_target_collected(self):
         result = self.run_script('run_gc_stress_tests.sh')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('OK   gc_vm at 16: ok. 3 passed', result.stdout)
+        self.assertIn('OK   gc_vm at 16: ok. 99 passed', result.stdout)
         self.assertNotIn('FAIL', result.stdout)
 
     def test_per_pr_lane_fails_a_run_that_did_not_collect(self):
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
-                               'FAIL gc_vm at 16: ok. 3 passed')
+                               'FAIL gc_vm at 16: ok. 99 passed')
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='zero'),
                                '0 collections, pinned minimum 8001')
 
@@ -82,6 +85,11 @@ class Lanes(unittest.TestCase):
                                'no collection record from the test binary')
         self.assert_lane_fails(self.run_script('run_gc_stress_tests.sh', mode='other-mode'),
                                'a process ran under another mode')
+
+    def test_per_pr_lane_fails_a_run_that_did_not_run_every_test(self):
+        result = self.run_script('run_gc_stress_tests.sh', mode='filtered')
+        self.assert_lane_fails(result, '2 test(s) filtered out')
+        self.assertIn('1 test(s) passed, pinned 23', result.stdout)
 
     def test_per_pr_lane_fails_a_failing_target(self):
         result = self.run_script('run_gc_stress_tests.sh', mode='fail')

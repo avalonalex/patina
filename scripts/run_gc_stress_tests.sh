@@ -19,6 +19,12 @@
 # stress, so a run the variable did not reach fails here even if the record
 # went missing some other way. Lower a minimum only with a measurement.
 #
+# Each target must also run all its tests: none filtered out, and at least
+# the number pinned below, which is how many it has. A run cut short or
+# filtered still passes and can still collect, and a GC lane passed that way
+# once, with the chibi suite run two assertions deep (#201). Raise a pin when
+# a target gains tests; lower one only with the tests it lost.
+#
 # Two minimums are near zero, and that is their healthy count, not an
 # oversight. macro_definition_env does all its work inside library loads, and
 # library_loading nearly all, and a library load defers collection for as
@@ -39,12 +45,14 @@
 # without stress for a third more time.
 #
 # Run it against a check build: a debug build, as here, or release with
-# `--features gc-check` passed through to patina-tests. CI's Test Suite job
+# `--features patina-tests/gc-check` passed through. CI's Test Suite job
 # runs it after `cargo test --all --lib --tests`, whose build it reuses: it
 # names the workspace (`--workspace`), as that command does, so the features
 # resolve the same and nothing recompiles.
 #
 # Usage: scripts/run_gc_stress_tests.sh [extra cargo test arguments]
+# (a build's, such as `--release --features patina-tests/gc-check`; a test
+# filter fails the tally)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -53,23 +61,24 @@ cd "$(dirname "$0")/.."
 # shell would change what it measures.
 unset PATINA_GC PATINA_GC_STRESS PATINA_GC_ZEAL PATINA_GC_COUNT_DIR
 
-# target, interval, minimum collections (measured 2026-10-02: half of each
-# count at that interval; the count without stress in parentheses)
+# target, interval, minimum collections, tests (measured 2026-10-02: the
+# minimum is half the count at that interval; in parentheses the count, and
+# the count without stress)
 TARGETS=(
-    "callability 16 31"                    # 62 (0)
-    "control_flow_matrix 16 340"           # 680 (0)
-    "cps_features 16 469"                  # 938 (0)
-    "ephemerons 16 62"                     # 124 (28)
-    "escape_from_primitive 16 364"         # 728 (0)
-    "finished_forms_release_code 16 1450"  # 2901 (13)
-    "gc_tree_walker 16 11421"              # 22842 (55)
-    "gc_vm 16 8001"                        # 16003 (64)
-    "hygiene_matrix 16 400"                # 800 (2)
-    "interpreter_api 16 37"                # 74 (5)
-    "library_loading 16 1"                 # 3 (0): see the header
-    "macro_definition_env 16 0"            # 0 (0): see the header
-    "vm_callprimitive 16 23"               # 47 (0)
-    "scheme_suite 4096 1534"               # 3068 (484): see the header
+    "callability 16 31 11"                    # 62 (0)
+    "control_flow_matrix 16 340 3"            # 680 (0)
+    "cps_features 16 469 1"                   # 938 (0)
+    "ephemerons 16 62 15"                     # 124 (28)
+    "escape_from_primitive 16 364 12"         # 728 (0)
+    "finished_forms_release_code 16 1450 9"   # 2901 (13)
+    "gc_tree_walker 16 11421 19"              # 22842 (55)
+    "gc_vm 16 8001 23"                        # 16003 (64)
+    "hygiene_matrix 16 400 13"                # 800 (2)
+    "interpreter_api 16 37 27"                # 74 (5)
+    "library_loading 16 1 9"                  # 3 (0): see the header
+    "macro_definition_env 16 0 14"            # 0 (0): see the header
+    "vm_callprimitive 16 23 15"               # 47 (0)
+    "scheme_suite 4096 1534 11"               # 3068 (484): see the header
 )
 
 OUT=$(mktemp -d)
@@ -78,7 +87,7 @@ trap 'rm -rf "$OUT"' EXIT
 fail=0
 lane_start=$SECONDS
 for entry in "${TARGETS[@]}"; do
-    read -r target interval minimum <<< "$entry"
+    read -r target interval minimum tests <<< "$entry"
     run="$OUT/$target"
     mkdir -p "$run/count"
     start=$SECONDS
@@ -92,7 +101,18 @@ for entry in "${TARGETS[@]}"; do
         problems+=("cargo test exited $rc")
     fi
     result=$(grep -E '^test result: ' "$run/output.txt" | tail -1 || true)
-    [ -n "$result" ] || problems+=("no test result line")
+    if [ -z "$result" ]; then
+        problems+=("no test result line")
+    else
+        passed=$(sed -n 's/^test result: [A-Za-z]*\. \([0-9]*\) passed;.*/\1/p' <<< "$result")
+        filtered=$(sed -n 's/.*; \([0-9]*\) filtered out.*/\1/p' <<< "$result")
+        if [ "${filtered:-x}" != 0 ]; then
+            problems+=("${filtered:-an unknown number of} test(s) filtered out")
+        fi
+        if [ "${passed:-0}" -lt "$tests" ]; then
+            problems+=("${passed:-no} test(s) passed, pinned $tests")
+        fi
+    fi
 
     # The test binary's own record, and any from processes it started; each
     # must have run under this interval.
