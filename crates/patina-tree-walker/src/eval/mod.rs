@@ -74,6 +74,23 @@ impl Evaluator {
     /// Use this to inject a `MemoryFs` for testing or a WASM-compatible
     /// filesystem for browser targets.
     pub fn with_fs(fs: Arc<dyn patina_core::FileSystem>) -> Self {
+        Self::with_fs_and_gc_mode(fs, patina_core::GcMode::from_env())
+    }
+
+    /// An evaluator collecting in `mode`, whatever `PATINA_GC`,
+    /// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: for a test that compares
+    /// collecting with not collecting, whose not-collecting side a stress
+    /// lane's variable would otherwise turn into a collecting one (#626).
+    /// Not an interface: Patina always collects.
+    #[doc(hidden)]
+    pub fn with_gc_mode(mode: patina_core::GcMode) -> Self {
+        Self::with_fs_and_gc_mode(Arc::new(patina_core::NativeFs), mode)
+    }
+
+    fn with_fs_and_gc_mode(
+        fs: Arc<dyn patina_core::FileSystem>,
+        mode: patina_core::GcMode,
+    ) -> Self {
         let global_env = Rc::new(Environment::new());
         // Counterpart of the VM's, on the same seam — see that comment.
         global_env
@@ -94,7 +111,7 @@ impl Evaluator {
         // Pairing heap with controller: install the policy's trigger
         // threshold (a bare heap defaults to inert) and cache the pending
         // flag the safe point reads.
-        let gc = patina_core::GcController::from_env();
+        let gc = patina_core::GcController::new(mode);
         global_env
             .heap()
             .borrow_mut()

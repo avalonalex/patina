@@ -15,7 +15,7 @@
 mod common;
 use common::*;
 
-gc_shared_tests!(eval_program_vm);
+gc_shared_tests!(eval_program_vm, eval_program_vm_gc_off);
 
 #[test]
 fn closure_free_vars_survive_collection() {

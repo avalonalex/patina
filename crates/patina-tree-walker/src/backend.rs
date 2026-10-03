@@ -69,6 +69,15 @@ impl TreeWalker {
         }
     }
 
+    /// A tree-walker collecting in `mode`, whatever the environment says: see
+    /// [`Evaluator::with_gc_mode`]. Not an interface.
+    #[doc(hidden)]
+    pub fn with_gc_mode(mode: patina_core::GcMode) -> Self {
+        TreeWalker {
+            evaluator: Rc::new(Evaluator::with_gc_mode(mode)),
+        }
+    }
+
     /// Create a tree-walker from an existing evaluator
     ///
     /// This is useful for tests that need to configure the evaluator

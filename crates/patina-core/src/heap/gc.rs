@@ -465,7 +465,13 @@ fn polled_inside_a_no_gc_scope(open: u32) -> ! {
 /// When automatic collection fires. Shared by both backends: `PATINA_GC` and
 /// `PATINA_GC_STRESS` are process-global, so the mode table lives here rather
 /// than being re-derived per backend (design §6).
-#[derive(Clone, Copy)]
+///
+/// A backend reads it from the environment when it is made
+/// ([`GcMode::from_env`]). A test that compares collecting with not
+/// collecting names its mode instead, through the backends' `with_gc_mode`
+/// constructors, so that a stress lane's variable does not turn its
+/// not-collecting side into a collecting one (#626).
+#[derive(Clone, Copy, Debug)]
 pub enum GcMode {
     /// Collect only when `(gc)` has been called. **Testing lanes only**
     /// (`PATINA_GC=0`): the differential suite needs a no-collection
@@ -540,9 +546,16 @@ pub struct GcController {
 }
 
 impl GcController {
+    /// A controller in the mode the environment selects: what every backend
+    /// uses unless a test names a mode.
     pub fn from_env() -> Self {
+        Self::new(GcMode::from_env())
+    }
+
+    /// A controller in `mode`, whatever the environment says.
+    pub fn new(mode: GcMode) -> Self {
         Self {
-            mode: GcMode::from_env(),
+            mode,
             collector: MarkSweepCollector::new(),
         }
     }

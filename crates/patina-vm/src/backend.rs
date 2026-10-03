@@ -163,6 +163,23 @@ impl VmBackend {
 
     /// Create a VM backend with a custom filesystem.
     pub fn with_fs(fs: std::sync::Arc<dyn patina_core::FileSystem>) -> Self {
+        Self::with_fs_and_gc_mode(fs, patina_core::GcMode::from_env())
+    }
+
+    /// A VM backend collecting in `mode`, whatever `PATINA_GC`,
+    /// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: for a test that compares
+    /// collecting with not collecting, whose not-collecting side a stress
+    /// lane's variable would otherwise turn into a collecting one (#626).
+    /// Not an interface: Patina always collects.
+    #[doc(hidden)]
+    pub fn with_gc_mode(mode: patina_core::GcMode) -> Self {
+        Self::with_fs_and_gc_mode(std::sync::Arc::new(patina_core::NativeFs), mode)
+    }
+
+    fn with_fs_and_gc_mode(
+        fs: std::sync::Arc<dyn patina_core::FileSystem>,
+        mode: patina_core::GcMode,
+    ) -> Self {
         let global_env = Rc::new(Environment::new());
         // Name this backend to `cond-expand` and `(features)`, once, on the
         // heap they both read. `crates/patina-tests/tests/backend_feature.rs`
@@ -170,7 +187,7 @@ impl VmBackend {
         // a library body, a `.sld` declaration, a quasiquote — because a
         // missed one does not error, it silently takes the `else` branch.
         global_env.heap().borrow_mut().add_feature("patina-vm");
-        let mut state = VmState::new(Rc::clone(&global_env));
+        let mut state = VmState::with_gc_mode(Rc::clone(&global_env), mode);
         // Deliberately *not* `install_primitives()` — that bound every
         // registered primitive into globals regardless of the import set
         // (`cadddr` was callable with only `(scheme base)` imported).

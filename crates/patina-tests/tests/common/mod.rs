@@ -46,8 +46,9 @@
 // file that includes this module compiles it unused.
 #![allow(unused_macros)]
 
+use patina_core::GcMode;
 use patina_core::tagged_value::TaggedValue;
-use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter};
+use patina_interpreter::{Interpreter, InterpreterError, TreeWalkInterpreter, TreeWalker};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_runtime::Backend;
 use patina_vm::VmBackend;
@@ -160,9 +161,27 @@ pub fn eval_program_shipped_only_err(code: &str) -> String {
 
 /// A VM interpreter with [`test_lib_root`] on its search path.
 pub fn vm_interpreter() -> Interpreter<VmBackend> {
-    let interp = Interpreter::new(VmBackend::new());
+    vm_interpreter_with(VmBackend::new())
+}
+
+fn vm_interpreter_with(backend: VmBackend) -> Interpreter<VmBackend> {
+    let interp = Interpreter::new(backend);
     interp.backend().add_library_search_path(test_lib_root());
     interp
+}
+
+/// [`vm_interpreter`], collecting only when `(gc)` asks, whatever
+/// `PATINA_GC_STRESS` or `PATINA_GC_ZEAL` say: the not-collecting side of a
+/// test that compares collecting with not collecting. Under a stress lane's
+/// variable a backend made from the environment collects too, and the
+/// comparison fails without anything being wrong (#626).
+pub fn vm_interpreter_gc_off() -> Interpreter<VmBackend> {
+    vm_interpreter_with(VmBackend::with_gc_mode(GcMode::Off))
+}
+
+/// The tree-walker half of [`vm_interpreter_gc_off`].
+pub fn tree_walker_interpreter_gc_off() -> TreeWalkInterpreter {
+    tree_walker_interpreter_with(Interpreter::new(TreeWalker::with_gc_mode(GcMode::Off)))
 }
 
 /// A path inside a caller-owned [`tempfile::TempDir`], which deletes the
@@ -576,6 +595,23 @@ pub fn eval_program_vm(code: &str) -> String {
     }
 }
 
+/// [`eval_program_vm`] on [`vm_interpreter_gc_off`]: only `(gc)` collects.
+pub fn eval_program_vm_gc_off(code: &str) -> String {
+    match run_on(vm_interpreter_gc_off(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
+/// [`eval_program_tree_walker`] on [`tree_walker_interpreter_gc_off`]: only
+/// `(gc)` collects.
+pub fn eval_program_tree_walker_gc_off(code: &str) -> String {
+    match run_on(tree_walker_interpreter_gc_off(), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!("Failed to evaluate program: {}\n{code}", e.message),
+    }
+}
+
 /// Assert that a multi-expression program produces expected result on both backends
 pub fn assert_program_eval_to(code: &str, expected: &str) {
     expect_value(Which::Both, code, expected, Mode::Program);
@@ -604,7 +640,12 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// only the tests that target machinery unique to it.
 ///
 /// `$eval` is a `fn(&str) -> String` that evaluates a program and `write`s the
-/// result: `eval_program_tree_walker` or `eval_program_vm`.
+/// result: `eval_program_tree_walker` or `eval_program_vm`. `$eval_gc_off` is
+/// the same backend collecting only when `(gc)` asks
+/// (`eval_program_tree_walker_gc_off`, `eval_program_vm_gc_off`), for the two
+/// tests that need to know when collections run: they must pass under the
+/// stress lanes' `PATINA_GC_STRESS` too, which a backend made from the
+/// environment obeys (#626).
 ///
 /// These take a *single-backend* evaluator on purpose. Several cases read
 /// `(gc-stats)` counters, which legitimately differ between the backends —
@@ -612,15 +653,20 @@ pub fn assert_eval_with_scheme_char(expr: &str, expected: &str) {
 /// tree-walker — so routing them through the agreement-asserting
 /// `eval_program` would fail on a difference that is not a divergence.
 macro_rules! gc_shared_tests {
-    ($eval:path) => {
+    ($eval:path, $eval_gc_off:path) => {
         /// Pull one `(gc-stats)` field out of the alist the primitive returns.
         fn stat(code_before: &str, field: &str) -> i64 {
+            stat_on($eval, code_before, field)
+        }
+
+        /// [`stat`], evaluated by `eval`.
+        fn stat_on(eval: fn(&str) -> String, code_before: &str, field: &str) -> i64 {
             let code = format!(
                 r#"(import (patina debug))
                    {code_before}
                    (cdr (assq '{field} (gc-stats)))"#
             );
-            $eval(&code)
+            eval(&code)
                 .parse()
                 .unwrap_or_else(|_| panic!("expected a number for {field}"))
         }
@@ -693,8 +739,11 @@ macro_rules! gc_shared_tests {
             // next iteration starts. Reference counting could never reclaim
             // any of them, so a sweep freeing that many slots is only possible
             // if cycles are collected.
-            assert_gc_eval_to(
-                r#"
+            //
+            // With collection off but for `(gc)`: the count is of the last
+            // collection, so one that ran while the cycles were being made
+            // would take them from it, as stress does.
+            let code = r#"
                 (import (patina debug))
                 (define (make-cycles n)
                   (if (> n 0)
@@ -704,9 +753,8 @@ macro_rules! gc_shared_tests {
                 (make-cycles 1000)
                 (gc)
                 (>= (cdr (assq 'last-swept (gc-stats))) 1000)
-                "#,
-                "#t",
-            );
+                "#;
+            assert_eq!($eval_gc_off(code), "#t", "\nProgram:\n{code}");
         }
 
         #[test]
@@ -816,7 +864,10 @@ macro_rules! gc_shared_tests {
         fn collecting_keeps_the_arena_smaller_than_not_collecting() {
             // Compared against the same workload with the collections removed,
             // so it can only pass if slots are actually reclaimed and reused —
-            // a fixed bound would pass vacuously with zero collections.
+            // a fixed bound would pass vacuously with zero collections. The
+            // side without them runs with collection off but for `(gc)`, so
+            // that a stress lane does not collect there either; the side with
+            // them runs in whatever mode the environment selects.
             let workload = |collect: &str| {
                 format!(
                     r#"(define (round n)
@@ -830,7 +881,7 @@ macro_rules! gc_shared_tests {
                 )
             };
             let with_gc = stat(&workload("(gc)"), "pairs");
-            let without_gc = stat(&workload(""), "pairs");
+            let without_gc = stat_on($eval_gc_off, &workload(""), "pairs");
             assert!(
                 with_gc < without_gc,
                 "collecting did not shrink the arena: {with_gc} with gc vs {without_gc} without"
