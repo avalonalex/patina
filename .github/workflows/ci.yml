@@ -54,8 +54,12 @@ jobs:
     # debug build, whose stale-reference checks turn a lost root into a
     # panic. Each target must pass and report at least its pinned number of
     # collections. It reuses the build above: the script names the workspace
-    # as that command does, so nothing recompiles.
+    # as that command does, so nothing recompiles. It took about a minute
+    # locally (2026-10-02); the limit, near ten times that, stops a target
+    # that a collector regression makes crawl, and the targets that finished
+    # are in the log above the one that did not.
     - name: GC stress lane (debug, collector and control-flow targets)
+      timeout-minutes: 15
       run: ./scripts/run_gc_stress_tests.sh
 
     - name: Embedding examples and feature combinations
