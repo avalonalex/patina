@@ -51,7 +51,7 @@ Non-goals (v1):
 | 5 | Sweep pushes to the existing free lists **and tombstones the slot** | Allocation path unchanged; tombstoning drops `Rc` payloads eagerly → breaks env cycles (§8) |
 | 6 | Safe point = top of each backend's driver loop, guarded by a re-entrancy defer counter | All Rust-stack temporaries are dead or restored there (§7) |
 | 7 | Environments traced via new `Environment::for_each_value`, deduped by `Rc` pointer | Globals/bindings live in Rust `HashMap`s outside the arenas |
-| 8 | VM continuation side tables traced by `VmState`'s root provider, not the heap tracer — **weakly** since stage 5: payloads trace only for marked ref objects, dead entries are pruned | Heap only holds opaque `VmContinuationRef(u64)` — heap-only tracing under-approximates, strong table tracing over-approximates into a monotonic leak (§9.5) |
+| 8 | VM continuation side tables traced by `VmState`'s root provider, not the heap tracer — **weakly** since stage 5: payloads trace only for marked ref objects, dead entries are pruned | Heap only holds opaque `VmContinuationRef { id, bytes }` (`bytes` for the trigger's byte account, §6) — heap-only tracing under-approximates, strong table tracing over-approximates into a monotonic leak (§9.5) |
 | 9 | Runtime mode gate (no Cargo feature); off by default until stage 4c, adaptive-on since | Baseline behavior stayed bit-identical through differential testing at every stage; the CI lanes enforce it permanently |
 
 ---
@@ -394,7 +394,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
 | `code_store[*].constants` | **yes** | Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
 | `globals` | **yes** | `visit_env` |
-| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef(u64)` is opaque; only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
+| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
@@ -508,18 +508,49 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
 
 ## 6. Trigger Policy
 
-- `Heap` gains an `allocs_since_gc` counter, incremented in each `alloc_*`
-  via `note_alloc`, which **raises a collection-pending flag** (an
-  `Rc<Cell<bool>>` shared with the dispatch loops) when the counter crosses
-  `Heap.gc_threshold`. The threshold is the mode made concrete —
-  `GcController::current_threshold`, the single owner of that mapping:
-  `usize::MAX` for Off, the collector's adaptive `max(GC_MIN_THRESHOLD, 2 ×
-  live_after_last_gc)` for On, `n` for Stress. The backend installs it when
-  heap and controller are paired (a bare heap defaults to the inert
-  `usize::MAX` — policy stays in the controller, mechanism in the heap), and
-  `GcController::collect` re-installs it after each collection — the only
-  point the adaptive term changes. `request_gc` raises the same flag, which
-  is how `(gc)` is honored in every mode; sweep lowers it.
+- Each `alloc_*` calls `note_alloc(bytes)`, which counts one allocation
+  (`allocs_since_gc`) and **charges its bytes** (`bytes_since_gc`), and
+  **raises a collection-pending flag** (an `Rc<Cell<bool>>` shared with the
+  dispatch loops) when either count reaches `Heap.gc_threshold`, a
+  `GcThreshold { allocations, bytes }`. The threshold is the mode made
+  concrete — `GcController::current_threshold`, the single owner of that
+  mapping: never for Off, the collector's adaptive `max(8 MiB, 2·L)` bytes
+  for On, `n` allocations for Stress, 0 allocations for Zeal. The backend
+  installs it when heap and controller are paired (a bare heap defaults to
+  the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
+  in the heap), and `GcController::collect` re-installs it after each
+  collection — the only point the adaptive term changes. `request_gc` raises
+  the same flag, which is how `(gc)` is honored in every mode; sweep lowers
+  it.
+- **The byte account (#606, `heap/account.rs`; GC_PRD §15).** An object
+  costs its slot in its arena plus its *payload*, the memory it owns outright
+  outside the slot: a vector's elements, a string's characters (4 bytes
+  each), a bytevector's bytes, a bignum's limbs, a record's fields, an
+  exception's message and irritants, a closure's free variables, a
+  `values` object's values, a spilled scope set, a symbol's name, and a VM
+  continuation's snapshot — its registers, frames and dynamic stacks, which
+  `VmState::alloc_vm_continuation` measures and charges to the handle
+  (`VmContinuationRef { id, bytes }`), since the side-table entry lives
+  exactly as long as the handle (§9.5). One function per arena measures a
+  payload, and allocation, marking and sweep all call it: marking adds the
+  payload of each object it reaches (a capture's when the weak-id fixpoint
+  proves its handle live), sweep credits each dead slot's, and L, the
+  **live bytes** after a collection, is the marked slots, their payloads and
+  the external bytes held then. Payloads cannot grow after allocation:
+  vectors, strings and bytevectors hand out slices, never their `Vec`.
+  Shared `Rc` payloads (procedures, macros, libraries, environments, ports,
+  tree-walker continuations) are not charged; GC_PRD §15 charges what they
+  hold as **external bytes**, through `Heap::charge_external_bytes` and
+  `release_external_bytes`, which count toward the trigger and into L. No
+  holder reports any yet: environment tables are #615's.
+  It was an allocation count until #606: a 100,000-element vector cost the
+  trigger what a pair costs, so 500 of them peaked at 414 MB with no
+  collection, and 20,000 VM captures 1,000 frames deep at 3.2 GB. Both now
+  peak near 20 MB. The 8 MiB floor is GC_PRD §15's: a small program's
+  garbage is bounded at 8 MiB rather than 65,536 objects, so pair-heavy
+  programs peak about 10 MB higher than they did, and small programs that
+  used to collect once or twice while loading a library now often never
+  collect.
 - The *decision* is therefore made at allocation time, but **collection still
   happens only at backend safe points** (§7) — inside `alloc_*` the heap is
   re-entrantly borrowed and mid-operation temporaries would be unrooted. The
@@ -534,14 +565,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   and stress over `PATINA_GC=0`:
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
-  | On (default) | — | adaptive threshold above |
+  | On (default) | — | adaptive threshold above: `max(8 MiB, 2·L)` bytes |
   | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called |
-  | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, **bypassing the adaptive `2 × live` floor** |
+  | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, whatever their size, **bypassing the adaptive `2·L` floor**; it still counts allocations, so the stress lanes' pinned counts do not depend on the byte account |
   | Zeal | `PATINA_GC_ZEAL=entry` *(the zeal lane, §11 item 7)* | collect at **every** outermost safe point, allocation or not: the threshold is 0, so the collection that lowers the pending flag re-installs it and raises the flag again. Any other value panics; `entry` is GC_PRD §14's name, and the PRD's other zeal modes come with the redesign |
 
-  Stress deliberately ignores the adaptive floor: after bootstrap the live set
-  is large enough that `2 × live` would almost never fire, which is the
-  opposite of what a stress lane wants.
+  Stress deliberately ignores the adaptive floor: 8 MiB is half a million
+  pairs, which is the opposite of what a stress lane wants.
 
   A backend reads the mode once, when it is made. A test that compares
   collecting with not collecting names its mode instead
@@ -555,7 +585,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
 - Manual entry points for testing and users: `(gc)` and `(gc-stats)`
   primitives, honored in **every** mode. `(gc)` records a request; the next
   safe point services it. This is what makes collection testable without
-  process-global environment variables.
+  process-global environment variables. `(gc-stats)` reports the arenas'
+  slot counts and four byte keys: `live-bytes` (L, 0 before the first
+  collection), `bytes-allocated` (every byte charged), `bytes-reclaimed`
+  (every byte a collection freed, so it grows only when one frees
+  something) and `committed-bytes` (every arena's capacity in slots, the
+  payloads of the occupied slots and the external bytes: what the heap holds
+  now, live or not).
 
 ### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 
@@ -575,7 +611,7 @@ measurable.
 The flaw was architectural, not micro: **the safe point asked a question whose
 answer only changes when something allocates.** Stage 4a therefore moved the
 decision to where allocation happens — `Heap::note_alloc` raises a pending
-flag when `allocs_since_gc` crosses the mode-derived threshold (§6), and every
+flag when its count crosses the mode-derived threshold (§6), and every
 mode's safe point collapsed to a single flag test. The flag lives outside the
 heap's `RefCell` (an `Rc<Cell<bool>>`; dispatch loops hoist a handle at
 entry), so the fast path has no borrow either.
@@ -1092,6 +1128,11 @@ visitor exists, and the stress lane is the real safety net.
 3. **Reclamation proofs:** cycle tests (`set-cdr!` self-loop, closure
    capturing its own env, `call/cc` captured and dropped); arena-length
    plateau test (allocate-and-drop in a loop; assert arena `len()` stabilizes).
+   Each proof requires `bytes-reclaimed` to have grown across its workload
+   (#606), which only a collection that freed something does, so none can
+   pass without collecting; `scripts/run_gc_differential.sh`'s default-mode
+   proof churns 160 MB of vectors in 20,000 allocations, which a count
+   trigger would not have collected on at all.
 4. **Pause/overhead:** interleaved A/B benchmark runs (main / branch / main)
    per the project's established methodology; record `GcStats.last_pause`
    distribution on allocation-heavy benchmarks.
@@ -1148,9 +1189,10 @@ visitor exists, and the stress lane is the real safety net.
    allocates nothing collects at least once an iteration under zeal and
    hardly at all at stress 1, on both backends. That test runs in `ci.yml`,
    not against the lane's binary, and the lane's check that each file
-   collected cannot see a binary that ignores the variable, since every
-   control file collects at least once under the default GC while it loads
-   SRFI 64; so the script first runs the same loop on its binary, on both
+   collected cannot see a binary that ignores the variable, since a control
+   file can collect under the default GC too (`cps-features.scm` does once;
+   before the byte trigger every one did, while it loaded SRFI 64); so the
+   script first runs the same loop on its binary, on both
    backends, and fails unless it collects at least 1000 times across its
    1000 iterations under zeal and fewer than 100 with no GC variable set.
    GC_PRD's zeal-`entry` replaces this mode at stage 3, collecting at every

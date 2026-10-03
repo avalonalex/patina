@@ -242,6 +242,17 @@ impl ScopeSet {
         self.scopes.len()
     }
 
+    /// The bytes this set holds outside itself: none while its scopes fit
+    /// inline, its spilled buffer once they do not. For the heap's byte
+    /// account (`heap/account.rs`), which charges an identifier for it.
+    pub fn heap_bytes(&self) -> usize {
+        if self.scopes.spilled() {
+            self.scopes.capacity() * std::mem::size_of::<ScopeId>()
+        } else {
+            0
+        }
+    }
+
     /// Check if a specific scope is in the set
     pub fn contains(&self, scope: &ScopeId) -> bool {
         self.scopes.binary_search(scope).is_ok()

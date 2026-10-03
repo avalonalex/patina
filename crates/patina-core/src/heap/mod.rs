@@ -22,6 +22,7 @@
 //! - `numeric.rs`: All numeric operations (arithmetic, division, complex, number theory)
 //! - `gc.rs`: Mark-and-sweep garbage collection (see `docs/GC_DESIGN.md`)
 
+mod account;
 mod check;
 pub mod gc;
 mod numeric;
@@ -35,6 +36,10 @@ mod source;
 pub(crate) mod trace_sentinels;
 
 use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
+use account::ByteAccount;
+pub use account::{
+    GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
+};
 use check::SlotChecks;
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -278,10 +283,23 @@ pub enum HeapObjectData {
     },
     /// Opaque handle to a full VM continuation (call/cc style).
     /// The actual `VmContinuation` data lives in `VmState::continuation_store`.
-    VmContinuationRef(u64),
+    VmContinuationRef {
+        /// The side-table key, minted by the heap.
+        id: u64,
+        /// The bytes of the snapshot the side table holds under `id`,
+        /// charged to this handle (#606). The entry lives exactly as long as
+        /// the handle (the weak-table protocol, `gc.rs`), so the byte account
+        /// counts the snapshot live, and frees it, with the handle.
+        bytes: usize,
+    },
     /// Opaque handle to a delimited VM continuation.
     /// The actual `VmDelimitedContinuation` data lives in `VmState::delimited_continuation_store`.
-    VmDelimitedContinuationRef(u64),
+    VmDelimitedContinuationRef {
+        /// As for [`HeapObjectData::VmContinuationRef`].
+        id: u64,
+        /// As for [`HeapObjectData::VmContinuationRef`].
+        bytes: usize,
+    },
     /// A syntactic keyword bound as a value, so that import sets and export
     /// resolution can reach it through the ordinary path. Interned once per
     /// heap — see `Heap::core_syntax`.
@@ -321,8 +339,8 @@ impl HeapObjectData {
             HeapObjectData::VmClosure { .. } => HeapObjectType::VmClosure,
             HeapObjectData::MutableCell(_) => HeapObjectType::MutableCell,
             HeapObjectData::Ephemeron(_) => HeapObjectType::Ephemeron,
-            HeapObjectData::VmContinuationRef(_) => HeapObjectType::VmContinuationRef,
-            HeapObjectData::VmDelimitedContinuationRef(_) => {
+            HeapObjectData::VmContinuationRef { .. } => HeapObjectType::VmContinuationRef,
+            HeapObjectData::VmDelimitedContinuationRef { .. } => {
                 HeapObjectType::VmDelimitedContinuationRef
             }
             HeapObjectData::CoreSyntax(_) => HeapObjectType::CoreSyntax,
@@ -447,16 +465,20 @@ pub struct Heap {
     string_checks: SlotChecks,
     object_checks: SlotChecks,
 
-    /// Allocations since the last GC (drives the collection trigger)
+    /// Allocations since the last GC: what `PATINA_GC_STRESS` counts.
     allocs_since_gc: usize,
 
-    /// Allocation count at which `note_alloc` raises the collection-pending
-    /// flag. `usize::MAX` (the default) is inert: only `request_gc` raises
-    /// the flag. A backend installs its policy's threshold via
+    /// Bytes allocated, reclaimed and found live (`heap/account.rs`, #606):
+    /// what the adaptive trigger counts and `(gc-stats)` reports.
+    account: ByteAccount,
+
+    /// The counts at which `note_alloc` raises the collection-pending flag.
+    /// [`GcThreshold::NEVER`] (the default) is inert: only `request_gc`
+    /// raises the flag. A backend installs its policy's threshold via
     /// `GcController::current_threshold` when heap and controller are paired,
     /// and `GcController::collect` re-installs it after each collection (the
-    /// adaptive `2 × live` term changes only there).
-    gc_threshold: usize,
+    /// adaptive `2·L` term changes only there).
+    gc_threshold: GcThreshold,
 
     /// The collection-pending flag: raised by `note_alloc` on threshold
     /// crossing and by `request_gc`; lowered by `sweep`. Lives outside the
@@ -625,7 +647,8 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            gc_threshold: usize::MAX,
+            account: ByteAccount::default(),
+            gc_threshold: GcThreshold::NEVER,
             gc_pending: Rc::new(Cell::new(false)),
             gc_freed_bits: None,
             gc_freed_overflow: false,
@@ -648,22 +671,26 @@ impl Heap {
     }
 
     /// The single invariant of the trigger design: the pending flag is up
-    /// whenever the counter has reached the threshold (or `(gc)` raised it
+    /// whenever either count has reached its threshold (or `(gc)` raised it
     /// directly).
     #[inline]
     fn refresh_gc_pending(&self) {
-        if self.allocs_since_gc >= self.gc_threshold {
+        if self.allocs_since_gc >= self.gc_threshold.allocations
+            || self.account.since_gc >= self.gc_threshold.bytes
+        {
             self.gc_pending.set(true);
         }
     }
 
-    /// Count one allocation, raising the collection-pending flag when the
+    /// Count one allocation of `bytes` — its slot and its payload
+    /// (`heap/account.rs`) — raising the collection-pending flag when the
     /// policy's threshold is crossed. Called by every `alloc_*`; this is
     /// where the collection decision is *made*, so safe points only have to
     /// read the flag (design §6.1).
     #[inline]
-    fn note_alloc(&mut self) {
+    fn note_alloc(&mut self, bytes: usize) {
         self.allocs_since_gc += 1;
+        self.account.since_gc += bytes;
         self.refresh_gc_pending();
     }
 
@@ -674,12 +701,12 @@ impl Heap {
         self.gc_pending.clone()
     }
 
-    /// Install the allocation threshold at which `note_alloc` raises the
-    /// pending flag. Called with `GcController::current_threshold` when heap
-    /// and controller are paired and again after each collection (the
-    /// adaptive term changes only there). Raises the flag immediately if the
-    /// counter already exceeds the new threshold.
-    pub fn set_gc_threshold(&mut self, threshold: usize) {
+    /// Install the threshold at which `note_alloc` raises the pending flag.
+    /// Called with `GcController::current_threshold` when heap and
+    /// controller are paired and again after each collection (the adaptive
+    /// term changes only there). Raises the flag immediately if a count
+    /// already exceeds the new threshold.
+    pub fn set_gc_threshold(&mut self, threshold: GcThreshold) {
         self.gc_threshold = threshold;
         self.refresh_gc_pending();
     }
@@ -790,7 +817,7 @@ impl Heap {
     pub fn alloc_pair(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         check_storable(car, "pair");
         check_storable(cdr, "pair");
-        self.note_alloc();
+        self.note_alloc(PAIR_SLOT_BYTES);
         if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
             self.pair_checks.reuse(TaggedValue::pair(free))
@@ -849,7 +876,7 @@ impl Heap {
         if GC_CHECK {
             elements.iter().for_each(|&e| check_storable(e, "vector"));
         }
-        self.note_alloc();
+        self.note_alloc(VECTOR_SLOT_BYTES + account::vector_payload(&elements));
         if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
             self.vector_checks.reuse(TaggedValue::vector(free))
@@ -916,7 +943,7 @@ impl Heap {
 
     /// Allocate a new string from Vec<char> (primary method)
     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
-        self.note_alloc();
+        self.note_alloc(STRING_SLOT_BYTES + account::string_payload(&chars));
         if let Some(free) = self.free_strings.pop() {
             self.strings[free as usize] = chars;
             self.string_checks.reuse(TaggedValue::string(free))
@@ -941,9 +968,11 @@ impl Heap {
         &self.strings[ptr.heap_index() as usize]
     }
 
-    /// Get mutable access to string characters
+    /// Get mutable access to string characters. A slice, not the `Vec`: a
+    /// string's length is fixed once allocated, so its payload is what it was
+    /// charged (`heap/account.rs`).
     #[inline(always)]
-    pub fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut Vec<char> {
+    pub fn get_string_chars_mut(&mut self, ptr: TaggedValue) -> &mut [char] {
         debug_assert!(ptr.is_string());
         self.string_checks.check("string", ptr);
         &mut self.strings[ptr.heap_index() as usize]
@@ -1518,9 +1547,16 @@ impl Heap {
     /// shared by both continuation kinds and every `VmState` on this heap, so
     /// an id names at most one side-table entry ever — the weak-table
     /// machinery (gc.rs §9.5) relies on ref objects never aliasing.
-    pub fn alloc_vm_continuation_ref(&mut self) -> (TaggedValue, u64) {
+    ///
+    /// `bytes` is the size of the snapshot the caller stores under the id,
+    /// charged to the handle as its payload (#606): a capture deep in the
+    /// stack costs the trigger what it copied.
+    pub fn alloc_vm_continuation_ref(&mut self, bytes: usize) -> (TaggedValue, u64) {
         let id = self.mint_vm_continuation_id();
-        (self.alloc_object(HeapObjectData::VmContinuationRef(id)), id)
+        (
+            self.alloc_object(HeapObjectData::VmContinuationRef { id, bytes }),
+            id,
+        )
     }
 
     /// Get the continuation id from a `VmContinuationRef` TaggedValue.
@@ -1529,17 +1565,18 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::VmContinuationRef(id) => Some(*id),
+            HeapObjectData::VmContinuationRef { id, bytes: _ } => Some(*id),
             _ => None,
         }
     }
 
     /// Allocate an opaque handle for a delimited VM continuation, minting its
-    /// id (same counter as `alloc_vm_continuation_ref`).
-    pub fn alloc_vm_delimited_continuation_ref(&mut self) -> (TaggedValue, u64) {
+    /// id (same counter as `alloc_vm_continuation_ref`), and charging it the
+    /// `bytes` of its snapshot.
+    pub fn alloc_vm_delimited_continuation_ref(&mut self, bytes: usize) -> (TaggedValue, u64) {
         let id = self.mint_vm_continuation_id();
         (
-            self.alloc_object(HeapObjectData::VmDelimitedContinuationRef(id)),
+            self.alloc_object(HeapObjectData::VmDelimitedContinuationRef { id, bytes }),
             id,
         )
     }
@@ -1556,7 +1593,7 @@ impl Heap {
             return None;
         }
         match self.get_object(tv) {
-            HeapObjectData::VmDelimitedContinuationRef(id) => Some(*id),
+            HeapObjectData::VmDelimitedContinuationRef { id, bytes: _ } => Some(*id),
             _ => None,
         }
     }
@@ -1568,13 +1605,17 @@ impl Heap {
         }
         matches!(
             self.get_object(tv),
-            HeapObjectData::VmContinuationRef(_) | HeapObjectData::VmDelimitedContinuationRef(_)
+            HeapObjectData::VmContinuationRef { .. }
+                | HeapObjectData::VmDelimitedContinuationRef { .. }
         )
     }
 
-    /// Allocate a generic object
+    /// Allocate a generic object, charging its slot and its payload.
+    /// Inlined so that each `alloc_*` above, which names its variant, folds
+    /// the payload's match to that variant's arm.
+    #[inline]
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
-        self.note_alloc();
+        self.note_alloc(OBJECT_SLOT_BYTES + data.payload_bytes());
         if let Some(free) = self.free_objects.pop() {
             self.objects[free as usize] = data;
             self.object_checks.reuse(TaggedValue::object(free))
@@ -1711,8 +1752,8 @@ impl Heap {
                     self.get_object(tv),
                     HeapObjectData::Procedure(_)
                         | HeapObjectData::VmClosure { .. }
-                        | HeapObjectData::VmContinuationRef(_)
-                        | HeapObjectData::VmDelimitedContinuationRef(_)
+                        | HeapObjectData::VmContinuationRef { .. }
+                        | HeapObjectData::VmDelimitedContinuationRef { .. }
                         | HeapObjectData::Parameter { .. }
                 ))
     }
@@ -1807,8 +1848,8 @@ impl Heap {
             && matches!(
                 self.get_object(tv),
                 HeapObjectData::Continuation(_)
-                    | HeapObjectData::VmContinuationRef(_)
-                    | HeapObjectData::VmDelimitedContinuationRef(_)
+                    | HeapObjectData::VmContinuationRef { .. }
+                    | HeapObjectData::VmDelimitedContinuationRef { .. }
             )
     }
 
@@ -2063,8 +2104,8 @@ impl Heap {
                 HeapObjectData::LabelPlaceholder(_) => "label-placeholder",
                 HeapObjectData::VmClosure { .. } => "procedure",
                 HeapObjectData::MutableCell(_) => "mutable-cell",
-                HeapObjectData::VmContinuationRef(_) => "continuation",
-                HeapObjectData::VmDelimitedContinuationRef(_) => "continuation",
+                HeapObjectData::VmContinuationRef { .. } => "continuation",
+                HeapObjectData::VmDelimitedContinuationRef { .. } => "continuation",
                 HeapObjectData::Free => "gc-freed-slot",
             }
         } else {
@@ -2985,15 +3026,16 @@ impl Heap {
         }
     }
 
-    /// Get mutable reference to native heap bytevector bytes.
-    pub fn get_bytevector_mut(&mut self, tv: TaggedValue) -> Option<&mut Vec<u8>> {
+    /// Get mutable access to native heap bytevector bytes. A slice, not the
+    /// `Vec`, for the reason [`Heap::get_string_chars_mut`] gives.
+    pub fn get_bytevector_mut(&mut self, tv: TaggedValue) -> Option<&mut [u8]> {
         if !tv.is_object() {
             return None;
         }
         self.object_checks.check("object", tv);
         let obj = &mut self.objects[tv.heap_index() as usize];
         match obj {
-            HeapObjectData::Bytevector(bytes) => Some(bytes),
+            HeapObjectData::Bytevector(bytes) => Some(bytes.as_mut_slice()),
             _ => None,
         }
     }
@@ -3221,7 +3263,8 @@ impl Heap {
     // Statistics
     // =========================================================================
 
-    /// Get heap statistics
+    /// Get heap statistics. Walks the arenas for `committed_bytes`, so it
+    /// is for diagnostics, not a hot path.
     pub fn stats(&self) -> HeapStats {
         HeapStats {
             pairs: self.pairs.len(),
@@ -3236,6 +3279,10 @@ impl Heap {
             allocs_since_gc: self.allocs_since_gc,
             gc_collections: self.gc_collections,
             gc_last_swept: self.gc_last_swept,
+            live_bytes: self.live_bytes(),
+            bytes_allocated: self.bytes_allocated(),
+            bytes_reclaimed: self.bytes_reclaimed(),
+            committed_bytes: self.committed_bytes(),
         }
     }
 }
@@ -3261,6 +3308,14 @@ pub struct HeapStats {
     pub allocs_since_gc: usize,
     pub gc_collections: u64,
     pub gc_last_swept: usize,
+    /// [`Heap::live_bytes`]: L, what the last collection found live.
+    pub live_bytes: usize,
+    /// [`Heap::bytes_allocated`]: every byte charged so far.
+    pub bytes_allocated: u64,
+    /// [`Heap::bytes_reclaimed`]: every byte the collections have freed.
+    pub bytes_reclaimed: u64,
+    /// [`Heap::committed_bytes`]: what the heap holds now, live or not.
+    pub committed_bytes: usize,
 }
 
 // ============================================================================

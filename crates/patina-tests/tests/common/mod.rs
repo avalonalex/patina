@@ -671,6 +671,25 @@ macro_rules! gc_shared_tests {
                 .unwrap_or_else(|_| panic!("expected a number for {field}"))
         }
 
+        /// The bytes of one pair (`patina_core::heap::PAIR_SLOT_BYTES`),
+        /// what the byte account charges a cons.
+        const PAIR_BYTES: i64 = patina_core::heap::PAIR_SLOT_BYTES as i64;
+
+        /// Evaluate `code` with `eval` and parse the list of integers it
+        /// writes.
+        fn integers(eval: fn(&str) -> String, code: &str) -> Vec<i64> {
+            let written = eval(code);
+            written
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .split_whitespace()
+                .map(|n| {
+                    n.parse()
+                        .unwrap_or_else(|_| panic!("not a list of integers: {written}"))
+                })
+                .collect()
+        }
+
         fn assert_gc_eval_to(code: &str, expected: &str) {
             let result = $eval(code);
             assert_eq!(
@@ -681,17 +700,26 @@ macro_rules! gc_shared_tests {
 
         #[test]
         fn gc_runs_and_reclaims_unreachable_pairs() {
-            // Allocate a large amount of garbage, drop the only reference,
-            // collect.
-            let freed = stat(
-                r#"(define (churn n acc) (if (= n 0) acc (churn (- n 1) (cons n '()))))
-                   (churn 5000 '())
-                   (gc)"#,
-                "free-pairs",
-            );
+            // Allocate 5000 conses, each garbage at once, and collect: the
+            // bytes the collections reclaim across the churn include the
+            // pairs'. A delta of `bytes-reclaimed`, which grows only when a
+            // collection frees something, so it holds however often the
+            // mode collected along the way (#606).
+            let [reclaimed] = integers(
+                $eval,
+                r#"(import (patina debug))
+                   (define (reclaimed) (cdr (assq 'bytes-reclaimed (gc-stats))))
+                   (define before (reclaimed))
+                   (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
+                   (churn 5000)
+                   (gc)
+                   (list (- (reclaimed) before))"#,
+            )[..] else {
+                panic!("expected one count")
+            };
             assert!(
-                freed > 0,
-                "expected the collector to reclaim pairs, free-pairs = {freed}"
+                reclaimed >= 4000 * PAIR_BYTES,
+                "expected the collector to reclaim 5000 pairs, it reclaimed {reclaimed} bytes"
             );
         }
 
@@ -737,12 +765,15 @@ macro_rules! gc_shared_tests {
         fn unreachable_cycles_are_reclaimed() {
             // A thousand self-referential pairs, each garbage the moment the
             // next iteration starts. Reference counting could never reclaim
-            // any of them, so a sweep freeing that many slots is only possible
-            // if cycles are collected.
+            // any of them, so a collection freeing their bytes is only
+            // possible if cycles are collected.
             //
-            // With collection off but for `(gc)`: the count is of the last
-            // collection, so one that ran while the cycles were being made
-            // would take them from it, as stress does.
+            // With collection off but for `(gc)`, so that exactly one
+            // collection runs across the cycles: a first `(gc)` takes the
+            // garbage the program made before them, and what the second
+            // reclaims is the cycles' bytes and the little the forms between
+            // made. Its count says it ran once, and `bytes-reclaimed` that
+            // it freed the cycles (#606).
             let code = r#"
                 (import (patina debug))
                 (define (make-cycles n)
@@ -750,11 +781,25 @@ macro_rules! gc_shared_tests {
                       (let ((x (cons n '())))
                         (set-cdr! x x)
                         (make-cycles (- n 1)))))
+                (gc)
+                (define (stat key) (cdr (assq key (gc-stats))))
+                (define collections (stat 'collections))
+                (define reclaimed (stat 'bytes-reclaimed))
                 (make-cycles 1000)
                 (gc)
-                (>= (cdr (assq 'last-swept (gc-stats))) 1000)
+                (list collections
+                      (- (stat 'collections) collections)
+                      (- (stat 'bytes-reclaimed) reclaimed))
                 "#;
-            assert_eq!($eval_gc_off(code), "#t", "\nProgram:\n{code}");
+            let [before, ran, freed] = integers($eval_gc_off, code)[..] else {
+                panic!("expected three counts from\n{code}")
+            };
+            assert!(before >= 1, "the first (gc) had not run: {before}");
+            assert_eq!(ran, 1, "collections across the cycles");
+            assert!(
+                freed >= 1000 * PAIR_BYTES,
+                "the collection freed {freed} bytes, under the 1000 cycles' pairs"
+            );
         }
 
         #[test]
@@ -886,6 +931,10 @@ macro_rules! gc_shared_tests {
                 with_gc < without_gc,
                 "collecting did not shrink the arena: {with_gc} with gc vs {without_gc} without"
             );
+            // And it collected: only a collection that freed something
+            // reclaims a byte (#606).
+            let reclaimed = stat(&workload("(gc)"), "bytes-reclaimed");
+            assert!(reclaimed > 0, "the side with (gc) reclaimed nothing");
         }
 
         #[test]
@@ -911,23 +960,31 @@ macro_rules! gc_shared_tests {
             // The stage-4b arena-reuse proof (design §10): across 20 churn
             // rounds with a collection each, the pairs arena must reuse freed
             // slots rather than grow — the delta after 100k churned conses
-            // stays under one round's worth.
-            let delta: i64 = $eval(
+            // stays under one round's worth — and the collections must have
+            // reclaimed the rounds' bytes (#606).
+            let [delta, reclaimed] = integers(
+                $eval,
                 r#"(import (patina debug))
                    (define (churn n) (if (> n 0) (begin (cons n n) (churn (- n 1)))))
                    (define (rounds k)
                      (if (> k 0) (begin (churn 5000) (gc) (rounds (- k 1)))))
                    (churn 5000)
                    (gc)
-                   (define baseline (cdr (assq 'pairs (gc-stats))))
+                   (define (stat key) (cdr (assq key (gc-stats))))
+                   (define baseline (stat 'pairs))
+                   (define reclaimed (stat 'bytes-reclaimed))
                    (rounds 20)
-                   (- (cdr (assq 'pairs (gc-stats))) baseline)"#,
-            )
-            .parse()
-            .unwrap_or_else(|_| panic!("expected a numeric arena delta"));
+                   (list (- (stat 'pairs) baseline) (- (stat 'bytes-reclaimed) reclaimed))"#,
+            )[..] else {
+                panic!("expected an arena delta and a byte count")
+            };
             assert!(
                 delta < 5000,
                 "pairs arena grew by {delta} slots across 20 collected churn rounds"
+            );
+            assert!(
+                reclaimed >= 19 * 5000 * PAIR_BYTES,
+                "20 rounds of 5000 conses, and {reclaimed} bytes reclaimed"
             );
         }
     };

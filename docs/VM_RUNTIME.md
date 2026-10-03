@@ -172,9 +172,12 @@ pub struct VmDelimitedContinuation {
 
 **Storage:** Continuations are stored in **side tables** on VmState
 (`continuation_store`, `delimited_continuation_store`), not directly on the heap.
-Opaque handles (`VmContinuationRef(u64)`, `VmDelimitedContinuationRef(u64)`)
-are stored as `HeapObjectData` variants. This avoids circular dependencies
-between `patina-core` and `patina-vm`.
+Opaque handles (`VmContinuationRef { id, bytes }`,
+`VmDelimitedContinuationRef { id, bytes }`) are stored as `HeapObjectData`
+variants. This avoids circular dependencies between `patina-core` and
+`patina-vm`. `bytes` is the snapshot's size, measured at capture
+(`VmContinuation::payload_bytes`) and charged to the handle, so a deep capture
+costs the collection trigger what it copied (#606).
 
 ---
 

@@ -6,7 +6,8 @@
 //! reason this impl has to exist at all:
 //!
 //! - **The continuation side tables.** The heap holds only an opaque
-//!   `VmContinuationRef(u64)`; the payloads live in `continuation_store` and
+//!   `VmContinuationRef { id, bytes }`, charged the payload's size for the
+//!   byte account (#606); the payloads live in `continuation_store` and
 //!   `delimited_continuation_store`. Nothing but this impl reaches them —
 //!   and they are **weak** (design §9.5, which has the measurements and the
 //!   full argument): a payload is traced only when its ref object was

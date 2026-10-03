@@ -187,7 +187,7 @@ pub struct VmState {
     /// call returns — never a channel for values, which travel in registers.
     pub(super) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
-    /// id inside the `VmContinuationRef(id)` handle. **Weak** (design §9.5):
+    /// id inside the `VmContinuationRef { id, .. }` handle. **Weak** (design §9.5):
     /// entries whose ref object dies are pruned at collection via
     /// `GcRoots::sweep_weak`, which runs with `&VmState` — hence the
     /// `RefCell`. Ids come from the heap's counter (unique across both
@@ -682,10 +682,14 @@ impl VmState {
     /// jump closes). `call/cc` hands it to its procedure instead, and a
     /// higher-order primitive may poll in a nested loop before storing it, so
     /// there the deferral rule covers it: a nested loop cannot collect.
+    ///
+    /// The handle is charged the snapshot's bytes (#606), so that a capture
+    /// deep in the stack costs the collection trigger what it copied.
     pub(super) fn alloc_vm_continuation(&mut self, mut cont: VmContinuation) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
         gc_roots::retire_registers(&mut cont.registers, &cont.frames, 0);
-        let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref();
+        let bytes = cont.payload_bytes();
+        let (tv, id) = self.heap.borrow_mut().alloc_vm_continuation_ref(bytes);
         self.continuation_store
             .borrow_mut()
             .insert(id, Rc::new(cont));
@@ -700,7 +704,11 @@ impl VmState {
     ) -> TaggedValue {
         let _no_gc = AssertNoGc::new(&self.heap);
         gc_roots::retire_registers(&mut cont.registers, &cont.frames, cont.base_at_capture);
-        let (tv, id) = self.heap.borrow_mut().alloc_vm_delimited_continuation_ref();
+        let bytes = cont.payload_bytes();
+        let (tv, id) = self
+            .heap
+            .borrow_mut()
+            .alloc_vm_delimited_continuation_ref(bytes);
         self.delimited_continuation_store
             .borrow_mut()
             .insert(id, Rc::new(cont));

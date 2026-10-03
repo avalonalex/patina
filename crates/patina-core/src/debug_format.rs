@@ -465,8 +465,10 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
             format_tagged_impl(content, heap, buf, printer);
             buf.push('>');
         }
-        HeapObjectData::VmContinuationRef(id) => write!(buf, "#<continuation:{}>", id).unwrap(),
-        HeapObjectData::VmDelimitedContinuationRef(id) => {
+        HeapObjectData::VmContinuationRef { id, bytes: _ } => {
+            write!(buf, "#<continuation:{}>", id).unwrap()
+        }
+        HeapObjectData::VmDelimitedContinuationRef { id, bytes: _ } => {
             write!(buf, "#<delimited-continuation:{}>", id).unwrap()
         }
         HeapObjectData::Free => buf.push_str("#<gc-freed-slot>"),
