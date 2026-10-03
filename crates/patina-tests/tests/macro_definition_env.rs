@@ -26,6 +26,8 @@
 //! Found via `(chibi test)`, whose `test` macro expands into an internal
 //! `test-vars` macro — the most-depended library in the ecosystem.
 
+mod common;
+
 use patina_tree_walker::Evaluator;
 use std::fs;
 use tempfile::TempDir;
@@ -480,4 +482,33 @@ fn test_unquote_as_an_argument_does_not_change_depth() {
         ),
     ]);
     assert_eq!(exported_fixnum(&eval, "useu", "r"), 30);
+}
+
+/// A macro's definition environment outlives a collection: an exported
+/// macro expanded by a program after the heap has been collected still
+/// reaches the library-private procedure its template names, on both
+/// backends.
+///
+/// Every other test here works inside library loads, which defer collection
+/// for as long as the library's unevaluated body exists (`ParsedLibrary`'s
+/// `GcDeferGuard::holding`), so under the per-PR stress lane this is the one
+/// that collects, and the reason the lane can pin a minimum of collections
+/// for this target (`scripts/run_gc_stress_tests.sh`, #626). `(gc)` makes it
+/// collect without stress too.
+#[test]
+fn test_macro_reaches_its_library_after_a_collection() {
+    let program = r#"(define-library (t collected)
+                       (import (scheme base))
+                       (export m)
+                       (begin
+                         (define (helper x) (* 5 x))
+                         (define-syntax m (syntax-rules () ((m x) (helper x))))))
+                     (import (scheme base) (t collected) (patina debug))
+                     (define (churn n acc)
+                       (if (= n 0) (length acc) (churn (- n 1) (cons n acc))))
+                     (churn 1000 '())
+                     (gc)
+                     (churn 1000 '())
+                     (list (m 4) (m 5))"#;
+    assert_eq!(common::eval_program(program), "(20 25)");
 }

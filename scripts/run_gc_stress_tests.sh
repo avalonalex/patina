@@ -25,12 +25,14 @@
 # once, with the chibi suite run two assertions deep (#201). Raise a pin when
 # a target gains tests; lower one only with the tests it lost.
 #
-# Two minimums are near zero, and that is their healthy count, not an
-# oversight. macro_definition_env does all its work inside library loads, and
-# library_loading nearly all, and a library load defers collection for as
-# long as its unevaluated body exists (ParsedLibrary's GcDeferGuard::holding).
-# Under stress they are there for the day that deferral is lost: they then
-# collect inside the load, and the checks catch what that frees.
+# One minimum is near zero, and that is its healthy count, not an oversight.
+# library_loading does nearly all its work inside library loads, and a
+# library load defers collection for as long as its unevaluated body exists
+# (ParsedLibrary's GcDeferGuard::holding). Under stress it is there for the
+# day that deferral is lost: it then collects inside the load, and the checks
+# catch what that frees. So is macro_definition_env, all of whose tests load
+# libraries; one of them then expands a library's macro after a collection,
+# which is what its minimum counts.
 #
 # scheme_suite.rs runs every tests/scheme file on both backends, and at 16 it
 # did not finish in 25 minutes (#626). One file is nearly all of that:
@@ -76,7 +78,7 @@ TARGETS=(
     "hygiene_matrix 16 400 13"                # 800 (2)
     "interpreter_api 16 37 27"                # 74 (5)
     "library_loading 16 1 9"                  # 3 (0): see the header
-    "macro_definition_env 16 0 14"            # 0 (0): see the header
+    "macro_definition_env 16 129 15"          # 258 (2): see the header
     "vm_callprimitive 16 23 15"               # 47 (0)
     "scheme_suite 4096 1534 11"               # 3068 (484): see the header
 )
