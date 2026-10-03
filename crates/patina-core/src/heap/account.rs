@@ -257,7 +257,9 @@ impl Heap {
     /// Every byte charged since the heap was made: each allocation's slot and
     /// payload, and the external bytes charged.
     pub fn bytes_allocated(&self) -> u64 {
-        self.account.through_last_gc + self.account.since_gc as u64
+        self.account
+            .through_last_gc
+            .saturating_add(self.account.since_gc as u64)
     }
 
     /// Every byte the collections have freed since the heap was made: each

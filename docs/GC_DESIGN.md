@@ -554,7 +554,12 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   slots, and the 8 MiB floor is more slots than the 65,536 objects that
   bounded it before #606 (524,288 pairs, or 116,508 of the 72-byte object
   slots that procedures and ports take), so it keeps more garbage between
-  collections than it did.
+  collections than it did. Measured against the commit before #606
+  (release, interleaved runs, 2026-10-03): on the tree-walker,
+  `scripts/benchmarks.py`'s `deriv` workload repeated peaks at 81 MB
+  against 28, its `call/cc`, `ctak` and `dynamic-wind` loops at 96–109 MB
+  against 60–74, 2,000,000 garbage closures at 122 MB against 75, and
+  1,000,000 string ports at 72 MB against 44 (35 against 25 on the VM).
   It was an allocation count until #606: a 100,000-element vector cost the
   trigger what a pair costs, so 500 of them peaked at 414 MB with no
   collection, and 20,000 VM captures 1,000 frames deep at 3.2 GB. Both now

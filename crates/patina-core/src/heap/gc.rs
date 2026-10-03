@@ -1661,7 +1661,9 @@ impl Heap {
             + freed_payload;
         let account = &mut self.account;
         account.reclaimed += freed_bytes as u64;
-        account.through_last_gc += account.since_gc as u64;
+        account.through_last_gc = account
+            .through_last_gc
+            .saturating_add(account.since_gc as u64);
         account.since_gc = 0;
         // Read after the arenas are swept: external bytes that the dead
         // slots' payloads gave back as they dropped are not live.
@@ -2635,12 +2637,18 @@ mod tests {
         assert_eq!(heap.bytes_reclaimed(), 0);
 
         // A size an embedder got wrong saturates the count the trigger
-        // compares rather than wrapping it past the threshold.
+        // compares rather than wrapping it past the threshold, and the
+        // collection it brings on settles the account without overflowing.
         heap.charge_external_bytes(1);
         heap.charge_external_bytes(usize::MAX);
         assert_eq!(heap.bytes_since_gc(), usize::MAX);
         assert_eq!(heap.external_bytes(), usize::MAX);
         assert!(pending.get());
+        collector.collect(&mut heap, &[&TestRoots::default()]);
+        assert_eq!(heap.bytes_allocated(), u64::MAX);
+        assert_eq!(heap.live_bytes(), usize::MAX);
+        heap.release_external_bytes(usize::MAX);
+        assert_eq!(heap.external_bytes(), 0);
     }
 
     /// A holder of external bytes usually dies inside a sweep, which holds
