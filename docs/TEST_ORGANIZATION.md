@@ -927,6 +927,18 @@ under zeal and fewer than 100 with no GC variable set, or it fails there. Its
 per-file check that a run collected cannot stand in for this: every control
 file collects at least once under the default GC too, while it loads SRFI 64.
 
+The lanes see a missed trace edge only when no other path reaches the value,
+so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).
+`scripts/check_gc_trace_names.py`, in the Clippy job, requires every trace
+function to take its struct apart by name. Sentinel tests, in the Test Suite,
+put a fresh value in each traced field of each traced struct, root the struct
+alone, collect, and check each value survived (`heap::sentinels`); each fails
+with its field's trace line deleted. They live beside the code they test:
+`patina-core`'s `heap::trace_sentinels`, `environment::gc_edge_tests` and
+`library::gc_edge_tests`, `patina-vm`'s `trace_sentinel_tests`, the
+tree-walker's `gc_roots::sentinel_tests` and `patina-runtime`'s
+`gc_root_tests`.
+
 ```bash
 cargo build --release -p patina-repl --bin patina --features patina-core/gc-check
 PATINA_GC_STRESS_INTERVAL=1 ./scripts/run_gc_differential.sh target/release/patina

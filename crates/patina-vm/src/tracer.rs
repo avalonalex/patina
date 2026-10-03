@@ -279,15 +279,49 @@ pub struct StepTracer {
 
 /// The register snapshots held between the pre- and post-instruction hooks
 /// are the tracer's only GC roots — `TraceEvent`s store pre-formatted
-/// `String`s, not `TaggedValue`s.
+/// `String`s, not `TaggedValue`s. Every field is named (#623); pinned by
+/// `every_vm_state_root_is_traced`, through `VmState::tracer`.
 impl patina_core::GcRoots for StepTracer {
     fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
-        visitor.visit_slice(&self.pre_regs);
-        visitor.visit_slice(&self.pre_all_regs);
+        let StepTracer {
+            // Pre-formatted strings.
+            events: _,
+            // Code ids, register numbers and event kinds.
+            filter: _,
+            // A flag.
+            print_live: _,
+            // A counter.
+            step: _,
+            pre_regs,
+            pre_all_regs,
+            // A code id.
+            pre_code_id: _,
+            // An instruction index.
+            pre_pc: _,
+        } = self;
+        visitor.visit_slice(pre_regs);
+        visitor.visit_slice(pre_all_regs);
     }
 }
 
 impl StepTracer {
+    /// A tracer between its hooks, holding these register snapshots, for
+    /// the sentinel test of `VmState`'s roots (#623). A struct literal, so a
+    /// new field breaks the test as well as `trace_roots`.
+    #[cfg(test)]
+    pub(crate) fn holding(pre_regs: Vec<TaggedValue>, pre_all_regs: Vec<TaggedValue>) -> Self {
+        StepTracer {
+            events: Vec::new(),
+            filter: TraceFilter::default(),
+            print_live: false,
+            step: 0,
+            pre_regs,
+            pre_all_regs,
+            pre_code_id: CodeObjectId(0),
+            pre_pc: 0,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             events: Vec::new(),

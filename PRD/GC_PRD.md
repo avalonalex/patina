@@ -1268,8 +1268,9 @@ wind, handler and prompt records), gets its `trace` from a `Trace` derive that n
 has no `Trace` does not compile, and a field is left out only by `#[trace(skip, reason = "…")]`, so a new field cannot
 go untraced silently. `declare_layouts!` closes this gap for heap kinds (§6), not for these structures, and both
 incidents of a missed trace edge so far (two edges in [#38], one in [#47]) were in hand-written off-heap traces, the
-second hidden from every dynamic check because its values were also reachable another way; [#623] decides
-`CompiledMacro.foreign_expansions`, untraced today. A proc-macro derive needs `syn` and `quote` as
+second hidden from every dynamic check because its values were also reachable another way. A third edge,
+`CompiledMacro.foreign_expansions`, stayed untraced until [#623] traced it (`trace_compiled_macro`, pinned by the
+sentinel test `compiled_macro_fields`). A proc-macro derive needs `syn` and `quote` as
 direct dependencies, which wait for decision 14's approval; without them, a `macro_rules!` declaration in
 `declare_layouts!`' style generates the same code. It lands at stage 2 with the slot visitor, so 4b–4e reshape these
 structures under it, and 4f does not start without it: the tree-walker never moves (§11.4), so `move-all` never checks
@@ -1550,7 +1551,7 @@ windows, which may overshoot F(L) by [K16](#k16)'s bound.
 |---|---|---|---|
 | Symbols | Reclaimed when unreferenced (SD2). Allocated old in the NMS, so only majors reclaim them, and the interner is pruned only in the major epilogue (step 6). The stored hash is a fixed-seed hash of the UTF-8 name, so a re-interned symbol hashes the same; `identity-hash` of a symbol changes from the heap index to that hash in its own PR (§9.8). An ephemeron keeps a symbol key alive, so symbol-keyed weak tables answer as today (§9.5) | 192 B per symbol [P] | 5c |
 | Global cells and binding records | Owned by namespaces; global and library namespaces are roots; placeholders weak; aliases bounded by program text; introduced definitions strong at 4b with an indexed lookup, reclaimed from 5c under §11.6's two tests; cells stop being a root region (§9.1), so pauses stop growing with cell history. Variant C keeps this | [#611]; [#613] | [#611] now; 4b own; 5c sweep |
-| Environment specifiers; redefined libraries | A namespace is a charged host payload that dies with its specifier or last unit (specifiers are immutable, so nothing defines into them); `define-library` forms get a collection point | [#615]; [#614] | 1 charge; 2 collection point; 4b |
+| Environment specifiers; redefined libraries | A namespace is a charged host payload that dies with its specifier or last unit (specifiers are immutable, so nothing defines into them); `define-library` forms get a collection point. A macro that a library's generator defines holds the generator's environment in `foreign_expansions`, traced since [#623], so the environment and its values live as long as the macro: 4b counts that edge among a replaced namespace's holders, or replaces it with one that keeps only binding locations, all that early binding reads through it | [#615]; [#614] | 1 charge; 2 collection point; 4b |
 | Provenance; scope sets | A document owns its location table and compacts it while streaming; expansion chains are interned per document; the scope-set table is weak (ids recycled) or scoped to one form, and reports which expansion scopes live identifiers still carry | [#612] | 1 chains; 4c |
 | `CoreExpr` literal pool | Scoped to one compilation (§11.3) | — | 3 |
 | Descriptors, record types | Mark-region with hole reuse inside the NMS; [K3](#k3) reports it | steady | 5c |

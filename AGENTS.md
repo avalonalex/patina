@@ -100,7 +100,7 @@ GitHub's path-filter limits and required-check considerations.
 | R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
 | GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621), the GC protocol checks (#624) and the retired-register checks (#625) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
 | GC zeal (`gc-zeal.yml`, path-filtered and weekly) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, for changes to the VM's runtime, compiler or types, the heap or `TaggedValue`, the library loader or registry, the tree-walker's evaluator, the toolchain or the lane itself, and weekly on `main` |
-| Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks |
+| Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks; `scripts/check_gc_trace_names.py`, that the trace code names every field (#623) |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
 
 For GC/rooting changes, also run `scripts/run_gc_differential.sh` against release
@@ -254,6 +254,19 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
 2. Add type predicate + accessor on `Heap`
 3. Add display in `crates/patina-core/src/debug_format.rs`
 4. Update GC tracing/root handling and test collection in both backends; read `docs/GC_DESIGN.md`.
+5. Trace it by name (#623, `docs/GC_DESIGN.md` §5.4): its arm in
+   `trace_object_children`, and any trace function it calls, takes every
+   field apart with no `..` and no catch-all arm, and a field or payload
+   that holds no value is written `field: _` or `Variant(_)` with a comment
+   saying what it holds instead.
+   `scripts/check_gc_trace_names.py` enforces both and lists the trace
+   functions; a new one joins the list. Then add a sentinel test that builds
+   the variant by a literal with a fresh value in each traced field, reachable
+   only through it, collects, and checks each survived (`heap::sentinels`) —
+   and run it once with the trace line deleted, to see it fail (#164's rule).
+   The same two rules hold for a new field in any traced struct or root
+   provider (`VmState`, `Environment`, `CpsContinuation`, …): a destructure
+   cannot judge whether a field needs tracing, and a sentinel can.
 
 **New CoreExpr form** (rare — prefer macros):
 1. Extend `CoreExprKind` in `patina-core/src/core_expr.rs`

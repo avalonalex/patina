@@ -3,7 +3,7 @@
 //! This module defines the core types for representing Scheme libraries.
 //! The library loading and resolution logic is in the evaluator.
 
-use crate::environment::Environment;
+use crate::environment::{Environment, GcEdge};
 use crate::tagged_value::TaggedValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -146,6 +146,30 @@ impl Library {
     pub fn exports_iter_tagged(&self) -> impl Iterator<Item = (&String, TaggedValue)> + '_ {
         self.exports.iter().map(|(k, tv)| (k, *tv))
     }
+
+    /// Report the collector's edges out of this library: each export's value
+    /// and the library's environment, its two root sets
+    /// (`docs/GC_DESIGN.md` §5.3). `GcVisitor::visit_library` is the caller.
+    ///
+    /// Every field is named (#623), so a new one does not compile here until
+    /// it is reported or written `field: _` with its reason. Pinned by the
+    /// sentinel test `gc_edge_tests::library_exports_and_environment`, below.
+    pub(crate) fn for_each_gc_edge(&self, f: &mut dyn FnMut(GcEdge<'_>)) {
+        let Library {
+            // Strings.
+            name: _,
+            exports,
+            env,
+            // Export name → internal name, as strings.
+            internal_names: _,
+            // A file path.
+            source: _,
+        } = self;
+        for &value in exports.values() {
+            f(GcEdge::Value(value));
+        }
+        f(GcEdge::Env(env));
+    }
 }
 
 impl std::fmt::Display for Library {
@@ -221,5 +245,39 @@ mod tests {
     fn test_library_display() {
         let lib = Library::new(vec!["mylib".to_string(), "utils".to_string()]);
         assert_eq!(lib.to_string(), "#<library:(mylib utils)>");
+    }
+}
+
+/// A library's two root sets, each with a value nothing else reaches (#623):
+/// an export and a binding of its environment. Built by a struct literal, so
+/// a new field breaks this test as well as `for_each_gc_edge`, and rooted
+/// through a `Library` heap object, so the object arm is covered too.
+#[cfg(test)]
+mod gc_edge_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::sentinels::Sentinels;
+    use crate::heap::trace_sentinels::{collect_from, env_holding};
+
+    #[test]
+    fn library_exports_and_environment() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let exported = s.pair(&mut h, "Library.exports");
+        let private = s.vector(&mut h, "Library.env");
+        drop(h);
+
+        let library = Library {
+            name: vec!["sentinel".to_string()],
+            exports: HashMap::from([("exported".to_string(), exported)]),
+            env: env_holding(&heap, private),
+            internal_names: HashMap::new(),
+            source: None,
+        };
+        let mut h = heap.borrow_mut();
+        let root = h.alloc_library(Rc::new(library));
+        collect_from(&mut h, &[root]);
+        s.assert_survived(&h);
     }
 }

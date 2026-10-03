@@ -302,11 +302,6 @@ impl Bindings {
     fn names(&self) -> impl Iterator<Item = &Rc<str>> {
         self.slots.iter().map(|(n, _)| n)
     }
-
-    /// Every bound value, in slot order.
-    fn values(&self) -> impl Iterator<Item = TaggedValue> + '_ {
-        self.slots.iter().map(|&(_, v)| v)
-    }
 }
 
 /// Where an imported binding lives: the environment that owns the location,
@@ -1361,7 +1356,7 @@ impl Environment {
     /// A scope set already present is *overwritten* rather than pushed
     /// beside. `set_with_scopes` finds a binding by exact scope-set match, so
     /// a second entry for the same set would be unreachable — and every entry
-    /// is a GC root (`for_each_local_value`), so re-evaluating a top-level
+    /// is a GC root (`for_each_gc_edge`), so re-evaluating a top-level
     /// form that expands a macro would otherwise pin one dead value per
     /// evaluation for the life of the process.
     fn insert_scoped(
@@ -2186,52 +2181,133 @@ impl Environment {
         self as *const Environment as usize
     }
 
-    /// Visit every value bound locally (simple and scoped bindings, not the
-    /// parent chain). GC tracing hook — allocation-free, unlike `bindings()`.
-    pub fn for_each_local_value(&self, f: &mut dyn FnMut(TaggedValue)) {
-        for tv in self.bindings.borrow().values() {
-            f(tv);
-        }
-        for scoped in self.scoped_bindings.borrow().values() {
-            for binding in scoped {
-                f(binding.tagged_value);
+    /// Report every edge the collector follows out of this environment: the
+    /// value in each of its slots and each environment it keeps live — the
+    /// target of each macro-expansion alias and the owner of each binding it
+    /// imported — and return the last, its parent. One level only:
+    /// `GcVisitor::visit_env` walks the environments reported, deduplicated,
+    /// without recursion, and follows the parent chain by reference, since
+    /// that is the edge nearly every environment has: queueing it as well
+    /// cost a hash lookup and a reference count per environment, about 1% of
+    /// the tree-walker's chibi suite under stress 1.
+    ///
+    /// Every field of this struct, of [`RareTables`] and of the binding
+    /// records is named below (#623), so a new field does not compile here
+    /// until it is reported or written `field: _` with the reason it holds no
+    /// edge. The sentinel test `gc_edge_tests::environment_edges`, below, puts
+    /// a value behind each edge that nothing else reaches; deleting the line
+    /// that reports an edge fails it.
+    ///
+    /// `f` runs with the binding tables borrowed, so it must not write to
+    /// this environment. The collector's visitor only marks.
+    #[must_use = "the parent is an edge too"]
+    pub(crate) fn for_each_gc_edge(
+        &self,
+        f: &mut dyn FnMut(GcEdge<'_>),
+    ) -> Option<&Rc<Environment>> {
+        let Environment {
+            // A handle to the arenas these values live in, which the collector
+            // is already marking: not an edge into them.
+            heap: _,
+            bindings,
+            // A number minted at construction.
+            env_id: _,
+            scoped_bindings,
+            alias_bindings,
+            // A summary of `alias_bindings`, which is reported in full below.
+            has_aliases: _,
+            // A summary of `scoped_bindings`, which is reported in full below.
+            has_visible_scoped: _,
+            rare,
+            parent,
+        } = self;
+        {
+            let bindings = bindings.borrow();
+            let Bindings {
+                slots,
+                // Name → slot number; the values are in `slots`.
+                index: _,
+            } = &*bindings;
+            // Each slot is a name and its value. An imported binding's slot
+            // holds `TaggedValue::FORWARDED`, an immediate that marks nothing;
+            // its value is in its owner's slot, and the owner is reported
+            // through `owners` below.
+            for &(_, value) in slots.iter() {
+                f(GcEdge::Value(value));
             }
         }
-    }
-
-    /// Visit the environments that own the bindings this one imported.
-    ///
-    /// GC tracing hook, and the same shape as `for_each_alias_target` below
-    /// for the same reason: an imported binding's value is in its owner's
-    /// slot, so `for_each_local_value` sees only the marker here, and the edge
-    /// to the owner is an `Rc<Environment>` in a side table. A loaded library
-    /// is rooted by the registry as well, but an environment is not obliged
-    /// to be a registered library's to be imported from, and the collector
-    /// should not have to know which are.
-    pub fn for_each_shared_owner(&self, f: &mut dyn FnMut(&Rc<Environment>)) {
-        let Some(rare) = self.rare.get() else {
-            return;
-        };
-        for owner in rare.owners.borrow().iter() {
-            f(owner);
-        }
-    }
-
-    /// Visit the environments this one's macro-expansion aliases point at.
-    ///
-    /// GC tracing hook. Values reachable only through an alias -- a library
-    /// private referenced by an exported macro -- are live, but the alias edge
-    /// is an `Rc<Environment>` in a side table rather than a `TaggedValue` in a
-    /// slot, so `for_each_local_value` cannot see it.
-    pub fn for_each_alias_target(&self, f: &mut dyn FnMut(&Rc<Environment>)) {
-        for target in self.alias_bindings.borrow().values() {
-            // A `None` target is this environment, which the caller is already
-            // tracing.
-            if let Some(env) = &target.env {
-                f(env);
+        {
+            let scoped = scoped_bindings.borrow();
+            let ScopedTable { map } = &*scoped;
+            for list in map.values() {
+                for binding in list {
+                    let ScopedBinding {
+                        // Scope ids.
+                        scopes: _,
+                        tagged_value,
+                        // A flag.
+                        visible_by_name: _,
+                    } = binding;
+                    f(GcEdge::Value(*tagged_value));
+                }
             }
         }
+        {
+            // Values reachable only through an alias — a library's private
+            // binding that an exported macro references — are live, but the
+            // edge is an `Rc<Environment>` here, not a value in a slot.
+            let aliases = alias_bindings.borrow();
+            for target in aliases.values() {
+                let AliasTarget {
+                    env,
+                    // The name the binding has in `env`.
+                    name: _,
+                    // Scope ids, which select the binding in `env`.
+                    scopes: _,
+                } = target;
+                // `None` is this environment, which is being reported now.
+                if let Some(env) = env {
+                    f(GcEdge::Env(env));
+                }
+            }
+        }
+        if let Some(rare) = rare.get() {
+            let RareTables {
+                // Spellings, scope sets and the names of renamed globals.
+                introduced_global_names: _,
+                // Each `Owner` here is also in `owners`: `set_owner`, the one
+                // writer of a `Some` link, records the owner there first.
+                // Pinned by `shared_binding_tests`, which share bindings
+                // through `set_owner` and check the owners the collector is
+                // shown (`the_collector_is_shown_each_owner_once` and its
+                // neighbours); `environment_edges` pins that `owners` is the
+                // edge that carries the imported value.
+                links: _,
+                // Environment ids, slot numbers and names.
+                import_aliases: _,
+                owners,
+            } = &**rare;
+            // An imported binding's value is in its owner's slot. A loaded
+            // library is rooted by the registry as well, but an environment
+            // need not be a registered library's to be imported from.
+            for owner in owners.borrow().iter() {
+                f(GcEdge::Env(owner));
+            }
+        }
+        parent.as_ref()
     }
+}
+
+/// One edge out of an [`Environment`] or a [`Library`](crate::Library), as
+/// their `for_each_gc_edge` report it to the collector (#623).
+#[derive(Clone, Copy)]
+pub(crate) enum GcEdge<'a> {
+    /// A value held in a slot.
+    Value(TaggedValue),
+    /// An environment kept live: an alias target, the owner of an imported
+    /// binding, or a library's own environment. An environment's parent is
+    /// `for_each_gc_edge`'s return value instead.
+    Env(&'a Rc<Environment>),
 }
 
 impl Default for Environment {
@@ -2788,6 +2864,19 @@ mod shared_binding_tests {
         (library, importer)
     }
 
+    /// The environments the collector is shown from `env`. None of these
+    /// tests gives an importer a parent or an alias, so these are its owners.
+    fn edges_to_environments(env: &Environment) -> Vec<*const Environment> {
+        let mut envs = Vec::new();
+        let parent = env.for_each_gc_edge(&mut |edge| {
+            if let GcEdge::Env(target) = edge {
+                envs.push(Rc::as_ptr(target));
+            }
+        });
+        envs.extend(parent.map(Rc::as_ptr));
+        envs
+    }
+
     #[test]
     fn a_shared_binding_reads_what_its_owner_holds_now() {
         let (library, importer) = library_and_importer();
@@ -2864,9 +2953,7 @@ mod shared_binding_tests {
         library.set("count", n(4)).unwrap();
         assert_eq!(importer.get("again"), Some(n(4)));
 
-        let mut owners = Vec::new();
-        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
-        assert_eq!(owners, vec![Rc::as_ptr(&library)]);
+        assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
     }
 
     #[test]
@@ -2889,9 +2976,7 @@ mod shared_binding_tests {
         // A value, not a forward into an environment about to be dropped.
         staging.set("loose", n(6)).unwrap();
         assert_eq!(importer.get("c:loose"), Some(n(5)));
-        let mut owners = Vec::new();
-        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
-        assert_eq!(owners, vec![Rc::as_ptr(&library)]);
+        assert_eq!(edges_to_environments(&importer), vec![Rc::as_ptr(&library)]);
     }
 
     #[test]
@@ -2928,9 +3013,10 @@ mod shared_binding_tests {
         importer.share_binding("third", &second, "third");
         importer.share_binding("other", &library, "other");
 
-        let mut owners = Vec::new();
-        importer.for_each_shared_owner(&mut |env| owners.push(Rc::as_ptr(env)));
-        assert_eq!(owners, vec![Rc::as_ptr(&library), Rc::as_ptr(&second)]);
+        assert_eq!(
+            edges_to_environments(&importer),
+            vec![Rc::as_ptr(&library), Rc::as_ptr(&second)]
+        );
     }
 
     #[test]
@@ -2952,9 +3038,11 @@ mod shared_binding_tests {
         assert_eq!(library.get("count"), Some(n(0)));
         assert_eq!(library.get("also"), Some(n(0)));
 
-        let mut owners = 0;
-        library.for_each_shared_owner(&mut |_| owners += 1);
-        assert_eq!(owners, 0, "a self-reference would leak the environment");
+        assert_eq!(
+            edges_to_environments(&library),
+            Vec::<*const Environment>::new(),
+            "a self-reference would leak the environment"
+        );
     }
 }
 
@@ -3385,5 +3473,97 @@ mod layout_tests {
             size <= 224,
             "Environment grew to {size} bytes; measure the tree-walker before raising this"
         );
+    }
+}
+
+/// Every edge the collector follows out of an environment, each to a value
+/// nothing else reaches (#623): a plain binding, a scoped one, the binding an
+/// alias forwards to (#38), an imported binding's owner, and the parent's
+/// binding. The environment is built by a struct literal, so a new field
+/// breaks this test as well as `for_each_gc_edge`; the reads before the
+/// collection show the literal is the environment the API would build.
+#[cfg(test)]
+mod gc_edge_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+    use crate::heap::sentinels::Sentinels;
+    use crate::heap::trace_sentinels::collect_only;
+    use crate::scope::ScopeId;
+    use smallvec::smallvec;
+
+    #[test]
+    fn environment_edges() {
+        let heap = new_shared_heap();
+        let mut h = heap.borrow_mut();
+        let mut s = Sentinels::new(&mut h);
+        let plain = s.pair(&mut h, "Environment.bindings");
+        let scoped = s.vector(&mut h, "Environment.scoped_bindings");
+        let aliased = s.string(&mut h, "Environment.alias_bindings");
+        let imported = s.object(&mut h, "Environment.rare: RareTables.owners");
+        let inherited = s.pair(&mut h, "Environment.parent");
+        drop(h);
+
+        let parent = Rc::new(Environment::with_heap(heap.clone()));
+        parent.define("inherited", inherited);
+        let alias_target = Rc::new(Environment::with_heap(heap.clone()));
+        alias_target.define("private", aliased);
+        let library = Rc::new(Environment::with_heap(heap.clone()));
+        library.define("exported", imported);
+        let owner_slot = library.local_slot("exported").unwrap();
+
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(ScopeId(7));
+        let mut scoped_table = ScopedTable::default();
+        scoped_table.insert(
+            Rc::from("hidden"),
+            smallvec![ScopedBinding {
+                scopes: scopes.clone(),
+                tagged_value: scoped,
+                visible_by_name: true,
+            }],
+        );
+        let mut aliases = AliasBindings::default();
+        aliases.insert(
+            Rc::from("alias"),
+            AliasTarget {
+                env: Some(Rc::clone(&alias_target)),
+                name: Rc::from("private"),
+                scopes: None,
+            },
+        );
+        let env = Environment {
+            heap: heap.clone(),
+            bindings: RefCell::new(Bindings {
+                slots: smallvec![
+                    (Rc::from("plain"), plain),
+                    (Rc::from("exported"), TaggedValue::FORWARDED),
+                ],
+                index: None,
+            }),
+            env_id: fresh_env_id(),
+            scoped_bindings: RefCell::new(scoped_table),
+            alias_bindings: RefCell::new(aliases),
+            has_aliases: Cell::new(true),
+            has_visible_scoped: Cell::new(true),
+            rare: OnceCell::from(Box::new(RareTables {
+                introduced_global_names: RefCell::default(),
+                links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
+                import_aliases: RefCell::default(),
+                owners: RefCell::new(vec![Rc::clone(&library)]),
+            })),
+            parent: Some(parent),
+        };
+        assert_eq!(env.get("plain"), Some(plain));
+        assert_eq!(
+            env.get_with_scopes("hidden", &scopes).unwrap(),
+            Some(scoped)
+        );
+        assert_eq!(env.get("alias"), Some(aliased));
+        assert_eq!(env.get("exported"), Some(imported));
+        assert_eq!(env.get("inherited"), Some(inherited));
+
+        let mut h = heap.borrow_mut();
+        collect_only(&mut h, |visitor| visitor.visit_env(&env));
+        s.assert_survived(&h);
     }
 }

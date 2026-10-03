@@ -135,7 +135,10 @@ impl CpsExpr {
     }
 
     /// Visit every heap value embedded in this expression tree
-    /// (`Literal` nodes). GC tracing hook.
+    /// (`Literal` nodes). GC tracing hook, called by the collector's
+    /// `visit_expr_literals`: every field of every variant is named (#623),
+    /// and the sentinel test `expression_literals_under_every_node` reaches a
+    /// literal through each walk below.
     ///
     /// `seen` deduplicates by node address: bodies are shared via `Rc` across
     /// closures, so the caller passes one set per collection and shared
@@ -148,27 +151,74 @@ impl CpsExpr {
         if !seen.insert(self as *const Self as usize) {
             return;
         }
-        match &self.kind {
+        let CpsExpr {
+            kind,
+            // A file position.
+            source: _,
+        } = self;
+        match kind {
             CpsExprKind::Literal(tv) => f(*tv),
-            CpsExprKind::Var { .. } | CpsExprKind::ContRef(_) => {}
-            CpsExprKind::Lambda { body, .. } => body.for_each_literal(seen, f),
-            CpsExprKind::LetVal { value, body, .. } => {
+            CpsExprKind::Var {
+                // A name.
+                name: _,
+                // Scope ids.
+                scopes: _,
+            } => {}
+            // A continuation variable's name.
+            CpsExprKind::ContRef(_) => {}
+            CpsExprKind::Lambda {
+                // Names and scope ids.
+                params: _,
+                // A name and scope ids.
+                variadic: _,
+                // A name.
+                cont_param: _,
+                body,
+                // Scope ids.
+                binding_scopes: _,
+            } => body.for_each_literal(seen, f),
+            CpsExprKind::LetVal {
+                // A name.
+                name: _,
+                value,
+                body,
+            } => {
                 value.for_each_literal(seen, f);
                 body.for_each_literal(seen, f);
             }
             CpsExprKind::LetCont {
-                cont_body, body, ..
+                // A name.
+                name: _,
+                // A name.
+                param: _,
+                cont_body,
+                body,
             } => {
                 cont_body.for_each_literal(seen, f);
                 body.for_each_literal(seen, f);
             }
-            CpsExprKind::App { func, args, .. } | CpsExprKind::Apply { func, args, .. } => {
+            CpsExprKind::App {
+                func,
+                args,
+                // A name.
+                cont: _,
+            }
+            | CpsExprKind::Apply {
+                func,
+                args,
+                // A name.
+                cont: _,
+            } => {
                 func.for_each_literal(seen, f);
                 for arg in args {
                     arg.for_each_literal(seen, f);
                 }
             }
-            CpsExprKind::Continue { value, .. } => value.for_each_literal(seen, f),
+            CpsExprKind::Continue {
+                // A name.
+                cont: _,
+                value,
+            } => value.for_each_literal(seen, f),
             CpsExprKind::If {
                 test,
                 consequent,
@@ -178,11 +228,34 @@ impl CpsExpr {
                 consequent.for_each_literal(seen, f);
                 alternate.for_each_literal(seen, f);
             }
-            CpsExprKind::Set { value, cont, .. } | CpsExprKind::Define { value, cont, .. } => {
+            CpsExprKind::Set {
+                // A name.
+                var: _,
+                // Scope ids.
+                scopes: _,
+                value,
+                cont,
+            }
+            | CpsExprKind::Define {
+                // A name.
+                name: _,
+                // Scope ids.
+                scopes: _,
+                // A flag.
+                visible_by_name: _,
+                value,
+                cont,
+            } => {
                 value.for_each_literal(seen, f);
                 cont.for_each_literal(seen, f);
             }
-            CpsExprKind::PrimOp { args, .. } => {
+            CpsExprKind::PrimOp {
+                // Which primitive.
+                op: _,
+                args,
+                // A name.
+                cont: _,
+            } => {
                 for arg in args {
                     arg.for_each_literal(seen, f);
                 }

@@ -2703,3 +2703,6 @@ mod tests {
 
 #[cfg(test)]
 mod weak_continuation_tests;
+
+#[cfg(test)]
+mod trace_sentinel_tests;
