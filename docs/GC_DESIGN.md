@@ -116,8 +116,9 @@ the heap:
 
 - **env → heap:** bindings hold `TaggedValue`s (bare arena indices, no ownership).
 - **heap → env:** `HeapObjectData::EnvironmentSpecifier{env}`,
-  `VmClosure{globals}`, `Procedure` (CPS lambda env), `CpsContinuation.env` all
-  hold owning `Rc<Environment>`.
+  `VmClosure{globals}`, `Procedure` (CPS lambda env), `CpsContinuation.env`
+  and `Macro` (`CompiledMacro.definition_env` and each `foreign_expansions`
+  environment) all hold owning `Rc<Environment>`.
 
 There is no traversal API today; the tracer needs a new
 `Environment::for_each_value(&self, f: &mut dyn FnMut(TaggedValue))` that walks
@@ -828,19 +829,24 @@ No, because the two edge directions have asymmetric ownership:
   ownership, invisible to `Rc`.
 - **heap → env** edges are owning `Rc<Environment>` held **inside heap slots**
   (`VmClosure.globals`, `Procedure`'s captured env, `CpsContinuation.env`,
-  `EnvironmentSpecifier.env`).
+  `EnvironmentSpecifier.env`, and a `Macro`'s `CompiledMacro.definition_env`
+  and `foreign_expansions` environments).
 
 Every environment cycle must route through a heap slot, because binding maps
 hold `TaggedValue`s, never `Rc<Environment>` directly, and parent chains are
 acyclic trees. When a closure cluster becomes unreachable from roots:
 
-1. the tracer never marks the `VmClosure`/`Procedure`/`Continuation` slot;
+1. the tracer never marks the `VmClosure`/`Procedure`/`Continuation`/`Macro`
+   slot;
 2. sweep tombstones the slot, dropping its `HeapObjectData` — including the
    `Rc<Environment>`;
 3. the environment's refcount falls; if that was the last strong ref, the env
    drops, dropping its binding maps (which held only non-owning indices);
 4. anything those bindings pointed at was likewise unmarked and swept in the
    same collection (reachability is transitive).
+
+`heap::trace_sentinels::a_foreign_expansion_environment_dies_with_its_macro`
+pins steps 1–3 for a macro's `foreign_expansions` environment.
 
 The same argument covers `set-cdr!` pair cycles trivially (pairs own nothing)
 and `Rc`-payload variants like `Promise`/`Record` (their `Rc<RefCell<…>>`
