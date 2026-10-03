@@ -50,11 +50,11 @@ jobs:
     # The per-PR GC stress lane (#626; docs/TEST_ORGANIZATION.md, "GC
     # lanes"): thirteen targets that drive the collector, control flow and
     # library loading through the embedding API, which the chibi lanes never
-    # reach, under PATINA_GC_STRESS=16 in this debug build, whose
-    # stale-reference checks turn a lost root into a panic. Each target must
-    # pass and report at least its pinned number of collections. It reuses
-    # the build above: the script names the workspace as that command does,
-    # so nothing recompiles.
+    # reach, under PATINA_GC_STRESS=16, and scheme_suite.rs at 4096, in this
+    # debug build, whose stale-reference checks turn a lost root into a
+    # panic. Each target must pass and report at least its pinned number of
+    # collections. It reuses the build above: the script names the workspace
+    # as that command does, so nothing recompiles.
     - name: GC stress lane (debug, collector and control-flow targets)
       run: ./scripts/run_gc_stress_tests.sh
 

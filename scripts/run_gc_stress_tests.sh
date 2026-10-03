@@ -2,12 +2,12 @@
 # The per-PR GC stress lane (#626; docs/TEST_ORGANIZATION.md, "GC lanes"): the
 # cargo test targets that exercise the collector, control flow and library
 # loading, under PATINA_GC_STRESS=16 in a build with the stale-reference
-# checks. The chibi lanes reach the collector only through the CLI and only
-# with the chibi suite's programs; these targets drive it through the
-# embedding API (Interpreter, Backend::eval, library loading from Rust) and
-# with the shapes a GC bug has needed: an ephemeron holding a continuation
-# (#130), an escape from a primitive, a continuation re-entered after a
-# collection.
+# checks, and the suite files' driver, scheme_suite.rs, at 4096. The chibi
+# lanes reach the collector only through the CLI and only with the chibi
+# suite's programs; these targets drive it through the embedding API
+# (Interpreter, Backend::eval, library loading from Rust) and with the shapes
+# a GC bug has needed: an ephemeron holding a continuation (#130), an escape
+# from a primitive, a continuation re-entered after a collection.
 #
 # Each target must pass, and must report at least the number of collections
 # pinned for it below: a lane that passes without collecting has tested
@@ -25,6 +25,18 @@
 # long as its unevaluated body exists (ParsedLibrary's GcDeferGuard::holding).
 # Under stress they are there for the day that deferral is lost: they then
 # collect inside the load, and the checks catch what that frees.
+#
+# scheme_suite.rs runs every tests/scheme file on both backends, and at 16 it
+# did not finish in 25 minutes (#626). One file is nearly all of that:
+# srfi/regex-graphemes.scm, which compiles SRFI 115's grapheme regex, a large
+# live heap of character sets, and then matches it against 400 syllables. Run
+# alone through the debug CLI it took 9 s on the VM and 22 s on the
+# tree-walker without stress, 12 s and 28 s at 4096, 58 s and 81 s at 256,
+# and had not finished after 300 s on either at 16; every other file together
+# took about 90 s and 130 s at 16. The whole target took 20 s without stress,
+# 27 s at 4096, 47 s at 1024 and 125 s at 256 (measured 2026-10-02, under
+# other load), so it runs at 4096, where it collects six times as often as
+# without stress for a third more time.
 #
 # Run it against a check build: a debug build, as here, or release with
 # `--features gc-check` passed through to patina-tests. CI's Test Suite job
@@ -57,6 +69,7 @@ TARGETS=(
     "library_loading 16 1"                 # 3 (0): see the header
     "macro_definition_env 16 0"            # 0 (0): see the header
     "vm_callprimitive 16 23"               # 47 (0)
+    "scheme_suite 4096 1534"               # 3068 (484): see the header
 )
 
 OUT=$(mktemp -d)
