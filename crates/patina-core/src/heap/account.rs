@@ -291,6 +291,12 @@ impl ExternalBytes {
         self.0.external.get()
     }
 
+    /// Whether this is `heap`'s own account, for a holder handed one to
+    /// check that it charges the heap whose arenas it serves.
+    pub(crate) fn is_of(&self, heap: &Heap) -> bool {
+        Rc::ptr_eq(&self.0, &heap.account.shared)
+    }
+
     /// Charge `bytes` held outside the arenas: [`Heap::charge_external_bytes`]
     /// without the heap. They count toward the next collection like an
     /// allocation, raising the pending flag if they cross the threshold, and

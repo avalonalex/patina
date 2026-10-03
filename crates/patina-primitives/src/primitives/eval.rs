@@ -768,6 +768,9 @@ fn load_next(
 /// Returns a mutable environment specifier for the interaction (global)
 /// environment: the same object every call, as chibi, Gauche and Chez answer
 /// (`Environment::mutable_specifier`), so a loop of these allocates nothing.
+/// The environment is the backend's `interaction_environment`, which on the
+/// VM, inside a library's body, is the library's (`mutable_specifier`'s doc
+/// says what that means for the cache).
 fn primitive_interaction_environment(
     ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,

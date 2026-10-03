@@ -486,8 +486,14 @@ struct RareTables {
 /// dead namespaces between collections. A frame ([`Environment::with_parent`])
 /// is never one: the tree-walker builds one per call and per `let`-bound
 /// temporary, and what its bindings hold is short-lived and small, so its
-/// path pays a compare per binding to learn that no table grew and nothing
-/// more. VM frames are registers and are not environments at all.
+/// path does as little of the measuring as it can. A scoped binding or an
+/// alias — the tree-walker binds a call's parameters under their scopes —
+/// asks [`Environment::is_namespace`] before it reads a table's capacity,
+/// and a frame reads none. A plain binding compares the slot vector's
+/// length with its capacity, except a fresh frame's first, which compares
+/// nothing; and when a frame's vector spills or its index grows, one load
+/// finds that it has no charge to settle. VM frames are registers and are
+/// not environments at all.
 ///
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box, every table's own buffer at its capacity —
@@ -717,8 +723,8 @@ impl Environment {
     /// as they grow, and gives them back when it drops (`NamespaceCharge`),
     /// so a collection comes as often as the memory namespaces hold calls
     /// for. Borrows `heap` for its account, so it must not be borrowed
-    /// mutably here: a caller that holds it passes the account itself, to
-    /// [`Environment::namespace`].
+    /// mutably here: a test in this crate that holds it passes the account
+    /// itself, to `Environment::namespace`.
     pub fn with_heap(heap: SharedHeap) -> Self {
         let account = heap.borrow().external_bytes_handle();
         Self::namespace(heap, account)
@@ -726,8 +732,18 @@ impl Environment {
 
     /// [`Environment::with_heap`] with the heap's account in hand
     /// ([`Heap::external_bytes_handle`](crate::heap::Heap::external_bytes_handle)),
-    /// which must be `heap`'s own.
-    pub fn namespace(heap: SharedHeap, account: ExternalBytes) -> Self {
+    /// which must be `heap`'s own: another heap's would put this namespace's
+    /// tables on that heap's trigger. Checked in debug builds whenever the
+    /// heap can be read, which is not when the caller holds it mutably — the
+    /// reason to pass the account at all. Within the crate, for the tests
+    /// that hold the heap; everything else calls `with_heap`.
+    pub(crate) fn namespace(heap: SharedHeap, account: ExternalBytes) -> Self {
+        debug_assert!(
+            heap.try_borrow()
+                .ok()
+                .is_none_or(|heap| account.is_of(&heap)),
+            "a namespace's external-bytes account is another heap's"
+        );
         let env = Environment {
             heap,
             bindings: RefCell::new(Bindings::default()),
@@ -889,6 +905,16 @@ impl Environment {
         }
     }
 
+    /// Whether this environment is a namespace, which charges for its tables
+    /// ([`NamespaceCharge`]): one made without a parent. Asked before a table
+    /// that frames fill too is measured, so that a frame skips the measuring
+    /// for the price of a field read: the parent is in the struct, where the
+    /// charge is behind the `rare` box.
+    #[inline(always)]
+    fn is_namespace(&self) -> bool {
+        self.parent.is_none()
+    }
+
     /// After a table reallocated: a namespace charges the heap for what its
     /// tables hold now ([`NamespaceCharge`]). Anything else — a frame —
     /// has nothing to charge, and finds that out in a load.
@@ -984,9 +1010,17 @@ impl Environment {
     /// allocates nothing; `load` evaluates in it.
     ///
     /// Held in this environment and traced with its bindings, so it is as
-    /// safe as they are: an environment the program uses is one a root
-    /// reaches, which for the interaction environment is the backend's
-    /// global environment.
+    /// safe as they are: whatever environment it is asked of, a root reaches
+    /// it while the program can use it. That is not always the program's
+    /// global environment. The VM answers `interaction-environment` with the
+    /// environment its globals are swapped to, which while a library's body
+    /// runs is the library's (`VmState::with_globals`): a call there gets a
+    /// mutable specifier over the library's environment, cached on it and
+    /// rooted with it by the registry, where the tree-walker answers its
+    /// global environment wherever it is asked. That divergence is older
+    /// than this cache — before it, the VM answered a fresh specifier over
+    /// the library's environment — and the cache changes only how long the
+    /// answer lives.
     pub fn mutable_specifier(self: &Rc<Self>) -> TaggedValue {
         let rare = self.rare.get_or_init(Default::default);
         if let Some(specifier) = rare.specifier.get() {
@@ -1646,9 +1680,9 @@ impl Environment {
         self.has_aliases.set(true);
         let grew = {
             let mut aliases = self.alias_bindings.borrow_mut();
-            let capacity = aliases.capacity();
+            let capacity = self.is_namespace().then(|| aliases.capacity());
             aliases.insert(alias, AliasTarget { env, name, scopes });
-            aliases.capacity() != capacity
+            capacity.is_some_and(|capacity| aliases.capacity() != capacity)
         };
         if grew {
             self.recharge();
@@ -1708,7 +1742,10 @@ impl Environment {
         }
         let grew = {
             let mut table = self.scoped_bindings.borrow_mut();
-            let capacity = table.capacity();
+            // Measured only for a namespace, which charges for the table: the
+            // tree-walker binds each call's parameters here, in a frame, and
+            // a frame's first scoped binding always allocates the table.
+            let capacity = self.is_namespace().then(|| table.capacity());
             let bindings = table.entry(name).or_default();
             match bindings.iter_mut().find(|b| b.scopes == scopes) {
                 Some(existing) => {
@@ -1721,7 +1758,7 @@ impl Environment {
                     visible_by_name,
                 }),
             }
-            table.capacity() != capacity
+            capacity.is_some_and(|capacity| table.capacity() != capacity)
         };
         if grew {
             self.recharge();
@@ -3890,8 +3927,9 @@ mod namespace_charge_tests {
             }
             frame.define_alias("alias", Rc::clone(&global), Rc::from("x"));
             assert_eq!(frame.charged_bytes(), None);
+            assert!(!frame.is_namespace());
+            assert_eq!(external(&heap), start, "a frame of {depth}");
         }
-        assert_eq!(external(&heap), start);
     }
 
     /// However many specifiers name a namespace, it is charged once; and its
@@ -3908,6 +3946,19 @@ mod namespace_charge_tests {
                 .alloc_environment_specifier(Rc::clone(&env), false);
         }
         assert_eq!(external(&heap), made);
+    }
+
+    /// A namespace handed another heap's account would charge its tables
+    /// to that heap's trigger; a debug build refuses it when it can read the
+    /// heap it is made on.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "account is another heap's")]
+    fn a_namespace_refuses_another_heaps_account() {
+        let heap = new_shared_heap();
+        let other = new_shared_heap();
+        let account = other.borrow().external_bytes_handle();
+        let _ = Environment::namespace(heap, account);
     }
 }
 

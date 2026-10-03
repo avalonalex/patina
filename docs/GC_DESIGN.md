@@ -566,23 +566,29 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   collects every 8 MiB of namespaces and peaks near 21 MB on either backend
   at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
   keeps its namespaces raises L with them. Frames (`Environment::with_parent`,
-  the tree-walker's per call and per `let`) never charge, and pay a compare
-  per binding to learn that no table grew. Each namespace is charged once
-  however many specifiers name it, and `interaction-environment` answers one
-  specifier, cached on the environment (§3.3), so a loop of it allocates
-  nothing. Measured 2026-10-03, release, macOS arm64.
+  the tree-walker's per call and per `let`) never charge, and skip the
+  measuring: a scoped binding or an alias, which is how the tree-walker
+  binds a call's parameters, checks for a parent before it reads a table's
+  capacity; a plain binding compares the slot vector's length with its
+  capacity (a fresh frame's first, nothing); and a frame whose vector
+  spills or whose index grows finds in one load that it has no charge.
+  Each namespace is charged once however many specifiers name it, and
+  `interaction-environment` answers one specifier, cached on the
+  environment (§3.3), so a loop of it allocates nothing. Measured
+  2026-10-03, release, macOS arm64.
 
   Nothing else charges yet. A program whose memory sits mostly behind those
-  `Rc`s — closure-heavy tree-walker code (a procedure's environment, which is
-  a frame), string-port churn — is charged only slots, and the 8 MiB floor is more slots than the 65,536 objects that
-  bounded it before #606 (524,288 pairs, or 116,508 of the 72-byte object
-  slots that procedures and ports take), so it keeps more garbage between
-  collections than it did. Measured against the commit before #606
-  (release, interleaved runs, 2026-10-03): on the tree-walker,
-  `scripts/benchmarks.py`'s `deriv` workload repeated peaks at 81 MB
-  against 28, its `call/cc`, `ctak` and `dynamic-wind` loops at 96–109 MB
-  against 60–74, 2,000,000 garbage closures at 122 MB against 75, and
-  1,000,000 string ports at 72 MB against 44 (35 against 25 on the VM).
+  `Rc`s — closure-heavy tree-walker code (a procedure's environment, which
+  is a frame), string-port churn — is charged only slots, and the 8 MiB
+  floor is more slots than the 65,536 objects that bounded it before #606
+  (524,288 pairs, or 116,508 of the 72-byte object slots that procedures
+  and ports take), so it keeps more garbage between collections than it
+  did. Measured against the commit before #606 (release, interleaved
+  runs, 2026-10-03): on the tree-walker, `scripts/benchmarks.py`'s
+  `deriv` workload repeated peaks at 81 MB against 28, its `call/cc`,
+  `ctak` and `dynamic-wind` loops at 96–109 MB against 60–74, 2,000,000
+  garbage closures at 122 MB against 75, and 1,000,000 string ports at
+  72 MB against 44 (35 against 25 on the VM).
   It was an allocation count until #606: a 100,000-element vector cost the
   trigger what a pair costs, so 500 of them peaked at 414 MB with no
   collection, and 20,000 VM captures 1,000 frames deep at 3.2 GB. Both now
@@ -627,13 +633,15 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   safe point services it. This is what makes collection testable without
   process-global environment variables. `(gc-stats)` reports the arenas'
   slot counts and five byte keys: `live-bytes` (L, 0 before the first
-  collection), `bytes-allocated` (every byte charged), `bytes-reclaimed`
-  (every byte a collection freed, so it grows only when one frees
-  something), `committed-bytes` (every arena's capacity in slots and the
-  payloads of the occupied slots: what the arenas hold now, live or not) and
-  `external-bytes` (what holders outside the arenas have charged and not
-  given back: the live namespaces' tables, #615). GC_PRD's footprint is the
-  last two together.
+  collection), `bytes-allocated` (every byte charged, external bytes
+  included), `bytes-reclaimed` (every byte a collection freed, so it grows
+  only when one frees something; external bytes given back when their
+  holder drops are not in it, so `bytes-allocated` less `bytes-reclaimed`
+  also counts every namespace that has died), `committed-bytes` (every
+  arena's capacity in slots and the payloads of the occupied slots: what
+  the arenas hold now, live or not) and `external-bytes` (what holders
+  outside the arenas have charged and not given back: the live
+  namespaces' tables, #615). GC_PRD's footprint is the last two together.
 
 ### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 
