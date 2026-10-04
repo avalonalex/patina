@@ -185,6 +185,12 @@ pub struct VmState {
     /// primitive calls pay an allocation; the common depth-1 case is
     /// allocation-free. An allocation pool, never read for meaning after a
     /// call returns — never a channel for values, which travel in registers.
+    ///
+    /// Emptied when each call is done, before it goes back. It is traced as
+    /// a root (`gc_roots.rs`), so the arguments of the last call left in it
+    /// would live until the next call reused it: a key passed to
+    /// `make-ephemeron` kept its pair whole through a `(gc)` that a procedure
+    /// value's tail call made (#639).
     pub(super) scratch_args: Vec<TaggedValue>,
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
     /// id inside the `VmContinuationRef { id, .. }` handle. **Weak** (design §9.5):
@@ -2119,12 +2125,15 @@ fn dispatch_one_instruction(
             dst,
         } => {
             // Gather args into the reusable scratch buffer (taken out of the
-            // state so a re-entrant primitive cannot alias it).
+            // state so a re-entrant primitive cannot alias it). Every call
+            // leaves it empty.
             let mut arg_vals = std::mem::take(&mut state.scratch_args);
-            arg_vals.clear();
+            debug_assert!(arg_vals.is_empty());
             arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
             let result =
                 exec_call_primitive(state, base, func_id, name, &arg_vals, dst, exit_depth);
+            // Emptied before it goes back: see `VmState::scratch_args`.
+            arg_vals.clear();
             state.scratch_args = arg_vals;
             if let Some(escaped) = result? {
                 return Ok(Some(escaped));
@@ -2137,9 +2146,10 @@ fn dispatch_one_instruction(
             dst,
         } => {
             let mut arg_vals = std::mem::take(&mut state.scratch_args);
-            arg_vals.clear();
+            debug_assert!(arg_vals.is_empty());
             arg_vals.extend(args.iter().map(|&r| state.reg_at(base, r)));
             let result = exec_call_primitive_direct(state, base, func_id, &arg_vals, dst);
+            arg_vals.clear();
             state.scratch_args = arg_vals;
             result?;
         }
