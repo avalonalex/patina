@@ -690,6 +690,53 @@ mod tests {
         assert!(registry.get(&name).unwrap().exports.contains_key("v"));
     }
 
+    /// A library defined again is replaced in the registry (#614's path),
+    /// and its environment, a namespace, keeps its charge on the heap's
+    /// external bytes (#615) for as long as anything holds it — here an
+    /// importer's link — and gives it back when the last holder drops. That
+    /// drop is the one a namespace can see outside a sweep.
+    #[test]
+    fn a_replaced_library_gives_its_namespace_charge_back_when_it_drops() {
+        use patina_core::environment::Environment;
+        use patina_core::heap::new_shared_heap;
+        use std::rc::Rc;
+
+        let heap = new_shared_heap();
+        let external = || heap.borrow().external_bytes();
+        let name = vec!["test".to_string()];
+        let library = |value: i64| {
+            let env = Rc::new(Environment::with_heap(heap.clone()));
+            for i in 0..50 {
+                env.define(format!("private-{i}"), patina_core::TaggedValue::fixnum(i));
+            }
+            env.define("v", patina_core::TaggedValue::fixnum(value));
+            let mut library = Library::with_env(name.clone(), env);
+            library.export_tagged("v".to_string(), patina_core::TaggedValue::fixnum(value));
+            library
+        };
+        let mut registry = LibraryRegistry::new();
+        registry.register(library(1)).unwrap();
+        let importer = Environment::with_heap(heap.clone());
+        assert!(
+            registry
+                .get(&name)
+                .unwrap()
+                .import_into(&importer, "v", "v")
+        );
+        let old = registry.get(&name).unwrap().env.charged_bytes().unwrap();
+
+        registry.register_or_replace(library(2));
+        let new = registry.get(&name).unwrap().env.charged_bytes().unwrap();
+        // The importer links the old library's binding, so the old namespace
+        // lives on, and stays charged, out of the registry.
+        assert_eq!(external(), importer.charged_bytes().unwrap() + old + new);
+
+        drop(importer);
+        assert_eq!(external(), new);
+        drop(registry);
+        assert_eq!(external(), 0);
+    }
+
     #[test]
     fn test_add_search_path() {
         let mut registry = LibraryRegistry::new();

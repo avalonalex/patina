@@ -153,6 +153,15 @@
 (test-error "defining into null-environment is refused" #t
   (eval '(define x 10) (null-environment 5)))
 
+;; ── The interaction environment ────────────────────────────────────────────
+;;
+;; One specifier, whichever call asks. R7RS 6.12 does not say; chibi, Gauche
+;; and Chez answer one object, and Patina hands out the one it made first
+;; (#615), so a program that asks in a loop allocates nothing.
+
+(test-assert "interaction-environment answers one specifier"
+  (eq? (interaction-environment) (interaction-environment)))
+
 ;; ── An import eval evaluates (#482) ────────────────────────────────────────
 ;;
 ;; `eval` of an `import` binds the library's exports in the environment, for

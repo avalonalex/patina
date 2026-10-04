@@ -10,16 +10,22 @@
 //!   objects it marked, their payloads (a VM continuation's snapshot among
 //!   them) and the external bytes held then. 0 before the first collection.
 //!   The adaptive trigger collects again after `max(8 MiB, 2 × live-bytes)`.
-//! - `bytes-allocated`: every byte charged since the heap was made, each
-//!   object's slot and payload.
+//! - `bytes-allocated`: every byte charged since the heap was made: each
+//!   object's slot and payload, and the external bytes charged, a
+//!   namespace's tables and their growth among them. External bytes are
+//!   given back when their holder drops, outside `bytes-reclaimed`, so
+//!   `bytes-allocated` less `bytes-reclaimed` is not what is held now: it
+//!   also counts every namespace that has died.
 //! - `bytes-reclaimed`: every byte the collections have freed. It grows only
 //!   when a collection frees something, so a reclamation proof that sees it
 //!   above 0 cannot have passed without collecting.
 //! - `committed-bytes`: what the arenas hold now, live or not: every arena's
 //!   capacity in slots and the payloads of the occupied slots.
 //! - `external-bytes`: what is held outside the arenas on heap objects'
-//!   behalf now (GC_PRD §15), charged by its holders; 0 until one does
-//!   (#615). GC_PRD's footprint is `committed-bytes` plus `external-bytes`.
+//!   behalf now (GC_PRD §15), charged by its holders: today the tables of
+//!   the live namespaces — the global environment, the libraries', and those
+//!   `environment` and the R5RS constructors build (#615). GC_PRD's
+//!   footprint is `committed-bytes` plus `external-bytes`.
 //!
 //! The slot counts before them (`pairs`, `free-pairs`, `allocs-since-gc`,
 //! `last-swept` and the rest) stay, as diagnostics of the arenas.

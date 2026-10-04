@@ -627,6 +627,7 @@ impl Heap {
 
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
+        let gc_pending = Rc::new(Cell::new(false));
         Self {
             syntax_sources: std::collections::HashMap::new(),
             features: crate::features::FeatureRegistry::new(),
@@ -648,9 +649,9 @@ impl Heap {
             string_checks: SlotChecks::new(),
             object_checks: SlotChecks::new(),
             allocs_since_gc: 0,
-            account: ByteAccount::default(),
+            account: ByteAccount::new(Rc::clone(&gc_pending)),
             gc_threshold: GcThreshold::NEVER,
-            gc_pending: Rc::new(Cell::new(false)),
+            gc_pending,
             gc_freed_bits: None,
             gc_freed_overflow: false,
             gc_freed_closure_code_ids: None,
@@ -677,7 +678,7 @@ impl Heap {
     #[inline]
     fn refresh_gc_pending(&self) {
         if self.allocs_since_gc >= self.gc_threshold.allocations
-            || self.account.since_gc >= self.gc_threshold.bytes
+            || self.bytes_since_gc() >= self.gc_threshold.bytes
         {
             self.gc_pending.set(true);
         }
@@ -688,11 +689,18 @@ impl Heap {
     /// policy's threshold is crossed. Called by every `alloc_*`; this is
     /// where the collection decision is *made*, so safe points only have to
     /// read the flag (design §6.1).
+    ///
+    /// The byte count is shared with the external-bytes handles
+    /// (`heap/account.rs`), which add to it without the heap.
     #[inline]
     fn note_alloc(&mut self, bytes: usize) {
         self.allocs_since_gc += 1;
-        self.account.since_gc += bytes;
-        self.refresh_gc_pending();
+        let since_gc = self.account.shared.count(bytes);
+        if self.allocs_since_gc >= self.gc_threshold.allocations
+            || since_gc >= self.gc_threshold.bytes
+        {
+            self.gc_pending.set(true);
+        }
     }
 
     /// A handle to the collection-pending flag. Dispatch loops clone this
@@ -709,6 +717,8 @@ impl Heap {
     /// already exceeds the new threshold.
     pub fn set_gc_threshold(&mut self, threshold: GcThreshold) {
         self.gc_threshold = threshold;
+        // Mirrored where an external charge, which has no heap, compares.
+        self.account.shared.threshold.set(threshold.bytes);
         self.refresh_gc_pending();
     }
 

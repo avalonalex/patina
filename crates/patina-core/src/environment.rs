@@ -1,10 +1,11 @@
-use crate::heap::SharedHeap;
+use crate::heap::{ExternalBytes, SharedHeap};
 use crate::scope::ScopeSet;
 use crate::scope_resolve::AmbiguousReference;
 use crate::tagged_value::TaggedValue;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::{Cell, OnceCell, RefCell};
+use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -218,6 +219,16 @@ struct Bindings {
 /// Frames up to this many bindings are searched linearly, without a hash index.
 const LINEAR_MAX: usize = 8;
 
+/// What [`Bindings::insert`] did.
+struct Inserted {
+    /// The slot written.
+    slot: u32,
+    /// Whether it held an imported binding's marker before.
+    was_forwarded: bool,
+    /// Whether the slot vector or the index reallocated to take it.
+    grew: bool,
+}
+
 /// Does a stored binding name match the name being looked up?
 ///
 /// The address check is the point. The CPS transform gives a `let`-bound
@@ -258,23 +269,40 @@ impl Bindings {
 
     /// Define semantics: overwrite the existing slot or append a new one.
     ///
-    /// Returns the slot, and whether what it overwrote was an imported
-    /// binding's marker — in which case the caller has an [`Owner`] to drop.
-    /// Asked of the old value rather than of a side table, so the frames the
-    /// tree-walker builds by the million pay one compare and nothing else.
-    fn insert(&mut self, name: Rc<str>, value: TaggedValue) -> (u32, bool) {
+    /// Reports the slot, whether what it overwrote was an imported binding's
+    /// marker — in which case the caller has an [`Owner`] to drop — and
+    /// whether a table reallocated to make room, which a namespace charges
+    /// (`NamespaceCharge`). Both asked here rather than of a side table or
+    /// of the environment, so the frames the tree-walker builds by the
+    /// million pay a compare for each and nothing else.
+    fn insert(&mut self, name: Rc<str>, value: TaggedValue) -> Inserted {
         // A fresh frame is the common case on the tree-walker's hot path —
         // one is built per `let`-bound temporary and per call — and it has
-        // nothing to search.
-        if !self.slots.is_empty()
-            && let Some(slot) = self.slot_of(&name)
-        {
+        // nothing to search, no index (one exists only past `LINEAR_MAX`)
+        // and room inline, so nothing reallocates.
+        if self.slots.is_empty() {
+            self.slots.push((name, value));
+            return Inserted {
+                slot: 0,
+                was_forwarded: false,
+                grew: false,
+            };
+        }
+        if let Some(slot) = self.slot_of(&name) {
             let old = std::mem::replace(&mut self.slots[slot as usize].1, value);
-            return (slot, old == TaggedValue::FORWARDED);
+            return Inserted {
+                slot,
+                was_forwarded: old == TaggedValue::FORWARDED,
+                grew: false,
+            };
         }
         let slot = self.slots.len() as u32;
+        // A full vector reallocates to take one more.
+        let mut grew = self.slots.len() == self.slots.capacity();
         match &mut self.index {
             Some(index) => {
+                // So does a full table (`capacity` counts the room left).
+                grew |= index.len() == index.capacity();
                 index.insert(Rc::clone(&name), slot);
             }
             // Cross into indexed form *after* pushing, so the new name is in
@@ -290,12 +318,20 @@ impl Bindings {
                     index.insert(Rc::clone(n), i as u32);
                 }
                 self.index = Some(Box::new(index));
-                return (slot, false);
+                return Inserted {
+                    slot,
+                    was_forwarded: false,
+                    grew: true,
+                };
             }
             None => {}
         }
         self.slots.push((name, value));
-        (slot, false)
+        Inserted {
+            slot,
+            was_forwarded: false,
+            grew,
+        }
     }
 
     /// Every bound name, in slot order.
@@ -426,6 +462,138 @@ struct RareTables {
     /// which keeps a library's environment reachable for as long as one of
     /// its importers is — and the registry does that anyway.
     owners: RefCell<Vec<Rc<Environment>>>,
+    /// This environment's mutable specifier, made the first time one was
+    /// asked for ([`Environment::mutable_specifier`]) and handed out after
+    /// that: `(interaction-environment)` answers one object, as chibi,
+    /// Gauche and Chez do. A heap value held like a binding's, so it lives
+    /// exactly as long as the bindings do: while this environment is traced.
+    specifier: Cell<Option<TaggedValue>>,
+    /// What this environment has charged the heap's external bytes for its
+    /// tables, when it is a namespace ([`NamespaceCharge`]); `None` for every
+    /// other environment that comes to hold one of these tables.
+    namespace: Option<NamespaceCharge>,
+}
+
+/// The external bytes (`heap/account.rs`, GC_PRD §15) a namespace has charged
+/// for its tables, given back when it drops (#615).
+///
+/// **A namespace is an environment made without a parent**
+/// ([`Environment::with_heap`]): the global environment, a library's, and the
+/// ones `environment`, `scheme-report-environment` and `null-environment`
+/// build. Their tables are Rust allocations the trigger would otherwise not
+/// see: an `(environment '(scheme base))` holds about 40 KiB in them and
+/// costs the heap one specifier slot, so a loop of those piled up 2.9 GiB of
+/// dead namespaces between collections. A frame ([`Environment::with_parent`])
+/// is never one: the tree-walker builds one per call and per `let`-bound
+/// temporary, and what its bindings hold is short-lived and small, so its
+/// path does as little of the measuring as it can. A scoped binding or an
+/// alias — the tree-walker binds a call's parameters under their scopes —
+/// asks [`Environment::is_namespace`] before it reads a table's capacity,
+/// and a frame reads none. A plain binding compares the slot vector's
+/// length with its capacity, except a fresh frame's first, which compares
+/// nothing; and when a frame's vector spills or its index grows, one load
+/// finds that it has no charge to settle. VM frames are registers and are
+/// not environments at all.
+///
+/// **What is counted** ([`Environment::table_bytes`]): the environment and
+/// its out-of-line tables' box, every table's own buffer at its capacity —
+/// the slot vector once it is out of line, the name index, the scoped and
+/// alias tables, the import links, the owners, the import aliases and the
+/// introduced globals — and the name of each slot, an `Rc<str>` of two counts
+/// and its bytes, counted whether or not something else shares it (an
+/// `environment` built by import has a fresh name for each of its several
+/// hundred bindings, which are most of what it holds). Not counted: what a
+/// table's entries own beyond their place in it — an alias's or a scoped
+/// binding's name, a scope set, a spelling's map of introduced globals, a
+/// list spilled out of line — and the values, which live in the arenas and
+/// are charged there. An estimate, then, of the tables a namespace fills by
+/// the hundred, and close for those: allocator overhead is not modelled.
+///
+/// **When it is charged**: once when the namespace is made, and again
+/// whenever one of the counted tables reallocates, which is the only time
+/// their size changes — each mutation that can grow a table reports whether
+/// it did, and only then is the namespace asked what it holds. The names are
+/// counted from where the last count stopped (slots are append-only), so a
+/// namespace's charge trails its names by at most the slots defined since a
+/// table last grew. Growth after a namespace is made is charged like the
+/// rest: the global environment growing under `eval`, a library's under its
+/// body.
+///
+/// **Borrow-free**: the charge goes through an [`ExternalBytes`] handle,
+/// which shares the trigger's count with the heap, because a table grows
+/// wherever a definition lands, some under a heap borrow; and `Drop` gives
+/// it back through the same handle, because a namespace usually dies inside a
+/// sweep, which holds the heap mutably while it drops a dead specifier's
+/// `Rc`. Each namespace is charged once however many specifiers name it:
+/// `interaction-environment` and `load` wrap the one global environment.
+#[derive(Debug)]
+struct NamespaceCharge {
+    /// The heap's external-bytes account.
+    account: ExternalBytes,
+    /// What this namespace has charged and not given back.
+    charged: Cell<usize>,
+    /// How many slots' names are in `charged`, and their bytes.
+    names: Cell<(usize, usize)>,
+}
+
+impl NamespaceCharge {
+    fn new(account: ExternalBytes) -> Self {
+        Self {
+            account,
+            charged: Cell::new(0),
+            names: Cell::new((0, 0)),
+        }
+    }
+
+    /// The bytes of the names of `slots`, counting only the ones not counted
+    /// before.
+    fn name_bytes(&self, slots: &[(Rc<str>, TaggedValue)]) -> usize {
+        let (counted, bytes) = self.names.get();
+        let bytes = bytes
+            + slots[counted.min(slots.len())..]
+                .iter()
+                .map(|(name, _)| RC_COUNTS + name.len())
+                .sum::<usize>();
+        self.names.set((slots.len(), bytes));
+        bytes
+    }
+
+    /// Charge the difference between what the namespace holds now, `bytes`,
+    /// and what it charged before.
+    fn settle(&self, bytes: usize) {
+        let charged = self.charged.replace(bytes);
+        if bytes > charged {
+            self.account.charge(bytes - charged);
+        } else {
+            self.account.release(charged - bytes);
+        }
+    }
+}
+
+impl Drop for NamespaceCharge {
+    fn drop(&mut self) {
+        self.account.release(self.charged.get());
+    }
+}
+
+/// The two counts at the head of an `Rc`'s allocation.
+const RC_COUNTS: usize = 2 * size_of::<usize>();
+
+/// The bytes of a hash table — `std`'s and `FxHashMap` are `hashbrown`'s —
+/// whose `capacity` reports `capacity`: its buckets, each an entry and a
+/// control byte, and a group of trailing control bytes. Zero for a table that
+/// never allocated.
+fn hash_table_bytes<K, V>(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    // `capacity` is the bucket count less an eighth, or less one below 8.
+    let buckets = if capacity < 8 {
+        capacity + 1
+    } else {
+        (capacity / 7 * 8).next_power_of_two()
+    };
+    buckets * (size_of::<(K, V)>() + 1) + 16
 }
 
 /// The aliases for one imported location: the spelling each was asked for
@@ -547,9 +715,36 @@ impl Environment {
         Self::with_heap(crate::heap::new_shared_heap())
     }
 
-    /// Create a new empty environment with a shared heap
+    /// Create a new empty namespace on a shared heap: the global
+    /// environment, a library's, or one `environment` or an R5RS constructor
+    /// builds.
+    ///
+    /// A namespace charges the heap's external bytes for its tables, now and
+    /// as they grow, and gives them back when it drops (`NamespaceCharge`),
+    /// so a collection comes as often as the memory namespaces hold calls
+    /// for. Borrows `heap` for its account, so it must not be borrowed
+    /// mutably here: a test in this crate that holds it passes the account
+    /// itself, to `Environment::namespace`.
     pub fn with_heap(heap: SharedHeap) -> Self {
-        Environment {
+        let account = heap.borrow().external_bytes_handle();
+        Self::namespace(heap, account)
+    }
+
+    /// [`Environment::with_heap`] with the heap's account in hand
+    /// ([`Heap::external_bytes_handle`](crate::heap::Heap::external_bytes_handle)),
+    /// which must be `heap`'s own: another heap's would put this namespace's
+    /// tables on that heap's trigger. Checked in debug builds whenever the
+    /// heap can be read, which is not when the caller holds it mutably — the
+    /// reason to pass the account at all. Within the crate, for the tests
+    /// that hold the heap; everything else calls `with_heap`.
+    pub(crate) fn namespace(heap: SharedHeap, account: ExternalBytes) -> Self {
+        debug_assert!(
+            heap.try_borrow()
+                .ok()
+                .is_none_or(|heap| account.is_of(&heap)),
+            "a namespace's external-bytes account is another heap's"
+        );
+        let env = Environment {
             heap,
             bindings: RefCell::new(Bindings::default()),
             env_id: fresh_env_id(),
@@ -557,12 +752,18 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
-            rare: OnceCell::new(),
+            rare: OnceCell::from(Box::new(RareTables {
+                namespace: Some(NamespaceCharge::new(account)),
+                ..RareTables::default()
+            })),
             parent: None,
-        }
+        };
+        env.recharge();
+        env
     }
 
-    /// Create a new environment with a parent (shares the parent's heap)
+    /// Create a new environment with a parent (shares the parent's heap): a
+    /// frame, which never charges for its tables (`NamespaceCharge`).
     pub fn with_parent(parent: Rc<Environment>) -> Self {
         Environment {
             heap: parent.heap.clone(),
@@ -672,18 +873,27 @@ impl Environment {
 
     fn set_owner(&self, slot: u32, owner: Owner) {
         let rare = self.rare.get_or_init(Default::default);
+        let mut grew = false;
         {
             let mut owners = rare.owners.borrow_mut();
             if !owners.iter().any(|known| Rc::ptr_eq(known, &owner.0)) {
+                grew = owners.len() == owners.capacity();
                 owners.push(Rc::clone(&owner.0));
             }
         }
-        let mut links = rare.links.borrow_mut();
-        let slot = slot as usize;
-        if links.len() <= slot {
-            links.resize(slot + 1, None);
+        {
+            let mut links = rare.links.borrow_mut();
+            let slot = slot as usize;
+            if links.len() <= slot {
+                let capacity = links.capacity();
+                links.resize(slot + 1, None);
+                grew |= links.capacity() != capacity;
+            }
+            links[slot] = Some(owner);
         }
-        links[slot] = Some(owner);
+        if grew {
+            self.recharge();
+        }
     }
 
     /// The slot is this environment's own from now on.
@@ -693,6 +903,135 @@ impl Environment {
         {
             *link = None;
         }
+    }
+
+    /// Whether this environment is a namespace, which charges for its tables
+    /// ([`NamespaceCharge`]): one made without a parent. Asked before a table
+    /// that frames fill too is measured, so that a frame skips the measuring
+    /// for the price of a field read: the parent is in the struct, where the
+    /// charge is behind the `rare` box.
+    #[inline(always)]
+    fn is_namespace(&self) -> bool {
+        self.parent.is_none()
+    }
+
+    /// After a table reallocated: a namespace charges the heap for what its
+    /// tables hold now ([`NamespaceCharge`]). Anything else — a frame —
+    /// has nothing to charge, and finds that out in a load.
+    #[inline]
+    fn recharge(&self) {
+        if let Some(charge) = self.rare.get().and_then(|rare| rare.namespace.as_ref()) {
+            self.settle_charge(charge);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn settle_charge(&self, charge: &NamespaceCharge) {
+        charge.settle(self.table_bytes(charge));
+    }
+
+    /// What this namespace's tables hold outside the heap's arenas, as
+    /// [`NamespaceCharge`] counts it.
+    ///
+    /// Every field of this struct and of [`RareTables`] is named, so a new
+    /// one does not compile here until it says whether it is counted.
+    fn table_bytes(&self, charge: &NamespaceCharge) -> usize {
+        let Environment {
+            // A handle to the heap, which charges its own arenas.
+            heap: _,
+            bindings,
+            // A number.
+            env_id: _,
+            scoped_bindings,
+            alias_bindings,
+            // Flags.
+            has_aliases: _,
+            has_visible_scoped: _,
+            rare,
+            // An environment of its own, which charges for itself if it is a
+            // namespace.
+            parent: _,
+        } = self;
+        // The environment itself, in its `Rc`'s allocation.
+        let mut bytes = RC_COUNTS + size_of::<Environment>();
+        {
+            let bindings = bindings.borrow();
+            let Bindings { slots, index } = &*bindings;
+            if slots.spilled() {
+                bytes += slots.capacity() * size_of::<(Rc<str>, TaggedValue)>();
+            }
+            bytes += charge.name_bytes(slots);
+            if let Some(index) = index {
+                // Its keys are the slots' names, counted above.
+                bytes += size_of::<FxHashMap<Rc<str>, u32>>()
+                    + hash_table_bytes::<Rc<str>, u32>(index.capacity());
+            }
+        }
+        bytes +=
+            hash_table_bytes::<Rc<str>, ScopedBindingList>(scoped_bindings.borrow().capacity());
+        bytes += hash_table_bytes::<Rc<str>, AliasTarget>(alias_bindings.borrow().capacity());
+        if let Some(rare) = rare.get() {
+            let RareTables {
+                introduced_global_names,
+                links,
+                import_aliases,
+                owners,
+                // A heap value, in the arenas.
+                specifier: _,
+                // This account.
+                namespace: _,
+            } = &**rare;
+            bytes += size_of::<RareTables>()
+                + hash_table_bytes::<Rc<str>, FxHashMap<ScopeSet, Rc<str>>>(
+                    introduced_global_names.borrow().capacity(),
+                )
+                + links.borrow().capacity() * size_of::<Option<Owner>>()
+                + hash_table_bytes::<(u64, u32), ImportAliases>(import_aliases.borrow().capacity())
+                + owners.borrow().capacity() * size_of::<Rc<Environment>>();
+        }
+        bytes
+    }
+
+    /// The bytes this namespace has charged the heap's external bytes for
+    /// its tables, or `None` for an environment that is not a namespace
+    /// (`NamespaceCharge`).
+    pub fn charged_bytes(&self) -> Option<usize> {
+        self.rare
+            .get()
+            .and_then(|rare| rare.namespace.as_ref())
+            .map(|charge| charge.charged.get())
+    }
+
+    /// This environment's mutable specifier: the same heap object each time
+    /// it is asked for, allocated the first time. `interaction-environment`
+    /// answers it, so that two calls answer one object as they do under
+    /// chibi, Gauche and Chez, and a program that calls it in a loop
+    /// allocates nothing; `load` evaluates in it.
+    ///
+    /// Held in this environment and traced with its bindings, so it is as
+    /// safe as they are: whatever environment it is asked of, a root reaches
+    /// it while the program can use it. That is not always the program's
+    /// global environment. The VM answers `interaction-environment` with the
+    /// environment its globals are swapped to, which while a library's body
+    /// runs is the library's (`VmState::with_globals`): a call there gets a
+    /// mutable specifier over the library's environment, cached on it and
+    /// rooted with it by the registry, where the tree-walker answers its
+    /// global environment wherever it is asked. That divergence is older
+    /// than this cache — before it, the VM answered a fresh specifier over
+    /// the library's environment — and the cache changes only how long the
+    /// answer lives.
+    pub fn mutable_specifier(self: &Rc<Self>) -> TaggedValue {
+        let rare = self.rare.get_or_init(Default::default);
+        if let Some(specifier) = rare.specifier.get() {
+            return specifier;
+        }
+        let specifier = self
+            .heap
+            .borrow_mut()
+            .alloc_environment_specifier(Rc::clone(self), true);
+        rare.specifier.set(Some(specifier));
+        specifier
     }
 
     /// Get the shared heap
@@ -785,7 +1124,15 @@ impl Environment {
         // A plain binding is reachable by name and by nothing else, so
         // `byname=true` here is a property of the table, not a decision.
         crate::scope_trace::bind(&name, &ScopeSet::new(), true);
-        self.bindings.borrow_mut().insert(name, value)
+        let Inserted {
+            slot,
+            was_forwarded,
+            grew,
+        } = self.bindings.borrow_mut().insert(name, value);
+        if grew {
+            self.recharge();
+        }
+        (slot, was_forwarded)
     }
 
     fn forward(&self, name: Rc<str>, owner: Owner) {
@@ -862,12 +1209,19 @@ impl Environment {
             }
         };
         self.forward(Rc::clone(&alias), owner);
-        let mut table = rare.import_aliases.borrow_mut();
-        let aliases = table.entry(key).or_default();
-        match aliases.iter_mut().find(|(spelling, _)| &**spelling == name) {
-            // Replacing one that was defined over.
-            Some((_, stale)) => *stale = Rc::clone(&alias),
-            None => aliases.push((Rc::from(name), Rc::clone(&alias))),
+        let grew = {
+            let mut table = rare.import_aliases.borrow_mut();
+            let capacity = table.capacity();
+            let aliases = table.entry(key).or_default();
+            match aliases.iter_mut().find(|(spelling, _)| &**spelling == name) {
+                // Replacing one that was defined over.
+                Some((_, stale)) => *stale = Rc::clone(&alias),
+                None => aliases.push((Rc::from(name), Rc::clone(&alias))),
+            }
+            table.capacity() != capacity
+        };
+        if grew {
+            self.recharge();
         }
         Some(alias)
     }
@@ -1175,13 +1529,19 @@ impl Environment {
     /// overwrite, which happens when one expansion is compiled twice.
     ///
     pub fn define_introduced_global(&self, name: Rc<str>, scopes: ScopeSet, renamed_to: Rc<str>) {
-        self.rare
-            .get_or_init(Default::default)
-            .introduced_global_names
-            .borrow_mut()
-            .entry(name)
-            .or_default()
-            .insert(scopes, renamed_to);
+        let grew = {
+            let mut table = self
+                .rare
+                .get_or_init(Default::default)
+                .introduced_global_names
+                .borrow_mut();
+            let capacity = table.capacity();
+            table.entry(name).or_default().insert(scopes, renamed_to);
+            table.capacity() != capacity
+        };
+        if grew {
+            self.recharge();
+        }
     }
 
     /// Call `f` with every macro-introduced top-level definition of `name`:
@@ -1318,9 +1678,15 @@ impl Environment {
         // `AliasTarget`.
         let env = (target_env.env_id() != self.env_id()).then_some(target_env);
         self.has_aliases.set(true);
-        self.alias_bindings
-            .borrow_mut()
-            .insert(alias, AliasTarget { env, name, scopes });
+        let grew = {
+            let mut aliases = self.alias_bindings.borrow_mut();
+            let capacity = self.is_namespace().then(|| aliases.capacity());
+            aliases.insert(alias, AliasTarget { env, name, scopes });
+            capacity.is_some_and(|capacity| aliases.capacity() != capacity)
+        };
+        if grew {
+            self.recharge();
+        }
     }
 
     /// Define a binding with a scope set (for scope-based hygiene)
@@ -1374,18 +1740,28 @@ impl Environment {
         if visible_by_name {
             self.has_visible_scoped.set(true);
         }
-        let mut table = self.scoped_bindings.borrow_mut();
-        let bindings = table.entry(name).or_default();
-        match bindings.iter_mut().find(|b| b.scopes == scopes) {
-            Some(existing) => {
-                existing.tagged_value = value;
-                existing.visible_by_name = visible_by_name;
+        let grew = {
+            let mut table = self.scoped_bindings.borrow_mut();
+            // Measured only for a namespace, which charges for the table: the
+            // tree-walker binds each call's parameters here, in a frame, and
+            // a frame's first scoped binding always allocates the table.
+            let capacity = self.is_namespace().then(|| table.capacity());
+            let bindings = table.entry(name).or_default();
+            match bindings.iter_mut().find(|b| b.scopes == scopes) {
+                Some(existing) => {
+                    existing.tagged_value = value;
+                    existing.visible_by_name = visible_by_name;
+                }
+                None => bindings.push(ScopedBinding {
+                    scopes,
+                    tagged_value: value,
+                    visible_by_name,
+                }),
             }
-            None => bindings.push(ScopedBinding {
-                scopes,
-                tagged_value: value,
-                visible_by_name,
-            }),
+            capacity.is_some_and(|capacity| table.capacity() != capacity)
+        };
+        if grew {
+            self.recharge();
         }
     }
 
@@ -2286,12 +2662,20 @@ impl Environment {
                 // Environment ids, slot numbers and names.
                 import_aliases: _,
                 owners,
+                specifier,
+                // A count of bytes and a handle to the heap's account.
+                namespace: _,
             } = &**rare;
             // An imported binding's value is in its owner's slot. A loaded
             // library is rooted by the registry as well, but an environment
             // need not be a registered library's to be imported from.
             for owner in owners.borrow().iter() {
                 f(GcEdge::Env(owner));
+            }
+            // Handed out again by `mutable_specifier`, so it lives as long
+            // as this environment is traced.
+            if let Some(specifier) = specifier.get() {
+                f(GcEdge::Value(specifier));
             }
         }
         parent.as_ref()
@@ -3457,6 +3841,130 @@ mod import_alias_tests {
     }
 }
 
+/// A namespace's charge on the heap's external bytes (#615): made, grown,
+/// given back; and a frame's, which is nothing.
+#[cfg(test)]
+mod namespace_charge_tests {
+    use super::*;
+    use crate::heap::new_shared_heap;
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    fn external(heap: &SharedHeap) -> usize {
+        heap.borrow().external_bytes()
+    }
+
+    #[test]
+    fn a_namespace_charges_its_tables_as_they_grow_and_gives_them_back() {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(heap.clone()));
+        let made = external(&heap);
+        assert!(made >= size_of::<Environment>() + size_of::<RareTables>());
+        assert_eq!(env.charged_bytes(), Some(made));
+
+        for i in 0..1000 {
+            env.define(format!("name-{i}"), n(i));
+        }
+        let grown = external(&heap);
+        // A slot and a name apiece at the least; the index is on top.
+        let least = 1000 * (size_of::<(Rc<str>, TaggedValue)>() + RC_COUNTS + "name-0".len());
+        assert!(grown >= made + least, "{made} then {grown}");
+        assert_eq!(env.charged_bytes(), Some(grown));
+
+        // Redefining a name writes its slot in place: no table grows.
+        for i in 0..1000 {
+            env.define(format!("name-{i}"), n(-i));
+        }
+        assert_eq!(external(&heap), grown);
+
+        drop(env);
+        assert_eq!(external(&heap), 0);
+    }
+
+    /// An `environment` is built by import: what it holds is its slots,
+    /// their names, the index, and the links to the owners of what it
+    /// imported — each charged to the importer, none to the library.
+    #[test]
+    fn an_imported_binding_charges_the_importer() {
+        let heap = new_shared_heap();
+        let library = Rc::new(Environment::with_heap(heap.clone()));
+        for i in 0..300 {
+            library.define(format!("export-{i}"), n(i));
+        }
+        let library_charge = library.charged_bytes().unwrap();
+        let importer = Rc::new(Environment::with_heap(heap.clone()));
+        let before = importer.charged_bytes().unwrap();
+        for i in 0..300 {
+            let name = format!("export-{i}");
+            assert!(importer.share_binding(name.as_str(), &library, &name));
+        }
+        let after = importer.charged_bytes().unwrap();
+        let least = 300 * (size_of::<(Rc<str>, TaggedValue)>() + size_of::<Option<Owner>>());
+        assert!(after >= before + least, "{before} then {after}");
+        assert_eq!(library.charged_bytes(), Some(library_charge));
+        assert_eq!(external(&heap), library_charge + after);
+
+        drop(importer);
+        assert_eq!(external(&heap), library_charge);
+    }
+
+    /// The tree-walker builds a frame per call and per `let`-bound
+    /// temporary; none of them is a namespace, whatever is bound in it.
+    /// Read while each frame is alive, with every table it has grown: a
+    /// frame that charged and gave the charge back when it dropped would
+    /// leave the account where it started all the same.
+    #[test]
+    fn a_frame_charges_nothing() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(heap.clone()));
+        let start = external(&heap);
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(3));
+        for depth in 0..100 {
+            let frame = Rc::new(Environment::with_parent(Rc::clone(&global)));
+            for i in 0..depth {
+                frame.define(format!("v{i}"), n(i));
+                frame.define_with_scopes(format!("s{i}"), scopes.clone(), n(i));
+            }
+            frame.define_alias("alias", Rc::clone(&global), Rc::from("x"));
+            assert_eq!(frame.charged_bytes(), None);
+            assert!(!frame.is_namespace());
+            assert_eq!(external(&heap), start, "a frame of {depth}");
+        }
+    }
+
+    /// However many specifiers name a namespace, it is charged once; and its
+    /// mutable specifier is one object.
+    #[test]
+    fn a_namespace_is_charged_once_however_many_specifiers_name_it() {
+        let heap = new_shared_heap();
+        let env = Rc::new(Environment::with_heap(heap.clone()));
+        let made = external(&heap);
+        let first = env.mutable_specifier();
+        for _ in 0..10 {
+            assert_eq!(env.mutable_specifier(), first);
+            heap.borrow_mut()
+                .alloc_environment_specifier(Rc::clone(&env), false);
+        }
+        assert_eq!(external(&heap), made);
+    }
+
+    /// A namespace handed another heap's account would charge its tables
+    /// to that heap's trigger; a debug build refuses it when it can read the
+    /// heap it is made on.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "account is another heap's")]
+    fn a_namespace_refuses_another_heaps_account() {
+        let heap = new_shared_heap();
+        let other = new_shared_heap();
+        let account = other.borrow().external_bytes_handle();
+        let _ = Environment::namespace(heap, account);
+    }
+}
+
 #[cfg(test)]
 mod layout_tests {
     /// Not a style rule: this struct's size is a measured cost. The
@@ -3500,6 +4008,7 @@ mod gc_edge_tests {
         let scoped = s.vector(&mut h, "Environment.scoped_bindings");
         let aliased = s.string(&mut h, "Environment.alias_bindings");
         let imported = s.object(&mut h, "Environment.rare: RareTables.owners");
+        let specifier = s.object(&mut h, "Environment.rare: RareTables.specifier");
         let inherited = s.pair(&mut h, "Environment.parent");
         drop(h);
 
@@ -3550,6 +4059,8 @@ mod gc_edge_tests {
                 links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
                 import_aliases: RefCell::default(),
                 owners: RefCell::new(vec![Rc::clone(&library)]),
+                specifier: Cell::new(Some(specifier)),
+                namespace: None,
             })),
             parent: Some(parent),
         };
@@ -3561,6 +4072,8 @@ mod gc_edge_tests {
         assert_eq!(env.get("alias"), Some(aliased));
         assert_eq!(env.get("exported"), Some(imported));
         assert_eq!(env.get("inherited"), Some(inherited));
+        let env = Rc::new(env);
+        assert_eq!(env.mutable_specifier(), specifier);
 
         let mut h = heap.borrow_mut();
         collect_only(&mut h, |visitor| visitor.visit_env(&env));

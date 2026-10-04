@@ -51,6 +51,17 @@ pub(crate) fn env_holding(heap: &SharedHeap, value: TaggedValue) -> Rc<Environme
     env
 }
 
+/// [`env_holding`] for a test that holds the heap, `held`, borrowed: the
+/// namespace takes its account from it rather than borrowing `shared` again.
+fn env_holding_on(shared: &SharedHeap, held: &Heap, value: TaggedValue) -> Rc<Environment> {
+    let env = Rc::new(Environment::namespace(
+        shared.clone(),
+        held.external_bytes_handle(),
+    ));
+    env.define("held", value);
+    env
+}
+
 /// `CompiledMacro`, every edge: a literal through each walk of
 /// `Pattern::for_each_literal` and `Template::for_each_literal` (a list's and
 /// a vector's elements, a dotted list's elements and its tail, an ellipsis's
@@ -584,7 +595,7 @@ fn cps_lambda_body_and_environment() {
             variadic: None,
             cont_param: Rc::from("k"),
             body: literal(body),
-            env: env_holding(shared, env),
+            env: env_holding_on(shared, heap, env),
             binding_scopes: Rc::new(ScopeSet::new()),
         }))]
     });
@@ -643,7 +654,7 @@ fn environment_specifier_environment() {
     objects_keep_their_sentinels(|shared, heap, s| {
         let held = s.pair(heap, "HeapObjectData::EnvironmentSpecifier.env");
         vec![HeapObjectData::EnvironmentSpecifier {
-            env: env_holding(shared, held),
+            env: env_holding_on(shared, heap, held),
             mutable: false,
         }]
     });
@@ -666,7 +677,7 @@ fn vm_closure_free_variables_and_globals() {
         vec![HeapObjectData::VmClosure {
             code_id: 0,
             free_vars: vec![free_var],
-            globals: env_holding(shared, global),
+            globals: env_holding_on(shared, heap, global),
         }]
     });
 }

@@ -679,8 +679,7 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         }
         args[1]
     } else {
-        let env = ctx.interaction_environment();
-        heap.borrow_mut().alloc_environment_specifier(env, true)
+        ctx.interaction_environment().mutable_specifier()
     };
 
     // Read the file
@@ -766,7 +765,12 @@ fn load_next(
 
 /// (interaction-environment) → environment-specifier
 ///
-/// Returns a mutable environment specifier for the interaction (global) environment.
+/// Returns a mutable environment specifier for the interaction (global)
+/// environment: the same object every call, as chibi, Gauche and Chez answer
+/// (`Environment::mutable_specifier`), so a loop of these allocates nothing.
+/// The environment is the backend's `interaction_environment`, which on the
+/// VM, inside a library's body, is the library's (`mutable_specifier`'s doc
+/// says what that means for the cache).
 fn primitive_interaction_environment(
     ctx: &dyn ApplyContext,
     args: Vec<TaggedValue>,
@@ -778,9 +782,7 @@ fn primitive_interaction_environment(
         });
     }
 
-    let env = ctx.interaction_environment();
-    let heap = ctx.heap();
-    Ok(heap.borrow_mut().alloc_environment_specifier(env, true))
+    Ok(ctx.interaction_environment().mutable_specifier())
 }
 
 /// Register eval primitives
