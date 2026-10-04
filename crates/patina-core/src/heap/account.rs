@@ -58,10 +58,12 @@
 //! closes the dead ones, since a port's file closes as its payload drops in
 //! the sweep. A [`FilePortCharge`] that the port's data holds gives both back
 //! when the port closes, explicitly or by dropping, with no heap borrow. A
-//! loop that closes what it opens never reaches the threshold; one that
-//! drops its ports collects every `threshold` opens rather than running out
-//! of descriptors, and an open that runs out anyway collects at its call and
-//! tries once more (`patina_primitives::Step::Collect`).
+//! loop that closes what it opens never reaches the descriptor threshold,
+//! though its charges still count toward the byte trigger like the
+//! allocations they stand for; one that drops its ports collects every
+//! `threshold` opens rather than running out of descriptors, and an open
+//! that runs out anyway collects at its call and tries once more
+//! (`patina_primitives::Step::Collect`).
 //!
 //! **A tree-walker closure** (#637) is charged its `Rc<Procedure>`
 //! allocation, its parameter vector and the scope sets its parameters own,
