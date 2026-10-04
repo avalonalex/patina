@@ -12,7 +12,9 @@
 //!
 //! These run the binary in a subprocess whose `RLIMIT_NOFILE` the shell sets
 //! (`ulimit -n`), in the default GC mode and under `PATINA_GC=0`, on both
-//! backends.
+//! backends. Unix only: the limit is `/bin/sh`'s to set, and only there is
+//! running out of descriptors told apart from another failed open
+//! (`patina_core::port::out_of_descriptors`).
 //!
 //! # The oracle
 //!
@@ -39,6 +41,8 @@
 //! GC-time flushing is observable, so these stay outside the byte-identical
 //! differential lane, `scripts/run_gc_differential.sh`, which compares the
 //! chibi suite's output alone.
+
+#![cfg(unix)]
 
 mod common;
 

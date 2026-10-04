@@ -735,7 +735,9 @@ fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
 /// Gauche 0.9.15 does not retry, and fails the first open or `load` that
 /// finds the table full, as before #607 both backends did. The table here
 /// is [`ScarceFs`]'s, so the test sets no limit on the process its
-/// neighbours share.
+/// neighbours share. Unix only, as the retry is: elsewhere
+/// `out_of_descriptors` tells no failed open apart, so none collects.
+#[cfg(unix)]
 #[test]
 fn test_reentering_around_an_open_that_collected_and_retried() {
     let dir = TempDir::new().expect("temp dir");
@@ -847,10 +849,12 @@ fn test_reentering_around_an_open_that_collected_and_retried() {
 /// collection, as a real one does. A file read whole, by `load` or the
 /// library loader, takes one only while it is read, and fails as an open
 /// does while the table is full.
+#[cfg(unix)]
 struct ScarceFs {
     open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[cfg(unix)]
 impl ScarceFs {
     const CAP: usize = 8;
 
@@ -880,23 +884,27 @@ impl ScarceFs {
 }
 
 /// A [`ScarceFs`] handle, which gives its descriptor back when it drops.
+#[cfg(unix)]
 struct Counted<T> {
     inner: T,
     open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
+#[cfg(unix)]
 impl<T> Drop for Counted<T> {
     fn drop(&mut self) {
         self.open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
+#[cfg(unix)]
 impl<T: std::io::Read> std::io::Read for Counted<T> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.inner.read(buf)
     }
 }
 
+#[cfg(unix)]
 impl<T: std::io::BufRead> std::io::BufRead for Counted<T> {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         self.inner.fill_buf()
@@ -907,6 +915,7 @@ impl<T: std::io::BufRead> std::io::BufRead for Counted<T> {
     }
 }
 
+#[cfg(unix)]
 impl<T: std::io::Write> std::io::Write for Counted<T> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.inner.write(buf)
@@ -917,12 +926,14 @@ impl<T: std::io::Write> std::io::Write for Counted<T> {
     }
 }
 
+#[cfg(unix)]
 impl patina_core::vfs::WritePort for Counted<Box<dyn patina_core::vfs::WritePort>> {
     fn finalize(&mut self) -> std::io::Result<()> {
         self.inner.finalize()
     }
 }
 
+#[cfg(unix)]
 impl patina_core::FileSystem for ScarceFs {
     fn open_read(
         &self,
