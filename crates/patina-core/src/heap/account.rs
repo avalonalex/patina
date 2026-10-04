@@ -73,7 +73,7 @@
 //! the `Rc` already; and sweep credits the dead closures' in one sum, what
 //! the account holds for the closures in the arena less what marking found
 //! live, with no work per slot. A check build measures each dead closure as
-//! well and asserts that the two agree.
+//! the object arena's sweep drops it, and asserts that the two agree.
 //!
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection

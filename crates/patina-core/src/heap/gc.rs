@@ -1599,9 +1599,16 @@ impl Heap {
         // Before the arenas are swept: `sweep_arena` sets the free slots'
         // bits, which are not live.
         let live = marks.live_bytes();
-        // Before the arenas are swept too: a check build reads the dead
-        // closures' payloads out of their slots.
+        // What the account holds for the tree-walker closures, which a check
+        // build compares with the live ones' and the dead ones' once the
+        // object arena's sweep has measured those.
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        let charged_closures = self.account.closures;
         let freed_closure_payloads = self.settle_closure_payloads(marks);
+        // A check build measures each dead tree-walker closure as the object
+        // arena's sweep drops it.
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        let mut measured_dead_closures = 0usize;
         // Provenance is not a root. Prune it before slots can be reused,
         // inspecting only annotated syntax rather than every freed datum.
         self.syntax_sources
@@ -1671,6 +1678,10 @@ impl Heap {
                 |dead, old| {
                     record_freed_bits(&mut freed, &mut overflow, dead);
                     freed_payload += old.payload_bytes();
+                    #[cfg(any(debug_assertions, feature = "gc-check"))]
+                    if let HeapObjectData::Procedure(procedure) = old {
+                        measured_dead_closures += account::procedure_payload(procedure);
+                    }
                     if let (Some(ids), HeapObjectData::VmClosure { code_id, .. }) =
                         (freed_closures.as_mut(), old)
                     {
@@ -1682,6 +1693,12 @@ impl Heap {
         self.gc_freed_bits = freed;
         self.gc_freed_overflow = overflow;
         self.gc_freed_closure_code_ids = freed_closures;
+        #[cfg(any(debug_assertions, feature = "gc-check"))]
+        assert_eq!(
+            charged_closures,
+            marks.live_closures + measured_dead_closures,
+            "the tree-walker closures charged are not the live ones and the dead ones"
+        );
         let freed_bytes = swept.pairs * PAIR_SLOT_BYTES
             + swept.vectors * VECTOR_SLOT_BYTES
             + swept.strings * STRING_SLOT_BYTES
@@ -1710,29 +1727,13 @@ impl Heap {
     /// one sum with no work per slot. Every closure in the arena was charged
     /// by `alloc_procedure`, and marking counted the live ones', so the dead
     /// ones' are the account's sum less those; the live ones' are the sum
-    /// from here on. A check build measures each dead closure as well and
-    /// asserts that the two agree, so it must run before the arenas are
-    /// swept, while the dead closures are still in their slots and the mark
-    /// bits still say which they are.
+    /// from here on. A check build also measures each dead closure in the
+    /// object arena's sweep, and asserts in `sweep` that the charge is the
+    /// live ones' and those together, so that a closure which bypassed the
+    /// charge fails the first collection after it; the measuring rides the
+    /// sweep's own walk, and a build without the check compiles none of it.
     fn settle_closure_payloads(&mut self, marks: &MarkBits) -> usize {
         let live = marks.live_closures;
-        if super::GC_CHECK {
-            let dead: usize = self
-                .objects
-                .iter()
-                .enumerate()
-                .filter(|&(index, _)| !marks.objects.get(index))
-                .map(|(_, data)| match data {
-                    HeapObjectData::Procedure(procedure) => account::procedure_payload(procedure),
-                    _ => 0,
-                })
-                .sum();
-            assert_eq!(
-                self.account.closures,
-                live + dead,
-                "the tree-walker closures charged are not the live ones and the dead ones"
-            );
-        }
         let dead = self.account.closures.saturating_sub(live);
         self.account.closures = live;
         dead
