@@ -577,13 +577,30 @@ impl Drop for NamespaceCharge {
 }
 
 /// The two counts at the head of an `Rc`'s allocation.
-const RC_COUNTS: usize = 2 * size_of::<usize>();
+pub(crate) const RC_COUNTS: usize = 2 * size_of::<usize>();
+
+/// What a tree-walker closure is charged for the frame it captures (#637;
+/// `heap/account.rs`, `cps_lambda_payload`): a frame binding one parameter
+/// under its scopes, as the tree-walker binds a call's — the frame in its
+/// `Rc`'s allocation, and the smallest scoped table, which `hashbrown` makes
+/// four buckets wide, a capacity of three. 612 bytes on a 64-bit target, the
+/// one-parameter frame #637 measured, which
+/// `captured_frame_bytes_is_a_one_parameter_frame` builds to check that the
+/// two agree.
+///
+/// A heuristic: the frame a closure captures may bind more, or bind by name
+/// alone; closures made in one frame are each charged for it; and a closure
+/// made where no frame is — at top level, in a library body, or by `eval` in
+/// a namespace — captures a namespace, whose tables [`NamespaceCharge`]
+/// charges already, and is charged one it does not capture.
+pub(crate) const CAPTURED_FRAME_BYTES: usize =
+    RC_COUNTS + size_of::<Environment>() + hash_table_bytes::<Rc<str>, ScopedBindingList>(3);
 
 /// The bytes of a hash table — `std`'s and `FxHashMap` are `hashbrown`'s —
 /// whose `capacity` reports `capacity`: its buckets, each an entry and a
 /// control byte, and a group of trailing control bytes. Zero for a table that
 /// never allocated.
-fn hash_table_bytes<K, V>(capacity: usize) -> usize {
+const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
     if capacity == 0 {
         return 0;
     }
@@ -3933,6 +3950,38 @@ mod namespace_charge_tests {
             assert!(!frame.is_namespace());
             assert_eq!(external(&heap), start, "a frame of {depth}");
         }
+    }
+
+    /// The estimate a tree-walker closure is charged for its frame (#637) is
+    /// the frame it describes: one the tree-walker builds for a call of one
+    /// parameter, bound under its scopes, measured as a namespace's tables
+    /// are. Its slot vector is inline and it has no index, aliases or rare
+    /// tables, so the frame and its scoped table are all it holds.
+    #[test]
+    fn captured_frame_bytes_is_a_one_parameter_frame() {
+        let heap = new_shared_heap();
+        let global = Rc::new(Environment::with_heap(heap.clone()));
+        let frame = Environment::with_parent(global);
+        let mut scopes = ScopeSet::new();
+        scopes.add_scope(crate::scope::ScopeId(3));
+        frame.define_with_scopes("x", scopes, n(1));
+
+        let bindings = frame.bindings.borrow();
+        assert!(!bindings.slots.spilled());
+        assert!(bindings.index.is_none());
+        assert_eq!(frame.alias_bindings.borrow().capacity(), 0);
+        assert!(frame.rare.get().is_none());
+        let measured = RC_COUNTS
+            + size_of::<Environment>()
+            + hash_table_bytes::<Rc<str>, ScopedBindingList>(
+                frame.scoped_bindings.borrow().capacity(),
+            );
+        assert_eq!(measured, CAPTURED_FRAME_BYTES);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            CAPTURED_FRAME_BYTES, 612,
+            "the frame changed size: update the number CAPTURED_FRAME_BYTES's comment gives"
+        );
     }
 
     /// However many specifiers name a namespace, it is charged once; and its

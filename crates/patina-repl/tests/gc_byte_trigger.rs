@@ -6,9 +6,11 @@
 //! frames deep at 3.2 GB with one. It now fires after `max(8 MiB, 2·L)` bytes,
 //! each object charged its slot and its payload, a VM capture its snapshot,
 //! and L, the bytes the last collection found live, counts the snapshots it
-//! kept. These run the shapes of #606 through the CLI with no GC variable
-//! set, on the backends they concern, and read what the heap reports in
-//! `gc-stats`.
+//! kept. A tree-walker closure is charged its own allocation and an estimate
+//! of the frame it captures (#637), so that a loop of closures collects as
+//! often as the memory they keep alive calls for. These run the shapes of
+//! #606 and #637 through the CLI with no GC variable set, on the backends
+//! they concern, and read what the heap reports in `gc-stats`.
 
 mod common;
 
@@ -145,4 +147,25 @@ fn kept_vm_captures_raise_the_interval() {
     // before it.
     assert!(r.live > r.allocated / 2, "{r:?}");
     assert!(r.collections * 2 < r.allocated / FLOOR, "{r:?}");
+}
+
+/// #637: every tree-walker closure keeps the frame it captures alive until a
+/// sweep drops it, and is charged for it — an estimate of 612 bytes on a
+/// 64-bit target, `CAPTURED_FRAME_BYTES` in `patina-core` — so a loop of
+/// garbage closures collects about every 8 MiB of what they hold. Charged
+/// their 72-byte slot alone, 100,000 of them allocated about 7 MB and did
+/// not collect. The bound below is 500 bytes a closure, under the estimate.
+/// The tree-walker only: a VM closure is a `VmClosure`, charged its free
+/// variables, and keeps no frame alive.
+#[test]
+fn garbage_tree_walker_closures_collect_by_what_they_capture() {
+    const CLOSURES: u64 = 100_000;
+    let workload = "(define (make-adder n) (lambda (x) (+ x n)))
+(let loop ((i 0) (sum 0))
+  (if (< i 100000) (loop (+ i 1) (+ sum ((make-adder i) 1))) sum))";
+    let r = run(&["--tree-walker"], workload);
+    assert!(r.allocated > CLOSURES * 500, "{r:?}");
+    assert!(r.collections >= CLOSURES * 500 / FLOOR, "{r:?}");
+    assert!(r.reclaimed > r.allocated * 9 / 10, "{r:?}");
+    assert!(r.committed < 4 * FLOOR, "{r:?}");
 }

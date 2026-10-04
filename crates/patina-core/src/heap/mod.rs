@@ -1053,8 +1053,13 @@ impl Heap {
         })
     }
 
-    /// Allocate a native procedure
+    /// Allocate a procedure: a primitive, or a tree-walker closure, which is
+    /// charged its own allocation and an estimate of the frame it captures
+    /// here rather than in `alloc_object`'s payload match (#637,
+    /// `heap/account.rs`). The only way a procedure enters the heap, so that
+    /// every closure marking counts was charged.
     pub fn alloc_procedure(&mut self, proc: Rc<crate::procedure::Procedure>) -> TaggedValue {
+        self.charge_procedure_payload(&proc);
         self.alloc_object(HeapObjectData::Procedure(proc))
     }
 

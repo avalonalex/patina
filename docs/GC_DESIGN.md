@@ -542,7 +542,23 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   **live bytes** after a collection, is the marked slots, their payloads and
   the external bytes held then. Payloads cannot grow after allocation:
   vectors, strings and bytevectors hand out slices, never their `Vec`.
-  Shared `Rc` payloads (procedures, macros, libraries, environments, ports,
+  **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
+  parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
+  captures — a frame binding one parameter, 612 bytes — because on that
+  backend every `let` makes a closure that keeps its frame alive until a
+  sweep, and charged its slot alone, closure-heavy programs peaked at
+  64–126 MB. Its payload has a path of its own, so that
+  `payload_bytes`, which every object allocation runs, the VM's included,
+  stays a leaf: `alloc_procedure` charges it, marking counts it in the
+  closure's trace arm, and sweep credits the dead closures' as one sum, what
+  the account holds for the closures in the arena less what marking found
+  live; a check build measures each dead closure too and asserts the two
+  agree. Closures made in one frame are each charged for it; a closure made
+  where no frame is — at top level, in a library body, or by `eval` in a
+  namespace — captures a namespace, whose tables are external bytes already
+  (below), and is charged a frame it does not capture; and frame chains are
+  missed: exact accounting is stage 4f's. Other shared `Rc`
+  payloads (procedures' bodies and environments, macros, libraries, ports,
   tree-walker continuations) are not charged; GC_PRD §15 charges what they
   hold as **external bytes**, through `Heap::charge_external_bytes`, which
   counts toward the trigger and into L. A holder gives them back through an
@@ -577,18 +593,24 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   environment (§3.3), so a loop of it allocates nothing. Measured
   2026-10-03, release, macOS arm64.
 
-  Nothing else charges yet. A program whose memory sits mostly behind those
-  `Rc`s — closure-heavy tree-walker code (a procedure's environment, which
-  is a frame), string-port churn — is charged only slots, and the 8 MiB
-  floor is more slots than the 65,536 objects that bounded it before #606
-  (524,288 pairs, or 116,508 of the 72-byte object slots that procedures
-  and ports take), so it keeps more garbage between collections than it
-  did. Measured against the commit before #606 (release, interleaved
-  runs, 2026-10-03): on the tree-walker, `scripts/benchmarks.py`'s
-  `deriv` workload repeated peaks at 81 MB against 28, its `call/cc`,
-  `ctak` and `dynamic-wind` loops at 96–109 MB against 60–74, 2,000,000
-  garbage closures at 122 MB against 75, and 1,000,000 string ports at
-  72 MB against 44 (35 against 25 on the VM).
+  The rest of what sits behind those `Rc`s is still charged only as
+  slots: a string port's buffer, the frames above the one a tree-walker
+  closure is charged for, and frames that only a continuation holds. The
+  8 MiB floor is more slots than the 65,536 objects that bounded it before
+  #606 (524,288 pairs, or 116,508 of the 72-byte object slots that
+  procedures and ports take), so a program whose memory sits there keeps
+  more garbage between collections than it did: on the VM, 1,000,000
+  string ports peak at 35 MB against 25 before #635 (release, interleaved
+  runs, 2026-10-03). On the tree-walker, where #635 alone left
+  closure-heavy programs at 64–126 MB, the closures' charge brings every
+  row #637 measured below its number before #635 (release, macOS arm64,
+  interleaved runs, 2026-10-03): `scripts/benchmarks.py`'s `deriv`
+  workload repeated peaks at 25 MB against 28 (80 under #635), its `nboyer`
+  and `sboyer` at 28 MB against 34 and 42, its `call/cc`, `ctak` and
+  `dynamic-wind` loops at 22–27 MB against 60–74, 2,000,000 garbage
+  closures at 22 MB against 75, and 1,000,000 string ports at 26 MB
+  against 44 — collected by the closures each iteration makes, not by
+  their buffers. #637 has the table.
   It was an allocation count until #606: a 100,000-element vector cost the
   trigger what a pair costs, so 500 of them peaked at 414 MB with no
   collection, and 20,000 VM captures 1,000 frames deep at 3.2 GB. Both now
@@ -642,6 +664,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   the arenas hold now, live or not) and `external-bytes` (what holders
   outside the arenas have charged and not given back: the live
   namespaces' tables, #615). GC_PRD's footprint is the last two together.
+  For a tree-walker closure, the first four count the estimate of the frame
+  it captures (#637, above) as part of its payload: an estimate, not a
+  measurement, counted once per closure, so a frame several closures share
+  is counted for each, and a closure that captures a namespace adds a frame
+  the footprint does not hold.
 
 ### 6.1 Trigger cost — measured, redesigned (stage 4a), re-measured
 
