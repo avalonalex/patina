@@ -26,10 +26,12 @@
 //! | 5,000 `open-input-file`s dropped, at 128 | `(ok 5000)` | `(failed-at 124 #t)` | `(failed-at 125 #t)` |
 //! | 5,000 `open-output-file`s dropped, at 128 | `(ok 5000)` | `(failed-at 124 #f)` | `(failed-at 125 #t)` |
 //! | a dropped output port's file, read before and after a collection | `("" "hello")` | `("" "hello")` | `("" "hello")` |
+//! | `load` once the ports that filled the table are dropped, at 64 | loads it | file error | file error |
 //!
-//! chibi collects and retries when an open fails with `EMFILE`; Gauche
-//! collects when its table of buffered ports fills, and does not retry.
-//! Patina follows chibi, and both backends now answer `ok` on every row.
+//! chibi collects and retries when an open fails with `EMFILE`, `load`'s
+//! included; Gauche collects when its table of buffered ports fills, and
+//! does not retry. Patina follows chibi, and both backends now answer `ok`
+//! on every row, and load the file.
 //! The last row was already right: the collection that finds a file port
 //! dead writes out its buffer as it closes it, which every collection, the
 //! one `(gc)` asks for and one the allocations trigger, does.
@@ -277,6 +279,45 @@ fn a_dropped_output_port_is_written_out_by_the_collection_that_finds_it() {
                 run(backend, 1024, &[], &program, &[]),
                 "(\"\" \"hello\")",
                 "{backend:?} {how}"
+            );
+        }
+    }
+}
+
+/// `load` reads its file as an open does: a read that runs out of
+/// descriptors collects at the call and reads once more. The table is
+/// filled with ports held live, so that the open that finds it full raises,
+/// and then dropped: `load` finds it full of ports nothing reaches, which
+/// the collection closes. The file it loads is in `lib/`, where [`run`]
+/// writes the files it is given. chibi 0.12, whose `load` opens its file
+/// through `open-input-file`'s retry, loads it, and so do both backends
+/// since #607; Gauche 0.9.15 raises the file error, as both did before
+/// (measured 2026-10-04).
+#[test]
+fn load_collects_and_reads_again_when_descriptors_ran_out() {
+    const PROGRAM: &str = "(import (scheme base) (scheme file) (scheme load) (scheme write))
+(define held '())
+(define (exhaust!)
+  (let loop ()
+    (let ((p (guard (e ((file-error? e) #f)) (open-input-file \"data.txt\"))))
+      (when p (set! held (cons p held)) (loop))))
+  (set! held '()))
+(exhaust!)
+(write (guard (e ((file-error? e) 'file-error)) (load \"lib/loaded.scm\") loaded-value))
+(newline)
+";
+    for backend in BOTH_BACKENDS {
+        for (mode, envs) in MODES {
+            assert_eq!(
+                run(
+                    backend,
+                    64,
+                    envs,
+                    PROGRAM,
+                    &[("loaded.scm", "(define loaded-value 42)\n")]
+                ),
+                "42",
+                "{backend:?} {mode}"
             );
         }
     }

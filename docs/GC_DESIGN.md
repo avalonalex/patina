@@ -634,11 +634,15 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `with-*-file` are Scheme over the first two — is resumable, answers
   `Step::Collect` on `EMFILE` or `ENFILE` with the file name as its state,
   and opens once more when resumed (`patina_primitives` `io/file.rs`), as
-  chibi does. The collection runs in every mode, `PATINA_GC=0` included.
-  Where collection is deferred (§7) it is posted instead and the second
-  attempt fails as the first did: there the first `EMFILE` raises, a
-  documented limit that GC_PRD stage 2 narrows. The loader's own reads of
-  library and `load`/`include` files do not retry.
+  chibi does. `load` reads its file the same way, keeping its environment
+  beside the name, as chibi's does, whose read is `open-input-file`'s. The
+  collection runs in every mode, `PATINA_GC=0` included. Where collection
+  is deferred (§7) it is posted instead and the second attempt fails as the
+  first did: there the first `EMFILE` raises, a documented limit that
+  GC_PRD stage 2 narrows. The loader's own reads of library and `include`
+  files do not retry, nor does `directory-files`'s read of a directory:
+  chibi's `opendir` does not retry either, and its `directory-files`
+  answers `'()` where Patina's raises the file error.
 
   The rest of what sits behind those `Rc`s is still charged only as
   slots: a string port's buffer, the frames above the one a tree-walker
@@ -834,7 +838,7 @@ placement + deferral:
 **Collections at a call (#639).** A collection at a call is the second way
 in. A primitive that needs a collection at its own call — `(gc)`, and an
 open that ran out of descriptors and collects before it tries again
-(#607) — answers `patina_primitives::Step::Collect { kind, state }`, and the
+(#607), `load`'s read of its file among them — answers `patina_primitives::Step::Collect { kind, state }`, and the
 machine suspends the call and collects before the caller's next
 instruction:
 

@@ -725,20 +725,36 @@ fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
 /// `call-with-input-file` calls after its retried open resumes the primitive
 /// again, which closes the port again. Captured before the open, in a
 /// `dynamic-wind` body whose before thunk fills the table on every entry,
-/// and with the open in tail position.
+/// and with the open in tail position. `load`'s read collects and retries
+/// too: captured before it, and in a form of the file it loaded after the
+/// collection, re-entered once the load has returned, which finishes that
+/// form and evaluates none after it.
 ///
 /// chibi 0.12 answers the same, run under `ulimit -n 64` with the standard
-/// `call-with-input-file` (measured 2026-10-04); Gauche 0.9.15 does not
-/// retry, and fails the first open that finds the table full, as before
-/// #607 both backends did. The table here is [`ScarceFs`]'s, so the test
-/// sets no limit on the process its neighbours share.
+/// `call-with-input-file` (measured 2026-10-04, `load` the same day);
+/// Gauche 0.9.15 does not retry, and fails the first open or `load` that
+/// finds the table full, as before #607 both backends did. The table here
+/// is [`ScarceFs`]'s, so the test sets no limit on the process its
+/// neighbours share.
 #[test]
 fn test_reentering_around_an_open_that_collected_and_retried() {
     let dir = TempDir::new().expect("temp dir");
     let data = scratch_path(&dir, "data.txt");
     std::fs::write(&data, "hello").expect("data file");
+    let loaded = scratch_path(&dir, "loaded.scm");
+    std::fs::write(
+        &loaded,
+        format!(
+            "(define loaded-k #f)\n\
+             (define loaded-n 0)\n\
+             (define loaded-char\n\
+               (call/cc (lambda (c) (set! loaded-k c) (read-char (open-input-file \"{data}\")))))\n\
+             (set! loaded-n (+ loaded-n 1))\n"
+        ),
+    )
+    .expect("loaded file");
     let program = format!(
-        r#"(import (scheme base) (scheme file) (patina debug)
+        r#"(import (scheme base) (scheme file) (scheme load) (patina debug)
                    (rename (only (patina internal io) call-with-input-file)
                            (call-with-input-file prim-call-with-input-file)))
            (define held '())
@@ -784,12 +800,25 @@ fn test_reentering_around_an_open_that_collected_and_retried() {
                  (set! n (+ n 1))
                  (set! seen (cons c seen))
                  (if (< n 3) (k #f) seen))))
+           (define (loading)
+             (let ((n 0) (seen '()))
+               (let ((c (begin (call/cc (lambda (c) (set! k c)))
+                               (exhaust!)
+                               (load "{loaded}")
+                               loaded-char)))
+                 (set! n (+ n 1))
+                 (set! seen (cons c seen))
+                 (cond ((< n 3) (k #f))
+                       ((< n 5) (loaded-k #\i))
+                       (else (list seen loaded-n))))))
            (define (collections) (cdr (assq 'collections (gc-stats))))
            (define c0 (collections))
-           (list (before) (wound) (tail) (internal) (> (collections) c0))"#
+           (list (before) (wound) (tail) (internal) (loading) (> (collections) c0))"#
     );
-    const EXPECTED: &str =
-        r"((#\h #\h #\h) (#\h (in out in out in out)) (#\h #\h #\h) (#\h #\h #\h) #t)";
+    const EXPECTED: &str = concat!(
+        r"((#\h #\h #\h) (#\h (in out in out in out)) (#\h #\h #\h) (#\h #\h #\h) ",
+        r"((#\i #\i #\h #\h #\h) 1) #t)"
+    );
 
     fn run<B: patina_runtime::Backend>(
         interpreter: &patina_interpreter::Interpreter<B>,
@@ -815,8 +844,9 @@ fn test_reentering_around_an_open_that_collected_and_retried() {
 /// one beyond `RLIMIT_NOFILE` does. A handle is alive until its reader or
 /// writer drops, which for a port is when it is closed or a collection
 /// drops it, so a port nothing reaches holds its descriptor until a
-/// collection, as a real one does. Library files are read whole and are not
-/// counted.
+/// collection, as a real one does. A file read whole, by `load` or the
+/// library loader, takes one only while it is read, and fails as an open
+/// does while the table is full.
 struct ScarceFs {
     open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -921,6 +951,7 @@ impl patina_core::FileSystem for ScarceFs {
     }
 
     fn read_to_string(&self, path: &std::path::Path) -> std::io::Result<String> {
+        let _descriptor = self.take(Ok(()))?;
         patina_core::NativeFs.read_to_string(path)
     }
 
