@@ -462,32 +462,39 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
 
 // ─── Public helpers ──────────────────────────────────────────────────────────
 
-/// Assert that `code`, run as a program on both backends with every safe
-/// point's collection turned off, produces `expected`.
+/// `interp` with every safe point's collection turned off.
 ///
 /// The switch is on the interpreter's heap (`Heap::set_skip_safe_points`, a
 /// `test-support` hook), so the only collections are the ones a primitive
 /// runs at its call: what shows that `(gc)` collects there (#639), since the
 /// safe point before every instruction would otherwise collect what it posts
 /// before anything after the call could look.
+fn without_safe_points<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
+    interp
+        .backend()
+        .global_env()
+        .heap()
+        .borrow_mut()
+        .set_skip_safe_points(true);
+    interp
+}
+
+/// Assert that `code`, run as a program on both backends with every safe
+/// point's collection turned off ([`without_safe_points`]), produces
+/// `expected`.
 pub fn assert_program_eval_to_without_safe_points(code: &str, expected: &str) {
-    fn skipping<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
-        interp
-            .backend()
-            .global_env()
-            .heap()
-            .borrow_mut()
-            .set_skip_safe_points(true);
-        interp
-    }
     let runs = [
         (
             "tree-walker",
-            run_on(skipping(tree_walker_interpreter()), code, Mode::Program),
+            run_on(
+                without_safe_points(tree_walker_interpreter()),
+                code,
+                Mode::Program,
+            ),
         ),
         (
             "vm",
-            run_on(skipping(vm_interpreter()), code, Mode::Program),
+            run_on(without_safe_points(vm_interpreter()), code, Mode::Program),
         ),
     ];
     for (backend, outcome) in runs {
@@ -503,6 +510,20 @@ pub fn assert_program_eval_to_without_safe_points(code: &str, expected: &str) {
                 e.message
             ),
         }
+    }
+}
+
+/// [`eval_program_vm`] with every safe point's collection turned off
+/// ([`without_safe_points`]): the VM half of
+/// [`assert_program_eval_to_without_safe_points`], for a test of the VM's own
+/// machinery around a collection at a call.
+pub fn eval_program_vm_without_safe_points(code: &str) -> String {
+    match run_on(without_safe_points(vm_interpreter()), code, Mode::Program) {
+        Ok(v) => v,
+        Err(e) => panic!(
+            "Failed to evaluate program with safe points skipped: {}\n{code}",
+            e.message
+        ),
     }
 }
 

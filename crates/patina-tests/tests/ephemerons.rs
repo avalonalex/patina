@@ -15,9 +15,12 @@
 //!
 //! They rely on `(gc)` collecting at its call, before the caller's next
 //! instruction (#639). The tests at the end pin that: a key that dies just
-//! before `(gc)` breaks its pair right after it, wherever the call is, with
-//! every safe point's collection turned off as well, and where collection is
-//! deferred `(gc)` posts the collection and counts it instead.
+//! before `(gc)` breaks its pair right after it, wherever the call is —
+//! including `gc` itself handed to a control primitive as its thunk, and
+//! code that `eval`, `load`, a parameter's converter or a re-entered
+//! continuation runs — with every safe point's collection turned off as well;
+//! where collection is deferred `(gc)` posts the collection and counts it
+//! instead; and the VM clears the caller's destination before it collects.
 
 mod common;
 use common::*;
@@ -455,4 +458,230 @@ fn gc_in_a_library_body_posts_and_counts() {
          observed",
         "(0 1)",
     );
+}
+
+/// The VM clears the register `(gc)`'s value goes to before it collects
+/// (`deliver_before_collecting`). A liveness map keeps a call's destination
+/// as a root from the call on, so what the register held before the call
+/// would otherwise survive the collection: here the key, which `(take!)`
+/// returned into the register the allocator gives `(gc)`'s value as well
+/// (`patina --dump` shows both calls writing `r4`), and which nothing reads
+/// in between. Collecting first and clearing after answers `#f`, and no
+/// check build notices, since keeping a value longer frees nothing early.
+///
+/// The VM only, because the tree-walker keeps the key for another reason:
+/// the CPS transform binds a sequence's discarded value to the parameter of
+/// the continuation for the rest of the body, which holds it until the
+/// procedure returns. The program shape answers `#f` there with or without
+/// #639.
+#[test]
+fn gc_on_the_vm_clears_its_destination_before_it_collects() {
+    let program = "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define box (list #f))
+         (define e (let ((k (list 'key))) (set-car! box k) (make-ephemeron k 'datum)))
+         (define (id x) x)
+         (define (take!) (let ((k (car box))) (set-car! box #f) k))
+         (define (run) (id (id (take!))) (id (gc)) (ephemeron-broken? e))
+         (run)";
+    assert_eq!(eval_program_vm(program), "#t");
+    assert_eq!(eval_program_vm_without_safe_points(program), "#t");
+}
+
+// ─── `gc` as a control primitive's thunk ─────────────────────────────────────
+//
+// `gc` is the first resumable primitive that takes no arguments, so it is the
+// first a control primitive can be handed as a thunk. Its collecting stub
+// then goes over a stub frame of the control primitive's own — on the VM the
+// value forms' stubs and the frames of a jump's, an abort's and a composable
+// re-entry's travel; on the tree-walker under the continuation the control
+// primitive built — where no resumable primitive's frame went before #639.
+
+/// Both `dynamic-wind` thunks are `gc`. The first key dies before the call
+/// and the before thunk breaks it; the second dies in the body and the after
+/// thunk breaks it, run by the extent's normal exit, by the travel of a
+/// jump out of the body, or by an abort's. In head position, as a value, and
+/// through `apply`.
+#[test]
+fn gc_as_both_dynamic_wind_thunks_breaks_a_dead_key() {
+    let program = |call: &str| {
+        format!(
+            "(import (scheme base) (scheme ephemeron) (patina debug))
+             (define (as-value procedure) procedure)
+             (define k1 (list 'k1))
+             (define k2 (list 'k2))
+             (define e1 (make-ephemeron k1 'd1))
+             (define e2 (make-ephemeron k2 'd2))
+             (define seen '())
+             (define (note!) (set! seen (cons (list (ephemeron-broken? e1)
+                                                    (ephemeron-broken? e2))
+                                              seen)))
+             (define t (make-continuation-prompt-tag 'p))
+             (set! k1 #f)
+             {call}
+             (note!)
+             (reverse seen)"
+        )
+    };
+    let returns = "(lambda () (note!) (set! k2 #f))";
+    let jumps = "(lambda () (note!) (set! k2 #f) (k 'out))";
+    let aborts = "(lambda () (note!) (set! k2 #f) (abort-current-continuation t 'out))";
+    let mut calls = vec![format!("(apply dynamic-wind (list gc {returns} gc))")];
+    for wind in ["dynamic-wind", "(as-value dynamic-wind)"] {
+        calls.push(format!("({wind} gc {returns} gc)"));
+        calls.push(format!("(call/cc (lambda (k) ({wind} gc {jumps} gc)))"));
+        calls.push(format!(
+            "(call-with-continuation-prompt (lambda () ({wind} gc {aborts} gc))
+                                            t
+                                            (lambda (v k) v))"
+        ));
+    }
+    for call in calls {
+        assert_at_the_call(&program(&call), "((#t #f) (#t #t))");
+    }
+}
+
+/// `gc` as `with-exception-handler`'s thunk, `call-with-continuation-
+/// prompt`'s body and `call-with-values`' producer, each in head position
+/// and reached as a value.
+#[test]
+fn gc_as_a_control_primitives_thunk_breaks_a_dead_key() {
+    for (operator, call) in [
+        ("with-exception-handler", "(lambda (c) c) gc"),
+        (
+            "call-with-continuation-prompt",
+            "gc (make-continuation-prompt-tag 'p) (lambda (v k) v)",
+        ),
+    ] {
+        for operator in [operator.to_string(), format!("(as-value {operator})")] {
+            assert_after_one_key(
+                &format!(
+                    "(define (as-value procedure) procedure)
+                     (define (run) (set! key #f) ({operator} {call}) (ephemeron-broken? e))
+                     (run)"
+                ),
+                "#t",
+            );
+        }
+    }
+    for operator in ["call-with-values", "(as-value call-with-values)"] {
+        assert_after_one_key(
+            &format!(
+                "(define (as-value procedure) procedure)
+                 (define (run)
+                   (set! key #f)
+                   ({operator} gc (lambda ignored (ephemeron-broken? e))))
+                 (run)"
+            ),
+            "#t",
+        );
+    }
+}
+
+/// `gc` as the before thunk that resuming an abort's composable continuation
+/// runs again on its way back into the extent: the key dies between the
+/// abort and the resume, and the body, going on from the abort, sees it
+/// broken.
+#[test]
+fn gc_as_the_before_thunk_of_a_resumed_extent_breaks_a_dead_key() {
+    for wind in ["dynamic-wind", "(as-value dynamic-wind)"] {
+        assert_after_one_key(
+            &format!(
+                "(define (as-value procedure) procedure)
+                 (define t (make-continuation-prompt-tag 'p))
+                 (define resume #f)
+                 (define seen '())
+                 (call-with-continuation-prompt
+                   (lambda ()
+                     ({wind} gc
+                             (lambda ()
+                               (abort-current-continuation t 'captured)
+                               (set! seen (cons (ephemeron-broken? e) seen)))
+                             (lambda () #f)))
+                   t
+                   (lambda (v k) (set! resume k)))
+                 (set! key #f)
+                 (resume 'again)
+                 seen"
+            ),
+            "(#t)",
+        );
+    }
+}
+
+/// A continuation captured just before `(gc)` and re-entered twice: each
+/// pass drops one more key, and its `(gc)` breaks that pair and no other.
+#[test]
+fn gc_in_a_reentered_continuation_breaks_each_newly_dead_key() {
+    assert_at_the_call(
+        "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define keys (list (list 'a) (list 'b) (list 'c)))
+         (define es (map (lambda (k) (make-ephemeron k 'd)) keys))
+         (define again #f)
+         (define seen '())
+         (define (run)
+           (let ((i (call/cc (lambda (k) (set! again k) 0))))
+             (set! keys (cdr keys))
+             (gc)
+             (set! seen (cons (map ephemeron-broken? es) seen))
+             (when (< i 2) (again (+ i 1)))))
+         (run)
+         (reverse seen)",
+        "((#t #f #f) (#t #t #f) (#t #t #t))",
+    );
+}
+
+/// `(gc)` in code that `eval` and `load` run, which each machine runs in its
+/// own loop rather than a nested one (#477), collects at its call there too.
+#[test]
+fn gc_in_evaluated_and_loaded_code_breaks_a_dead_key() {
+    assert_after_one_key(
+        "(import (scheme eval))
+         (define (run)
+           (set! key #f)
+           (eval '(gc) (environment '(patina debug)))
+           (ephemeron-broken? e))
+         (run)",
+        "#t",
+    );
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = scratch_path(&dir, "collect.scm");
+    std::fs::write(
+        &path,
+        "(set! key #f) (gc) (set! inside (ephemeron-broken? e))",
+    )
+    .expect("write the file to load");
+    assert_after_one_key(
+        &format!(
+            "(import (scheme load))
+             (define inside #f)
+             (load \"{path}\")
+             inside"
+        ),
+        "#t",
+    );
+}
+
+/// `(gc)` in a parameter's converter, which `make-parameter` and
+/// `parameterize` call from a resumable primitive's stub (#478): one
+/// suspended call under another.
+#[test]
+fn gc_in_a_parameter_converter_breaks_a_dead_key() {
+    let convert = "(define (convert x)
+                     (if (eq? x 'collect)
+                         (begin (set! key #f) (gc) (ephemeron-broken? e))
+                         x))";
+    for program in [
+        format!(
+            "{convert}
+             (define p (make-parameter 0 convert))
+             (parameterize ((p 'collect)) (p))"
+        ),
+        format!(
+            "{convert}
+             (define p (make-parameter 'collect convert))
+             (p)"
+        ),
+    ] {
+        assert_after_one_key(&program, "#t");
+    }
 }
