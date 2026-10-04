@@ -348,7 +348,12 @@ fn written_register(instruction: &Instruction) -> Option<u16> {
         | Define { .. }
         | InvokeContinuation { .. }
         | Nop => None,
-        ResumeWindJump | ResumeComposableInvoke | ResumeRaise | ResumeForce | ResumePrimitive => {
+        ResumeWindJump
+        | ResumeComposableInvoke
+        | ResumeRaise
+        | ResumeForce
+        | ResumePrimitive
+        | CollectAtCall { .. } => {
             unreachable!("runtime stubs use conservative register roots")
         }
     }

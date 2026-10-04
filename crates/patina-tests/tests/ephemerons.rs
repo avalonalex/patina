@@ -12,6 +12,12 @@
 //! suite is the only one, it is a lane rather than a cargo test, and it forces
 //! collection by allocating 100 million pairs. These tests force collection
 //! directly, including the register-lifetime regression from #423.
+//!
+//! They rely on `(gc)` collecting at its call, before the caller's next
+//! instruction (#639). The tests at the end pin that: a key that dies just
+//! before `(gc)` breaks its pair right after it, wherever the call is, with
+//! every safe point's collection turned off as well, and where collection is
+//! deferred `(gc)` posts the collection and counts it instead.
 
 mod common;
 use common::*;
@@ -253,4 +259,200 @@ fn the_accessors_reject_a_non_ephemeron() {
     ] {
         assert_program_eval_error(&format!("(import (scheme base) (scheme ephemeron)) {expr}"));
     }
+}
+
+// ─── `(gc)` collects at its call (#639) ──────────────────────────────────────
+//
+// Each test drops the only other path to a key just before `(gc)` and asks
+// whether the pair broke right after it, in the same frame. A `(gc)` that
+// only posted a request would leave that to the next safe point, which today
+// comes before the next instruction anyway; GC_PRD's stage 3 removes that
+// poll. So each position runs twice, the second time with every safe point's
+// collection turned off, where only a collection at the call can break it.
+
+/// The globals every position test starts from: one key, and its pair.
+const ONE_KEY: &str = "(import (scheme base) (scheme ephemeron) (patina debug))
+     (define key (list 'key))
+     (define e (make-ephemeron key 'datum))";
+
+/// `program` answers `expected` on both backends, with safe points and
+/// without.
+fn assert_at_the_call(program: &str, expected: &str) {
+    assert_program_eval_to(program, expected);
+    assert_program_eval_to_without_safe_points(program, expected);
+}
+
+fn assert_after_one_key(body: &str, expected: &str) {
+    assert_at_the_call(&format!("{ONE_KEY}\n{body}"), expected);
+}
+
+#[test]
+fn gc_in_head_position_breaks_a_dead_key() {
+    assert_after_one_key(
+        "(define (run) (set! key #f) (gc) (ephemeron-broken? e))
+         (run)",
+        "#t",
+    );
+}
+
+/// In tail position the call is the frame's last act: compiled as a call of
+/// the primitive whose value the frame returns, and, through a procedure
+/// value, a tail call the frame is replaced by.
+#[test]
+fn gc_in_tail_position_breaks_a_dead_key() {
+    assert_after_one_key(
+        "(define (collect-last) (set! key #f) (gc))
+         (define (run) (collect-last) (ephemeron-broken? e))
+         (run)",
+        "#t",
+    );
+    assert_after_one_key(
+        "(define (collect-last-with collect) (set! key #f) (collect))
+         (define (run) (collect-last-with gc) (ephemeron-broken? e))
+         (run)",
+        "#t",
+    );
+}
+
+/// As an argument, `(gc)`'s value goes to a register the caller reads next.
+#[test]
+fn gc_as_an_argument_breaks_a_dead_key() {
+    assert_after_one_key(
+        "(define (observe ignored) (ephemeron-broken? e))
+         (define (run) (set! key #f) (observe (gc)))
+         (run)",
+        "#t",
+    );
+    assert_after_one_key(
+        "(define (run) (set! key #f) (apply (lambda (ignored) (ephemeron-broken? e)) (list (gc))))
+         (run)",
+        "#t",
+    );
+}
+
+/// In the before thunk, in tail position, and in the after thunk, in head
+/// position, each breaking the pair whose key died just before it and no
+/// other: the second key lives until the body drops it.
+#[test]
+fn gc_in_both_dynamic_wind_thunks_breaks_a_dead_key() {
+    let program = |wind: &str| {
+        format!(
+            "(import (scheme base) (scheme ephemeron) (patina debug))
+             (define k1 (list 'k1))
+             (define k2 (list 'k2))
+             (define e1 (make-ephemeron k1 'd1))
+             (define e2 (make-ephemeron k2 'd2))
+             (define seen '())
+             (define (note!) (set! seen (cons (list (ephemeron-broken? e1)
+                                                    (ephemeron-broken? e2))
+                                              seen)))
+             (define (before) (set! k1 #f) (gc))
+             (define (body) (note!) (set! k2 #f))
+             (define (after) (gc) (note!))
+             {wind}
+             (reverse seen)"
+        )
+    };
+    // Thunks written in place, and passed as values.
+    for wind in [
+        "(dynamic-wind (lambda () (set! k1 #f) (gc))
+                       (lambda () (note!) (set! k2 #f))
+                       (lambda () (gc) (note!)))",
+        "(dynamic-wind before body after)",
+    ] {
+        assert_at_the_call(&program(wind), "((#t #f) (#t #t))");
+    }
+}
+
+/// In a `guard` clause, which runs in the `guard`'s continuation once the
+/// raise has unwound, and in a handler a continuable raise returns from.
+#[test]
+fn gc_in_an_exception_handler_breaks_a_dead_key() {
+    assert_after_one_key(
+        "(define (run)
+           (guard (c (#t (set! key #f) (gc) (ephemeron-broken? e)))
+             (raise 'oops)))
+         (run)",
+        "#t",
+    );
+    assert_after_one_key(
+        "(define (run)
+           (with-exception-handler
+             (lambda (c) (set! key #f) (gc) (ephemeron-broken? e))
+             (lambda () (raise-continuable 'oops))))
+         (run)",
+        "#t",
+    );
+}
+
+/// The collection happens at the call, not at a later safe point: with every
+/// safe point's collection turned off, the collection count has risen when
+/// the next primitive in the same frame reads it, and the pair has broken.
+/// Before #639 `(gc)` posted a request that only a safe point ran, which here
+/// would have answered `(0 #f)`.
+#[test]
+fn collects_at_its_call_with_safe_points_skipped() {
+    assert_program_eval_to_without_safe_points(
+        "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define (collections) (cdr (assq 'collections (gc-stats))))
+         (define key (list 'key))
+         (define e (make-ephemeron key 'datum))
+         (define (run)
+           (let ((before (collections)))
+             (set! key #f)
+             (gc)
+             (list (- (collections) before) (ephemeron-broken? e))))
+         (run)",
+        "(1 #t)",
+    );
+}
+
+/// Where collection is deferred, `(gc)` posts the collection and counts it
+/// in `deferred-collections`, as every `(gc)` posted before #639: inside a
+/// comparator that `(patina internal lists)`'s `member` calls from Rust, on a
+/// nested loop, the pair stays whole; the outermost loop's next safe point
+/// runs the collection, and then it is broken.
+#[test]
+fn gc_where_collection_is_deferred_posts_and_counts() {
+    // Not with safe points skipped: a safe point is what runs what it posts.
+    assert_program_eval_to(
+        &format!(
+            "{ONE_KEY}
+         (import (only (patina internal lists) member))
+         (define (stat name) (cdr (assq name (gc-stats))))
+         (define inside #f)
+         (member 1 (list 1)
+                 (lambda (x y)
+                   (let ((c (stat 'collections)) (d (stat 'deferred-collections)))
+                     (set! key #f)
+                     (gc)
+                     (set! inside (list (- (stat 'collections) c)
+                                        (- (stat 'deferred-collections) d)
+                                        (ephemeron-broken? e))))
+                   (= x y)))
+         (list inside (ephemeron-broken? e))"
+        ),
+        "((0 1 #f) #t)",
+    );
+}
+
+/// The same in a library body being loaded, which defers collection for as
+/// long as its unevaluated forms are held (`ParsedLibrary`).
+#[test]
+fn gc_in_a_library_body_posts_and_counts() {
+    assert_program_eval_to(
+        "(define-library (gc in a body)
+           (import (scheme base) (patina debug))
+           (export observed)
+           (begin
+             (define (stat name) (cdr (assq name (gc-stats))))
+             (define c (stat 'collections))
+             (define d (stat 'deferred-collections))
+             (gc)
+             (define observed (list (- (stat 'collections) c)
+                                    (- (stat 'deferred-collections) d)))))
+         (import (scheme base) (gc in a body))
+         observed",
+        "(0 1)",
+    );
 }

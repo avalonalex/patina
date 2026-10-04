@@ -524,8 +524,9 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
   in the heap), and `GcController::collect` re-installs it after each
   collection — the only point the adaptive term changes. `request_gc` raises
-  the same flag, which is how `(gc)` is honored in every mode; sweep lowers
-  it.
+  the same flag for a collection posted from elsewhere, honored in every
+  mode; sweep lowers it. `(gc)` does not wait for it: it collects at its call
+  (below, and §7).
 - **The byte account (#606, `heap/account.rs`; GC_PRD §15).** An object
   costs its slot in its arena plus its *payload*, the memory it owns outright
   outside the slot: a vector's elements, a string's characters (4 bytes
@@ -651,9 +652,15 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   asks each process for a record of how many collections it ran, which the
   stress lanes read to fail a run that did not collect (§11 item 9).
 - Manual entry points for testing and users: `(gc)` and `(gc-stats)`
-  primitives, honored in **every** mode. `(gc)` records a request; the next
-  safe point services it. This is what makes collection testable without
-  process-global environment variables. `(gc-stats)` reports the arenas'
+  primitives, honored in **every** mode. `(gc)` collects **at its call**
+  (#639): it is a resumable primitive that answers
+  `Step::Collect(Major)`, and the machine runs a full collection before the
+  caller's next instruction, with the caller suspended at the call's return
+  pc (§7, "Collections at a call"). Where collection is deferred — a nested
+  loop, a library body being loaded — it posts the collection for the next
+  safe point that may collect, as every `(gc)` did before #639, and counts
+  it in `(gc-stats)`'s `deferred-collections`. This is what makes collection
+  testable without process-global environment variables. `(gc-stats)` reports the arenas'
   slot counts and five byte keys: `live-bytes` (L, 0 before the first
   collection), `bytes-allocated` (every byte charged, external bytes
   included), `bytes-reclaimed` (every byte a collection freed, so it grows
@@ -761,6 +768,40 @@ placement + deferral:
    `library_registry` is already mutably borrowed: rooting must walk it, and
    a partial root set is a use-after-free. Parsing needs no guard — safe
    points exist only inside the trampoline, so GC cannot fire mid-parse.
+
+**Collections at a call (#639).** A safe point is the second way in. A
+primitive that needs a collection at its own call — `(gc)`, and next an open
+that ran out of descriptors and collects before it tries again (#607) —
+answers `patina_primitives::Step::Collect { kind, state }`, and the machine
+suspends the call and collects before the caller's next instruction:
+
+- **VM:** the primitive's step pushes `resume_stub`'s collecting variant,
+  `CollectAtCall` / `ResumePrimitive` / `Return`, over the caller, which
+  waits at the call's return pc. The frame holds the primitive's state, so a
+  primitive that retries keeps its arguments rooted. `CollectAtCall` first
+  clears the register the call's value goes to — a liveness map keeps a
+  call's destination as a root from the call on, so until something is
+  delivered there its old value would survive the collection — then
+  retires registers and collects, and leaves whether it collected for
+  `ResumePrimitive`, which resumes the primitive and delivers its value.
+- **Tree-walker:** the step becomes `StepResult::CollectAtCall` under the
+  primitive's `ResumePrimitive` continuation, and the trampoline runs it at
+  the top of its loop with that step and the run's entry expression as roots
+  (`StepRoots`), then invokes the continuation with whether it collected.
+
+Both go through `GcController::collect_at_call`, a poll site like a safe
+point: it asserts that no `AssertNoGc` scope is open, and collects only with
+the defer depth at 1 — the running loop's guard alone, which is what
+`is_outermost` answers at a safe point, asked of the heap because this poll
+runs inside an instruction or a step. It collects in every mode, `PATINA_GC=0`
+included. Anywhere else it posts the collection (`Heap::defer_collection`),
+which the next safe point that may collect runs, and counts it in
+`deferred-collections`; so does a collection whose roots are unavailable
+(a library load holding the registry). `ephemerons.rs` breaks a dead key right
+after `(gc)` in head and tail position, as an argument, in both
+`dynamic-wind` thunks and in a `guard` clause, on both backends, and again
+with every safe point's collection turned off (`Heap::set_skip_safe_points`,
+a `test-support` switch), where only a collection at the call can.
 
 **Known limitation (accepted for v1):** a long-running nested execution — e.g.
 `(map f huge-list)` where each `f` call is a nested trampoline, or a library

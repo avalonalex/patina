@@ -27,6 +27,9 @@ serde_json = "1"
 # The wrong-map switch the DEAD_SLOT controls drive (tests/retired_registers.rs,
 # #625). A dev-dependency, so the feature is never in a build that ships.
 patina-vm = { path = "../patina-vm", features = ["test-support"] }
+# The switch that turns every safe point's collection off, which shows that
+# `(gc)` collects at its call (tests/ephemerons.rs, #639). The same.
+patina-core = { path = "../patina-core", features = ["test-support"] }
 
 [features]
 # Run the check-build controls (tests/stale_references.rs, gc_protocol.rs and

@@ -9,11 +9,11 @@ pub(super) mod gc_roots;
 use super::control::{
     Reentry, abort_to_prompt, across_reentry, call_any, call_closure_from_regs, call_value,
     call_value_with_probe, capture_delimited, captured_handlers, classify_error,
-    exec_call_primitive, exec_call_primitive_direct, find_prompt, finish_delimited_invoke,
-    invoke_step, is_catchable, park_escape, park_transfer, pop_resolved_extents, push_invoke_step,
-    raise_step, self_tail_call, spread_apply_args, step_wind_jump, tail_call_closure_resolved,
-    tail_call_value, tail_call_value_with_probe, tail_invoke_delimited, unpack_values,
-    vm_raise_value, wind_step,
+    deliver_before_collecting, exec_call_primitive, exec_call_primitive_direct, find_prompt,
+    finish_delimited_invoke, invoke_step, is_catchable, park_escape, park_transfer,
+    pop_resolved_extents, push_invoke_step, raise_step, resume_step, self_tail_call,
+    spread_apply_args, step_wind_jump, tail_call_closure_resolved, tail_call_value,
+    tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::VmError;
 use crate::types::CodeObjectId;
@@ -26,7 +26,9 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes};
+use patina_core::{
+    AssertNoGc, CollectKind, GC_CHECK, GcController, GcDeferGuard, GcMode, NoGcScopes,
+};
 use patina_primitives::PrimitiveRegistry;
 use patina_runtime::HasDiagnostic;
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
@@ -153,8 +155,9 @@ pub struct VmState {
     pub(super) force_code: Option<CodeObjectId>,
     /// Ids of the three-instruction stubs a resumable primitive's call runs
     /// in (`resume_stub`), one per argument count up to
-    /// `resume_step::INLINE_ARGS` and one that spreads a list for more. Each
-    /// built on the first such call.
+    /// `resume_step::INLINE_ARGS` and one that spreads a list for more, and
+    /// of the one its collection runs in (`collect_stub`, #639). Each built
+    /// on the first such call.
     pub(super) resume_codes: [Option<CodeObjectId>; super::control::resume_step::VARIANTS],
     /// `%parameter-set!`'s registry index, which a call `(p v)` of a
     /// parameter object runs (#478); looked up once, here, not per call.
@@ -1431,6 +1434,41 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     )
 }
 
+/// A collection a resumable primitive asked for at its call (`Step::Collect`,
+/// #639), run by `CollectAtCall` in `resume_stub`'s frame with the caller
+/// suspended beneath it: the VM's root set, handed to
+/// `GcController::collect_at_call`, which collects under the running loop's
+/// own guard alone and otherwise posts the collection and counts it. Returns
+/// whether a collection ran.
+///
+/// The poll is inside an instruction, where nothing is held in Rust: the
+/// stub frame has just been entered, so every value the call needs is in its
+/// registers or the caller's, and `cur_code` (the stub's) is in the code
+/// store. Registers are retired first, as `maybe_collect` retires them, but
+/// only where the collection can run: in a nested loop the frames below are
+/// suspended in the middle of an instruction, which may read its operands
+/// again when it resumes.
+fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
+    if state.heap.borrow().gc_defer_depth() == 1 {
+        state.execution.retire_registers();
+    }
+    let collected = GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| {
+        // Libraries are a root set, as at a safe point: with a load in
+        // flight the registry cannot be read, and the collection is posted.
+        let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
+            return;
+        };
+        match &registry {
+            Some(registry) => collect(&[&*state, &**registry]),
+            None => collect(&[&*state]),
+        }
+    });
+    if collected {
+        state.after_collection();
+    }
+    collected
+}
+
 /// Attach a source location to an error if it doesn't already have one.
 /// Looks up the current frame's code object and uses the PC to find the
 /// closest source location from the compiled source map.
@@ -1857,6 +1895,14 @@ fn dispatch_one_instruction(
             // A resumable primitive's call has returned into `resume_stub`'s
             // frame; see [`Instruction::ResumePrimitive`].
             super::control::resume_primitive(state, base)?;
+        }
+
+        Instruction::CollectAtCall { kind } => {
+            // A resumable primitive asked for a collection at its call; see
+            // [`Instruction::CollectAtCall`]. Deliver first, then collect.
+            deliver_before_collecting(state, exit_depth);
+            let collected = collect_at_call(state, kind);
+            state.set_reg_at(base, resume_step::RESULT, TaggedValue::boolean(collected));
         }
 
         Instruction::ResumeForce => {

@@ -1,6 +1,7 @@
 //! Primitive procedure registry for backend-agnostic primitives
 
 use crate::apply_context::ApplyContext;
+use patina_core::CollectKind;
 use patina_runtime::environment::Environment;
 use patina_runtime::{Arity, EvalError, SharedHeap, TaggedValue};
 use std::cell::Cell;
@@ -30,6 +31,11 @@ pub type HOTaggedHandler =
 /// runs it in a stub frame, the tree-walker as a continuation — and is
 /// resumed with the result, with the state it asked to keep. Nothing of the
 /// primitive is on the Rust stack while the procedure runs.
+///
+/// A collection is the same shape ([`Step::Collect`], #639): a primitive
+/// cannot collect from Rust, where the collector sees neither its frame nor
+/// its caller's, so it asks the machine, which suspends the call where its
+/// roots see everything and collects there.
 pub enum Step {
     /// Finished, with this value.
     Done(TaggedValue),
@@ -51,6 +57,27 @@ pub enum Step {
     Eval {
         expr: TaggedValue,
         env: Rc<Environment>,
+        state: TaggedValue,
+    },
+    /// Run a collection of `kind` at this call, then resume the primitive
+    /// with `state` and whether the collection ran (`#t`, or `#f` where it
+    /// was posted instead). `(gc)` asks for one and is done when resumed;
+    /// an open that ran out of descriptors can ask for one and try again
+    /// when resumed (#607), its arguments kept in `state`.
+    ///
+    /// The machine suspends the caller at the call's return pc, clears the
+    /// register the call's value goes to (the VM's liveness maps keep a
+    /// call's destination from the call on), and collects before the
+    /// caller's next instruction: the VM in `resume_stub`'s frame, which
+    /// holds `state`; the tree-walker at the top of its trampoline, under the
+    /// primitive's `ResumePrimitive` continuation. Both go through
+    /// `GcController::collect_at_call`, which collects only where a safe
+    /// point may, in every GC mode; where collection is deferred (a nested
+    /// loop, a library body being loaded) it posts the collection for the
+    /// next safe point that may collect and counts it in `(gc-stats)`'s
+    /// `deferred-collections`.
+    Collect {
+        kind: CollectKind,
         state: TaggedValue,
     },
 }
@@ -135,6 +162,13 @@ fn run_synchronously(
                 )]
                 let result = ctx.eval_expr(expr, &env)?;
                 step = resume(ctx, state, result)?;
+            }
+            Step::Collect { kind: _, state } => {
+                // No machine, so no roots to collect with: posted for the
+                // next safe point that may collect, as where a machine's
+                // collection is deferred (`Heap::defer_collection`).
+                ctx.heap().borrow_mut().defer_collection();
+                step = resume(ctx, state, TaggedValue::FALSE)?;
             }
         }
     }

@@ -141,6 +141,22 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
             trace_cont_env(cont_env, visitor);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }
+
+        StepResult::CollectAtCall {
+            // Which collection: no value.
+            kind: _,
+            cont,
+            env,
+            cont_env,
+            prompt_stack,
+            dynamic_winds,
+            exception_handlers,
+        } => {
+            trace_cont_value(cont, visitor);
+            visitor.visit_env(env);
+            trace_cont_env(cont_env, visitor);
+            trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
+        }
     }
 }
 

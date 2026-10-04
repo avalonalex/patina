@@ -462,6 +462,50 @@ fn expect_error(which: Which, code: &str, mode: Mode) {
 
 // ─── Public helpers ──────────────────────────────────────────────────────────
 
+/// Assert that `code`, run as a program on both backends with every safe
+/// point's collection turned off, produces `expected`.
+///
+/// The switch is on the interpreter's heap (`Heap::set_skip_safe_points`, a
+/// `test-support` hook), so the only collections are the ones a primitive
+/// runs at its call: what shows that `(gc)` collects there (#639), since the
+/// safe point before every instruction would otherwise collect what it posts
+/// before anything after the call could look.
+pub fn assert_program_eval_to_without_safe_points(code: &str, expected: &str) {
+    fn skipping<B: Backend>(interp: Interpreter<B>) -> Interpreter<B> {
+        interp
+            .backend()
+            .global_env()
+            .heap()
+            .borrow_mut()
+            .set_skip_safe_points(true);
+        interp
+    }
+    let runs = [
+        (
+            "tree-walker",
+            run_on(skipping(tree_walker_interpreter()), code, Mode::Program),
+        ),
+        (
+            "vm",
+            run_on(skipping(vm_interpreter()), code, Mode::Program),
+        ),
+    ];
+    for (backend, outcome) in runs {
+        match outcome {
+            Ok(actual) => assert_eq!(
+                actual, expected,
+                "\n[{backend}] wrong result with safe points skipped\nProgram:\n{code}\n\
+                 Expected: {expected}\nGot: {actual}"
+            ),
+            Err(e) => panic!(
+                "\n[{backend}] failed to evaluate with safe points skipped\nProgram:\n{code}\n\
+                 Error: {}",
+                e.message
+            ),
+        }
+    }
+}
+
 /// Assert that evaluating a Scheme expression produces the expected result
 /// on both backends.
 pub fn assert_eval_to(expr: &str, expected: &str) {

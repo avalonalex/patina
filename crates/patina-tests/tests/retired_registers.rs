@@ -18,10 +18,15 @@
 //! The same programs answer correctly without the switch
 //! (`the_programs_answer_without_the_switch`).
 //!
-//! `(gc)` collects at the next safe point in every mode, so the controls do
-//! not depend on the collector's mode as long as it is the default; under
-//! `PATINA_GC_STRESS` or `PATINA_GC_ZEAL`, a collection at an earlier pc may
-//! drop a register that is read first somewhere else.
+//! `(gc)` collects at its call in every mode (#639), with its caller
+//! suspended at the call's return pc, so the controls do not depend on the
+//! collector's mode as long as it is the default; under `PATINA_GC_STRESS`
+//! or `PATINA_GC_ZEAL`, a collection at an earlier pc may drop a register
+//! that is read first somewhere else. The register `(gc)`'s value goes to is
+//! written after the collection, when the primitive is done, so a control
+//! drops another: the argument controls put `(gc)` inside the last argument,
+//! whose value is a constant loaded after it, and the switch drops the
+//! argument before it.
 //!
 //! They run in every check build: every debug `cargo test`, and a release one
 //! with this crate's `gc-check` feature, which the release GC lane enables.
@@ -44,22 +49,23 @@ use patina_vm::test_support::DropHighestLive;
 const OPERAND: &str = "(define (first-of x) (gc) (car x)) (first-of (cons 1 2))";
 
 /// A variadic call's rest argument. The arguments are evaluated into fresh
-/// registers in order, so `(gc)`'s result is the last of them and the
-/// highest live register when the collection runs, at the call's own safe
-/// point: the copy that conses the rest list reads it.
+/// registers in order, and `(gc)`'s own value is dropped as soon as it
+/// returns, so the copy of `a` before it is the highest live register when
+/// the collection runs, at the call's return pc: the copy that conses the
+/// rest list reads it.
 const VARIADIC_REST: &str = "(define (gather . xs) xs) \
-     (define (call-it a) (gather a (gc)) a) \
+     (define (call-it a) (gather a (begin (gc) 2)) a) \
      (call-it 1)";
 
-/// A variadic call's fixed argument: the same, with `(gc)`'s result as the
+/// A variadic call's fixed argument: the same, with the copy of `a` as the
 /// one fixed parameter's value.
 const VARIADIC_FIXED: &str = "(define (gather first . rest) first) \
-     (define (call-it a) (gather (gc)) a) \
+     (define (call-it a) (gather a (begin (gc) 2)) a) \
      (call-it 1)";
 
 /// A fixed-arity call's argument.
 const FIXED: &str = "(define (pair-up a b) (cons a b)) \
-     (define (call-it a) (pair-up a (gc)) a) \
+     (define (call-it a) (pair-up a (begin (gc) 2)) a) \
      (call-it 1)";
 
 fn interpreter() -> Interpreter<VmBackend> {

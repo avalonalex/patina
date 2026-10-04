@@ -1034,7 +1034,10 @@ impl<'a> CpsEvaluator<'a> {
     /// delivered to `cont`, or the call it asks for made with a
     /// `ResumePrimitive` continuation that brings the result back to it —
     /// so nothing of the primitive is on the Rust stack while the call runs.
-    /// An error goes where any primitive's does.
+    /// A collection it asks for is a step of its own under the same
+    /// continuation, which the trampoline runs before anything else
+    /// (`StepResult::CollectAtCall`, #639). An error goes where any
+    /// primitive's does.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn resumable_step(
         &self,
@@ -1065,6 +1068,19 @@ impl<'a> CpsEvaluator<'a> {
             }) => Ok(StepResult::ApplyProc {
                 proc: callee,
                 args: args.into_vec(),
+                cont: ContValue::ResumePrimitive {
+                    index,
+                    state,
+                    original_cont: Box::new(cont),
+                },
+                env: self.evaluator.global_env.clone(),
+                cont_env,
+                prompt_stack,
+                dynamic_winds,
+                exception_handlers,
+            }),
+            Ok(patina_primitives::Step::Collect { kind, state }) => Ok(StepResult::CollectAtCall {
+                kind,
                 cont: ContValue::ResumePrimitive {
                     index,
                     state,

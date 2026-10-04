@@ -7,6 +7,7 @@
 //! See VM_ISA.md §3 and §4 for the full specification.
 
 use super::{CodeObjectId, ConstIdx, Reg};
+use patina_core::CollectKind;
 use patina_core::core_expr::Symbol;
 use patina_core::tagged_value::TaggedValue;
 
@@ -548,7 +549,30 @@ pub enum Instruction {
     /// continuation captured in the call carries the frame, so re-entered
     /// after the primitive returned it resumes the primitive again. Its
     /// registers are the `resume_step` module in `runtime/control.rs`.
+    ///
+    /// After a `CollectAtCall` it resumes the primitive the same way, with
+    /// whether the collection ran in place of a call's result.
     ResumePrimitive,
+
+    /// Collect at a resumable primitive's call (`patina_primitives::Step::
+    /// Collect`, #639): `(gc)`'s full collection, and the collection an open
+    /// that ran out of descriptors retries after (#607). Never emitted by the
+    /// compiler — the first instruction of `collect_stub`, `CollectAtCall` /
+    /// `ResumePrimitive` / `Return`, the variant of `resume_stub`'s frame
+    /// that collects.
+    ///
+    /// The caller is suspended at the call's return pc beneath the frame,
+    /// which holds the primitive's state, so every live value is on the
+    /// machine. It clears the register the primitive's value goes to (a
+    /// liveness map keeps a call's destination from the call on), then runs
+    /// the collection through `GcController::collect_at_call`, which
+    /// collects only where a safe point may and otherwise posts it for the
+    /// next safe point that may, counting it as deferred; and it leaves
+    /// whether a collection ran in the frame's `RESULT` register for
+    /// `ResumePrimitive`. So `(gc)` collects before its caller's next
+    /// instruction whether or not a safe point comes between (GC_PRD
+    /// stage 3 removes the one before every instruction).
+    CollectAtCall { kind: CollectKind },
 
     // ── Global Definitions ────────────────────────────────────────────────────
     /// Top-level `define`: `globals[name] ← reg[src]`.
