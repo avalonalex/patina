@@ -1687,7 +1687,7 @@ repro and fix direction; the rest have no issue because the design fixes them at
 | Dropping an interpreter leaks its heap | [#604] | 2 |
 | Unreferenced symbols are never reclaimed: 192 B per symbol [P] (chibi 166, Chez 0) | no issue: fixed by design | 5c |
 | Register stacks keep a deep recursion's pages: 143 MiB on the VM and 984 MiB on the tree-walker after 1 M frames [P] | no issue: fixed by design | 4d |
-| Tree-walker environments plateau under the count-based trigger, freed only when sweep drops their procedure | no issue: fixed by design | 4f |
+| Tree-walker environments are freed only when sweep drops their procedure, and the trigger sees them as an estimate, one frame a closure: frame chains, and frames only a continuation holds, are missed | [#637] (the estimate) | 4f |
 
 ## 18. Threading readiness and future parallelism (decision 7)
 
@@ -2230,3 +2230,4 @@ from them on these known points before filing it:
 [#624]: https://github.com/avalonalex/patina/issues/624
 [#625]: https://github.com/avalonalex/patina/issues/625
 [#626]: https://github.com/avalonalex/patina/issues/626
+[#637]: https://github.com/avalonalex/patina/issues/637

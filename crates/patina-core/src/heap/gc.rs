@@ -119,6 +119,10 @@ pub struct MarkBits {
     /// string's characters when it is marked, an object's payload when it
     /// is traced, an interned symbol's name when the visitor roots it.
     pub(crate) live_payload: usize,
+    /// The part of `live_payload` that is tree-walker closures'
+    /// (`account::cps_lambda_payload`), from which sweep credits the dead
+    /// closures' in one sum.
+    pub(crate) live_closures: usize,
 }
 
 impl MarkBits {
@@ -150,6 +154,7 @@ impl MarkBits {
             strings: BitSet::new(heap.strings.len()),
             objects: BitSet::new(heap.objects.len()),
             live_payload: 0,
+            live_closures: 0,
         }
     }
 
@@ -1130,6 +1135,22 @@ impl<'h> GcVisitor<'h> {
         });
     }
 
+    /// Count a live tree-walker closure's payload (`heap/account.rs`): into
+    /// the live bytes, and into the closures' part of them, from which sweep
+    /// credits the dead closures'. Out of line, so that the marking loop,
+    /// which every collection on either backend runs, carries a call in the
+    /// closure's arm rather than the measuring.
+    #[inline(never)]
+    fn count_closure_payload(
+        &mut self,
+        params: &Vec<crate::core_expr::ScopedParam>,
+        variadic: &Option<crate::core_expr::ScopedParam>,
+    ) {
+        let payload = account::cps_lambda_payload(params, variadic);
+        self.marks.live_payload += payload;
+        self.marks.live_closures += payload;
+    }
+
     /// Trace literals embedded in live code (`CpsExprKind::Literal` /
     /// `Quasiquote`). Root providers need this for expression trees reachable
     /// outside the heap (e.g. a suspended `StepResult`'s current expression).
@@ -1298,10 +1319,10 @@ impl<'h> GcVisitor<'h> {
                     registry_index: _,
                 } => {}
                 Procedure::CpsLambda {
-                    // Names and scope ids.
-                    params: _,
-                    // A name and scope ids.
-                    variadic: _,
+                    // Names and scope ids: measured below, not traced.
+                    params,
+                    // A name and scope ids, as above.
+                    variadic,
                     // A name.
                     cont_param: _,
                     body,
@@ -1309,6 +1330,10 @@ impl<'h> GcVisitor<'h> {
                     // Scope ids.
                     binding_scopes: _,
                 } => {
+                    // The byte account: a tree-walker closure's payload is
+                    // counted here, not by `payload_bytes` above, which keeps
+                    // the allocation path's match a leaf (`heap/account.rs`).
+                    self.count_closure_payload(params, variadic);
                     self.visit_expr_literals(body);
                     self.visit_env(env);
                 }
@@ -1574,6 +1599,9 @@ impl Heap {
         // Before the arenas are swept: `sweep_arena` sets the free slots'
         // bits, which are not live.
         let live = marks.live_bytes();
+        // Before the arenas are swept too: a check build reads the dead
+        // closures' payloads out of their slots.
+        let freed_closure_payloads = self.settle_closure_payloads(marks);
         // Provenance is not a root. Prune it before slots can be reused,
         // inspecting only annotated syntax rather than every freed datum.
         self.syntax_sources
@@ -1658,7 +1686,8 @@ impl Heap {
             + swept.vectors * VECTOR_SLOT_BYTES
             + swept.strings * STRING_SLOT_BYTES
             + swept.objects * OBJECT_SLOT_BYTES
-            + freed_payload;
+            + freed_payload
+            + freed_closure_payloads;
         let account = &mut self.account;
         account.reclaimed += freed_bytes as u64;
         account.through_last_gc = account
@@ -1674,6 +1703,39 @@ impl Heap {
         self.gc_collections += 1;
         self.gc_last_swept = swept.total();
         swept
+    }
+
+    /// Sweep's part of a tree-walker closure's own path through the byte
+    /// account (`heap/account.rs`): the dead closures' payloads, credited in
+    /// one sum with no work per slot. Every closure in the arena was charged
+    /// by `alloc_procedure`, and marking counted the live ones', so the dead
+    /// ones' are the account's sum less those; the live ones' are the sum
+    /// from here on. A check build measures each dead closure as well and
+    /// asserts that the two agree, so it must run before the arenas are
+    /// swept, while the dead closures are still in their slots and the mark
+    /// bits still say which they are.
+    fn settle_closure_payloads(&mut self, marks: &MarkBits) -> usize {
+        let live = marks.live_closures;
+        if super::GC_CHECK {
+            let dead: usize = self
+                .objects
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| !marks.objects.get(index))
+                .map(|(_, data)| match data {
+                    HeapObjectData::Procedure(procedure) => account::procedure_payload(procedure),
+                    _ => 0,
+                })
+                .sum();
+            assert_eq!(
+                self.account.closures,
+                live + dead,
+                "the tree-walker closures charged are not the live ones and the dead ones"
+            );
+        }
+        let dead = self.account.closures.saturating_sub(live);
+        self.account.closures = live;
+        dead
     }
 }
 
@@ -2447,7 +2509,64 @@ mod tests {
             h.alloc_vm_continuation_ref(160_000);
         });
         assert_eq!(continuation, OBJECT_SLOT_BYTES + 160_000);
-        assert_eq!(heap.allocs_since_gc(), 9);
+        // A tree-walker closure (#637): its `Rc<Procedure>`, its parameters
+        // and their spilled scope sets, and the frame it is assumed to
+        // capture. A primitive, its slot.
+        let closure = tree_walker_closure(&env, &["x", "y"]);
+        let Procedure::CpsLambda { params, .. } = &*closure else {
+            unreachable!()
+        };
+        let scopes = params
+            .iter()
+            .map(|param| param.scopes.heap_bytes())
+            .sum::<usize>();
+        assert!(scopes >= 2 * 9 * size_of::<crate::ScopeId>());
+        let lambda = charged(heap, |h| {
+            h.alloc_procedure(closure);
+        });
+        assert_eq!(
+            lambda,
+            OBJECT_SLOT_BYTES
+                + 2 * size_of::<usize>()
+                + size_of::<Procedure>()
+                + 2 * size_of::<crate::core_expr::ScopedParam>()
+                + scopes
+                + account::CAPTURED_FRAME_BYTES
+        );
+        let primitive = charged(heap, |h| {
+            h.alloc_procedure(Procedure::primitive(
+                "car",
+                crate::procedure::Arity::Exact(1),
+                Rc::from("scheme.base/car"),
+                None,
+            ));
+        });
+        assert_eq!(primitive, OBJECT_SLOT_BYTES);
+        // A closure's payload is charged with its slot, as one allocation.
+        assert_eq!(heap.allocs_since_gc(), 11);
+    }
+
+    /// A tree-walker closure over `env` with parameters `params`, each
+    /// bound under a scope set of nine scopes, which spills.
+    fn tree_walker_closure(env: &Rc<Environment>, params: &[&str]) -> Rc<Procedure> {
+        let mut scopes = crate::ScopeSet::new();
+        for id in 0..9 {
+            scopes.add_scope(crate::ScopeId(2000 + id));
+        }
+        Rc::new(Procedure::CpsLambda {
+            params: params
+                .iter()
+                .map(|name| crate::core_expr::ScopedParam {
+                    name: Rc::from(*name),
+                    scopes: scopes.clone(),
+                })
+                .collect(),
+            variadic: None,
+            cont_param: Rc::from("k"),
+            body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::NULL)),
+            env: env.clone(),
+            binding_scopes: Rc::new(crate::ScopeSet::new()),
+        })
     }
 
     /// Every byte allocation charges is either reclaimed by a sweep or still
@@ -2475,6 +2594,18 @@ mod tests {
                     .objects
                     .iter()
                     .map(HeapObjectData::payload_bytes)
+                    .sum::<usize>()
+                // The tree-walker closures', which `payload_bytes` leaves to
+                // a path of their own (`heap/account.rs`).
+                + heap
+                    .objects
+                    .iter()
+                    .map(|data| match data {
+                        HeapObjectData::Procedure(procedure) => {
+                            account::procedure_payload(procedure)
+                        }
+                        _ => 0,
+                    })
                     .sum::<usize>();
             (slots + payloads) as u64
         }
@@ -2515,6 +2646,13 @@ mod tests {
                 heap.alloc_vm_closure(1, vec![TaggedValue::NULL; 6], env.clone()),
                 heap.alloc_vm_continuation_ref(4096).0,
                 heap.alloc_vm_delimited_continuation_ref(2048).0,
+                heap.alloc_procedure(tree_walker_closure(&env, &["p", "q", "r"])),
+                heap.alloc_procedure(Procedure::primitive(
+                    "car",
+                    crate::procedure::Arity::Exact(1),
+                    Rc::from("scheme.base/car"),
+                    None,
+                )),
             ];
             if keep {
                 roots.values.extend(made);
@@ -2545,6 +2683,22 @@ mod tests {
             occupied(&heap) + external
         );
         assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
+    }
+
+    /// Sweep credits the dead tree-walker closures' payloads in one sum
+    /// (#637), and a check build holds the sum to a measurement of each dead
+    /// closure: one that entered the heap without `alloc_procedure`'s charge
+    /// fails the first collection after it, rather than leaving the account
+    /// short.
+    #[test]
+    #[cfg(any(debug_assertions, feature = "gc-check"))]
+    #[should_panic(expected = "the tree-walker closures charged")]
+    fn an_uncharged_closure_fails_the_sweep_check() {
+        let shared = crate::heap::new_shared_heap();
+        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let mut heap = shared.borrow_mut();
+        heap.alloc_object(HeapObjectData::Procedure(tree_walker_closure(&env, &["x"])));
+        MarkSweepCollector::new().collect(&mut heap, &[&TestRoots::default()]);
     }
 
     /// #606's first program in miniature: large vectors, each garbage at

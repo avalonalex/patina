@@ -542,7 +542,20 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   **live bytes** after a collection, is the marked slots, their payloads and
   the external bytes held then. Payloads cannot grow after allocation:
   vectors, strings and bytevectors hand out slices, never their `Vec`.
-  Shared `Rc` payloads (procedures, macros, libraries, environments, ports,
+  **A tree-walker closure (#637)** is charged its `Rc<Procedure>`, its
+  parameters and `CAPTURED_FRAME_BYTES`, an estimate of the frame it
+  captures — a frame binding one parameter, 612 bytes — because on that
+  backend every `let` makes a closure that keeps its frame alive until a
+  sweep, and charged its slot alone, closure-heavy programs peaked at
+  64–126 MB. Its payload has a path of its own, so that
+  `payload_bytes`, which every object allocation runs, the VM's included,
+  stays a leaf: `alloc_procedure` charges it, marking counts it in the
+  closure's trace arm, and sweep credits the dead closures' as one sum, what
+  the account holds for the closures in the arena less what marking found
+  live; a check build measures each dead closure too and asserts the two
+  agree. Closures made in one frame are each charged for it, and frame
+  chains are missed: exact accounting is stage 4f's. Other shared `Rc`
+  payloads (procedures' bodies and environments, macros, libraries, ports,
   tree-walker continuations) are not charged; GC_PRD §15 charges what they
   hold as **external bytes**, through `Heap::charge_external_bytes`, which
   counts toward the trigger and into L. A holder gives them back through an

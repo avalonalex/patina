@@ -7,10 +7,12 @@
 //! in its arena plus its *payload*, the memory it owns outright outside the
 //! slot — a vector's elements, a string's characters, a bytevector's bytes, a
 //! bignum's limbs, a record's fields, a closure's free variables, a VM
-//! continuation's register and frame snapshot. One function per arena
-//! measures a payload, and allocation, marking and sweep all call it, so what
-//! an object was charged at birth is what marking counts while it lives and
-//! what sweep credits when it dies.
+//! continuation's register and frame snapshot, a tree-walker closure's own
+//! allocation and an estimate of the frame it captures. One function per
+//! arena measures a payload, and allocation, marking and sweep all call it,
+//! so what an object was charged at birth is what marking counts while it
+//! lives and what sweep credits when it dies. A tree-walker closure's payload
+//! is measured by a function of its own, on a path of its own (below).
 //!
 //! **Payloads do not grow after allocation**, so no growth is charged. Vectors,
 //! strings and bytevectors hand out slices only, never their `Vec`
@@ -25,7 +27,8 @@
 //! which their frames already pay for.
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
-//! environment, a macro, a library, an environment specifier, a port, a
+//! environment (a tree-walker closure is charged an estimate of its frame
+//! instead, below), a macro, a library, an environment specifier, a port, a
 //! prompt tag, a promise's state (which `promise_update` shares between two
 //! promises), a tree-walker continuation (whose frames are `Rc` links shared
 //! with every other capture). Attributing them to one slot would charge the
@@ -45,6 +48,29 @@
 //! definition lands. The sweep settles L after the arenas are swept, so what
 //! those drops give back is out of the L it sets.
 //!
+//! **A tree-walker closure** (#637) is charged its `Rc<Procedure>`
+//! allocation, its parameter vector and the scope sets its parameters own,
+//! and [`CAPTURED_FRAME_BYTES`], an estimate of the frame it captures: on
+//! that backend every `let` makes a closure, which keeps its frame alive
+//! until a sweep drops it, and charged its slot alone, closure-heavy
+//! programs peaked at 64–126 MB under the 8 MiB interval. The estimate is
+//! one frame binding one parameter; closures made in one frame are each
+//! charged for it, and frame chains, and frames only a tree-walker
+//! continuation holds, are missed. Exact accounting is stage 4f's, which
+//! charges the tree-walker's `Rc` payloads (`PRD/GC_PRD.md`).
+//!
+//! [`cps_lambda_payload`] measures it, and [`HeapObjectData::payload_bytes`]
+//! does not: that match runs on every object allocation, the VM's closures
+//! and continuations among them, and an arm that looks through the `Rc`
+//! made it a function with a stack frame, which measured +0.15–0.3%
+//! instructions on the VM's allocation-heavy loops. So the closure's payload
+//! has its own path through the three: [`Heap::alloc_procedure`] charges it
+//! ahead of the slot; marking counts it in the closure's trace arm, which
+//! looks through the `Rc` already; and sweep credits the dead closures' in
+//! one sum, what the account holds for the closures in the arena less what
+//! marking found live, with no work per slot. A check build measures each
+//! dead closure as well and asserts that the two agree.
+//!
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
 //! after `max(8 MiB, 2·L)` bytes, L being the bytes the last collection
@@ -58,6 +84,10 @@ use std::rc::Rc;
 use num_bigint::BigInt;
 
 use super::{Heap, HeapObjectData};
+use crate::core_expr::ScopedParam;
+pub(crate) use crate::environment::CAPTURED_FRAME_BYTES;
+use crate::environment::RC_COUNTS;
+use crate::procedure::Procedure;
 use crate::tagged_value::TaggedValue;
 
 /// Bytes of one pair slot: the whole of a pair.
@@ -88,6 +118,63 @@ pub(crate) fn string_payload(chars: &Vec<char>) -> usize {
 /// 64-bit digits, less any spare capacity it keeps, which it does not expose.
 fn bigint_payload(n: &BigInt) -> usize {
     (n.bits().div_ceil(64) as usize) * size_of::<u64>()
+}
+
+/// A tree-walker closure's payload (the module comment says what counts and
+/// why it is not in [`HeapObjectData::payload_bytes`]): its `Rc<Procedure>`
+/// allocation, its parameter vector at capacity, the scope sets its
+/// parameters own, and [`CAPTURED_FRAME_BYTES`] for the frame it captures.
+/// The closure is immutable behind its `Rc`, so allocation and marking
+/// measure the same bytes.
+#[inline]
+pub(crate) fn cps_lambda_payload(
+    params: &Vec<ScopedParam>,
+    variadic: &Option<ScopedParam>,
+) -> usize {
+    RC_COUNTS
+        + size_of::<Procedure>()
+        + params.capacity() * size_of::<ScopedParam>()
+        + params
+            .iter()
+            .map(|param| param.scopes.heap_bytes())
+            .sum::<usize>()
+        + variadic
+            .as_ref()
+            .map_or(0, |param| param.scopes.heap_bytes())
+        + CAPTURED_FRAME_BYTES
+}
+
+/// A procedure's payload: a tree-walker closure's ([`cps_lambda_payload`]),
+/// and none for a primitive, which is charged its slot alone, as before
+/// #637 — a backend makes one per registry entry when it installs them, and
+/// they live as long as the backend does. Every field is named, so a new one
+/// does not compile here until it says whether it is charged.
+pub(crate) fn procedure_payload(procedure: &Procedure) -> usize {
+    match procedure {
+        // Its slot alone (above).
+        Procedure::Primitive {
+            // A static name.
+            name: _,
+            // Argument counts.
+            arity: _,
+            // A name.
+            qualified_name: _,
+            // An index.
+            registry_index: _,
+        } => 0,
+        Procedure::CpsLambda {
+            params,
+            variadic,
+            // A name, shared with the code.
+            cont_param: _,
+            // Code, shared with every closure of this lambda.
+            body: _,
+            // The frame, estimated: `CAPTURED_FRAME_BYTES`.
+            env: _,
+            // Shared with the code.
+            binding_scopes: _,
+        } => cps_lambda_payload(params, variadic),
+    }
 }
 
 impl HeapObjectData {
@@ -140,7 +227,9 @@ impl HeapObjectData {
             | HeapObjectData::CoreSyntax(_)
             | HeapObjectData::Free => 0,
             // Shared `Rc` payloads, or ones that change size after
-            // allocation: not charged (the module comment says why).
+            // allocation: not charged (the module comment says why). A
+            // tree-walker closure's payload is charged on a path of its own
+            // (`procedure_payload`), which keeps this match a leaf.
             HeapObjectData::Procedure(_)
             | HeapObjectData::Port(_)
             | HeapObjectData::Macro(_)
@@ -206,6 +295,11 @@ pub(super) struct ByteAccount {
     /// L: the bytes the last collection found live, the external bytes held
     /// at that time included. Zero before the first collection.
     pub(super) live: usize,
+    /// The payloads of the tree-walker closures in the object arena, live or
+    /// not yet swept ([`cps_lambda_payload`]): `alloc_procedure` adds each
+    /// one's, and sweep credits the dead ones' as this less what marking
+    /// found live, which it then becomes.
+    pub(super) closures: usize,
 }
 
 impl ByteAccount {
@@ -222,6 +316,7 @@ impl ByteAccount {
             through_last_gc: 0,
             reclaimed: 0,
             live: 0,
+            closures: 0,
         }
     }
 }
@@ -383,8 +478,24 @@ impl Heap {
                 .objects
                 .iter()
                 .map(HeapObjectData::payload_bytes)
-                .sum::<usize>();
+                .sum::<usize>()
+            // The occupied slots' tree-walker closures, which the walk above
+            // does not measure: the account keeps their sum.
+            + self.account.closures;
         slots + payloads
+    }
+
+    /// Charge a procedure's payload ([`procedure_payload`]) ahead of its
+    /// slot: `alloc_procedure`'s part of a tree-walker closure's own path
+    /// through the account (the module comment). Counted toward the trigger
+    /// before the slot is, so that the slot's allocation compares the two
+    /// together against the threshold; and not an allocation of its own, so
+    /// `PATINA_GC_STRESS`, which counts allocations, is unchanged.
+    #[inline]
+    pub(super) fn charge_procedure_payload(&mut self, procedure: &Procedure) {
+        let bytes = procedure_payload(procedure);
+        self.account.closures += bytes;
+        self.account.shared.count(bytes);
     }
 
     /// Charge `bytes` held outside the arenas on a heap object's behalf: they

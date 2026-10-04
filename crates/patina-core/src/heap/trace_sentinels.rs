@@ -335,7 +335,12 @@ fn objects_keep_their_sentinels(
     let objects = build(&shared, &mut heap, &mut sentinels);
     let roots: Vec<TaggedValue> = objects
         .into_iter()
-        .map(|data| heap.alloc_object(data))
+        .map(|data| match data {
+            // Through its own path, which charges a tree-walker closure's
+            // payload (`heap/account.rs`); sweep checks that it was.
+            HeapObjectData::Procedure(procedure) => heap.alloc_procedure(procedure),
+            data => heap.alloc_object(data),
+        })
         .collect();
     collect_from(&mut heap, &roots);
     sentinels.assert_survived(&heap);
