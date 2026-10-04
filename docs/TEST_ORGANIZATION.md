@@ -731,7 +731,9 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   budgets and measured results in
   [Track H's archived PRD](../PRD/ARCHIVE/completed_planning/TRACK_H_HYGIENE_ASSURANCE_PRD.md#h3--differential-generation-and-shrinking-manual-or-scheduled-lane).
 - `escape_from_primitive.rs` — escaping out of a Rust primitive's callback,
-  on both backends. `backend_divergence.rs` is gone: its rows are in
+  on both backends, and re-entering continuations captured around an open
+  that ran out of descriptors, collected and retried (#607).
+  `backend_divergence.rs` is gone: its rows are in
   `control/cps-features.scm`, `control/callability.scm`, `control/prompts.scm`
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
 - `control_flow_matrix.rs` — the 24-shape transfer matrix behind
@@ -977,6 +979,24 @@ growth under `eval` is charged, while frames charge nothing, read while
 they are alive. A replaced library's namespace (#614's path) keeps its
 charge while an importer holds it and gives it back when the last holder
 drops (`library_registry.rs`).
+
+`crates/patina-repl/tests/file_descriptors.rs`, in the Test Suite, runs
+#607's programs through the CLI in a shell that lowers `RLIMIT_NOFILE`
+(`ulimit -n`), on both backends, in the default mode and under
+`PATINA_GC=0`: 100,000 dropped `open-input-file`s at 1024 and 5,000 of each
+open primitive at 128 finish, as chibi's do; 10,000 opens each closed post
+no descriptor-pressure collection, while 10,000 dropped post one every 128
+opens (`(gc-stats)`'s `descriptor-collections`), and none under
+`PATINA_GC=0`; an open port holds 8 KiB of `external-bytes` and one place in
+`descriptors-since-gc` until it is closed; a dropped output port's file is
+empty before a collection and holds its output after one, `(gc)`'s and an
+allocation-triggered one, as in chibi and Gauche; and in a library body,
+where collection is deferred, the first `EMFILE` raises, the documented
+limit. GC-time flushing is observable, so these stay out of the
+byte-identical differential lane. `escape_from_primitive.rs` re-enters
+continuations captured around an open that collected and retried, over a
+filesystem whose descriptor table it caps (`ScarceFs`), so that the stress
+lane runs it without a limit on its process.
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).

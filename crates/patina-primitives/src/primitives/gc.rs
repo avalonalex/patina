@@ -32,8 +32,9 @@
 //! - `external-bytes`: what is held outside the arenas on heap objects'
 //!   behalf now (GC_PRD §15), charged by its holders: today the tables of
 //!   the live namespaces — the global environment, the libraries', and those
-//!   `environment` and the R5RS constructors build (#615). GC_PRD's
-//!   footprint is `committed-bytes` plus `external-bytes`.
+//!   `environment` and the R5RS constructors build (#615) — and the buffers
+//!   of the open file ports, 8 KiB each (#607). GC_PRD's footprint is
+//!   `committed-bytes` plus `external-bytes`.
 //!
 //! For a tree-walker closure, the payload in the first four keys includes an
 //! estimate of the frame it captures (#637), not a measurement: counted once
@@ -48,6 +49,17 @@
 //! collection was deferred, and posted instead (`Heap::defer_collection`,
 //! #639): the windows that cannot collect, kept visible. GC_PRD's K16
 //! counters, which measure those windows, are its eventual home.
+//!
+//! Descriptor pressure (#607, `patina_core::heap` `account.rs`):
+//!
+//! - `descriptors-since-gc`: the file ports opened since the last collection
+//!   and not closed since. A close takes a port off only if it was opened
+//!   since, and a collection starts the count again.
+//! - `descriptor-collections`: the collections descriptor pressure posted,
+//!   each time that count reached `min(128, RLIMIT_NOFILE / 4)` with no
+//!   collection pending already. Never under `PATINA_GC=0`. An open that
+//!   ran out of descriptors and collected at its call is not counted here:
+//!   that collection is in `collections`, or in `deferred-collections`.
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;
@@ -120,6 +132,11 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         (
             "deferred-collections",
             stats.gc_deferred_collections as usize,
+        ),
+        ("descriptors-since-gc", stats.descriptors_since_gc),
+        (
+            "descriptor-collections",
+            stats.descriptor_collections as usize,
         ),
         ("last-swept", stats.gc_last_swept),
         ("live-bytes", stats.live_bytes),

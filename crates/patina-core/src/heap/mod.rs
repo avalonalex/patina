@@ -37,9 +37,10 @@ pub(crate) mod trace_sentinels;
 
 use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
 use account::ByteAccount;
+pub(crate) use account::FilePortCharge;
 pub use account::{
-    ExternalBytes, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES,
-    VECTOR_SLOT_BYTES,
+    ExternalBytes, FILE_PORT_BYTES, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES,
+    STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_pressure_threshold,
 };
 use check::SlotChecks;
 use num_bigint::BigInt;
@@ -537,6 +538,10 @@ pub struct Heap {
     /// `deferred-collections`, which keeps the deferred windows visible.
     gc_deferred_collections: u64,
 
+    /// Collections that descriptor pressure posted (`Heap::charge_file_port`,
+    /// #607): `(gc-stats)`'s `descriptor-collections`.
+    descriptor_collections: u64,
+
     /// A test's switch (#639): while set, [`GcController::safe_point`]
     /// collects nothing on this heap, so the only collections are the ones
     /// primitives ask for at their calls (`GcController::collect_at_call`).
@@ -687,6 +692,7 @@ impl Heap {
             gc_collections: 0,
             gc_last_swept: 0,
             gc_deferred_collections: 0,
+            descriptor_collections: 0,
             #[cfg(feature = "test-support")]
             skip_safe_points: false,
             next_vm_continuation_id: 0,
@@ -704,7 +710,8 @@ impl Heap {
 
     /// The single invariant of the trigger design: the pending flag is up
     /// whenever either count has reached its threshold (or `(gc)` raised it
-    /// directly).
+    /// directly). Descriptor pressure is compared where a file port opens
+    /// (`Heap::charge_file_port`), the only place its count grows.
     #[inline]
     fn refresh_gc_pending(&self) {
         if self.allocs_since_gc >= self.gc_threshold.allocations
@@ -1134,8 +1141,12 @@ impl Heap {
         self.alloc_object(HeapObjectData::Procedure(proc))
     }
 
-    /// Allocate a native port
+    /// Allocate a native port. An open file port is charged here, once,
+    /// whichever primitive opened it: its buffer as external bytes, and its
+    /// descriptor toward descriptor pressure (`Heap::charge_file_port`,
+    /// #607). It gives both back when it closes.
     pub fn alloc_port(&mut self, port: Rc<crate::port::Port>) -> TaggedValue {
+        port.hold_file_charge(|| self.charge_file_port());
         self.alloc_object(HeapObjectData::Port(port))
     }
 
@@ -3367,6 +3378,8 @@ impl Heap {
             gc_collections: self.gc_collections,
             gc_last_swept: self.gc_last_swept,
             gc_deferred_collections: self.gc_deferred_collections,
+            descriptors_since_gc: self.descriptors_since_gc(),
+            descriptor_collections: self.descriptor_collections,
             live_bytes: self.live_bytes(),
             bytes_allocated: self.bytes_allocated(),
             bytes_reclaimed: self.bytes_reclaimed(),
@@ -3400,6 +3413,12 @@ pub struct HeapStats {
     /// [`Heap::gc_deferred_collections`]: collections asked for at a call
     /// and posted instead, where collection was deferred.
     pub gc_deferred_collections: u64,
+    /// [`Heap::descriptors_since_gc`]: file ports opened since the last
+    /// collection and not closed since.
+    pub descriptors_since_gc: usize,
+    /// [`Heap::descriptor_collections`]: collections descriptor pressure
+    /// posted.
+    pub descriptor_collections: u64,
     /// [`Heap::live_bytes`]: L, what the last collection found live.
     pub live_bytes: usize,
     /// [`Heap::bytes_allocated`]: every byte charged so far.

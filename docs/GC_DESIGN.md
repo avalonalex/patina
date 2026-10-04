@@ -516,10 +516,12 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   (`allocs_since_gc`) and **charges its bytes** (`bytes_since_gc`), and
   **raises a collection-pending flag** (an `Rc<Cell<bool>>` shared with the
   dispatch loops) when either count reaches `Heap.gc_threshold`, a
-  `GcThreshold { allocations, bytes }`. The threshold is the mode made
-  concrete — `GcController::current_threshold`, the single owner of that
-  mapping: never for Off, the collector's adaptive `max(8 MiB, 2·L)` bytes
-  for On, `n` allocations for Stress, 0 allocations for Zeal. The backend
+  `GcThreshold { allocations, bytes, descriptors }`. The threshold is the
+  mode made concrete — `GcController::current_threshold`, the single owner
+  of that mapping: never for Off, the collector's adaptive `max(8 MiB, 2·L)`
+  bytes for On, `n` allocations for Stress, 0 allocations for Zeal, and for
+  each of the last three descriptor pressure's `min(128, RLIMIT_NOFILE / 4)`
+  open file ports (below), compared where a file port opens. The backend
   installs it when heap and controller are paired (a bare heap defaults to
   the inert `GcThreshold::NEVER` — policy stays in the controller, mechanism
   in the heap), and `GcController::collect` re-installs it after each
@@ -594,6 +596,50 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   environment (§3.3), so a loop of it allocates nothing. Measured
   2026-10-03, release, macOS arm64.
 
+  **Open file ports charge too, and count toward descriptor pressure
+  (#607).** A file port's descriptor and buffer were invisible to the
+  trigger, so a loop that opened files and dropped the ports ran out of
+  descriptors (`EMFILE` at the 1,021st open under `ulimit -n 1024`) long
+  before a collection would have closed the dead ones, which sweep does as
+  it drops their payloads. Now `Heap::alloc_port`, which every port reaches
+  the program through, charges an open file port `FILE_PORT_BYTES` (8 KiB,
+  its buffer's capacity) of external bytes and counts it in descriptor
+  pressure: the file ports opened since the last collection and not closed
+  since. When that count reaches `GcThreshold::descriptors`,
+  `min(128, RLIMIT_NOFILE / 4)` with the soft limit read once per process
+  (`descriptor_pressure_threshold`), the heap posts a collection, unless one
+  is pending already, and counts it in `(gc-stats)`'s
+  `descriptor-collections`; Off never does. The port's `FilePortData` holds
+  a `FilePortCharge` beside the file, which gives both back when the file
+  closes — at `close-port`, or when the port's last `Rc` drops, usually in a
+  sweep — through the shared counts, with no heap borrow. Sweep starts the
+  count again after the arenas, so a port it found live counts toward no
+  later collection: the charge records the cycle it was made in, and a
+  close takes a port off the count only if it was opened since. A loop that
+  closes what it opens never posts one, though its charges still count
+  toward the byte trigger like the allocations they stand for: 100,000
+  opens and closes collect about every 1,000 opens, 98 times where they
+  collected once, for 0.25% more instructions on the VM and 0.66% on the
+  tree-walker (medians of five interleaved runs against b2a270d, release,
+  macOS arm64, 2026-10-04; four other I/O loops, `call-with-output-file`,
+  `with-output-to-file`, `read-line` over 14 MB and a million string ports,
+  moved by -0.26% to +0.47%). A loop that drops them collects every 128
+  opens, and finishes.
+
+  An open that runs out of descriptors anyway, because the table holds live
+  ports or because collection was deferred, collects at its call: every
+  primitive that opens a file — `open-input-file`, `open-output-file`, the
+  binary ones, and `(patina internal io)`'s `call-with-input-file` and
+  `call-with-output-file`; `(scheme file)`'s `call-with-*-file` and
+  `with-*-file` are Scheme over the first two — is resumable, answers
+  `Step::Collect` on `EMFILE` or `ENFILE` with the file name as its state,
+  and opens once more when resumed (`patina_primitives` `io/file.rs`), as
+  chibi does. The collection runs in every mode, `PATINA_GC=0` included.
+  Where collection is deferred (§7) it is posted instead and the second
+  attempt fails as the first did: there the first `EMFILE` raises, a
+  documented limit that GC_PRD stage 2 narrows. The loader's own reads of
+  library and `load`/`include` files do not retry.
+
   The rest of what sits behind those `Rc`s is still charged only as
   slots: a string port's buffer, the frames above the one a tree-walker
   closure is charged for, and frames that only a continuation holds. The
@@ -635,7 +681,7 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   | Mode | Selected by | Behavior |
   |------|-------------|----------|
   | On (default) | — | adaptive threshold above: `max(8 MiB, 2·L)` bytes |
-  | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called |
+  | Off | `PATINA_GC=0` *(testing lanes only — the no-collection reference run the differential suite diffs against, §11)* | collect only when `(gc)` has been called, or an open has run out of descriptors (#607); no descriptor pressure |
   | Stress | `PATINA_GC_STRESS[=n]` | collect once `n` allocations (default 1) have happened, whatever their size, **bypassing the adaptive `2·L` floor**; it still counts allocations, so the stress lanes' pinned counts do not depend on the byte account |
   | Zeal | `PATINA_GC_ZEAL=entry` *(the zeal lane, §11 item 7)* | collect at **every** outermost safe point, allocation or not: the threshold is 0, so the collection that lowers the pending flag re-installs it and raises the flag again. Any other value panics; `entry` is GC_PRD §14's name, and the PRD's other zeal modes come with the redesign |
 
@@ -670,7 +716,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   arena's capacity in slots and the payloads of the occupied slots: what
   the arenas hold now, live or not) and `external-bytes` (what holders
   outside the arenas have charged and not given back: the live
-  namespaces' tables, #615). GC_PRD's footprint is the last two together.
+  namespaces' tables, #615, and the open file ports' buffers, #607).
+  GC_PRD's footprint is the last two together. Two keys report descriptor
+  pressure (#607): `descriptors-since-gc`, the file ports opened since the
+  last collection and not closed since, and `descriptor-collections`, the
+  collections it has posted.
   For a tree-walker closure, the first four count the estimate of the frame
   it captures (#637, above) as part of its payload: an estimate, not a
   measurement, counted once per closure, so a frame several closures share
@@ -782,8 +832,8 @@ placement + deferral:
    points exist only inside the trampoline, so GC cannot fire mid-parse.
 
 **Collections at a call (#639).** A collection at a call is the second way
-in. A primitive that needs a collection at its own call — `(gc)`, and next
-an open that ran out of descriptors and collects before it tries again
+in. A primitive that needs a collection at its own call — `(gc)`, and an
+open that ran out of descriptors and collects before it tries again
 (#607) — answers `patina_primitives::Step::Collect { kind, state }`, and the
 machine suspends the call and collects before the caller's next
 instruction:

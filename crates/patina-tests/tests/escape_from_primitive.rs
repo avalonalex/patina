@@ -353,8 +353,11 @@ fn library_load_does_not_offer_an_unhandled_error_twice() {
 /// under them, from `(patina internal lists)` and `(patina internal io)` —
 /// the standard names would reach no boundary at all. `force`'s row reaches
 /// none on either backend now: the VM runs a promise's thunk in a stub frame
-/// since #476, and the tree-walker's `force` was always native CPS. It stays
-/// as a check that leaving the thunk still reaches the target.
+/// since #476, and the tree-walker's `force` was always native CPS. Nor do
+/// the file variants' rows since #607, which made those primitives resumable
+/// so that their opens collect and retry: the machine calls their procedure,
+/// as it calls a parameter's converter. They stay, as a check that leaving
+/// the procedure still reaches the target.
 #[test]
 fn test_every_re_entrant_primitive_can_be_left_by_escape_and_by_abort() {
     let dir = TempDir::new().expect("temp dir");
@@ -709,4 +712,247 @@ fn test_escaping_out_of_a_library_body_an_eval_import_loads() {
     tw.backend()
         .add_library_search_path(root.path().to_path_buf());
     assert_eq!(run(&tw, PROGRAM), EXPECTED, "tree-walker");
+}
+
+/// A continuation captured around an open that ran out of descriptors,
+/// collected at its call and tried again (#607), re-entered after the open
+/// returned: each time round the table is full again, of ports nothing
+/// reaches, and the open collects and retries again. The VM collects in
+/// `resume_stub`'s collecting frame over the suspended caller and the
+/// tree-walker under the primitive's `ResumePrimitive` continuation, so a
+/// continuation captured before the call, re-entered, makes the call anew,
+/// and one captured in the procedure `(patina internal io)`'s
+/// `call-with-input-file` calls after its retried open resumes the primitive
+/// again, which closes the port again. Captured before the open, in a
+/// `dynamic-wind` body whose before thunk fills the table on every entry,
+/// and with the open in tail position.
+///
+/// chibi 0.12 answers the same, run under `ulimit -n 64` with the standard
+/// `call-with-input-file` (measured 2026-10-04); Gauche 0.9.15 does not
+/// retry, and fails the first open that finds the table full, as before
+/// #607 both backends did. The table here is [`ScarceFs`]'s, so the test
+/// sets no limit on the process its neighbours share.
+#[test]
+fn test_reentering_around_an_open_that_collected_and_retried() {
+    let dir = TempDir::new().expect("temp dir");
+    let data = scratch_path(&dir, "data.txt");
+    std::fs::write(&data, "hello").expect("data file");
+    let program = format!(
+        r#"(import (scheme base) (scheme file) (patina debug)
+                   (rename (only (patina internal io) call-with-input-file)
+                           (call-with-input-file prim-call-with-input-file)))
+           (define held '())
+           ;; Every descriptor taken, by ports nothing reaches once this returns.
+           (define (exhaust!)
+             (let loop ()
+               (let ((p (guard (e ((file-error? e) #f)) (open-input-file "{data}"))))
+                 (when p (set! held (cons p held)) (loop))))
+             (set! held '()))
+           (define k #f)
+           (define (before)
+             (let ((n 0) (seen '()))
+               (let ((c (begin (call/cc (lambda (c) (set! k c)))
+                               (exhaust!)
+                               (read-char (open-input-file "{data}")))))
+                 (set! n (+ n 1))
+                 (set! seen (cons c seen))
+                 (if (< n 3) (k #f) seen))))
+           (define (wound)
+             (let ((n 0) (log '()))
+               (let ((c (dynamic-wind
+                          (lambda () (exhaust!) (set! log (cons 'in log)))
+                          (lambda () (call/cc (lambda (c) (set! k c)))
+                                     (read-char (open-input-file "{data}")))
+                          (lambda () (set! log (cons 'out log))))))
+                 (set! n (+ n 1))
+                 (if (< n 3) (k #f) (list c (reverse log))))))
+           (define (opened) (exhaust!) (open-input-file "{data}"))
+           (define (tail)
+             (let ((n 0) (seen '()))
+               (let ((p (begin (call/cc (lambda (c) (set! k c))) (opened))))
+                 (set! n (+ n 1))
+                 (set! seen (cons (read-char p) seen))
+                 (if (< n 3) (k #f) seen))))
+           (define (internal)
+             (let ((n 0) (seen '()))
+               (exhaust!)
+               (let ((c (prim-call-with-input-file "{data}"
+                          (lambda (p)
+                            (let ((c (read-char p)))
+                              (call/cc (lambda (c) (set! k c)))
+                              c)))))
+                 (set! n (+ n 1))
+                 (set! seen (cons c seen))
+                 (if (< n 3) (k #f) seen))))
+           (define (collections) (cdr (assq 'collections (gc-stats))))
+           (define c0 (collections))
+           (list (before) (wound) (tail) (internal) (> (collections) c0))"#
+    );
+    const EXPECTED: &str =
+        r"((#\h #\h #\h) (#\h (in out in out in out)) (#\h #\h #\h) (#\h #\h #\h) #t)";
+
+    fn run<B: patina_runtime::Backend>(
+        interpreter: &patina_interpreter::Interpreter<B>,
+        program: &str,
+    ) -> String {
+        let value = interpreter
+            .eval_program(program)
+            .unwrap_or_else(|e| panic!("{program}: {e}"));
+        patina_primitives::primitives::io::datum_writer::format_write_tagged(
+            value,
+            interpreter.backend().global_env().heap(),
+        )
+    }
+
+    let vm = patina_interpreter::Interpreter::new(patina_vm::VmBackend::with_fs(ScarceFs::new()));
+    assert_eq!(run(&vm, &program), EXPECTED, "VM");
+    let tw = common::tree_walker_interpreter_with_fs(ScarceFs::new());
+    assert_eq!(run(&tw, &program), EXPECTED, "tree-walker");
+}
+
+/// The native filesystem with a table of [`ScarceFs::CAP`] descriptors: an
+/// open while that many of its handles are alive fails with `EMFILE`, as
+/// one beyond `RLIMIT_NOFILE` does. A handle is alive until its reader or
+/// writer drops, which for a port is when it is closed or a collection
+/// drops it, so a port nothing reaches holds its descriptor until a
+/// collection, as a real one does. Library files are read whole and are not
+/// counted.
+struct ScarceFs {
+    open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ScarceFs {
+    const CAP: usize = 8;
+
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            open: Default::default(),
+        })
+    }
+
+    /// Take a descriptor for `inner`, or fail as an open past the limit does.
+    fn take<T>(&self, inner: std::io::Result<T>) -> std::io::Result<Counted<T>> {
+        use std::sync::atomic::Ordering;
+        // EMFILE: 24 on Linux and on macOS. `out_of_descriptors` is what the
+        // open primitives ask, so ask it too.
+        let full = std::io::Error::from_raw_os_error(24);
+        assert!(patina_core::port::out_of_descriptors(&full));
+        if self.open.load(Ordering::SeqCst) >= Self::CAP {
+            return Err(full);
+        }
+        let inner = inner?;
+        self.open.fetch_add(1, Ordering::SeqCst);
+        Ok(Counted {
+            inner,
+            open: std::sync::Arc::clone(&self.open),
+        })
+    }
+}
+
+/// A [`ScarceFs`] handle, which gives its descriptor back when it drops.
+struct Counted<T> {
+    inner: T,
+    open: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<T> Drop for Counted<T> {
+    fn drop(&mut self) {
+        self.open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl<T: std::io::Read> std::io::Read for Counted<T> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl<T: std::io::BufRead> std::io::BufRead for Counted<T> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.inner.consume(amount)
+    }
+}
+
+impl<T: std::io::Write> std::io::Write for Counted<T> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl patina_core::vfs::WritePort for Counted<Box<dyn patina_core::vfs::WritePort>> {
+    fn finalize(&mut self) -> std::io::Result<()> {
+        self.inner.finalize()
+    }
+}
+
+impl patina_core::FileSystem for ScarceFs {
+    fn open_read(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Box<dyn patina_core::vfs::ReadPort>> {
+        Ok(Box::new(self.take(patina_core::NativeFs.open_read(path))?))
+    }
+
+    fn open_write(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Box<dyn patina_core::vfs::WritePort>> {
+        Ok(Box::new(self.take(patina_core::NativeFs.open_write(path))?))
+    }
+
+    fn file_exists(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.file_exists(path)
+    }
+
+    fn is_file(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.is_file(path)
+    }
+
+    fn remove_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.remove_file(path)
+    }
+
+    fn read_to_string(&self, path: &std::path::Path) -> std::io::Result<String> {
+        patina_core::NativeFs.read_to_string(path)
+    }
+
+    fn canonicalize(&self, path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+        patina_core::NativeFs.canonicalize(path)
+    }
+
+    fn is_dir(&self, path: &std::path::Path) -> bool {
+        patina_core::NativeFs.is_dir(path)
+    }
+
+    fn read_dir(&self, path: &std::path::Path) -> std::io::Result<Vec<String>> {
+        patina_core::NativeFs.read_dir(path)
+    }
+
+    fn create_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.create_dir(path)
+    }
+
+    fn create_dir_all(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.create_dir_all(path)
+    }
+
+    fn remove_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.remove_dir(path)
+    }
+
+    fn current_dir(&self) -> std::io::Result<std::path::PathBuf> {
+        patina_core::NativeFs.current_dir()
+    }
+
+    fn set_current_dir(&self, path: &std::path::Path) -> std::io::Result<()> {
+        patina_core::NativeFs.set_current_dir(path)
+    }
 }

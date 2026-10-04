@@ -8,6 +8,7 @@
 //! This module provides the infrastructure for string ports, stdio ports,
 //! file ports, and (in the future) bytevector ports.
 
+use crate::heap::FilePortCharge;
 use crate::source_map::SourceCursor;
 use crate::vfs::{FileSystem, ReadPort, WritePort};
 use std::cell::{Cell, RefCell};
@@ -223,6 +224,7 @@ pub fn flush_open_output_files() -> Vec<(PathBuf, io::Error)> {
         if let PortData::File(FilePortData {
             path,
             handle: FileHandle::Output(writer),
+            charge: _,
         }) = &mut *data
             && let Err(error) = writer.flush()
         {
@@ -547,6 +549,39 @@ pub struct FilePortData {
     pub path: PathBuf,
     /// The file handle - either a buffered reader or writer
     pub handle: FileHandle,
+    /// What the port is charged while it is open: its buffer as external
+    /// bytes, and its descriptor toward descriptor pressure (#607). Given to
+    /// it when it gets its heap object (`Heap::alloc_port`), and dropped with
+    /// the file, when the port is closed or its last `Rc` drops. `None` for a
+    /// port that never reached the heap.
+    charge: Option<FilePortCharge>,
+}
+
+impl FilePortData {
+    fn new(path: &str, handle: FileHandle) -> Self {
+        Self {
+            path: PathBuf::from(path),
+            handle,
+            charge: None,
+        }
+    }
+}
+
+/// Whether an open failed because descriptors ran out: `EMFILE`, this
+/// process's table full, or `ENFILE`, the system's (#607). An open primitive
+/// collects at its call and tries once more after either, since the
+/// collection closes the file ports it finds dead. Elsewhere than Unix,
+/// nothing is told apart.
+pub fn out_of_descriptors(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(libc::EMFILE | libc::ENFILE))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
 }
 
 /// File handle - either input or output.
@@ -735,10 +770,10 @@ impl Port {
         Ok(Self::new_port(
             PortKind::Textual,
             PortDirection::Input,
-            PortData::File(FilePortData {
-                path: PathBuf::from(path),
-                handle: FileHandle::Input(WholeCharReader::new(reader)),
-            }),
+            PortData::File(FilePortData::new(
+                path,
+                FileHandle::Input(WholeCharReader::new(reader)),
+            )),
         ))
     }
 
@@ -753,10 +788,7 @@ impl Port {
         let port = Self::new_port(
             kind,
             PortDirection::Output,
-            PortData::File(FilePortData {
-                path: PathBuf::from(path),
-                handle: FileHandle::Output(writer),
-            }),
+            PortData::File(FilePortData::new(path, FileHandle::Output(writer))),
         );
         OUTPUT_FILES.with(|files| files.borrow_mut().note(&port.data));
         port
@@ -768,10 +800,10 @@ impl Port {
         Ok(Self::new_port(
             PortKind::Binary,
             PortDirection::Input,
-            PortData::File(FilePortData {
-                path: PathBuf::from(path),
-                handle: FileHandle::Input(WholeCharReader::new(reader)),
-            }),
+            PortData::File(FilePortData::new(
+                path,
+                FileHandle::Input(WholeCharReader::new(reader)),
+            )),
         ))
     }
 
@@ -843,6 +875,18 @@ impl Port {
             self.pushback.borrow_mut().push_str(line);
         }
         Ok(line)
+    }
+
+    /// Give an open file port the charge `charge` makes, unless it holds one
+    /// already: `Heap::alloc_port`'s part of descriptor pressure (#607).
+    /// `charge` is called only for an open file port without one, so a port
+    /// that gets a second heap object, or any other port, is charged nothing.
+    pub(crate) fn hold_file_charge(&self, charge: impl FnOnce() -> FilePortCharge) {
+        if let PortData::File(file) = &mut *self.data.borrow_mut()
+            && file.charge.is_none()
+        {
+            file.charge = Some(charge());
+        }
     }
 
     /// Check if port is open
@@ -2409,10 +2453,7 @@ mod tests {
         let port = Port::new_port(
             PortKind::Binary,
             PortDirection::Input,
-            PortData::File(FilePortData {
-                path: "scripted".into(),
-                handle: FileHandle::Input(reader),
-            }),
+            PortData::File(FilePortData::new("scripted", FileHandle::Input(reader))),
         );
         // Neither a zero-length request nor reaching the limit may consume
         // the next byte. Only Interrupted is retried; other errors survive.

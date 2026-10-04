@@ -403,37 +403,43 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         read::read,
     ));
 
-    // File I/O operations (scheme file library)
-    registry.register(PrimitiveFn::new_higher_order(
+    // File I/O operations (scheme file library). Resumable, so that an open
+    // that ran out of descriptors collects at its call and tries again
+    // (`file.rs`, #607).
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "open-input-file",
         Arity::Exact(1),
         "Opens a file for reading and returns an input port.",
         file::open_input_file,
+        file::open_input_file_again,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "open-output-file",
         Arity::Exact(1),
         "Opens a file for writing and returns an output port.",
         file::open_output_file,
+        file::open_output_file_again,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "open-binary-input-file",
         Arity::Exact(1),
         "Opens a binary file for reading and returns an input port.",
         file::open_binary_input_file,
+        file::open_binary_input_file_again,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "open-binary-output-file",
         Arity::Exact(1),
         "Opens a binary file for writing and returns an output port.",
         file::open_binary_output_file,
+        file::open_binary_output_file_again,
     ));
 
     // Flush is in scheme base
@@ -523,21 +529,26 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         ));
     }
 
-    // Higher-order file operations (scheme file library)
-    registry.register(PrimitiveFn::new_higher_order(
+    // Higher-order file operations: `(patina internal io)`'s, which
+    // `(scheme file)` replaces with Scheme versions. Resumable, so that an
+    // open collects and retries, and the procedure runs as a call the
+    // machine makes.
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "call-with-input-file",
         Arity::Exact(2),
         "Opens file for reading, calls proc with port, closes port.",
         file::call_with_input_file,
+        file::call_with_input_file_resume,
     ));
 
-    registry.register(PrimitiveFn::new_higher_order(
+    registry.register(PrimitiveFn::new_resumable(
         "scheme.file",
         "call-with-output-file",
         Arity::Exact(2),
         "Opens file for writing, calls proc with port, closes port.",
         file::call_with_output_file,
+        file::call_with_output_file_resume,
     ));
 
     // `with-input-from-file` and `with-output-to-file` are deliberately not
