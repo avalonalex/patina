@@ -63,6 +63,18 @@ cd "$(dirname "$0")/.."
 # This lane sets the one GC variable it means; one left exported in the
 # shell would change what it measures.
 unset PATINA_GC PATINA_GC_STRESS PATINA_GC_ZEAL PATINA_GC_COUNT_DIR
+# Descriptor pressure posts a collection once min(128, soft RLIMIT_NOFILE / 4)
+# file ports opened since the last one are still open (#607), so the soft
+# limit decides when those collections come. Pin the threshold at 128, as
+# any limit of 512 or more gives it: raise a lower one, such as the 256 a
+# macOS shell starts with, to 1024, and leave a higher one as it is.
+nofile=$(ulimit -Sn)
+if [ "$nofile" != unlimited ] && [ "$nofile" -lt 512 ]; then
+    ulimit -Sn 1024 || {
+        echo "error: cannot raise the descriptor limit from $nofile to 1024 (hard limit $(ulimit -Hn))" >&2
+        exit 1
+    }
+fi
 
 # target, interval, minimum collections, tests (measured 2026-10-02: the
 # minimum is half the count at that interval; in parentheses the count, and

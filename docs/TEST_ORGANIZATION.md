@@ -934,6 +934,16 @@ per-file check that a run collected cannot stand in for this: a control file
 can collect under the default GC too (`cps-features.scm` does, once; before
 the byte trigger, #606, every one did, while it loaded SRFI 64).
 
+**Every GC lane pins descriptor pressure's threshold (#607).** Descriptor
+pressure posts a collection once `min(128, soft RLIMIT_NOFILE / 4)` file
+ports opened since the last one are still open, so the soft descriptor limit
+decides when those collections come, and with them when a dropped output
+port's buffer is written out, which a program can see. The four lane scripts
+raise a soft limit under 512, such as the 256 a macOS shell starts with, to
+1024 before they run anything, so the threshold is 128 on every host, as any
+limit of 512 or more gives it; a higher limit is left as it is, and one the
+hard limit keeps under 1024 fails the lane.
+
 **The reclamation proofs are in bytes, and none can pass without collecting
 (#606).** `(gc-stats)` reports `bytes-reclaimed`, every byte a collection has
 freed, which grows only when a collection frees something; each proof

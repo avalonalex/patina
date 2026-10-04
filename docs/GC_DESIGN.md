@@ -623,8 +623,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   tree-walker (medians of five interleaved runs against b2a270d, release,
   macOS arm64, 2026-10-04; four other I/O loops, `call-with-output-file`,
   `with-output-to-file`, `read-line` over 14 MB and a million string ports,
-  moved by -0.26% to +0.47%). A loop that drops them collects every 128
-  opens, and finishes.
+  moved by -0.26% to +0.47%). A loop that drops them collects every
+  `min(128, ulimit -n / 4)` opens, and finishes: every 128 at a soft limit
+  of 512 or more, which the GC lanes raise a lower one to
+  (`docs/TEST_ORGANIZATION.md`, "GC lanes"), and every 64 at the 256 a
+  macOS shell starts with.
 
   An open that runs out of descriptors anyway, because the table holds live
   ports or because collection was deferred, collects at its call: every
