@@ -28,7 +28,8 @@
 //!
 //! **Shared `Rc` payloads are not charged** — a procedure's body and
 //! environment (a tree-walker closure is charged an estimate of its frame
-//! instead, below), a macro, a library, an environment specifier, a port, a
+//! instead, below), a macro, a library, an environment specifier, a port
+//! (an open file port's buffer is charged as external bytes, below), a
 //! prompt tag, a promise's state (which `promise_update` shares between two
 //! promises), a tree-walker continuation (whose frames are `Rc` links shared
 //! with every other capture). Attributing them to one slot would charge the
@@ -47,6 +48,22 @@
 //! tombstoned slots' payloads, and a namespace's tables grow wherever a
 //! definition lands. The sweep settles L after the arenas are swept, so what
 //! those drops give back is out of the L it sets.
+//!
+//! **An open file port** (#607, GC_PRD §9.6 F3) is charged
+//! [`FILE_PORT_BYTES`] of external bytes for its buffer, and counted toward
+//! **descriptor pressure**: the file ports opened since the last collection
+//! and not closed since. When that count reaches the installed
+//! [`GcThreshold::descriptors`], `min(128, RLIMIT_NOFILE / 4)`
+//! ([`descriptor_pressure_threshold`]), the heap posts a collection, which
+//! closes the dead ones, since a port's file closes as its payload drops in
+//! the sweep. A [`FilePortCharge`] that the port's data holds gives both back
+//! when the port closes, explicitly or by dropping, with no heap borrow. A
+//! loop that closes what it opens never reaches the descriptor threshold,
+//! though its charges still count toward the byte trigger like the
+//! allocations they stand for; one that drops its ports collects every
+//! `threshold` opens rather than running out of descriptors, and an open
+//! that runs out anyway collects at its call and tries once more
+//! (`patina_primitives::Step::Collect`).
 //!
 //! **A tree-walker closure** (#637) is charged its `Rc<Procedure>`
 //! allocation, its parameter vector and the scope sets its parameters own,
@@ -79,11 +96,13 @@
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
 //! after `max(8 MiB, 2·L)` bytes, L being the bytes the last collection
 //! found live. `PATINA_GC_STRESS` still counts allocations, not bytes
-//! ([`GcThreshold`]).
+//! ([`GcThreshold`]). Descriptor pressure applies in every mode that
+//! collects on its own, and not under `PATINA_GC=0`.
 
 use std::cell::Cell;
 use std::mem::size_of;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use num_bigint::BigInt;
 
@@ -104,6 +123,55 @@ pub const STRING_SLOT_BYTES: usize = size_of::<Vec<char>>();
 pub const OBJECT_SLOT_BYTES: usize = size_of::<HeapObjectData>();
 
 const VALUE_BYTES: usize = size_of::<TaggedValue>();
+
+/// What an open file port is charged as external bytes (#607): its buffer,
+/// at the 8 KiB capacity that `NativeFs` gives the `BufReader` and
+/// `BufWriter` under it (`std`'s default), the figure GC_PRD §9.6 F3 sets.
+pub const FILE_PORT_BYTES: usize = 8 * 1024;
+
+/// Descriptor pressure's cap: the file ports opened since the last
+/// collection, and not closed, that post one however high the descriptor
+/// limit is.
+const DESCRIPTOR_PRESSURE_CAP: usize = 128;
+
+/// How many file ports opened since the last collection, and not closed
+/// since, post a collection (#607): `min(128, RLIMIT_NOFILE / 4)`, at least
+/// one. The soft limit is read once per process, when the first collector
+/// installs its threshold; a program that changes it later is not followed.
+/// Where there is no such limit to read (not a Unix), the cap alone.
+pub fn descriptor_pressure_threshold() -> usize {
+    static THRESHOLD: OnceLock<usize> = OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        descriptor_limit()
+            .map_or(DESCRIPTOR_PRESSURE_CAP, |limit| {
+                DESCRIPTOR_PRESSURE_CAP.min(limit / 4)
+            })
+            .max(1)
+    })
+}
+
+/// The soft `RLIMIT_NOFILE`, or `None` where it is unlimited or cannot be
+/// read.
+#[cfg(unix)]
+fn descriptor_limit() -> Option<usize> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `getrlimit` writes the one `rlimit` it is given, which lives
+    // for the call, and reads nothing else.
+    let status = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
+    if status != 0 || limit.rlim_cur == libc::RLIM_INFINITY {
+        return None;
+    }
+    Some(usize::try_from(limit.rlim_cur).unwrap_or(usize::MAX))
+}
+
+/// No descriptor limit to read.
+#[cfg(not(unix))]
+fn descriptor_limit() -> Option<usize> {
+    None
+}
 
 /// A vector's payload: its element buffer, at capacity.
 #[inline]
@@ -249,14 +317,20 @@ impl HeapObjectData {
 }
 
 /// What raises the collection-pending flag: allocations since the last
-/// collection reaching `allocations`, or bytes reaching `bytes`, whichever
-/// comes first. The mode made concrete (`GcController::current_threshold`):
-/// the adaptive default counts bytes, `PATINA_GC_STRESS` allocations, and
-/// zeal's threshold of no allocations is already crossed.
+/// collection reaching `allocations`, bytes reaching `bytes`, or file ports
+/// opened and not closed reaching `descriptors`, whichever comes first. The
+/// mode made concrete (`GcController::current_threshold`): the adaptive
+/// default counts bytes, `PATINA_GC_STRESS` allocations, and zeal's
+/// threshold of no allocations is already crossed; each of them counts
+/// descriptors too, and `PATINA_GC=0` counts nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GcThreshold {
     pub allocations: usize,
     pub bytes: usize,
+    /// Descriptor pressure's threshold (#607): file ports opened since the
+    /// last collection and not closed since. Compared where a file port is
+    /// charged ([`Heap::charge_file_port`]).
+    pub descriptors: usize,
 }
 
 impl GcThreshold {
@@ -264,21 +338,31 @@ impl GcThreshold {
     pub const NEVER: Self = Self {
         allocations: usize::MAX,
         bytes: usize::MAX,
+        descriptors: usize::MAX,
     };
 
     /// Crossed after `n` allocations, whatever their size.
     pub const fn allocations(n: usize) -> Self {
         Self {
             allocations: n,
-            bytes: usize::MAX,
+            ..Self::NEVER
         }
     }
 
     /// Crossed after `n` bytes of allocation.
     pub const fn bytes(n: usize) -> Self {
         Self {
-            allocations: usize::MAX,
             bytes: n,
+            ..Self::NEVER
+        }
+    }
+
+    /// This threshold, crossed also when `n` file ports opened since the last
+    /// collection are still open.
+    pub const fn with_descriptors(self, n: usize) -> Self {
+        Self {
+            descriptors: n,
+            ..self
         }
     }
 }
@@ -316,6 +400,8 @@ impl ByteAccount {
                 external: Cell::new(0),
                 threshold: Cell::new(usize::MAX),
                 pending,
+                descriptors: Cell::new(0),
+                cycle: Cell::new(0),
             }),
             through_last_gc: 0,
             reclaimed: 0,
@@ -345,6 +431,16 @@ pub(super) struct SharedCounts {
     pub(super) threshold: Cell<usize>,
     /// The heap's collection-pending flag (`Heap::gc_pending`).
     pub(super) pending: Rc<Cell<bool>>,
+    /// Descriptor pressure (#607): the file ports opened since the last
+    /// collection and not closed since. Here rather than on the heap because
+    /// a port closes by dropping, often inside a sweep, and its
+    /// [`FilePortCharge`] takes itself off with no heap borrow.
+    pub(super) descriptors: Cell<usize>,
+    /// Collections so far, as the sweep counts them when it resets
+    /// `descriptors`: a [`FilePortCharge`] records the cycle it was made in,
+    /// so that closing a port an earlier collection found live does not take
+    /// off one opened since.
+    pub(super) cycle: Cell<u64>,
 }
 
 impl SharedCounts {
@@ -364,6 +460,51 @@ impl SharedCounts {
         self.external.set(self.external.get().saturating_add(bytes));
         if self.count(bytes) >= self.threshold.get() {
             self.pending.set(true);
+        }
+    }
+
+    /// Hold `bytes` fewer outside the arenas ([`ExternalBytes::release`]).
+    fn release_external(&self, bytes: usize) {
+        let held = self.external.get();
+        debug_assert!(
+            bytes <= held,
+            "released {bytes} external bytes, but only {held} are charged"
+        );
+        self.external.set(held.saturating_sub(bytes));
+    }
+
+    /// The sweep's part of descriptor pressure: the ports opened before this
+    /// collection that it found live count toward no later one.
+    pub(super) fn start_cycle(&self) {
+        self.descriptors.set(0);
+        self.cycle.set(self.cycle.get().wrapping_add(1));
+    }
+}
+
+/// What an open file port holds against the collector (#607): the
+/// [`FILE_PORT_BYTES`] of its buffer, charged as external bytes, and its
+/// place in descriptor pressure's count. [`Heap::charge_file_port`] makes
+/// one when the port gets its heap object, and the port's data holds it
+/// beside the file, so both go together: when the port is closed, or when
+/// its last `Rc` drops — in a sweep, usually, which holds the heap mutably,
+/// so giving it back needs no heap borrow.
+#[derive(Debug)]
+pub(crate) struct FilePortCharge {
+    counts: Rc<SharedCounts>,
+    /// The collection cycle the port was opened in ([`SharedCounts::cycle`]).
+    cycle: u64,
+}
+
+impl Drop for FilePortCharge {
+    fn drop(&mut self) {
+        let counts = &self.counts;
+        counts.release_external(FILE_PORT_BYTES);
+        // A port an earlier collection found live was counted toward that
+        // one, and is not among the ones opened since.
+        if counts.cycle.get() == self.cycle {
+            counts
+                .descriptors
+                .set(counts.descriptors.get().saturating_sub(1));
         }
     }
 }
@@ -410,12 +551,7 @@ impl ExternalBytes {
     /// bug in the holder: it panics in debug builds and gives back what is
     /// held in release.
     pub fn release(&self, bytes: usize) {
-        let held = self.0.external.get();
-        debug_assert!(
-            bytes <= held,
-            "released {bytes} external bytes, but only {held} are charged"
-        );
-        self.0.external.set(held.saturating_sub(bytes));
+        self.0.release_external(bytes);
     }
 }
 
@@ -528,5 +664,39 @@ impl Heap {
     /// caller that holds the heap.
     pub fn release_external_bytes(&mut self, bytes: usize) {
         self.external_bytes_handle().release(bytes);
+    }
+
+    /// Charge a file port that has just opened (#607): [`FILE_PORT_BYTES`]
+    /// of external bytes, and one more port in descriptor pressure's count.
+    /// When the count reaches the installed [`GcThreshold::descriptors`] and
+    /// no collection is pending already, post one for the next safe point
+    /// and count it in [`Heap::descriptor_collections`]. The port holds what
+    /// this returns until it closes. `alloc_port` calls it, once per port.
+    pub(crate) fn charge_file_port(&mut self) -> FilePortCharge {
+        let counts = &self.account.shared;
+        counts.charge_external(FILE_PORT_BYTES);
+        let open = counts.descriptors.get().saturating_add(1);
+        counts.descriptors.set(open);
+        if open >= self.gc_threshold.descriptors && !self.gc_pending.get() {
+            self.gc_pending.set(true);
+            self.descriptor_collections += 1;
+        }
+        FilePortCharge {
+            counts: Rc::clone(counts),
+            cycle: counts.cycle.get(),
+        }
+    }
+
+    /// File ports opened since the last collection and not closed since:
+    /// what descriptor pressure compares with [`GcThreshold::descriptors`].
+    pub fn descriptors_since_gc(&self) -> usize {
+        self.account.shared.descriptors.get()
+    }
+
+    /// Collections that descriptor pressure posted: each time the file ports
+    /// opened since the last collection, and not closed, reached the
+    /// threshold with no collection pending already.
+    pub fn descriptor_collections(&self) -> u64 {
+        self.descriptor_collections
     }
 }

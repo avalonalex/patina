@@ -10,7 +10,8 @@
 
 use crate::apply_context::ApplyContext;
 use crate::registry::{PrimitiveFn, PrimitiveRegistry, Step, done_with_result};
-use patina_core::{CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
+use patina_core::port::out_of_descriptors;
+use patina_core::{CollectKind, CoreExpr, CoreExprKind, TaggedValue, core_syntax::CoreForm};
 use patina_frontend::{Desugarer, LibraryDefinition};
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
@@ -647,6 +648,14 @@ mod load_state {
 /// and resumes this with the next (#477). The file is parsed first, to the
 /// end or to a parse error, which is raised once the forms before it have
 /// run — where reading form by form raised it.
+///
+/// A read that fails because descriptors ran out asks for a full collection
+/// at the call ([`Step::Collect`]), which closes the file ports it finds
+/// dead, and reads once more when resumed, as the open primitives do
+/// (`io/file.rs`, #607) and as chibi's `load` does, whose read is an
+/// `open-input-file`. The state it keeps is a pair of the file name and the
+/// environment specifier, which [`load_resume`] tells apart from the vector
+/// it keeps between forms ([`load_state`]).
 fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, EvalError> {
     if args.is_empty() || args.len() > 2 {
         return Err(EvalError::WrongArity {
@@ -682,15 +691,36 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         ctx.interaction_environment().mutable_specifier()
     };
 
-    // Read the file
-    let content = ctx
-        .fs()
-        .read_to_string(std::path::Path::new(&filename))
-        .map_err(|e| {
-            EvalError::IOError(format!("load: cannot open '{}': {}", filename, e)).with_diagnostic(
-                Diagnostic::new(DiagnosticKind::Io, e.to_string()).at_path(&filename),
-            )
-        })?;
+    match read_source(ctx, &filename) {
+        Err(e) if out_of_descriptors(&e) => {
+            let state = heap.borrow_mut().alloc_pair(args[0], env_spec);
+            Ok(Step::Collect {
+                kind: CollectKind::Major,
+                state,
+            })
+        }
+        content => load_forms(ctx, filename, env_spec, content),
+    }
+}
+
+/// Read `load`'s file whole.
+fn read_source(ctx: &dyn ApplyContext, filename: &str) -> std::io::Result<String> {
+    ctx.fs().read_to_string(std::path::Path::new(filename))
+}
+
+/// `load` with its file read, or the error the read failed with, which is
+/// raised: parse the forms, keep them in the state, and evaluate the first.
+fn load_forms(
+    ctx: &dyn ApplyContext,
+    filename: String,
+    env_spec: TaggedValue,
+    content: std::io::Result<String>,
+) -> Result<Step, EvalError> {
+    let heap = ctx.heap();
+    let content = content.map_err(|e| {
+        EvalError::IOError(format!("load: cannot open '{}': {}", filename, e))
+            .with_diagnostic(Diagnostic::new(DiagnosticKind::Io, e.to_string()).at_path(&filename))
+    })?;
 
     let parse_error = |e: &patina_frontend::ParseError| {
         format!(
@@ -724,6 +754,29 @@ fn primitive_load(ctx: &dyn ApplyContext, args: &[TaggedValue]) -> Result<Step, 
         heap.alloc_vector(vec![forms, error, env_spec, path])
     };
     load_next(ctx, state, TaggedValue::UNSPECIFIED)
+}
+
+/// `load` resumed. After the collection its read asked for, `state` is the
+/// pair of the file name and the environment specifier: read again, whether
+/// or not the machine collected, as the opens do, so that a second failure
+/// raises the error the system gives. Otherwise a form has returned, and
+/// `state` is the vector of [`load_state`]: carry on with the next.
+fn load_resume(
+    ctx: &dyn ApplyContext,
+    state: TaggedValue,
+    value: TaggedValue,
+) -> Result<Step, EvalError> {
+    let retry = ctx.heap().borrow().try_pair(state);
+    let Some((name, env_spec)) = retry else {
+        return load_next(ctx, state, value);
+    };
+    let filename = ctx
+        .heap()
+        .borrow()
+        .get_string_contents(name)
+        .ok_or_else(|| EvalError::InternalError("load: lost its file name".into()))?;
+    let content = read_source(ctx, &filename);
+    load_forms(ctx, filename, env_spec, content)
 }
 
 /// `load`'s next step: evaluate the next form of its file, raise the parse
@@ -831,7 +884,7 @@ pub fn register(registry: &mut PrimitiveRegistry) {
         Arity::Range(1, 2),
         "Reads and evaluates all expressions from a file.",
         primitive_load,
-        load_next,
+        load_resume,
     ));
 
     // interaction-environment - return the REPL/global environment (scheme repl library)

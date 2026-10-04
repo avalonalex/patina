@@ -654,16 +654,21 @@ impl GcController {
     /// [`GcThreshold::NEVER`] default, where only `(gc)` raises the flag.
     ///
     /// The adaptive default counts bytes (#606); stress counts allocations,
-    /// as its lanes' pinned collection counts assume.
+    /// as its lanes' pinned collection counts assume. Every mode that
+    /// collects on its own counts descriptor pressure too (#607,
+    /// `heap/account.rs`); `PATINA_GC=0` does not, so its reference run
+    /// collects only where `(gc)` or an open that ran out of descriptors
+    /// asks to.
     pub fn current_threshold(&self) -> GcThreshold {
-        match self.mode {
-            GcMode::Off => GcThreshold::NEVER,
+        let threshold = match self.mode {
+            GcMode::Off => return GcThreshold::NEVER,
             GcMode::On => GcThreshold::bytes(self.collector.auto_threshold()),
             GcMode::Stress(n) => GcThreshold::allocations(n),
             // Already crossed: installing it raises the pending flag, and
             // `collect` re-installs it after every sweep.
             GcMode::Zeal => GcThreshold::allocations(0),
-        }
+        };
+        threshold.with_descriptors(account::descriptor_pressure_threshold())
     }
 
     /// Collect now, with no check of the deferral rule. Crate-private (#624):
@@ -1797,6 +1802,10 @@ impl Heap {
             .through_last_gc
             .saturating_add(account.shared.since_gc.get() as u64);
         account.shared.since_gc.set(0);
+        // After the arenas, as `since_gc`: the file ports this sweep closed
+        // took themselves off the count as they dropped, and the ones it
+        // found live count toward no later collection (#607).
+        account.shared.start_cycle();
         // Read after the arenas are swept: external bytes that the dead
         // slots' payloads gave back as they dropped — a dead environment
         // specifier's namespace, say — are not live.
@@ -3025,6 +3034,89 @@ mod tests {
         assert_eq!(heap.external_bytes(), kept_charge);
         assert!(heap.live_bytes() >= kept_charge + OBJECT_SLOT_BYTES);
         assert!(heap.live_bytes() < kept_charge + 4 * OBJECT_SLOT_BYTES);
+    }
+
+    /// An open file port is charged its buffer and its place in descriptor
+    /// pressure when it gets its heap object, once, and gives both back when
+    /// it closes: explicitly, or by dropping in the sweep that finds it dead.
+    /// The count reaching the threshold posts a collection, once while one is
+    /// pending; the collection starts the count again, and closing a port it
+    /// found live gives back its bytes but takes nothing off the ports opened
+    /// since (#607).
+    #[test]
+    fn a_file_port_is_charged_until_it_closes() {
+        use crate::heap::FILE_PORT_BYTES;
+        use crate::port::Port;
+
+        let fs = crate::vfs::MemoryFs::new();
+        fs.add_text_file("/f", "hello");
+        let mut heap = Heap::new();
+        let pending = heap.gc_pending_handle();
+        heap.set_gc_threshold(GcThreshold::NEVER.with_descriptors(3));
+        let open = |heap: &mut Heap| heap.alloc_port(Port::open_input_file("/f", &fs).unwrap());
+        let held = |heap: &Heap| (heap.descriptors_since_gc(), heap.external_bytes());
+
+        let kept = open(&mut heap);
+        let closed = open(&mut heap);
+        assert_eq!(held(&heap), (2, 2 * FILE_PORT_BYTES));
+        heap.get_port(closed).unwrap().close();
+        assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
+        // Closed already: nothing more to give back.
+        heap.get_port(closed).unwrap().close();
+        assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
+
+        // Neither a port that is not a file's nor a second heap object for
+        // a file port is charged.
+        heap.alloc_port(Port::new_input_string("text".into()));
+        let again = Rc::clone(heap.get_port(kept).unwrap());
+        let kept_again = heap.alloc_port(again);
+        assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
+
+        open(&mut heap);
+        assert!(!pending.get());
+        open(&mut heap);
+        assert!(pending.get(), "three open: a collection is posted");
+        assert_eq!(heap.descriptor_collections(), 1);
+        open(&mut heap);
+        assert_eq!(heap.descriptor_collections(), 1, "one is pending already");
+        assert_eq!(held(&heap), (4, 4 * FILE_PORT_BYTES));
+
+        let roots = TestRoots {
+            values: vec![kept, kept_again],
+            ..TestRoots::default()
+        };
+        collect(&mut heap, &roots);
+        assert!(!pending.get());
+        assert_eq!(
+            held(&heap),
+            (0, FILE_PORT_BYTES),
+            "the dead ports closed in the sweep, and the live one counts no more"
+        );
+
+        let opened_since = open(&mut heap);
+        heap.get_port(kept).unwrap().close();
+        assert_eq!(held(&heap), (1, FILE_PORT_BYTES));
+        heap.get_port(opened_since).unwrap().close();
+        assert_eq!(held(&heap), (0, 0));
+    }
+
+    /// Descriptor pressure is part of every mode that collects on its own,
+    /// and not of `PATINA_GC=0`'s (#607).
+    #[test]
+    fn descriptor_pressure_follows_the_mode() {
+        let threshold = crate::heap::descriptor_pressure_threshold();
+        assert!((1..=128).contains(&threshold), "{threshold}");
+        for mode in [GcMode::On, GcMode::Stress(16), GcMode::Zeal] {
+            assert_eq!(
+                GcController::new(mode).current_threshold().descriptors,
+                threshold,
+                "{mode}"
+            );
+        }
+        assert_eq!(
+            GcController::new(GcMode::Off).current_threshold(),
+            GcThreshold::NEVER
+        );
     }
 
     #[test]

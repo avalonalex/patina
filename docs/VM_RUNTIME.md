@@ -314,8 +314,9 @@ There are **two** probe sets, one per call shape, and they differ in order:
   `try_call_parameter` sees it, and its converter runs in `resume_stub`'s
   frame. It ran on a nested loop through `call_any_sync()` until #478
 - A resumable primitive that asks for a collection at its call
-  (`Step::Collect`, #639; `(gc)`, and next #607's collect-and-retry) runs it
-  in `resume_stub`'s collecting variant, `collect_stub`: `CollectAtCall` /
+  (`Step::Collect`, #639; `(gc)`, and #607's opens that ran out of
+  descriptors, `load`'s read among them, which collect and retry) runs it in `resume_stub`'s
+  collecting variant, `collect_stub`: `CollectAtCall` /
   `ResumePrimitive` / `Return`, with the same register window, so one frame
   can go from a call to a collection and back. The caller waits beneath it
   at the call's return pc. `CollectAtCall` writes into the caller's register

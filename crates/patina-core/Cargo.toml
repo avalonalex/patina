@@ -19,6 +19,11 @@ rustc-hash.workspace = true
 # Small vector optimization for ScopeSet
 smallvec.workspace = true
 
+# `getrlimit(RLIMIT_NOFILE)`, which sets descriptor pressure's threshold
+# (`heap/account.rs`, #607). The binary had it already, through rustyline.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
 

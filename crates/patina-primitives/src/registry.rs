@@ -62,8 +62,9 @@ pub enum Step {
     /// Run a collection of `kind` at this call, then resume the primitive
     /// with `state` and whether the collection ran (`#t`, or `#f` where it
     /// was posted instead). `(gc)` asks for one and is done when resumed;
-    /// an open that ran out of descriptors can ask for one and try again
-    /// when resumed (#607), its arguments kept in `state`.
+    /// an open that ran out of descriptors asks for one and opens again
+    /// when resumed (#607, `primitives/io/file.rs`), its file name kept in
+    /// `state`, and `load` reads its file again the same way.
     ///
     /// The machine suspends the caller at the call's return pc, clears the
     /// register the call's value goes to (the VM's liveness maps keep a
@@ -81,12 +82,14 @@ pub enum Step {
     /// and repeats its work in its resume half: the machine keeps none of the
     /// call's arguments (the VM clears the stub frame's argument registers,
     /// and the tree-walker's `ResumePrimitive` keeps only `state`). For
-    /// #607's opens that is the one file name, which costs no allocation.
-    /// Allocating before the step can cross the collection trigger, and then
-    /// the safe point before the collection runs one of its own first, so
-    /// the call pays for two. Where the answer is `#f` — deferred, or no
-    /// machine at all (`run_synchronously`, which posts it) — nothing was
-    /// freed, and a retry should fail as the first attempt did.
+    /// #607's opens that is the one file name, which costs no allocation
+    /// (`(patina internal io)`'s `call-with-*-file` keep their procedure
+    /// too, in a pair, and `load` its environment). Allocating before the step can cross the collection
+    /// trigger, and then the safe point before the collection runs one of
+    /// its own first, so the call pays for two. Where the answer is `#f` —
+    /// deferred, or no machine at all (`run_synchronously`, which posts it)
+    /// — nothing was freed, and a retry fails as the first attempt did: the
+    /// opens and `load` make it anyway, for the error it raises.
     Collect {
         kind: CollectKind,
         state: TaggedValue,
