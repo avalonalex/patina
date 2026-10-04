@@ -511,6 +511,12 @@ pub struct Heap {
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
     gc_defer_depth: u32,
 
+    /// How many of those scopes are holders' (`GcDeferGuard::holding`)
+    /// rather than loops' (`GcDeferGuard::new`), so that a collection at a
+    /// call can tell the one guard of the outermost loop from a holder's
+    /// alone ([`Heap::gc_defer_is_one_loop`]).
+    gc_defer_holders: u32,
+
     /// Open `AssertNoGc` scopes: windows that must not reach a GC poll
     /// (`gc::AssertNoGc`, #624). Counted in check builds only
     /// (`GC_CHECK`), and asserted zero at every poll site. Shared through an
@@ -523,6 +529,26 @@ pub struct Heap {
     /// reaching into a backend-private collector.
     gc_collections: u64,
     gc_last_swept: usize,
+
+    /// Collections a primitive asked for at its call (`(gc)`, through
+    /// `patina_primitives::Step::Collect`) where collection is deferred, and
+    /// that were posted for a later safe point instead
+    /// ([`Heap::defer_collection`], #639): `(gc-stats)`'s
+    /// `deferred-collections`, which keeps the deferred windows visible.
+    gc_deferred_collections: u64,
+
+    /// A test's switch (#639): while set, [`GcController::safe_point`]
+    /// collects nothing on this heap, so the only collections are the ones
+    /// primitives ask for at their calls (`GcController::collect_at_call`).
+    /// What lets a test show that `(gc)` collects at its call rather than at
+    /// the safe point after it, which today comes before the caller's next
+    /// instruction anyway (GC_PRD stage 3 removes that poll). Compiled only
+    /// with `test-support`, a dev-dependency feature, so no build that ships
+    /// has it.
+    ///
+    /// [`GcController::safe_point`]: crate::GcController::safe_point
+    #[cfg(feature = "test-support")]
+    skip_safe_points: bool,
 
     /// Next id for `VmContinuationRef` / `VmDelimitedContinuationRef`
     /// handles. Heap-owned so ids are unique across both continuation kinds
@@ -656,9 +682,13 @@ impl Heap {
             gc_freed_overflow: false,
             gc_freed_closure_code_ids: None,
             gc_defer_depth: 0,
+            gc_defer_holders: 0,
             no_gc_scopes: Rc::new(Cell::new(0)),
             gc_collections: 0,
             gc_last_swept: 0,
+            gc_deferred_collections: 0,
+            #[cfg(feature = "test-support")]
+            skip_safe_points: false,
             next_vm_continuation_id: 0,
         }
     }
@@ -722,14 +752,23 @@ impl Heap {
         self.refresh_gc_pending();
     }
 
-    /// Ask for a collection at the next backend safe point (the `(gc)`
-    /// primitive cannot collect in place: it runs mid-evaluation, where live
-    /// values sit in Rust locals no root provider can see).
+    /// Ask for a collection at the next backend safe point.
     ///
     /// Raises the pending flag — honored regardless of the installed
-    /// threshold — and `sweep` lowers it.
+    /// threshold — and `sweep` lowers it. `(gc)` no longer comes here: it
+    /// collects at its call (`GcController::collect_at_call`, #639), and
+    /// posts through [`Heap::defer_collection`] only where it cannot.
     pub fn request_gc(&mut self) {
         self.gc_pending.set(true);
+    }
+
+    /// Post a collection that was asked for at a call where collection is
+    /// deferred — a nested loop, a library body being loaded — for the next
+    /// safe point that may collect, and count it (#639). What
+    /// `GcController::collect_at_call` does when it cannot collect.
+    pub fn defer_collection(&mut self) {
+        self.request_gc();
+        self.gc_deferred_collections += 1;
     }
 
     /// Start recording the raw bits of slots sweep reclaims, for
@@ -789,19 +828,30 @@ impl Heap {
         self.gc_defer_depth
     }
 
-    pub(crate) fn enter_gc_defer(&mut self) {
+    /// Whether the one GC-deferring scope alive is a loop's own guard: the
+    /// defer depth is 1, and that guard is no holder's. Every dispatch loop
+    /// and trampoline takes a guard at entry, so this is the outermost loop
+    /// polling with nothing deferring under it, where a collection at a call
+    /// may run (`GcController::collect_at_call`, #639).
+    pub fn gc_defer_is_one_loop(&self) -> bool {
+        self.gc_defer_depth == 1 && self.gc_defer_holders == 0
+    }
+
+    pub(crate) fn enter_gc_defer(&mut self, holder: bool) {
         self.gc_defer_depth += 1;
+        self.gc_defer_holders += u32::from(holder);
     }
 
     /// Checked in every build, not only check builds: it runs once per guard
     /// drop, off every hot path, and a release build that underflowed here
     /// would wrap to `u32::MAX` and never collect again, with no report.
-    pub(crate) fn exit_gc_defer(&mut self) {
+    pub(crate) fn exit_gc_defer(&mut self, holder: bool) {
         assert!(
             self.gc_defer_depth > 0,
             "unbalanced GC defer: exit without a matching enter"
         );
         self.gc_defer_depth -= 1;
+        self.gc_defer_holders -= u32::from(holder);
     }
 
     /// Collections performed against this heap.
@@ -812,6 +862,27 @@ impl Heap {
     /// Slots reclaimed by the most recent collection.
     pub fn gc_last_swept(&self) -> usize {
         self.gc_last_swept
+    }
+
+    /// Collections asked for at a call that were posted instead, because
+    /// collection was deferred there ([`Heap::defer_collection`]).
+    pub fn gc_deferred_collections(&self) -> u64 {
+        self.gc_deferred_collections
+    }
+
+    /// Turn every safe point's collection on this heap off, or back on: the
+    /// test switch `skip_safe_points` describes. Compiled only with
+    /// `test-support`.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn set_skip_safe_points(&mut self, skip: bool) {
+        self.skip_safe_points = skip;
+    }
+
+    /// Whether the test switch is on.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn skips_safe_points(&self) -> bool {
+        self.skip_safe_points
     }
 
     // =========================================================================
@@ -3295,6 +3366,7 @@ impl Heap {
             allocs_since_gc: self.allocs_since_gc,
             gc_collections: self.gc_collections,
             gc_last_swept: self.gc_last_swept,
+            gc_deferred_collections: self.gc_deferred_collections,
             live_bytes: self.live_bytes(),
             bytes_allocated: self.bytes_allocated(),
             bytes_reclaimed: self.bytes_reclaimed(),
@@ -3325,6 +3397,9 @@ pub struct HeapStats {
     pub allocs_since_gc: usize,
     pub gc_collections: u64,
     pub gc_last_swept: usize,
+    /// [`Heap::gc_deferred_collections`]: collections asked for at a call
+    /// and posted instead, where collection was deferred.
+    pub gc_deferred_collections: u64,
     /// [`Heap::live_bytes`]: L, what the last collection found live.
     pub live_bytes: usize,
     /// [`Heap::bytes_allocated`]: every byte charged so far.

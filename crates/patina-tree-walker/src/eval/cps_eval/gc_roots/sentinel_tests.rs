@@ -115,6 +115,11 @@ fn every_step_result_field_is_traced() {
     let apply_env = s.pair(h, "StepResult::ApplyProc.env");
     let apply_cont_env = s.vector(h, "StepResult::ApplyProc.cont_env");
     let apply_stacks = stacks(h, &mut s, "StepResult::ApplyProc");
+
+    let collect_cont = s.vector(h, "StepResult::CollectAtCall.cont");
+    let collect_env = s.object(h, "StepResult::CollectAtCall.env");
+    let collect_cont_env = s.pair(h, "StepResult::CollectAtCall.cont_env");
+    let collect_stacks = stacks(h, &mut s, "StepResult::CollectAtCall");
     drop(heap);
 
     let entry_expr = literal(entry);
@@ -152,6 +157,19 @@ fn every_step_result_field_is_traced() {
             prompt_stack: apply_stacks.prompt_stack,
             dynamic_winds: apply_stacks.dynamic_winds,
             exception_handlers: apply_stacks.exception_handlers,
+        },
+        StepResult::CollectAtCall {
+            kind: patina_core::CollectKind::Major,
+            cont: ContValue::ResumePrimitive {
+                index: 0,
+                state: collect_cont,
+                original_cont: Box::new(ContValue::Halt),
+            },
+            env: env_holding(&shared, collect_env),
+            cont_env: cont_env_holding(collect_cont_env),
+            prompt_stack: collect_stacks.prompt_stack,
+            dynamic_winds: collect_stacks.dynamic_winds,
+            exception_handlers: collect_stacks.exception_handlers,
         },
     ];
     let roots: Vec<StepRoots<'_>> = steps

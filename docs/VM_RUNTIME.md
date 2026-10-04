@@ -199,6 +199,10 @@ fn run_loop_until(state: &mut VmState, exit_depth: usize) -> Result<TaggedValue,
 
 Runs `dispatch_one_instruction()` in a loop until `frames.len() == exit_depth`.
 Catchable errors are routed through exception handlers via `vm_raise_value()`.
+The top of each iteration is a GC safe point, under the loop's own
+`GcDeferGuard` (`docs/GC_DESIGN.md` §7). The one collection that runs inside
+dispatch is `CollectAtCall`'s, a resumable primitive's collection at its call
+(§4.5).
 
 ### 3.3 Instruction Dispatch
 
@@ -309,6 +313,21 @@ There are **two** probe sets, one per call shape, and they differ in order:
   (`patina_primitives::Step`): the call paths send it there before
   `try_call_parameter` sees it, and its converter runs in `resume_stub`'s
   frame. It ran on a nested loop through `call_any_sync()` until #478
+- A resumable primitive that asks for a collection at its call
+  (`Step::Collect`, #639; `(gc)`, and next #607's collect-and-retry) runs it
+  in `resume_stub`'s collecting variant, `collect_stub`: `CollectAtCall` /
+  `ResumePrimitive` / `Return`, with the same register window, so one frame
+  can go from a call to a collection and back. The caller waits beneath it
+  at the call's return pc. `CollectAtCall` writes into the caller's register
+  file before any `Return`: it clears the register the call's value goes to
+  (deliver-first, `deliver_before_collecting`), because a liveness map keeps
+  a call's destination as a root from the call on. Then it collects through
+  `GcController::collect_at_call`, or posts the collection where it may not
+  collect (a nested loop, a holder's extent). It skips the clearing when the
+  stub frame sits at the loop's `exit_depth`, whose frame below belongs to
+  another loop. The stub frame keeps the primitive's state and nothing of
+  the call: its callee, argument and result registers are cleared, so they
+  keep nothing alive through the collection
 - A `with-exception-handler` thunk that finishes without a frame closes its
   handler extent by truncating to the handler-stack length recorded before
   installation. A prompt body does the same for prompts. Neither can rely on
@@ -735,6 +754,7 @@ component nobody carried, that one catches a shape nobody tried.
 | abort unwind | *builds a landing and travels to it* — the `full invoke` row, with a stub frame on top that calls the prompt handler | | | | |
 | `raise` | push the stub that calls the handler (§5.2) | — | — | — | pop one; `ResumeRaise` re-pushes on a continuable return |
 | normal `Return` | pop | free | by `PopWind` | by depth | by depth |
+| resumable primitive suspends (`Step::Call`, `Eval`, `Collect`) | push stub | for a `Collect` only: the caller's destination cleared, unless the stub sits at `exit_depth` | — | — | — |
 | wind thunk (jump, abort) | push stub | — | — | — | replaced by the record's own |
 | wind thunk (invoke re-entry) | — | — | — | — | the invoke site's |
 | wind thunk (ordinary call) | — | — | — | — | the live stack |
@@ -792,6 +812,15 @@ Notes on the cells that are not a plain yes:
   had already made `tail_call_value` run a primitive before popping the
   frame, as any tail callee runs, and routed a `call-with-values` consumer
   and `apply` as a value through it
+- **A resumable primitive's suspension touches no dynamic stack.** Its stub
+  frame (`resume_stub`, or `collect_stub` for a collection, §4.5) is an
+  ordinary frame over the caller, so a continuation captured in the call it
+  makes carries the frame and resumes the primitive again (#477, #478). The
+  one write to the caller's registers before the primitive's value arrives
+  is a `Collect`'s: the caller's destination is cleared before the
+  collection (#639). Nothing reads it before the value arrives, and a
+  continuation that re-enters the caller restores its registers from its
+  own snapshot.
 - **Parameter objects are not a sixth component.** `parameterize` expands to
   `dynamic-wind` around a swap (`lib/scheme/base/parameters.scm`), so
   parameter state rides on `dynamic_winds` and needs no snapshot of its own.

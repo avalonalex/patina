@@ -211,4 +211,20 @@ pub(super) enum StepResult {
         dynamic_winds: Vec<DynamicWindRecord>,
         exception_handlers: Vec<ExceptionHandler>,
     },
+    /// Collect at a resumable primitive's call (`patina_primitives::Step::
+    /// Collect`, #639), then invoke `cont` — the primitive's
+    /// `ResumePrimitive` — with whether the collection ran. A step of its
+    /// own so that the trampoline runs the collection at the top of its
+    /// loop, where this step is the whole machine and the run's entry
+    /// expression is at hand (`StepRoots`): the primitive's call is
+    /// suspended, and nothing of it is on the Rust stack.
+    CollectAtCall {
+        kind: patina_core::CollectKind,
+        cont: ContValue,
+        env: Rc<Environment>,
+        cont_env: ContEnv,
+        prompt_stack: Vec<PromptFrame>,
+        dynamic_winds: Vec<DynamicWindRecord>,
+        exception_handlers: Vec<ExceptionHandler>,
+    },
 }

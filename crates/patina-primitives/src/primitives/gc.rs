@@ -1,10 +1,17 @@
 //! GC primitives (see `docs/GC_DESIGN.md`)
 //!
-//! `(gc)` cannot collect in place: a primitive runs mid-evaluation, where
-//! live values sit in Rust locals no root provider can see. It records a
-//! request that backends honor at their next safe point (stages 2–3 of the
-//! GC plan). `(gc-stats)` reports arena and collector counters, and the
-//! byte account (`patina_core::heap` `account.rs`, #606):
+//! `(gc)` collects at its call (#639). It cannot collect from Rust, where
+//! the collector sees neither its frame nor its caller's, so it is a
+//! resumable primitive that asks the machine for a full collection
+//! ([`Step::Collect`]): the machine suspends the caller at the call's return
+//! pc and collects before the caller's next instruction, in every GC mode,
+//! `PATINA_GC=0` included. Where collection is deferred — a nested loop, a
+//! library body being loaded — the collection is posted for the next safe
+//! point that may collect instead, as every `(gc)` was before #639, and
+//! counted in `deferred-collections`.
+//!
+//! `(gc-stats)` reports arena and collector counters, and the byte account
+//! (`patina_core::heap` `account.rs`, #606):
 //!
 //! - `live-bytes`: what the last collection found live — the slots of the
 //!   objects it marked, their payloads (a VM continuation's snapshot among
@@ -36,25 +43,35 @@
 //!
 //! The slot counts before them (`pairs`, `free-pairs`, `allocs-since-gc`,
 //! `last-swept` and the rest) stay, as diagnostics of the arenas.
+//!
+//! `deferred-collections` counts the collections asked for at a call where
+//! collection was deferred, and posted instead (`Heap::defer_collection`,
+//! #639): the windows that cannot collect, kept visible. GC_PRD's K16
+//! counters, which measure those windows, are its eventual home.
 
+use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;
 use crate::registry::PrimitiveRegistry;
+use crate::registry::Step;
+use patina_core::CollectKind;
 use patina_core::TaggedValue;
 use patina_runtime::Arity;
 use patina_runtime::EvalError;
 use patina_runtime::SharedHeap;
 
-// Both handlers are registered with Arity::Exact(0); the registry checks
-// arity before dispatch, so the handlers don't re-check.
+// Both are registered with Arity::Exact(0); the registry checks arity before
+// dispatch, so the handlers don't re-check.
 
 /// Register GC primitives in the registry
 pub(super) fn register(registry: &mut PrimitiveRegistry) {
-    registry.register(PrimitiveFn::new_heap(
+    registry.register(PrimitiveFn::new_resumable(
         "patina.debug",
         "gc",
         Arity::Exact(0),
-        "Request a garbage collection at the next safe point.",
+        "Collect garbage at this call, before the caller's next instruction; where collection \
+         is deferred, at the next safe point that may collect.",
         gc,
+        gc_done,
     ));
 
     registry.register(PrimitiveFn::new_heap(
@@ -66,9 +83,23 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
     ));
 }
 
-fn gc(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
-    heap.borrow_mut().request_gc();
-    Ok(TaggedValue::UNSPECIFIED)
+/// Ask the machine for a full collection at this call. Nothing to keep
+/// across it.
+fn gc(_ctx: &dyn ApplyContext, _args: &[TaggedValue]) -> Result<Step, EvalError> {
+    Ok(Step::Collect {
+        kind: CollectKind::Major,
+        state: TaggedValue::UNSPECIFIED,
+    })
+}
+
+/// The collection has run, or been posted where collection is deferred:
+/// `(gc)`'s value is unspecified either way.
+fn gc_done(
+    _ctx: &dyn ApplyContext,
+    _state: TaggedValue,
+    _collected: TaggedValue,
+) -> Result<Step, EvalError> {
+    Ok(Step::Done(TaggedValue::UNSPECIFIED))
 }
 
 fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
@@ -86,6 +117,10 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         ("free-objects", stats.free_objects),
         ("allocs-since-gc", stats.allocs_since_gc),
         ("collections", stats.gc_collections as usize),
+        (
+            "deferred-collections",
+            stats.gc_deferred_collections as usize,
+        ),
         ("last-swept", stats.gc_last_swept),
         ("live-bytes", stats.live_bytes),
         ("bytes-allocated", stats.bytes_allocated as usize),

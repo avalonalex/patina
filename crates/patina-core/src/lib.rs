@@ -89,10 +89,11 @@ pub use source_map::{SourceMap, prune_freed_locations};
 pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scopes};
 // The collector itself — `Collector`, `MarkSweepCollector`, `run_mark_phase`,
 // `Heap::sweep`, `GcController::collect` — is crate-private (#624): code
-// outside this crate collects only through `GcController::safe_point`.
+// outside this crate collects only through `GcController::safe_point` and
+// `GcController::collect_at_call`.
 pub use heap::gc::{
-    ArenaCounts, AssertNoGc, GcController, GcDeferGuard, GcMode, GcRoots, GcStats, GcVisitor,
-    MarkBits, NoGcScopes,
+    ArenaCounts, AssertNoGc, CollectKind, GcController, GcDeferGuard, GcMode, GcRoots, GcStats,
+    GcVisitor, MarkBits, NoGcScopes,
 };
 pub use heap::{
     GC_CHECK, GcFreedBits, Heap, SharedHeap, SpineEnd,

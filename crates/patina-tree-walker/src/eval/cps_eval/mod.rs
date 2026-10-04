@@ -132,6 +132,37 @@ impl<'a> CpsEvaluator<'a> {
         );
     }
 
+    /// A collection a resumable primitive asked for at its call
+    /// (`StepResult::CollectAtCall`, #639): the same root set as
+    /// [`Self::maybe_collect`]'s, with `step` — the suspended call, its
+    /// primitive's `ResumePrimitive` continuation and the step's stacks —
+    /// as the whole machine, handed to `GcController::collect_at_call`. It
+    /// collects only on the outermost trampoline with no other guard alive,
+    /// and otherwise posts the collection for the outermost trampoline's
+    /// next safe point and counts it. Returns whether a collection ran.
+    fn collect_at_call(
+        &self,
+        kind: patina_core::CollectKind,
+        step: &StepResult,
+        expr: Option<&CpsExpr>,
+    ) -> bool {
+        let evaluator = self.evaluator;
+        GcController::collect_at_call(
+            &evaluator.gc,
+            evaluator.global_env.heap(),
+            kind,
+            |collect| {
+                // As at a safe point: with a load in flight the registry
+                // cannot be read, and the collection is posted.
+                let Ok(registry) = evaluator.library_registry.try_borrow() else {
+                    return;
+                };
+                let step_roots = gc_roots::StepRoots { step, expr };
+                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
+            },
+        )
+    }
+
     /// Evaluate a CPS expression to a final value
     ///
     /// This is the main entry point for CPS evaluation. The expression
@@ -323,6 +354,36 @@ impl<'a> CpsEvaluator<'a> {
                     dynamic_winds,
                     exception_handlers,
                 ),
+
+                // A primitive asked for a collection at its call. It runs
+                // here, before anything after the call, with this step as
+                // the machine: it is checked for an open `AssertNoGc` window
+                // like the safe point above, and collects only where that
+                // one may (#639).
+                StepResult::CollectAtCall { kind, .. } => {
+                    let collected = self.collect_at_call(kind, &current_step, expr);
+                    let StepResult::CollectAtCall {
+                        kind: _,
+                        cont,
+                        env,
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    } = current_step
+                    else {
+                        unreachable!("matched as CollectAtCall above")
+                    };
+                    Ok(StepResult::InvokeContinuation {
+                        cont,
+                        value: TaggedValue::boolean(collected),
+                        env,
+                        cont_env,
+                        prompt_stack,
+                        dynamic_winds,
+                        exception_handlers,
+                    })
+                }
             };
 
             match step_result {

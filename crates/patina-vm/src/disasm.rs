@@ -313,6 +313,7 @@ pub fn format_instruction(instr: &Instruction, nested: &mut Vec<CodeObjectId>) -
         Instruction::ResumeRaise => "ResumeRaise".to_string(),
         Instruction::ResumeForce => "ResumeForce".to_string(),
         Instruction::ResumePrimitive => "ResumePrimitive".to_string(),
+        Instruction::CollectAtCall { kind } => format!("CollectAtCall {kind:?}"),
         Instruction::Nop => "Nop".to_string(),
     }
 }

@@ -21,7 +21,10 @@
 //!   register pointer, or heap borrow across such a call. Re-read the top
 //!   frame/base and refresh cached code before using them in the driver.
 //! - These helpers do not collect. Allocations request collection; the driver
-//!   services it only at a safe point. Rust argument vectors, capture copies,
+//!   services it only at a safe point, or, for a primitive that asks for a
+//!   collection at its call (`Step::Collect`), at the `CollectAtCall` of the
+//!   stub frame they push, an instruction of its own (#639). Rust argument
+//!   vectors, capture copies,
 //!   and globals-swap temporaries are not roots. Every driver loop holds a
 //!   `GcDeferGuard`; nested loops cannot collect while those temporaries live.
 //!   A compiled driver must use the same guard/safe-point discipline and the
@@ -123,7 +126,7 @@ use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
 use patina_core::procedure::Procedure;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{AssertNoGc, GC_CHECK};
+use patina_core::{AssertNoGc, CollectKind, GC_CHECK};
 use patina_primitives::{CallArgs, Step};
 use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
@@ -1459,12 +1462,13 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 
 /// A code object the runtime builds rather than compiles, memoised in `slot`.
 ///
-/// Both callers want the same three properties, and stating them once is the
-/// point of the helper. The object goes through `state.load`, so the GC's
-/// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — none of its seven stubs has constants to trace, but
-/// the invariant is cheaper to keep than to caveat, and a stub that ever does
-/// need them inherits the rule rather than having to discover it. It is built at most once per
+/// Every stub builder wants the same three properties, and stating them once
+/// is the point of the helper. The object goes through `state.load`, so the
+/// GC's "every frame's code came from the store" invariant (`gc_roots.rs`)
+/// holds without qualification — none of the stubs it builds has constants
+/// to trace (`VM_ISA.md` lists them), but the invariant is cheaper to keep
+/// than to caveat, and a stub that ever does need them inherits the rule
+/// rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
 /// `code_store` is the one owner. And its `source_map` is empty, which
 /// `attach_source_location` reads as "not a place in the program" and steps
@@ -1718,8 +1722,9 @@ thread_local! {
     static EMPTY_REENTRY: Rc<[u64]> = Rc::from(Vec::new());
 }
 
-/// The registers of the stub frame a resumable primitive's call runs in. See
-/// [`resume_stub`] and [`Instruction::ResumePrimitive`].
+/// The registers of the stub frame a resumable primitive's call or
+/// collection runs in. See [`resume_stub`], [`collect_stub`] and
+/// [`Instruction::ResumePrimitive`].
 pub(super) mod resume_step {
     /// The primitive's registry index, as a fixnum.
     pub(in crate::runtime) const INDEX: u16 = 0;
@@ -1727,7 +1732,8 @@ pub(super) mod resume_step {
     pub(in crate::runtime) const STATE: u16 = 1;
     /// The procedure the primitive asked to call.
     pub(in crate::runtime) const CALLEE: u16 = 2;
-    /// What the call returned, and then the value the frame returns.
+    /// What the call returned (or, for a collection, whether it ran), and
+    /// then the value the frame returns.
     pub(in crate::runtime) const RESULT: u16 = 3;
     /// `#t` while CALLEE is the closure a `Step::Eval` compiled, which
     /// `ResumePrimitive` retires when it returns so that its code can go.
@@ -1738,8 +1744,12 @@ pub(super) mod resume_step {
     /// The most arguments a stub passes in registers: a converter takes one,
     /// and a list costs an allocation and a spread on every call.
     pub(in crate::runtime) const INLINE_ARGS: usize = 3;
-    /// One stub per argument count up to [`INLINE_ARGS`], and one for more.
-    pub(crate) const VARIANTS: usize = INLINE_ARGS + 2;
+    /// The variant that collects ([`super::collect_stub`]), after the call
+    /// variants.
+    pub(in crate::runtime) const COLLECT: usize = INLINE_ARGS + 2;
+    /// One stub per argument count up to [`INLINE_ARGS`], one for more, and
+    /// one that collects.
+    pub(crate) const VARIANTS: usize = COLLECT + 1;
     /// Window size of the stub frame, the same for every variant, so that a
     /// frame can change variant between calls.
     pub(in crate::runtime) const NUM_REGS: u16 = ARGS + INLINE_ARGS as u16;
@@ -1790,31 +1800,116 @@ fn resume_stub(state: &mut VmState, argc: usize) -> Result<Rc<CodeObject>, VmErr
     )
 }
 
-/// Put a call and the state kept across it into the stub frame at `base`,
-/// as [`resume_stub`]'s variant for its argument count reads them.
+/// The code object a resumable primitive's collection runs in
+/// ([`Step::Collect`], #639): `CollectAtCall` / `ResumePrimitive` /
+/// `Return`. The frame suspends the caller at the call's return pc and holds
+/// the primitive's state while the collection runs, so a primitive that
+/// collects and then tries again (#607) keeps its arguments rooted here; the
+/// value goes to the caller when the primitive is resumed and done.
+///
+/// # State contract
+///
+/// Returns loaded/cached stub code via runtime_stub. Changes only the code
+/// store/cache; no frame is pushed and no Scheme code runs.
+fn collect_stub(state: &mut VmState, kind: CollectKind) -> Result<Rc<CodeObject>, VmError> {
+    // One kind, so one variant; a second kind gets a variant of its own.
+    let CollectKind::Major = kind;
+    runtime_stub(
+        state,
+        |s| s.resume_codes[resume_step::COLLECT],
+        |s, id| s.resume_codes[resume_step::COLLECT] = Some(id),
+        "collect-at-call",
+        move || {
+            vec![
+                Instruction::CollectAtCall { kind },
+                Instruction::ResumePrimitive,
+                Instruction::Return {
+                    val: resume_step::RESULT,
+                },
+            ]
+        },
+        resume_step::NUM_REGS,
+    )
+}
+
+/// The stub variant for `work`: [`resume_stub`]'s for a call of its argument
+/// count, or [`collect_stub`].
+///
+/// # State contract
+///
+/// As `resume_stub`: changes only the code store/cache.
+fn stub_for(state: &mut VmState, work: &StubWork) -> Result<Rc<CodeObject>, VmError> {
+    match work {
+        StubWork::Call { args, .. } => resume_stub(state, args.len()),
+        StubWork::Collect(kind) => collect_stub(state, *kind),
+    }
+}
+
+/// Put the work a primitive is suspended for, and the state kept across it,
+/// into the stub frame at `base`, as [`stub_for`]'s variant reads them.
 ///
 /// # State contract
 ///
 /// Requires the stub frame on top at `base`. Writes its call registers, and
 /// allocates a list past the inline count; calls no Scheme.
-fn set_resume_call(state: &mut VmState, base: usize, call: ResumeCall) {
-    let ResumeCall {
-        callee,
-        args,
-        kept,
-        eval,
-    } = call;
+fn set_suspension(state: &mut VmState, base: usize, suspension: Suspension) {
+    let Suspension { work, kept } = suspension;
     state.set_reg_at(base, resume_step::STATE, kept);
-    state.set_reg_at(base, resume_step::CALLEE, callee);
-    state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(eval));
-    if args.len() <= resume_step::INLINE_ARGS {
-        for (i, arg) in args.into_iter().enumerate() {
-            state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
+    match work {
+        StubWork::Call { callee, args, eval } => {
+            state.set_reg_at(base, resume_step::CALLEE, callee);
+            state.set_reg_at(base, resume_step::EVAL, TaggedValue::boolean(eval));
+            if args.len() <= resume_step::INLINE_ARGS {
+                for (i, arg) in args.into_iter().enumerate() {
+                    state.set_reg_at(base, resume_step::ARGS + i as u16, arg);
+                }
+            } else {
+                let list = state.heap().borrow_mut().list_from_iter(args);
+                state.set_reg_at(base, resume_step::ARGS, list);
+            }
         }
-    } else {
-        let list = state.heap().borrow_mut().list_from_iter(args);
-        state.set_reg_at(base, resume_step::ARGS, list);
+        StubWork::Collect(_) => {
+            // Nothing to call. A frame going round again keeps the last
+            // call's callee, arguments and result in these registers, which
+            // the collection would otherwise keep alive.
+            for reg in [resume_step::CALLEE, resume_step::RESULT]
+                .into_iter()
+                .chain((0..resume_step::INLINE_ARGS as u16).map(|i| resume_step::ARGS + i))
+            {
+                state.set_reg_at(base, reg, TaggedValue::UNSPECIFIED);
+            }
+            state.set_reg_at(base, resume_step::EVAL, TaggedValue::FALSE);
+        }
     }
+}
+
+/// Deliver first (#639): before `resume_stub`'s frame on top collects, clear
+/// the register the primitive's value goes to. A liveness map keeps a call's
+/// destination as a root from the call on, for the value or continuation
+/// that will arrive there (`written_register`), so until something is
+/// delivered it would keep whatever it held before the call alive through the
+/// collection. `(gc)`'s value is unspecified, so this delivers it; a
+/// primitive that goes on after the collection delivers its own value over
+/// this when it is done. Nothing reads the register before then: the call
+/// has not returned, and a continuation that re-enters the frame restores
+/// its registers from its own snapshot.
+///
+/// Nothing is cleared when the frame returns out of this loop rather than
+/// into a frame it runs (`Return` at `exit_depth`): its value then goes to
+/// the loop's Rust caller, and the frame below belongs to another loop.
+///
+/// # State contract
+///
+/// Requires the stub frame on top. Writes one register of the frame below it
+/// when that frame is this loop's; changes no frame and calls no Scheme.
+pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: usize) {
+    let frames = state.execution.frames();
+    let depth = frames.len();
+    if depth < 2 || depth - 1 <= exit_depth {
+        return;
+    }
+    let slot = frames[depth - 2].register_base + frames[depth - 1].return_reg as usize;
+    state.execution.registers_mut()[slot] = TaggedValue::UNSPECIFIED;
 }
 
 /// The registry index of `prim`, if it is a resumable primitive
@@ -1854,22 +1949,35 @@ fn eval_to_vm_error(e: patina_primitives::EvalError) -> VmError {
     .with_diagnostic(e.diagnostic())
 }
 
-/// A resumable primitive's step as this machine takes it: a value, or a call
-/// for `resume_stub`'s frame to make — `Step::Eval`'s datum compiled into a
-/// closure over its environment ([`eval_closure`]), called like any other.
+/// A resumable primitive's step as this machine takes it: a value, or work
+/// for `resume_stub`'s frame to do before the primitive resumes — a call
+/// (`Step::Eval`'s datum compiled into a closure over its environment,
+/// [`eval_closure`], called like any other), or a collection.
 enum VmStep {
     Done(TaggedValue),
-    Call(ResumeCall),
+    Suspend(Suspension),
 }
 
-/// The call a resumable primitive's step asks `resume_stub`'s frame to make.
-struct ResumeCall {
-    callee: TaggedValue,
-    args: CallArgs,
-    /// The primitive's state, kept across the call.
+/// What a resumable primitive is suspended for, in `resume_stub`'s frame,
+/// and the state it keeps meanwhile.
+struct Suspension {
+    work: StubWork,
+    /// The primitive's state, kept across the work.
     kept: TaggedValue,
-    /// Whether `callee` is a `Step::Eval`'s closure ([`resume_step::EVAL`]).
-    eval: bool,
+}
+
+/// The work a stub frame does for a suspended primitive.
+enum StubWork {
+    /// Call `callee` with `args` ([`resume_stub`]).
+    Call {
+        callee: TaggedValue,
+        args: CallArgs,
+        /// Whether `callee` is a `Step::Eval`'s closure
+        /// ([`resume_step::EVAL`]).
+        eval: bool,
+    },
+    /// Collect at the call ([`collect_stub`], #639).
+    Collect(CollectKind),
 }
 
 /// The primitive's `step`, or its error, as a [`VmStep`].
@@ -1889,11 +1997,17 @@ fn vm_step(
             callee,
             args,
             state: kept,
-        } => VmStep::Call(ResumeCall {
-            callee,
-            args,
+        } => VmStep::Suspend(Suspension {
+            work: StubWork::Call {
+                callee,
+                args,
+                eval: false,
+            },
             kept,
-            eval: false,
+        }),
+        Step::Collect { kind, state: kept } => VmStep::Suspend(Suspension {
+            work: StubWork::Collect(kind),
+            kept,
         }),
         Step::Eval {
             expr,
@@ -1923,11 +2037,13 @@ fn vm_step(
                 |_| TaggedValue::UNSPECIFIED,
             )
             .map_err(Reentry::into_vm_error)?;
-            VmStep::Call(ResumeCall {
-                callee,
-                args: CallArgs::new(),
+            VmStep::Suspend(Suspension {
+                work: StubWork::Call {
+                    callee,
+                    args: CallArgs::new(),
+                    eval: true,
+                },
                 kept,
-                eval: true,
             })
         }
     })
@@ -1953,7 +2069,7 @@ fn start_resumable(
     };
     match vm_step(state, registry.start(index, args, &ctx))? {
         VmStep::Done(value) => state.set_reg(dst, value),
-        VmStep::Call(call) => push_resume_frame(state, index, call, dst)?,
+        VmStep::Suspend(suspension) => push_resume_frame(state, index, suspension, dst)?,
     }
     Ok(())
 }
@@ -1994,30 +2110,31 @@ fn tail_start_resumable(
             // The popped frame's extents close now, as after `Return`.
             pop_resolved_extents(state, exit_depth);
         }
-        VmStep::Call(call) => push_resume_frame(state, index, call, return_reg)?,
+        VmStep::Suspend(suspension) => push_resume_frame(state, index, suspension, return_reg)?,
     }
     Ok(None)
 }
 
-/// Push `resume_stub`'s frame for the resumable primitive at `index`, to make
-/// `call` and resume the primitive with what it returns; the frame returns
-/// the primitive's value to `return_reg` of the frame below.
+/// Push `resume_stub`'s frame for the resumable primitive at `index`, to do
+/// the work it is suspended for and resume it with what that answers; the
+/// frame returns the primitive's value to `return_reg` of the frame below.
 ///
 /// # State contract
 ///
 /// Requires the frame the value is for on top. Allocates the argument list
-/// and pushes one frame; calls no Scheme.
+/// and pushes one frame; calls no Scheme. A collection runs later, at the
+/// frame's `CollectAtCall`.
 fn push_resume_frame(
     state: &mut VmState,
     index: usize,
-    call: ResumeCall,
+    suspension: Suspension,
     return_reg: u16,
 ) -> Result<(), VmError> {
-    let code = resume_stub(state, call.args.len())?;
+    let code = stub_for(state, &suspension.work)?;
     let base = state.execution.push_frame(code, None, return_reg);
 
     state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
-    set_resume_call(state, base, call);
+    set_suspension(state, base, suspension);
     Ok(())
 }
 
@@ -2050,11 +2167,12 @@ pub(super) fn resume_primitive(state: &mut VmState, base: usize) -> Result<(), V
     };
     match vm_step(state, registry.resume(index, kept, result, &ctx))? {
         VmStep::Done(value) => state.set_reg_at(base, resume_step::RESULT, value),
-        VmStep::Call(call) => {
+        VmStep::Suspend(suspension) => {
             // Round again from the top, in the variant for this call's
-            // argument count; the loop picks up a changed code object.
-            let code = resume_stub(state, call.args.len())?;
-            set_resume_call(state, base, call);
+            // argument count, or the one that collects; the loop picks up a
+            // changed code object.
+            let code = stub_for(state, &suspension.work)?;
+            set_suspension(state, base, suspension);
             state.execution.restart_stub(code);
         }
     }
@@ -3661,9 +3779,10 @@ pub(super) fn exec_call_primitive_direct(
     // only primitives in call position.
     match step {
         VmStep::Done(result) => state.set_reg_at(base, dst, result),
-        // A resumable primitive's call runs in `resume_stub`'s frame, which
-        // returns the primitive's value to `dst` (#477, #478).
-        VmStep::Call(call) => push_resume_frame(state, index, call, dst)?,
+        // A resumable primitive's call or collection runs in `resume_stub`'s
+        // frame, which returns the primitive's value to `dst` (#477, #478,
+        // #639).
+        VmStep::Suspend(suspension) => push_resume_frame(state, index, suspension, dst)?,
     }
     Ok(None)
 }

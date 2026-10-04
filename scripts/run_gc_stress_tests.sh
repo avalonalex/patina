@@ -70,13 +70,17 @@ unset PATINA_GC PATINA_GC_STRESS PATINA_GC_ZEAL PATINA_GC_COUNT_DIR
 # #606, which left every count under stress as it was; gc_tree_walker's and
 # gc_vm's counts re-measured that day too, when their reclamation proofs
 # moved to bytes, which raised them slightly, and again when the arena
-# comparison stopped making a third run, which lowered them)
+# comparison stopped making a third run, which lowered them; ephemerons'
+# minimum re-pinned 2026-10-04, when #639's tests of `(gc)` collecting at its
+# call doubled its count, and again that day for seven more of them, `gc`
+# as a control primitive's thunk among them; escape_from_primitive's count
+# re-measured that day, 728 when it was pinned)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
     "cps_features 16 469 1"                   # 938 (0)
-    "ephemerons 16 62 15"                     # 124 (28)
-    "escape_from_primitive 16 364 12"         # 728 (0)
+    "ephemerons 16 289 30"                    # 578 (204)
+    "escape_from_primitive 16 364 12"         # 726 (0)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
     "gc_tree_walker 16 11421 19"              # 22851 (55)
     "gc_vm 16 8001 23"                        # 16012 (66)
