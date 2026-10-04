@@ -1462,12 +1462,13 @@ fn install_thunk_handlers(state: &mut VmState, handlers: &[ExceptionHandler]) {
 
 /// A code object the runtime builds rather than compiles, memoised in `slot`.
 ///
-/// Both callers want the same three properties, and stating them once is the
-/// point of the helper. The object goes through `state.load`, so the GC's
-/// "every frame's code came from the store" invariant (`gc_roots.rs`) holds
-/// without qualification — none of its seven stubs has constants to trace, but
-/// the invariant is cheaper to keep than to caveat, and a stub that ever does
-/// need them inherits the rule rather than having to discover it. It is built at most once per
+/// Every stub builder wants the same three properties, and stating them once
+/// is the point of the helper. The object goes through `state.load`, so the
+/// GC's "every frame's code came from the store" invariant (`gc_roots.rs`)
+/// holds without qualification — none of the stubs it builds has constants
+/// to trace (`VM_ISA.md` lists them), but the invariant is cheaper to keep
+/// than to caveat, and a stub that ever does need them inherits the rule
+/// rather than having to discover it. It is built at most once per
 /// `VmState`, and `slot` holds the id rather than the `Rc` because
 /// `code_store` is the one owner. And its `source_map` is empty, which
 /// `attach_source_location` reads as "not a place in the program" and steps

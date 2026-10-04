@@ -76,6 +76,17 @@ pub enum Step {
     /// loop, a library body being loaded) it posts the collection for the
     /// next safe point that may collect and counts it in `(gc-stats)`'s
     /// `deferred-collections`.
+    ///
+    /// To be called again, a primitive keeps what the retry needs in `state`
+    /// and repeats its work in its resume half: the machine keeps none of the
+    /// call's arguments (the VM clears the stub frame's argument registers,
+    /// and the tree-walker's `ResumePrimitive` keeps only `state`). For
+    /// #607's opens that is the one file name, which costs no allocation.
+    /// Allocating before the step can cross the collection trigger, and then
+    /// the safe point before the collection runs one of its own first, so
+    /// the call pays for two. Where the answer is `#f` — deferred, or no
+    /// machine at all (`run_synchronously`, which posts it) — nothing was
+    /// freed, and a retry should fail as the first attempt did.
     Collect {
         kind: CollectKind,
         state: TaggedValue,

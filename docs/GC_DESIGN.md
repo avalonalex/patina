@@ -750,30 +750,43 @@ placement + deferral:
    `eval`, quasiquote), instead of relying on someone having remembered to
    guard that route.
 
+   The VM does the same: every dispatch loop, outermost or nested, takes a
+   guard at entry (`run_loop_until_outcome`). So on both backends the
+   outermost loop runs at defer depth 1, under its own guard alone.
+
    A safe point asks **its own guard** — `GcDeferGuard::is_outermost()`, true
-   when nothing was deferring at the moment it was taken — rather than
-   comparing the depth to a literal. The "outermost" depth differs per backend
-   (the tree-walker guards every trampoline; the VM guards only its re-entrant
-   paths) and both share one counter through `SharedHeap`, so a hardcoded
-   number would be correct for at most one of them.
+   when nothing was deferring at the moment it was taken — once, at loop
+   entry, and hoists the answer out of the loop. That is not the whole rule:
+   a guard that a callee takes later and keeps past its instruction does not
+   change a hoisted answer. So the depth is checked as well when a collection
+   runs. `GcController::safe_point` asserts it is 1 in check builds (#624),
+   and a collection at a call (below), which runs inside an instruction or a
+   step and is handed no guard, requires it.
 
    Additional guards cover Rust-side scopes that hold values across an
-   evaluation call:
-   - library loading's `for tv in &parsed.body` loop (`eval/mod.rs`) — the
-     unevaluated forms are TaggedValues no root provider can see.
-   - VM (stage 3): `execute_nested`, `VmApplyContext` primitive callbacks,
-     the globals-swap windows.
+   evaluation call. These are holders' guards (`GcDeferGuard::holding`),
+   which the heap counts apart from the depth:
+   - library loading's `ParsedLibrary`, which holds a library's unevaluated
+     body (`patina-runtime/src/library_loader.rs`). Its forms are TaggedValues
+     no root provider can see.
+   - a form being expanded while its imports load (`desugar_with_imports`),
+     the VM's globals-swap window (`VmState::with_globals`), and each method
+     of the tree-walker's detached `ApplyContext for Evaluator`.
+
+   The nested runs themselves (`execute_nested`, a primitive's callback) are
+   loops, and take a loop's guard.
 
    The tree-walker safe point additionally refuses to collect when
    `library_registry` is already mutably borrowed: rooting must walk it, and
    a partial root set is a use-after-free. Parsing needs no guard — safe
    points exist only inside the trampoline, so GC cannot fire mid-parse.
 
-**Collections at a call (#639).** A safe point is the second way in. A
-primitive that needs a collection at its own call — `(gc)`, and next an open
-that ran out of descriptors and collects before it tries again (#607) —
-answers `patina_primitives::Step::Collect { kind, state }`, and the machine
-suspends the call and collects before the caller's next instruction:
+**Collections at a call (#639).** A collection at a call is the second way
+in. A primitive that needs a collection at its own call — `(gc)`, and next
+an open that ran out of descriptors and collects before it tries again
+(#607) — answers `patina_primitives::Step::Collect { kind, state }`, and the
+machine suspends the call and collects before the caller's next
+instruction:
 
 - **VM:** the primitive's step pushes `resume_stub`'s collecting variant,
   `CollectAtCall` / `ResumePrimitive` / `Return`, over the caller, which
@@ -790,18 +803,36 @@ suspends the call and collects before the caller's next instruction:
   (`StepRoots`), then invokes the continuation with whether it collected.
 
 Both go through `GcController::collect_at_call`, a poll site like a safe
-point: it asserts that no `AssertNoGc` scope is open, and collects only with
-the defer depth at 1 — the running loop's guard alone, which is what
-`is_outermost` answers at a safe point, asked of the heap because this poll
-runs inside an instruction or a step. It collects in every mode, `PATINA_GC=0`
-included. Anywhere else it posts the collection (`Heap::defer_collection`),
-which the next safe point that may collect runs, and counts it in
-`deferred-collections`; so does a collection whose roots are unavailable
-(a library load holding the registry). `ephemerons.rs` breaks a dead key right
-after `(gc)` in head and tail position, as an argument, in both
-`dynamic-wind` thunks and in a `guard` clause, on both backends, and again
-with every safe point's collection turned off (`Heap::set_skip_safe_points`,
-a `test-support` switch), where only a collection at the call can.
+point. It asserts that no `AssertNoGc` scope is open. It collects only when
+the one guard alive is a loop's (`Heap::gc_defer_is_one_loop`: the defer
+depth at 1, and no holder's guard). Since every loop takes a guard, that is
+the running loop's own guard, the outermost. This is what `is_outermost`
+answers at a safe point, asked of the heap because this poll runs inside an
+instruction or a step. A host that holds values under a holder's guard alone,
+outside any loop, gets the collection posted rather than run inside the
+holder's extent. It collects in every mode, `PATINA_GC=0` included. Anywhere
+else it posts the collection (`Heap::defer_collection`), which the next safe
+point that may collect runs, and counts it in `deferred-collections`; so does
+a collection whose roots are unavailable (a library load holding the
+registry).
+
+`ephemerons.rs` breaks a dead key right after `(gc)` on both backends:
+
+- in head and tail position, as an argument, in both `dynamic-wind` thunks,
+  and in a `guard` clause;
+- with `gc` itself as a control primitive's thunk, in head position and as a
+  value. That covers both `dynamic-wind` thunks, run by the extent's own exit
+  and by a jump's or an abort's travel. It also covers the before thunk a
+  resumed composable capture runs again, `with-exception-handler`'s thunk, a
+  prompt's body, and `call-with-values`' producer;
+- in code that `eval`, `load`, a parameter's converter, or a continuation
+  re-entered twice runs.
+
+It runs each again with every safe point's collection turned off
+(`Heap::set_skip_safe_points`, a `test-support` switch), where only a
+collection at the call can break the key. A VM-only test pins deliver-first:
+collecting before the destination is cleared keeps a key that an earlier
+call left in the same register.
 
 **Known limitation (accepted for v1):** a long-running nested execution — e.g.
 `(map f huge-list)` where each `f` call is a nested trampoline, or a library
