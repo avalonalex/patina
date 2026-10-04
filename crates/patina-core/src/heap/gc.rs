@@ -291,8 +291,8 @@ pub(crate) trait Collector {
 /// Two kinds, by what the guard protects (#624):
 /// - a **loop's** own guard ([`GcDeferGuard::new`]), which every dispatch
 ///   loop and trampoline takes for its extent. The outermost one is the only
-///   guard that may be alive when a collection runs, and `safe_point` asserts
-///   that in check builds.
+///   guard that may be alive when a collection runs: `safe_point` asserts
+///   that in check builds, and `collect_at_call` collects only then.
 /// - a **holder's** guard ([`GcDeferGuard::holding`]), taken by a Rust scope
 ///   or value that holds heap values across an evaluation call. No collection
 ///   may run inside its extent at all, and in check builds its drop asserts
@@ -304,6 +304,9 @@ pub struct GcDeferGuard {
     heap: SharedHeap,
     /// Defer depth observed on entry. Zero means nothing outer is deferring.
     outer_depth: u32,
+    /// Whether this is a holder's guard ([`GcDeferGuard::holding`]), which
+    /// the heap counts apart from the depth ([`Heap::gc_defer_is_one_loop`]).
+    holder: bool,
     /// A holder's guard, in a check build: the heap's collection count when
     /// it was taken, which must not have moved when it drops.
     collections_at_entry: Option<u64>,
@@ -332,30 +335,37 @@ impl GcDeferGuard {
     /// `ApplyContext for Evaluator`, which no loop runs above, takes one of
     /// these in each of its methods instead (#622).
     pub fn holding(heap: &SharedHeap) -> Self {
-        Self::enter(heap, GC_CHECK)
+        Self::enter(heap, true)
     }
 
-    fn enter(heap: &SharedHeap, check_extent: bool) -> Self {
+    fn enter(heap: &SharedHeap, holder: bool) -> Self {
         let (outer_depth, collections) = {
             let mut h = heap.borrow_mut();
             let depth = h.gc_defer_depth();
-            h.enter_gc_defer();
+            h.enter_gc_defer(holder);
             (depth, h.gc_collections())
         };
         Self {
             heap: heap.clone(),
             outer_depth,
-            collections_at_entry: check_extent.then_some(collections),
+            holder,
+            collections_at_entry: (holder && GC_CHECK).then_some(collections),
         }
     }
 
     /// Whether this guard is the outermost one — i.e. nothing else was
     /// deferring when it was taken, so a safe point inside it may collect.
     ///
-    /// Backends ask their own guard rather than comparing the depth against a
-    /// literal: the "outermost" depth differs per backend (the tree-walker
-    /// guards every trampoline, the VM only its re-entrant paths), and both
-    /// share one counter through `SharedHeap`.
+    /// Both backends guard every loop they run — the VM each
+    /// `run_loop_until_outcome`, the tree-walker each `run_trampoline` — so
+    /// the outermost loop runs at defer depth 1, under its own guard alone.
+    /// A loop asks this once, at entry, and hoists the answer out of its
+    /// safe point, so it is not the whole rule: a guard a callee took later
+    /// and kept past its instruction would not change it. When a collection
+    /// runs, the depth is checked as well. `safe_point` asserts it is 1 in a
+    /// check build (#624); `collect_at_call`, which runs inside an
+    /// instruction or a step and is handed no guard, requires it, with no
+    /// holder's guard among the one alive ([`Heap::gc_defer_is_one_loop`]).
     pub fn is_outermost(&self) -> bool {
         self.outer_depth == 0
     }
@@ -365,7 +375,7 @@ impl Drop for GcDeferGuard {
     fn drop(&mut self) {
         let collections = {
             let mut h = self.heap.borrow_mut();
-            h.exit_gc_defer();
+            h.exit_gc_defer(self.holder);
             h.gc_collections()
         };
         // Not while unwinding: a second panic would abort the process and
@@ -754,13 +764,18 @@ impl GcController {
     /// at the top of its trampoline (`StepResult::CollectAtCall`). Returns
     /// whether a collection ran.
     ///
-    /// It collects where a safe point may (#624): with the defer depth at 1 —
-    /// the running loop's own guard and no other, which is what
-    /// [`GcDeferGuard::is_outermost`] answers at a safe point, asked of the
-    /// heap here because the poll runs inside an instruction or a step, not
-    /// at the top of the loop — and with no [`AssertNoGc`] scope open, which
-    /// it asserts in a check build, as every poll site does. It collects in
-    /// every mode, `PATINA_GC=0` included, as `(gc)` always has.
+    /// It collects where a safe point may (#624): with one guard alive, and
+    /// that one a loop's ([`Heap::gc_defer_is_one_loop`]: the defer depth at
+    /// 1 and no holder's guard). Every loop takes a guard at entry, so that
+    /// is the running loop's own, the outermost, which is what
+    /// [`GcDeferGuard::is_outermost`] answers at a safe point; it is asked
+    /// of the heap here because the poll runs inside an instruction or a
+    /// step, not at the top of the loop. A holder's guard alone is no
+    /// loop's: a host that holds values under one and calls this outside any
+    /// loop gets the collection posted, not run inside the holder's extent.
+    /// And with no [`AssertNoGc`] scope open, which it asserts in a check
+    /// build, as every poll site does. It collects in every mode,
+    /// `PATINA_GC=0` included, as `(gc)` always has.
     ///
     /// Where collection is deferred — a nested loop, a library body being
     /// loaded, a holder's extent — it posts the collection for the next safe
@@ -780,7 +795,7 @@ impl GcController {
         // The one kind there is: a full collection.
         let CollectKind::Major = kind;
         let mut collected = false;
-        if heap.borrow().gc_defer_depth() == 1 {
+        if heap.borrow().gc_defer_is_one_loop() {
             with_roots(&mut |roots| {
                 let mut h = heap.borrow_mut();
                 gc.borrow_mut().collect(&mut h, roots);
@@ -3233,8 +3248,9 @@ mod tests {
 
     /// A collection a primitive asks for at its call (#639): under the
     /// running loop's own guard alone it collects, in every mode; where
-    /// collection is deferred, or the backend cannot supply its roots, it is
-    /// posted for the next safe point that may collect, and counted.
+    /// collection is deferred, or the backend cannot supply its roots, or no
+    /// loop is running — a holder's guard alone, or none — it is posted for
+    /// the next safe point that may collect, and counted.
     #[test]
     fn collect_at_call_collects_only_under_the_loops_own_guard() {
         let shared = crate::heap::new_shared_heap();
@@ -3287,6 +3303,19 @@ mod tests {
         assert!(collected);
         assert_eq!(counts(), (2, 3, false));
         drop(loop_guard);
+
+        // A host outside any loop, holding values under a holder's guard:
+        // the one guard alive is no loop's, so the depth of 1 does not let it
+        // collect inside the holder's extent (a check build's holder would
+        // panic on its drop if it had).
+        let holder = GcDeferGuard::holding(&shared);
+        assert_eq!(shared.borrow().gc_defer_depth(), 1);
+        assert!(!collect_at_call(Some(&no_roots)));
+        drop(holder);
+        assert_eq!(counts(), (2, 4, true));
+        // Nor with no guard at all: no loop is running.
+        assert!(!collect_at_call(Some(&no_roots)));
+        assert_eq!(counts(), (2, 5, true));
     }
 
     /// The test switch (#639): with it on, no safe point collects, however
@@ -3516,7 +3545,7 @@ mod tests {
         #[test]
         #[should_panic(expected = "unbalanced GC defer: exit without a matching enter")]
         fn an_unbalanced_defer_exit_panics() {
-            Heap::new().exit_gc_defer();
+            Heap::new().exit_gc_defer(false);
         }
 
         #[test]

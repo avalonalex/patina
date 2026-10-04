@@ -511,6 +511,12 @@ pub struct Heap {
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
     gc_defer_depth: u32,
 
+    /// How many of those scopes are holders' (`GcDeferGuard::holding`)
+    /// rather than loops' (`GcDeferGuard::new`), so that a collection at a
+    /// call can tell the one guard of the outermost loop from a holder's
+    /// alone ([`Heap::gc_defer_is_one_loop`]).
+    gc_defer_holders: u32,
+
     /// Open `AssertNoGc` scopes: windows that must not reach a GC poll
     /// (`gc::AssertNoGc`, #624). Counted in check builds only
     /// (`GC_CHECK`), and asserted zero at every poll site. Shared through an
@@ -676,6 +682,7 @@ impl Heap {
             gc_freed_overflow: false,
             gc_freed_closure_code_ids: None,
             gc_defer_depth: 0,
+            gc_defer_holders: 0,
             no_gc_scopes: Rc::new(Cell::new(0)),
             gc_collections: 0,
             gc_last_swept: 0,
@@ -821,19 +828,30 @@ impl Heap {
         self.gc_defer_depth
     }
 
-    pub(crate) fn enter_gc_defer(&mut self) {
+    /// Whether the one GC-deferring scope alive is a loop's own guard: the
+    /// defer depth is 1, and that guard is no holder's. Every dispatch loop
+    /// and trampoline takes a guard at entry, so this is the outermost loop
+    /// polling with nothing deferring under it, where a collection at a call
+    /// may run (`GcController::collect_at_call`, #639).
+    pub fn gc_defer_is_one_loop(&self) -> bool {
+        self.gc_defer_depth == 1 && self.gc_defer_holders == 0
+    }
+
+    pub(crate) fn enter_gc_defer(&mut self, holder: bool) {
         self.gc_defer_depth += 1;
+        self.gc_defer_holders += u32::from(holder);
     }
 
     /// Checked in every build, not only check builds: it runs once per guard
     /// drop, off every hot path, and a release build that underflowed here
     /// would wrap to `u32::MAX` and never collect again, with no report.
-    pub(crate) fn exit_gc_defer(&mut self) {
+    pub(crate) fn exit_gc_defer(&mut self, holder: bool) {
         assert!(
             self.gc_defer_depth > 0,
             "unbalanced GC defer: exit without a matching enter"
         );
         self.gc_defer_depth -= 1;
+        self.gc_defer_holders -= u32::from(holder);
     }
 
     /// Collections performed against this heap.

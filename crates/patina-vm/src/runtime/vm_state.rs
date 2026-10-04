@@ -1445,11 +1445,12 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
 /// stub frame has just been entered, so every value the call needs is in its
 /// registers or the caller's, and `cur_code` (the stub's) is in the code
 /// store. Registers are retired first, as `maybe_collect` retires them, but
-/// only where the collection can run: in a nested loop the frames below are
-/// suspended in the middle of an instruction, which may read its operands
-/// again when it resumes.
+/// only where the collection can run (`Heap::gc_defer_is_one_loop`, what
+/// `GcController::collect_at_call` decides by): in a nested loop the frames
+/// below are suspended in the middle of an instruction, which may read its
+/// operands again when it resumes.
 fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
-    if state.heap.borrow().gc_defer_depth() == 1 {
+    if state.heap.borrow().gc_defer_is_one_loop() {
         state.execution.retire_registers();
     }
     let collected = GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| {
