@@ -2511,17 +2511,21 @@ mod tests {
         });
         assert_eq!(continuation, OBJECT_SLOT_BYTES + 160_000);
         // A tree-walker closure (#637): its `Rc<Procedure>`, its parameters
-        // and their spilled scope sets, and the frame it is assumed to
-        // capture. A primitive, its slot.
-        let closure = tree_walker_closure(&env, &["x", "y"]);
-        let Procedure::CpsLambda { params, .. } = &*closure else {
+        // and their spilled scope sets, its rest parameter's too, and the
+        // frame it is assumed to capture. A primitive, its slot.
+        let closure = tree_walker_closure(&env, &["x", "y"], Some("rest"));
+        let Procedure::CpsLambda {
+            params, variadic, ..
+        } = &*closure
+        else {
             unreachable!()
         };
         let scopes = params
             .iter()
+            .chain(variadic)
             .map(|param| param.scopes.heap_bytes())
             .sum::<usize>();
-        assert!(scopes >= 2 * 9 * size_of::<crate::ScopeId>());
+        assert!(scopes >= 3 * 9 * size_of::<crate::ScopeId>());
         let lambda = charged(heap, |h| {
             h.alloc_procedure(closure);
         });
@@ -2547,22 +2551,25 @@ mod tests {
         assert_eq!(heap.allocs_since_gc(), 11);
     }
 
-    /// A tree-walker closure over `env` with parameters `params`, each
-    /// bound under a scope set of nine scopes, which spills.
-    fn tree_walker_closure(env: &Rc<Environment>, params: &[&str]) -> Rc<Procedure> {
+    /// A tree-walker closure over `env` with parameters `params` and the
+    /// rest parameter `variadic`, each bound under a scope set of nine
+    /// scopes, which spills.
+    fn tree_walker_closure(
+        env: &Rc<Environment>,
+        params: &[&str],
+        variadic: Option<&str>,
+    ) -> Rc<Procedure> {
         let mut scopes = crate::ScopeSet::new();
         for id in 0..9 {
             scopes.add_scope(crate::ScopeId(2000 + id));
         }
+        let param = |name: &str| crate::core_expr::ScopedParam {
+            name: Rc::from(name),
+            scopes: scopes.clone(),
+        };
         Rc::new(Procedure::CpsLambda {
-            params: params
-                .iter()
-                .map(|name| crate::core_expr::ScopedParam {
-                    name: Rc::from(*name),
-                    scopes: scopes.clone(),
-                })
-                .collect(),
-            variadic: None,
+            params: params.iter().map(|name| param(name)).collect(),
+            variadic: variadic.map(param),
             cont_param: Rc::from("k"),
             body: CpsExpr::rc(CpsExprKind::Literal(TaggedValue::NULL)),
             env: env.clone(),
@@ -2572,7 +2579,9 @@ mod tests {
 
     /// Every byte allocation charges is either reclaimed by a sweep or still
     /// occupied, and after a collection what is occupied is L: allocation,
-    /// marking and sweep measure each payload the same way.
+    /// marking and sweep measure each payload the same way. And
+    /// `committed_bytes`, which takes the tree-walker closures' payloads from
+    /// the account rather than measuring them, agrees with a measurement.
     #[test]
     fn the_byte_account_balances() {
         fn occupied(heap: &Heap) -> u64 {
@@ -2580,8 +2589,22 @@ mod tests {
                 + (heap.vectors.len() - heap.free_vectors.len()) * VECTOR_SLOT_BYTES
                 + (heap.strings.len() - heap.free_strings.len()) * STRING_SLOT_BYTES
                 + (heap.objects.len() - heap.free_objects.len()) * OBJECT_SLOT_BYTES;
+            (slots + payloads(heap)) as u64
+        }
+        // What `committed_bytes` should report, measured: every arena's
+        // capacity in slots and the occupied slots' payloads, the tree-walker
+        // closures' among them, which `committed_bytes` reads from the
+        // account instead.
+        fn committed(heap: &Heap) -> usize {
+            heap.pairs.capacity() * PAIR_SLOT_BYTES
+                + heap.vectors.capacity() * VECTOR_SLOT_BYTES
+                + heap.strings.capacity() * STRING_SLOT_BYTES
+                + heap.objects.capacity() * OBJECT_SLOT_BYTES
+                + payloads(heap)
+        }
+        fn payloads(heap: &Heap) -> usize {
             // A free slot holds a tombstone, whose payload is zero.
-            let payloads = heap
+            heap
                 .vectors
                 .iter()
                 .map(account::vector_payload)
@@ -2607,8 +2630,7 @@ mod tests {
                         }
                         _ => 0,
                     })
-                    .sum::<usize>();
-            (slots + payloads) as u64
+                    .sum::<usize>()
         }
 
         let shared = crate::heap::new_shared_heap();
@@ -2647,7 +2669,7 @@ mod tests {
                 heap.alloc_vm_closure(1, vec![TaggedValue::NULL; 6], env.clone()),
                 heap.alloc_vm_continuation_ref(4096).0,
                 heap.alloc_vm_delimited_continuation_ref(2048).0,
-                heap.alloc_procedure(tree_walker_closure(&env, &["p", "q", "r"])),
+                heap.alloc_procedure(tree_walker_closure(&env, &["p", "q", "r"], Some("s"))),
                 heap.alloc_procedure(Procedure::primitive(
                     "car",
                     crate::procedure::Arity::Exact(1),
@@ -2666,6 +2688,7 @@ mod tests {
         assert_eq!(Some(external as usize), env.charged_bytes());
         assert_eq!(heap.bytes_allocated(), occupied(&heap) + external);
         assert_eq!(heap.bytes_reclaimed(), 0);
+        assert_eq!(heap.committed_bytes(), committed(&heap));
 
         MarkSweepCollector::new().collect(&mut heap, &[&roots]);
         assert!(heap.bytes_reclaimed() > 0);
@@ -2674,6 +2697,7 @@ mod tests {
             occupied(&heap) + external
         );
         assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
+        assert_eq!(heap.committed_bytes(), committed(&heap));
 
         // Dropping the roots frees the rest, and the account still balances.
         let allocated = heap.bytes_allocated();
@@ -2684,6 +2708,7 @@ mod tests {
             occupied(&heap) + external
         );
         assert_eq!(heap.live_bytes() as u64, occupied(&heap) + external);
+        assert_eq!(heap.committed_bytes(), committed(&heap));
     }
 
     /// Sweep credits the dead tree-walker closures' payloads in one sum
@@ -2698,7 +2723,11 @@ mod tests {
         let shared = crate::heap::new_shared_heap();
         let env = Rc::new(Environment::with_heap(shared.clone()));
         let mut heap = shared.borrow_mut();
-        heap.alloc_object(HeapObjectData::Procedure(tree_walker_closure(&env, &["x"])));
+        heap.alloc_object(HeapObjectData::Procedure(tree_walker_closure(
+            &env,
+            &["x"],
+            None,
+        )));
         MarkSweepCollector::new().collect(&mut heap, &[&TestRoots::default()]);
     }
 
