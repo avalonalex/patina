@@ -20,12 +20,19 @@
 //!   when a collection frees something, so a reclamation proof that sees it
 //!   above 0 cannot have passed without collecting.
 //! - `committed-bytes`: what the arenas hold now, live or not: every arena's
-//!   capacity in slots and the payloads of the occupied slots.
+//!   capacity in slots and the payloads of the occupied slots (a tree-walker
+//!   closure's with an estimate of its frame, below).
 //! - `external-bytes`: what is held outside the arenas on heap objects'
 //!   behalf now (GC_PRD §15), charged by its holders: today the tables of
 //!   the live namespaces — the global environment, the libraries', and those
 //!   `environment` and the R5RS constructors build (#615). GC_PRD's
 //!   footprint is `committed-bytes` plus `external-bytes`.
+//!
+//! For a tree-walker closure, the payload in the first four keys includes an
+//! estimate of the frame it captures (#637), not a measurement: counted once
+//! per closure, so a frame several closures share is counted for each, and a
+//! closure that captures a namespace rather than a frame is counted one it
+//! does not hold.
 //!
 //! The slot counts before them (`pairs`, `free-pairs`, `allocs-since-gc`,
 //! `last-swept` and the rest) stay, as diagnostics of the arenas.

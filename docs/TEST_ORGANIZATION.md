@@ -952,13 +952,19 @@ the cycle proof also requires the pairs in use not to grow by the cycles,
 since each iteration's other garbage outweighs its pair, and the arena
 comparison requires `bytes-reclaimed` to grow in the run it measures.
 `crates/patina-repl/tests/gc_byte_trigger.rs`, in the Test Suite, runs #606's
-shapes through the CLI with no GC variable, each bound on the growth of a key
-across the workload, after the same `(gc)`, so that the bootstrap counts
-against none of them: 200 garbage vectors of 100,000 elements and 1,000 VM
-captures 1,000 frames deep each collect about every 8 MiB and grow the heap
-by a few MB, and 600 kept captures collect three times, because L counts
-their snapshots (with them left out of L it collects eleven times, and the
-test fails). `crates/patina-repl/tests/gc_namespace_bytes.rs` does the same
+and #637's shapes through the CLI with no GC variable, each bound on the
+growth of a key across the workload, after the same `(gc)`, so that the
+bootstrap counts against none of them: 200 garbage vectors of 100,000
+elements and 1,000 VM captures 1,000 frames deep each collect about every
+8 MiB and grow the heap by a few MB, and 600 kept captures collect three
+times, because L counts their snapshots (with them left out of L it collects
+eleven times, and the test fails). On the tree-walker, 100,000 garbage
+closures, each made in a call's frame, must allocate more than 500 bytes a
+closure, collect at least once per 8 MiB of that (five times), reclaim nine
+tenths of what they allocated and grow the heap by under 32 MiB, because
+each is charged an estimate of the frame it captures (#637); charged their
+72-byte slots alone, as before #637, they allocated about 7 MB and did not
+collect. `crates/patina-repl/tests/gc_namespace_bytes.rs` does the same
 for #615's namespaces on both backends: loops of `environment`, of it with
 an `eval`, of `scheme-report-environment` and of `null-environment`, at a
 size and four times it, each collect about every 8 MiB of namespaces, hold

@@ -55,21 +55,25 @@
 //! until a sweep drops it, and charged its slot alone, closure-heavy
 //! programs peaked at 64–126 MB under the 8 MiB interval. The estimate is
 //! one frame binding one parameter; closures made in one frame are each
-//! charged for it, and frame chains, and frames only a tree-walker
-//! continuation holds, are missed. Exact accounting is stage 4f's, which
-//! charges the tree-walker's `Rc` payloads (`PRD/GC_PRD.md`).
+//! charged for it; a closure made where no frame is — at top level, in a
+//! library body, or by `eval` in a namespace — captures a namespace, whose
+//! tables are external bytes already, and is charged a frame it does not
+//! capture; and frame chains, and frames only a tree-walker continuation
+//! holds, are missed. Exact accounting is stage 4f's, which charges the
+//! tree-walker's `Rc` payloads (`PRD/GC_PRD.md`).
 //!
 //! [`cps_lambda_payload`] measures it, and [`HeapObjectData::payload_bytes`]
 //! does not: that match runs on every object allocation, the VM's closures
 //! and continuations among them, and an arm that looks through the `Rc`
-//! made it a function with a stack frame, which measured +0.15–0.3%
-//! instructions on the VM's allocation-heavy loops. So the closure's payload
-//! has its own path through the three: [`Heap::alloc_procedure`] charges it
-//! ahead of the slot; marking counts it in the closure's trace arm, which
-//! looks through the `Rc` already; and sweep credits the dead closures' in
-//! one sum, what the account holds for the closures in the arena less what
-//! marking found live, with no work per slot. A check build measures each
-//! dead closure as well and asserts that the two agree.
+//! made it a function with a stack frame, which measured +0.16–0.40%
+//! instructions on the VM's allocation-heavy loops (built with one codegen
+//! unit on both sides, #637). So the closure's payload has its own path
+//! through the three: [`Heap::alloc_procedure`] charges it ahead of the
+//! slot; marking counts it in the closure's trace arm, which looks through
+//! the `Rc` already; and sweep credits the dead closures' in one sum, what
+//! the account holds for the closures in the arena less what marking found
+//! live, with no work per slot. A check build measures each dead closure as
+//! well and asserts that the two agree.
 //!
 //! The policy that reads the account lives in the collector
 //! (`MarkSweepCollector::auto_threshold` in `gc.rs`): the next collection
@@ -465,8 +469,15 @@ impl Heap {
     /// lists, the mark bits of a collection in progress, the symbol table or
     /// the check build's stamps.
     ///
-    /// A walk of the arenas, not a running total: for `(gc-stats)`, not for a
-    /// hot path.
+    /// A tree-walker closure's payload is what it was charged
+    /// (`cps_lambda_payload`), which counts an estimate of the frame it
+    /// captures, not a measurement: once per closure, so a frame several
+    /// closures share is counted for each, and a closure that captures a
+    /// namespace is counted a frame it does not hold.
+    ///
+    /// A walk of the arenas, not a running total, but for the tree-walker
+    /// closures' payloads, whose total the account keeps: for `(gc-stats)`,
+    /// not for a hot path.
     pub fn committed_bytes(&self) -> usize {
         let slots = self.pairs.capacity() * PAIR_SLOT_BYTES
             + self.vectors.capacity() * VECTOR_SLOT_BYTES

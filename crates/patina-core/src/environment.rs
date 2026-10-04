@@ -589,7 +589,10 @@ pub(crate) const RC_COUNTS: usize = 2 * size_of::<usize>();
 /// two agree.
 ///
 /// A heuristic: the frame a closure captures may bind more, or bind by name
-/// alone, and closures made in one frame are each charged for it.
+/// alone; closures made in one frame are each charged for it; and a closure
+/// made where no frame is — at top level, in a library body, or by `eval` in
+/// a namespace — captures a namespace, whose tables [`NamespaceCharge`]
+/// charges already, and is charged one it does not capture.
 pub(crate) const CAPTURED_FRAME_BYTES: usize =
     RC_COUNTS + size_of::<Environment>() + hash_table_bytes::<Rc<str>, ScopedBindingList>(3);
 
