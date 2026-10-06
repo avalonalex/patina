@@ -110,7 +110,7 @@ fn body_binds_definitions(exprs: &[CoreExpr]) -> bool {
 fn stamp_expansion_source(
     tv: TaggedValue,
     source: &SourceLocation,
-    source_map: &Rc<RefCell<SourceMap>>,
+    source_map: Option<&Rc<RefCell<SourceMap>>>,
     heap: &SharedHeap,
     macro_name: &str,
 ) {
@@ -148,12 +148,17 @@ fn stamp_expansion_source(
                 });
                 span.expansion_chain = Some(chain.clone());
             }
-            heap.record_source(value, loc.clone());
-            let mut map = source_map.borrow_mut();
-            if loc.span.is_none() {
-                map.record_expansion(&loc, macro_name.to_owned());
+            // A location with no document of its own records the expansion
+            // in the program's, by line and column. A library body's
+            // desugarer has no map, and such a location no document to
+            // record it in.
+            if loc.span.is_none()
+                && let Some(map) = source_map
+            {
+                map.borrow_mut()
+                    .record_expansion(&loc, macro_name.to_owned());
             }
-            map.record(value, loc);
+            heap.record_source(value, loc);
         }
         if value.is_pair() {
             let (car, cdr) = heap.get_pair(value);
@@ -2160,14 +2165,10 @@ impl<'a> Desugarer<'a> {
 
             // Phase 4: stamp expanded pairs + record macro expansion chain
             if let Some(src) = &call_site_source {
-                let sm = self
-                    .source_map
-                    .clone()
-                    .unwrap_or_else(|| Rc::new(RefCell::new(SourceMap::new())));
                 stamp_expansion_source(
                     expanded_tagged,
                     src,
-                    &sm,
+                    self.source_map.as_ref(),
                     shared_heap,
                     &compiled_macro.name,
                 );

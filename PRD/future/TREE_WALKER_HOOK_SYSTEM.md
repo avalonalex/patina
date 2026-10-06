@@ -448,9 +448,11 @@ Two further facts every location-driven client must design around:
 - **Node addresses are unstable.** There is no CpsExpr cache — every top-level form is
   re-transformed (`cps_eval/mod.rs:367`) — so clients key by `(source, line, column)`
   and match against `expr.source`, never by node identity.
-- **`SourceMap.locations` is keyed by raw NaN-box bits** and pruned at top-level-form
-  boundaries (`prune_freed_locations`) because the GC reuses addresses. Clients store
-  `SourceLocation` values, which are self-contained, never those keys.
+- **Syntax provenance is keyed by raw value bits** (`Heap::source`), and sweep prunes it
+  because the GC reuses slots. Clients store `SourceLocation` values, which are
+  self-contained, never those keys. (`SourceMap` kept a second such table, pruned at
+  top-level-form boundaries by `prune_freed_locations`; nothing read it, and it went in
+  #643.)
 
 ---
 
@@ -622,8 +624,8 @@ lifetimes:
 **Hooks attached ⇒ don't tier up.** One flag, consulted at tier-up/dispatch time, à la
 PEP 669; code runs in the VM (which already has `StepTracer`) or the tree-walker.
 Patina is unusually well-positioned — it already has *two* hook-capable tiers where most
-runtimes have one. Attach at top-level-form boundaries only (the same boundary where
-`prune_freed_locations` already runs), which sidesteps mid-frame invalidation of
+runtimes have one. Attach at top-level-form boundaries only (the boundary at which the drivers parse the
+next form), which sidesteps mid-frame invalidation of
 compiled code entirely. Deopt-grade participation of JIT'd frames (per-statement
 stepping *inside* compiled code) is **explicitly out of scope** unless a real need
 proves it.

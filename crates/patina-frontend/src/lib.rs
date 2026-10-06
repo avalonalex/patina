@@ -39,4 +39,7 @@ pub use library_support::{SchemeLibraryLoader, is_define_library_form};
 pub use parser::{ParseError, Parser};
 pub use quasiquote_lower::{ConstructorResolver, QuasiquoteError, lower_quasiquotes};
 pub use reader::Reader;
-pub use source_map::{SourceMap, prune_freed_locations};
+pub use source_map::SourceMap;
+// Deprecated no-op, kept until stage 5e (#643).
+#[allow(deprecated)]
+pub use source_map::prune_freed_locations;

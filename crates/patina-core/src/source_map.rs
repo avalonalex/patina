@@ -4,9 +4,8 @@
 
 use crate::error::SourceLocation;
 use crate::source_document::{SourceDocument, SourceSpan};
-use crate::{GcFreedBits, SharedHeap, TaggedValue};
+use crate::{SharedHeap, TaggedValue};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A character-based source position using R7RS 7.1.1 line endings.
@@ -53,12 +52,14 @@ pub fn source_lines(mut text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Holds a primary source document and a snapshot of parsed node locations.
-/// Interned symbols cannot represent distinct occurrences. Program parsers
-/// use unique syntax identifiers, and heap provenance is authoritative.
+/// Holds a primary source document, for caret-style error display and the
+/// expansion records keyed by its lines. Where each datum came from is the
+/// heap's provenance (`Heap::source`); the map's own table of parsed node
+/// locations, which nothing outside tests read, is gone (#643), and the
+/// methods that served it are deprecated no-ops until stage 5e of
+/// `PRD/GC_PRD.md`.
 #[derive(Debug, Default)]
 pub struct SourceMap {
-    locations: HashMap<u64, SourceLocation>,
     document: Option<Arc<SourceDocument>>,
     /// The name the parser was given for that text — a file path when the
     /// program came from one, `<eval>`/`<repl>` otherwise. Populated with
@@ -71,7 +72,6 @@ impl SourceMap {
     /// Create a new empty source map
     pub fn new() -> Self {
         Self {
-            locations: HashMap::new(),
             document: None,
             primary_source: None,
         }
@@ -174,24 +174,29 @@ impl SourceMap {
         Some(format!("{}{}\n{}{}", prefix, line_text, indent, carets))
     }
 
-    /// Record a source location for a TaggedValue
-    pub fn record(&mut self, tv: TaggedValue, loc: SourceLocation) {
-        self.locations.insert(tv.raw_bits(), loc);
+    /// Formerly recorded a datum's location in the map's own table, which
+    /// nothing outside tests read (#643). Records nothing.
+    #[deprecated(note = "a no-op; use Heap::record_source and Heap::source")]
+    pub fn record(&mut self, _tv: TaggedValue, _loc: SourceLocation) {}
+
+    /// Formerly looked a datum's location up in the map's own table (#643).
+    /// Answers `None`.
+    #[deprecated(note = "answers None; use Heap::source")]
+    pub fn get(&self, _tv: TaggedValue) -> Option<&SourceLocation> {
+        None
     }
 
-    /// Look up the source location for a TaggedValue
-    pub fn get(&self, tv: TaggedValue) -> Option<&SourceLocation> {
-        self.locations.get(&tv.raw_bits())
-    }
-
-    /// Number of entries in the source map
+    /// Formerly the number of entries in the map's own table (#643).
+    /// Answers 0.
+    #[deprecated(note = "answers 0; the map no longer records datum locations")]
     pub fn len(&self) -> usize {
-        self.locations.len()
+        0
     }
 
-    /// Whether the source map is empty
+    /// Formerly whether the map's own table was empty (#643). Answers `true`.
+    #[deprecated(note = "answers true; the map no longer records datum locations")]
     pub fn is_empty(&self) -> bool {
-        self.locations.is_empty()
+        true
     }
 
     /// Record that a macro with the given name was expanded at this location.
@@ -206,9 +211,10 @@ impl SourceMap {
         }
     }
 
-    /// Iterate over all recorded source locations.
+    /// Formerly iterated over the map's own table (#643). Yields nothing.
+    #[deprecated(note = "yields nothing; the map no longer records datum locations")]
     pub fn iter_locations(&self) -> impl Iterator<Item = &SourceLocation> {
-        self.locations.values()
+        std::iter::empty()
     }
 
     /// Return the ordered list of macro names expanded at this location, if any.
@@ -227,38 +233,23 @@ impl SourceMap {
             .expansions(loc.line, loc.column)
     }
 
-    /// Drop the entries for slots the GC reclaimed (`GC_DESIGN.md` §9.1): a
-    /// reused slot must not inherit the old datum's source location.
-    /// Expansion records belong to retained source documents, so they remain
-    /// valid and are untouched.
-    pub fn prune_freed(&mut self, freed: &[u64]) {
-        for bits in freed {
-            self.locations.remove(bits);
-        }
-    }
+    /// Formerly dropped the table's entries for reclaimed slots (#643). Does
+    /// nothing.
+    #[deprecated(note = "a no-op; the map no longer records datum locations")]
+    pub fn prune_freed(&mut self, _freed: &[u64]) {}
 
-    /// Forget all location entries. The overflow fallback for
-    /// [`SourceMap::prune_freed`]: a missing location degrades a diagnostic,
-    /// a stale one misattributes it.
-    pub fn clear_locations(&mut self) {
-        self.locations.clear();
-    }
+    /// Formerly forgot every entry of the map's own table (#643). Does
+    /// nothing.
+    #[deprecated(note = "a no-op; the map no longer records datum locations")]
+    pub fn clear_locations(&mut self) {}
 }
 
-/// Drain the slots the GC reclaimed since the last call and drop their
-/// entries from `source_map` (`GC_DESIGN.md` §9.1).
-///
-/// Call between evaluating one top-level form and parsing the next to bound
-/// the compatibility snapshot. Compiler lookups use the heap's provenance,
-/// pruned directly by sweep, rather than relying on this shared drain. Cheap
-/// when no collection ran (one empty drain, no map borrow).
-pub fn prune_freed_locations(heap: &SharedHeap, source_map: &RefCell<SourceMap>) {
-    match heap.borrow_mut().take_gc_freed_bits() {
-        GcFreedBits::Exact(freed) if freed.is_empty() => {}
-        GcFreedBits::Exact(freed) => source_map.borrow_mut().prune_freed(&freed),
-        GcFreedBits::Overflowed => source_map.borrow_mut().clear_locations(),
-    }
-}
+/// Formerly dropped the map's entries for the slots the GC reclaimed, which
+/// the drivers called between top-level forms. The map no longer records
+/// datum locations, and the heap's provenance is pruned by sweep, so there
+/// is nothing to prune (#643). Does nothing.
+#[deprecated(note = "a no-op; the heap's provenance is pruned by sweep")]
+pub fn prune_freed_locations(_heap: &SharedHeap, _source_map: &RefCell<SourceMap>) {}
 
 #[cfg(test)]
 mod tests {
@@ -355,79 +346,35 @@ mod tests {
         );
     }
 
+    /// The table of datum locations is gone (#643): what is left of its API
+    /// records nothing and answers empty, and the expansion records, which
+    /// belong to the document, are unaffected.
     #[test]
-    fn test_source_map_basic() {
-        let mut sm = SourceMap::new();
-        assert!(sm.is_empty());
-
-        let tv = TaggedValue::fixnum(42);
-        let loc = SourceLocation {
-            source: Arc::from("test.scm"),
-            line: 1,
-            column: 5,
-            length: Some(2),
-            span: None,
-        };
-        sm.record(tv, loc.clone());
-
-        assert_eq!(sm.len(), 1);
-        assert!(!sm.is_empty());
-
-        let retrieved = sm.get(tv).unwrap();
-        assert_eq!(retrieved.line, 1);
-        assert_eq!(retrieved.column, 5);
-    }
-
-    #[test]
-    fn test_source_map_missing() {
-        let sm = SourceMap::new();
-        assert!(sm.get(TaggedValue::fixnum(99)).is_none());
-    }
-
-    #[test]
-    fn prune_freed_drops_reclaimed_entries_only() {
-        use crate::heap::gc::{Collector, MarkSweepCollector};
-        use crate::{GcRoots, GcVisitor};
-
-        // A root provider keeping one of the two datums alive.
-        struct Keep(TaggedValue);
-        impl GcRoots for Keep {
-            fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-                visitor.visit(self.0);
-            }
-        }
-
+    #[expect(deprecated, reason = "pins the deprecated no-ops' answers")]
+    fn the_location_table_answers_empty() {
         let heap = crate::new_shared_heap();
-        heap.borrow_mut().enable_gc_freed_tracking();
-        let live = heap
+        let datum = heap
             .borrow_mut()
             .alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        let dead = heap
-            .borrow_mut()
-            .alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
-
-        let loc = |line| SourceLocation {
-            source: Arc::from("test.scm"),
-            line,
-            column: 1,
-            length: None,
-            span: None,
-        };
         let sm = RefCell::new(SourceMap::new());
-        sm.borrow_mut().record(live, loc(1));
-        sm.borrow_mut().record(dead, loc(2));
-
-        {
-            let mut h = heap.borrow_mut();
-            MarkSweepCollector::new().collect(&mut h, &[&Keep(live)]);
-        }
+        sm.borrow_mut().set_source_text("(m 1)\n".into());
+        let at = sm.borrow().location("test.scm", 1, 1, 1, 6);
+        sm.borrow_mut().record(datum, at.clone());
+        sm.borrow_mut()
+            .record_expansion(&SourceLocation::new("test.scm", 1, 1), "m".into());
         prune_freed_locations(&heap, &sm);
-
+        sm.borrow_mut().prune_freed(&[datum.raw_bits()]);
+        sm.borrow_mut().clear_locations();
         let sm = sm.borrow();
-        assert_eq!(sm.get(live).unwrap().line, 1);
-        assert!(
-            sm.get(dead).is_none(),
-            "reclaimed slot must not keep its old location"
+        assert!(sm.get(datum).is_none());
+        assert_eq!(sm.len(), 0);
+        assert!(sm.is_empty());
+        assert_eq!(sm.iter_locations().count(), 0);
+        assert_eq!(
+            sm.get_expansions(&SourceLocation::new("test.scm", 1, 1))
+                .as_deref(),
+            Some(&["m".to_string()][..])
         );
+        assert!(sm.format_context(&at).unwrap().contains("(m 1)"));
     }
 }

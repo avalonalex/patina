@@ -200,14 +200,6 @@ impl Parser {
             sm.set_source_text(input.to_string());
             sm.set_primary_source(&source_name);
         }
-        // The map is keyed by raw bits, so slots the GC reclaims must be
-        // pruned from it (§9.1). Recording is enabled here — only
-        // source-mapped sessions pay for it — and the run loops drain via
-        // `prune_freed_locations` at form boundaries. Draining now starts
-        // this session clean of any earlier session's leftover bits (the
-        // map is empty, so the prune itself is a no-op).
-        heap.borrow_mut().enable_gc_freed_tracking();
-        crate::source_map::prune_freed_locations(&heap, &source_map);
         let mut lexer = Lexer::new(input);
         lexer.set_initial_fold_case(fold_case);
         let mut parser = Self::from_lexer(lexer, heap)?;
@@ -225,10 +217,6 @@ impl Parser {
         source_map: Rc<RefCell<SourceMap>>,
     ) -> Self {
         source_map.borrow_mut().set_primary_source(&source_name);
-        // As in `new_with_source_map`: slots the GC reclaims are pruned from
-        // the map (§9.1).
-        self.heap.borrow_mut().enable_gc_freed_tracking();
-        crate::source_map::prune_freed_locations(&self.heap, &source_map);
         self.source_map = Some(source_map);
         self.source_name = source_name;
         self
@@ -287,12 +275,7 @@ impl Parser {
     }
 
     fn record_location(&self, tv: TaggedValue, loc: SourceLocation) {
-        self.heap.borrow_mut().record_source(tv, loc.clone());
-        if let Some(map) = &self.source_map
-            && (tv.is_pair() || tv.is_vector() || self.heap.borrow().is_identifier(tv))
-        {
-            map.borrow_mut().record(tv, loc);
-        }
+        self.heap.borrow_mut().record_source(tv, loc);
     }
 
     /// Program syntax has distinct identifiers; datum readers continue to
@@ -1841,7 +1824,7 @@ mod tests {
             Parser::new_with_source_map("(+ 1 2)", heap.clone(), Rc::from("test.scm"), sm.clone())
                 .unwrap();
         let result = parser.parse().unwrap();
-        let loc = sm.borrow().get(result).cloned();
+        let loc = heap.borrow().source(result).cloned();
         assert!(loc.is_some(), "list form should have source location");
         let loc = loc.unwrap();
         assert_eq!(loc.line, 1);
@@ -1862,7 +1845,7 @@ mod tests {
         .unwrap();
         let result = parser.parse().unwrap();
         // Outer list starts at column 1
-        let loc = sm.borrow().get(result).cloned().unwrap();
+        let loc = heap.borrow().source(result).cloned().unwrap();
         assert_eq!(loc.line, 1);
         assert_eq!(loc.column, 1);
 
@@ -1872,7 +1855,7 @@ mod tests {
         let cdr2 = heap_ref.cdr(cdr1); // ((+ x 1))
         let inner = heap_ref.car(cdr2); // (+ x 1)
         drop(heap_ref);
-        let inner_loc = sm.borrow().get(inner).cloned().unwrap();
+        let inner_loc = heap.borrow().source(inner).cloned().unwrap();
         assert_eq!(inner_loc.line, 1);
         assert_eq!(inner_loc.column, 15); // position of `(` in `(+ x 1)`
     }
@@ -1886,7 +1869,7 @@ mod tests {
                 .unwrap();
         let result = parser.parse().unwrap();
         // The quote abbreviation should record position of the `'`
-        let loc = sm.borrow().get(result).cloned();
+        let loc = heap.borrow().source(result).cloned();
         assert!(loc.is_some(), "quote form should have source location");
         let loc = loc.unwrap();
         assert_eq!(loc.line, 1);
@@ -1901,7 +1884,7 @@ mod tests {
             Parser::new_with_source_map("#(1 2 3)", heap.clone(), Rc::from("test.scm"), sm.clone())
                 .unwrap();
         let result = parser.parse().unwrap();
-        let loc = sm.borrow().get(result).cloned();
+        let loc = heap.borrow().source(result).cloned();
         assert!(loc.is_some(), "vector should have source location");
         let loc = loc.unwrap();
         assert_eq!(loc.line, 1);
@@ -1921,8 +1904,8 @@ mod tests {
         .unwrap();
         let expr1 = parser.parse().unwrap();
         let expr2 = parser.parse().unwrap();
-        let loc1 = sm.borrow().get(expr1).cloned().unwrap();
-        let loc2 = sm.borrow().get(expr2).cloned().unwrap();
+        let loc1 = heap.borrow().source(expr1).cloned().unwrap();
+        let loc2 = heap.borrow().source(expr2).cloned().unwrap();
         assert_eq!(loc1.line, 1);
         assert_eq!(loc1.column, 1);
         assert_eq!(loc2.line, 2);
@@ -1943,7 +1926,7 @@ mod occurrence_span_tests {
     use super::*;
 
     #[test]
-    fn program_identifiers_are_occurrences_and_immediate_slots_have_spans() {
+    fn program_identifiers_are_occurrences() {
         let heap = patina_core::new_shared_heap();
         let mut parser =
             Parser::new_program("(same 42 same) next", heap.clone(), "test.scm", false).unwrap();
@@ -1957,11 +1940,6 @@ mod occurrence_span_tests {
         assert_eq!(h.source(first).unwrap().column, 2);
         assert_eq!(h.source(last).unwrap().column, 10);
         assert_eq!(h.source(last).unwrap().length, Some(4));
-        let number = h.child_source(rest, 0).unwrap();
-        assert_eq!(
-            (number.column, number.span.as_ref().unwrap().end_column),
-            (7, 9)
-        );
         let outer = h.source(form).unwrap();
         assert_eq!(outer.span.as_ref().unwrap().end_column, 15);
         drop(h);
@@ -1971,6 +1949,5 @@ mod occurrence_span_tests {
         assert_eq!(h.car(datum), h.car(h.cdr(datum)));
         assert_eq!(h.get_symbol_name(h.car(datum)), Some("same"));
         assert!(h.source(datum).is_none());
-        assert!(h.child_source(datum, 0).is_none());
     }
 }
