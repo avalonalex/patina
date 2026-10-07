@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Checked benchmark runners. Public entry points remain the two .sh scripts."""
+"""Checked benchmark runners. Public entry points remain the .sh scripts:
+run_benchmarks.sh (criterion), bench_compare.sh (compare) and
+run_gc_benchmarks.sh (gc, scripts/gc_bench.py)."""
 import argparse
 import datetime as dt
 import hashlib
@@ -11,6 +13,8 @@ import platform
 import subprocess
 import sys
 import tempfile
+
+import gc_bench
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKLOADS = ROOT / 'crates/patina-tests/bench_programs/workloads.json'
@@ -217,7 +221,20 @@ def main(argv=None):
         sub.add_argument('--output', help='also save JSON here; must not already exist')
         if name == 'criterion':
             sub.add_argument('--backend', choices=['vm', 'tree-walker'], default=os.environ.get('PATINA_BENCH_BACKEND', 'vm'))
+    sub = subparsers.add_parser('gc', help='the GC benchmark set (#649); see docs/TEST_ORGANIZATION.md')
+    sub.add_argument('--base', help='a revision or checkout to compare against, run base/branch/base')
+    sub.add_argument('--keep-base', action='store_true', help='keep the base worktree and its target/ for reuse')
+    sub.add_argument('--rounds', type=int, default=10, help='rounds (default 10)')
+    sub.add_argument('--set', action='append', help='gbs, probes, barrier, io, load, tw, twins, large-live '
+                     '(repeatable; default all but large-live)')
+    sub.add_argument('--workload', action='append', default=[], help='one workload by name (repeatable)')
+    sub.add_argument('--large-live', action='store_true', help='add the large-live set (0.5 and 1 GiB live)')
+    sub.add_argument('--seed', type=int, default=653, help='seed of the per-round environment sizes')
+    sub.add_argument('--timeout', type=float, default=300, help='seconds per run')
+    sub.add_argument('--output', help='also save JSON here; must not already exist')
     args = parser.parse_args(argv)
+    if args.kind == 'gc' and args.rounds < 1:
+        parser.error('--rounds must be at least 1')
     if args.kind == 'criterion' and args.backend not in ('vm', 'tree-walker'):
         parser.error('PATINA_BENCH_BACKEND must be vm or tree-walker')
     output = Path(args.output).resolve() if args.output else None
@@ -230,7 +247,17 @@ def main(argv=None):
         base.mkdir(parents=True, exist_ok=True)
         directory = Path(tempfile.mkdtemp(prefix=dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ-'), dir=base))
         print(f'Run artifacts: {directory}', flush=True)
-        report = dict(info, **(compare(args, directory) if args.kind == 'compare' else criterion(args, directory)))
+        if args.kind == 'gc':
+            fields, failed = gc_bench.gc_mode(args, directory, environment())
+            report = dict(info, **fields)
+            if failed:
+                # The others' measurements are kept, never as a success report.
+                report['correctness'] = f'failed: {sorted(fields["failed"])}'
+                (directory / 'failed-report.json').write_text(json.dumps(report, indent=2, allow_nan=False) + '\n')
+                raise BenchmarkError(f'{len(fields["failed"])} workloads failed; measurements of the rest: '
+                                     f'{directory / "failed-report.json"}')
+        else:
+            report = dict(info, **(compare(args, directory) if args.kind == 'compare' else criterion(args, directory)))
         payload = json.dumps(report, indent=2, allow_nan=False) + '\n'
         if output:
             # Exclusive creation protects existing baselines, including races.
@@ -241,10 +268,11 @@ def main(argv=None):
         for row in report['measurements']:
             if args.kind == 'compare':
                 print(f'{row["id"]}: tree-walker {row["tree-walker_ms"]:.4f} ms; vm {row["vm_ms"]:.4f} ms')
-            else:
+            elif args.kind == 'criterion':
                 print(f'{row["id"]}: median {row["median_ns"] / 1000:.3f} us')
         return 0
-    except (BenchmarkError, OSError, ValueError, KeyError, TypeError, KeyboardInterrupt) as error:
+    except (BenchmarkError, OSError, ValueError, KeyError, TypeError, RuntimeError,
+            subprocess.CalledProcessError, KeyboardInterrupt) as error:
         print(f'Benchmark failed: {error}', file=sys.stderr)
         if directory:
             print(f'Incomplete run diagnostics: {directory} (no success report)', file=sys.stderr)

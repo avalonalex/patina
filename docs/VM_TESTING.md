@@ -136,6 +136,9 @@ their medians are not additive.
 ./scripts/run_benchmarks.sh --quick --backend vm --filter phases/ \
   --output /tmp/patina-vm-phases.json
 
+# The GC benchmark set, ABA against a base: docs/TEST_ORGANIZATION.md, "GC benchmarks".
+./scripts/run_gc_benchmarks.sh --base main --set gbs
+
 # No timing suite: offline failure-injection tests, already included in CI.
 python3 -B -m unittest discover -s scripts/tests -p 'test_benchmarks.py'
 

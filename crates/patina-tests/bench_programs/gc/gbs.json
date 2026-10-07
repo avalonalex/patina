@@ -1,0 +1,742 @@
+{
+ "about": "The GC benchmark set and its companions (#649, docs/TEST_ORGANIZATION.md, 'GC benchmarks'). kind: larceny-r7rs runs the Larceny checkout's test/Benchmarking/R7RS/src/<source>.scm plus common.scm, with the checkout's inputs/<source>.input, its leading count replaced ('count') or a Patina-authored input ('text'); larceny-gc runs test/Benchmarking/GC/<source>.sch behind shims/larceny-gc-prefix.scm and calls 'entry'; patina runs a vendored program; example runs a cargo example; generated is written by the runner. Sets: gbs, probes, barrier, io, load, tw, twins (the fixnum twins of the float kernels, for K6), large-live (on demand). Backends default to the VM. timing_output: the program prints timings, so its output is not compared across sides.",
+ "workloads": [
+  {
+   "name": "nboyer",
+   "group": "allocation",
+   "kind": "larceny-r7rs",
+   "source": "nboyer",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n3\n5375678\n"
+   }
+  },
+  {
+   "name": "deriv",
+   "group": "allocation",
+   "kind": "larceny-r7rs",
+   "source": "deriv",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 450000
+   }
+  },
+  {
+   "name": "gcbench",
+   "group": "allocation",
+   "kind": "larceny-r7rs",
+   "source": "gcbench",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n16\n0\n"
+   }
+  },
+  {
+   "name": "destruc",
+   "group": "mutation",
+   "kind": "larceny-r7rs",
+   "source": "destruc",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 150
+   }
+  },
+  {
+   "name": "quicksort",
+   "group": "mutation",
+   "kind": "larceny-r7rs",
+   "source": "quicksort",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 40
+   }
+  },
+  {
+   "name": "gcold",
+   "group": "mutation",
+   "kind": "larceny-gc",
+   "source": "gcold",
+   "sets": [
+    "gbs"
+   ],
+   "entry": "(GCOld 8 0 10 10 150)"
+  },
+  {
+   "name": "mperm",
+   "group": "large-live",
+   "kind": "larceny-r7rs",
+   "source": "mperm",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "4\n9\n2\n1\n16329600\n"
+   }
+  },
+  {
+   "name": "queue3",
+   "group": "large-live",
+   "kind": "larceny-gc",
+   "source": "queue3",
+   "sets": [
+    "gbs"
+   ],
+   "entry": "(queue-benchmark 100 200000 10)"
+  },
+  {
+   "name": "fibfp",
+   "group": "flonum",
+   "kind": "larceny-r7rs",
+   "source": "fibfp",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n34.0\n5702887.0\n"
+   }
+  },
+  {
+   "name": "fib",
+   "group": "float-twin",
+   "kind": "larceny-r7rs",
+   "source": "fib",
+   "sets": [
+    "twins"
+   ],
+   "input": {
+    "text": "1\n34\n5702887\n"
+   }
+  },
+  {
+   "name": "mbrot",
+   "group": "flonum",
+   "kind": "larceny-r7rs",
+   "source": "mbrot",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 15
+   }
+  },
+  {
+   "name": "nucleic",
+   "group": "flonum",
+   "kind": "larceny-r7rs",
+   "source": "nucleic",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 2
+   }
+  },
+  {
+   "name": "ctak",
+   "group": "continuation",
+   "kind": "larceny-r7rs",
+   "source": "ctak",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "30\n18\n12\n6\n7\n"
+   }
+  },
+  {
+   "name": "fibc",
+   "group": "continuation",
+   "kind": "larceny-r7rs",
+   "source": "fibc",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n28\n317811\n"
+   }
+  },
+  {
+   "name": "generator",
+   "group": "continuation",
+   "kind": "larceny-r7rs",
+   "source": "generator",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n100\n(49 168 175)\n"
+   }
+  },
+  {
+   "name": "deeprec",
+   "group": "deep-recursion",
+   "kind": "patina",
+   "source": "probes/deeprec.scm",
+   "sets": [
+    "gbs"
+   ]
+  },
+  {
+   "name": "libload",
+   "group": "loading",
+   "kind": "patina",
+   "source": "probes/libload.scm",
+   "sets": [
+    "gbs",
+    "load"
+   ]
+  },
+  {
+   "name": "hashtable0",
+   "group": "supplementary",
+   "kind": "larceny-r7rs",
+   "source": "hashtable0",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 2
+   }
+  },
+  {
+   "name": "eqtable",
+   "group": "supplementary",
+   "kind": "patina",
+   "source": "probes/eqtable.scm",
+   "sets": [
+    "gbs"
+   ]
+  },
+  {
+   "name": "dynamic",
+   "group": "supplementary",
+   "kind": "larceny-r7rs",
+   "source": "dynamic",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "count": 15
+   }
+  },
+  {
+   "name": "earley",
+   "group": "supplementary",
+   "kind": "larceny-r7rs",
+   "source": "earley",
+   "sets": [
+    "gbs"
+   ],
+   "input": {
+    "text": "1\n12\n58786\n"
+   }
+  },
+  {
+   "name": "samedepth1000",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/samedepth1000.scm",
+   "sets": [
+    "probes"
+   ],
+   "backends": [
+    "vm",
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "escape1000",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/escape1000.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "pingpong1000",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/pingpong1000.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "ctakdeep",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/ctakdeep.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "abort100",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/abort100.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "frag-mix",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/frag-mix.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "retained-continuations",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/retained-continuations.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "small-heap",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/small-heap.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "deep-unwind",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/deep-unwind.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "deep-descent",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/deep-descent.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "deep-recursion-10m",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/deep-recursion.scm",
+   "sets": [
+    "probes"
+   ],
+   "args": [
+    "10000000"
+   ]
+  },
+  {
+   "name": "display-loop",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/display-loop.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "parameterize-loop",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/parameterize-loop.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "poll-even-odd",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/poll-even-odd.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "poll-callcc",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/poll-callcc.scm",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "vectors-500",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/vectors-500.scm",
+   "sets": [
+    "probes"
+   ],
+   "backends": [
+    "vm",
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "ephem-chain-16k-forward",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/ephem-chain-16k.scm",
+   "sets": [
+    "probes"
+   ],
+   "args": [
+    "16000",
+    "forward"
+   ],
+   "timing_output": true
+  },
+  {
+   "name": "ephem-chain-16k-reverse",
+   "group": "probe",
+   "kind": "patina",
+   "source": "probes/ephem-chain-16k.scm",
+   "sets": [
+    "probes"
+   ],
+   "args": [
+    "16000",
+    "reverse"
+   ],
+   "timing_output": true
+  },
+  {
+   "name": "port-churn",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/port-churn.scm",
+   "sets": [
+    "probes",
+    "io"
+   ],
+   "args": [
+    "{scratch}/port-churn.txt"
+   ],
+   "nofile": 1024
+  },
+  {
+   "name": "open-close-10k",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/open-close-10k.scm",
+   "sets": [
+    "probes",
+    "io"
+   ],
+   "args": [
+    "{scratch}/open-close.txt"
+   ]
+  },
+  {
+   "name": "large-live",
+   "group": "large-live",
+   "kind": "patina",
+   "source": "probes/large-live.scm",
+   "sets": [
+    "large-live"
+   ],
+   "args": [
+    "10000000",
+    "20000000"
+   ]
+  },
+  {
+   "name": "large-live-1g",
+   "group": "large-live",
+   "kind": "patina",
+   "source": "probes/large-live.scm",
+   "sets": [
+    "large-live"
+   ],
+   "args": [
+    "20000000",
+    "20000000"
+   ]
+  },
+  {
+   "name": "many-heaps",
+   "group": "probe",
+   "kind": "example",
+   "source": "many_heaps",
+   "sets": [
+    "probes"
+   ]
+  },
+  {
+   "name": "barrier-vecsort",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-vecsort.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "barrier-hashtab",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-hashtab.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "barrier-queue",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-queue.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "barrier-tree",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-tree.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "barrier-strport",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-strport.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "barrier-letrec",
+   "group": "barrier",
+   "kind": "patina",
+   "source": "probes/barrier-letrec.scm",
+   "sets": [
+    "barrier"
+   ]
+  },
+  {
+   "name": "fileio",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/fileio.scm",
+   "sets": [
+    "io"
+   ],
+   "args": [
+    "{scratch}/fileio.txt"
+   ]
+  },
+  {
+   "name": "string-ports",
+   "group": "io",
+   "kind": "patina",
+   "source": "probes/string-ports.scm",
+   "sets": [
+    "io"
+   ]
+  },
+  {
+   "name": "io-cat",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "cat",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "count": 2
+   }
+  },
+  {
+   "name": "io-wc",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "wc",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "count": 2
+   }
+  },
+  {
+   "name": "io-string",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "string",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "count": 250
+   }
+  },
+  {
+   "name": "io-read1",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "read1",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "count": 1000
+   }
+  },
+  {
+   "name": "io-slatex",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "slatex",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "count": 40
+   }
+  },
+  {
+   "name": "io-bibfreq",
+   "group": "io",
+   "kind": "larceny-r7rs",
+   "source": "bibfreq",
+   "sets": [
+    "io"
+   ],
+   "input": {
+    "text": "4\n\"derived/bib-778\"\n((and . 1923) (the . 1382) (gen . 778) (of . 735) (he . 299) (to . 283) (unto . 280) (his . 279) (in . 278) (that . 256))\n"
+   },
+   "derive": {
+    "derived/bib-778": {
+     "from": "inputs/bib",
+     "lines": 778
+    }
+   }
+  },
+  {
+   "name": "startup",
+   "group": "loading",
+   "kind": "patina",
+   "source": "probes/empty.scm",
+   "sets": [
+    "load"
+   ]
+  },
+  {
+   "name": "libload3",
+   "group": "loading",
+   "kind": "patina",
+   "source": "probes/libload3.scm",
+   "sets": [
+    "load"
+   ]
+  },
+  {
+   "name": "macroprog",
+   "group": "loading",
+   "kind": "generated",
+   "source": "macroprog",
+   "sets": [
+    "load"
+   ]
+  },
+  {
+   "name": "tw-fib",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/fib.scm",
+   "sets": [
+    "tw"
+   ],
+   "args": [
+    "27"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-nboyer",
+   "group": "tree-walker",
+   "kind": "larceny-r7rs",
+   "source": "nboyer",
+   "sets": [
+    "tw"
+   ],
+   "input": {
+    "text": "1\n1\n591777\n"
+   },
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-deeprec",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/deeprec.scm",
+   "sets": [
+    "tw"
+   ],
+   "args": [
+    "200000"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-libload",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/libload.scm",
+   "sets": [
+    "tw"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  },
+  {
+   "name": "tw-deep-recursion",
+   "group": "tree-walker",
+   "kind": "patina",
+   "source": "probes/deep-recursion.scm",
+   "sets": [
+    "tw"
+   ],
+   "args": [
+    "200000"
+   ],
+   "backends": [
+    "tree-walker"
+   ]
+  }
+ ]
+}
