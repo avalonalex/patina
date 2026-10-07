@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -229,12 +230,15 @@ sys.exit(status)
         # The epilogue's forced pair is not counted.
         self.assertEqual((row['branch_collections'], row['branch_pause_max_us'], row['branch_mark_mean_us'],
                           row['branch_forced_pause_us']), (2, 700, 400, 5000))
-        self.assertEqual(row['branch_instructions'], 11805187762)
+        # time -l counts instructions on macOS; on Linux the fake perf
+        # cannot count, so the mode records none.
+        self.assertEqual(row['branch_instructions'], 11805187762 if sys.platform == 'darwin' else None)
         self.assertEqual(row['branch_live_bytes'], 1000)
         self.assertIsNone(row['branch_resident_bytes'])
         self.assertEqual((row['branch_deferral_max_bytes'], row['branch_deferral_site'], row['branch_wait_site']),
                          (854658, ['crates/x.rs:212:25'], None))
-        self.assertEqual(row['instructions_ratio'], [1.0, 1.0, 1.0])
+        self.assertEqual(row['wall_s_ratio'], [1.0, 1.0, 1.0])
+        self.assertEqual('instructions_ratio' in row, sys.platform == 'darwin')
 
     def test_gc_fails_without_a_success_report_when_the_sides_disagree(self):
         self.gc_setup()
