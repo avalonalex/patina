@@ -737,6 +737,16 @@ fn macro_expansion_chains_belong_to_each_invocation() {
                  (peel 1 2)",
                 "  macro expansion chain: peel → peel → peel",
             ),
+            // A macro another macro's expansion defined, used by a later
+            // form: its template keeps the defining expansion (#612).
+            (
+                "(define-syntax def-bad (syntax-rules ()
+                   ((_ name) (define-syntax name
+                               (syntax-rules () ((_ x) (if #t unknown x)))))))
+                 (def-bad bad)
+                 (bad 42)",
+                "  macro expansion chain: def-bad → bad",
+            ),
         ] {
             let (_, _, stderr, ok) = run(dir.path(), backend, &["-p", program], None);
             assert!(!ok, "{backend:?}: {program}");
@@ -746,6 +756,43 @@ fn macro_expansion_chains_belong_to_each_invocation() {
                 "{backend:?}: {stderr}"
             );
         }
+    }
+}
+
+/// The 100th `eval` of one quoted datum reports an error inside a `case`
+/// clause as the first did: the same location and the same expansion
+/// chain, which belongs to that expansion, not to every one before it
+/// (#612).
+#[test]
+fn an_error_in_the_hundredth_eval_of_a_datum_reports_as_the_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut program = String::from(
+        "(import (scheme base) (scheme eval) (scheme repl))\n\
+         (define form '(case 3 ((1 2) 'a) ((3) (missing 5)) (else 'c)))\n",
+    );
+    program.push_str(&"(eval form (interaction-environment))\n".repeat(100));
+    fs::write(dir.path().join("program.scm"), program).unwrap();
+    for backend in BOTH_BACKENDS {
+        let (_, _, stderr, ok) = run(dir.path(), backend, &["-k", "program.scm"], None);
+        assert!(!ok, "{backend:?}: {stderr}");
+        let mut reports: Vec<String> = Vec::new();
+        for line in stderr.lines() {
+            if line.starts_with("Error:") {
+                reports.push(String::new());
+            }
+            if let Some(report) = reports.last_mut() {
+                report.push_str(line);
+                report.push('\n');
+            }
+        }
+        assert_eq!(reports.len(), 100, "{backend:?}: {stderr}");
+        assert!(
+            reports[0].contains("program.scm:2:")
+                && reports[0].contains("  macro expansion chain: case → let → case → let\n"),
+            "{backend:?}: {}",
+            reports[0]
+        );
+        assert_eq!(reports[99], reports[0], "{backend:?}");
     }
 }
 

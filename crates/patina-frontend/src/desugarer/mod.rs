@@ -76,6 +76,7 @@ pub use error::{DesugarError, Result};
 
 use crate::source_map::SourceMap;
 use patina_core::error::SourceLocation;
+use patina_core::source_document::ExpansionChain;
 use patina_core::walk::OpenNodes;
 use patina_core::{CoreForm, SharedHeap, TaggedValue};
 use patina_ir::{CoreExpr, CoreExprKind};
@@ -86,6 +87,7 @@ use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Whether a desugared body contributes any definition, looking through
 /// `Begin`.
@@ -107,23 +109,42 @@ fn body_binds_definitions(exprs: &[CoreExpr]) -> bool {
     })
 }
 
+/// Numbers the top-level forms the desugarers expand, for the expansion
+/// chains each makes (`Desugarer::form`). Zero is no form.
+static NEXT_FORM: AtomicU64 = AtomicU64::new(1);
+
+/// `chain`, if an expansion of `form` may extend it: the expansion of
+/// `form` made it, or a macro's template holds it.
+fn extendable(chain: Option<&ExpansionChain>, form: u64) -> Option<&ExpansionChain> {
+    chain.filter(|chain| chain.form() == form || chain.form() == ExpansionChain::TEMPLATE)
+}
+
 fn stamp_expansion_source(
     tv: TaggedValue,
     source: &SourceLocation,
     source_map: Option<&Rc<RefCell<SourceMap>>>,
     heap: &SharedHeap,
     macro_name: &str,
+    form: u64,
 ) {
     // Syntax without an origin uses the invocation. Written templates and
     // substituted syntax keep their original occurrence, across files. Each
     // expanded occurrence owns its chain: separate uses of one template must
-    // not accumulate history at the template's shared text position.
+    // not accumulate history at the template's shared text position, and an
+    // expansion extends only a chain its own top-level form made, or one a
+    // macro's template holds for its uses. Syntax a later form expands
+    // again — a quoted datum `eval` sees each time — still carries the chains
+    // the earlier expansion left, and extending those grew them with every
+    // `eval` (#612).
     let mut pending = vec![tv];
     let mut seen = HashSet::new();
     // A wide expansion gives many nodes the same history. Extend each
-    // distinct prefix once, rather than copying all its strings per node.
-    // Keep the prefixes alive while keyed by address, so an allocation's
-    // address cannot be reused during this walk.
+    // distinct prefix once, and share the new link among them. A link holds
+    // its prefix, so no address in this map can be reused during the walk.
+    // The name is made with the first link: many expansions reach no syntax
+    // with a document of its own, and extend no chain (made eagerly, it cost
+    // loading `(scheme base)` 2% more instructions).
+    let mut name: Option<std::sync::Arc<str>> = None;
     let mut histories = HashMap::new();
     while let Some(value) = pending.pop() {
         if !seen.insert(value.raw_bits()) {
@@ -136,15 +157,12 @@ fn stamp_expansion_source(
             .unwrap_or_else(|| source.clone());
         if value.is_pair() || value.is_vector() || heap.is_identifier(value) {
             if let Some(span) = &mut loc.span {
-                let prefix = span
-                    .expansion_chain
-                    .as_ref()
-                    .or_else(|| source.span.as_ref()?.expansion_chain.as_ref());
-                let key = prefix.map_or(0, |chain| chain.as_ptr() as usize);
-                let (_, chain) = histories.entry(key).or_insert_with(|| {
-                    let mut names = prefix.map_or_else(Vec::new, |chain| chain.to_vec());
-                    names.push(macro_name.to_owned());
-                    (prefix.cloned(), std::sync::Arc::<[String]>::from(names))
+                let prefix = extendable(span.expansion_chain.as_ref(), form)
+                    .or_else(|| extendable(source.span.as_ref()?.expansion_chain.as_ref(), form));
+                let key = prefix.map_or(0, ExpansionChain::id);
+                let chain = histories.entry(key).or_insert_with(|| {
+                    let name = name.get_or_insert_with(|| std::sync::Arc::from(macro_name));
+                    ExpansionChain::extend(prefix, name.clone(), form)
                 });
                 span.expansion_chain = Some(chain.clone());
             }
@@ -376,6 +394,12 @@ pub struct Desugarer<'a> {
     /// while desugaring; clear on exit so raw indices never outlive a form.
     quoted: Rc<RefCell<HashMap<u64, TaggedValue>>>,
 
+    /// The number of the top-level form being desugared, which the
+    /// expansion chains it makes record (`ExpansionChain::form`): an
+    /// expansion extends only a chain its own form made (#612). Shared with
+    /// the child desugarers, like `quoted`.
+    form: Rc<Cell<u64>>,
+
     splicing: Option<Rc<SplicingContext>>,
     /// Splicing forms behave as ordinary local syntax in operand positions.
     definition_context: Cell<bool>,
@@ -419,6 +443,7 @@ impl<'a> Desugarer<'a> {
             declarations: Rc::default(),
             open_forms: Rc::default(),
             quoted: Rc::default(),
+            form: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -444,6 +469,7 @@ impl<'a> Desugarer<'a> {
             declarations: Rc::default(),
             open_forms: Rc::default(),
             quoted: Rc::default(),
+            form: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -490,6 +516,7 @@ impl<'a> Desugarer<'a> {
             declarations: Rc::default(),
             open_forms: Rc::default(),
             quoted: Rc::default(),
+            form: Rc::default(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(true),
@@ -519,6 +546,7 @@ impl<'a> Desugarer<'a> {
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             quoted: self.quoted.clone(),
+            form: self.form.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -619,6 +647,7 @@ impl<'a> Desugarer<'a> {
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             quoted: self.quoted.clone(),
+            form: self.form.clone(),
             splicing: None,
             definition_context: Cell::new(true),
             top_level: Cell::new(false),
@@ -1063,6 +1092,7 @@ impl<'a> Desugarer<'a> {
             declarations: self.declarations.clone(),
             open_forms: Rc::clone(&self.open_forms),
             quoted: self.quoted.clone(),
+            form: self.form.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -1839,6 +1869,7 @@ impl<'a> Desugarer<'a> {
             self.early.is_idle() && self.open_forms.borrow().is_empty(),
             "`desugar_tagged` is the per-form entry point; recurse through `desugar_form`"
         );
+        self.form.set(NEXT_FORM.fetch_add(1, Ordering::Relaxed));
         let result = self.desugar_form(tagged, shared_heap);
         self.quoted.borrow_mut().clear();
         let finished = self.early.finish_form();
@@ -1909,6 +1940,7 @@ impl<'a> Desugarer<'a> {
             declarations: self.declarations.clone(),
             open_forms: self.open_forms.clone(),
             quoted: self.quoted.clone(),
+            form: self.form.clone(),
             splicing: self.splicing.clone(),
             definition_context: Cell::new(self.definition_context.get()),
             top_level: Cell::new(self.top_level.get()),
@@ -2171,6 +2203,7 @@ impl<'a> Desugarer<'a> {
                     self.source_map.as_ref(),
                     shared_heap,
                     &compiled_macro.name,
+                    self.form.get(),
                 );
             }
 

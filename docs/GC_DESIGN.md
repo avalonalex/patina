@@ -1143,9 +1143,19 @@ before slots can be reused. There is no drain shared between nested loaders,
 and a later parse cannot see stale provenance. Spans retain an `Arc` to a source
 document containing text and a line-start index, but no Scheme values. Expansion
 chains travel with each expanded span, so separate uses of a template do not
-accumulate history at its definition. Within an invocation, nodes with the same
-history prefix share its extended name array; copying every name for every node
-makes large library imports consume gigabytes while collection is deferred.
+accumulate history at its definition. A chain is a list of shared links
+(`ExpansionChain`): extending one is one allocation, and the nodes of an
+expansion with the same history share the new link; copying every name for
+every node made large library imports consume gigabytes while collection is
+deferred. Each link records the top-level form whose expansion made it, and an
+expansion extends only a chain its own form made: a datum that `eval` expands
+again keeps the chains an earlier expansion left on the pairs a macro splices
+into its output, as `case` does its clauses, and extending those grew memory and
+time with every `eval` (#612). The exception is a chain a macro's template holds,
+on a symbol written in it or on an identifier an outer expansion introduced into
+it: each use introduces a copy and extends that, so a macro another macro's
+expansion defined reports `def-bad → bad` from any later form, and the
+template's own copy never accumulates.
 Syntax copies likewise share their location, which `record_source` replaces only
 when that occurrence's provenance changes. The table's entries own no Scheme values.
 IR, bytecode and errors retain a document

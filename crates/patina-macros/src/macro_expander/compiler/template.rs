@@ -8,6 +8,7 @@ use crate::error::MacroError;
 use crate::macro_expander::utils::collect_template_vars_at_level;
 use crate::macro_expander::{Identifier, Template};
 use patina_core::TaggedValue;
+use patina_core::source_document::ExpansionChain;
 use patina_runtime::{PVRef, ScopeSet};
 
 impl Compiler {
@@ -30,7 +31,18 @@ impl Compiler {
         }
         let compiled = self.compile_template_node(form, level).map(|mut template| {
             if let Template::Symbol(identifier) = &mut template {
-                identifier.source = self.heap.borrow().source(form).cloned();
+                // Every use introduces the identifier with this location,
+                // and extends its expansion chain, whichever form it is in
+                // (`ExpansionChain::for_template`, #612).
+                identifier.source = self.heap.borrow().source(form).cloned().map(|mut loc| {
+                    if let Some(span) = &mut loc.span {
+                        span.expansion_chain = span
+                            .expansion_chain
+                            .as_ref()
+                            .map(ExpansionChain::for_template);
+                    }
+                    loc
+                });
             }
             template
         });
@@ -38,6 +50,24 @@ impl Compiler {
             self.open.leave();
         }
         compiled
+    }
+
+    /// Mark the expansion chain on `form`'s location as this template's
+    /// (`ExpansionChain::for_template`), so that every use, in whichever
+    /// form, extends it.
+    fn hold_chain_for_template(&self, form: TaggedValue) {
+        let mut heap = self.heap.borrow_mut();
+        let Some(mut loc) = heap.source(form).cloned() else {
+            return;
+        };
+        let Some(span) = &mut loc.span else {
+            return;
+        };
+        let Some(chain) = &span.expansion_chain else {
+            return;
+        };
+        span.expansion_chain = Some(chain.for_template());
+        heap.record_source(form, loc);
     }
 
     /// [`Self::compile_template`] for one node, inside the ones `open` holds.
@@ -124,6 +154,10 @@ impl Compiler {
                 if !seen.contains(&key.scopes) {
                     seen.push(key.scopes);
                 }
+                // Each use introduces a copy of it, which inherits its
+                // location and so its expansion chain: the chain is this
+                // template's from now on, for every use to extend (#612).
+                self.hold_chain_for_template(form);
                 return Ok(self.make_literal_template(form));
             }
 

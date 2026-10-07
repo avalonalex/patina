@@ -743,3 +743,60 @@ fn compiled_functions_retain_their_document_across_same_named_inputs() {
     check(&TreeWalkInterpreter::new_tree_walker());
     check(&Interpreter::new(VmBackend::new()));
 }
+
+// =============================================================================
+// Expansion chains belong to one expansion (#612)
+// =============================================================================
+
+/// The length of the expansion chain on each pair of `value`, in a fixed
+/// order: none for a pair without one.
+fn chain_lengths(heap: &patina_core::SharedHeap, value: TaggedValue) -> Vec<Option<usize>> {
+    let heap = heap.borrow();
+    let mut lengths = Vec::new();
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        if !value.is_pair() {
+            continue;
+        }
+        lengths.push(
+            heap.source(value)
+                .and_then(|loc| loc.span.as_ref()?.expansion_chain.as_ref())
+                .map(|chain| chain.len()),
+        );
+        pending.extend([heap.cdr(value), heap.car(value)]);
+    }
+    lengths
+}
+
+/// `eval` of one quoted datum, again and again: each expansion stamps the
+/// datum's own pairs where a macro splices them into its output, as `case`
+/// does its remaining clauses, and each chain is that expansion's. A chain
+/// an earlier `eval` left on a pair is not extended, which made memory and
+/// time grow with every `eval` (#612).
+#[test]
+fn eval_of_one_datum_does_not_extend_its_earlier_chains() {
+    fn check<B: Backend>(interp: &Interpreter<B>, backend: &str) {
+        let heap = interp.backend().global_env().heap().clone();
+        let (result, _map) = interp.eval_program_with_source_name(
+            "(import (scheme base) (scheme eval) (scheme repl))\n\
+             (define form '(case 3 ((1 2) 'a) ((3) 'b) (else 'c)))\n\
+             (define (run n)\n\
+               (do ((i 0 (+ i 1))) ((= i n) (eval form (interaction-environment)))\n\
+                 (eval form (interaction-environment))))",
+            "chains.scm",
+        );
+        result.unwrap();
+        let answer = interp.eval_str("(run 0)").unwrap();
+        assert_eq!(answer, interp.eval_str("'b").unwrap(), "{backend}");
+        let once = chain_lengths(&heap, interp.eval_str("form").unwrap());
+        assert!(
+            once.iter().any(Option::is_some),
+            "{backend}: no pair of the datum carries a chain, so this proves nothing: {once:?}"
+        );
+        interp.eval_str("(run 99)").unwrap();
+        let after = chain_lengths(&heap, interp.eval_str("form").unwrap());
+        assert_eq!(once, after, "{backend}: after 1 and after 100 evals");
+    }
+    check(&TreeWalkInterpreter::new_tree_walker(), "tree-walker");
+    check(&Interpreter::new(VmBackend::new()), "vm");
+}
