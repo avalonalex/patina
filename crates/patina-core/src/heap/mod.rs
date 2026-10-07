@@ -32,6 +32,7 @@ mod numeric;
 #[doc(hidden)]
 pub mod sentinels;
 mod source;
+pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod trace_sentinels;
 
@@ -489,6 +490,10 @@ pub struct Heap {
     /// (the default) means nobody consumes them and sweep records nothing.
     gc_freed_closure_code_ids: Option<Vec<u64>>,
 
+    /// What each collection cost and why it ran, the pause and MMU
+    /// figures, and K16's high-water marks (`heap/telemetry.rs`, #648).
+    telemetry: telemetry::Telemetry,
+
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
@@ -666,6 +671,7 @@ impl Heap {
             gc_threshold: GcThreshold::NEVER,
             gc_pending,
             gc_freed_closure_code_ids: None,
+            telemetry: telemetry::Telemetry::new(),
             gc_defer_depth: 0,
             gc_defer_holders: 0,
             no_gc_scopes: Rc::new(Cell::new(0)),
@@ -697,7 +703,7 @@ impl Heap {
         if self.allocs_since_gc >= self.gc_threshold.allocations
             || self.bytes_since_gc() >= self.gc_threshold.bytes
         {
-            self.gc_pending.set(true);
+            self.account.shared.raise_pending();
         }
     }
 
@@ -716,7 +722,7 @@ impl Heap {
         if self.allocs_since_gc >= self.gc_threshold.allocations
             || since_gc >= self.gc_threshold.bytes
         {
-            self.gc_pending.set(true);
+            self.account.shared.raise_pending();
         }
     }
 
@@ -746,7 +752,7 @@ impl Heap {
     /// collects at its call (`GcController::collect_at_call`, #639), and
     /// posts through [`Heap::defer_collection`] only where it cannot.
     pub fn request_gc(&mut self) {
-        self.gc_pending.set(true);
+        self.account.shared.raise_pending();
     }
 
     /// Post a collection that was asked for at a call where collection is
@@ -793,9 +799,27 @@ impl Heap {
         self.gc_defer_depth == 1 && self.gc_defer_holders == 0
     }
 
-    pub(crate) fn enter_gc_defer(&mut self, holder: bool) {
+    /// `site`: where the guard was taken. A guard that makes the heap defer
+    /// where it did not — one other than the running loop's own — opens a
+    /// deferral window, whose bytes K16's second high-water mark measures
+    /// (#648).
+    pub(crate) fn enter_gc_defer(
+        &mut self,
+        holder: bool,
+        site: &'static std::panic::Location<'static>,
+    ) {
+        let deferred = self.defers_collection();
         self.gc_defer_depth += 1;
         self.gc_defer_holders += u32::from(holder);
+        if !deferred && self.defers_collection() {
+            self.open_deferral_window(site);
+        }
+    }
+
+    /// Whether a guard other than the running loop's own is alive: a nested
+    /// loop, or a holder's guard. Neither lets a collection run.
+    fn defers_collection(&self) -> bool {
+        self.gc_defer_depth >= 2 || self.gc_defer_holders > 0
     }
 
     /// Checked in every build, not only check builds: it runs once per guard
@@ -806,8 +830,12 @@ impl Heap {
             self.gc_defer_depth > 0,
             "unbalanced GC defer: exit without a matching enter"
         );
+        let deferred = self.defers_collection();
         self.gc_defer_depth -= 1;
         self.gc_defer_holders -= u32::from(holder);
+        if deferred && !self.defers_collection() {
+            self.close_deferral_window();
+        }
     }
 
     /// Collections performed against this heap.

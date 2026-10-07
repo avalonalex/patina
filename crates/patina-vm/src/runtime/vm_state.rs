@@ -559,7 +559,18 @@ impl VmState {
     /// code a collection longer; one too low would free code a closure can
     /// still run, which is why it only goes down for a closure the collector
     /// has freed.
+    ///
+    /// The collection's pause includes this work: its time completes the
+    /// collection's record (`Heap::finish_collection`, #648).
     fn after_collection(&mut self) {
+        let started = std::time::Instant::now();
+        self.release_dead_code();
+        self.heap.borrow_mut().finish_collection(started.elapsed());
+    }
+
+    /// [`Self::after_collection`]'s work: count down the freed closures'
+    /// code, and release the units nothing can run.
+    fn release_dead_code(&mut self) {
         let freed = self.heap.borrow_mut().take_gc_freed_closure_code_ids();
         for id in freed {
             if id == patina_core::heap::Heap::RETIRED_VM_CLOSURE_CODE {

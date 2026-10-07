@@ -61,6 +61,7 @@ use super::account::{
     self, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
 };
 use super::check::SlotChecks;
+use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
@@ -216,8 +217,12 @@ pub struct GcStats {
     pub last_marked: ArenaCounts,
     /// Slots reclaimed in the last collection.
     pub last_swept: ArenaCounts,
-    /// Duration of the last collection in microseconds.
+    /// Duration of the last collection in microseconds: its marking and
+    /// sweep, without the backend's work after it.
     pub last_pause_micros: u128,
+    /// The phases of the last collection (#648); `after` is the backend's,
+    /// which `Heap::finish_collection` adds.
+    pub last_phases: PhaseTimes,
 }
 
 // ============================================================================
@@ -314,8 +319,9 @@ pub struct GcDeferGuard {
 
 impl GcDeferGuard {
     /// A dispatch loop's guard, for the loop's own extent.
+    #[track_caller]
     pub fn new(heap: &SharedHeap) -> Self {
-        Self::enter(heap, false)
+        Self::enter(heap, false, std::panic::Location::caller())
     }
 
     /// A holder's guard: for a scope or value that keeps heap values no root
@@ -334,15 +340,22 @@ impl GcDeferGuard {
     /// nested loop's guard is the only deferral. The tree-walker's detached
     /// `ApplyContext for Evaluator`, which no loop runs above, takes one of
     /// these in each of its methods instead (#622).
+    #[track_caller]
     pub fn holding(heap: &SharedHeap) -> Self {
-        Self::enter(heap, true)
+        Self::enter(heap, true, std::panic::Location::caller())
     }
 
-    fn enter(heap: &SharedHeap, holder: bool) -> Self {
+    /// `site`: where the guard was taken, which names the deferral window
+    /// it opens in K16's high-water mark (`Heap::enter_gc_defer`, #648).
+    fn enter(
+        heap: &SharedHeap,
+        holder: bool,
+        site: &'static std::panic::Location<'static>,
+    ) -> Self {
         let (outer_depth, collections) = {
             let mut h = heap.borrow_mut();
             let depth = h.gc_defer_depth();
-            h.enter_gc_defer(holder);
+            h.enter_gc_defer(holder, site);
             (depth, h.gc_collections())
         };
         Self {
@@ -673,14 +686,67 @@ impl GcController {
 
     /// Collect now, with no check of the deferral rule. Crate-private (#624):
     /// a backend collects through [`GcController::safe_point`].
-    pub(crate) fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+    ///
+    /// `at_call`: a primitive asked for this collection at its call
+    /// (`collect_at_call`); otherwise the pending flag brought it, and the
+    /// counts say why. The collection is recorded for the telemetry (#648),
+    /// which the backend completes with [`Heap::finish_collection`] once its
+    /// own work after the collection is done.
+    pub(crate) fn collect(
+        &mut self,
+        heap: &mut Heap,
+        roots: &[&dyn GcRoots],
+        at_call: bool,
+    ) -> GcStats {
+        let started = Instant::now();
+        let reason = if at_call {
+            CollectReason::Call
+        } else {
+            self.reason(heap)
+        };
+        let allocated = heap.bytes_since_gc() as u64;
+        let reclaimed = heap.bytes_reclaimed();
+        let (wait_bytes, wait) = heap.take_collection_wait(started);
         let stats = self.collector.collect(heap, roots);
         count_log::note_collection();
         // Sweep lowered the pending flag; re-arm the threshold that raises it.
         // This is what lets `note_alloc` compare against a stored number
         // instead of safe points re-deriving the policy per instruction.
         heap.set_gc_threshold(self.current_threshold());
+        heap.record_collection(CollectionRecord {
+            start: started.saturating_duration_since(super::telemetry::epoch()),
+            reason,
+            phases: stats.last_phases,
+            number: heap.gc_collections(),
+            allocated,
+            live: heap.live_bytes(),
+            freed: heap.bytes_reclaimed().saturating_sub(reclaimed),
+            external: heap.external_bytes(),
+            marked: stats.last_marked,
+            swept: stats.last_swept,
+            wait_bytes,
+            wait,
+        });
         stats
+    }
+
+    /// Why the pending flag brought a collection: the count that crossed
+    /// its threshold, or a post (`Heap::defer_collection`) if none did.
+    fn reason(&self, heap: &Heap) -> CollectReason {
+        let threshold = heap.gc_threshold;
+        if heap.allocs_since_gc >= threshold.allocations {
+            if matches!(self.mode, GcMode::Zeal) {
+                CollectReason::Zeal
+            } else {
+                CollectReason::Stress
+            }
+        } else if heap.bytes_since_gc() >= threshold.bytes {
+            CollectReason::Bytes
+        } else if heap.account.shared.descriptors.get() >= threshold.descriptors {
+            CollectReason::Descriptors
+        } else {
+            CollectReason::Posted
+        }
     }
 
     /// Run a backend safe point.
@@ -754,7 +820,7 @@ impl GcController {
                     collected_under_another_guard(depth);
                 }
             }
-            gc.borrow_mut().collect(&mut h, roots);
+            gc.borrow_mut().collect(&mut h, roots, false);
             collected = true;
         });
         collected
@@ -803,7 +869,7 @@ impl GcController {
         if heap.borrow().gc_defer_is_one_loop() {
             with_roots(&mut |roots| {
                 let mut h = heap.borrow_mut();
-                gc.borrow_mut().collect(&mut h, roots);
+                gc.borrow_mut().collect(&mut h, roots, true);
                 collected = true;
             });
         }
@@ -1867,12 +1933,21 @@ impl Default for MarkSweepCollector {
 /// would reinstate the §9.5 monotonic leak, and the two weak kinds share one
 /// loop for the reason the comment on it gives. Crate-private, like every
 /// other way to run a collection (#624).
-pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
+pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> (MarkBits, PhaseTimes) {
+    let mut phases = PhaseTimes::default();
+    let mut clock = Instant::now();
+    let mut lap = |phase: &mut std::time::Duration| {
+        let now = Instant::now();
+        *phase = now - clock;
+        clock = now;
+    };
     let mut visitor = GcVisitor::new(heap);
     for provider in roots {
         provider.trace_roots(&mut visitor);
     }
+    lap(&mut phases.roots);
     visitor.drain();
+    lap(&mut phases.mark);
 
     // One fixpoint over *both* kinds of weak reference, because each can feed
     // the other and neither is quiescent until both are.
@@ -1940,28 +2015,31 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> MarkBits {
     for &tv in &visitor.pending_ephemerons {
         heap.break_ephemeron(tv);
     }
+    lap(&mut phases.weak);
 
     for provider in roots {
         provider.sweep_weak(&visitor);
     }
+    lap(&mut phases.prune);
 
-    visitor.finish()
+    (visitor.finish(), phases)
 }
 
 impl Collector for MarkSweepCollector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
-        let start = Instant::now();
+        let (mut marks, mut phases) = run_mark_phase(heap, roots);
 
-        let mut marks = run_mark_phase(heap, roots);
-
+        let sweep = Instant::now();
         let marked = marks.marked();
         let swept = heap.sweep(&mut marks);
+        phases.sweep = sweep.elapsed();
 
         self.live_bytes_after_last = heap.live_bytes();
         self.stats.collections += 1;
         self.stats.last_marked = marked;
         self.stats.last_swept = swept;
-        self.stats.last_pause_micros = start.elapsed().as_micros();
+        self.stats.last_pause_micros = phases.total().as_micros();
+        self.stats.last_phases = phases;
         self.stats
     }
 }
@@ -2838,6 +2916,48 @@ mod tests {
     /// L counts the payloads of the VM continuations a collection proves
     /// live, so a program that keeps its captures raises its interval with
     /// them instead of collecting every 8 MiB of capture; a capture that
+    /// K16's two high-water marks (#648): the bytes allocated inside one
+    /// deferral window, and between a collection being posted and the
+    /// collection, each named by the guard that opened the window.
+    #[test]
+    fn deferral_windows_and_waits_report_their_guard() {
+        let shared = crate::new_shared_heap();
+        let mut controller = GcController::new(GcMode::Off);
+        let loop_guard = GcDeferGuard::new(&shared);
+        // The loop's own guard defers nothing.
+        assert_eq!(shared.borrow().deferral_high_water().bytes, 0);
+        let line = line!() + 1;
+        let holder = GcDeferGuard::holding(&shared);
+        shared.borrow_mut().request_gc();
+        let before = shared.borrow().bytes_allocated();
+        for i in 0..1000 {
+            shared
+                .borrow_mut()
+                .alloc_pair(TaggedValue::fixnum(i), TaggedValue::NULL);
+        }
+        let inside = shared.borrow().bytes_allocated() - before;
+        drop(holder);
+        let deferral = shared.borrow().deferral_high_water();
+        assert!(deferral.bytes >= inside, "{deferral:?}");
+        assert_eq!(deferral.site.map(|s| s.line()), Some(line));
+        assert!(deferral.site.unwrap().file().ends_with("gc.rs"));
+
+        // The collection posted inside the window waited for all of it.
+        let roots = TestRoots::default();
+        controller.collect(&mut shared.borrow_mut(), &[&roots], false);
+        let wait = shared.borrow().wait_high_water();
+        assert!(wait.bytes >= inside, "{wait:?}");
+        assert_eq!(wait.site.map(|s| s.line()), Some(line));
+        shared
+            .borrow_mut()
+            .finish_collection(std::time::Duration::ZERO);
+        assert!(shared.borrow().pause_total() >= shared.borrow().last_pause());
+        // A collection at a call waited for nothing.
+        controller.collect(&mut shared.borrow_mut(), &[&roots], true);
+        assert_eq!(shared.borrow().wait_high_water(), wait);
+        drop(loop_guard);
+    }
+
     /// dies is reclaimed with its handle.
     #[test]
     fn live_continuation_snapshots_count_in_l() {
@@ -2852,7 +2972,7 @@ mod tests {
         }
         let (_dead, _) = heap.alloc_vm_continuation_ref(snapshot);
 
-        controller.collect(&mut heap, &[&roots]);
+        controller.collect(&mut heap, &[&roots], false);
         assert!(heap.live_bytes() >= 3 * snapshot);
         assert!(heap.live_bytes() < 3 * snapshot + 4096);
         assert!(heap.bytes_reclaimed() >= snapshot as u64);
@@ -2936,7 +3056,7 @@ mod tests {
             bytes: 1 << 20,
         };
         let mut controller = GcController::new(GcMode::On);
-        controller.collect(&mut shared.borrow_mut(), &[&roots]);
+        controller.collect(&mut shared.borrow_mut(), &[&roots], false);
         assert_eq!(handle.held(), 1 << 20);
         assert_eq!(shared.borrow().live_bytes(), 1 << 20);
     }
@@ -2996,7 +3116,7 @@ mod tests {
         drop(kept);
 
         let mut controller = GcController::new(GcMode::On);
-        controller.collect(&mut shared.borrow_mut(), &[&roots]);
+        controller.collect(&mut shared.borrow_mut(), &[&roots], false);
         let heap = shared.borrow();
         assert_eq!(heap.external_bytes(), kept_charge);
         assert!(heap.live_bytes() >= kept_charge + OBJECT_SLOT_BYTES);
@@ -3155,7 +3275,7 @@ mod tests {
             values: vec![a, b],
             ..Default::default()
         };
-        controller.collect(&mut heap, &[&roots]);
+        controller.collect(&mut heap, &[&roots], false);
         assert!(!pending.get());
 
         // L is two pairs, so the re-armed threshold is max(1, 2·L), four
