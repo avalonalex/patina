@@ -1,0 +1,11 @@
+;; 10,000 file ports, each opened, read and closed: no descriptor pressure.
+(import (scheme base) (scheme write) (scheme file) (scheme process-context))
+(define path (list-ref (command-line) 1))
+(call-with-output-file path (lambda (p) (write 'x p)))
+(let loop ((i 0) (acc 0))
+  (if (< i 10000)
+      (let ((p (open-input-file path)))
+        (let ((c (read-char p)))
+          (close-port p)
+          (loop (+ i 1) (+ acc (if (char? c) 1 0)))))
+      (begin (display acc) (newline))))

@@ -1091,6 +1091,78 @@ which stage 2's teardown work adds, nor the thread rows of stage 9.
 is the `def-getter` shape the stages that reclaim macro-introduced
 definitions must keep: 7 on both backends, as on chibi and Gauche.
 
+**GC benchmarks (#649).** `scripts/run_gc_benchmarks.sh` (the `gc` mode of
+`scripts/benchmarks.py`, in `scripts/gc_bench.py`) runs the workloads of
+`crates/patina-tests/bench_programs/gc/gbs.json`, the measurements each GC
+stage is judged by (`PRD/GC_PRD.md` §16). The sets:
+
+- **gbs**, the GC benchmark set, 20 workloads: nboyer, deriv, gcbench,
+  destruc, quicksort, gcold, mperm, queue3, fibfp, mbrot, nucleic, ctak,
+  fibc, generator, deeprec, libload, hashtable0, eqtable, dynamic and
+  earley. Each runs 1.0–4.7 s on the VM here.
+- **probes**: continuations at depth (`samedepth1000`, `escape1000`,
+  `pingpong1000`, `ctakdeep`, `abort100`, `retained-continuations`), deep
+  stacks (`deep-unwind`, `deep-descent`, a 10 M-deep recursion),
+  fragmentation, small heaps, ports, `parameterize`, the two loops that must
+  poll every iteration under stress, #606's 500 large vectors, #609's
+  ephemeron chain in both orders, and `many-heaps`, 300 interpreters in one
+  process (the `many_heaps` example of `patina-interpreter`).
+- **barrier**: the six barrier programs.
+- **io**: #642's workloads.
+- **load**: #644's workloads, among them a generated program of 2,500
+  definitions.
+- **tw**: a tree-walker subset.
+- **twins**: fibfp's fixnum twin, Larceny's `fib`, for K6.
+- **large-live**: 10 and 20 million objects live, run only with
+  `--large-live`.
+
+The Larceny-derived workloads are LGPL and are not vendored. They run from
+the checkout that `run_larceny_tests.sh` uses (`LARCENY_DIR`, by default
+`~/Project/reference/larceny`). Without it they are reported as `SKIPPED`
+and the run completes. Their inputs are kept in `gbs.json` as a replacement
+count or as a Patina-authored input, never as copied input files. Larceny's
+GC programs run behind `shims/larceny-gc-prefix.scm`.
+
+Every program ends with an epilogue of two `(gc)` calls and a reading of
+`(gc-stats)`. Each run records:
+
+- wall and user time, instructions retired, cycles, peak RSS, peak footprint
+  and page reclaims, from `/usr/bin/time -l` on macOS, or `/usr/bin/time -v`
+  and `perf stat` on Linux;
+- from #648's `PATINA_GC_LOG`: the collections, the paced ones, the maximum
+  and total pause, the mean and maximum mark time, and the MMU at 1–100 ms
+  windows over the run's own pauses. The epilogue's collections are left
+  out, and the first of them is reported alone (a `(gc)` right after the
+  program);
+- after the epilogue: live, committed and resident bytes.
+
+Run alone, each workload gets medians with bootstrap 95% intervals. With
+`--base REV` (a revision, built in a worktree under
+`target/benchmark-runs/worktrees/` that is removed afterwards unless
+`--keep-base`) or `--base DIR` (a checkout), every round runs base, branch,
+base. Each side's binary runs over its own `lib/`, and a run whose sides
+print different answers fails. A ratio is the branch over the mean of its
+round's two base runs, taken as a geomean over rounds, with a bootstrap 95%
+interval per workload and on the geomean over workloads. A difference under
+2% is judged in instructions or cycles, never in wall time. Each round draws
+the environment's size at random, the same for all its runs (#653): the
+VM's cycles depend on where the stack lands. Ten rounds is the default.
+The whole default set, 66 measurements, takes about 2 minutes a round on
+one build here; a comparison takes three times that.
+
+```bash
+./scripts/run_gc_benchmarks.sh --rounds 3                    # this build, every set
+./scripts/run_gc_benchmarks.sh --base main --set gbs         # main/branch/main
+./scripts/run_gc_benchmarks.sh --workload queue3 --workload libload --rounds 5
+```
+
+The report goes to `target/benchmark-runs/<stamp>/report.json`, with every
+run's metrics and its pad. A run in which any workload failed writes
+`failed-report.json` instead and exits non-zero. The mode's own tests are
+in `scripts/tests/test_benchmarks.py`. It does not yet have the fixnum twins
+of mbrot and nucleic, which K6 needs before stage 6, nor `blocked-threads`
+(stage 9).
+
 **A change that moves a Larceny tally re-pins its stress rows in the same
 pull request.** The nightly lane holds each suite on each lane to its row in
 `scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue
