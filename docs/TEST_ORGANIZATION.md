@@ -1228,6 +1228,26 @@ Clippy job runs it with the feature. Without the feature, its one test
 checks that the variables change nothing. The arithmetic behind the rows is tested in
 `scripts/tests/test_benchmarks.py`.
 
+**The GC probes (#650).** `scripts/gc_probes/` holds the small programs
+behind the design's decommit, reservation and continuation choices:
+
+- `madv.c`: each way of handing memory back, read in resident size and
+  footprint;
+- `cycle.c`: what decommitting one cycle's memory costs the next;
+- `decommit.c`: 464 MiB given back in 32 KiB pieces against 4 MiB runs;
+- `mapjit.c`: `MAP_JIT` regions with per-thread write protection (macOS
+  arm64);
+- `placement.c`: where anonymous maps land, whether a 2⁴⁰ hint is
+  honoured, and how many 16 GiB reservations one process holds;
+- `continuation_toy.rs`: today's capture against designs A and C′ at
+  depths 10 to 1,000.
+
+Each file's header says what it measures, how to build and run it with
+`cc` or `rustc` alone, and its result on the development machine with the
+date. They are not part of the build or of CI; a stage that depends on one
+re-runs it and updates its header (5e for decommit, 4e for continuations,
+6 for `MAP_JIT`).
+
 **A change that moves a Larceny tally re-pins its stress rows in the same
 pull request.** The nightly lane holds each suite on each lane to its row in
 `scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue
