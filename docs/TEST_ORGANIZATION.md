@@ -1165,6 +1165,69 @@ in `scripts/tests/test_benchmarks.py`. It does not yet have the fixnum twins
 of mbrot and nucleic, which K6 needs before stage 6, nor `blocked-threads`
 (stage 9).
 
+**The GC census (#651).** `patina-core`'s `gc-census` feature compiles in
+`crates/patina-core/src/census.rs` (the core and the hook API) and
+`heap/census.rs` (the heap's side). This is the study's demographics patch,
+ported to today's heap. A run is measured when `PATINA_GC_CENSUS` is set,
+and it records:
+
+- **Allocations**, by kind and length. Each is sized twice: as the byte
+  account charges it today, and in the headered layout of
+  `PRD/GC_PRD.md` §6.
+- **Survival**, between marking and sweeping: the share of what was
+  allocated since the previous collection that this one marks. Under
+  `PATINA_GC_STRESS=N`, that is the survival of an N-allocation nursery.
+- **Stores**, per site. Each store records whether its value is an
+  immediate, and whether its holder and its value are young. "Young" is
+  judged in the actual heap and in virtual nurseries of 16 K to 4 M
+  allocations, which also gives old-to-young edges and their distinct
+  holders per interval.
+- **Other counts:** identity- and `equal-hash`, continuation copies, and
+  the VM's stack at each safe point.
+
+The output goes to three places:
+
+- `PATINA_GC_CENSUS_OUT` gets the summary at exit (standard error when
+  unset).
+- `PATINA_GC_CENSUS_LOG` gets one CSV line per collection.
+- `PATINA_GC_CENSUS_HEAPS` gets the line `exe total=… max_live=…
+  live_at_exit=…` appended, the heaps one process made. It is written even
+  without `PATINA_GC_CENSUS`. With it, `cargo test -p patina-tests` gives
+  heaps per test binary.
+
+Only the process's first heap is measured. Without the feature, every hook
+is an empty inline function, and the shipped build is unchanged.
+
+`scripts/run_gc_census.sh` (the `census` mode of `scripts/benchmarks.py`,
+in `scripts/gc_census.py`) builds that binary into `target/gc-census`, away
+from the main build. It runs each GBS workload under the default trigger
+and at each nursery size, with #648's log beside the census, and prints the
+rows of #647's measurement table that the census answers:
+
+- bytes against the headered layout;
+- object sizes and the allocation mix;
+- survival at 64 K allocations;
+- the store mix;
+- live peaks and the deepest stack;
+- the collector's rates.
+
+The census takes a lock per allocation and per store, about doubling run
+time, so it answers counts and shapes, and the `gc` mode answers times. The
+whole GBS at six configurations takes about 6 minutes here with four runs
+side by side.
+
+```bash
+./scripts/run_gc_census.sh                                    # the GBS, every configuration
+./scripts/run_gc_census.sh --workload deeprec --config default --config s64K
+cargo test -p patina-repl --test gc_census --features patina-core/gc-census
+```
+
+`crates/patina-repl/tests/gc_census.rs` pins the census on both backends:
+counts by kind and site, survival by interval, and heaps per process. CI's
+Clippy job runs it with the feature. Without the feature, its one test
+checks that the variables change nothing. The arithmetic behind the rows is tested in
+`scripts/tests/test_benchmarks.py`.
+
 **A change that moves a Larceny tally re-pins its stress rows in the same
 pull request.** The nightly lane holds each suite on each lane to its row in
 `scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue

@@ -23,6 +23,8 @@
 //! - `gc.rs`: Mark-and-sweep garbage collection (see `docs/GC_DESIGN.md`)
 
 mod account;
+#[cfg(feature = "gc-census")]
+mod census;
 mod check;
 pub mod gc;
 mod numeric;
@@ -541,6 +543,10 @@ pub struct Heap {
     /// [`GcController::safe_point`]: crate::GcController::safe_point
     #[cfg(feature = "test-support")]
     skip_safe_points: bool,
+    /// This heap's part of the GC census (#651): counted among the
+    /// process's heaps, and measured when it is the first.
+    #[cfg(feature = "gc-census")]
+    census: crate::census::imp::HeapCensus,
 
     /// Next id for `VmContinuationRef` / `VmDelimitedContinuationRef`
     /// handles. Heap-owned so ids are unique across both continuation kinds
@@ -681,6 +687,8 @@ impl Heap {
             descriptor_collections: 0,
             #[cfg(feature = "test-support")]
             skip_safe_points: false,
+            #[cfg(feature = "gc-census")]
+            census: crate::census::imp::HeapCensus::new(),
             next_vm_continuation_id: 0,
         }
     }
@@ -884,7 +892,7 @@ impl Heap {
         check_storable(car, "pair");
         check_storable(cdr, "pair");
         self.note_alloc(PAIR_SLOT_BYTES);
-        if let Some(free) = self.free_pairs.pop() {
+        let pair = if let Some(free) = self.free_pairs.pop() {
             self.pairs[free as usize] = (car, cdr);
             self.pair_checks.reuse(TaggedValue::pair(free))
         } else {
@@ -892,7 +900,10 @@ impl Heap {
             self.pairs.push((car, cdr));
             self.pair_checks.push();
             TaggedValue::pair(index)
-        }
+        };
+        #[cfg(feature = "gc-census")]
+        self.census_alloc(pair);
+        pair
     }
 
     /// Get pair contents
@@ -921,6 +932,7 @@ impl Heap {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
+        crate::census::store(crate::census::Site::SetCar, Some(ptr), value);
         self.pairs[ptr.heap_index() as usize].0 = value;
     }
 
@@ -930,6 +942,7 @@ impl Heap {
         debug_assert!(ptr.is_pair());
         self.pair_checks.check("pair", ptr);
         check_storable(value, "pair");
+        crate::census::store(crate::census::Site::SetCdr, Some(ptr), value);
         self.pairs[ptr.heap_index() as usize].1 = value;
     }
 
@@ -943,7 +956,7 @@ impl Heap {
             elements.iter().for_each(|&e| check_storable(e, "vector"));
         }
         self.note_alloc(VECTOR_SLOT_BYTES + account::vector_payload(&elements));
-        if let Some(free) = self.free_vectors.pop() {
+        let vector = if let Some(free) = self.free_vectors.pop() {
             self.vectors[free as usize] = elements;
             self.vector_checks.reuse(TaggedValue::vector(free))
         } else {
@@ -951,7 +964,10 @@ impl Heap {
             self.vectors.push(elements);
             self.vector_checks.push();
             TaggedValue::vector(index)
-        }
+        };
+        #[cfg(feature = "gc-census")]
+        self.census_alloc(vector);
+        vector
     }
 
     /// Allocate a vector filled with a value
@@ -981,6 +997,7 @@ impl Heap {
         debug_assert!(ptr.is_vector());
         self.vector_checks.check("vector", ptr);
         check_storable(value, "vector");
+        crate::census::store(crate::census::Site::VectorSet, Some(ptr), value);
         self.vectors[ptr.heap_index() as usize][index] = value;
     }
 
@@ -1010,7 +1027,7 @@ impl Heap {
     /// Allocate a new string from Vec<char> (primary method)
     pub fn alloc_string_chars(&mut self, chars: Vec<char>) -> TaggedValue {
         self.note_alloc(STRING_SLOT_BYTES + account::string_payload(&chars));
-        if let Some(free) = self.free_strings.pop() {
+        let string = if let Some(free) = self.free_strings.pop() {
             self.strings[free as usize] = chars;
             self.string_checks.reuse(TaggedValue::string(free))
         } else {
@@ -1018,7 +1035,10 @@ impl Heap {
             self.strings.push(chars);
             self.string_checks.push();
             TaggedValue::string(index)
-        }
+        };
+        #[cfg(feature = "gc-census")]
+        self.census_alloc(string);
+        string
     }
 
     /// Allocate a string from a &str
@@ -1276,6 +1296,8 @@ impl Heap {
             _ => return,
         };
         if !Rc::ptr_eq(&outer_cell, &self.get_promise(inner).expect("checked")) {
+            let (PromiseState::Delayed(value) | PromiseState::Forced(value)) = inner_state;
+            crate::census::store(crate::census::Site::PromiseUpdate, Some(outer), value);
             *outer_cell.borrow_mut() = inner_state;
             // The write indexes the arena directly, but needs no check of
             // its own in a check build (#621): `get_promise(inner)` above
@@ -1435,7 +1457,14 @@ impl Heap {
     /// heap immutably; the `RefCell` is what makes that sound.
     pub fn break_ephemeron(&self, tv: TaggedValue) {
         match self.get_object(tv) {
-            HeapObjectData::Ephemeron(cell) => *cell.borrow_mut() = None,
+            HeapObjectData::Ephemeron(cell) => {
+                crate::census::store(
+                    crate::census::Site::BreakEphemeron,
+                    Some(tv),
+                    TaggedValue::FALSE,
+                );
+                *cell.borrow_mut() = None;
+            }
             // The collector only hands back a value it recorded while tracing
             // an ephemeron, so anything else is a bookkeeping error — and a
             // silent one would leave a pair unbroken with a key whose cells
@@ -1477,6 +1506,7 @@ impl Heap {
         match self.get_object(ptr) {
             HeapObjectData::MutableCell(cell) => {
                 check_storable(val, "cell");
+                crate::census::store(crate::census::Site::MutableCell, Some(ptr), val);
                 *cell.borrow_mut() = val;
                 true
             }
@@ -1610,6 +1640,11 @@ impl Heap {
         match self.objects.get_mut(closure.index() as usize) {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
                 check_storable(val, "closure's free variable");
+                crate::census::store(
+                    crate::census::Site::ClosureFreeVar,
+                    Some(TaggedValue::object(closure.index())),
+                    val,
+                );
                 free_vars[slot] = val;
                 true
             }
@@ -1690,8 +1725,11 @@ impl Heap {
     /// the payload's match to that variant's arm.
     #[inline]
     fn alloc_object(&mut self, data: HeapObjectData) -> TaggedValue {
-        self.note_alloc(OBJECT_SLOT_BYTES + data.payload_bytes());
-        if let Some(free) = self.free_objects.pop() {
+        let payload = data.payload_bytes();
+        self.note_alloc(OBJECT_SLOT_BYTES + payload);
+        #[cfg(feature = "gc-census")]
+        let census = self.census.on.then(|| census::object_info(&data));
+        let object = if let Some(free) = self.free_objects.pop() {
             self.objects[free as usize] = data;
             self.object_checks.reuse(TaggedValue::object(free))
         } else {
@@ -1699,7 +1737,10 @@ impl Heap {
             self.objects.push(data);
             self.object_checks.push();
             TaggedValue::object(index)
-        }
+        };
+        #[cfg(feature = "gc-census")]
+        self.census_alloc_object(object, census, payload);
+        object
     }
 
     /// Get object data reference
@@ -2768,13 +2809,19 @@ impl Heap {
                 HeapObjectData::Procedure(p) => Rc::as_ptr(p) as *const u8 as usize,
                 HeapObjectData::RecordType(t) => Rc::as_ptr(t) as *const u8 as usize,
                 HeapObjectData::Record { fields, .. } => Rc::as_ptr(fields) as *const u8 as usize,
-                _ => return mix(tv.heap_index() as u64),
+                _ => {
+                    crate::census::identity_hash(crate::census::IdentityHash::Index);
+                    return mix(tv.heap_index() as u64);
+                }
             };
+            crate::census::identity_hash(crate::census::IdentityHash::Rc);
             return mix(by_rc as u64);
         }
         if tv.is_heap_pointer() {
+            crate::census::identity_hash(crate::census::IdentityHash::Index);
             return mix(tv.heap_index() as u64);
         }
+        crate::census::identity_hash(crate::census::IdentityHash::Immediate);
         self.tagged_value_hash(tv)
     }
 
@@ -2884,6 +2931,7 @@ impl Heap {
                     return h;
                 }
                 _ => {
+                    crate::census::equal_hash_fallback();
                     return tv.heap_index() as u64;
                 }
             }

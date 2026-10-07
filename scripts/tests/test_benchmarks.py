@@ -21,7 +21,8 @@ class BenchmarkRunners(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / 'scripts').mkdir()
-        for name in ('benchmarks.py', 'gc_bench.py', 'bench_compare.sh', 'run_benchmarks.sh', 'run_gc_benchmarks.sh'):
+        for name in ('benchmarks.py', 'gc_bench.py', 'gc_census.py', 'bench_compare.sh', 'run_benchmarks.sh',
+                     'run_gc_benchmarks.sh', 'run_gc_census.sh'):
             shutil.copy2(SOURCE / 'scripts' / name, self.root / 'scripts' / name)
         shutil.copytree(SOURCE / 'crates/patina-tests/bench_programs', self.root / 'crates/patina-tests/bench_programs')
         self.bin = self.root / 'bin'
@@ -252,6 +253,42 @@ sys.exit(status)
         failed = list((self.root / 'target/benchmark-runs').glob('*/failed-report.json'))
         self.assertEqual(len(failed), 1)
 
+    def test_census_runs_each_configuration_with_the_census_on(self):
+        binary = self.root / 'target/gc-census/release/patina'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+with pathlib.Path(os.environ['FAKE_ROOT'], 'census-calls.jsonl').open('a') as log:
+    log.write(json.dumps({'stress': os.environ.get('PATINA_GC_STRESS'), 'census': os.environ['PATINA_GC_CENSUS'],
+                          'program': sys.argv[-1]}) + '\\n')
+z = [0] * 14
+pathlib.Path(os.environ['PATINA_GC_CENSUS_OUT']).write_text('\\n'.join([
+    'collections 1', 'alloc_total 10', 'alloc_by_arena [10, 0, 0, 0]', 'bytes_by_arena [160, 0, 0, 0]',
+    'today_bytes_by_arena [160, 0, 0, 0]', f'vec_len {z}', f'str_len {z}', f'obj_variant {[0] * 28}',
+    f'closure_fv {z}', f'record_fields {z}', f'size_hist {[10] + [0] * 15}',
+    f'young_alloc_class1 {[10] + [0] * 8}', f'young_surv_class1 {[1] + [0] * 8}']) + '\\n')
+pathlib.Path(os.environ['PATINA_GC_CENSUS_LOG']).write_text(
+    'live_bytes,frames,regs,live_pairs,live_vectors,live_strings,live_objects,arena_pairs,arena_vectors,'
+    'arena_strings,arena_objects\\n160,3,30,1,0,0,0,10,0,0,0\\n')
+pathlib.Path(os.environ['PATINA_GC_LOG']).write_text(
+    'roots_us,mark_us,weak_us,prune_us,sweep_us\\n1,1,0,0,1\\n')
+print('300000')
+''')
+        binary.chmod(0o755)
+        result = self.run_script('run_gc_census.sh', '--workload', 'deeprec', '--config', 'default',
+                                 '--config', 's64K', '--jobs', '1')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in (self.root / 'census-calls.jsonl').read_text().splitlines()]
+        self.assertEqual(sorted(str(c['stress']) for c in calls), ['65536', 'None'])
+        self.assertTrue(all(c['census'] == '1' for c in calls))
+        # The census runs the program alone, without the gc mode's epilogue.
+        program = Path(calls[0]['program']).read_text()
+        self.assertNotIn('gc-stats', program)
+        report = json.loads(self.reports()[0].read_text())
+        self.assertEqual(report['kind'], 'census')
+        self.assertEqual(report['measurements']['survival']['deeprec']['s64K'], 0.1)
+        self.assertIn('live heaps (headered): deeprec 0 MB', result.stdout)
+
 
 class GcArithmetic(unittest.TestCase):
     """scripts/gc_bench.py's parsing and statistics, on synthetic input."""
@@ -332,6 +369,104 @@ class GcArithmetic(unittest.TestCase):
                 self.assertIn('entry', w)
         with self.assertRaises(ValueError):
             self.gc.load_workloads([], ['no-such-workload'])
+
+
+class GcCensusArithmetic(unittest.TestCase):
+    """scripts/gc_census.py's parsing and #647's rows, on synthetic summaries."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(SOURCE / 'scripts'))
+        spec = importlib.util.spec_from_file_location('gc_census', SOURCE / 'scripts/gc_census.py')
+        cls.census = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.census)
+
+    @staticmethod
+    def summary(pairs=600, closures=300, flonums=100, survive=(0, 0), stores=((100, 60, 95),)):
+        """A census summary: `pairs` pairs (16 B), `closures` closures of two
+        free variables (32 B headered), `flonums` flonums (16 B); class-1
+        survival (pairs survived, pairs allocated); and vector stores as
+        (total, immediates, to young holders at 64 K)."""
+        variants = [0] * 28
+        variants[23], variants[2] = closures, flonums
+        total = pairs + closures + flonums
+        fv = [0] * 14
+        fv[2] = closures
+        size = [0] * 16
+        size[0], size[2] = pairs + flonums, closures
+        lines = [
+            'heaps_total 1 heaps_max_live 1', 'collections 3', 'max_frames 7 max_regs 70',
+            f'alloc_total {total}', 'vm_instrs 1000',
+            f'alloc_by_arena {[pairs, 0, 0, closures + flonums]}',
+            f'bytes_by_arena {[16 * pairs, 0, 0, 32 * closures + 16 * flonums]}',
+            f'today_bytes_by_arena {[16 * pairs, 0, 0, 88 * closures + 72 * flonums]}',
+            f'vec_len {[0] * 14}', f'str_len {[0] * 14}', f'obj_variant {variants}',
+            f'closure_fv {fv}', f'record_fields {[0] * 14}', f'size_hist {size}',
+            f'young_alloc_class1 {[survive[1]] + [0] * 8}', f'young_surv_class1 {[survive[0]] + [0] * 8}',
+            'rs_sum [1, 2, 3, 4, 5, 6] rs_max [1, 1, 1, 1, 1, 1] rs_nonempty [1, 2, 3, 4, 5, 6]',
+            'cap_full 2 frames 10 regs 40 max_regs 30 restore 1 rframes 5 rregs 20 cap_delim 0 dframes 0 dregs 0',
+            'variant_names BigInt,Rational,Real',
+        ]
+        for t, imm, young in stores:
+            lines.append(f'site vector_set total {t} imm {imm} heapval {t - imm} target_unknown 0 '
+                         f'young_target {[young] * 6} young_target_heapval {[0] * 6} young_value {[0] * 6} '
+                         f'old_to_young {[0, 0, 5, 0, 0, 0]} old_target_heapval {[0] * 6}')
+        return '\n'.join(lines) + '\n'
+
+    def test_summaries_parse_into_numbers_lists_and_sites(self):
+        d = self.census.parse_summary(self.summary())
+        self.assertEqual((d['alloc_total'], d['max_frames'], d['max_regs']), (1000, 7, 70))
+        self.assertEqual(d['alloc_by_arena'], [600, 0, 0, 400])
+        self.assertEqual(d['rs_sum'], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(d['continuations'], {'cap_full': 2, 'frames': 10, 'regs': 40, 'max_regs': 30,
+                                              'restore': 1, 'rframes': 5, 'rregs': 20, 'cap_delim': 0,
+                                              'dframes': 0, 'dregs': 0})
+        self.assertEqual(d['variant_names'], ['BigInt', 'Rational', 'Real'])
+        site = d['sites']['vector_set']
+        self.assertEqual((site['total'], site['imm'], site['old_to_young'][2]), (100, 60, 5))
+
+    def test_the_rows(self):
+        parse = self.census.parse_summary
+        # One large collection, and one too small to count in the rates.
+        log = [{'live_bytes': 5 << 20, 'frames': 200_000, 'regs': 2_000_000, 'live_pairs': 100_000,
+                'live_vectors': 0, 'live_strings': 0, 'live_objects': 0, 'arena_pairs': 200_000,
+                'arena_vectors': 0, 'arena_strings': 0, 'arena_objects': 0},
+               {'live_bytes': 1, 'frames': 1, 'regs': 1, 'live_pairs': 10, 'live_vectors': 0, 'live_strings': 0,
+                'live_objects': 0, 'arena_pairs': 20, 'arena_vectors': 0, 'arena_strings': 0, 'arena_objects': 0}]
+        gclog = [{'roots_us': 1, 'mark_us': 300, 'weak_us': 0, 'prune_us': 1, 'sweep_us': 400},
+                 {'roots_us': 50, 'mark_us': 50, 'weak_us': 0, 'prune_us': 0, 'sweep_us': 50}]
+        results = {
+            'a': {'default': {'summary': parse(self.summary(stores=((100, 60, 95),))), 'log': log, 'gclog': gclog},
+                  's64K': {'summary': parse(self.summary(survive=(1, 100))), 'log': [], 'gclog': []}},
+            'deeprec': {'default': {'summary': parse(self.summary(stores=((300, 0, 30),))), 'log': log,
+                                    'gclog': gclog},
+                        's64K': {'summary': parse(self.summary(survive=(100, 100))), 'log': [], 'gclog': []}},
+        }
+        r = self.census.rows(results)
+        # Headered: 600*16 + 300*32 + 100*16 = 20,800 per workload; the
+        # account charges 600*16 + 300*88 + 100*72 = 43,200.
+        self.assertAlmostEqual(r['bytes_ratio_account'], 43_200 / 20_800)
+        self.assertAlmostEqual(r['size_16'], 0.7)
+        self.assertEqual(r['size_over_8k'], 0)
+        self.assertAlmostEqual(r['mix_closures'], 0.3)
+        self.assertAlmostEqual(r['mix_pairs'], 0.6)
+        self.assertEqual((r['survival']['a']['s64K'], r['survival']['deeprec']['s64K']), (0.01, 1.0))
+        self.assertEqual(r['survival_64k_at_most_1_5'], 1)
+        # 60 immediates of 400 stores; young holders 95% and 10%.
+        self.assertAlmostEqual(r['store_immediate'], 60 / 400)
+        self.assertAlmostEqual(r['store_young_holder_median_64k'], (0.95 + 0.1) / 2)
+        self.assertEqual(r['live_peak']['a'], 5 << 20)
+        self.assertEqual(r['stack']['deeprec'], (200_000, 2_000_000))
+        rates = r['rates']['deeprec']
+        self.assertEqual((rates['sweep_ns_per_slot'], rates['mark_ns_per_live'], rates['deep_mark_mean_us']),
+                         (2.0, 3.0, 302))
+        self.assertTrue(any('deeprec 200,000 frames' in line for line in self.census.report_lines(r)))
+
+    def test_the_study_s_estimate_of_today_s_bytes(self):
+        d = self.census.parse_summary(self.summary(pairs=10, closures=1, flonums=0))
+        # 10 pairs at 16 B, one object slot of 72 B and its two free
+        # variables' 16 B buffer.
+        self.assertEqual(self.census.today_estimate(d), 160 + 72 + 16)
 
 
 if __name__ == '__main__':

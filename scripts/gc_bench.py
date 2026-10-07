@@ -120,9 +120,10 @@ def macroprog(n=2500):
     return '\n'.join(lines) + '\n'
 
 
-def prepare(workload, scratch):
-    """Write the workload's program into `scratch`: (program path or None,
-    arguments, stdin path or None, working directory, check). Raises Skip."""
+def prepare(workload, scratch, epilogue=EPILOGUE):
+    """Write the workload's program into `scratch`, followed by `epilogue`:
+    (program path or None, arguments, stdin path or None, working
+    directory, check). Raises Skip."""
     name, kind = workload['name'], workload['kind']
     run_dir = scratch / 'run'
     (run_dir / 'outputs').mkdir(parents=True, exist_ok=True)
@@ -150,15 +151,15 @@ def prepare(workload, scratch):
                     + (root / 'GC' / f'{workload["source"]}.sch').read_text() + '\n' + workload['entry'] + '\n')
             stdin = None
         program = scratch / f'{name}.scm'
-        program.write_text(text + EPILOGUE)
+        program.write_text(text + epilogue)
         return program, args, stdin, run_dir, 'larceny'
     if kind == 'patina':
         program = scratch / f'{name}.scm'
-        program.write_text((GC / workload['source']).read_text() + EPILOGUE)
+        program.write_text((GC / workload['source']).read_text() + epilogue)
         return program, args, None, run_dir, 'output'
     if kind == 'generated':
         program = scratch / f'{name}.scm'
-        program.write_text(macroprog() + EPILOGUE)
+        program.write_text(macroprog() + epilogue)
         return program, args, None, run_dir, 'output'
     if kind == 'example':
         return None, args, None, run_dir, 'output'

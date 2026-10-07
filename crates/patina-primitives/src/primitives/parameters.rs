@@ -19,6 +19,7 @@
 use crate::apply_context::ApplyContext;
 use crate::registry::{Step, done_with_result};
 use patina_core::TaggedValue;
+use patina_core::census::Site;
 use patina_core::heap::ParameterData;
 use patina_runtime::EvalError;
 use smallvec::smallvec;
@@ -141,7 +142,7 @@ pub(super) fn parameter_set(
             args: smallvec![value],
             state: param,
         }),
-        None => Ok(install(&values, value)),
+        None => Ok(install(&values, param, value, Site::ParameterInstall)),
     }
 }
 
@@ -152,7 +153,12 @@ pub(super) fn parameter_set_converted(
     value: TaggedValue,
 ) -> Result<Step, EvalError> {
     let (values, _) = parameter_parts(ctx, param)?;
-    Ok(install(&values, value))
+    Ok(install(
+        &values,
+        param,
+        value,
+        Site::ParameterInstallConverted,
+    ))
 }
 
 /// The value stack and converter of the parameter object `param`.
@@ -163,8 +169,15 @@ fn parameter_parts(ctx: &dyn ApplyContext, param: TaggedValue) -> Result<Paramet
         .ok_or_else(|| EvalError::TypeError("%parameter-set!: not a parameter object".to_string()))
 }
 
-/// Make `value` the current value of the parameter whose stack is `values`.
-fn install(values: &RefCell<Vec<TaggedValue>>, value: TaggedValue) -> Step {
+/// Make `value` the current value of `param`, whose stack is `values`;
+/// `site` says which setter, for the GC census.
+fn install(
+    values: &RefCell<Vec<TaggedValue>>,
+    param: TaggedValue,
+    value: TaggedValue,
+    site: Site,
+) -> Step {
+    patina_core::census::store(site, Some(param), value);
     if let Some(top) = values.borrow_mut().last_mut() {
         *top = value;
     }

@@ -831,6 +831,7 @@ impl Environment {
     /// is the one that keeps a location one location.
     #[inline]
     pub fn set_slot_value(&self, slot: u32, value: TaggedValue) {
+        crate::census::store(crate::census::Site::EnvSetSlot, None, value);
         let forwarded = {
             let mut bindings = self.bindings.borrow_mut();
             let forwarded = bindings.read_slot(slot) == TaggedValue::FORWARDED;
@@ -1061,6 +1062,7 @@ impl Environment {
     /// Use this for top-level defines, built-ins, and other simple bindings.
     /// This is the primary API - accepts TaggedValue directly.
     pub fn define(&self, name: impl Into<Rc<str>>, value: TaggedValue) {
+        crate::census::store(crate::census::Site::EnvDefine, None, value);
         let (slot, was_forwarded) = self.define_slot(name.into(), value);
         // A definition is a new binding of this environment's own, whatever
         // the name was before — so an importer that defines a name it
@@ -1303,6 +1305,7 @@ impl Environment {
         if let Some(i) = self.visible_scoped_index(name)
             && let Some(bindings) = self.scoped_bindings.borrow_mut().get_mut(name)
         {
+            crate::census::store(crate::census::Site::EnvSetScoped, None, value);
             bindings[i].tagged_value = value;
             return Ok(());
         }

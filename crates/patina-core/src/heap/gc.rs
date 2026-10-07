@@ -102,7 +102,7 @@ impl BitSet {
     }
 
     #[inline]
-    fn get(&self, i: usize) -> bool {
+    pub(crate) fn get(&self, i: usize) -> bool {
         debug_assert!(i < self.len, "bit index {i} out of range {}", self.len);
         self.words[i / 64] & (1u64 << (i % 64)) != 0
     }
@@ -2029,6 +2029,10 @@ impl Collector for MarkSweepCollector {
     fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
         let (mut marks, mut phases) = run_mark_phase(heap, roots);
 
+        // Between marking and sweeping, outside the pause's phases: the
+        // census's own time is its log's `scan_us`.
+        #[cfg(feature = "gc-census")]
+        heap.census_collection(&marks);
         let sweep = Instant::now();
         let marked = marks.marked();
         let swept = heap.sweep(&mut marks);

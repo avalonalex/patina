@@ -236,6 +236,12 @@ impl<'a> CpsEvaluator<'a> {
                 // like Scheme lambdas do. We define in the captured environment directly.
                 // This is important because `Define` inside a continuation body should
                 // go to the original lexical scope, not an artificially created child scope.
+                patina_core::census::store(
+                    patina_core::census::Site::TwContinuationDefine,
+                    None,
+                    value,
+                );
+                patina_core::census::skip_next_env_define();
                 captured_env.define(param, value);
 
                 // Return Continue step instead of recursive call

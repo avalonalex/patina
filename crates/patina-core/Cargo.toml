@@ -34,6 +34,12 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # shipped binary does not enable it and compiles none of the checks.
 gc-check = []
 
+# Compile the GC census (#651, `census`): allocation by kind and size,
+# survival per collection, and the store mix, read through the
+# PATINA_GC_CENSUS variables. A measuring build only: every hook is an empty
+# inline function without it, and nothing ships with it.
+gc-census = []
+
 # Compile `heap::gc::collect_for_tests`, which collects outside every safe
 # point, for unit tests in other crates that drive the collector against
 # hand-built state (#624), and `heap::sentinels`, which those tests use to

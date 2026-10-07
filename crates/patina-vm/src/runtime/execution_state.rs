@@ -279,6 +279,7 @@ impl ExecutionState {
     /// Capture every dynamic component together; handle allocation retires
     /// dead temporaries and installs the weak-store payload before a safe point.
     pub(super) fn capture_full(&self, deliver_reg: u16, reentry: Rc<[u64]>) -> VmContinuation {
+        patina_core::census::capture_full(self.frames.len(), self.registers.len());
         VmContinuation {
             frames: self.frames.clone(),
             dynamic_winds: self.dynamic_winds.clone(),
@@ -295,6 +296,7 @@ impl ExecutionState {
     /// Full arrival replaces all five components. The control layer decides
     /// which Rust re-entry boundaries it leaves and when to deliver the value.
     pub(super) fn restore(&mut self, cc: &VmContinuation) {
+        patina_core::census::restore_full(cc.frames.len(), cc.registers.len());
         self.registers = cc.registers.clone();
         self.frames = cc.frames.clone();
         self.dynamic_winds = cc.dynamic_winds.clone();

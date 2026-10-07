@@ -259,6 +259,7 @@ fn record_set(heap: &SharedHeap, args: &[TaggedValue]) -> Result<TaggedValue, Ev
                 fields_ref.len()
             )));
         }
+        patina_core::census::store(patina_core::census::Site::RecordSet, Some(args[0]), args[2]);
         fields_ref[index] = args[2];
         Ok(TaggedValue::UNSPECIFIED)
     } else {

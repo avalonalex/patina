@@ -284,3 +284,7 @@ jobs:
     # leaves their empty stand-ins unlinted.
     - name: Clippy, plain release
       run: cargo clippy --release --all-targets -- -D warnings
+    # The GC census (#651) is compiled only with its feature, which no other
+    # job builds: its tests run here, beside the lint that covers it.
+    - name: GC census
+      run: cargo test -p patina-repl --test gc_census --features patina-core/gc-census
