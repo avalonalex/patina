@@ -1,5 +1,7 @@
 """Offline subprocess smoke tests; no compiler, interpreter or timing suite needed."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SOURCE = Path(__file__).resolve().parents[2]
 
@@ -180,6 +183,9 @@ print('GC_FINAL live-bytes=1000 committed-bytes=4096 external-bytes=0 resident-b
         binary.chmod(0o755)
 
     def gc_setup(self):
+        # A perf that cannot count, as on GitHub's Ubuntu runners: the mode
+        # falls back to time(1) alone wherever perf would be used.
+        self.command('perf', 'import sys\nprint("perf_event_paranoid setting is 4", file=sys.stderr)\nsys.exit(255)')
         self.command('time', '''
 import subprocess, sys
 flag, command = sys.argv[1], sys.argv[2:]
@@ -264,6 +270,17 @@ class GcArithmetic(unittest.TestCase):
         self.assertEqual((linux['wall_s'], linux['max_rss'], linux['instructions'], linux['cycles']),
                          (62.5, 2048, 99, 50))
         self.assertIsNone(linux['peak_footprint'])
+
+    def test_perf_is_used_only_where_it_can_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            perf = Path(directory) / 'perf'
+            for status, usable in ((255, False), (0, True)):
+                perf.write_text(f'#!/bin/sh\nexit {status}\n')
+                perf.chmod(0o755)
+                self.gc.perf_usable.cache_clear()
+                with mock.patch.dict(os.environ, PATH=directory), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(self.gc.perf_usable(), str(perf) if usable else None)
+        self.gc.perf_usable.cache_clear()
 
     def test_mmu_takes_the_worst_window_inside_the_run(self):
         # A 5 ms pause from 10 ms to 15 ms in a run that ends at 100 ms.

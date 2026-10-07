@@ -1128,7 +1128,9 @@ Every program ends with an epilogue of two `(gc)` calls and a reading of
 
 - wall and user time, instructions retired, cycles, peak RSS, peak footprint
   and page reclaims, from `/usr/bin/time -l` on macOS, or `/usr/bin/time -v`
-  and `perf stat` on Linux;
+  and `perf stat` on Linux. Where `perf_event_paranoid` stops perf from
+  counting, as on GitHub's Ubuntu runners, instructions and cycles are not
+  recorded, and the run says so;
 - from #648's `PATINA_GC_LOG`: the collections, the paced ones, the maximum
   and total pause, the mean and maximum mark time, and the MMU at 1–100 ms
   windows over the run's own pauses. The epilogue's collections are left

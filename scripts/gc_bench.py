@@ -24,6 +24,7 @@ The Larceny-derived workloads are LGPL and are not vendored: they run from
 the Larceny checkout (LARCENY_DIR, by default ~/Project/reference/larceny),
 as scripts/run_larceny_tests.sh does, and are reported as skipped without it.
 """
+import functools
 import hashlib
 import json
 import math
@@ -275,15 +276,29 @@ def parse_log(path):
 
 # ---------------------------------------------------------------- running
 
+PERF_EVENTS = ['stat', '-x', ',', '-e', 'instructions,cycles', '--']
+
+
+@functools.cache
+def perf_usable():
+    """perf's path when it can count here: installed, and allowed by
+    perf_event_paranoid (GitHub's Ubuntu runners have perf at 4, which
+    refuses). None otherwise, said once."""
+    perf = shutil.which('perf')
+    if perf and subprocess.run([perf, *PERF_EVENTS, 'true'], capture_output=True).returncode == 0:
+        return perf
+    print(f'perf stat {"cannot count here" if perf else "is not installed"}: '
+          'instructions and cycles are not recorded', flush=True)
+    return None
+
+
 def timing_command():
     """time(1) with its resource report, and perf stat's counters on Linux."""
     time = shutil.which('time') or '/usr/bin/time'
     if sys.platform == 'darwin':
         return [time, '-l']
-    command = []
-    if shutil.which('perf'):
-        command = ['perf', 'stat', '-x', ',', '-e', 'instructions,cycles', '--']
-    return command + [time, '-v']
+    perf = perf_usable()
+    return ([perf, *PERF_EVENTS] if perf else []) + [time, '-v']
 
 
 def run_one(side, workload, backend, scratch, pad, timeout):
