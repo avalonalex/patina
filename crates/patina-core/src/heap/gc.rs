@@ -1591,16 +1591,16 @@ impl<'h> GcVisitor<'h> {
 
 /// Sweep one arena: pre-mark already-free slots (they are unmarked by
 /// definition; re-pushing them would double-free on reuse), then reclaim
-/// every remaining unmarked slot, reporting each to `record_freed` (the
-/// §9.1 diagnostics-pruning hook) as the reference the dead object had,
-/// built by `reference`. Returns the number of slots reclaimed.
+/// every remaining unmarked slot, showing each one's payload to
+/// `record_freed` before its tombstone drops it (the byte account, and the
+/// VM's code release, #338). Returns the number of slots reclaimed.
 ///
 /// In check builds ([`GC_CHECK`](super::GC_CHECK)) the pre-mark doubles as
 /// `docs/GC_DESIGN.md` §11 item 5's assertion: a free slot whose bit is
 /// already set was reached by marking, so a root or a traced edge names a
 /// slot that was free when this collection began. `checks` records each slot
-/// freed here, and stamps the reported reference with the generation the
-/// slot had until now (`heap/check.rs`).
+/// freed here, through the reference `reference` builds for it
+/// (`heap/check.rs`).
 #[allow(clippy::too_many_arguments)]
 fn sweep_arena<T>(
     arena_name: &'static str,
@@ -1611,7 +1611,7 @@ fn sweep_arena<T>(
     reference: impl Fn(HeapIndex) -> TaggedValue,
     write_tombstone: bool,
     tombstone: impl Fn() -> T,
-    mut record_freed: impl FnMut(TaggedValue, &T),
+    mut record_freed: impl FnMut(&T),
 ) -> usize {
     for &idx in free_list.iter() {
         if !marks.set(idx as usize) && super::GC_CHECK {
@@ -1621,9 +1621,9 @@ fn sweep_arena<T>(
     let mut swept = 0;
     for (i, slot) in arena.iter_mut().enumerate() {
         if !marks.get(i) {
-            let dead = checks.free(reference(i as HeapIndex));
+            checks.free(reference(i as HeapIndex));
             // Before the tombstone, so a consumer can see what died.
-            record_freed(dead, slot);
+            record_freed(slot);
             if write_tombstone {
                 *slot = tombstone();
             }
@@ -1640,27 +1640,6 @@ fn sweep_arena<T>(
 #[inline(never)]
 fn free_slot_reached_by_marking(arena: &str, idx: HeapIndex) -> ! {
     panic!("dangling reference: {arena} slot {idx} is free, but marking reached it")
-}
-
-/// Cap on the freed-bits recording buffer (§9.1). A consumer that lets more
-/// than this accumulate between drains gets `GcFreedBits::Overflowed` and
-/// must treat its whole map as stale — bounded memory, never misattribution.
-const GC_FREED_BITS_CAP: usize = 65_536;
-
-/// Record one reclaimed slot's raw bits, honoring the cap. No-op when
-/// tracking is disabled (`bits` is `None`).
-fn record_freed_bits(bits: &mut Option<Vec<u64>>, overflow: &mut bool, tv: TaggedValue) {
-    if let Some(bits) = bits {
-        if *overflow {
-            return;
-        }
-        if bits.len() >= GC_FREED_BITS_CAP {
-            bits.clear();
-            *overflow = true;
-        } else {
-            bits.push(tv.raw_bits());
-        }
-    }
 }
 
 impl Heap {
@@ -1709,10 +1688,8 @@ impl Heap {
         if self.syntax_sources.capacity() > self.syntax_sources.len().saturating_mul(4).max(64) {
             self.syntax_sources.shrink_to(64);
         }
-        // Moved out so the per-arena recording closures can hold it while
+        // Moved out so the object arena's recording closure can hold it while
         // the arenas themselves are mutably borrowed.
-        let mut freed = self.gc_freed_bits.take();
-        let mut overflow = self.gc_freed_overflow;
         let mut freed_closures = self.gc_freed_closure_code_ids.take();
         // The payloads of the slots freed, measured before their tombstones
         // drop them.
@@ -1727,7 +1704,7 @@ impl Heap {
                 TaggedValue::pair,
                 super::GC_CHECK,
                 || (TaggedValue::GC_POISON, TaggedValue::GC_POISON),
-                |dead, _| record_freed_bits(&mut freed, &mut overflow, dead),
+                |_| {},
             ),
             vectors: sweep_arena(
                 "vector",
@@ -1738,10 +1715,7 @@ impl Heap {
                 TaggedValue::vector,
                 true,
                 Vec::new,
-                |dead, elements| {
-                    record_freed_bits(&mut freed, &mut overflow, dead);
-                    freed_payload += account::vector_payload(elements);
-                },
+                |elements| freed_payload += account::vector_payload(elements),
             ),
             strings: sweep_arena(
                 "string",
@@ -1752,10 +1726,7 @@ impl Heap {
                 TaggedValue::string,
                 true,
                 Vec::new,
-                |dead, chars| {
-                    record_freed_bits(&mut freed, &mut overflow, dead);
-                    freed_payload += account::string_payload(chars);
-                },
+                |chars| freed_payload += account::string_payload(chars),
             ),
             objects: sweep_arena(
                 "object",
@@ -1766,8 +1737,7 @@ impl Heap {
                 TaggedValue::object,
                 true,
                 || HeapObjectData::Free,
-                |dead, old| {
-                    record_freed_bits(&mut freed, &mut overflow, dead);
+                |old| {
                     freed_payload += old.payload_bytes();
                     #[cfg(any(debug_assertions, feature = "gc-check"))]
                     if let HeapObjectData::Procedure(procedure) = old {
@@ -1781,8 +1751,6 @@ impl Heap {
                 },
             ),
         };
-        self.gc_freed_bits = freed;
-        self.gc_freed_overflow = overflow;
         self.gc_freed_closure_code_ids = freed_closures;
         #[cfg(any(debug_assertions, feature = "gc-check"))]
         assert_eq!(
@@ -2227,7 +2195,6 @@ pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisit
 mod tests {
     use super::*;
     use crate::cps_expr::{CpsExpr, CpsExprKind};
-    use crate::heap::GcFreedBits;
     use std::cell::RefCell;
     use std::mem::size_of;
 
@@ -3117,62 +3084,6 @@ mod tests {
             GcController::new(GcMode::Off).current_threshold(),
             GcThreshold::NEVER
         );
-    }
-
-    #[test]
-    fn freed_bits_recorded_only_when_tracking_enabled() {
-        let mut heap = Heap::new();
-
-        // Disabled by default: sweep records nothing.
-        heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
-        collect(&mut heap, &TestRoots::default());
-        match heap.take_gc_freed_bits() {
-            GcFreedBits::Exact(bits) => assert!(bits.is_empty()),
-            GcFreedBits::Overflowed => panic!("no cap can be hit while disabled"),
-        }
-
-        heap.enable_gc_freed_tracking();
-        let live = heap.alloc_pair(TaggedValue::fixnum(2), TaggedValue::NULL);
-        let dead_pair = heap.alloc_pair(TaggedValue::fixnum(3), TaggedValue::NULL);
-        let dead_string = heap.alloc_string("dead".to_string());
-        let roots = TestRoots {
-            values: vec![live],
-            ..Default::default()
-        };
-        collect(&mut heap, &roots);
-
-        let GcFreedBits::Exact(bits) = heap.take_gc_freed_bits() else {
-            panic!("two frees cannot overflow the cap");
-        };
-        assert!(bits.contains(&dead_pair.raw_bits()));
-        assert!(bits.contains(&dead_string.raw_bits()));
-        assert!(!bits.contains(&live.raw_bits()));
-
-        // Drained: a second take is empty until the next sweep.
-        let GcFreedBits::Exact(bits) = heap.take_gc_freed_bits() else {
-            panic!("drained buffer cannot be overflowed");
-        };
-        assert!(bits.is_empty());
-    }
-
-    #[test]
-    fn freed_bits_cap_degrades_to_overflow_not_growth() {
-        let mut heap = Heap::new();
-        heap.enable_gc_freed_tracking();
-        // One more than the cap, all garbage.
-        for i in 0..(GC_FREED_BITS_CAP + 1) {
-            heap.alloc_pair(TaggedValue::fixnum(i as i64), TaggedValue::NULL);
-        }
-        collect(&mut heap, &TestRoots::default());
-
-        assert!(matches!(heap.take_gc_freed_bits(), GcFreedBits::Overflowed));
-        // The overflow is consumed; tracking resumes exactly.
-        heap.alloc_pair(TaggedValue::fixnum(0), TaggedValue::NULL);
-        collect(&mut heap, &TestRoots::default());
-        let GcFreedBits::Exact(bits) = heap.take_gc_freed_bits() else {
-            panic!("overflow must reset after a drain");
-        };
-        assert_eq!(bits.len(), 1);
     }
 
     #[test]

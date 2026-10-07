@@ -1,57 +1,34 @@
-//! Non-owning syntax provenance. Entries are removed by sweep, before slots
-//! can be reused. Documents contain no Scheme values and are not GC roots.
+//! Non-owning syntax provenance: where each occurrence of program syntax was
+//! read or expanded. Entries are removed by sweep, before slots can be
+//! reused. Documents contain no Scheme values and are not GC roots.
+//!
+//! Only containers and identifiers have an entry. The reader used to record
+//! the location of each element of a list or vector too, immediate datums
+//! included, but nothing outside tests read those spans (#643).
 
 use super::Heap;
 use crate::{SourceLocation, TaggedValue};
 use std::rc::Rc;
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct SyntaxSource {
-    pub location: Option<SourceLocation>,
-    pub children: Option<Rc<[Option<SourceLocation>]>>,
-}
-
 impl Heap {
     pub fn source(&self, value: TaggedValue) -> Option<&SourceLocation> {
-        self.syntax_sources
-            .get(&value.raw_bits())?
-            .location
-            .as_ref()
+        self.syntax_sources.get(&value.raw_bits()).map(Rc::as_ref)
     }
 
     pub fn record_source(&mut self, value: TaggedValue, location: SourceLocation) {
         if value.is_pair() || value.is_vector() || value.is_string() || value.is_object() {
             // Interned symbols denote a name, never one occurrence.
             if self.get_symbol_name(value).is_none() {
-                Rc::make_mut(self.syntax_sources.entry(value.raw_bits()).or_default()).location =
-                    Some(location);
+                self.syntax_sources
+                    .insert(value.raw_bits(), Rc::new(location));
             }
         }
     }
 
-    /// Pair car/cdr or vector element positions, including immediate datums.
-    pub fn record_source_children(
-        &mut self,
-        value: TaggedValue,
-        children: Vec<Option<SourceLocation>>,
-    ) {
-        Rc::make_mut(self.syntax_sources.entry(value.raw_bits()).or_default()).children =
-            Some(children.into());
-    }
-
-    pub fn child_source(&self, value: TaggedValue, index: usize) -> Option<&SourceLocation> {
-        self.syntax_sources
-            .get(&value.raw_bits())?
-            .children
-            .as_ref()?
-            .get(index)?
-            .as_ref()
-    }
-
     pub fn inherit_source(&mut self, original: TaggedValue, copy: TaggedValue) {
         // Scope edits often copy the same syntax repeatedly while a library
-        // load defers GC. Share its immutable provenance; record_source and
-        // record_source_children detach only when an occurrence is updated.
+        // load defers GC. Share its immutable provenance; record_source
+        // replaces a copy's entry only when that occurrence is updated.
         if original != copy
             && (copy.is_pair() || copy.is_vector() || copy.is_string() || copy.is_object())
             && self.get_symbol_name(copy).is_none()
@@ -184,7 +161,7 @@ mod tests {
     use crate::{GcRoots, GcVisitor, ScopeSet, SourceMap};
 
     #[test]
-    fn syntax_copies_keep_independent_locations_and_child_spans() {
+    fn syntax_copies_keep_independent_locations() {
         let mut heap = Heap::new();
         let mut map = SourceMap::new();
         map.set_source_text("(1) (2)".into());
@@ -193,19 +170,13 @@ mod tests {
         let first = map.location("test.scm", 1, 1, 1, 4);
         let second = map.location("test.scm", 1, 5, 1, 8);
         heap.record_source(original, first.clone());
-        heap.record_source_children(original, vec![Some(first.clone()), None]);
         heap.inherit_source(original, copy);
+        assert_eq!(heap.source(copy), Some(&first));
 
         heap.record_source(copy, second.clone());
         assert_eq!(heap.source(original), Some(&first));
         assert_eq!(heap.source(copy), Some(&second));
-        assert_eq!(heap.child_source(copy, 0), Some(&first));
-
-        heap.record_source_children(copy, vec![Some(second.clone()), None]);
-        assert_eq!(heap.child_source(original, 0), Some(&first));
-        assert_eq!(heap.child_source(copy, 0), Some(&second));
-        heap.record_source_children(original, vec![None, Some(first.clone())]);
-        assert_eq!(heap.child_source(copy, 0), Some(&second));
+        heap.record_source(original, map.location("test.scm", 1, 2, 1, 3));
         assert_eq!(heap.source(copy), Some(&second));
     }
 
@@ -224,13 +195,10 @@ mod tests {
         let dead = heap.alloc_identifier("dead".into(), ScopeSet::new());
         heap.record_source(live, map.location("test.scm", 1, 1, 1, 5));
         heap.record_source(dead, map.location("test.scm", 1, 6, 1, 10));
-        let pair = heap.alloc_pair(dead, TaggedValue::NULL);
-        heap.record_source_children(pair, vec![heap.source(dead).cloned(), None]);
         let retained = heap.source(dead).unwrap().clone();
         MarkSweepCollector::new().collect(&mut heap, &[&Keep(live)]);
         assert!(heap.source(live).is_some());
         assert!(heap.source(dead).is_none());
-        assert!(heap.child_source(pair, 0).is_none());
         let reused = heap.alloc_identifier("new".into(), ScopeSet::new());
         // The same slot. In a check build the new tenant's reference carries
         // a newer generation stamp, so it is deliberately not `dead` (#621).

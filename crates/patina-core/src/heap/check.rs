@@ -101,15 +101,14 @@ mod checked {
             tv.with_generation(self.slots[tv.heap_index() as usize] as u16)
         }
 
-        /// Sweep frees `dead`'s slot: bump its generation and set `FREED`.
-        /// Returns `dead` stamped with the generation the slot had until now,
-        /// which is the stamp every reference to the dead object carries.
+        /// Sweep frees `dead`'s slot: bump its generation and set `FREED`,
+        /// so every reference to the dead object, which carries the
+        /// generation the slot had until now, fails the accessors' check.
         #[inline]
-        pub(crate) fn free(&mut self, dead: TaggedValue) -> TaggedValue {
+        pub(crate) fn free(&mut self, dead: TaggedValue) {
             let slot = &mut self.slots[dead.heap_index() as usize];
             let generation = *slot as u16;
             *slot = u32::from(generation.wrapping_add(1)) | FREED;
-            dead.with_generation(generation)
         }
 
         /// The accessors' check: panic unless `tv` names a live slot of its
@@ -214,9 +213,7 @@ mod unchecked {
         }
 
         #[inline(always)]
-        pub(crate) fn free(&mut self, dead: TaggedValue) -> TaggedValue {
-            dead
-        }
+        pub(crate) fn free(&mut self, _dead: TaggedValue) {}
 
         #[inline(always)]
         pub(crate) fn check(&self, _arena: &'static str, _tv: TaggedValue) {}
@@ -703,23 +700,6 @@ mod tests {
         collect(&mut heap, &[]);
         assert_eq!(heap.intern_symbol("s"), symbol);
         heap.get_object(symbol);
-    }
-
-    #[test]
-    fn freed_bits_carry_the_stamp_of_the_dead_reference() {
-        // `SourceMap` keys are a value's raw bits as it was made; the report
-        // that prunes them must use the same stamp, not the slot's next one.
-        let mut heap = Heap::new();
-        heap.enable_gc_freed_tracking();
-        let first = pair(&mut heap);
-        collect(&mut heap, &[]);
-        let second = pair(&mut heap);
-        assert_eq!(second.heap_index(), first.heap_index());
-        collect(&mut heap, &[]);
-        let crate::heap::GcFreedBits::Exact(bits) = heap.take_gc_freed_bits() else {
-            panic!("two frees cannot overflow the cap");
-        };
-        assert_eq!(bits, vec![first.raw_bits(), second.raw_bits()]);
     }
 
     #[test]

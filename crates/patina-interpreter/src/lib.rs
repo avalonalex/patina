@@ -51,8 +51,11 @@ pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::TaggedValue;
 pub use patina_core::error::SourceLocation;
 pub use patina_frontend::{
-    DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap, prune_freed_locations,
+    DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
+// Deprecated no-op, kept until stage 5e (#643).
+#[allow(deprecated)]
+pub use patina_frontend::prune_freed_locations;
 pub use patina_ir::CoreExpr;
 use patina_runtime::HasDiagnostic;
 pub use patina_runtime::{Arity, Backend, Environment, EvalError, Procedure};
@@ -549,9 +552,6 @@ impl<B: Backend> Interpreter<B> {
             }
         };
         loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this iteration's parse can reuse them (§9.1).
-            prune_freed_locations(heap, &source_map);
             let datum = parser.parse_next();
             *fold_case = parser.read_state().fold_case;
             match datum {
@@ -559,8 +559,8 @@ impl<B: Backend> Interpreter<B> {
                     clippy::disallowed_methods,
                     reason = "the outermost entry, so the backend's loop may collect. The parser \
                               holds no heap value between data (it clears its labels after each), \
-                              and the source map is pruned of freed slots before each read \
-                              (docs/GC_DESIGN.md §9.1). `value`, the last result, is held across \
+                              and the heap's provenance is not a root, pruned by sweep. `value`, \
+                              the last result, is held across \
                               the form unrooted: overwritten if the form succeeds, and returned \
                               stale whenever every later form fails, on any continue-on-error \
                               entry (`-k`, `eval_program_resilient*`, an interrupted `exit`'s \
@@ -1000,36 +1000,6 @@ mod tests {
         assert!(
             formatted.contains("cond"),
             "should mention cond in expansion, got: {formatted}"
-        );
-    }
-
-    #[test]
-    fn test_source_stamp_inner_forms() {
-        // Inner pairs of a let expansion should have source in SourceMap after expansion
-        let interp = TreeWalkInterpreter::new_tree_walker();
-        let heap = interp.evaluator().global_env.heap();
-        let sm = std::rc::Rc::new(std::cell::RefCell::new(SourceMap::new()));
-        let source_name: std::rc::Rc<str> = std::rc::Rc::from("test.scm");
-        let input = "(let ((x 1)) (+ x 2))";
-        let mut parser =
-            Parser::new_with_source_map(input, heap.clone(), source_name.clone(), sm.clone())
-                .unwrap();
-        let expr = parser.parse().unwrap();
-        drop(parser);
-        let global = interp.backend().global_env().clone();
-        interp
-            .backend()
-            .eval_with_source_map(expr, &global, &sm)
-            .unwrap();
-        // Expanded syntax retains its own history at the invocation position.
-        let sm_ref = sm.borrow();
-        assert!(
-            sm_ref.iter_locations().any(|loc| loc.line == 1
-                && loc.column == 1
-                && sm_ref
-                    .get_expansions(loc)
-                    .is_some_and(|names| names.contains(&"let".into()))),
-            "expanded inner forms should retain the 'let' invocation"
         );
     }
 

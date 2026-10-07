@@ -83,7 +83,10 @@ pub use procedure::{Arity, Procedure};
 pub use pvref::{MatchEnv, MatchValue, PVRef};
 pub use record_type::{RecordTypeDescriptor, next_record_type_id};
 pub use scope::{ScopeId, ScopeSet};
-pub use source_map::{SourceMap, prune_freed_locations};
+pub use source_map::SourceMap;
+// Deprecated no-op, kept until stage 5e (#643).
+#[allow(deprecated)]
+pub use source_map::prune_freed_locations;
 
 // TaggedValue and heap types for compact value representation
 pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scopes};
@@ -96,7 +99,7 @@ pub use heap::gc::{
     GcVisitor, MarkBits, NoGcScopes,
 };
 pub use heap::{
-    GC_CHECK, GcFreedBits, Heap, SharedHeap, SpineEnd,
+    GC_CHECK, Heap, SharedHeap, SpineEnd,
     gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
     new_shared_heap,
 };

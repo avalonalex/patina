@@ -105,8 +105,8 @@ is the only thing that turns a `SourceLocation` into a displayable line
 session owns an `Rc<RefCell<SourceMap>>`, parses with `Parser::new_with_source_map`,
 and evaluates form by form through `Backend::eval_with_source_map`
 (`crates/patina-tree-walker/src/backend.rs:98`) — the same shape as the existing
-runner, minus the discard. It must also call `prune_freed_locations` at each form
-boundary, as the existing drivers do.
+runner, minus the discard. (It no longer needs to call `prune_freed_locations` at each
+form boundary: the map keeps no datum locations to prune, #643.)
 
 **`RunState` and `should_pause` are pure data + a pure function** — the policy layer,
 patina's `bdb`, kept terminal-free as gyrus does. The modes are defined in §4, keyed on

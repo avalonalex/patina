@@ -266,32 +266,6 @@ fn an_error_leaves_the_interpreter_ready_for_the_next_form() {
     check(Interpreter::new(VmBackend::new()), "vm");
 }
 
-#[test]
-fn source_map_entries_pruned_after_collection() {
-    // GC_DESIGN.md §9.1: SourceMap is keyed by raw bits, so a slot the GC
-    // reclaims must lose its entry before the slot can be reused — otherwise
-    // a later value inherits the old datum's source location. The two
-    // programs are identical except that one collects; the quoted list is
-    // garbage by then, so its entries must be gone from the returned map.
-    fn map_len(middle_form: &str) -> usize {
-        let interp = TreeWalkInterpreter::new_tree_walker();
-        let program =
-            format!("(import (scheme base) (patina debug))\n'(a b c d e f)\n{middle_form}\n42\n");
-        let (result, source_map) = interp.eval_program_with_source_name(&program, "prune-test");
-        assert_eq!(result.unwrap().as_fixnum(), Some(42));
-        source_map.borrow().len()
-    }
-
-    let collected = map_len("(gc)");
-    let uncollected = map_len("(list)");
-    assert!(uncollected > 0, "parser recorded nothing");
-    assert!(
-        collected < uncollected,
-        "collection did not prune the source map: {collected} entries with (gc) \
-         vs {uncollected} with (list)"
-    );
-}
-
 // =============================================================================
 // Input that ends inside a datum (#329)
 // =============================================================================

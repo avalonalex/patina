@@ -1120,16 +1120,17 @@ the backends remain the registry owners.
 
 ## 9. Known Hazards and Policies
 
-### 9.1 Syntax provenance and source-map snapshots
+### 9.1 Syntax provenance
 
 Program parsers allocate a distinct, empty-scoped `Identifier` for each written
 identifier. Its `written` flag preserves ordinary symbol semantics in macro
 scope edits, template compilation and ellipsis recognition; an expansion's
 identifiers remain distinct from these annotated source names. Ordinary datum
 parsers and Scheme `read` still intern symbols and allocate no source metadata.
-Their parser frames also omit source fields. The heap's `syntax_sources` table
-records node spans and pair/vector child spans (including immediate values). Desugaring uses
-this table, never an interned symbol as an occurrence key. Scope edits preserve
+The heap's `syntax_sources` table records the span of each list, vector,
+string and identifier a program parser reads, and the location and expansion
+chain of each node an expansion stamps. Desugaring uses this table, never an
+interned symbol as an occurrence key. Scope edits preserve
 provenance; stripping syntax identifiers into quoted data preserves graph
 sharing and cycles, using the same iterative graph copier. A memo shared by all
 quotes in one form preserves sharing across separate insertions of a macro
@@ -1145,19 +1146,24 @@ chains travel with each expanded span, so separate uses of a template do not
 accumulate history at its definition. Within an invocation, nodes with the same
 history prefix share its extended name array; copying every name for every node
 makes large library imports consume gigabytes while collection is deferred.
-Syntax copies likewise share location and child-span payloads, detaching them
-only when their provenance changes. The table's entries still own no Scheme values.
+Syntax copies likewise share their location, which `record_source` replaces only
+when that occurrence's provenance changes. The table's entries own no Scheme values.
 IR, bytecode and errors retain a document
 independently of the parsed syntax's lifetime. `SourceLocation` remains `Send + Sync`.
 
-`SourceMap` keeps a compatibility snapshot of parsed node locations for callers
-that inspect it, plus the primary document used by streaming input and parse
-error formatting. These snapshots are pruned at form boundaries using the
-existing capped `Heap::take_gc_freed_bits` buffer; overflow clears the snapshot.
-The compiler does not consult those raw-bit snapshots. Streaming documents
-forget old lines under the existing text budget, preserving the unfinished
-datum; old compiled locations still report their file/line/column but cannot
-quote text that was deliberately discarded.
+`SourceMap` holds the primary document used by streaming input and parse error
+formatting, and the expansion records of locations that have no document of
+their own. It used to keep a snapshot of parsed node locations as well, keyed by
+raw bits and pruned between top-level forms from a capped buffer of the slots
+sweep freed; the reader also recorded the span of every element of a list or
+vector, immediates included. Nothing outside tests read either, and both went
+with the freed-slot buffer, as did the throwaway `SourceMap` a library body's
+desugarer made for each expansion (#643). `SourceMap::get`, `record`, `len`,
+`iter_locations` and `prune_freed_locations` remain as deprecated no-ops until
+stage 5e of `PRD/GC_PRD.md`. Streaming documents forget old lines under the
+existing text budget, preserving the unfinished datum; old compiled locations
+still report their file/line/column but cannot quote text that was deliberately
+discarded.
 
 ### 9.2 Symbol table
 

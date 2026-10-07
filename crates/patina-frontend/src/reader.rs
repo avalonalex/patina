@@ -631,7 +631,7 @@ mod tests {
             })
             .expect("a datum has finished")
             .expect("it reads");
-        let at = source_map.borrow().get(value).map(|l| (l.line, l.column));
+        let at = heap.borrow().source(value).map(|l| (l.line, l.column));
         assert_eq!(at, Some((7, 5)), "the position is the source's own");
         assert_eq!(
             format_tagged(value, &heap.borrow()),

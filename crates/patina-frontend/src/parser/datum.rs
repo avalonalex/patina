@@ -3,7 +3,7 @@
 
 use super::{ParseError, Parser};
 use crate::lexer::{Lexer, Token};
-use patina_core::{SourceLocation, TaggedValue};
+use patina_core::TaggedValue;
 
 enum Tail {
     Elements,
@@ -11,57 +11,33 @@ enum Tail {
     Complete(TaggedValue),
 }
 
-#[derive(Default)]
-struct ContainerSources {
-    elements: Vec<Option<SourceLocation>>,
-    tail: Option<SourceLocation>,
-}
-
 // Specialize the same grammar for syntax and ordinary Scheme data. The latter
-// carries no source fields in its stack frames and does no provenance work.
+// does no provenance work. Syntax records where each container, identifier
+// and string begins; it no longer records each element's span (#643).
 trait SourceMode {
     const TRACK: bool;
-    type Sources: Default;
-    fn take(sources: Self::Sources) -> Option<ContainerSources>;
-    fn get(sources: &mut Self::Sources) -> Option<&mut ContainerSources>;
 }
 
 struct DatumMode;
 
 impl SourceMode for DatumMode {
     const TRACK: bool = false;
-    type Sources = ();
-    fn take(_: ()) -> Option<ContainerSources> {
-        None
-    }
-    fn get(_: &mut ()) -> Option<&mut ContainerSources> {
-        None
-    }
 }
 
 struct ProgramMode;
 
 impl SourceMode for ProgramMode {
     const TRACK: bool = true;
-    type Sources = Box<ContainerSources>;
-    fn take(sources: Self::Sources) -> Option<ContainerSources> {
-        Some(*sources)
-    }
-    fn get(sources: &mut Self::Sources) -> Option<&mut ContainerSources> {
-        Some(sources)
-    }
 }
 
-enum Frame<M: SourceMode> {
+enum Frame {
     List {
         elements: Vec<TaggedValue>,
-        sources: M::Sources,
         tail: Tail,
         at: (u32, u32),
     },
     Vector {
         elements: Vec<TaggedValue>,
-        sources: M::Sources,
         at: (u32, u32),
     },
     Bytes(Vec<u8>, (u32, u32)),
@@ -79,7 +55,7 @@ enum Frame<M: SourceMode> {
     SkippedPrefix,
 }
 
-impl<M: SourceMode> Frame<M> {
+impl Frame {
     fn opening(&self) -> Option<(u32, u32)> {
         match self {
             Self::List { at, .. }
@@ -124,7 +100,7 @@ impl Parser {
     fn read_with_frames<M: SourceMode>(
         &mut self,
         mut discarding: bool,
-        frames: &mut Vec<Frame<M>>,
+        frames: &mut Vec<Frame>,
     ) -> Result<TaggedValue, ParseError> {
         'tokens: loop {
             if self.current_token == Token::DatumComment {
@@ -192,13 +168,11 @@ impl Parser {
                         match self.current_token {
                             Token::LeftParen => Frame::List {
                                 elements: Vec::new(),
-                                sources: M::Sources::default(),
                                 tail: Tail::Elements,
                                 at,
                             },
                             Token::VectorOpen => Frame::Vector {
                                 elements: Vec::new(),
-                                sources: M::Sources::default(),
                                 at,
                             },
                             _ => Frame::Bytes(Vec::new(), at),
@@ -224,12 +198,7 @@ impl Parser {
                         return Err(ParseError::UnexpectedToken(Token::RightParen));
                     }
                     let value = match frames.pop() {
-                        Some(Frame::List {
-                            elements,
-                            sources,
-                            tail,
-                            at,
-                        }) => {
+                        Some(Frame::List { elements, tail, at }) => {
                             let tail = match tail {
                                 Tail::Elements => TaggedValue::NULL,
                                 Tail::Complete(tail) => tail,
@@ -240,39 +209,15 @@ impl Parser {
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
                             }
-                            let mut heap = self.heap.borrow_mut();
-                            let value = if let Some(sources) = M::take(sources) {
-                                let mut out = tail;
-                                let mut rest_source = sources.tail;
-                                for (element, source) in
-                                    elements.into_iter().zip(sources.elements).rev()
-                                {
-                                    out = heap.alloc_pair(element, out);
-                                    heap.record_source_children(out, vec![source, rest_source]);
-                                    rest_source = None;
-                                }
-                                out
-                            } else {
-                                heap.list_from_iter_with_tail(elements, tail)
-                            };
-                            drop(heap);
-                            value
+                            self.heap
+                                .borrow_mut()
+                                .list_from_iter_with_tail(elements, tail)
                         }
-                        Some(Frame::Vector {
-                            elements,
-                            sources,
-                            at,
-                        }) => {
+                        Some(Frame::Vector { elements, at }) => {
                             if M::TRACK {
                                 location = self.source_location(at.0, at.1);
                             }
-                            let value = self.heap.borrow_mut().alloc_vector(elements);
-                            if let Some(sources) = M::take(sources) {
-                                self.heap
-                                    .borrow_mut()
-                                    .record_source_children(value, sources.elements);
-                            }
-                            value
+                            self.heap.borrow_mut().alloc_vector(elements)
                         }
                         Some(Frame::Bytes(bytes, at)) => {
                             if M::TRACK {
@@ -370,8 +315,7 @@ impl Parser {
                 && let Some(loc) = &location
             {
                 // A label reference is another edge to existing syntax. Keep
-                // the identifier/container's original spelling location;
-                // its parent's slot records the #n# occurrence separately.
+                // the identifier/container's original spelling location.
                 if !matches!(self.current_token, Token::DatumRef(_))
                     || self.heap.borrow().source(value).is_none()
                 {
@@ -389,32 +333,16 @@ impl Parser {
             loop {
                 match frames.last_mut() {
                     None => return Ok(value),
-                    Some(Frame::List {
-                        elements,
-                        sources,
-                        tail,
-                        ..
-                    }) => {
+                    Some(Frame::List { elements, tail, .. }) => {
                         if matches!(tail, Tail::Needed) {
                             *tail = Tail::Complete(value);
-                            if let Some(sources) = M::get(sources) {
-                                sources.tail = location.clone();
-                            }
                         } else {
                             elements.push(value);
-                            if let Some(sources) = M::get(sources) {
-                                sources.elements.push(location.clone());
-                            }
                         }
                         continue 'tokens;
                     }
-                    Some(Frame::Vector {
-                        elements, sources, ..
-                    }) => {
+                    Some(Frame::Vector { elements, .. }) => {
                         elements.push(value);
-                        if let Some(sources) = M::get(sources) {
-                            sources.elements.push(location.clone());
-                        }
                         continue 'tokens;
                     }
                     Some(Frame::SkippedList(tail, _)) => {

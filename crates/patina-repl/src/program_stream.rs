@@ -22,9 +22,7 @@
 use patina_core::source_map::source_lines;
 use patina_core::{SharedHeap, TaggedValue};
 use patina_frontend::{Reader, ReaderState, dialect};
-use patina_interpreter::{
-    ParseError, ProgramOutcome, SourceMap, format_parse_error_with_source, prune_freed_locations,
-};
+use patina_interpreter::{ParseError, ProgramOutcome, SourceMap, format_parse_error_with_source};
 use patina_runtime::{Diagnostic, DiagnosticKind, HasDiagnostic, Port};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -142,9 +140,6 @@ where
     /// over. `None` means the reader wants more text.
     fn run_finished_forms(&mut self) -> Option<ProgramOutcome> {
         loop {
-            // Drop SourceMap entries for slots the previous form's evaluation
-            // freed, before this form's parse can reuse them (§9.1).
-            prune_freed_locations(self.heap, &self.source_map);
             let source_name = self.source_name.clone();
             let source_map = self.source_map.clone();
             let Some(datum) = self.reader.next_datum(self.heap, move |parser| {
@@ -300,8 +295,11 @@ mod tests {
         let heap = patina_core::new_shared_heap();
         let input = Port::new_input_string(text.to_string());
         let mut seen = Vec::new();
-        let outcome = run_program_stream(&input, &heap, "<test>", keep_going, |datum, map| {
-            let at = map.borrow().get(datum).map(|loc| (loc.line, loc.column));
+        let outcome = run_program_stream(&input, &heap, "<test>", keep_going, |datum, _| {
+            let at = heap
+                .borrow()
+                .source(datum)
+                .map(|loc| (loc.line, loc.column));
             seen.push(at);
             act(&input, at)
         });
