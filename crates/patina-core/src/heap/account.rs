@@ -402,6 +402,9 @@ impl ByteAccount {
                 pending,
                 descriptors: Cell::new(0),
                 cycle: Cell::new(0),
+                posted: Cell::new(None),
+                open_window: Cell::new(None),
+                wait_site: Cell::new(None),
             }),
             through_last_gc: 0,
             reclaimed: 0,
@@ -441,9 +444,40 @@ pub(super) struct SharedCounts {
     /// so that closing a port an earlier collection found live does not take
     /// off one opened since.
     pub(super) cycle: Cell<u64>,
+    /// When the pending flag last rose from down, and the bytes charged
+    /// then (#648): the start of the wait that K16's first high-water mark
+    /// and the time to safepoint measure. Taken by the collection.
+    pub(super) posted: Cell<Option<(usize, std::time::Instant)>>,
+    /// The site of the deferral window open now (`Heap::enter_gc_defer`),
+    /// mirrored here so that a post with no heap to hand sees it.
+    pub(super) open_window: Cell<Option<&'static std::panic::Location<'static>>>,
+    /// The first deferral window that held the collection pending now:
+    /// open when it was posted, or opened while it waited.
+    pub(super) wait_site: Cell<Option<&'static std::panic::Location<'static>>>,
 }
 
 impl SharedCounts {
+    /// Raise the collection-pending flag. On its rise from down, note when
+    /// and where the collection was posted (#648): once per collection
+    /// cycle, so allocation does no new work while the flag stays up.
+    #[inline]
+    pub(super) fn raise_pending(&self) {
+        if !self.pending.get() {
+            self.note_posted();
+            self.pending.set(true);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn note_posted(&self) {
+        self.posted
+            .set(Some((self.since_gc.get(), std::time::Instant::now())));
+        if self.wait_site.get().is_none() {
+            self.wait_site.set(self.open_window.get());
+        }
+    }
+
     /// Count `bytes` toward the next collection, and answer the count for
     /// the caller to compare. Saturating, so a size an embedder got wrong
     /// cannot wrap the count past the threshold and put the collection off.
@@ -459,7 +493,7 @@ impl SharedCounts {
     fn charge_external(&self, bytes: usize) {
         self.external.set(self.external.get().saturating_add(bytes));
         if self.count(bytes) >= self.threshold.get() {
-            self.pending.set(true);
+            self.raise_pending();
         }
     }
 
@@ -678,7 +712,7 @@ impl Heap {
         let open = counts.descriptors.get().saturating_add(1);
         counts.descriptors.set(open);
         if open >= self.gc_threshold.descriptors && !self.gc_pending.get() {
-            self.gc_pending.set(true);
+            counts.raise_pending();
             self.descriptor_collections += 1;
         }
         FilePortCharge {

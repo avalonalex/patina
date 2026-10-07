@@ -90,7 +90,7 @@ pub(super) fn register(registry: &mut PrimitiveRegistry) {
         "patina.debug",
         "gc-stats",
         Arity::Exact(0),
-        "Return an alist of heap arena sizes, free-list lengths, GC counters and byte totals.",
+        "Return an alist of heap arena sizes, free-list lengths, GC counters, byte totals, pause and MMU figures, K16's high-water marks, and the process's resident size and CPU time.",
         gc_stats,
     ));
 }
@@ -146,12 +146,47 @@ fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, Eva
         ("external-bytes", stats.external_bytes),
     ];
 
-    let alist: Vec<TaggedValue> = entries
+    let mut alist: Vec<TaggedValue> = entries
         .iter()
         .map(|(name, count)| {
             let key = h.intern_symbol(name);
             h.alloc_pair(key, TaggedValue::fixnum(*count as i64))
         })
         .collect();
+
+    // What the collections cost and how long they waited (#648): pauses in
+    // microseconds, the backend's work after each included; the minimum
+    // mutator utilisation at 10 ms; K16's two high-water marks, each with
+    // the site of the deferral window that set it, or #f; and the process's
+    // resident size and CPU time, or #f where they cannot be read.
+    let micros = |d: std::time::Duration| TaggedValue::fixnum(d.as_micros() as i64);
+    let bytes = |n: u64| TaggedValue::fixnum(n as i64);
+    let wait = h.wait_high_water();
+    let deferral = h.deferral_high_water();
+    let mmu = h.mmu(10).unwrap_or(1.0);
+    let mut values = vec![
+        ("last-pause-us", micros(h.last_pause())),
+        ("pause-max-us", micros(h.pause_max())),
+        ("pause-total-us", micros(h.pause_total())),
+        ("mmu-10ms", h.alloc_real(mmu)),
+        ("wait-max-bytes", bytes(wait.bytes)),
+        ("wait-max-us", micros(h.wait_time_max())),
+    ];
+    for (name, site) in [("wait-site", wait.site), ("deferral-site", deferral.site)] {
+        let value = match site {
+            Some(site) => h.alloc_string(site.to_string()),
+            None => TaggedValue::FALSE,
+        };
+        values.push((name, value));
+    }
+    values.push(("deferral-max-bytes", bytes(deferral.bytes)));
+    let resident = patina_core::heap::telemetry::resident_bytes();
+    let cpu = patina_core::heap::telemetry::cpu_micros();
+    values.push(("resident-bytes", resident.map_or(TaggedValue::FALSE, bytes)));
+    values.push(("cpu-us", cpu.map_or(TaggedValue::FALSE, bytes)));
+    for (name, value) in values {
+        let key = h.intern_symbol(name);
+        alist.push(h.alloc_pair(key, value));
+    }
     Ok(h.list_from_iter(alist))
 }

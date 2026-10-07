@@ -112,7 +112,10 @@ The architecture is designed to support future exploration:
   give manual control; `(gc-stats)` reports `live-bytes`,
   `bytes-allocated`, `bytes-reclaimed`, `committed-bytes`,
   `external-bytes` and descriptor pressure beside its arena counts
-  (`docs/GC_DESIGN.md` §6). Pauses are not yet bounded;
+  (`docs/GC_DESIGN.md` §6), and the pauses, the MMU at 10 ms, how much was
+  allocated where collection was deferred, and the process's resident size
+  and CPU time (§6.2). `PATINA_GC_LOG=<path>` writes a CSV line per
+  collection, with its reason and phase times. Pauses are not yet bounded;
   `PRD/GC_PRD.md` plans a mark-region collector with budgeted
   stop-the-world pauses.
 - Performance is that of a young interpreter: far beyond a naive

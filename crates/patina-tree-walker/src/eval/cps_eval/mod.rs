@@ -113,7 +113,7 @@ impl<'a> CpsEvaluator<'a> {
     #[inline]
     fn maybe_collect(&self, is_outermost: bool, step: &StepResult, expr: Option<&CpsExpr>) {
         let evaluator = self.evaluator;
-        GcController::safe_point(
+        let collected = GcController::safe_point(
             &evaluator.gc,
             evaluator.global_env.heap(),
             &evaluator.gc_pending,
@@ -130,6 +130,15 @@ impl<'a> CpsEvaluator<'a> {
                 collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
             },
         );
+        if collected {
+            // Nothing to do after a collection here: its pause is complete
+            // (#648).
+            evaluator
+                .global_env
+                .heap()
+                .borrow_mut()
+                .finish_collection(std::time::Duration::ZERO);
+        }
     }
 
     /// A collection a resumable primitive asked for at its call
@@ -147,7 +156,7 @@ impl<'a> CpsEvaluator<'a> {
         expr: Option<&CpsExpr>,
     ) -> bool {
         let evaluator = self.evaluator;
-        GcController::collect_at_call(
+        let collected = GcController::collect_at_call(
             &evaluator.gc,
             evaluator.global_env.heap(),
             kind,
@@ -160,7 +169,15 @@ impl<'a> CpsEvaluator<'a> {
                 let step_roots = gc_roots::StepRoots { step, expr };
                 collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
             },
-        )
+        );
+        if collected {
+            evaluator
+                .global_env
+                .heap()
+                .borrow_mut()
+                .finish_collection(std::time::Duration::ZERO);
+        }
+        collected
     }
 
     /// Evaluate a CPS expression to a final value

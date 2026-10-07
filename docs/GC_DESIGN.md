@@ -775,6 +775,43 @@ it sits at the edge of the noise band.
 
 ---
 
+### 6.2 What each collection records (#648)
+
+Every collection is recorded where it runs, in `GcController::collect`
+(`crates/patina-core/src/heap/telemetry.rs`), and completed by the backend
+with `Heap::finish_collection` once its own work after the collection is
+done: the VM's code release, timed; nothing on the tree-walker. A record
+holds the **reason** — `bytes` (the trigger), `stress`, `zeal`,
+`descriptors`, `posted` (a collection asked for where collection was
+deferred, run at a later safe point) or `call` (`(gc)`, an open retried
+after `EMFILE`, at the call that asked) — read from the counts at the
+collection, so the allocation path decides nothing new; the **phase times**
+of roots, marking, the weak fixpoint, the providers' `sweep_weak`, the heap's
+sweep and the backend's work after it, whose sum is the pause; the bytes
+allocated since the last collection, found live, freed and held externally;
+slots marked and swept per arena; and the **wait** since the collection was
+posted, in bytes and time.
+
+The pending flag rises through one helper, `SharedCounts::raise_pending`,
+which on the flag's rise from down notes the time and the bytes charged:
+once per collection cycle, so a flag that stays up while a deferred region
+allocates costs nothing more. A **deferral window** is the extent in which a
+guard other than the running loop's own is alive — a nested loop's or a
+holder's — where nothing may collect; `GcDeferGuard::new` and `holding` take
+their caller's location (`#[track_caller]`), and the window keeps the
+location of the guard that opened it. From these `(gc-stats)` reports
+`last-pause-us`, `pause-max-us`, `pause-total-us` and `mmu-10ms`; K16's two
+high-water marks (`PRD/GC_PRD.md` §20): `wait-max-bytes`, the most bytes
+allocated between a collection being posted and its start, with
+`wait-site`, the first window that held it, and `deferral-max-bytes`, the
+most bytes allocated inside one window, with `deferral-site`, its guard;
+`wait-max-us`, the time to safepoint (C12); and the process's
+`resident-bytes` and `cpu-us`. The MMU is kept for windows of 1–100 ms from
+every pause, evaluating the windows that end at a pause's end and those that
+start at a pause's start, which between them hold the worst of each length,
+over a ring of the intervals a window can still reach. `PATINA_GC_LOG=<path>`
+writes each record as a CSV line (`docs/TEST_ORGANIZATION.md`, "GC lanes").
+
 ## 7. Safe Points and Re-entrancy
 
 **Invariant: GC runs only when every live value is reachable from a registered

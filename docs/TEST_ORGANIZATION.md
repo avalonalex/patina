@@ -1042,6 +1042,23 @@ set for the day that deferral is lost. `macro_definition_env` works inside
 library loads too, but one of its tests expands a library's macro after a
 collection, so it collects.
 
+**What each collection cost (#648).** `PATINA_GC_LOG=<path>` writes one CSV
+line per collection, for every heap in the process, under a header naming
+the columns: `heap` (the heap's number in the process), `number` (its
+collection count), `start_us` (since the process's first heap), `reason`
+(`bytes`, `stress`, `zeal`, `descriptors`, `posted`, `call`; `docs/GC_DESIGN.md`
+§6.2), `pause_us` and its phases `roots_us`, `mark_us`, `weak_us`,
+`prune_us`, `sweep_us` and `after_us` (each rounded down, so their sum is
+within 6 µs below the pause), `wait_us` and `wait_bytes` (from the
+collection being posted to its start; zero at a call), `allocated_bytes`
+(since the collection before), `live_bytes`, `freed_bytes`,
+`external_bytes`, and the slots marked and swept per arena. `(gc-stats)`
+reports the pause and MMU figures, K16's two high-water marks with their
+sites, and the process's `resident-bytes` and `cpu-us`.
+`crates/patina-repl/tests/gc_log.rs` pins the log and the keys on both
+backends, and `heap::gc::tests::deferral_windows_and_waits_report_their_guard`
+the sites.
+
 **A change that moves a Larceny tally re-pins its stress rows in the same
 pull request.** The nightly lane holds each suite on each lane to its row in
 `scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue
