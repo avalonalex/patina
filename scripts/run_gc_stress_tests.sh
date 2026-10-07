@@ -91,7 +91,9 @@ fi
 # collect without stress as well, and again for `load`'s retry, which that
 # test also re-enters; interpreter_api's re-pinned 2026-10-06, when #643
 # deleted its test of the source map's pruning, with the store it measured,
-# and again that day for #612's test of a hundred `eval`s of one datum)
+# and again that day for #612's test of a hundred `eval`s of one datum;
+# hygiene_matrix's test count re-pinned 2026-10-07 for #652's def-getter
+# shape, its minimum left at 400)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -101,7 +103,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
     "gc_tree_walker 16 11421 19"              # 22851 (55)
     "gc_vm 16 8001 23"                        # 16012 (66)
-    "hygiene_matrix 16 400 13"                # 800 (2)
+    "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)
     "library_loading 16 1 9"                  # 3 (0): see the header
     "macro_definition_env 16 129 15"          # 258 (2): see the header

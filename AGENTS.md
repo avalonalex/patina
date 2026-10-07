@@ -102,12 +102,12 @@ GitHub's path-filter limits and required-check considerations.
 | Job | What it runs |
 |---|---|
 | Test Suite | `cargo test --all --lib --tests` on **ubuntu and macos** (`SKIP_CHIBI_TESTS=1`), then `run_gc_stress_tests.sh` on the same debug build: 13 GC- and control-relevant targets under `PATINA_GC_STRESS=16` and `scheme_suite.rs` at 4096, each with its test count and a minimum of collections pinned (#626) |
-| R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends |
+| R7RS Compliance | `run_chibi_tests.sh` **and** `run_chibi_tests_tree_walker.sh`, then `patina-compat check-smoke` on both backends, then the steady-state lane's per-PR rows (`run_steady_state.py --quick`, #652) |
 | GC differential | `run_gc_differential.sh` on release built with `--features patina-core/gc-check` at stress 1, after the positive controls of the stale-reference checks (#621), the GC protocol checks (#624) and the retired-register checks (#625) — the defer-balance control also in the plain release build — **and** on debug at stress 16 |
 | GC zeal (`gc-zeal.yml`, path-filtered and weekly) | `run_gc_zeal.sh` on the same release `gc-check` build — the control suite files under `PATINA_GC_ZEAL=entry`, both backends — and `finished_forms_release_code` under zeal, for changes to the VM's runtime, compiler or types, the heap or `TaggedValue`, the library loader or registry, the tree-walker's evaluator, the toolchain or the lane itself, and weekly on `main` |
 | Rustfmt / Clippy | `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo clippy --release --all-targets -- -D warnings` for the plain release build without the checks; `scripts/check_gc_trace_names.py`, that the trace code names every field (#623) |
 | Suite oracles | `run_suite_oracles.sh` under chibi 0.12 and Gauche 0.9.15, pinned and built from source, against `DIVERGENCES.tsv` |
-| Nightly (`nightly.yml`, daily and when its lanes change) | `run_larceny_gc_stress.sh`, R7RS and `(r6rs ...)`, on each backend: Larceny's suites at the pinned commit under stress in the release `gc-check` build, each tally held to `scheme_tests/reports/larceny_gc_stress.tsv` (#626) |
+| Nightly (`nightly.yml`, daily and when its lanes change) | `run_larceny_gc_stress.sh`, R7RS and `(r6rs ...)`, on each backend: Larceny's suites at the pinned commit under stress in the release `gc-check` build, each tally held to `scheme_tests/reports/larceny_gc_stress.tsv` (#626); and every row of the steady-state lane (`run_steady_state.py`, #652) |
 
 For GC/rooting changes, also run `scripts/run_gc_differential.sh` against release
 and debug builds, and `scripts/run_gc_stress_tests.sh` after the Rust tests;

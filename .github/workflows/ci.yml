@@ -103,6 +103,12 @@ jobs:
         ./target/release/patina-compat check-smoke --tree-walker
         --results "$RUNNER_TEMP/compat-smoke-tree-walker.scm"
         --report "$RUNNER_TEMP/compat-smoke-tree-walker.txt"
+    # The steady-state lane's per-PR rows (#652, docs/TEST_ORGANIZATION.md,
+    # "GC lanes"): each runs three times on both backends against the
+    # clauses it declares; the whole lane runs nightly (nightly.yml).
+    - name: Steady-state lane, per-PR rows
+      if: ${{ !cancelled() }}
+      run: python3 scripts/run_steady_state.py --quick
 
   # The two GC lanes (docs/GC_DESIGN.md §10 stage 4b): the chibi suite must
   # be byte-identical with GC off, under stress, and under the adaptive mode,

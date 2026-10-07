@@ -1059,6 +1059,38 @@ sites, and the process's `resident-bytes` and `cpu-us`.
 backends, and `heap::gc::tests::deferral_windows_and_waits_report_their_guard`
 the sites.
 
+**The steady-state lane (#652).** `scripts/run_steady_state.py` runs the rows
+of `crates/patina-tests/bench_programs/gc/steady/`, each a program that repeats
+one cycle 4N times through `driver.scm`, which reads the heap at N, 2N, 3N
+and 4N: at N and 4N after two `(gc)` calls, which collect at their call, so
+the readings are deterministic. Every row runs three times on each backend
+and is held to the clauses it declares (`PRD/GC_PRD.md` §17.1): **SS1**,
+L(4N) − L(N) ≤ 3N·8 B + 64 KiB, which also sets the smallest leak per cycle
+the row can see; **SS2**, footprint (`committed-bytes` plus `external-bytes`)
+≤ F(L) at both readings, with at least two paced collections in each of
+[N, 2N) and [3N, 4N), or the clause is vacuous and fails; **SS4**, mutator CPU
+per cycle (`cpu-us` less `pause-total-us`) over [3N, 4N) ≤ 1.5× that over
+[N, 2N), each segment the minimum of the three runs; **SS5**, `symbols` at 4N
+within max(16, 5%) of N. A row that drops a peak also requires L below a
+ceiling (`peak`), and the class-D row `eval-fresh-names` holds its cost per
+fresh name to 1.2× the pinned bytes. The REPL rows declare SS1, SS4 and SS5,
+since their growth shows in L and the counts and their footprints are the
+deferred library loads' high-water (#616); the server and churn rows declare
+SS2 as well. A clause a row fails today is marked red in the runner's table
+with the issue or stage that fixes it — #611, #613, #614, #616, #655, #656,
+stage 5c — and is reported, not failed; a red clause that passes is called
+out for promotion. Every run is watched: a timeout, a resident-size cap, a
+non-zero exit or a missing reading fails the row. The rows marked `pr` run in
+CI's R7RS Compliance job (`--quick`, about 40 s here for both backends); the
+whole lane runs nightly (`nightly.yml`, about 5 minutes here). Peak RSS is
+printed beside each row as a signal, never a gate. The lane does not yet have
+`interp-churn` (an interpreter made and dropped per cycle, #604's shape),
+which stage 2's teardown work adds, nor the thread rows of stage 9.
+`scripts/tests/test_steady_state.py` checks the runner's arithmetic, and
+`hygiene_matrix.rs`'s `an_introduced_definition_only_templates_reach_survives`
+is the `def-getter` shape the stages that reclaim macro-introduced
+definitions must keep: 7 on both backends, as on chibi and Gauche.
+
 **A change that moves a Larceny tally re-pins its stress rows in the same
 pull request.** The nightly lane holds each suite on each lane to its row in
 `scheme_tests/reports/larceny_gc_stress.tsv`, so a fix from the defect queue
