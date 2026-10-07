@@ -224,7 +224,7 @@ impl SourceMap {
             .as_ref()
             .and_then(|span| span.expansion_chain.as_ref())
         {
-            return Some(chain.to_vec());
+            return Some(chain.names());
         }
         loc.span
             .as_ref()

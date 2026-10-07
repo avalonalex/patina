@@ -3,8 +3,8 @@
 
 use crate::source_map::source_lines;
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 /// Identity belongs to an input, not its name: two REPL submissions are
 /// different documents even when both are called `<repl>`.
@@ -147,7 +147,135 @@ pub struct SourceSpan {
     pub end_column: u32,
     /// Expansion history belongs to this syntax occurrence, not its text
     /// position: one written macro template can be instantiated many times.
-    pub expansion_chain: Option<std::sync::Arc<[String]>>,
+    pub expansion_chain: Option<ExpansionChain>,
+}
+
+/// The macros one occurrence of syntax was expanded through, outermost
+/// first. A chain is a list of shared links, so extending one allocates one
+/// link, and giving it to every node of an expansion is a reference count.
+///
+/// Each link records the top-level form whose expansion made it (the
+/// desugarer numbers them), so that an expansion can tell its own chains
+/// from one an earlier form left on syntax they share: `eval` expands one
+/// quoted datum again and again, and a macro that splices the datum's pairs
+/// into its output, as `case` does its clauses, reaches what the earlier
+/// expansions stamped. It starts afresh there: extending those chains made
+/// each `eval`'s memory and time grow with every one before it (#612). A
+/// chain a macro's template holds is the exception ([`Self::for_template`]).
+#[derive(Clone)]
+pub struct ExpansionChain(Arc<ChainLink>);
+
+struct ChainLink {
+    name: Arc<str>,
+    parent: Option<ExpansionChain>,
+    len: usize,
+    form: u64,
+}
+
+impl ExpansionChain {
+    /// The form number of a chain a macro's template holds.
+    pub const TEMPLATE: u64 = 0;
+
+    /// `parent` extended by an expansion of the macro `name`, made while
+    /// expanding the top-level form numbered `form`.
+    pub fn extend(parent: Option<&ExpansionChain>, name: Arc<str>, form: u64) -> Self {
+        Self(Arc::new(ChainLink {
+            name,
+            parent: parent.cloned(),
+            len: parent.map_or(0, ExpansionChain::len) + 1,
+            form,
+        }))
+    }
+
+    /// How many expansions the chain records: at least one.
+    pub fn len(&self) -> usize {
+        self.0.len
+    }
+
+    /// Never: a chain records at least one expansion.
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// The top-level form whose expansion made the newest link.
+    pub fn form(&self) -> u64 {
+        self.0.form
+    }
+
+    /// The macro names, outermost first.
+    pub fn names(&self) -> Vec<String> {
+        let mut names = Vec::with_capacity(self.len());
+        let mut link = Some(self);
+        while let Some(chain) = link {
+            names.push(chain.0.name.to_string());
+            link = chain.0.parent.as_ref();
+        }
+        names.reverse();
+        names
+    }
+
+    /// An identity for the newest link, as long as the chain is held.
+    pub fn id(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
+
+    /// This chain as a macro's template holds it, for the syntax each use of
+    /// the macro introduces from it: every use extends it, whichever form
+    /// the use is in. The template's copy is never stamped, so nothing
+    /// accumulates on it, and the uses of a macro another macro's expansion
+    /// defined keep that expansion in their chains (`def-bad → bad`).
+    pub fn for_template(&self) -> Self {
+        Self(Arc::new(ChainLink {
+            name: self.0.name.clone(),
+            parent: self.0.parent.clone(),
+            len: self.0.len,
+            form: Self::TEMPLATE,
+        }))
+    }
+}
+
+/// Two chains are equal when they record the same expansions in the same
+/// order, whichever forms made them.
+impl PartialEq for ExpansionChain {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+        let (mut left, mut right) = (Some(self), Some(other));
+        while let (Some(l), Some(r)) = (left, right) {
+            if Arc::ptr_eq(&l.0, &r.0) {
+                return true;
+            }
+            if l.0.name != r.0.name {
+                return false;
+            }
+            left = l.0.parent.as_ref();
+            right = r.0.parent.as_ref();
+        }
+        true
+    }
+}
+
+impl Eq for ExpansionChain {}
+
+impl std::fmt::Debug for ExpansionChain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.names()).finish()
+    }
+}
+
+/// A chain is as long as the expansion was deep. Release it a link at a time
+/// rather than by recursion through each link's parent.
+impl Drop for ChainLink {
+    fn drop(&mut self) {
+        let mut next = self.parent.take();
+        while let Some(chain) = next {
+            next = match Arc::try_unwrap(chain.0) {
+                Ok(mut link) => link.parent.take(),
+                Err(_) => None,
+            };
+        }
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +314,44 @@ mod tests {
                 .as_deref(),
             Some("final")
         );
+    }
+
+    #[test]
+    fn chains_share_their_links_and_compare_by_names() {
+        use super::ExpansionChain;
+        use std::sync::Arc;
+        let outer = ExpansionChain::extend(None, Arc::from("case"), 1);
+        let inner = ExpansionChain::extend(Some(&outer), Arc::from("let"), 1);
+        assert_eq!((outer.len(), inner.len()), (1, 2));
+        assert_eq!(inner.names(), ["case", "let"]);
+        assert_eq!(inner.form(), 1);
+        // Made separately, by another form: the same expansions.
+        let again = ExpansionChain::extend(
+            Some(&ExpansionChain::extend(None, Arc::from("case"), 2)),
+            Arc::from("let"),
+            2,
+        );
+        assert_eq!(inner, again);
+        assert_ne!(inner, outer);
+        assert_ne!(
+            inner,
+            ExpansionChain::extend(Some(&outer), Arc::from("if"), 1)
+        );
+        assert_eq!(format!("{inner:?}"), r#"["case", "let"]"#);
+    }
+
+    /// A chain a million expansions long drops without a frame per link.
+    #[test]
+    fn a_long_chain_drops_without_recursion() {
+        use super::ExpansionChain;
+        use std::sync::Arc;
+        let name: Arc<str> = Arc::from("peel");
+        let mut chain = ExpansionChain::extend(None, name.clone(), 1);
+        for _ in 1..1_000_000 {
+            chain = ExpansionChain::extend(Some(&chain), name.clone(), 1);
+        }
+        assert_eq!(chain.len(), 1_000_000);
+        drop(chain);
     }
 
     #[test]
