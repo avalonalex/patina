@@ -1688,6 +1688,8 @@ repro and fix direction; the rest have no issue because the design fixes them at
 | Unreferenced symbols are never reclaimed: 192 B per symbol [P] (chibi 166, Chez 0) | no issue: fixed by design | 5c |
 | Register stacks keep a deep recursion's pages: 143 MiB on the VM and 984 MiB on the tree-walker after 1 M frames [P] | no issue: fixed by design | 4d |
 | Tree-walker environments are freed only when sweep drops their procedure, and the trigger sees them as an estimate, one frame a closure: frame chains, and frames only a continuation holds, are missed | [#637] (the estimate) | 4f |
+| Tree-walker continuation captures are invisible to the trigger: a `call/cc` loop at depth 1,000 peaks at 2.4 GB | [#656] | 4e, 4f |
+| On the tree-walker, a top-level variable assigned a literal keeps its previous value reachable | [#655] | a defect, fixed on its own |
 
 ## 18. Threading readiness and future parallelism (decision 7)
 
@@ -2238,3 +2240,5 @@ from them on these known points before filing it:
 [#650]: https://github.com/avalonalex/patina/issues/650
 [#651]: https://github.com/avalonalex/patina/issues/651
 [#652]: https://github.com/avalonalex/patina/issues/652
+[#655]: https://github.com/avalonalex/patina/issues/655
+[#656]: https://github.com/avalonalex/patina/issues/656

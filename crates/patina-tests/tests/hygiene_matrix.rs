@@ -1670,3 +1670,31 @@ fn one_spelling_mentioned_as_two_bindings_is_relinked_as_two() {
         assert_eq!(eval_program_tree_walker(&code), "(local lib)", "{code}");
     }
 }
+
+/// The `def-getter` shape (`PRD/GC_PRD.md` §17.4, #652): an introduced
+/// top-level definition that only macro templates reach — `secret`, beside a
+/// getter macro and a setter macro, with no procedure that reads it. It is
+/// the guard for the stages that reclaim macro-introduced definitions: a
+/// collector that drops `secret` because no code names it breaks the getter.
+/// Chibi 0.12 and Gauche 0.9.15 print 7, as both backends do.
+#[test]
+fn an_introduced_definition_only_templates_reach_survives() {
+    let program = r#"
+        (define-syntax def-getter
+          (syntax-rules ()
+            ((_ get set)
+             (begin
+               (define secret 42)
+               (define-syntax get (syntax-rules () ((_) secret)))
+               (define-syntax set (syntax-rules () ((_ v) (set! secret v))))))))
+        (def-getter get-secret set-secret!)
+        (set-secret! 7)
+        (get-secret)
+    "#;
+    for (backend, result) in [
+        ("vm", try_eval_program_vm(program)),
+        ("tree-walker", try_eval_program_tree_walker(program)),
+    ] {
+        assert_eq!(result.as_deref(), Ok("7"), "{backend}");
+    }
+}

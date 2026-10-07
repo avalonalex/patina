@@ -31,6 +31,8 @@ on:
       - 'scripts/run_larceny_tests.sh'
       - 'scripts/larceny_report.py'
       - 'scheme_tests/reports/larceny_gc_stress.tsv'
+      - 'scripts/run_steady_state.py'
+      - 'crates/patina-tests/bench_programs/gc/steady/**'
       - '.github/workflows/nightly.yml'
 
 # Checkout and the caches need nothing more.
@@ -146,3 +148,22 @@ jobs:
           ${{ runner.temp }}/gc-stress-*/results.tsv
           scheme_tests/reports/larceny_gc_stress.tsv
         retention-days: 30
+
+  # The steady-state lane (#652, PRD/GC_PRD.md §17.4): every row, three runs
+  # on each backend, held to the clauses it declares; a red row names the
+  # issue or stage that fixes it, and fails only if it stops reaching its
+  # readings. About 5 minutes on an M-series Mac for both backends; the
+  # limit leaves the runner's 2.2x and a margin.
+  steady-state:
+    name: Steady-state lane (both backends)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      run: rustup show
+    - uses: Swatinem/rust-cache@v2
+    - name: Build release
+      run: cargo build --release -p patina-repl --bin patina
+    - name: Steady-state lane, every row
+      run: python3 scripts/run_steady_state.py
