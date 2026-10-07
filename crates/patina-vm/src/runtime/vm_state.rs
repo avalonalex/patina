@@ -1342,6 +1342,7 @@ pub(super) fn run_loop_until_outcome(
             state.after_collection();
         }
 
+        patina_core::census::vm_instruction();
         match dispatch_one_instruction(state, &mut cur_code, exit_depth) {
             Ok(Some(val)) => {
                 state.execution.close_handlers(handlers_at_entry);
@@ -1424,6 +1425,10 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
     if !state.gc_pending.get() || !is_outermost {
         return false;
     }
+    patina_core::census::stack_shape(
+        state.execution.frames().len(),
+        state.execution.registers().len(),
+    );
     state.execution.retire_registers();
     GcController::safe_point(
         &state.gc,
@@ -1462,6 +1467,10 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
 /// operands again when it resumes.
 fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
     if state.heap.borrow().gc_defer_is_one_loop() {
+        patina_core::census::stack_shape(
+            state.execution.frames().len(),
+            state.execution.registers().len(),
+        );
         state.execution.retire_registers();
     }
     let collected = GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| {
@@ -2581,6 +2590,11 @@ fn dispatch_one_instruction(
                             let mut heap = state.heap.borrow_mut();
                             let slot = heap.vector_slice_mut(vec).get_mut(i)?;
                             *slot = x;
+                            patina_core::census::store(
+                                patina_core::census::Site::VmVectorSet,
+                                Some(vec),
+                                x,
+                            );
                             Some(TaggedValue::UNSPECIFIED)
                         })
                         .flatten()

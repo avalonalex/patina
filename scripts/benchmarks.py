@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Checked benchmark runners. Public entry points remain the .sh scripts:
-run_benchmarks.sh (criterion), bench_compare.sh (compare) and
-run_gc_benchmarks.sh (gc, scripts/gc_bench.py)."""
+run_benchmarks.sh (criterion), bench_compare.sh (compare),
+run_gc_benchmarks.sh (gc, scripts/gc_bench.py) and run_gc_census.sh
+(census, scripts/gc_census.py)."""
 import argparse
 import datetime as dt
 import hashlib
@@ -15,6 +16,7 @@ import sys
 import tempfile
 
 import gc_bench
+import gc_census
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKLOADS = ROOT / 'crates/patina-tests/bench_programs/workloads.json'
@@ -232,6 +234,14 @@ def main(argv=None):
     sub.add_argument('--seed', type=int, default=653, help='seed of the per-round environment sizes')
     sub.add_argument('--timeout', type=float, default=300, help='seconds per run')
     sub.add_argument('--output', help='also save JSON here; must not already exist')
+    sub = subparsers.add_parser('census', help='the GC census over the GC benchmark set (#651)')
+    sub.add_argument('--set', action='append', help='workload sets from gbs.json (default gbs)')
+    sub.add_argument('--workload', action='append', default=[], help='one workload by name (repeatable)')
+    sub.add_argument('--config', action='append', choices=list(gc_census.CONFIGS),
+                     help='default or a nursery size (repeatable; default all six)')
+    sub.add_argument('--jobs', type=int, default=4, help='runs side by side (default 4)')
+    sub.add_argument('--timeout', type=float, default=1800, help='seconds per run')
+    sub.add_argument('--output', help='also save JSON here; must not already exist')
     args = parser.parse_args(argv)
     if args.kind == 'gc' and args.rounds < 1:
         parser.error('--rounds must be at least 1')
@@ -247,8 +257,9 @@ def main(argv=None):
         base.mkdir(parents=True, exist_ok=True)
         directory = Path(tempfile.mkdtemp(prefix=dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ-'), dir=base))
         print(f'Run artifacts: {directory}', flush=True)
-        if args.kind == 'gc':
-            fields, failed = gc_bench.gc_mode(args, directory, environment())
+        if args.kind in ('gc', 'census'):
+            mode = gc_bench.gc_mode if args.kind == 'gc' else gc_census.census_mode
+            fields, failed = mode(args, directory, environment())
             report = dict(info, **fields)
             if failed:
                 # The others' measurements are kept, never as a success report.
@@ -264,7 +275,9 @@ def main(argv=None):
             with output.open('x') as file:
                 file.write(payload)
         (directory / 'report.json').write_text(payload)
-        print(f'Validated {len(report["measurements"])} measurements. Report: {output or directory / "report.json"}')
+        count = sum(map(len, report['summaries'].values())) if args.kind == 'census' else len(report['measurements'])
+        print(f'Validated {count} {"runs" if args.kind == "census" else "measurements"}. '
+              f'Report: {output or directory / "report.json"}')
         for row in report['measurements']:
             if args.kind == 'compare':
                 print(f'{row["id"]}: tree-walker {row["tree-walker_ms"]:.4f} ms; vm {row["vm_ms"]:.4f} ms')

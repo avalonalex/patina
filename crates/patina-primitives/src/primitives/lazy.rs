@@ -140,6 +140,11 @@ fn force_tagged(ctx: &dyn ApplyContext, obj: TaggedValue) -> Result<TaggedValue,
         if heap.borrow().is_promise(result) {
             heap.borrow_mut().promise_update(obj, result);
         } else {
+            patina_core::census::store(
+                patina_core::census::Site::PromiseForcePrimitive,
+                Some(obj),
+                result,
+            );
             *cell.borrow_mut() = PromiseState::Forced(result);
             return Ok(result);
         }

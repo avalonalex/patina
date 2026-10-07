@@ -58,6 +58,7 @@ pub(super) fn equal_hash(
             actual: args.len(),
         });
     }
+    patina_core::census::equal_hash_call();
     let h = heap.borrow().tagged_value_hash(args[0]);
     // Return as non-negative fixnum (mod a large prime < fixnum max)
     Ok(TaggedValue::fixnum((h % 536870909) as i64))

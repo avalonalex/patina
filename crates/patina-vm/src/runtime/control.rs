@@ -2269,6 +2269,11 @@ pub(super) fn resume_force(state: &mut VmState, base: usize) -> Result<(), VmErr
                     }
                 }
             } else {
+                patina_core::census::store(
+                    patina_core::census::Site::PromiseForceVm,
+                    Some(promise),
+                    result,
+                );
                 *cell.borrow_mut() = PromiseState::Forced(result);
                 Some(result)
             }
@@ -3122,6 +3127,7 @@ pub(super) fn capture_delimited(
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
     let mut registers = state.execution.registers()[base_at_capture..].to_vec();
+    patina_core::census::capture_delimited(frames.len(), registers.len());
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
         // — the capturing call never returns a value into it — so whatever it

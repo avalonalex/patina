@@ -21,7 +21,8 @@
               shared on purpose by every port that reads the one standard input (per thread, so a \
               second thread would keep a read-ahead of its own, C9), and `OUTPUT_FILES`, the open \
               file output ports to flush at exit; `scope::SCOPE_ORIGINS` and `scope_trace::PHASE`, \
-              debugging aids. Clippy takes this lint only at a crate root, so a new \
+              debugging aids; and, with the `gc-census` feature, `census`'s \
+              `ON_PRIMARY_THREAD`, a flag. Clippy takes this lint only at a crate root, so a new \
               `thread_local!` in the crate goes on this list, which a test in \
               `reentry_lint_control.rs` holds to the crate's sources (#622)"
 )]
@@ -34,6 +35,7 @@
     )
 )]
 
+pub mod census;
 pub mod compiled_macro;
 pub mod cont_value;
 pub mod continuation;
