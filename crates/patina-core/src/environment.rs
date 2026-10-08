@@ -455,6 +455,12 @@ struct RareTables {
     /// names has two, because the desugarer reads a spelling back off an
     /// alias (`Desugarer::settle_early_bindings`).
     import_aliases: RefCell<FxHashMap<(u64, u32), ImportAliases>>,
+    /// For each binding the desugarer's relinking aliased here, the alias it
+    /// minted — see [`Environment::relink_alias`]. One target has one alias
+    /// however many expansions ask (#611), where each expansion used to mint
+    /// its own: a program of `n` top-level `guard` forms held `3n` aliases to
+    /// one private helper, and their symbols.
+    relink_aliases: RefCell<FxHashMap<RelinkKey, Rc<str>>>,
     /// The distinct environments `links` points into, for the collector. An
     /// importer of `(scheme base)` holds several hundred links into a dozen
     /// environments, and a collection should look at the dozen. Only ever
@@ -498,8 +504,8 @@ struct RareTables {
 /// **What is counted** ([`Environment::table_bytes`]): the environment and
 /// its out-of-line tables' box, every table's own buffer at its capacity —
 /// the slot vector once it is out of line, the name index, the scoped and
-/// alias tables, the import links, the owners, the import aliases and the
-/// introduced globals — and the name of each slot, an `Rc<str>` of two counts
+/// alias tables, the import links, the owners, the import and relink aliases
+/// and the introduced globals — and the name of each slot, an `Rc<str>` of two counts
 /// and its bytes, counted whether or not something else shares it (an
 /// `environment` built by import has a fresh name for each of its several
 /// hundred bindings, which are most of what it holds). Not counted: what a
@@ -616,6 +622,12 @@ const fn hash_table_bytes<K, V>(capacity: usize) -> usize {
 /// The aliases for one imported location: the spelling each was asked for
 /// under, and the alias. A scan, not a table — it holds one entry, or two.
 type ImportAliases = SmallVec<[(Rc<str>, Rc<str>); 1]>;
+
+/// What a relink alias stands for ([`Environment::relink_alias`]): the
+/// environment that holds the binding, by id, the binding's name there, the
+/// scopes that select it (`None` for one the name alone reaches), and the
+/// identity of the macro's mention it renames.
+type RelinkKey = (u64, Rc<str>, Option<ScopeSet>, ScopeSet);
 
 /// Mint a process-unique, never-reused environment id (0 is reserved as the
 /// "empty" sentinel in the VM's global caches).
@@ -994,6 +1006,7 @@ impl Environment {
                 introduced_global_names,
                 links,
                 import_aliases,
+                relink_aliases,
                 owners,
                 // A heap value, in the arenas.
                 specifier: _,
@@ -1006,6 +1019,7 @@ impl Environment {
                 )
                 + links.borrow().capacity() * size_of::<Option<Owner>>()
                 + hash_table_bytes::<(u64, u32), ImportAliases>(import_aliases.borrow().capacity())
+                + hash_table_bytes::<RelinkKey, Rc<str>>(relink_aliases.borrow().capacity())
                 + owners.borrow().capacity() * size_of::<Rc<Environment>>();
         }
         bytes
@@ -1685,6 +1699,127 @@ impl Environment {
         scopes: ScopeSet,
     ) {
         self.install_alias(alias.into(), target_env, target_name, Some(scopes));
+    }
+
+    /// The alias here for the binding of `name` in `target_env` — the one
+    /// `scopes` select, for a binding the name alone does not reach — as a
+    /// macro's mention of it under `mention`, its identity, renames it:
+    /// minted once per target and mention (#611).
+    ///
+    /// The desugarer's relinking (`link_definition_env_refs`) used to mint an
+    /// alias for every expansion that needed one, so a library macro whose
+    /// template names a private helper, as `guard` names `%guard-aux`, left an
+    /// alias and an interned symbol in the program per top-level form, which
+    /// nothing removes. One target now has one alias here, as one imported
+    /// location has one in [`import_alias`]. Two targets, or two identities of
+    /// one spelling that select different bindings, still get one each.
+    ///
+    /// And two mentions of one target get one each. The alias's spelling is
+    /// also how a renamed mention is told from another of the same name: a
+    /// generated macro can mention a spelling once as a binder of its own
+    /// template and once as the library's binding, both reaching the same
+    /// target, and one spelling for the two had the binder capture the other
+    /// (`hygiene_matrix.rs`, `one_spelling_mentioned_as_two_bindings_…`). A
+    /// macro's mention is the same from one expansion to the next — written
+    /// templates mention a name under their definition scopes — so this costs
+    /// nothing in what is shared. Two *expansions* of one mention share the
+    /// spelling and are told apart by the scopes their occurrences keep
+    /// (`Desugarer::rewrite_refs`).
+    ///
+    /// An alias is an ordinary spelling (`%guard-aux.17` is a legal
+    /// identifier), so a program can define over it. A remembered alias is
+    /// reused only while it is still an alias to the same target and nothing
+    /// here binds its spelling, and is replaced otherwise; and `mint` is asked
+    /// again while the spelling it offers is bound here already. Otherwise it
+    /// is installed as [`define_alias`] or [`define_scoped_alias`] would.
+    ///
+    /// A frame first reuses an alias its root holds for the target: a lookup
+    /// from the frame reaches the root's, and the frame installs nothing. The
+    /// desugarer's speculative body scan works in a frame, which it drops with
+    /// whatever was minted there.
+    ///
+    /// [`import_alias`]: Self::import_alias
+    /// [`define_alias`]: Self::define_alias
+    /// [`define_scoped_alias`]: Self::define_scoped_alias
+    pub fn relink_alias(
+        &self,
+        target_env: Rc<Environment>,
+        name: Rc<str>,
+        scopes: Option<ScopeSet>,
+        mention: &ScopeSet,
+        mut mint: impl FnMut() -> Rc<str>,
+    ) -> Rc<str> {
+        let key: RelinkKey = (target_env.env_id(), name, scopes, mention.clone());
+        if let Some(alias) = self.remembered_relink(&key) {
+            return alias;
+        }
+        let mut root = self.parent.as_ref();
+        while let Some(parent) = root.and_then(|env| env.parent.as_ref()) {
+            root = Some(parent);
+        }
+        if let Some(alias) = root.and_then(|root| root.remembered_relink(&key)) {
+            return alias;
+        }
+        let alias = loop {
+            let candidate = mint();
+            if self.local_slot(&candidate).is_none() && self.alias_target(&candidate).is_none() {
+                break candidate;
+            }
+        };
+        self.install_alias(Rc::clone(&alias), target_env, key.1.clone(), key.2.clone());
+        let rare = self.rare.get_or_init(Box::default);
+        let grew = {
+            let mut table = rare.relink_aliases.borrow_mut();
+            let capacity = table.capacity();
+            table.insert(key, Rc::clone(&alias));
+            table.capacity() != capacity
+        };
+        if grew {
+            self.recharge();
+        }
+        alias
+    }
+
+    /// [`relink_alias`] to the definition [`introduced_definition`] found, as
+    /// [`define_alias_to_introduced`] installs one.
+    ///
+    /// [`relink_alias`]: Self::relink_alias
+    /// [`introduced_definition`]: Self::introduced_definition
+    /// [`define_alias_to_introduced`]: Self::define_alias_to_introduced
+    pub fn relink_alias_to_introduced(
+        &self,
+        home: Rc<Environment>,
+        name: Rc<str>,
+        found: IntroducedDefinition,
+        mention: &ScopeSet,
+        mint: impl FnMut() -> Rc<str>,
+    ) -> Rc<str> {
+        match found {
+            IntroducedDefinition::Renamed(renamed) => {
+                self.relink_alias(home, renamed, None, mention, mint)
+            }
+            IntroducedDefinition::Scoped(scopes) => {
+                self.relink_alias(home, name, Some(scopes), mention, mint)
+            }
+        }
+    }
+
+    /// The alias remembered here for `key`, while it is still an alias to
+    /// that target and nothing here binds its spelling.
+    fn remembered_relink(&self, key: &RelinkKey) -> Option<Rc<str>> {
+        let alias = self.rare.get()?.relink_aliases.borrow().get(key).cloned()?;
+        let (target_id, name, scopes, _) = key;
+        let still = self.local_slot(&alias).is_none()
+            && self.alias_target(&alias).is_some_and(|target| {
+                target
+                    .env
+                    .as_ref()
+                    .map_or(self.env_id(), |env| env.env_id())
+                    == *target_id
+                    && target.name == *name
+                    && target.scopes == *scopes
+            });
+        still.then_some(alias)
     }
 
     fn install_alias(
@@ -2681,6 +2816,9 @@ impl Environment {
                 links: _,
                 // Environment ids, slot numbers and names.
                 import_aliases: _,
+                // Environment ids, names, scope ids and alias spellings; the
+                // binding each alias reaches is an edge of `alias_bindings`.
+                relink_aliases: _,
                 owners,
                 specifier,
                 // A count of bytes and a handle to the heap's account.
@@ -4110,6 +4248,7 @@ mod gc_edge_tests {
                 introduced_global_names: RefCell::default(),
                 links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),
                 import_aliases: RefCell::default(),
+                relink_aliases: RefCell::default(),
                 owners: RefCell::new(vec![Rc::clone(&library)]),
                 specifier: Cell::new(Some(specifier)),
                 namespace: None,
@@ -4130,5 +4269,273 @@ mod gc_edge_tests {
         let mut h = heap.borrow_mut();
         collect_only(&mut h, |visitor| visitor.visit_env(&env));
         s.assert_survived(&h);
+    }
+}
+
+#[cfg(test)]
+mod relink_alias_tests {
+    //! [`Environment::relink_alias`] (#611): one alias per target, however
+    //! many expansions ask, and never one shared by two targets.
+    use super::*;
+    use crate::scope::{ScopeId, ScopeSet};
+
+    fn n(i: i64) -> TaggedValue {
+        TaggedValue::fixnum(i)
+    }
+
+    /// A library with two private helpers, and a program that cannot name
+    /// either.
+    fn library_and_program() -> (Rc<Environment>, Rc<Environment>) {
+        let library = Rc::new(Environment::new());
+        library.define("helper", n(1));
+        library.define("other", n(2));
+        let program = Rc::new(Environment::with_heap(library.heap().clone()));
+        (library, program)
+    }
+
+    #[test]
+    fn one_target_asked_for_repeatedly_gets_one_alias() {
+        let (library, program) = library_and_program();
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let first = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        for _ in 0..100 {
+            let again = program.relink_alias(
+                Rc::clone(&library),
+                "helper".into(),
+                None,
+                &ScopeSet::new(),
+                &mut mint,
+            );
+            assert_eq!(again, first);
+        }
+        assert_eq!(minted.get(), 1, "an alias per target, not per expansion");
+        // Still an alias, resolved afresh: it sees what the library assigns.
+        library.set("helper", n(10)).unwrap();
+        assert_eq!(program.get(&first), Some(n(10)));
+    }
+
+    #[test]
+    fn two_targets_get_two_aliases() {
+        let (library, program) = library_and_program();
+        let elsewhere = Rc::new(Environment::with_heap(library.heap().clone()));
+        elsewhere.define("helper", n(3));
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("alias.{}", minted.get()))
+        };
+        let helper = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        let other = program.relink_alias(
+            Rc::clone(&library),
+            "other".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        // The same spelling in another environment is another target.
+        let elsewhere_helper = program.relink_alias(
+            Rc::clone(&elsewhere),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(minted.get(), 3);
+        assert_eq!(program.get(&helper), Some(n(1)));
+        assert_eq!(program.get(&other), Some(n(2)));
+        assert_eq!(program.get(&elsewhere_helper), Some(n(3)));
+    }
+
+    #[test]
+    fn two_identities_of_one_spelling_get_two_aliases() {
+        let (library, program) = library_and_program();
+        let a = ScopeSet::singleton(ScopeId::fresh());
+        let b = ScopeSet::singleton(ScopeId::fresh());
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("tmp.{}", minted.get()))
+        };
+        let by_name = program.relink_alias(
+            Rc::clone(&library),
+            "tmp".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        let at_a = program.relink_alias(
+            Rc::clone(&library),
+            "tmp".into(),
+            Some(a.clone()),
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        let at_b = program.relink_alias(
+            Rc::clone(&library),
+            "tmp".into(),
+            Some(b),
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(minted.get(), 3, "{by_name} {at_a} {at_b}");
+        assert_eq!(
+            program.relink_alias(
+                Rc::clone(&library),
+                "tmp".into(),
+                Some(a),
+                &ScopeSet::new(),
+                &mut mint
+            ),
+            at_a
+        );
+        assert_eq!(minted.get(), 3);
+    }
+
+    /// Two mentions of one target — a generated macro's own binder of a
+    /// spelling and the library's binding it was passed — each get an alias,
+    /// since the spelling is what tells the renamed mentions apart.
+    #[test]
+    fn two_mentions_of_one_target_get_two_aliases() {
+        let (library, program) = library_and_program();
+        let generated = ScopeSet::singleton(ScopeId::fresh());
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let as_written = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        let as_generated = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &generated,
+            &mut mint,
+        );
+        assert_ne!(as_written, as_generated);
+        assert_eq!(minted.get(), 2);
+        // Each mention keeps its own from then on, and both reach the helper.
+        assert_eq!(
+            program.relink_alias(
+                Rc::clone(&library),
+                "helper".into(),
+                None,
+                &generated,
+                &mut mint
+            ),
+            as_generated
+        );
+        assert_eq!(minted.get(), 2);
+        assert_eq!(program.get(&as_written), Some(n(1)));
+        assert_eq!(program.get(&as_generated), Some(n(1)));
+    }
+
+    #[test]
+    fn a_remembered_alias_that_was_defined_over_is_replaced() {
+        let (library, program) = library_and_program();
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("helper.{}", minted.get()))
+        };
+        let first = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        // `helper.1` is a legal identifier: the program binds it itself.
+        program.define(Rc::clone(&first), n(99));
+        let second = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_ne!(second, first);
+        assert_eq!(minted.get(), 2);
+        assert_eq!(program.get(&first), Some(n(99)));
+        assert_eq!(program.get(&second), Some(n(1)));
+        // And the replacement is the one remembered from then on.
+        assert_eq!(
+            program.relink_alias(
+                Rc::clone(&library),
+                "helper".into(),
+                None,
+                &ScopeSet::new(),
+                &mut mint
+            ),
+            second
+        );
+        assert_eq!(minted.get(), 2);
+    }
+
+    #[test]
+    fn a_frame_reuses_its_roots_alias_and_keeps_its_own_to_itself() {
+        let (library, program) = library_and_program();
+        let minted = Cell::new(0);
+        let mut mint = || {
+            minted.set(minted.get() + 1);
+            Rc::<str>::from(format!("alias.{}", minted.get()))
+        };
+        let rooted = program.relink_alias(
+            Rc::clone(&library),
+            "helper".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        let body = Rc::new(Environment::with_parent(Rc::clone(&program)));
+        let frame = Rc::new(Environment::with_parent(Rc::clone(&body)));
+        assert_eq!(
+            frame.relink_alias(
+                Rc::clone(&library),
+                "helper".into(),
+                None,
+                &ScopeSet::new(),
+                &mut mint
+            ),
+            rooted
+        );
+        assert_eq!(minted.get(), 1);
+        assert!(
+            frame.alias_target(&rooted).is_none(),
+            "the frame installs nothing"
+        );
+        assert_eq!(frame.get(&rooted), Some(n(1)));
+        // A target the root has not aliased is minted into the frame alone.
+        let own = frame.relink_alias(
+            Rc::clone(&library),
+            "other".into(),
+            None,
+            &ScopeSet::new(),
+            &mut mint,
+        );
+        assert_eq!(minted.get(), 2);
+        assert!(program.alias_target(&own).is_none());
+        assert_eq!(frame.get(&own), Some(n(2)));
     }
 }

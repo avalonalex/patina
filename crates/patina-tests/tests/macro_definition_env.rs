@@ -512,3 +512,135 @@ fn test_macro_reaches_its_library_after_a_collection() {
                      (list (m 4) (m 5))"#;
     assert_eq!(common::eval_program(program), "(20 25)");
 }
+
+// ─── One alias per target (#611) ────────────────────────────────────────────
+//
+// Relinking gives a template's reference to a private helper an alias in the
+// program. It used to mint one per expansion, which nothing removes, so each
+// top-level `guard` — whose helper `%guard-aux` is private — left three
+// aliases and their symbols behind. One target now has one alias
+// (`Environment::relink_alias`).
+
+/// A library whose macros name one exported helper and one private one.
+const PRIVATE_HELPER: &str = "(define-library (t m)
+  (export via-public public-helper via-private)
+  (import (scheme base))
+  (begin
+    (define (public-helper x) x)
+    (define (private-helper x) x)
+    (define-syntax via-public (syntax-rules () ((_ x) (public-helper x))))
+    (define-syntax via-private (syntax-rules () ((_ x) (private-helper x))))))
+";
+
+/// The interned symbols after `forms` (top-level forms, `n` times), on each
+/// backend.
+fn symbols_after(prelude: &str, form: &str, n: usize) -> [String; 2] {
+    let program = format!(
+        "{prelude}{}(cdr (assq 'symbols (gc-stats)))",
+        format!("{form}\n").repeat(n)
+    );
+    [
+        common::eval_program_vm(&program),
+        common::eval_program_tree_walker(&program),
+    ]
+}
+
+#[test]
+fn repeated_top_level_expansions_add_no_symbols() {
+    let prelude =
+        format!("{PRIVATE_HELPER}(import (scheme base) (scheme write) (patina debug) (t m))\n");
+    for form in [
+        "(guard (e (#t 0)) (raise 'x))",
+        "(guard (e ((string? e) 1) ((number? e) 2) (#t 0)) (raise 'x))",
+        "(via-private 1)",
+        "(via-public 1)",
+    ] {
+        assert_eq!(
+            symbols_after(&prelude, form, 1000),
+            symbols_after(&prelude, form, 3000),
+            "{form}: [VM, tree-walker] after 1,000 and 3,000 forms"
+        );
+    }
+}
+
+#[test]
+fn repeated_evals_of_a_guard_form_add_no_symbols() {
+    let prelude = "(import (scheme base) (scheme eval) (scheme repl) (patina debug))\n";
+    let symbols = |n: usize| {
+        symbols_after(
+            prelude,
+            &format!(
+                "(let loop ((i 0)) (when (< i {n}) \
+                 (eval '(guard (e (#t 0)) (raise 'x)) (interaction-environment)) \
+                 (loop (+ i 1))))"
+            ),
+            1,
+        )
+    };
+    assert_eq!(symbols(1000), symbols(3000), "[VM, tree-walker]");
+}
+
+/// An alias is an ordinary spelling, so a program can define over it. The
+/// next expansion must not reach that definition: it gets a new alias.
+fn defining_over_the_alias<B: patina_runtime::Backend>(
+    interp: patina_interpreter::Interpreter<B>,
+) -> (String, String) {
+    interp
+        .eval_program(&format!(
+            "{PRIVATE_HELPER}(import (scheme base) (t m)) (define first (via-private 1))"
+        ))
+        .unwrap();
+    let env = interp.global_env();
+    let spelling = (0..100_000)
+        .map(|k| format!("private-helper.{k}"))
+        .find(|spelling| env.get(spelling).is_some())
+        .expect("relinking aliased the private helper");
+    interp
+        .eval_program(&format!("(define ({spelling} x) 'mine)"))
+        .unwrap();
+    let second = interp.eval_str("(via-private 2)").unwrap();
+    let own = interp.eval_str(&format!("({spelling} 0)")).unwrap();
+    (interp.display_tagged(second), interp.display_tagged(own))
+}
+
+#[test]
+fn a_definition_over_an_alias_does_not_capture_the_next_expansion() {
+    assert_eq!(
+        defining_over_the_alias(common::vm_interpreter()),
+        ("2".to_string(), "mine".to_string()),
+        "VM"
+    );
+    assert_eq!(
+        defining_over_the_alias(common::tree_walker_interpreter()),
+        ("2".to_string(), "mine".to_string()),
+        "tree-walker"
+    );
+}
+
+/// One alias per target means two expansions of a macro share a spelling for
+/// its private name, so the spelling cannot keep them apart: here the outer
+/// expansion's `let` binds `helper` and the inner expansion, nested in its
+/// body, mentions the library's `helper` free. The renamed occurrences keep
+/// their scopes, which do keep them apart. chibi 0.12 and Gauche 0.9.15 both
+/// answer `(lib (lib 0))` and `(lib (lib (lib 0)))`, measured 2026-10-08;
+/// with the spelling alone, both backends answered `(lib (local 0))`.
+#[test]
+fn nested_expansions_sharing_an_alias_do_not_capture_each_other() {
+    let program = "(define-library (t n)
+  (export m)
+  (import (scheme base))
+  (begin
+    (define helper 'lib)
+    (define-syntax m
+      (syntax-rules ()
+        ((_ e) (list helper (let ((helper 'local)) e)))))))
+(import (scheme base) (t n))
+(list (m (m 0)) (m (m (m 0))))";
+    let expected = "((lib (lib 0)) (lib (lib (lib 0))))";
+    assert_eq!(common::eval_program_vm(program), expected, "VM");
+    assert_eq!(
+        common::eval_program_tree_walker(program),
+        expected,
+        "tree-walker"
+    );
+}

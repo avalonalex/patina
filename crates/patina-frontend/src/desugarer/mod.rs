@@ -1107,7 +1107,9 @@ impl<'a> Desugarer<'a> {
     /// defines the macro. The expansion carries only the bare name, so at the
     /// use site it compiles to a global load that is not there. Each such name
     /// gets a uniquely-named alias in the use site's global environment
-    /// pointing back at the definition environment.
+    /// pointing back at the definition environment: one per target, which
+    /// later expansions reuse (`Environment::relink_alias`, #611), where each
+    /// expansion used to mint its own and leave it behind.
     ///
     /// The definition binding wins whenever the two environments disagree
     /// (R7RS 4.3.2), so a use-site binding of the same name does not displace
@@ -1327,9 +1329,14 @@ impl<'a> Desugarer<'a> {
                     if self.env.scoped_binding_of(name, identity).ok().flatten()
                         != Some(scopes.clone())
                     {
-                        let alias = alias_name(name);
+                        let alias = target_env.relink_alias(
+                            home,
+                            name.clone(),
+                            Some(scopes),
+                            identity,
+                            || Rc::from(alias_name(name)),
+                        );
                         let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
-                        target_env.define_scoped_alias(alias, home, name.clone(), scopes);
                         made.push((identity.clone(), symbol));
                     }
                     continue;
@@ -1348,14 +1355,23 @@ impl<'a> Desugarer<'a> {
                     },
                     Err(_) => continue,
                 };
-                let alias = alias_name(name);
-                let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
-                match alias_to {
-                    None => target_env.define_alias(alias, def_env.clone(), name.clone()),
-                    Some((home, found)) => {
-                        target_env.define_alias_to_introduced(alias, home, name.clone(), found)
+                // One alias per target, however many expansions ask (#611):
+                // a remembered one is reused, and its symbol is already
+                // interned.
+                let mint = || Rc::from(alias_name(name));
+                let alias = match alias_to {
+                    None => {
+                        target_env.relink_alias(def_env.clone(), name.clone(), None, identity, mint)
                     }
-                }
+                    Some((home, found)) => target_env.relink_alias_to_introduced(
+                        home,
+                        name.clone(),
+                        found,
+                        identity,
+                        mint,
+                    ),
+                };
+                let symbol = shared_heap.borrow_mut().intern_symbol(&alias);
                 made.push((identity.clone(), symbol));
             }
             let aliases = match made.as_slice() {
@@ -1794,17 +1810,28 @@ impl<'a> Desugarer<'a> {
             return tv;
         };
         let mut heap = shared_heap.borrow_mut();
-        if let Some(source) = heap.source(tv).cloned() {
-            let name = Rc::from(
-                heap.get_symbol_or_identifier_name(alias)
-                    .expect("alias name"),
-            );
-            let copy = heap.alloc_identifier(name, ScopeSet::new());
+        // The renamed occurrence keeps the scopes it had. Each target has one
+        // alias however many expansions use it (#611), so the spelling no
+        // longer tells two expansions apart; their scopes do, as they do for
+        // any other identifier. Stripped, as they were while every expansion
+        // minted its own alias, one expansion's binder of a library's private
+        // name captured the same name free in another expansion nested inside
+        // it: `(m (m 0))` answered `(lib (local 0))` where chibi and Gauche
+        // answer `(lib (lib 0))` (`macro_definition_env.rs`).
+        let scopes = heap
+            .get_identifier_data(tv)
+            .map(|(_, scopes)| scopes.clone())
+            .unwrap_or_default();
+        let name = Rc::from(
+            heap.get_symbol_or_identifier_name(alias)
+                .expect("alias name"),
+        );
+        let source = heap.source(tv).cloned();
+        let copy = heap.alloc_identifier(name, scopes);
+        if let Some(source) = source {
             heap.record_source(copy, source);
-            copy
-        } else {
-            alias
         }
+        copy
     }
 
     /// [`Self::rewrite_refs`] for a vector.
