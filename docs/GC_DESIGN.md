@@ -727,7 +727,13 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   GC_PRD's footprint is the last two together. Two keys report descriptor
   pressure (#607): `descriptors-since-gc`, the file ports opened since the
   last collection and not closed since, and `descriptor-collections`, the
-  collections it has posted.
+  collections it has posted. Each limit sits beside its use (#663):
+  `allocs-trigger` after `allocs-since-gc`, `bytes-trigger` (max(8 MiB,
+  2 × L)) after `bytes-since-gc`, `descriptors-trigger` (min(128,
+  `RLIMIT_NOFILE` / 4)) after `descriptors-since-gc`, and `descriptor-limit`
+  (the soft `RLIMIT_NOFILE`) after `open-file-ports`, the file ports open
+  now. A trigger the GC mode does not use reads `#f`. `minors` and `majors`
+  count collections by kind: every one is a major until a nursery.
   For a tree-walker closure, the first four count the estimate of the frame
   it captures (#637, above) as part of its payload: an estimate, not a
   measurement, counted once per closure, so a frame several closures share

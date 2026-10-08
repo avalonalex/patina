@@ -169,3 +169,75 @@ fn garbage_tree_walker_closures_collect_by_what_they_capture() {
     assert!(r.reclaimed > r.allocated * 9 / 10, "{r:?}");
     assert!(r.committed < 4 * FLOOR, "{r:?}");
 }
+
+/// Each trigger beside its count (#663), right after a collection, in each
+/// GC mode. The default counts bytes and collects again after max(8 MiB,
+/// 2 × `live-bytes`): the floor with a small heap, twice L with a kept
+/// vector of 2 M elements. `PATINA_GC_STRESS=N` counts allocations, and
+/// `PATINA_GC=0` neither; a trigger the mode does not use reads `#f`. Every
+/// collection is a major.
+#[test]
+fn each_trigger_shows_beside_its_count() {
+    const KEYS: &str = "(write (map (lambda (key) (cdr (assq key (gc-stats))))
+            '(live-bytes bytes-since-gc bytes-trigger allocs-since-gc allocs-trigger
+              collections minors majors)))
+(newline)
+";
+    let modes: [(&str, &[(&str, &str)]); 3] = [
+        ("default", &[]),
+        ("stress", &[("PATINA_GC_STRESS", "4096")]),
+        ("off", &[("PATINA_GC", "0")]),
+    ];
+    for backend in BOTH_BACKENDS {
+        for (mode, envs) in modes {
+            for kept in ["", "(define kept (make-vector 2000000 0))"] {
+                let dir = TempDir::new().unwrap();
+                let program = format!(
+                    "(import (scheme base) (scheme write) (patina debug))\n{kept}\n(gc)\n{KEYS}"
+                );
+                std::fs::write(dir.path().join("program.scm"), &program).unwrap();
+                let mut args = backend.to_vec();
+                args.push("program.scm");
+                let output = patina_command(dir.path(), &args, &[])
+                    .env_remove("PATINA_GC")
+                    .env_remove("PATINA_GC_STRESS")
+                    .env_remove("PATINA_GC_ZEAL")
+                    .envs(envs.iter().copied())
+                    .output()
+                    .expect("spawn patina");
+                let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                assert!(output.status.success(), "{backend:?} {mode}: {stdout}");
+                let values: Vec<&str> = stdout
+                    .trim()
+                    .trim_matches(|c| c == '(' || c == ')')
+                    .split_whitespace()
+                    .collect();
+                let count = |i: usize| -> u64 {
+                    values[i]
+                        .parse()
+                        .unwrap_or_else(|_| panic!("{backend:?} {mode}: {stdout}"))
+                };
+                let (live, since, bytes_trigger, allocs, allocs_trigger) =
+                    (count(0), count(1), values[2], count(3), values[4]);
+                let (collections, minors, majors) = (count(5), count(6), count(7));
+                let context = format!("{backend:?} {mode} {kept:?}: {stdout}");
+                match mode {
+                    "default" => {
+                        assert_eq!(bytes_trigger, FLOOR.max(2 * live).to_string(), "{context}");
+                        assert!(since < FLOOR.max(2 * live), "{context}");
+                        assert_eq!(allocs_trigger, "#f", "{context}");
+                    }
+                    "stress" => {
+                        assert_eq!((bytes_trigger, allocs_trigger), ("#f", "4096"), "{context}");
+                        assert!(allocs < 4096, "{context}");
+                    }
+                    _ => assert_eq!((bytes_trigger, allocs_trigger), ("#f", "#f"), "{context}"),
+                }
+                if !kept.is_empty() {
+                    assert!(2 * live > FLOOR, "{context}: the kept vector should lift L");
+                }
+                assert_eq!((minors, majors), (0, collections), "{context}");
+            }
+        }
+    }
+}

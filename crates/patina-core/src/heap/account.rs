@@ -151,9 +151,10 @@ pub fn descriptor_pressure_threshold() -> usize {
 }
 
 /// The soft `RLIMIT_NOFILE`, or `None` where it is unlimited or cannot be
-/// read.
+/// read. Read at each call; [`descriptor_pressure_threshold`] keeps the
+/// value it read first.
 #[cfg(unix)]
-fn descriptor_limit() -> Option<usize> {
+pub fn descriptor_limit() -> Option<usize> {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -169,7 +170,7 @@ fn descriptor_limit() -> Option<usize> {
 
 /// No descriptor limit to read.
 #[cfg(not(unix))]
-fn descriptor_limit() -> Option<usize> {
+pub fn descriptor_limit() -> Option<usize> {
     None
 }
 
@@ -401,6 +402,7 @@ impl ByteAccount {
                 threshold: Cell::new(usize::MAX),
                 pending,
                 descriptors: Cell::new(0),
+                open_file_ports: Cell::new(0),
                 cycle: Cell::new(0),
                 posted: Cell::new(None),
                 open_window: Cell::new(None),
@@ -439,6 +441,10 @@ pub(super) struct SharedCounts {
     /// a port closes by dropping, often inside a sweep, and its
     /// [`FilePortCharge`] takes itself off with no heap borrow.
     pub(super) descriptors: Cell<usize>,
+    /// The file ports open now, opened in any cycle: the use of the
+    /// descriptor limit, `RLIMIT_NOFILE`, as far as the heap's ports go.
+    /// Here for the reason `descriptors` is.
+    pub(super) open_file_ports: Cell<usize>,
     /// Collections so far, as the sweep counts them when it resets
     /// `descriptors`: a [`FilePortCharge`] records the cycle it was made in,
     /// so that closing a port an earlier collection found live does not take
@@ -533,6 +539,9 @@ impl Drop for FilePortCharge {
     fn drop(&mut self) {
         let counts = &self.counts;
         counts.release_external(FILE_PORT_BYTES);
+        counts
+            .open_file_ports
+            .set(counts.open_file_ports.get().saturating_sub(1));
         // A port an earlier collection found live was counted toward that
         // one, and is not among the ones opened since.
         if counts.cycle.get() == self.cycle {
@@ -711,6 +720,9 @@ impl Heap {
         counts.charge_external(FILE_PORT_BYTES);
         let open = counts.descriptors.get().saturating_add(1);
         counts.descriptors.set(open);
+        counts
+            .open_file_ports
+            .set(counts.open_file_ports.get().saturating_add(1));
         if open >= self.gc_threshold.descriptors && !self.gc_pending.get() {
             counts.raise_pending();
             self.descriptor_collections += 1;
@@ -725,6 +737,12 @@ impl Heap {
     /// what descriptor pressure compares with [`GcThreshold::descriptors`].
     pub fn descriptors_since_gc(&self) -> usize {
         self.account.shared.descriptors.get()
+    }
+
+    /// File ports open now, whenever they opened: the use of the descriptor
+    /// limit ([`descriptor_limit`]), as far as the heap's own ports go.
+    pub fn open_file_ports(&self) -> usize {
+        self.account.shared.open_file_ports.get()
     }
 
     /// Collections that descriptor pressure posted: each time the file ports
