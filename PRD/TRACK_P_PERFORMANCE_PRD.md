@@ -492,7 +492,13 @@ fusion peephole is a P5 candidate.
 
 **Trail: primitive redefinition semantics (future work).** The deopt bitset
 (#158) gives exact R7RS top-level redefinition semantics at the cost of one
-load+mask per optimized call. If that check ever needs to go away — or
+load+mask per optimized call. *(2026-10-07, #603: "exact R7RS semantics"
+overstates it. R7RS §5.2 makes redefining an imported binding an error in a
+program, and chibi, Chez and, for what it inlines, Gauche keep the old binding
+in code compiled before the change. Patina's answer is one the standard
+permits, recorded as `latitude` against both oracles in
+`crates/patina-tests/tests/scheme/DIVERGENCES.tsv`, rows for
+`stdlib/rebinding.scm` and `stdlib/library-bindings.scm`.)* If that check ever needs to go away — or
 redefinition needs different semantics — the design space, roughly in
 ascending effort:
 1. **Immutable library bindings (R6RS-style):** bindings imported from

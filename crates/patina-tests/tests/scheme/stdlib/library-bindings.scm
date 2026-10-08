@@ -18,7 +18,9 @@
 ;; `define-library` in a script; `expansion/template-references.scm` has the
 ;; measurement — and is registered `*` / `incomplete` in `DIVERGENCES.tsv`.
 ;; Gauche runs it. The same programs were measured against chibi with the
-;; libraries as files (2026-09-19), and chibi and Gauche agree on every row.
+;; libraries as files (2026-09-19), and chibi and Gauche agree on every row but
+;; those of the last section, which is about rebinding an imported name and
+;; where neither answers as Patina does on every row (#603).
 ;;
 ;; Each row resets the counter it reads, so rows do not depend on their order.
 
@@ -66,6 +68,33 @@
     (define (add! n) (set! total (+ total n)))
     (define (read-total) total)))
 
+;; One library for each row of the last section, "A program rebinds an imported
+;; name" (#603), so that the program's definitions there reach nothing else.
+(define-library (lb defined-later)
+  (export pending)
+  (import (scheme base))
+  (begin (define pending 0)))
+
+(define-library (lb defined-over)
+  (export overridden bump-overridden! get-overridden)
+  (import (scheme base))
+  (begin
+    (define overridden 0)
+    (define (bump-overridden!) (set! overridden (+ overridden 1)))
+    (define (get-overridden) overridden)))
+
+(define-library (lb imported-late)
+  (export late-value)
+  (import (scheme base))
+  (begin (define (late-value) 'late)))
+
+(define-library (lb imported-over)
+  (export imported-over bump-imported-over!)
+  (import (scheme base))
+  (begin
+    (define imported-over 0)
+    (define (bump-imported-over!) (set! imported-over (+ imported-over 1)))))
+
 ;; Every kind of import set, because each is resolved by its own code: a
 ;; plain one installs from the library, and the other four pass the bindings
 ;; through a scratch environment first, where a binding could be flattened
@@ -79,7 +108,9 @@
                 except:)
         (lb relay)
         (lb primitive)
-        (lb shadowed))
+        (lb shadowed)
+        (lb defined-later)
+        (lb defined-over))
 
 (test-begin "library-bindings")
 
@@ -205,5 +236,52 @@
   '(99 7)
   (begin (add! 7)
          (list total (read-total))))
+
+;; ─── A program rebinds an imported name ─────────────────────────────────────
+;;
+;; R7RS §5.2 makes it an error in a program to redefine an imported binding,
+;; to import one identifier with two different bindings, or to refer to an
+;; identifier before it is imported, and asks a REPL to permit all three. So
+;; these rows are `latitude` wherever an oracle answers otherwise (#603). They
+;; assert Patina's answer today: a compiled reference follows whatever the name
+;; is bound to when it runs. Gauche resolves a reference the first time it
+;; runs and keeps what it found; chibi binds it when it is compiled (its
+;; answers are in the register's `*` note). `stdlib/rebinding.scm` has the
+;; shapes that need no library.
+
+;; Never run before the program defines the name, so Gauche follows too.
+(define (read-pending) pending)
+(define pending 100)
+(test-equal "a reference first run after the program defines the name follows it"
+  100
+  (read-pending))
+
+;; Run before the program defines the name, and after.
+(define (read-overridden) overridden)
+(bump-overridden!)
+(define overridden-before
+  (list (read-overridden) overridden (get-overridden)))
+(define overridden 100)
+(bump-overridden!)
+(test-equal "a reference run before the program defines the name follows the definition"
+  '((1 1 1) (100 100 2))
+  (list overridden-before
+        (list (read-overridden) overridden (get-overridden))))
+
+;; Compiled before the name exists in the program at all.
+(define (call-late) (late-value))
+(import (lb imported-late))
+(test-equal "a reference compiled before its name is imported follows the import"
+  'late
+  (call-late))
+
+;; The program defines the name first, and an import replaces it.
+(define imported-over 'mine)
+(define (read-imported-over) imported-over)
+(import (lb imported-over))
+(bump-imported-over!)
+(test-equal "an import over the program's definition replaces it for compiled code"
+  '(1 1)
+  (list (read-imported-over) imported-over))
 
 (test-end)
