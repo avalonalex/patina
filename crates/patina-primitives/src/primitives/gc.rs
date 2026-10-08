@@ -60,6 +60,26 @@
 //!   collection pending already. Never under `PATINA_GC=0`. An open that
 //!   ran out of descriptors and collected at its call is not counted here:
 //!   that collection is in `collections`, or in `deferred-collections`.
+//!
+//! Each limit beside its use (#663, GC_PRD §15). Each pair is a count and
+//! the value at which it acts. A trigger the GC mode does not use reads
+//! `#f`: `PATINA_GC=0` uses none, the default counts no allocations, and
+//! `PATINA_GC_STRESS` and zeal count no bytes.
+//!
+//! - `allocs-since-gc` and `allocs-trigger`: allocations since the last
+//!   collection, and the count that posts one (`PATINA_GC_STRESS=N`'s N,
+//!   zeal's 0).
+//! - `bytes-since-gc` and `bytes-trigger`: bytes charged since the last
+//!   collection, and the count that posts one, `max(8 MiB, 2 × live-bytes)`
+//!   as the last collection set it.
+//! - `descriptors-since-gc` and `descriptors-trigger`: descriptor pressure's
+//!   count, above, and its threshold, `min(128, RLIMIT_NOFILE / 4)`.
+//! - `open-file-ports` and `descriptor-limit`: the file ports open now,
+//!   whenever they opened, and the soft `RLIMIT_NOFILE` they count against,
+//!   or `#f` where it is unlimited or cannot be read.
+//! - `minors` and `majors`: collections by kind. Every collection is a major
+//!   until a nursery comes (GC_PRD stage 7), so `minors` is 0 and `majors` is
+//!   `collections`.
 
 use crate::apply_context::ApplyContext;
 use crate::registry::PrimitiveFn;
@@ -117,40 +137,62 @@ fn gc_done(
 fn gc_stats(heap: &SharedHeap, _args: &[TaggedValue]) -> Result<TaggedValue, EvalError> {
     let mut h = heap.borrow_mut();
     let stats = h.stats();
+    let n = |count: usize| TaggedValue::fixnum(count as i64);
+    // A limit the GC mode does not use is installed as `usize::MAX`.
+    let limit = |at: usize| {
+        if at == usize::MAX {
+            TaggedValue::FALSE
+        } else {
+            n(at)
+        }
+    };
+    let threshold = h.gc_threshold();
     let entries = [
-        ("pairs", stats.pairs),
-        ("vectors", stats.vectors),
-        ("strings", stats.strings),
-        ("objects", stats.objects),
-        ("symbols", stats.symbols),
-        ("free-pairs", stats.free_pairs),
-        ("free-vectors", stats.free_vectors),
-        ("free-strings", stats.free_strings),
-        ("free-objects", stats.free_objects),
-        ("allocs-since-gc", stats.allocs_since_gc),
-        ("collections", stats.gc_collections as usize),
+        ("pairs", n(stats.pairs)),
+        ("vectors", n(stats.vectors)),
+        ("strings", n(stats.strings)),
+        ("objects", n(stats.objects)),
+        ("symbols", n(stats.symbols)),
+        ("free-pairs", n(stats.free_pairs)),
+        ("free-vectors", n(stats.free_vectors)),
+        ("free-strings", n(stats.free_strings)),
+        ("free-objects", n(stats.free_objects)),
+        ("allocs-since-gc", n(stats.allocs_since_gc)),
+        ("allocs-trigger", limit(threshold.allocations)),
+        ("collections", n(stats.gc_collections as usize)),
+        // Every collection is a major until a nursery (GC_PRD stage 7).
+        ("minors", n(0)),
+        ("majors", n(stats.gc_collections as usize)),
         (
             "deferred-collections",
-            stats.gc_deferred_collections as usize,
+            n(stats.gc_deferred_collections as usize),
         ),
-        ("descriptors-since-gc", stats.descriptors_since_gc),
+        ("descriptors-since-gc", n(stats.descriptors_since_gc)),
+        ("descriptors-trigger", limit(threshold.descriptors)),
         (
             "descriptor-collections",
-            stats.descriptor_collections as usize,
+            n(stats.descriptor_collections as usize),
         ),
-        ("last-swept", stats.gc_last_swept),
-        ("live-bytes", stats.live_bytes),
-        ("bytes-allocated", stats.bytes_allocated as usize),
-        ("bytes-reclaimed", stats.bytes_reclaimed as usize),
-        ("committed-bytes", stats.committed_bytes),
-        ("external-bytes", stats.external_bytes),
+        ("last-swept", n(stats.gc_last_swept)),
+        ("live-bytes", n(stats.live_bytes)),
+        ("bytes-since-gc", n(h.bytes_since_gc())),
+        ("bytes-trigger", limit(threshold.bytes)),
+        ("bytes-allocated", n(stats.bytes_allocated as usize)),
+        ("bytes-reclaimed", n(stats.bytes_reclaimed as usize)),
+        ("committed-bytes", n(stats.committed_bytes)),
+        ("external-bytes", n(stats.external_bytes)),
+        ("open-file-ports", n(h.open_file_ports())),
+        (
+            "descriptor-limit",
+            patina_core::heap::descriptor_limit().map_or(TaggedValue::FALSE, n),
+        ),
     ];
 
     let mut alist: Vec<TaggedValue> = entries
         .iter()
-        .map(|(name, count)| {
+        .map(|&(name, value)| {
             let key = h.intern_symbol(name);
-            h.alloc_pair(key, TaggedValue::fixnum(*count as i64))
+            h.alloc_pair(key, value)
         })
         .collect();
 

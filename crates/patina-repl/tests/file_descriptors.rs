@@ -246,6 +246,42 @@ fn a_close_gives_back_what_the_open_charged() {
     }
 }
 
+/// Each descriptor limit beside what counts against it (#663). Under
+/// `ulimit -n 200`, descriptor pressure's threshold is min(128, 200 / 4) =
+/// 50, and `#f` under `PATINA_GC=0`, which counts nothing. `open-file-ports`
+/// counts the ports open now, whenever they opened: a collection starts
+/// `descriptors-since-gc` again and leaves it alone, and a close takes one
+/// off.
+#[test]
+fn each_descriptor_limit_shows_beside_its_use() {
+    const PROGRAM: &str = "(import (scheme base) (scheme file) (scheme write) (patina debug))
+(define (stat key) (cdr (assq key (gc-stats))))
+(define (measure)
+  (let* ((p (open-input-file \"data.txt\"))
+         (q (open-input-file \"data.txt\"))
+         (opened (list (stat 'open-file-ports) (stat 'descriptors-since-gc))))
+    (gc)
+    (let ((collected (list (stat 'open-file-ports) (stat 'descriptors-since-gc))))
+      (close-port p)
+      (let ((closed (stat 'open-file-ports)))
+        (close-port q)
+        (list opened collected closed (stat 'open-file-ports)
+              (stat 'descriptors-trigger) (stat 'descriptor-limit))))))
+(write (measure))
+(newline)
+";
+    for backend in BOTH_BACKENDS {
+        for (mode, envs) in MODES {
+            let trigger = if mode == "default" { "50" } else { "#f" };
+            assert_eq!(
+                run(backend, 200, envs, PROGRAM, &[]),
+                format!("((2 2) (2 0) 1 0 {trigger} 200)"),
+                "{backend:?} {mode}"
+            );
+        }
+    }
+}
+
 /// F2 of GC_PRD §9.6: a collection that finds a file port dead writes out
 /// what was left in its buffer and closes it. Before the collection the
 /// file is empty, after it it holds the output, both for the collection
