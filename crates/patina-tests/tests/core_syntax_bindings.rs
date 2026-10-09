@@ -55,6 +55,56 @@ fn test_define_syntax_also_shadows_a_syntactic_keyword() {
     );
 }
 
+/// `define-library` and `library` are not keywords: no library binds them, and
+/// a top-level form headed by either defines a library only while the name is
+/// unbound. Bound to a procedure, a macro or an import, the form is a call or
+/// a use, as chibi 0.12 and Gauche 0.9.15 answer every row here (#610). The
+/// backends used to send the form to the library loader by its spelling, which
+/// then refused it as a malformed library.
+#[test]
+fn a_top_level_form_headed_by_a_bound_library_keyword_is_not_a_library() {
+    for name in ["define-library", "library"] {
+        assert_program_eval_to(
+            &format!(
+                "(import (scheme base))
+                 (define ({name} . args) (list 'called args))
+                 ({name} 1 2)"
+            ),
+            "(called (1 2))",
+        );
+    }
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define-syntax define-library
+           (syntax-rules () ((_ x ...) (list 'expanded x ...))))
+         (define-library 1 2)",
+        "(expanded 1 2)",
+    );
+    assert_program_eval_to(
+        "(import (scheme base) (rename (only (scheme base) list) (list define-library)))
+         (define-library 1 2)",
+        "(1 2)",
+    );
+}
+
+/// The other half: unbound where the form is evaluated, the name defines a
+/// library, even after a program bound it in a body, where the binding does
+/// not reach the top level.
+#[test]
+fn a_top_level_form_headed_by_an_unbound_library_keyword_is_a_library() {
+    assert_program_eval_to(
+        "(import (scheme base))
+         (define (f) (define (define-library . args) args) (define-library 'inner))
+         (define-library (test unbound-keyword)
+           (export x)
+           (import (scheme base))
+           (begin (define x 'loaded)))
+         (import (test unbound-keyword))
+         (list x (f))",
+        "(loaded (inner))",
+    );
+}
+
 // #463: a begin is expanded before it executes, but definitions must already
 // affect subsequent expansion. Fresh programs keep these top-level keyword
 // redefinitions from poisoning unrelated Scheme suite rows. Chibi 0.12 and

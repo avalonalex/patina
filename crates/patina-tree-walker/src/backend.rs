@@ -120,7 +120,7 @@ impl TreeWalker {
 
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
-        if patina_frontend::is_define_library_form(expr, internal_heap) {
+        if patina_frontend::is_define_library_form(expr, env) {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds the `define-library` datum, not read after the call: the library's \

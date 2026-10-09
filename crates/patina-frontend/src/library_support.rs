@@ -7,13 +7,14 @@
 //! import resolution and evaluation, eliminating the need for circular references.
 
 use crate::{BodyElement, LibraryDefinition, ParseError};
-use patina_core::{FileSystem, SharedHeap, TaggedValue};
+use patina_core::{Environment, FileSystem, ScopeSet, SharedHeap, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
 use patina_runtime::library_registry::{LibraryError, find_library_file_in};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// Result of parsing a single library declaration.
@@ -51,23 +52,46 @@ impl SchemeLibraryLoader {
     }
 }
 
-/// Is this datum a `(define-library ...)` or R6RS `(library ...)` form?
+/// Is `tv`, a top-level form to be evaluated in `env`, an inline
+/// `(define-library ...)` or R6RS `(library ...)`?
 ///
 /// Used by the backends to route a top-level inline library definition (in a
 /// script or the REPL) to the library loader instead of the desugarer.
 ///
-/// `library` is not a procedure or syntactic keyword anywhere in Patina, so a
-/// form in this position with that head can only be an R6RS library.
-pub fn is_define_library_form(tv: TaggedValue, heap: &SharedHeap) -> bool {
-    if !tv.is_pair() {
-        return false;
-    }
-    let h = heap.borrow();
-    let head = h.car(tv);
+/// Decided by what the head is bound to, never by its spelling alone (#610).
+/// No library binds either name, so the form defines a library only while its
+/// head has no binding in `env`. A program that defines, imports or
+/// `define-syntax`es either name has the form called or expanded instead, as
+/// chibi and Gauche do and as Patina did everywhere but the top level, where
+/// the spelling claimed it first. Whether an R6RS library may be read is the
+/// loader's to say.
+pub fn is_define_library_form(tv: TaggedValue, env: &Environment) -> bool {
     matches!(
-        h.get_symbol_or_identifier_name(head),
-        Some("define-library") | Some("library")
+        top_level_head(tv, env),
+        Some((name, None)) if matches!(&*name, "define-library" | "library")
     )
+}
+
+/// The name at the head of the top-level form `tv`, and what it is bound to
+/// in `env`, `None` for nothing.
+///
+/// This is the one place a backend asks what a top-level form's head means
+/// before the desugarer does. The next form to be handled outside the
+/// desugarer, a bare `import` (`PRD/GC_PRD.md` §11.3), is recognized here by
+/// the same rule. A head that is not a name, or whose reference the set-of-
+/// scopes rule leaves ambiguous, answers `None`, so the form goes to the
+/// desugarer, which reports the ambiguity.
+fn top_level_head(tv: TaggedValue, env: &Environment) -> Option<(Rc<str>, Option<TaggedValue>)> {
+    let (name, scopes) = {
+        let heap = env.heap().borrow();
+        let (head, _) = heap.try_pair(tv)?;
+        match heap.get_symbol_name(head) {
+            Some(name) => (Rc::from(name), ScopeSet::new()),
+            None => heap.get_identifier_data_any(head)?,
+        }
+    };
+    let binding = env.get_with_scopes(&name, &scopes).ok()?;
+    Some((name, binding))
 }
 
 /// Error label for a `define-library` form that has no backing file.
