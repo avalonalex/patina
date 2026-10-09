@@ -1837,11 +1837,14 @@ the current corpus's import-only coverage gap; it does not assert complete
 conformance or remove the existing FFI/licence/upstream exclusions.
 
 CI runs all active smoke drivers on both backends, using the release build
-from the R7RS compliance job. The same gates can be run locally:
+from the R7RS compliance job. The tree-walker gets twice the default
+per-package budget of 30 s (`--timeout 60`): `chibi-char-set-boundary` takes
+about 29 s of it on `ubuntu-latest`, and timed out at 30 s once (#672). The
+same gates can be run locally:
 
 ```bash
 ./target/release/patina-compat check-smoke
-./target/release/patina-compat check-smoke --tree-walker
+./target/release/patina-compat check-smoke --tree-walker --timeout 60
 ```
 
 `check-smoke` discovers its selection from the manifest, keeps the full
