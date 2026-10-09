@@ -28,6 +28,9 @@
 //! others. The guard test at the bottom makes adding an entry (or a
 //! recorded reason not to) a condition of bundling a library at all.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::repo_root;

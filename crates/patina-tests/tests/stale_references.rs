@@ -17,6 +17,9 @@
 //! one with this crate's `gc-check` feature, which the release GC lane
 //! enables. A build without the checks reports them ignored.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::{tree_walker_interpreter, vm_interpreter};

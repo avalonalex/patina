@@ -97,10 +97,14 @@ jobs:
         ./target/release/patina-compat check-smoke
         --results "$RUNNER_TEMP/compat-smoke-vm.scm"
         --report "$RUNNER_TEMP/compat-smoke-vm.txt"
+    # Twice the default per-package budget of 30 s: chibi-char-set-boundary
+    # takes about 29 s of it on the tree-walker here (10.7 s on an M4 Pro), so
+    # the step ran 29-30 s in four of main's last six runs before 2026-10-09,
+    # and the package timed out once (#672).
     - name: Check corpus smoke drivers, tree-walker backend
       if: ${{ !cancelled() }}
       run: >-
-        ./target/release/patina-compat check-smoke --tree-walker
+        ./target/release/patina-compat check-smoke --tree-walker --timeout 60
         --results "$RUNNER_TEMP/compat-smoke-tree-walker.scm"
         --report "$RUNNER_TEMP/compat-smoke-tree-walker.txt"
     # The steady-state lane's per-PR rows (#652, docs/TEST_ORGANIZATION.md,

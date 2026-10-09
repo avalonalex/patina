@@ -3,6 +3,9 @@
 //! These tests verify that Scheme file I/O primitives work correctly,
 //! exercising the VFS plumbing end-to-end via the interpreter (NativeFs).
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::assert_program_eval_to;

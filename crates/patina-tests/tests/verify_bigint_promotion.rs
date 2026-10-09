@@ -7,6 +7,9 @@
 //! which means numbers larger than FIXNUM_MAX (~10^18) are automatically
 //! promoted to BigInt even before arithmetic operations.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_core::TaggedValue;
 use patina_interpreter::TreeWalkInterpreter;
 

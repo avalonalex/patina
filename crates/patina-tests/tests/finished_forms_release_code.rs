@@ -21,6 +21,9 @@
 //! no-collection reference, included — so what these test does not depend on
 //! the environment the suite is run in.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::vm_interpreter;

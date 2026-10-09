@@ -1,5 +1,8 @@
 //! Tests for (scheme base) library
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::TreeWalkInterpreter;
 use patina_tree_walker::Evaluator;
 

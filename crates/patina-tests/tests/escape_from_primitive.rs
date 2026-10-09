@@ -60,6 +60,9 @@
 //! which Gauche's does not; the `eval` escape, for the same reason; and the
 //! port-open test, for the files.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::{assert_program_eval_to, scratch_path};
 use tempfile::TempDir;

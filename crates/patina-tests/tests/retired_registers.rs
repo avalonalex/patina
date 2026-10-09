@@ -35,6 +35,9 @@
 //! operand control's `car` raises a type error, and the argument controls
 //! quietly answer with an unspecified value in the list.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::vm_interpreter;

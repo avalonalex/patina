@@ -3,6 +3,9 @@
 //! These run against `VmBackend` explicitly rather than the both-backends
 //! common helpers: the deopt behavior under test only exists in the VM.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::eval_program_vm as eval;
 

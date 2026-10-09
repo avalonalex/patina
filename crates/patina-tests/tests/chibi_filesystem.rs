@@ -12,6 +12,9 @@
 //! that is the point of routing the primitives through the VFS trait, and a
 //! test that touched real directories would prove the opposite.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::*;
 

@@ -2,6 +2,9 @@
 //!
 //! These tests verify the public API provided by the main `patina` crate
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::{Interpreter, TaggedValue, TreeWalkInterpreter};
 use patina_runtime::Backend;
 use patina_vm::VmBackend;

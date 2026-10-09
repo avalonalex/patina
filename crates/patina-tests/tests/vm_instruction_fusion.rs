@@ -4,6 +4,9 @@
 //! exist in the VM — and pin the R7RS redefinition semantics the deopt
 //! paths must preserve.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::eval_program_vm as eval;
 

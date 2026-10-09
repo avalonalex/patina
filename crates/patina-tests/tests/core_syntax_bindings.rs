@@ -19,6 +19,9 @@
 //! imports at the top level, none of which a shared suite file can do without
 //! changing every row after it.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::{assert_program_eval_error, assert_program_eval_to};
 

@@ -263,7 +263,8 @@ memory between collections. No `TaggedValue` or `HeapObjectData` change.
 The visitor also roots the intern table at construction (a dangling
 `symbol_table` index would break *any* collector — heap invariant, not
 policy), marking symbols without a worklist round-trip since they are leaves
-by construction.
+by construction. It visits the hosts' handles there too (§5.3), on the same
+terms; their values can be anything, so they take the worklist.
 
 ### 4.3 Trace rules
 
@@ -450,6 +451,7 @@ debug build is the lane that localizes failures like this one.
 | `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
+| `Heap.handles` | `heap/handles.rs` | The values hosts keep across evaluations, each rooted until its `Owned` handle is dropped (#605): what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | `CompiledMacro` literals and environments | `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: pattern and template literals, `definition_env`, and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
@@ -1061,12 +1063,15 @@ that is safe:
   tree-walker's detached `ApplyContext for Evaluator`, which an embedder
   reaches through `Interpreter::evaluator()` with no loop above it, defers
   the same calls with a holder's guard in each of its methods, and so covers
-  `run_synchronously`, which only it and an embedder's own context reach.
+  `run_synchronously`, which only it and an embedder's own context reach;
+- a handle roots it (§5.3): `Interpreter::run_forms` holds the last form's
+  value in one across the next form.
 
-One site is none of these, and its reason says so: `Interpreter::run_forms`
-holds the last form's value unrooted across the next form, returning it stale
-whenever every later form fails, on any continue-on-error entry (#605's
-shape). Two others were closed when this list was drawn up: the detached
+Three sites were none of these, and all three are closed.
+`Interpreter::run_forms` held the last form's value unrooted across the next
+form, returning it stale whenever every later form failed, on any
+continue-on-error entry, until it held it by a handle (#605). Two others were
+closed when this list was drawn up: the detached
 context ran an outermost trampoline beneath a primitive's Rust frame, which
 collected what the primitive held (`gc_tree_walker.rs` has the case), and the
 tree-walker's `-extras.scm` step ran a Rust-defined library's extras file,
@@ -1165,8 +1170,10 @@ tombstoned, so every environment payload drops, the environments let go of
 the heap, and the heap is freed with its owner's last handle; each port
 flushes and closes as it drops. The interned symbols and core forms go with
 their slots. Values do not outlive their interpreter: one kept past it names
-a freed slot, which a check build refuses as a use after free (§4.5).
-`heap_teardown.rs` holds both backends to it, and
+a freed slot, which a check build refuses as a use after free (§4.5). The
+hosts' handles go with their table, which teardown drops: a handle kept past
+its interpreter holds a dead reference, which the heap refuses to read, and
+dropping it does nothing (#605). `heap_teardown.rs` holds both backends to it, and
 `teardown_frees_every_slot_and_the_heap_with_them` the sweep's part.
 
 The heap's `cond-expand` library-availability service is metadata outside the
@@ -1494,7 +1501,7 @@ visitor exists, and the stress lane is the real safety net.
    ephemeron holding a continuation, which that suite never builds, and
    #605 and #620 are reachable only through the embedding API. So two more
    lanes run under stress in a check build. Per pull request,
-   `scripts/run_gc_stress_tests.sh` runs thirteen `cargo test` targets that
+   `scripts/run_gc_stress_tests.sh` runs fourteen `cargo test` targets that
    drive the collector, control flow and library loading from Rust at
    `PATINA_GC_STRESS=16`, and `scheme_suite.rs` at 4096 (one of its files,
    `srfi/regex-graphemes.scm`, kept it from finishing at 16), in the Test

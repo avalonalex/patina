@@ -3,6 +3,9 @@
 //! These tests run Scheme code through both Patina and chibi-scheme
 //! to ensure R7RS compliance by comparing outputs.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::{TaggedValue, TreeWalkInterpreter};
 use std::path::Path;
 use std::process::Command;

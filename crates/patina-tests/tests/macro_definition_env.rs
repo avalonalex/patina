@@ -26,6 +26,9 @@
 //! Found via `(chibi test)`, whose `test` macro expands into an internal
 //! `test-vars` macro — the most-depended library in the ecosystem.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use patina_tree_walker::Evaluator;

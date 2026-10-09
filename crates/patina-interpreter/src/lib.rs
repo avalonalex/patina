@@ -22,16 +22,22 @@
 //! let interp = VmInterpreter::new_vm();
 //! # // rustdoc runs in a temporary directory, outside the installed layout.
 //! # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
-//! let result = interp.eval_program("(import (scheme base)) (define x 40) (list (+ x 2))").unwrap();
-//! assert_eq!(interp.display_tagged(result), "(42)");
+//! let result = interp.eval_program_owned("(import (scheme base)) (define x 40) (list (+ x 2))").unwrap();
+//! assert_eq!(interp.display_tagged(&result), "(42)");
 //! # }
 //! ```
 //!
+//! A host keeps a value through a handle, [`Owned`], which roots it until the
+//! handle is dropped; a bare `TaggedValue` is freed by the next collection
+//! that finds nothing else holding it (#605). See [handles](Interpreter#handles).
+//!
 //! Values do not outlive their interpreter. Dropping an interpreter tears its
 //! heap down (#604): every object is freed, so the heap's memory is returned
-//! and each file port it left open is flushed and closed. A `TaggedValue`, an
-//! environment or a heap handle kept past the interpreter names freed memory;
-//! a debug build reports a read of one as a use after free.
+//! and each file port it left open is flushed and closed. A `TaggedValue` or
+//! an environment kept past the interpreter names freed memory; a debug build
+//! reports a read of one as a use after free. A handle kept past it holds
+//! nothing: the interpreter that could read it is gone, and dropping it does
+//! nothing.
 //!
 //! Features: `vm`, `tree-walker`, and `legacy-pipeline` (which enables
 //! `tree-walker`). All are enabled by default to retain existing imports. Use
@@ -54,8 +60,8 @@ mod reentry_lint_control;
 #[cfg(feature = "legacy-pipeline")]
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
-pub use patina_core::TaggedValue;
 pub use patina_core::error::SourceLocation;
+pub use patina_core::{Owned, TaggedValue};
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
@@ -179,6 +185,40 @@ pub fn format_backend_error_with_source<E: std::error::Error + HasSourceLocation
 /// read, for formatting an error it reports.
 pub type WithSourceMap<T> = (T, Rc<RefCell<SourceMap>>);
 
+/// What [`Interpreter::display_tagged`] shows: a bare [`TaggedValue`], or a
+/// handle, [`Owned`] (by value or by reference), which the interpreter that
+/// made it reads.
+pub trait AsValue: sealed::Sealed {
+    /// The value, read from `heap`.
+    #[doc(hidden)]
+    fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue;
+}
+
+mod sealed {
+    pub trait Sealed {}
+    impl Sealed for super::TaggedValue {}
+    impl Sealed for super::Owned {}
+    impl Sealed for &super::Owned {}
+}
+
+impl AsValue for TaggedValue {
+    fn value_in(&self, _: &patina_core::Heap) -> TaggedValue {
+        *self
+    }
+}
+
+impl AsValue for Owned {
+    fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue {
+        heap.held(self)
+    }
+}
+
+impl AsValue for &Owned {
+    fn value_in(&self, heap: &patina_core::Heap) -> TaggedValue {
+        heap.held(self)
+    }
+}
+
 /// How reading a program a form at a time ended.
 enum FormsEnd<E> {
     /// Every form was read.
@@ -206,10 +246,27 @@ enum FormsEnd<E> {
 /// # {
 /// use patina_interpreter::{Interpreter, VmBackend};
 /// let interp = Interpreter::new(VmBackend::new());
-/// let result = interp.eval_str("42").unwrap();
-/// assert_eq!(result.as_fixnum(), Some(42));
+/// let result = interp.eval_str_owned("42").unwrap();
+/// assert_eq!(interp.display_tagged(&result), "42");
 /// # }
 /// ```
+///
+/// # Handles
+///
+/// A [`TaggedValue`] names a slot in the interpreter's heap and roots
+/// nothing. Once the evaluation that answered it has returned, a later one
+/// that collects can free it, and a value kept across that evaluation reads
+/// whatever comes to occupy its slot (#605). The `eval_*_owned` methods
+/// answer a handle, [`Owned`], instead, which roots its value until the
+/// handle is dropped; [`Interpreter::lookup`] answers one for a global. The
+/// interpreter that made a handle reads it ([`Interpreter::display_tagged`],
+/// [`Interpreter::raw_value`]), and any other panics on it. The `eval_*`
+/// methods that answer a bare value are deprecated.
+///
+/// The `_owned` suffix is temporary. At stage 5e of the collector's redesign
+/// (`PRD/GC_PRD.md`, decision 13) the bare methods go and the plain names
+/// answer handles; the `_owned` names stay as deprecated aliases of them
+/// until stage 5g.
 pub struct Interpreter<B: Backend> {
     backend: B,
 }
@@ -228,7 +285,8 @@ impl<B: Backend> Interpreter<B> {
     /// # {
     /// use patina_interpreter::{Interpreter, VmBackend};
     /// let interp = Interpreter::new(VmBackend::new());
-    /// assert_eq!(interp.eval_str("42").unwrap().as_fixnum(), Some(42));
+    /// let value = interp.eval_str_owned("42").unwrap();
+    /// assert_eq!(interp.raw_value(&value).as_fixnum(), Some(42));
     /// # }
     /// ```
     pub fn new(backend: B) -> Self {
@@ -267,13 +325,16 @@ impl<B: Backend> Interpreter<B> {
             .set_command_line(program_name, arguments);
     }
 
-    /// Evaluate a string containing one Scheme expression.
+    /// Evaluate a string containing one Scheme expression, and answer a
+    /// handle that keeps its value until the handle is dropped.
     ///
     /// Uses the backend's evaluation strategy. Text after that expression is
     /// not evaluated, but it must still read: a remainder that ends inside a
     /// datum is an error rather than something to drop silently. Use
-    /// `eval_program` to evaluate every form in a string. Source positions are
-    /// recorded under `<eval>`; use the named variant to retain its source map.
+    /// `eval_program_owned` to evaluate every form in a string. Source
+    /// positions are recorded under `<eval>`; use the named variant to retain
+    /// its source map. The `_owned` suffix is temporary (see
+    /// [handles](Interpreter#handles)).
     ///
     /// # Example
     ///
@@ -282,49 +343,57 @@ impl<B: Backend> Interpreter<B> {
     /// # {
     /// # use patina_interpreter::VmInterpreter;
     /// # let interp = VmInterpreter::new_vm();
-    /// let result = interp.eval_str("42").unwrap();
-    /// assert_eq!(result.as_fixnum(), Some(42));
+    /// let value = interp.eval_str_owned("42").unwrap();
+    /// assert_eq!(interp.raw_value(&value).as_fixnum(), Some(42));
     /// # }
     /// ```
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_str_with_source_name`: holds nothing"
+        reason = "a wrapper over `eval_str_with_source_name_owned`: holds nothing"
     )]
-    pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_str_with_source_name(input, "<eval>").0
-    }
-
-    /// Evaluate multiple expressions from a string, returning the last result
-    ///
-    /// This is useful for evaluating entire programs or test files.
-    /// Each expression is parsed and evaluated in sequence, with the result
-    /// of the last expression being returned.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a wrapper over `eval_program_with_source_name`: holds nothing"
-    )]
-    pub fn eval_program(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_program_with_source_name(input, "<eval>").0
-    }
-
-    /// Evaluate multiple expressions from a string, continuing on errors
-    ///
-    /// Unlike `eval_program`, this method does not stop on the first error.
-    /// Instead, it prints errors to stderr and continues with the next expression.
-    /// This is useful for test suites where you want to see all failures.
-    ///
-    /// Returns the last successfully evaluated result, or Unspecified if all failed.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a wrapper over `eval_program_resilient_tracked`: holds nothing"
-    )]
-    pub fn eval_program_resilient(&self, input: &str) -> TaggedValue {
-        self.eval_program_resilient_tracked(input)
+    pub fn eval_str_owned(&self, input: &str) -> Result<Owned, InterpreterError<B::Error>> {
+        self.eval_str_with_source_name_owned(input, "<eval>").0
     }
 
     /// Evaluate a string containing one expression with its source positions,
     /// naming the source `source_name`, and return the source map that placed
-    /// it for formatting an error. See [`Interpreter::eval_str`].
+    /// it for formatting an error. See [`Interpreter::eval_str_owned`].
+    pub fn eval_str_with_source_name_owned(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_str_in_env` in the global environment: holds nothing across it, and \
+                      holds the value it answers before anything can collect"
+        )]
+        let (result, source_map) =
+            self.eval_str_in_env(input, source_name, self.backend.global_env());
+        (result.map(|value| self.hold(value)), source_map)
+    }
+
+    /// Evaluate a string containing one Scheme expression, answering its
+    /// value bare. See [`Interpreter::eval_str_owned`].
+    #[deprecated(
+        note = "use `eval_str_owned`: nothing roots a bare value, so a later evaluation that \
+                collects can free it (#605)"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
+    )]
+    pub fn eval_str(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
+        self.eval_str_in_env(input, "<eval>", self.backend.global_env())
+            .0
+    }
+
+    /// [`Interpreter::eval_str_with_source_name_owned`], answering the value
+    /// bare.
+    #[deprecated(
+        note = "use `eval_str_with_source_name_owned`: nothing roots a bare value, so a later \
+                evaluation that collects can free it (#605)"
+    )]
     #[expect(
         clippy::disallowed_methods,
         reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
@@ -374,13 +443,33 @@ impl<B: Backend> Interpreter<B> {
         (result, source_map)
     }
 
-    /// [`Interpreter::eval_str_with_source_name`] for a source named `<eval>`.
+    /// [`Interpreter::eval_str`] under another name.
+    #[deprecated(
+        note = "use `eval_str_owned`: nothing roots a bare value, so a later evaluation that \
+                collects can free it (#605)"
+    )]
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_str_with_source_name`: holds nothing"
+        reason = "a wrapper over `eval_str_in_env` in the global environment: holds nothing"
     )]
     pub fn eval_str_tracked(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_str_with_source_name(input, "<eval>").0
+        self.eval_str_in_env(input, "<eval>", self.backend.global_env())
+            .0
+    }
+
+    /// Evaluate multiple expressions from a string, and answer a handle on
+    /// the last result.
+    ///
+    /// This is useful for evaluating entire programs or test files. Each
+    /// expression is parsed and evaluated in sequence, with the result of the
+    /// last expression being returned. The `_owned` suffix is temporary (see
+    /// [handles](Interpreter#handles)).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_with_source_name_owned`: holds nothing"
+    )]
+    pub fn eval_program_owned(&self, input: &str) -> Result<Owned, InterpreterError<B::Error>> {
+        self.eval_program_with_source_name_owned(input, "<eval>").0
     }
 
     /// Evaluate a program (multiple expressions) with its source positions,
@@ -388,14 +477,14 @@ impl<B: Backend> Interpreter<B> {
     /// the source map for formatting it.
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_program_with_fold_case`: holds nothing"
+        reason = "a wrapper over `eval_program_with_fold_case_owned`: holds nothing"
     )]
-    pub fn eval_program_with_source_name(
+    pub fn eval_program_with_source_name_owned(
         &self,
         input: &str,
         source_name: &str,
-    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
-        self.eval_program_with_fold_case(input, source_name, &mut false)
+    ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
+        self.eval_program_with_fold_case_owned(input, source_name, &mut false)
     }
 
     /// Evaluate one interactive submission, retaining directives for the next.
@@ -405,12 +494,12 @@ impl<B: Backend> Interpreter<B> {
         clippy::disallowed_methods,
         reason = "a wrapper over `eval_program_in_env` in the global environment: holds nothing"
     )]
-    pub fn eval_program_with_fold_case(
+    pub fn eval_program_with_fold_case_owned(
         &self,
         input: &str,
         source_name: &str,
         fold_case: &mut bool,
-    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+    ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
         self.eval_program_in_env(input, source_name, fold_case, self.backend.global_env())
     }
 
@@ -420,7 +509,7 @@ impl<B: Backend> Interpreter<B> {
         source_name: &str,
         fold_case: &mut bool,
         env: &Rc<Environment>,
-    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+    ) -> WithSourceMap<Result<Owned, InterpreterError<B::Error>>> {
         let (value, end, source_map) =
             self.run_forms(input, source_name, fold_case, env, |error, _| Some(error));
         let result = match end {
@@ -431,23 +520,90 @@ impl<B: Backend> Interpreter<B> {
         (result, source_map)
     }
 
-    /// [`Interpreter::eval_program_with_source_name`] for a source named
-    /// `<eval>`.
+    /// Evaluate multiple expressions from a string, answering the last
+    /// result bare. See [`Interpreter::eval_program_owned`].
+    #[deprecated(
+        note = "use `eval_program_owned`: nothing roots a bare value, so a later evaluation that \
+                collects can free it (#605)"
+    )]
     #[expect(
         clippy::disallowed_methods,
-        reason = "a wrapper over `eval_program_with_source_name`: holds nothing"
+        reason = "a wrapper over `eval_program_owned`: holds nothing"
+    )]
+    pub fn eval_program(&self, input: &str) -> Result<TaggedValue, InterpreterError<B::Error>> {
+        self.eval_program_owned(input)
+            .map(|value| self.raw_value(&value))
+    }
+
+    /// [`Interpreter::eval_program_with_source_name_owned`], answering the
+    /// last result bare.
+    #[deprecated(
+        note = "use `eval_program_with_source_name_owned`: nothing roots a bare value, so a later \
+                evaluation that collects can free it (#605)"
+    )]
+    pub fn eval_program_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_with_source_name_owned`: holds nothing across it"
+        )]
+        let (result, source_map) = self.eval_program_with_source_name_owned(input, source_name);
+        (result.map(|value| self.raw_value(&value)), source_map)
+    }
+
+    /// [`Interpreter::eval_program_with_fold_case_owned`], answering the last
+    /// result bare.
+    #[deprecated(
+        note = "use `eval_program_with_fold_case_owned`: nothing roots a bare value, so a later \
+                evaluation that collects can free it (#605)"
+    )]
+    pub fn eval_program_with_fold_case(
+        &self,
+        input: &str,
+        source_name: &str,
+        fold_case: &mut bool,
+    ) -> WithSourceMap<Result<TaggedValue, InterpreterError<B::Error>>> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_with_fold_case_owned`: holds nothing across it"
+        )]
+        let (result, source_map) =
+            self.eval_program_with_fold_case_owned(input, source_name, fold_case);
+        (result.map(|value| self.raw_value(&value)), source_map)
+    }
+
+    /// [`Interpreter::eval_program`] under another name.
+    #[deprecated(
+        note = "use `eval_program_owned`: nothing roots a bare value, so a later evaluation that \
+                collects can free it (#605)"
+    )]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a wrapper over `eval_program_owned`: holds nothing"
     )]
     pub fn eval_program_tracked(
         &self,
         input: &str,
     ) -> Result<TaggedValue, InterpreterError<B::Error>> {
-        self.eval_program_with_source_name(input, "<eval>").0
+        self.eval_program_owned(input)
+            .map(|value| self.raw_value(&value))
     }
 
-    /// Evaluate a program with source positions, printing each error and
-    /// continuing past evaluation errors, as [`Interpreter::eval_program_resilient`]
-    /// does. Returns the last value evaluated.
-    pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
+    /// Evaluate multiple expressions from a string, continuing on errors, and
+    /// answer a handle on the last result.
+    ///
+    /// Unlike `eval_program_owned`, this method does not stop on the first
+    /// error. Instead, it prints errors to stderr and continues with the next
+    /// expression. This is useful for test suites where you want to see all
+    /// failures.
+    ///
+    /// Answers the last successfully evaluated result, or Unspecified if all
+    /// failed. The `_owned` suffix is temporary (see
+    /// [handles](Interpreter#handles)).
+    pub fn eval_program_resilient_owned(&self, input: &str) -> Owned {
         let (value, end, _) = self.run_forms(
             input,
             "<eval>",
@@ -465,8 +621,39 @@ impl<B: Backend> Interpreter<B> {
         value
     }
 
+    /// Evaluate multiple expressions from a string, continuing on errors,
+    /// answering the last result bare. See
+    /// [`Interpreter::eval_program_resilient_owned`].
+    #[deprecated(
+        note = "use `eval_program_resilient_owned`: nothing roots a bare value, so a later \
+                evaluation that collects can free it (#605)"
+    )]
+    pub fn eval_program_resilient(&self, input: &str) -> TaggedValue {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_resilient_owned`: holds nothing across it"
+        )]
+        let value = self.eval_program_resilient_owned(input);
+        self.raw_value(&value)
+    }
+
+    /// [`Interpreter::eval_program_resilient`] under another name.
+    #[deprecated(
+        note = "use `eval_program_resilient_owned`: nothing roots a bare value, so a later \
+                evaluation that collects can free it (#605)"
+    )]
+    pub fn eval_program_resilient_tracked(&self, input: &str) -> TaggedValue {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_resilient_owned`: holds nothing across it"
+        )]
+        let value = self.eval_program_resilient_owned(input);
+        self.raw_value(&value)
+    }
+
     /// Evaluate a program with a named source, reporting each error and
-    /// carrying on to the next top-level form: the CLI's `-k`.
+    /// carrying on to the next top-level form: the CLI's `-k`. Answers a
+    /// handle on the last result.
     ///
     /// Carrying on is a recovery policy, not a verdict. The returned
     /// [`ProgramOutcome`] counts the errors reported and says whether the
@@ -478,12 +665,13 @@ impl<B: Backend> Interpreter<B> {
     ///
     /// An error that interrupted an `exit` stops the run instead of carrying
     /// on, and the caller ends the process with
-    /// [`patina_runtime::exit_status::exit_if_interrupted`].
-    pub fn eval_program_resilient_with_source_name(
+    /// [`patina_runtime::exit_status::exit_if_interrupted`]. The `_owned`
+    /// suffix is temporary (see [handles](Interpreter#handles)).
+    pub fn eval_program_resilient_with_source_name_owned(
         &self,
         input: &str,
         source_name: &str,
-    ) -> (TaggedValue, ProgramOutcome)
+    ) -> (Owned, ProgramOutcome)
     where
         B::Error: HasSourceLocation,
     {
@@ -522,6 +710,29 @@ impl<B: Backend> Interpreter<B> {
         (value, outcome)
     }
 
+    /// [`Interpreter::eval_program_resilient_with_source_name_owned`],
+    /// answering the last result bare.
+    #[deprecated(
+        note = "use `eval_program_resilient_with_source_name_owned`: nothing roots a bare value, \
+                so a later evaluation that collects can free it (#605)"
+    )]
+    pub fn eval_program_resilient_with_source_name(
+        &self,
+        input: &str,
+        source_name: &str,
+    ) -> (TaggedValue, ProgramOutcome)
+    where
+        B::Error: HasSourceLocation,
+    {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_resilient_with_source_name_owned`: holds nothing across it"
+        )]
+        let (value, outcome) =
+            self.eval_program_resilient_with_source_name_owned(input, source_name);
+        (self.raw_value(&value), outcome)
+    }
+
     /// Read `input` a form at a time and evaluate each with its source
     /// positions: the one loop behind all program entry points.
     ///
@@ -529,8 +740,8 @@ impl<B: Backend> Interpreter<B> {
     /// formatting it, which gives the error back to stop there or returns
     /// `None` to carry on with the next form. A read error always stops: the
     /// parser leaves the offending token where it was, so reading on would
-    /// report it again without end. Returns the last value evaluated, how
-    /// reading ended, and the source map.
+    /// report it again without end. Returns a handle on the last value
+    /// evaluated, how reading ended, and the source map.
     fn run_forms(
         &self,
         input: &str,
@@ -538,9 +749,12 @@ impl<B: Backend> Interpreter<B> {
         fold_case: &mut bool,
         env: &Rc<Environment>,
         mut on_error: impl FnMut(B::Error, &SourceMap) -> Option<B::Error>,
-    ) -> (TaggedValue, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
-        let mut value = TaggedValue::UNSPECIFIED;
+    ) -> (Owned, FormsEnd<B::Error>, Rc<RefCell<SourceMap>>) {
         let heap = self.backend.global_env().heap();
+        // The last value, held across each later form by a handle: it is the
+        // answer when every later form fails, so a collection in one must not
+        // free it (#605).
+        let value = heap.borrow().hold(TaggedValue::UNSPECIFIED);
         let source_map = Rc::new(RefCell::new(SourceMap::new()));
         let mut parser = match Parser::new_with_source_map_and_fold_case(
             input,
@@ -566,15 +780,11 @@ impl<B: Backend> Interpreter<B> {
                     reason = "the outermost entry, so the backend's loop may collect. The parser \
                               holds no heap value between data (it clears its labels after each), \
                               and the heap's provenance is not a root, pruned by sweep. `value`, \
-                              the last result, is held across \
-                              the form unrooted: overwritten if the form succeeds, and returned \
-                              stale whenever every later form fails, on any continue-on-error \
-                              entry (`-k`, `eval_program_resilient*`, an interrupted `exit`'s \
-                              `Stopped`). The CLI drops it; an embedder that keeps it meets #605: \
-                              unprotected"
+                              the last result, is held across the form by a handle, which roots \
+                              it (#605)"
                 )]
                 Ok(Some(expr)) => match self.backend.eval_with_source_map(expr, env, &source_map) {
-                    Ok(result) => value = result,
+                    Ok(result) => heap.borrow().set_held(&value, result),
                     Err(error) => {
                         let stop = on_error(error, &source_map.borrow());
                         if let Some(error) = stop {
@@ -588,19 +798,60 @@ impl<B: Backend> Interpreter<B> {
         }
     }
 
+    /// The value bound to `name` in the global environment, held by a
+    /// handle; `None` when the name is unbound.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// # let interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// interp.eval_program_owned("(import (scheme base)) (define kept (list 1 2))").unwrap();
+    /// let kept = interp.lookup("kept").unwrap();
+    /// interp.eval_program_owned("(set! kept #f)").unwrap();
+    /// assert_eq!(interp.display_tagged(&kept), "(1 2)");
+    /// # }
+    /// ```
+    pub fn lookup(&self, name: &str) -> Option<Owned> {
+        let value = self.backend.global_env().get(name)?;
+        Some(self.hold(value))
+    }
+
+    /// The value `handle` holds, raw: a bare `TaggedValue`, valid until the
+    /// next evaluation. Keep the handle, not this, across one. Panics on a
+    /// handle another interpreter made.
+    pub fn raw_value(&self, handle: &Owned) -> TaggedValue {
+        self.backend.global_env().heap().borrow().held(handle)
+    }
+
+    /// A handle on `value`, which this interpreter answered.
+    fn hold(&self, value: TaggedValue) -> Owned {
+        self.backend.global_env().heap().borrow().hold(value)
+    }
+
     /// The interpreter's global environment, shared with its backend.
+    ///
+    /// The raw layer (#605): what it holds and answers are bare
+    /// `TaggedValue`s. A value read from it is rooted only while the name
+    /// stays bound to it, so once the program rebinds the name a later
+    /// evaluation that collects can free it; [`Interpreter::lookup`] answers
+    /// a handle instead. An environment built from it with
+    /// `Environment::with_parent` is not rooted between calls (#620).
     pub fn global_env(&self) -> Rc<Environment> {
         self.backend.global_env().clone()
     }
 
-    /// Format a TaggedValue for display using write notation (machine-readable)
+    /// Format a value for display using write notation (machine-readable):
+    /// a bare `TaggedValue`, or a handle ([`Owned`]) this interpreter made.
     ///
     /// Uses the datum writer which properly handles all TaggedValue types
     /// including heap pairs, vectors, strings, and circular structures.
     /// Multiple values (from `values`) are unpacked and displayed one per line.
-    pub fn display_tagged(&self, tv: TaggedValue) -> String {
+    pub fn display_tagged(&self, value: impl AsValue) -> String {
         use patina_primitives::primitives::io::datum_writer::format_write_tagged;
         let heap = self.backend.global_env().heap();
+        let tv = value.value_in(&heap.borrow());
 
         // Unpack multiple values (R7RS: each value displayed on its own line)
         let vals = heap.borrow().get_values(tv).map(|v| v.to_vec());
@@ -618,7 +869,9 @@ impl<B: Backend> Interpreter<B> {
     /// Get a reference to the underlying backend
     ///
     /// This allows access to backend-specific functionality that's not
-    /// part of the generic `Backend` trait.
+    /// part of the generic `Backend` trait. The raw layer (#605): the
+    /// backend's methods take and answer bare `TaggedValue`s and
+    /// environments, which nothing roots between calls.
     pub fn backend(&self) -> &B {
         &self.backend
     }
@@ -634,7 +887,8 @@ impl<B: Backend> Interpreter<B> {
 /// ```
 /// use patina_interpreter::TreeWalkInterpreter;
 /// let interp = TreeWalkInterpreter::new_tree_walker();
-/// assert_eq!(interp.eval_str("42").unwrap().as_fixnum(), Some(42));
+/// let value = interp.eval_str_owned("42").unwrap();
+/// assert_eq!(interp.display_tagged(&value), "42");
 /// ```
 #[cfg(feature = "tree-walker")]
 pub type TreeWalkInterpreter = Interpreter<TreeWalker>;
@@ -676,7 +930,8 @@ impl Interpreter<TreeWalker> {
     /// Get a reference to the underlying evaluator (TreeWalker-specific)
     ///
     /// This provides access to evaluator-specific functionality.
-    /// For generic backend access, use `backend()` instead.
+    /// For generic backend access, use `backend()` instead. The raw layer, as
+    /// `backend()` is (#605).
     ///
     /// This method is only available when using the TreeWalker backend.
     pub fn evaluator(&self) -> &Evaluator {
@@ -771,6 +1026,9 @@ impl<E: std::error::Error + patina_runtime::HasDiagnostic> patina_runtime::HasDi
               does, and none reads a value from one evaluation after another that may collect \
               (#605's shape)"
 )]
+// The deprecated bare-value forms, which these tests still cover until stage
+// 5e removes them (#605).
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

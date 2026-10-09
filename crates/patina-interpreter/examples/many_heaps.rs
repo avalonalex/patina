@@ -23,14 +23,14 @@ fn main() {
     let mut held = Vec::with_capacity(count);
     for i in 0..count {
         let interpreter = VmInterpreter::new_vm();
-        let (result, sources) = interpreter.eval_program_with_source_name(
+        let (result, sources) = interpreter.eval_program_with_source_name_owned(
             "(import (scheme base)) \
              (define (build n acc) (if (= n 0) acc (build (- n 1) (cons n acc)))) \
              (length (build 10000 '()))",
             "many-heaps.scm",
         );
         match result {
-            Ok(value) => assert_eq!(interpreter.display_tagged(value), "10000", "heap {i}"),
+            Ok(value) => assert_eq!(interpreter.display_tagged(&value), "10000", "heap {i}"),
             Err(error) => panic!("{}", format_interpreter_error(&error, &sources.borrow())),
         }
         held.push(interpreter);

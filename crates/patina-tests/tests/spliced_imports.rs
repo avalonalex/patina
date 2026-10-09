@@ -1,6 +1,9 @@
 //! #435: imports are consumed during expansion, including top-level splices.
 //! Each program needs a fresh environment so a prior import cannot hide a
 //! missing import. The shared helpers run every case on both backends.
+
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
 mod common;
 
 use common::{assert_program_eval_error, assert_program_eval_to};

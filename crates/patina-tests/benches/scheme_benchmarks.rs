@@ -1,6 +1,9 @@
 //! Correctness-checked, backend-qualified measurements. See docs/VM_TESTING.md
 //! for timing boundaries and scripts/run_benchmarks.sh for reproducible reports.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use patina_core::{CoreExpr, Environment, TaggedValue};
 use patina_frontend::{Desugarer, Parser};

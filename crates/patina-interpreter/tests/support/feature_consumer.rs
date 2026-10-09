@@ -57,6 +57,14 @@ where
         .eval_program("(define cycle (cons 1 '())) (set-cdr! cycle cycle) cycle")
         .unwrap();
     assert_eq!(interpreter.display_tagged(value), "#0=(1 . #0#)");
+    // The handle forms (#605), as a host outside the workspace calls them.
+    let held = interpreter
+        .eval_program_owned("(define kept (list 'kept 1)) kept")
+        .unwrap();
+    let kept = interpreter.lookup("kept").expect("`kept` is bound");
+    assert_eq!(interpreter.display_tagged(&held), "(kept 1)");
+    assert_eq!(interpreter.display_tagged(kept), "(kept 1)");
+    assert!(interpreter.raw_value(&held).is_pair());
     for source in [
         "(define x 42)\n(+ x missing)",
         "(define-syntax one (syntax-rules () ((_ x) x)))\n(one 1 2)",

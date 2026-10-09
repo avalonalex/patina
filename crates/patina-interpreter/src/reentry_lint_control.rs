@@ -82,31 +82,58 @@ fn every_nameable_entry_is_matched() {
         b.eval_with_source_map(TaggedValue::NULL, env, map)
     };
 
-    // patina-interpreter
+    // patina-interpreter: the twins that answer a handle (#605)
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_str("");
+    let _ = |i: &Vm| i.eval_str_owned("");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_str_with_source_name("", "");
+    let _ = |i: &Vm| i.eval_str_with_source_name_owned("", "");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm, env: &Rc<Environment>| i.eval_str_in_env("", "", env);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_str_tracked("");
+    let _ = |i: &Vm| i.eval_program_owned("");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_program("");
+    let _ = |i: &Vm| i.eval_program_resilient_owned("");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_program_resilient("");
+    let _ = |i: &Vm| i.eval_program_with_source_name_owned("", "");
     #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm| i.eval_program_with_source_name("", "");
-    #[expect(clippy::disallowed_methods, reason = "positive control")]
-    let _ = |i: &Vm, fold_case: &mut bool| i.eval_program_with_fold_case("", "", fold_case);
+    let _ = |i: &Vm, fold_case: &mut bool| i.eval_program_with_fold_case_owned("", "", fold_case);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm, fold_case: &mut bool, env: &Rc<Environment>| {
         i.eval_program_in_env("", "", fold_case, env)
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_program_resilient_with_source_name_owned("", "");
+
+    // patina-interpreter: the bare-value forms, deprecated until stage 5e
+    // removes them (#605)
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_str("");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_str_with_source_name("", "");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_str_tracked("");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_program("");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_program_resilient("");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm| i.eval_program_with_source_name("", "");
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm, fold_case: &mut bool| i.eval_program_with_fold_case("", "", fold_case);
+    #[allow(deprecated)]
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_tracked("");
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_resilient_tracked("");
+    #[allow(deprecated)]
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_resilient_with_source_name("", "");
 

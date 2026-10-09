@@ -41,7 +41,9 @@ const HOLDERS: &str = "
 /// Whether `interp`'s heap is gone once `interp` is dropped, after
 /// running [`HOLDERS`].
 fn freed_on_drop<B: Backend>(interp: Interpreter<B>) -> bool {
-    let value = interp.eval_program(HOLDERS).expect("the program runs");
+    let value = interp
+        .eval_program_owned(HOLDERS)
+        .expect("the program runs");
     assert_eq!(interp.display_tagged(value), "(2 kept 2 1)");
     let heap = Rc::downgrade(interp.global_env().heap());
     drop(interp);
@@ -79,10 +81,10 @@ fn a_dropped_interpreter_writes_out_the_file_ports_it_left_open() {
     if let Some(dir) = std::env::var_os(EMBEDDER) {
         let dir = Path::new(&dir);
         vm_interpreter()
-            .eval_program(&program(&dir.join("vm")))
+            .eval_program_owned(&program(&dir.join("vm")))
             .expect("the VM's program runs");
         tree_walker_interpreter()
-            .eval_program(&program(&dir.join("tree-walker")))
+            .eval_program_owned(&program(&dir.join("tree-walker")))
             .expect("the tree-walker's program runs");
         return;
     }
@@ -118,7 +120,8 @@ fn a_value_kept_past_its_interpreter_is_a_use_after_free() {
         return;
     }
     let interp = vm_interpreter();
-    let value = interp.eval_str("(list 'held 1 2)").expect("a list");
+    let held = interp.eval_str_owned("(list 'held 1 2)").expect("a list");
+    let value = interp.raw_value(&held);
     let heap = interp.global_env().heap().clone();
     drop(interp);
     let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

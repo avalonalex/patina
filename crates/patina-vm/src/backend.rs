@@ -810,7 +810,8 @@ mod tests {
         let backend = VmBackend::new();
         let interp = Interpreter::new(backend);
         // Use eval_program to handle multiple top-level expressions.
-        interp.eval_program(code).expect("eval failed")
+        let value = interp.eval_program_owned(code).expect("eval failed");
+        interp.raw_value(&value)
     }
 
     /// The interpreter's source-named evaluation is generic over backends, so
@@ -820,15 +821,15 @@ mod tests {
     fn source_named_evaluation_places_and_counts_vm_errors() {
         let interp = Interpreter::new(VmBackend::new());
         let (result, source_map) =
-            interp.eval_program_with_source_name("(define x 1)\n\n(no-such x)\n", "t.scm");
+            interp.eval_program_with_source_name_owned("(define x 1)\n\n(no-such x)\n", "t.scm");
         let error = result.expect_err("an unbound variable");
         let rendered =
             patina_interpreter::format_backend_error_with_source(&error, &source_map.borrow());
         assert!(rendered.contains("t.scm:3:2"), "{rendered}");
         assert!(rendered.contains("3 | (no-such x)"), "{rendered}");
 
-        let (_, outcome) =
-            interp.eval_program_resilient_with_source_name("(no-such)\n(also-no-such)\n", "k.scm");
+        let (_, outcome) = interp
+            .eval_program_resilient_with_source_name_owned("(no-such)\n(also-no-such)\n", "k.scm");
         assert_eq!(outcome.eval_errors, 2);
         assert!(outcome.read_to_end);
     }

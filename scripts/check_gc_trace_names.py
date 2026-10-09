@@ -60,6 +60,8 @@ TRACE_FUNCTIONS = {
         "trace_prompt_frame",
         "trace_exception_handler",
     ],
+    # The hosts' handles, rooted in GcVisitor::new (#605).
+    "crates/patina-core/src/heap/handles.rs": ["trace_handles"],
     # The literal walks under trace_compiled_macro and visit_expr_literals.
     "crates/patina-core/src/compiled_macro.rs": ["for_each_literal"],
     "crates/patina-core/src/cps_expr.rs": ["for_each_literal"],
