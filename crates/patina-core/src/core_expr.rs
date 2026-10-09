@@ -129,6 +129,25 @@ impl CoreExpr {
     }
 }
 
+impl Drop for CoreExpr {
+    fn drop(&mut self) {
+        // The drop glue that follows recurses into the children, a level of
+        // the code at a time; where the stack has no room for that, they go
+        // to a new segment (#617). A leaf, most of any tree, has none.
+        let leaf = matches!(
+            self.kind,
+            CoreExprKind::Literal(_)
+                | CoreExprKind::Var { .. }
+                | CoreExprKind::Quote(_)
+                | CoreExprKind::Import { .. }
+        );
+        if !leaf && !crate::walk::has_stack_room() {
+            let placeholder = CoreExprKind::Literal(TaggedValue::UNSPECIFIED);
+            crate::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
+        }
+    }
+}
+
 impl std::fmt::Display for CoreExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.kind, f)
@@ -313,10 +332,15 @@ impl QuasiTemplate {
         match self {
             QuasiTemplate::Datum(datum) => QuasiTemplate::Datum(*datum),
             QuasiTemplate::Unquoted(expr) => QuasiTemplate::Unquoted(Rc::new(f(expr))),
-            QuasiTemplate::Build(constructor, parts) => QuasiTemplate::Build(
-                *constructor,
-                parts.iter().map(|part| part.map_unquoted(f)).collect(),
-            ),
+            // Grown with the depth of the template (#617).
+            QuasiTemplate::Build(constructor, parts) => {
+                crate::walk::ensure_sufficient_stack(|| {
+                    QuasiTemplate::Build(
+                        *constructor,
+                        parts.iter().map(|part| part.map_unquoted(f)).collect(),
+                    )
+                })
+            }
         }
     }
 
@@ -325,11 +349,23 @@ impl QuasiTemplate {
         match self {
             QuasiTemplate::Datum(_) => {}
             QuasiTemplate::Unquoted(expr) => f(expr),
-            QuasiTemplate::Build(_, parts) => {
+            // Grown with the depth of the template (#617).
+            QuasiTemplate::Build(_, parts) => crate::walk::ensure_sufficient_stack(|| {
                 for part in parts {
                     part.for_each_unquoted(f);
                 }
-            }
+            }),
+        }
+    }
+}
+
+impl Drop for QuasiTemplate {
+    fn drop(&mut self) {
+        // As `CoreExpr`'s, a level of the template at a time (#617).
+        if let QuasiTemplate::Build(_, parts) = self
+            && !crate::walk::has_stack_room()
+        {
+            crate::walk::drop_deep(std::mem::take(parts));
         }
     }
 }
@@ -543,5 +579,40 @@ impl std::fmt::Display for CoreExprKind {
                 write!(f, ")")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Dropping a tree recurses a level at a time; on a 256 KiB thread these
+    /// are each far deeper than the stack would hold without the `Drop` that
+    /// moves to a new segment (#617).
+    #[test]
+    fn trees_deeper_than_the_stack_drop() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let leaf = || CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(0)));
+                let mut nested = leaf();
+                for _ in 0..100_000 {
+                    // Through a `Vec` and through an `Rc`.
+                    nested = CoreExpr::new(CoreExprKind::If {
+                        test: Rc::new(leaf()),
+                        then: Rc::new(CoreExpr::new(CoreExprKind::Begin(vec![nested]))),
+                        else_: Rc::new(leaf()),
+                    });
+                }
+                drop(nested);
+                let mut template = QuasiTemplate::Datum(TaggedValue::NULL);
+                for _ in 0..100_000 {
+                    template = QuasiTemplate::Build(QuasiConstructor::List, vec![template]);
+                }
+                drop(template);
+            })
+            .expect("spawn")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 }

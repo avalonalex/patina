@@ -148,6 +148,7 @@ impl Desugarer<'_> {
                 env: &use_env,
                 scopes: &self.current_scopes,
             }),
+            self.open_forms.borrow().depth(),
         )
     }
 }

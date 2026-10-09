@@ -117,15 +117,21 @@ impl Compiler {
         level: usize,
     ) -> Result<Pattern, MacroError> {
         // A pattern met again inside itself — a datum label can write one — is
-        // refused, rather than compiled until the stack overflows (#459).
+        // refused, rather than compiled until the stack overflows (#459), and
+        // so is one nested past the limit code is held to (#617).
         let compound = form.is_pair() || form.is_vector();
+        if compound && self.open.depth() >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(MacroError::NestedTooDeeply);
+        }
         if compound && !self.open.enter(form) {
             return Err(MacroError::InvalidSyntax(format!(
                 "a syntax-rules pattern cannot contain itself: {}",
                 patina_core::format_tagged(form, &self.heap.borrow())
             )));
         }
-        let compiled = self.compile_pattern_node(form, level);
+        let compiled = patina_core::walk::ensure_sufficient_stack_if(compound, || {
+            self.compile_pattern_node(form, level)
+        });
         if compound {
             self.open.leave();
         }

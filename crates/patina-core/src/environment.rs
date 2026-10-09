@@ -1300,32 +1300,39 @@ impl Environment {
     /// Set an existing binding (searches parent environments)
     /// This is the primary API - accepts TaggedValue directly.
     pub fn set(&self, name: &str, value: TaggedValue) -> Result<(), String> {
-        if let Some(slot) = self.local_slot(name) {
-            self.set_slot_value(slot, value);
-            return Ok(());
-        }
-        // Assign through a macro-expansion alias, so a template that mutates a
-        // binding private to its defining library works. Reads follow aliases
-        // in `get`; writes have to as well or the two disagree.
-        if let Some(target) = self.alias_target(name) {
-            return target.set(self, value);
-        }
-        // The write side of the same fallback `get` takes, and it has to be
-        // here for the reason `alias_bindings` gives for its own pair: a name
-        // that reads through to a scoped definition and does not write through
-        // to it leaves the two disagreeing. Reached when a macro-generated
-        // macro's template assigns to a definition its expansion introduced,
-        // which arrives relinked to the bare name.
-        if let Some(i) = self.visible_scoped_index(name)
-            && let Some(bindings) = self.scoped_bindings.borrow_mut().get_mut(name)
-        {
-            crate::census::store(crate::census::Site::EnvSetScoped, None, value);
-            bindings[i].tagged_value = value;
-            return Ok(());
-        }
-        match &self.parent {
-            Some(parent) => parent.set(name, value),
-            None => Err(name.to_string()),
+        // A loop up the chain, not a call per parent: a chain is as long as
+        // the code is nested, and recursing on it overflowed the native stack
+        // (#617).
+        let mut env = self;
+        loop {
+            if let Some(slot) = env.local_slot(name) {
+                env.set_slot_value(slot, value);
+                return Ok(());
+            }
+            // Assign through a macro-expansion alias, so a template that
+            // mutates a binding private to its defining library works. Reads
+            // follow aliases in `get`; writes have to as well or the two
+            // disagree.
+            if let Some(target) = env.alias_target(name) {
+                return target.set(env, value);
+            }
+            // The write side of the same fallback `get` takes, and it has to
+            // be here for the reason `alias_bindings` gives for its own pair:
+            // a name that reads through to a scoped definition and does not
+            // write through to it leaves the two disagreeing. Reached when a
+            // macro-generated macro's template assigns to a definition its
+            // expansion introduced, which arrives relinked to the bare name.
+            if let Some(i) = env.visible_scoped_index(name)
+                && let Some(bindings) = env.scoped_bindings.borrow_mut().get_mut(name)
+            {
+                crate::census::store(crate::census::Site::EnvSetScoped, None, value);
+                bindings[i].tagged_value = value;
+                return Ok(());
+            }
+            match &env.parent {
+                Some(parent) => env = parent,
+                None => return Err(name.to_string()),
+            }
         }
     }
 
@@ -2126,46 +2133,50 @@ impl Environment {
         scopes: &ScopeSet,
         value: TaggedValue,
     ) -> Result<(), String> {
-        if let Some(slot) = self.local_slot(name) {
-            self.set_slot_value(slot, value);
-            return Ok(());
-        }
-        if self.has_aliases.get()
-            && let Some(target) = self.alias_target(name)
-        {
-            return target.set(self, value);
-        }
-        if self.has_visible_scoped.get()
-            && let Some(i) = self.visible_scoped_index(name)
-        {
-            let table = self.scoped_bindings.borrow();
-            if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
-                // Provably dead on this path, and asserted rather than pruned
-                // for the reason `get_scoped_fallback` gives for its twin: the
-                // fallback runs only after resolution rejected every scoped
-                // binding on this chain, so a candidate showing up here means
-                // the rule changed underneath and family 36 is back.
-                debug_assert!(
-                    !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
-                    "set_scoped_fallback reached a binding of `{name}` that is a \
-                     candidate for {scopes} — resolution should have written it"
-                );
-                if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                    drop(table);
-                    let mut table = self.scoped_bindings.borrow_mut();
-                    if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
-                        binding.tagged_value = value;
-                        return Ok(());
-                    }
-                    return Err(name.to_string());
-                }
+        // A loop up the chain, as `set` walks it (#617).
+        let mut env = self;
+        loop {
+            if let Some(slot) = env.local_slot(name) {
+                env.set_slot_value(slot, value);
+                return Ok(());
             }
-            // Rejected for these scopes: fall through to the parent rather
-            // than clobber it by spelling.
-        }
-        match &self.parent {
-            Some(parent) => parent.set_scoped_fallback(name, scopes, value),
-            None => Err(name.to_string()),
+            if env.has_aliases.get()
+                && let Some(target) = env.alias_target(name)
+            {
+                return target.set(env, value);
+            }
+            if env.has_visible_scoped.get()
+                && let Some(i) = env.visible_scoped_index(name)
+            {
+                let table = env.scoped_bindings.borrow();
+                if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
+                    // Provably dead on this path, and asserted rather than pruned
+                    // for the reason `get_scoped_fallback` gives for its twin: the
+                    // fallback runs only after resolution rejected every scoped
+                    // binding on this chain, so a candidate showing up here means
+                    // the rule changed underneath and family 36 is back.
+                    debug_assert!(
+                        !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
+                        "set_scoped_fallback reached a binding of `{name}` that is a \
+                         candidate for {scopes} — resolution should have written it"
+                    );
+                    if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                        drop(table);
+                        let mut table = env.scoped_bindings.borrow_mut();
+                        if let Some(binding) = table.get_mut(name).and_then(|bs| bs.get_mut(i)) {
+                            binding.tagged_value = value;
+                            return Ok(());
+                        }
+                        return Err(name.to_string());
+                    }
+                }
+                // Rejected for these scopes: fall through to the parent rather
+                // than clobber it by spelling.
+            }
+            match &env.parent {
+                Some(parent) => env = parent,
+                None => return Err(name.to_string()),
+            }
         }
     }
 
@@ -2322,45 +2333,47 @@ impl Environment {
     ///
     /// [`get`]: Self::get
     fn get_scoped_fallback(&self, name: &str, scopes: &ScopeSet) -> Option<TaggedValue> {
-        if let Some(tv) = self.local_value(name) {
-            return Some(tv);
-        }
-        if self.has_aliases.get()
-            && let Some(target) = self.alias_target(name)
-        {
-            return target.get(self);
-        }
-        if self.has_visible_scoped.get()
-            && let Some(i) = self.visible_scoped_index(name)
-        {
-            let table = self.scoped_bindings.borrow();
-            // `.get(i)`, as `get` reads the same table — the two copies of
-            // this walk must not disagree on out-of-bounds behavior. One
-            // shared walk is Track Q's Q7.3; until then they mirror by hand.
-            if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
-                // Provably dead on this path today: the fallback only runs
-                // after `resolve_index` returned no candidate over this same
-                // chain, so every scoped binding here already failed
-                // `is_candidate`. Kept as a live arm rather than pruned, with
-                // the invariant asserted, so a future change to the rule (a
-                // visibility filter, an ambiguity-policy change) fails a
-                // debug test loudly instead of silently resurrecting a
-                // rejected binding — which would be family 36 again.
-                debug_assert!(
-                    !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
-                    "get_scoped_fallback reached a binding of `{name}` that is a \
-                     candidate for {scopes} — resolution should have chosen it"
-                );
-                if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
-                    return Some(binding.tagged_value);
-                }
+        // A loop up the chain, as `get` walks it (#617).
+        let mut env = self;
+        loop {
+            if let Some(tv) = env.local_value(name) {
+                return Some(tv);
             }
-            // Rejected for these scopes: fall through to the parent rather
-            // than resurrect it by name.
+            if env.has_aliases.get()
+                && let Some(target) = env.alias_target(name)
+            {
+                return target.get(env);
+            }
+            if env.has_visible_scoped.get()
+                && let Some(i) = env.visible_scoped_index(name)
+            {
+                let table = env.scoped_bindings.borrow();
+                // `.get(i)`, as `get` reads the same table — the two copies of
+                // this walk must not disagree on out-of-bounds behavior. One
+                // shared walk is Track Q's Q7.3; until then they mirror by hand.
+                if let Some(binding) = table.get(name).and_then(|bs| bs.get(i)) {
+                    // Provably dead on this path today: the fallback only runs
+                    // after `resolve_index` returned no candidate over this same
+                    // chain, so every scoped binding here already failed
+                    // `is_candidate`. Kept as a live arm rather than pruned, with
+                    // the invariant asserted, so a future change to the rule (a
+                    // visibility filter, an ambiguity-policy change) fails a
+                    // debug test loudly instead of silently resurrecting a
+                    // rejected binding — which would be family 36 again.
+                    debug_assert!(
+                        !crate::scope_resolve::is_candidate(&binding.scopes, scopes),
+                        "get_scoped_fallback reached a binding of `{name}` that is a \
+                         candidate for {scopes} — resolution should have chosen it"
+                    );
+                    if crate::scope_resolve::is_candidate(&binding.scopes, scopes) {
+                        return Some(binding.tagged_value);
+                    }
+                }
+                // Rejected for these scopes: fall through to the parent rather
+                // than resurrect it by name.
+            }
+            env = env.parent.as_deref()?;
         }
-        self.parent
-            .as_ref()
-            .and_then(|p| p.get_scoped_fallback(name, scopes))
     }
 
     /// Which scoped binding a reference denotes, named by the scope set it
@@ -2525,8 +2538,9 @@ impl Environment {
         candidates: &mut Vec<(ScopeSet, TaggedValue)>,
         debug: bool,
     ) {
-        {
-            let scoped = self.scoped_bindings.borrow();
+        let mut env = self;
+        loop {
+            let scoped = env.scoped_bindings.borrow();
             if let Some(bindings) = scoped.get(name) {
                 for binding in bindings.iter().rev() {
                     let is_candidate =
@@ -2544,10 +2558,13 @@ impl Environment {
                     }
                 }
             }
-        }
-        match &self.parent {
-            Some(parent) => parent.collect_scoped_candidates(name, ref_scopes, candidates, debug),
-            None => self.collect_introduced_globals(name, ref_scopes, candidates, debug),
+            drop(scoped);
+            match &env.parent {
+                Some(parent) => env = parent,
+                None => {
+                    return env.collect_introduced_globals(name, ref_scopes, candidates, debug);
+                }
+            }
         }
     }
 
@@ -2606,22 +2623,34 @@ impl Environment {
     /// Check if a binding exists
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
-        self.bindings.borrow().slot_of(name).is_some()
-            || self.parent.as_ref().is_some_and(|p| p.has(name))
+        let mut env = self;
+        loop {
+            if env.bindings.borrow().slot_of(name).is_some() {
+                return true;
+            }
+            match env.parent.as_deref() {
+                Some(parent) => env = parent,
+                None => return false,
+            }
+        }
     }
 
     /// Get all variable names defined in this environment and parent environments
     pub fn get_all_names(&self) -> Vec<String> {
-        // Through `local_names`, so an `import_alias` is left out here too.
-        let mut names = self.local_names();
-        // Include names from scoped bindings
-        for name in self.scoped_bindings.borrow().keys() {
-            if !names.iter().any(|n| n.as_str() == name.as_ref()) {
-                names.push(name.to_string());
-            }
-        }
-        if let Some(parent) = &self.parent {
-            names.extend(parent.get_all_names());
+        let mut names = Vec::new();
+        let mut env = Some(self);
+        while let Some(current) = env {
+            // Through `local_names`, so an `import_alias` is left out here too.
+            names.extend(current.local_names());
+            // Include names from scoped bindings
+            names.extend(
+                current
+                    .scoped_bindings
+                    .borrow()
+                    .keys()
+                    .map(|name| name.to_string()),
+            );
+            env = current.parent.as_deref();
         }
         names.sort();
         names.dedup();

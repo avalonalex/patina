@@ -75,6 +75,14 @@ smallvec = "1"
 # Fast non-cryptographic hashing for hot-path string-keyed maps
 rustc-hash = "2"
 
+# Native stack on demand for the walks shaped like the code they walk — the
+# desugarer, the quasiquote lowering, the CPS transform, the VM compiler's
+# passes — so that code nested deeply runs, or is refused at
+# `patina_core::walk::MAX_FORM_DEPTH`, rather than overflowing the thread's
+# stack and aborting the process (#617). rustc grows its stack with it the
+# same way (`ensure_sufficient_stack`).
+stacker = "0.1"
+
 # Logging/tracing
 tracing = "0.1"
 

@@ -111,15 +111,24 @@ impl Derivation<'_> {
     /// overflowed and aborted the process. A cycle through a *tail* never
     /// comes back here, since `pair_template` walks a spine itself, so it
     /// checks its own; `operand_list` checks an operand list's.
+    ///
+    /// The nodes being derived are also the template's depth, which is held to
+    /// [`MAX_FORM_DEPTH`] as code is, and the walk's stack grows with it
+    /// (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     fn within(
         &self,
         node: TaggedValue,
         derive: impl FnOnce() -> Result<QuasiTemplate>,
     ) -> Result<QuasiTemplate> {
+        if self.active.borrow().len() >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(DesugarError::nested_too_deeply(node, &self.heap.borrow()));
+        }
         if !self.active.borrow_mut().insert(node.raw_bits()) {
             return Err(circular());
         }
-        let derived = derive();
+        let derived = patina_core::walk::ensure_sufficient_stack(derive);
         self.active.borrow_mut().remove(&node.raw_bits());
         derived
     }

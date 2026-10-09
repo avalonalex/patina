@@ -20,6 +20,10 @@ pub enum ExpandError {
 
     /// Invalid template structure
     InvalidTemplate { message: String },
+
+    /// A pattern variable's value nests past
+    /// `patina_core::walk::MAX_FORM_DEPTH`, so marking it was refused (#617).
+    NestedTooDeeply,
 }
 
 impl std::fmt::Display for ExpandError {
@@ -59,6 +63,11 @@ impl std::fmt::Display for ExpandError {
                     expected, actual
                 )
             }
+            ExpandError::NestedTooDeeply => write!(
+                f,
+                "Template expansion failed: a substituted form nests more than {} deep",
+                patina_core::walk::MAX_FORM_DEPTH
+            ),
             ExpandError::InvalidTemplate { message } => {
                 write!(
                     f,

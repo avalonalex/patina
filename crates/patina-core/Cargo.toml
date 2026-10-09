@@ -19,6 +19,9 @@ rustc-hash.workspace = true
 # Small vector optimization for ScopeSet
 smallvec.workspace = true
 
+# Grows the native stack for the walks of code (`walk::ensure_sufficient_stack`, #617)
+stacker.workspace = true
+
 # `getrlimit(RLIMIT_NOFILE)`, which sets descriptor pressure's threshold
 # (`heap/account.rs`, #607). The binary had it already, through rustyline.
 [target.'cfg(unix)'.dependencies]

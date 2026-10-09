@@ -74,6 +74,12 @@ pub enum MacroError {
     #[error("{0}")]
     AmbiguousReference(String),
 
+    /// What the expansion would substitute nests past
+    /// `patina_core::walk::MAX_FORM_DEPTH` (#617). Kept apart so the desugarer
+    /// refuses it as it refuses every form nested past the limit.
+    #[error("a substituted form nests too deeply")]
+    NestedTooDeeply,
+
     /// Error with expansion context for better debugging
     #[error("{message}")]
     WithContext {

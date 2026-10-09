@@ -408,6 +408,11 @@ fn rename_body(exprs: &[CoreExpr], env: &mut RenameEnv) -> Vec<CoreExpr> {
 }
 
 fn rename_expr(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
+    // Grown with the depth of the code, which the desugarer bounds (#617).
+    patina_core::walk::ensure_sufficient_stack(|| rename_expr_inner(expr, env))
+}
+
+fn rename_expr_inner(expr: &CoreExpr, env: &mut RenameEnv) -> CoreExpr {
     let kind = match &expr.kind {
         CoreExprKind::Literal(v) => CoreExprKind::Literal(*v),
         CoreExprKind::Quote(v) => CoreExprKind::Quote(*v),

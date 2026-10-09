@@ -695,6 +695,11 @@ fn gen_discarded_expr(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileErr
 }
 
 fn gen_expr_value(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| gen_expr_value_inner(expr, cg))
+}
+
+fn gen_expr_value_inner(expr: &RegExpr, cg: &mut Codegen) -> Result<(), CompileError> {
     // Record source location before emitting instructions for this expression.
     cg.record_source(&expr.source);
 

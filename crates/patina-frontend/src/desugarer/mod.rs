@@ -783,10 +783,19 @@ impl<'a> Desugarer<'a> {
         open: &mut OpenNodes,
     ) {
         const DEPTH_LIMIT: usize = 64;
-        if depth > DEPTH_LIMIT || !tv.is_pair() || !open.enter(tv) {
+        // Nor is one nested past the limit code is held to (#617): the
+        // desugar that follows refuses it too. The scan grows its stack
+        // until then.
+        if depth > DEPTH_LIMIT
+            || !tv.is_pair()
+            || open.depth() >= patina_core::walk::MAX_FORM_DEPTH
+            || !open.enter(tv)
+        {
             return;
         }
-        self.collect_produced_names_of_form(tv, shared_heap, out, depth, open);
+        patina_core::walk::ensure_sufficient_stack(|| {
+            self.collect_produced_names_of_form(tv, shared_heap, out, depth, open)
+        });
         open.leave();
     }
 
@@ -881,10 +890,14 @@ impl<'a> Desugarer<'a> {
         out: &mut Vec<(Rc<str>, ScopeSet)>,
         open: &mut OpenNodes,
     ) {
-        if !tv.is_pair() || !open.enter(tv) {
+        // Nor is one nested past the limit (#617), which the desugar that
+        // follows refuses too; the scan grows its stack until then.
+        if !tv.is_pair() || open.depth() >= patina_core::walk::MAX_FORM_DEPTH || !open.enter(tv) {
             return;
         }
-        self.collect_definition_names_of_form(tv, shared_heap, out, open);
+        patina_core::walk::ensure_sufficient_stack(|| {
+            self.collect_definition_names_of_form(tv, shared_heap, out, open)
+        });
         open.leave();
     }
 
@@ -1581,7 +1594,10 @@ impl<'a> Desugarer<'a> {
                     })
                     .then(|| Rc::clone(name))
             };
-            let mut settled = expr.map_children(|child| settle(child, bound, introduced));
+            // Grown with the depth of the code (#617).
+            let mut settled = patina_core::walk::ensure_sufficient_stack(|| {
+                expr.map_children(|child| settle(child, bound, introduced))
+            });
             match &mut settled.kind {
                 CoreExprKind::Var { name, scopes } => {
                     if let Some(original) = written(name, scopes) {
@@ -1999,15 +2015,23 @@ impl<'a> Desugarer<'a> {
     /// One form, and what every form recurses through. Internal recursion
     /// comes here rather than through `desugar_tagged`, whose bookkeeping is
     /// per top-level form and was a measurable cost per *node*.
+    ///
+    /// So it is also where the desugarer's stack grows: every level of the
+    /// code it desugars is a call here, and a few more frames below it, and
+    /// code nested deeply ran the thread out of stack and aborted the process
+    /// (#617). Only a compound form goes deeper. How deep it may go is
+    /// `desugar_open_form`'s to say.
     fn desugar_form(&self, tagged: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
-        let source = self.lookup_source(tagged, shared_heap);
-        let mut expr = self
-            .desugar_form_inner(tagged, shared_heap)
-            .map_err(|error| error.at_opt(source.clone()))?;
-        if expr.source.is_none() {
-            expr.source = source;
-        }
-        Ok(expr)
+        patina_core::walk::ensure_sufficient_stack_if(tagged.is_pair(), || {
+            let source = self.lookup_source(tagged, shared_heap);
+            let mut expr = self
+                .desugar_form_inner(tagged, shared_heap)
+                .map_err(|error| error.at_opt(source.clone()))?;
+            if expr.source.is_none() {
+                expr.source = source;
+            }
+            Ok(expr)
+        })
     }
 
     fn desugar_form_inner(
@@ -2109,12 +2133,21 @@ impl<'a> Desugarer<'a> {
     /// (#459). Checked here, where every compound form comes through, as
     /// Gauche checks `list?` at the head of each form and chibi `sexp_listp`.
     /// A circular literal is untouched: `quote` does not desugar its datum.
+    ///
+    /// And where a form nested past [`MAX_FORM_DEPTH`] is refused, counting
+    /// what macros expanded it into (#617): every compound form is entered
+    /// here, so the forms open here are the depth.
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     fn desugar_open_form(&self, form: TaggedValue, shared_heap: &SharedHeap) -> Result<CoreExpr> {
         if shared_heap.borrow().spine_is_circular(form) {
             return Err(DesugarError::InvalidSyntax(format!(
                 "a form must be a proper list, not a circular one: {}",
                 patina_core::debug_format::format_tagged(form, &shared_heap.borrow())
             )));
+        }
+        if self.open_forms.borrow().depth() >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(DesugarError::nested_too_deeply(form, &shared_heap.borrow()));
         }
         if !self.open_forms.borrow_mut().enter(form) {
             return Err(DesugarError::InvalidSyntax(format!(
@@ -2204,6 +2237,11 @@ impl<'a> Desugarer<'a> {
                         DesugarError::InvalidSyntax(format!(
                             "no `syntax-rules` pattern of `{name}` matches this use"
                         ))
+                    }
+                    // What it would have substituted nests past the limit
+                    // the desugarer holds the expansion to anyway (#617).
+                    patina_macros::MacroError::NestedTooDeeply => {
+                        DesugarError::nested_too_deeply(list, &shared_heap.borrow())
                     }
                     other => {
                         DesugarError::InvalidSyntax(format!("Macro expansion failed: {}", other))
@@ -3700,8 +3738,13 @@ impl<'a> Desugarer<'a> {
             env.heap().clone(),
         );
         let macro_name = name.clone();
-        let mut compiled = compiler.compile_macro(name, rules).map_err(|e| {
-            DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}"))
+        let mut compiled = compiler.compile_macro(name, rules).map_err(|e| match e {
+            // A pattern or template nested past the limit code is held to
+            // (#617).
+            patina_macros::MacroError::NestedTooDeeply => {
+                DesugarError::nested_too_deeply(transformer_tv, &shared_heap.borrow())
+            }
+            e => DesugarError::InvalidSyntax(format!("Failed to compile macro {macro_name}: {e}")),
         })?;
         // Compilation consults declarations (notably a bound `...`), but an
         // escaping transformer must retain the live environment, not its view.
@@ -3894,7 +3937,7 @@ mod tests {
         let desugarer = Desugarer::new();
         let x = sym(&heap, "x");
         let result = desugarer.desugar_tagged(x, &heap).unwrap();
-        if let CoreExprKind::Var { name, scopes } = result.kind {
+        if let CoreExprKind::Var { name, scopes } = &result.kind {
             assert_eq!(name.as_ref(), "x");
             assert!(scopes.is_empty());
         } else {
@@ -3949,7 +3992,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
         let list = make_list(&heap, &[sym(&heap, "lambda"), params, body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Lambda { params, body, .. } = result.kind {
+        if let CoreExprKind::Lambda { params, body, .. } = &result.kind {
             assert!(matches!(params, Formals::Fixed(_)));
             assert_eq!(body.len(), 1);
         } else {
@@ -3965,7 +4008,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "car"), sym(&heap, "args")]);
         let list = make_list(&heap, &[sym(&heap, "lambda"), sym(&heap, "args"), body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Lambda { params, body, .. } = result.kind {
+        if let CoreExprKind::Lambda { params, body, .. } = &result.kind {
             assert!(matches!(params, Formals::Variadic(_)));
             assert_eq!(body.len(), 1);
         } else {
@@ -3985,7 +4028,7 @@ mod tests {
         let formals = heap.borrow_mut().alloc_pair(x, y_rest);
         let list = make_list(&heap, &[sym(&heap, "lambda"), formals, sym(&heap, "x")]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Lambda { params, .. } = result.kind {
+        if let CoreExprKind::Lambda { params, .. } = &result.kind {
             assert!(matches!(params, Formals::Mixed { .. }));
         } else {
             panic!("Expected Lambda, got {:?}", result);
@@ -4011,7 +4054,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::If { test, then, else_ } = result.kind {
+        if let CoreExprKind::If { test, then, else_ } = &result.kind {
             assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
             assert!(
                 matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
@@ -4034,7 +4077,7 @@ mod tests {
             &[sym(&heap, "if"), TaggedValue::TRUE, TaggedValue::fixnum(1)],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::If { test, then, else_ } = result.kind {
+        if let CoreExprKind::If { test, then, else_ } = &result.kind {
             assert!(matches!(&test.kind, CoreExprKind::Literal(v) if *v == TaggedValue::TRUE));
             assert!(
                 matches!(&then.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 1)
@@ -4061,7 +4104,7 @@ mod tests {
             &[sym(&heap, "set!"), sym(&heap, "x"), TaggedValue::fixnum(42)],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Set { var, scopes, value } = result.kind {
+        if let CoreExprKind::Set { var, scopes, value } = &result.kind {
             assert_eq!(var.as_ref(), "x");
             assert!(scopes.is_empty());
             assert!(
@@ -4107,7 +4150,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value, .. } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = &result.kind {
             assert_eq!(name.as_ref(), "x");
             assert!(
                 matches!(&value.kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
@@ -4129,7 +4172,7 @@ mod tests {
         let body = make_list(&heap, &[sym(&heap, "+"), sym(&heap, "x"), sym(&heap, "y")]);
         let list = make_list(&heap, &[sym(&heap, "define"), name_params, body]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value, .. } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = &result.kind {
             assert_eq!(name.as_ref(), "add");
             assert!(matches!(&value.kind, CoreExprKind::Lambda { .. }));
         } else {
@@ -4150,7 +4193,7 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "args")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value, .. } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = &result.kind {
             assert_eq!(name.as_ref(), "f");
             if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 assert!(matches!(params, Formals::Variadic(_)));
@@ -4179,7 +4222,7 @@ mod tests {
             &[sym(&heap, "define"), name_params, sym(&heap, "rest")],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Define { name, value, .. } = result.kind {
+        if let CoreExprKind::Define { name, value, .. } = &result.kind {
             assert_eq!(name.as_ref(), "f");
             if let CoreExprKind::Lambda { params, .. } = &value.kind {
                 if let Formals::Mixed { fixed, rest } = params {
@@ -4209,7 +4252,7 @@ mod tests {
         // (begin 42)
         let list = make_list(&heap, &[sym(&heap, "begin"), TaggedValue::fixnum(42)]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Begin(exprs) = result.kind {
+        if let CoreExprKind::Begin(exprs) = &result.kind {
             assert_eq!(exprs.len(), 1);
             assert!(
                 matches!(&exprs[0].kind, CoreExprKind::Literal(v) if v.is_fixnum() && v.as_fixnum_unchecked() == 42)
@@ -4234,7 +4277,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Begin(exprs) = result.kind {
+        if let CoreExprKind::Begin(exprs) = &result.kind {
             assert_eq!(exprs.len(), 3);
         } else {
             panic!("Expected Begin, got {:?}", result);
@@ -4273,7 +4316,7 @@ mod tests {
             ],
         );
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::App { func, args } = result.kind {
+        if let CoreExprKind::App { func, args } = &result.kind {
             assert!(matches!(&func.kind, CoreExprKind::Var { .. }));
             assert_eq!(args.len(), 2);
         } else {
@@ -4290,7 +4333,7 @@ mod tests {
         let lambda = make_list(&heap, &[sym(&heap, "lambda"), params, sym(&heap, "x")]);
         let list = make_list(&heap, &[lambda, TaggedValue::fixnum(42)]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::App { func, args } = result.kind {
+        if let CoreExprKind::App { func, args } = &result.kind {
             assert!(matches!(&func.kind, CoreExprKind::Lambda { .. }));
             assert_eq!(args.len(), 1);
         } else {
@@ -4445,7 +4488,7 @@ mod tests {
         );
         let list = make_list(&heap, &[sym(&heap, "cond-expand"), clause]);
         let result = desugarer.desugar_tagged(list, &heap).unwrap();
-        if let CoreExprKind::Begin(exprs) = result.kind {
+        if let CoreExprKind::Begin(exprs) = &result.kind {
             assert_eq!(exprs.len(), 3);
         } else {
             panic!("Expected Begin, got {:?}", result);

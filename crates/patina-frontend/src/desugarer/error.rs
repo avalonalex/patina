@@ -44,6 +44,12 @@ pub enum DesugarError {
     /// once expansion is done. See `patina_core::scope_resolve`.
     AmbiguousReference(String),
 
+    /// A form nested deeper than [`MAX_FORM_DEPTH`], counting the forms
+    /// macros expanded it into, named in brief (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    NestedTooDeeply(String),
+
     /// Generic error with message
     Other(String),
 
@@ -63,6 +69,15 @@ pub enum DesugarError {
 }
 
 impl DesugarError {
+    /// Refuse `form` for nesting past [`MAX_FORM_DEPTH`]. It is named in
+    /// brief: written out in full it would be as deep as the limit, and as
+    /// long as the rest of the program.
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    pub fn nested_too_deeply(form: patina_core::TaggedValue, heap: &patina_core::Heap) -> Self {
+        DesugarError::NestedTooDeeply(patina_core::debug_format::format_tagged_brief(form, heap))
+    }
+
     pub fn with_diagnostic(self, diagnostic: patina_runtime::Diagnostic) -> Self {
         Self::WithDiagnostic {
             error: Box::new(self),
@@ -102,6 +117,7 @@ impl DesugarError {
             DesugarError::DuplicateParameter { .. } => ErrorKind::Syntax,
             DesugarError::InvalidFormals(_) => ErrorKind::Syntax,
             DesugarError::AmbiguousReference(_) => ErrorKind::Syntax,
+            DesugarError::NestedTooDeeply(_) => ErrorKind::Syntax,
             DesugarError::Other(_) => ErrorKind::Internal,
             DesugarError::WithLocation { error, .. }
             | DesugarError::WithDiagnostic { error, .. } => error.to_error_kind(),
@@ -151,6 +167,13 @@ impl fmt::Display for DesugarError {
             DesugarError::InvalidFormals(msg) => {
                 write!(f, "Invalid formal parameters: {}", msg)
             }
+            DesugarError::NestedTooDeeply(form) => write!(
+                f,
+                "form nested too deeply: more than {} forms deep, counting what macros \
+                 expand into: {}",
+                patina_core::walk::MAX_FORM_DEPTH,
+                form
+            ),
             DesugarError::Other(msg) => write!(f, "{}", msg),
             DesugarError::WithLocation { error, .. }
             | DesugarError::WithDiagnostic { error, .. } => write!(f, "{}", error),

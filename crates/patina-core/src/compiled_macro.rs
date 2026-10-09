@@ -98,6 +98,15 @@ impl Pattern {
         matches!(self, Pattern::Ellipsis { .. })
     }
 
+    /// Whether this pattern has subpatterns, for a walk of it that grows its
+    /// stack where it goes deeper (`walk::ensure_sufficient_stack_if`, #617).
+    pub fn is_nested(&self) -> bool {
+        !matches!(
+            self,
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::Var(_)
+        )
+    }
+
     /// Get the PVREF if this is a variable pattern
     pub fn as_var(&self) -> Option<PVRef> {
         match self {
@@ -111,7 +120,8 @@ impl Pattern {
     /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
     /// literal through each walk below.
     pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
-        match self {
+        // As deep as the pattern: grown as it goes (#617).
+        crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
             Pattern::Literal(tv) => f(*tv),
             Pattern::Wildcard => {}
             // A pattern variable's depth and index.
@@ -136,6 +146,15 @@ impl Pattern {
                 // Pattern-variable references.
                 vars: _,
             } => subpattern.for_each_literal(f),
+        })
+    }
+}
+
+impl Drop for Pattern {
+    fn drop(&mut self) {
+        // As `CoreExpr`'s, a level of the pattern at a time (#617).
+        if self.is_nested() && !crate::walk::has_stack_room() {
+            crate::walk::drop_deep(std::mem::replace(self, Pattern::Wildcard));
         }
     }
 }
@@ -336,6 +355,15 @@ impl Template {
         matches!(self, Template::Ellipsis { .. })
     }
 
+    /// Whether this template has subtemplates, for a walk of it that grows its
+    /// stack where it goes deeper (`walk::ensure_sufficient_stack_if`, #617).
+    pub fn is_nested(&self) -> bool {
+        !matches!(
+            self,
+            Template::Literal(_) | Template::Symbol(_) | Template::Var(_)
+        )
+    }
+
     /// Get the PVREF if this is a variable template
     pub fn as_var(&self) -> Option<PVRef> {
         match self {
@@ -349,7 +377,8 @@ impl Template {
     /// named (#623), and the sentinel test `compiled_macro_fields` reaches a
     /// literal through each walk below.
     pub fn for_each_literal(&self, f: &mut dyn FnMut(TaggedValue)) {
-        match self {
+        // As deep as the template: grown as it goes (#617).
+        crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
             Template::Literal(tv) => f(*tv),
             // A name, a source position and scope sets.
             Template::Symbol(_) => {}
@@ -375,7 +404,7 @@ impl Template {
                 // Pattern-variable references.
                 vars: _,
             } => subtemplate.for_each_literal(f),
-        }
+        })
     }
 
     /// Visit every free identifier name in this template.
@@ -383,7 +412,8 @@ impl Template {
     /// Pattern variables (`Template::Var`) are excluded by construction: they
     /// are substituted from the macro call, not introduced by the template.
     pub fn for_each_symbol(&self, f: &mut dyn FnMut(Rc<str>)) {
-        match self {
+        // As deep as the template: grown as it goes (#617).
+        crate::walk::ensure_sufficient_stack_if(self.is_nested(), || match self {
             Template::Symbol(id) => f(id.name().clone()),
             Template::List(items) | Template::Vector(items) => {
                 for i in items {
@@ -398,6 +428,16 @@ impl Template {
             }
             Template::Ellipsis { subtemplate, .. } => subtemplate.for_each_symbol(f),
             Template::Literal(_) | Template::Var(_) => {}
+        })
+    }
+}
+
+impl Drop for Template {
+    fn drop(&mut self) {
+        // As `CoreExpr`'s, a level of the template at a time (#617).
+        if self.is_nested() && !crate::walk::has_stack_room() {
+            let placeholder = Template::Literal(TaggedValue::UNSPECIFIED);
+            crate::walk::drop_deep(std::mem::replace(self, placeholder));
         }
     }
 }

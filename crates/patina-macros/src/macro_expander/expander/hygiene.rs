@@ -4,7 +4,7 @@
 //! including identifier renaming and marking substituted values.
 //! All methods return TaggedValue directly.
 
-use super::Expander;
+use super::{ExpandError, Expander};
 use crate::macro_expander::Identifier;
 use patina_core::walk::OpenNodes;
 use patina_core::{SpineEnd, TaggedValue};
@@ -77,21 +77,72 @@ impl Expander {
     /// chibi and Gauche hand back the datum itself — `eq?` to its own
     /// `cadr`. As code the desugarer refuses it; as data a macro quotes it,
     /// and quoted data carries no marks.
-    pub(super) fn mark_substituted_tagged(&self, tv: TaggedValue) -> TaggedValue {
-        let mut walk = MarkWalk::default();
-        let marked = self.mark_substituted_in(tv, &mut walk);
-        if walk.circular { tv } else { marked }
+    ///
+    /// The walk is a loop over a stack of the lists it is inside, not a
+    /// recursion: what a pattern variable holds can be the rest of a program
+    /// nested thousands deep, and the recursion overflowed the native stack
+    /// (#617). A value that nests deeper than the expansion has left of
+    /// [`MAX_FORM_DEPTH`] ([`Self::at_depth`]) is refused, since the desugarer
+    /// would refuse the expansion that holds it — and before it got there,
+    /// each level of such a form would copy all the levels below.
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    pub(super) fn mark_substituted_tagged(
+        &self,
+        tv: TaggedValue,
+    ) -> Result<TaggedValue, ExpandError> {
+        let mut open = OpenNodes::default();
+        // The lists being marked, innermost last.
+        let mut lists: Vec<MarkedList> = Vec::new();
+        let mut next = tv;
+        loop {
+            let mut marked = match self.mark_node(next) {
+                Mark::Done(marked) => marked,
+                Mark::Circular => return Ok(tv),
+                Mark::List { elements, tail } => {
+                    if open.depth() >= self.depth_limit {
+                        return Err(ExpandError::NestedTooDeeply);
+                    }
+                    if !open.enter(next) {
+                        return Ok(tv);
+                    }
+                    let list = next;
+                    next = elements[0];
+                    lists.push(MarkedList {
+                        list,
+                        elements,
+                        done: 0,
+                        tail,
+                    });
+                    continue;
+                }
+            };
+            // Hand `marked` to the list it belongs to, and on up through every
+            // list it completes.
+            loop {
+                let Some(list) = lists.last_mut() else {
+                    return Ok(marked);
+                };
+                if list.done < list.elements.len() {
+                    // An element, marked in place; then the next, or the tail.
+                    list.elements[list.done] = marked;
+                    list.done += 1;
+                    next = list.elements.get(list.done).copied().unwrap_or(list.tail);
+                    break;
+                }
+                // The tail: the list is done.
+                let list = lists.pop().expect("the list just marked");
+                open.leave();
+                marked = self.rebuild_marked(&list, marked);
+            }
+        }
     }
 
-    /// [`Self::mark_substituted_tagged`], inside the pairs `walk` holds open.
-    fn mark_substituted_in(&self, tv: TaggedValue, walk: &mut MarkWalk) -> TaggedValue {
-        if walk.circular {
-            return tv;
-        }
-
+    /// Mark one node, or say it is a list to walk.
+    fn mark_node(&self, tv: TaggedValue) -> Mark {
         // Fast path: immediate values don't need marking
         if tv.is_fixnum() || tv.is_char() || tv.is_special() {
-            return tv;
+            return Mark::Done(tv);
         }
 
         let heap = self.heap();
@@ -105,7 +156,7 @@ impl Expander {
                 let mut heap = heap.borrow_mut();
                 let copy = heap.alloc_identifier(name, new_scopes);
                 heap.inherit_source(tv, copy);
-                return copy;
+                return Mark::Done(copy);
             }
         }
 
@@ -116,7 +167,7 @@ impl Expander {
                 let name_rc: Rc<str> = name.into();
                 let scopes = patina_runtime::ScopeSet::new().with_scope(self.macro_scope);
                 drop(heap_ref);
-                return heap.borrow_mut().alloc_identifier(name_rc, scopes);
+                return Mark::Done(heap.borrow_mut().alloc_identifier(name_rc, scopes));
             }
         }
 
@@ -130,34 +181,29 @@ impl Expander {
         // case. Flatten the spine once and decide head-ness at element 0,
         // which is what `compile_template` and `rewrite_form` already do.
         if tv.is_pair() {
-            let Some((elems, tail)) = self.spine_of(tv) else {
-                walk.circular = true;
-                return tv;
+            let Some((elements, tail)) = self.spine_of(tv) else {
+                return Mark::Circular;
             };
-            let head = elems[0];
+            let head = elements[0];
             if self.is_macro_definition_tagged(head) || self.is_quote_form_tagged(head) {
-                return tv;
+                return Mark::Done(tv);
             }
-            if !walk.open.enter(tv) {
-                walk.circular = true;
-                return tv;
-            }
-            let marked: Vec<TaggedValue> = elems
-                .into_iter()
-                .map(|e| self.mark_substituted_in(e, walk))
-                .collect();
-            let mut out = self.mark_substituted_in(tail, walk);
-            walk.open.leave();
-            let mut heap = heap.borrow_mut();
-            for e in marked.into_iter().rev() {
-                out = heap.alloc_pair(e, out);
-            }
-            heap.inherit_source(tv, out);
-            return out;
+            return Mark::List { elements, tail };
         }
 
         // Other values (vectors, etc.) pass through unchanged
-        tv
+        Mark::Done(tv)
+    }
+
+    /// The marked copy of `list`, from its marked elements and `tail`.
+    fn rebuild_marked(&self, list: &MarkedList, tail: TaggedValue) -> TaggedValue {
+        let mut heap = self.heap().borrow_mut();
+        let mut out = tail;
+        for &element in list.elements.iter().rev() {
+            out = heap.alloc_pair(element, out);
+        }
+        heap.inherit_source(list.list, out);
+        out
     }
 
     /// Flatten a pair's spine into its elements and whatever ends it — `()`
@@ -188,10 +234,25 @@ impl Expander {
     }
 }
 
-/// One marking of a substituted value: the pairs it is inside, and whether it
-/// has met a cycle (`Expander::mark_substituted_tagged`).
-#[derive(Default)]
-struct MarkWalk {
-    open: OpenNodes,
-    circular: bool,
+/// What marking one node found ([`Expander::mark_substituted_tagged`]).
+enum Mark {
+    /// The node's marked value: a copy, or the node itself where nothing in
+    /// it is marked.
+    Done(TaggedValue),
+    /// A list to walk: its elements and whatever ends its spine.
+    List {
+        elements: Vec<TaggedValue>,
+        tail: TaggedValue,
+    },
+    /// A spine that comes back on itself: the whole value goes unmarked.
+    Circular,
+}
+
+/// A list being marked: its elements, the first `done` of them replaced by
+/// their marked copies, and the tail, marked after them.
+struct MarkedList {
+    list: TaggedValue,
+    elements: Vec<TaggedValue>,
+    done: usize,
+    tail: TaggedValue,
 }

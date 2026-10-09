@@ -31,6 +31,29 @@ pub struct TailedExpr {
     pub source: Option<SourceLocation>,
 }
 
+impl Drop for TailedExpr {
+    fn drop(&mut self) {
+        // The drop glue that follows recurses into the children, a level of
+        // the code at a time; where the stack has no room for that, they go
+        // to a new segment (#617). A leaf, most of any tree, has none.
+        let leaf = matches!(
+            self.kind,
+            TailedExprKind::Literal(_)
+                | TailedExprKind::Quote(_)
+                | TailedExprKind::Quasiquote
+                | TailedExprKind::LocalRef { .. }
+                | TailedExprKind::ClosureRef { .. }
+                | TailedExprKind::GlobalRef { .. }
+                | TailedExprKind::ReadLocalCell { .. }
+                | TailedExprKind::ReadClosureCell { .. }
+        );
+        if !leaf && !patina_core::walk::has_stack_room() {
+            let placeholder = TailedExprKind::Literal(TaggedValue::UNSPECIFIED);
+            patina_core::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
+        }
+    }
+}
+
 impl TailedExpr {
     fn with_source(kind: TailedExprKind, source: Option<SourceLocation>) -> Self {
         Self { kind, source }
@@ -135,6 +158,11 @@ impl Pass3Tail {
 }
 
 fn mark(expr: &ClosedExpr, tail: bool) -> TailedExpr {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| mark_inner(expr, tail))
+}
+
+fn mark_inner(expr: &ClosedExpr, tail: bool) -> TailedExpr {
     let source = expr.source.clone();
     let kind = match &expr.kind {
         ClosedExprKind::Literal(v) => TailedExprKind::Literal(*v),
@@ -277,7 +305,7 @@ mod tests {
     fn tail_call_in_lambda_body() {
         let expr = lambda(vec![], vec![app(var("f"), vec![lit(1)])]);
         let tailed = pipeline(&expr);
-        let TailedExprKind::Lambda(lam) = tailed.kind else {
+        let TailedExprKind::Lambda(lam) = &tailed.kind else {
             panic!("expected Lambda");
         };
         let TailedExprKind::App { is_tail, .. } = &lam.body[0].kind else {
@@ -296,7 +324,7 @@ mod tests {
             ]))],
         );
         let tailed = pipeline(&expr);
-        let TailedExprKind::Lambda(lam) = tailed.kind else {
+        let TailedExprKind::Lambda(lam) = &tailed.kind else {
             panic!("expected Lambda");
         };
         let TailedExprKind::Begin(exprs) = &lam.body[0].kind else {
@@ -321,7 +349,7 @@ mod tests {
         });
         let expr = lambda(vec![], vec![if_expr]);
         let tailed = pipeline(&expr);
-        let TailedExprKind::Lambda(lam) = tailed.kind else {
+        let TailedExprKind::Lambda(lam) = &tailed.kind else {
             panic!("expected Lambda");
         };
         let TailedExprKind::If { then, else_, .. } = &lam.body[0].kind else {

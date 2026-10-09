@@ -43,6 +43,29 @@ pub struct ClosedExpr {
     pub source: Option<SourceLocation>,
 }
 
+impl Drop for ClosedExpr {
+    fn drop(&mut self) {
+        // The drop glue that follows recurses into the children, a level of
+        // the code at a time; where the stack has no room for that, they go
+        // to a new segment (#617). A leaf, most of any tree, has none.
+        let leaf = matches!(
+            self.kind,
+            ClosedExprKind::Literal(_)
+                | ClosedExprKind::Quote(_)
+                | ClosedExprKind::Quasiquote
+                | ClosedExprKind::LocalRef { .. }
+                | ClosedExprKind::ClosureRef { .. }
+                | ClosedExprKind::GlobalRef { .. }
+                | ClosedExprKind::ReadLocalCell { .. }
+                | ClosedExprKind::ReadClosureCell { .. }
+        );
+        if !leaf && !patina_core::walk::has_stack_room() {
+            let placeholder = ClosedExprKind::Literal(TaggedValue::UNSPECIFIED);
+            patina_core::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
+        }
+    }
+}
+
 impl ClosedExpr {
     fn with_source(kind: ClosedExprKind, source: Option<SourceLocation>) -> Self {
         Self { kind, source }
@@ -208,6 +231,11 @@ impl Pass2Closure {
 }
 
 fn convert(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| convert_inner(expr, ctx))
+}
+
+fn convert_inner(expr: &CoreExpr, ctx: &mut Ctx<'_>) -> ClosedExpr {
     let source = expr.source.clone();
     let kind = match &expr.kind {
         CoreExprKind::Literal(v) => ClosedExprKind::Literal(*v),
@@ -453,7 +481,7 @@ mod tests {
         let expr = lambda(vec!["x"], vec![var("x")]);
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
-        let ClosedExprKind::Lambda(lam) = closed.kind else {
+        let ClosedExprKind::Lambda(lam) = &closed.kind else {
             panic!("expected Lambda")
         };
         assert!(matches!(&lam.body[0].kind, ClosedExprKind::LocalRef(n) if n.as_ref() == "x"));
@@ -465,7 +493,7 @@ mod tests {
         let expr = lambda(vec!["x"], vec![var("y")]);
         let info = Pass1Analysis::run(&expr);
         let closed = Pass2Closure::run(&expr, &info);
-        let ClosedExprKind::Lambda(lam) = closed.kind else {
+        let ClosedExprKind::Lambda(lam) = &closed.kind else {
             panic!("expected Lambda")
         };
         assert!(
@@ -479,7 +507,7 @@ mod tests {
     fn unresolved_var_becomes_global_ref() {
         let info = Pass1Analysis::run(&var("foo"));
         let closed = Pass2Closure::run(&var("foo"), &info);
-        assert!(matches!(closed.kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "foo"));
+        assert!(matches!(&closed.kind, ClosedExprKind::GlobalRef(n) if n.as_ref() == "foo"));
     }
 
     #[test]
@@ -488,7 +516,7 @@ mod tests {
         let outer = lambda(vec!["x"], vec![inner]);
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
-        let ClosedExprKind::Lambda(outer_lam) = closed.kind else {
+        let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda (outer)")
         };
         assert!(outer_lam.capture_list.is_empty());
@@ -513,7 +541,7 @@ mod tests {
         let outer = lambda(vec!["x"], vec![set_x, inner]);
         let info = Pass1Analysis::run(&outer);
         let closed = Pass2Closure::run(&outer, &info);
-        let ClosedExprKind::Lambda(outer_lam) = closed.kind else {
+        let ClosedExprKind::Lambda(outer_lam) = &closed.kind else {
             panic!("expected Lambda")
         };
         assert!(outer_lam.boxed_params.contains(&Rc::<str>::from("x")));

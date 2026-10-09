@@ -117,6 +117,11 @@ impl Lowering<'_> {
 
 /// Recursively walk a CoreExpr tree, lowering any Quasiquote nodes.
 fn lower_expr(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, QuasiquoteError> {
+    // Grown with the depth of the code, which the desugarer bounds (#617).
+    patina_core::walk::ensure_sufficient_stack(|| lower_expr_inner(expr, cx))
+}
+
+fn lower_expr_inner(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, QuasiquoteError> {
     let each = |exprs: &[CoreExpr]| -> Result<Vec<CoreExpr>, QuasiquoteError> {
         exprs.iter().map(|e| lower_expr(e, cx)).collect()
     };
@@ -187,6 +192,14 @@ fn lower_expr(expr: &CoreExpr, cx: &Lowering<'_>) -> Result<CoreExpr, Quasiquote
 
 /// The expression that builds what `template` describes.
 fn lower_template(
+    template: &QuasiTemplate,
+    cx: &Lowering<'_>,
+) -> Result<CoreExpr, QuasiquoteError> {
+    // Grown with the depth of the template, which the desugarer bounds (#617).
+    patina_core::walk::ensure_sufficient_stack(|| lower_template_inner(template, cx))
+}
+
+fn lower_template_inner(
     template: &QuasiTemplate,
     cx: &Lowering<'_>,
 ) -> Result<CoreExpr, QuasiquoteError> {

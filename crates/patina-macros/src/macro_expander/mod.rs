@@ -53,6 +53,11 @@ pub use utils::{
 /// * `original_args` - Original unflipped TaggedValue args (for debug logging)
 /// * `shared_heap` - Shared heap for TaggedValue operations
 /// * `use_site` - Where an input identifier resolves when it meets a literal
+/// * `depth` - How many forms deep the use is ([`Expander::at_depth`])
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one fact about the expansion, and the one caller passes them through"
+)]
 fn expand_macro_core_tagged(
     compiled_macro: &CompiledMacro,
     flipped_args: patina_core::TaggedValue,
@@ -61,6 +66,7 @@ fn expand_macro_core_tagged(
     shared_heap: &patina_core::SharedHeap,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
+    depth: usize,
 ) -> Result<patina_core::TaggedValue, crate::error::MacroError> {
     use debug::{DebugContext, record_expansion_step};
 
@@ -82,7 +88,7 @@ fn expand_macro_core_tagged(
     debug_ctx.log_input_flip(macro_scope, flipped_args, shared_heap);
 
     // Create expander with macro scope for hygiene
-    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone());
+    let expander = Expander::new_with_heap(macro_scope, shared_heap.clone()).at_depth(depth);
 
     // Try each rule until we find a match
     for (rule_idx, rule) in compiled_macro.rules.iter().enumerate() {
@@ -101,9 +107,15 @@ fn expand_macro_core_tagged(
                 debug_ctx.log_match_success(&match_env, &rule.pvar_names, &rule.template);
 
                 // Expand the template into a TaggedValue
-                let expanded_tagged = expander
-                    .expand(&rule.template, &match_env)
-                    .map_err(|e| crate::error::MacroError::InvalidSyntax(e.to_string()))?;
+                let expanded_tagged =
+                    expander
+                        .expand(&rule.template, &match_env)
+                        .map_err(|e| match e {
+                            ExpandError::NestedTooDeeply => {
+                                crate::error::MacroError::NestedTooDeeply
+                            }
+                            e => crate::error::MacroError::InvalidSyntax(e.to_string()),
+                        })?;
 
                 // Debug logging (functions handle TaggedValue directly)
                 debug_ctx.log_before_output_flip(expanded_tagged, shared_heap);
@@ -345,18 +357,23 @@ pub fn expand_macro_with_scope(
         env,
         scopes: &compiled_macro.definition_scopes,
     });
-    expand_macro_at_sites(compiled_macro, args, shared_heap, definition, use_site)
+    expand_macro_at_sites(compiled_macro, args, shared_heap, definition, use_site, 0)
 }
 
 /// Expand using explicit lookup sites. The frontend supplies transient views of
 /// declarations encountered in the current form, without capturing those views
 /// in the compiled transformer or changing its runtime definition environment.
+///
+/// `depth` is how many forms deep the use is, counting expansions, which
+/// limits how deep a value it substitutes may nest ([`Expander::at_depth`],
+/// #617).
 pub fn expand_macro_at_sites(
     compiled_macro: &CompiledMacro,
     args: patina_core::TaggedValue,
     shared_heap: &patina_core::SharedHeap,
     definition: Option<Site<'_>>,
     use_site: Option<Site<'_>>,
+    depth: usize,
 ) -> Result<MacroExpansion, crate::error::MacroError> {
     use crate::tracer::MacroTracer;
 
@@ -380,6 +397,7 @@ pub fn expand_macro_at_sites(
         shared_heap,
         definition,
         use_site,
+        depth,
     );
 
     // Exit expansion (decrement depth) — on the error path too. A caller that

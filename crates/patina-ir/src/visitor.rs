@@ -150,8 +150,11 @@ pub trait ExprVisitor {
     ///     self.walk_expr(expr);
     /// }
     /// ```
+    ///
+    /// Every default recursion comes through here, so here is where a walk's
+    /// stack grows with the depth of the code it walks (#617).
     fn walk_expr(&mut self, expr: &CoreExpr) {
-        match &expr.kind {
+        patina_core::walk::ensure_sufficient_stack(|| match &expr.kind {
             CoreExprKind::Literal(val) => self.visit_literal(val),
             CoreExprKind::Var { name, scopes } => self.visit_var(name, scopes),
             CoreExprKind::Quote(val) => self.visit_quote(val),
@@ -173,7 +176,7 @@ pub trait ExprVisitor {
             CoreExprKind::Expand { expr } => self.visit_expand(expr),
             CoreExprKind::App { func, args } => self.visit_app(func, args),
             CoreExprKind::Apply { func, args } => self.visit_apply(func, args),
-        }
+        });
     }
 }
 

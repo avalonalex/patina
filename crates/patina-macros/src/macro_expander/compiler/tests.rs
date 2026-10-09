@@ -33,7 +33,7 @@ fn test_compile_simple_pattern() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3);
             assert!(matches!(&patterns[0], Pattern::Var(_)));
@@ -64,7 +64,7 @@ fn test_compile_pattern_with_ellipsis() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3);
             // First two are normal vars
@@ -109,7 +109,7 @@ fn test_compile_pattern_ellipsis_with_following() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3); // do, bindings..., (test result)
             match &patterns[1] {
@@ -141,7 +141,7 @@ fn test_compile_simple_template() {
     );
     let template = compiler.compile_template(template_form, 0).unwrap();
 
-    match template {
+    match &template {
         Template::List(templates) => {
             assert_eq!(templates.len(), 3);
             // "if" is introduced symbol
@@ -177,7 +177,7 @@ fn test_compile_template_with_ellipsis() {
     );
     let template = compiler.compile_template(template_form, 0).unwrap();
 
-    match template {
+    match &template {
         Template::List(templates) => {
             assert_eq!(templates.len(), 3); // lambda, (), (body ...)
             match &templates[2] {
@@ -211,7 +211,7 @@ fn test_compile_with_literals() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3);
             // "cond" is a variable
@@ -326,7 +326,7 @@ fn test_underscore_as_wildcard() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3);
             // "foo" is a pattern variable
@@ -352,7 +352,7 @@ fn test_underscore_as_literal() {
     );
     let pattern = compiler.compile_pattern(pattern_form, 0).unwrap();
 
-    match pattern {
+    match &pattern {
         Pattern::List(patterns) => {
             assert_eq!(patterns.len(), 3);
             // "foo" is a pattern variable

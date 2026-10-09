@@ -196,6 +196,7 @@ impl LibraryDefinition {
                 &mut body_elements,
                 can_load_library,
                 heap,
+                0,
             )?;
         }
 
@@ -211,7 +212,12 @@ impl LibraryDefinition {
         })
     }
 
-    /// Parse a library declaration from a TaggedValue
+    /// Parse a library declaration from a TaggedValue, `depth` `cond-expand`s
+    /// inside the library's own declarations. Declarations nest as code does,
+    /// and are held to the same limit, [`MAX_FORM_DEPTH`], with the stack
+    /// grown as they go (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
     fn parse_declaration_tagged(
         tv: TaggedValue,
         exports: &mut Vec<ExportSpec>,
@@ -219,6 +225,36 @@ impl LibraryDefinition {
         body_elements: &mut Vec<BodyElement>,
         can_load_library: &dyn Fn(&[String]) -> bool,
         heap: &SharedHeap,
+        depth: usize,
+    ) -> Result<(), ParseError> {
+        if depth >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(ParseError::InvalidSyntax(format!(
+                "library declaration nested too deeply: more than {} levels",
+                patina_core::walk::MAX_FORM_DEPTH
+            )));
+        }
+        patina_core::walk::ensure_sufficient_stack(|| {
+            Self::parse_declaration_node(
+                tv,
+                exports,
+                imports,
+                body_elements,
+                can_load_library,
+                heap,
+                depth,
+            )
+        })
+    }
+
+    /// [`Self::parse_declaration_tagged`] for one declaration.
+    fn parse_declaration_node(
+        tv: TaggedValue,
+        exports: &mut Vec<ExportSpec>,
+        imports: &mut Vec<ImportSet>,
+        body_elements: &mut Vec<BodyElement>,
+        can_load_library: &dyn Fn(&[String]) -> bool,
+        heap: &SharedHeap,
+        depth: usize,
     ) -> Result<(), ParseError> {
         // A declaration that is not a proper list has no keyword to dispatch
         // on, so it falls under the same policy as an unknown keyword below:
@@ -302,6 +338,7 @@ impl LibraryDefinition {
                     body_elements,
                     can_load_library,
                     heap,
+                    depth,
                 ),
                 "include-library-declarations" => {
                     let paths = Self::parse_include_paths_tagged(&list[1..], heap)?;
@@ -443,6 +480,7 @@ impl LibraryDefinition {
         body_elements: &mut Vec<BodyElement>,
         can_load_library: &dyn Fn(&[String]) -> bool,
         heap: &SharedHeap,
+        depth: usize,
     ) -> Result<(), ParseError> {
         use crate::cond_expand::evaluate_feature_requirement_tagged;
 
@@ -492,6 +530,7 @@ impl LibraryDefinition {
                         body_elements,
                         can_load_library,
                         heap,
+                        depth + 1,
                     )?;
                 }
                 return Ok(());
@@ -556,6 +595,35 @@ impl LibraryDefinition {
         tv: TaggedValue,
         heap: &SharedHeap,
     ) -> Result<ImportSet, ParseError> {
+        Self::parse_import_set_at(tv, heap, 0)
+    }
+
+    /// [`Self::parse_import_set_tagged`] for an import set `depth` modifiers
+    /// inside the one being parsed. Modifiers nest as code does, and are held
+    /// to the same limit, [`MAX_FORM_DEPTH`], with the stack grown as they go
+    /// (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    fn parse_import_set_at(
+        tv: TaggedValue,
+        heap: &SharedHeap,
+        depth: usize,
+    ) -> Result<ImportSet, ParseError> {
+        if depth >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(ParseError::InvalidSyntax(format!(
+                "import set nested too deeply: more than {} levels",
+                patina_core::walk::MAX_FORM_DEPTH
+            )));
+        }
+        patina_core::walk::ensure_sufficient_stack(|| Self::parse_import_set_node(tv, heap, depth))
+    }
+
+    /// [`Self::parse_import_set_at`] for one import set.
+    fn parse_import_set_node(
+        tv: TaggedValue,
+        heap: &SharedHeap,
+        depth: usize,
+    ) -> Result<ImportSet, ParseError> {
         {
             let h = heap.borrow();
             if !tv.is_pair() {
@@ -584,10 +652,10 @@ impl LibraryDefinition {
 
         if let Some(ref first) = first_sym {
             match first.as_str() {
-                "only" => return Self::parse_only_import_tagged(&list, heap),
-                "except" => return Self::parse_except_import_tagged(&list, heap),
-                "prefix" => return Self::parse_prefix_import_tagged(&list, heap),
-                "rename" => return Self::parse_rename_import_tagged(&list, heap),
+                "only" => return Self::parse_only_import_tagged(&list, heap, depth),
+                "except" => return Self::parse_except_import_tagged(&list, heap, depth),
+                "prefix" => return Self::parse_prefix_import_tagged(&list, heap, depth),
+                "rename" => return Self::parse_rename_import_tagged(&list, heap, depth),
                 _ => {}
             }
         }
@@ -600,6 +668,7 @@ impl LibraryDefinition {
     fn parse_only_import_tagged(
         list: &[TaggedValue],
         heap: &SharedHeap,
+        depth: usize,
     ) -> Result<ImportSet, ParseError> {
         if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
@@ -607,7 +676,7 @@ impl LibraryDefinition {
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let import_set = Box::new(Self::parse_import_set_at(list[1], heap, depth + 1)?);
         let h = heap.borrow();
         let mut identifiers = Vec::new();
 
@@ -631,6 +700,7 @@ impl LibraryDefinition {
     fn parse_except_import_tagged(
         list: &[TaggedValue],
         heap: &SharedHeap,
+        depth: usize,
     ) -> Result<ImportSet, ParseError> {
         if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
@@ -638,7 +708,7 @@ impl LibraryDefinition {
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let import_set = Box::new(Self::parse_import_set_at(list[1], heap, depth + 1)?);
         let h = heap.borrow();
         let mut identifiers = Vec::new();
 
@@ -662,6 +732,7 @@ impl LibraryDefinition {
     fn parse_prefix_import_tagged(
         list: &[TaggedValue],
         heap: &SharedHeap,
+        depth: usize,
     ) -> Result<ImportSet, ParseError> {
         if list.len() != 3 {
             return Err(ParseError::InvalidSyntax(
@@ -669,7 +740,7 @@ impl LibraryDefinition {
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let import_set = Box::new(Self::parse_import_set_at(list[1], heap, depth + 1)?);
         let prefix = {
             let h = heap.borrow();
             h.get_symbol_or_identifier_name(list[2])
@@ -684,6 +755,7 @@ impl LibraryDefinition {
     fn parse_rename_import_tagged(
         list: &[TaggedValue],
         heap: &SharedHeap,
+        depth: usize,
     ) -> Result<ImportSet, ParseError> {
         if list.len() < 2 {
             return Err(ParseError::InvalidSyntax(
@@ -691,7 +763,7 @@ impl LibraryDefinition {
             ));
         }
 
-        let import_set = Box::new(Self::parse_import_set_tagged(list[1], heap)?);
+        let import_set = Box::new(Self::parse_import_set_at(list[1], heap, depth + 1)?);
         let mut renames = Vec::new();
 
         for &pair_tv in &list[2..] {

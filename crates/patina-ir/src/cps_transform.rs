@@ -139,6 +139,11 @@ impl CpsTransformer {
     ///
     /// The continuation `k` will receive the result of evaluating `expr`.
     pub fn transform(&self, expr: &CoreExpr, k: &ContVar) -> CpsExpr {
+        // Grown with the depth of the code (#617).
+        patina_core::walk::ensure_sufficient_stack(|| self.transform_inner(expr, k))
+    }
+
+    fn transform_inner(&self, expr: &CoreExpr, k: &ContVar) -> CpsExpr {
         let mut result = match &expr.kind {
             // ==================== Trivial expressions ====================
             // These don't need CPS transformation - just pass to continuation
@@ -625,6 +630,29 @@ mod tests {
             name: name.into(),
             scopes: ScopeSet::new(),
         })
+    }
+
+    /// The transform and the tree it builds both grow their stack: code far
+    /// deeper than a 512 KiB thread holds transforms and drops (#617).
+    #[test]
+    fn code_deeper_than_the_stack_transforms() {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let mut nested = make_literal(1);
+                for _ in 0..20_000 {
+                    nested = CoreExpr::new(CoreExprKind::If {
+                        test: Rc::new(make_var("t")),
+                        then: Rc::new(nested),
+                        else_: Rc::new(make_literal(0)),
+                    });
+                }
+                let cps = CpsTransformer::new().transform_toplevel(&nested);
+                assert!(matches!(cps.kind, CpsExprKind::LetCont { .. }));
+            })
+            .expect("spawn")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     }
 
     #[test]

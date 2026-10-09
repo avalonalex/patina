@@ -39,7 +39,10 @@ pub(crate) fn for_each_define(exprs: &[CoreExpr], f: &mut impl FnMut(&Symbol, &S
     for expr in exprs {
         match &expr.kind {
             CoreExprKind::Define { name, scopes, .. } => f(name, scopes),
-            CoreExprKind::Begin(inner) => for_each_define(inner, f),
+            // Grown with the depth of the code (#617).
+            CoreExprKind::Begin(inner) => {
+                patina_core::walk::ensure_sufficient_stack(|| for_each_define(inner, f))
+            }
             _ => {}
         }
     }
