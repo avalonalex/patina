@@ -3,7 +3,7 @@
 //! This module implements matching for list patterns, including the complex
 //! ellipsis handling with Gauche's num_following optimization.
 
-use super::error::MatchError;
+use super::error::{self, MatchError};
 use crate::macro_expander::Pattern;
 use crate::macro_expander::utils::{
     TaggedListIter, collect_pattern_pvars, list_to_vec_tagged, list_to_vec_with_tail_tagged,
@@ -48,7 +48,7 @@ where
     if !(input.is_pair() || input == TaggedValue::NULL) {
         return Err(MatchError::TypeMismatch {
             expected: "list".to_string(),
-            actual: patina_core::format_tagged(input, heap),
+            actual: error::described(input, heap),
         });
     }
 
@@ -86,7 +86,7 @@ where
             Some(Err(_)) => {
                 return Err(MatchError::TypeMismatch {
                     expected: "proper list".to_string(),
-                    actual: patina_core::format_tagged(input, heap),
+                    actual: error::described(input, heap),
                 });
             }
             None => {
@@ -128,7 +128,7 @@ where
     // Convert input to Vec for random access
     let input_list = list_to_vec_tagged(input, heap).map_err(|_| MatchError::TypeMismatch {
         expected: "proper list".to_string(),
-        actual: patina_core::format_tagged(input, heap),
+        actual: error::described(input, heap),
     })?;
 
     match_elements_with_ellipsis(
@@ -293,7 +293,7 @@ where
     // Not a vector
     Err(MatchError::TypeMismatch {
         expected: "vector".to_string(),
-        actual: patina_core::format_tagged(input, heap),
+        actual: error::described(input, heap),
     })
 }
 

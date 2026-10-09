@@ -161,6 +161,13 @@ pub fn validate_rule(
 
 /// Validate pattern structure for common errors
 fn validate_pattern_structure(pattern: &Pattern) -> Result<(), ValidationError> {
+    // As deep as the pattern: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(pattern.is_nested(), || {
+        validate_pattern_node(pattern)
+    })
+}
+
+fn validate_pattern_node(pattern: &Pattern) -> Result<(), ValidationError> {
     match pattern {
         Pattern::List(patterns) => {
             // Check each subpattern
@@ -198,6 +205,13 @@ fn validate_pattern_structure(pattern: &Pattern) -> Result<(), ValidationError> 
 
 /// Validate template structure for common errors
 fn validate_template_structure(template: &Template) -> Result<(), ValidationError> {
+    // As deep as the template: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(template.is_nested(), || {
+        validate_template_node(template)
+    })
+}
+
+fn validate_template_node(template: &Template) -> Result<(), ValidationError> {
     match template {
         Template::List(templates) => {
             for t in templates {

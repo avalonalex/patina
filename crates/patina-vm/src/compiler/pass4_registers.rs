@@ -52,6 +52,28 @@ pub struct RegExpr {
     /// Source location from the original `CoreExpr`, for error reporting.
     pub source: Option<SourceLocation>,
 }
+impl Drop for RegExpr {
+    fn drop(&mut self) {
+        // The drop glue that follows recurses into the children, a level of
+        // the code at a time; where the stack has no room for that, they go
+        // to a new segment (#617). A leaf, most of any tree, has none.
+        let leaf = matches!(
+            self.kind,
+            RegExprKind::Literal(_)
+                | RegExprKind::Quote(_)
+                | RegExprKind::Quasiquote
+                | RegExprKind::LocalRef { .. }
+                | RegExprKind::ClosureRef { .. }
+                | RegExprKind::GlobalRef { .. }
+                | RegExprKind::ReadLocalCell { .. }
+                | RegExprKind::ReadClosureCell { .. }
+        );
+        if !leaf && !patina_core::walk::has_stack_room() {
+            let placeholder = RegExprKind::Literal(TaggedValue::UNSPECIFIED);
+            patina_core::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum RegExprKind {
@@ -249,6 +271,18 @@ fn allocate(expr: &TailedExpr, dst: u16, alloc: &mut RegAlloc) -> RegExpr {
 /// enclosing lambda — needed so nested lambda nodes can resolve which parent
 /// closure slot each free variable comes from.
 fn allocate_ctx(
+    expr: &TailedExpr,
+    dst: u16,
+    alloc: &mut RegAlloc,
+    own_captures: &[Symbol],
+) -> RegExpr {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| {
+        allocate_ctx_inner(expr, dst, alloc, own_captures)
+    })
+}
+
+fn allocate_ctx_inner(
     expr: &TailedExpr,
     dst: u16,
     alloc: &mut RegAlloc,

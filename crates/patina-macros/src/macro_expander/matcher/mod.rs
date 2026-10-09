@@ -201,6 +201,21 @@ impl<'a> Matcher<'a> {
         level: usize,
         heap: &Heap,
     ) -> Result<(), MatchError> {
+        // As deep as the pattern: grown as it goes (#617).
+        patina_core::walk::ensure_sufficient_stack_if(pattern.is_nested(), || {
+            self.match_node_tagged(pattern, input, env, level, heap)
+        })
+    }
+
+    /// [`Self::match_impl_tagged`] for one node of the pattern.
+    fn match_node_tagged(
+        &self,
+        pattern: &Pattern,
+        input: TaggedValue,
+        env: &mut MatchEnv,
+        level: usize,
+        heap: &Heap,
+    ) -> Result<(), MatchError> {
         match pattern {
             Pattern::Wildcard => {
                 // Wildcard matches anything, binds nothing
@@ -222,7 +237,7 @@ impl<'a> Matcher<'a> {
                 } else {
                     Err(MatchError::LiteralMismatch {
                         expected: format!("{:?}", lit),
-                        actual: patina_core::format_tagged(input, heap),
+                        actual: error::described(input, heap),
                     })
                 }
             }

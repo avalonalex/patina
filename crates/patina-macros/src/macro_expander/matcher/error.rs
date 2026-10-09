@@ -2,6 +2,25 @@
 //!
 //! This module defines the error types returned when pattern matching fails.
 
+use patina_core::{Heap, TaggedValue};
+
+/// How a mismatch names the input it refused, for the macro debug log, the
+/// one reader of a failed attempt at a rule (`DebugContext::log_match_failure`):
+/// written only while that log is on, and then in brief (#617).
+///
+/// Every rule tried before the one that matches fails, and formatting the
+/// input in full each time was work for every expansion, and recursion as
+/// deep as the input: what a `cond` clause is matched against can be the rest
+/// of a program nested thousands deep, and writing it out overflowed the
+/// stack.
+pub(super) fn described(input: TaggedValue, heap: &Heap) -> String {
+    if patina_runtime::macro_debug::is_enabled() {
+        patina_core::format_tagged_brief(input, heap)
+    } else {
+        String::new()
+    }
+}
+
 /// Error type for pattern matching failures
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchError {

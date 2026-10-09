@@ -145,6 +145,18 @@ million-element lists, million-level nesting, million-directive sequences and
 million-character strings with Unicode, escapes and an unterminated variant.
 This keeps stack aborts and hangs observable without taking down the test runner.
 
+Code nested deeply has its own pair (#617). `patina-tests/tests/deep_nesting.rs`
+generates its programs and runs them on both backends on a thread with a 2 MiB
+stack, in a test binary of their own: shapes nested past the depth the old walks
+aborted at run, one just short of `patina_core::walk::MAX_FORM_DEPTH` compiles,
+runs and is dropped, and code nested past it is refused with an error a `guard`
+around `eval` catches. `patina-repl/tests/deep_code.rs` runs the binary on its
+main thread's stack, where an uncaught refusal is reported and fails the run.
+The macro shapes run 400 deep, not 1,000: expanding a macro copies what it
+substitutes, so their cost grows with the square of their depth. Unit tests in
+`patina-core`, `patina-ir` and `patina-vm` hold each walk and each tree's `Drop`
+to the same on a smaller stack.
+
 The separate `fuzz/` workspace uses libFuzzer and the same reader comparison.
 It does not format arbitrary-depth data. Invalid UTF-8 is discarded at the
 `&str` API boundary; byte-decoding tests remain in `patina-core`. The target

@@ -54,6 +54,34 @@ impl Compiler {
     pub(super) fn compile_quote_template_escaped(
         &mut self,
         form: TaggedValue,
+        level: usize,
+    ) -> Result<Template, MacroError> {
+        // Held to what `compile_template` holds a template to: no cycle
+        // (#459), and no deeper than code (#617).
+        let compound = form.is_pair() || form.is_vector();
+        if compound && self.open.depth() >= patina_core::walk::MAX_FORM_DEPTH {
+            return Err(MacroError::NestedTooDeeply);
+        }
+        if compound && !self.open.enter(form) {
+            return Err(MacroError::InvalidSyntax(format!(
+                "a syntax-rules template cannot contain itself: {}",
+                patina_core::format_tagged(form, &self.heap.borrow())
+            )));
+        }
+        let compiled = patina_core::walk::ensure_sufficient_stack_if(compound, || {
+            self.compile_quote_template_escaped_node(form, level)
+        });
+        if compound {
+            self.open.leave();
+        }
+        compiled
+    }
+
+    /// [`Self::compile_quote_template_escaped`] for one node, inside the ones
+    /// `open` holds.
+    fn compile_quote_template_escaped_node(
+        &mut self,
+        form: TaggedValue,
         _level: usize,
     ) -> Result<Template, MacroError> {
         // Check for symbol

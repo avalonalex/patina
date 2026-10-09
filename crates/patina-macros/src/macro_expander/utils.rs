@@ -357,7 +357,8 @@ pub fn collect_pattern_pvars(pattern: &Pattern) -> HashSet<PVRef> {
 }
 
 fn collect_pattern_pvars_impl(pattern: &Pattern, acc: &mut HashSet<PVRef>) {
-    match pattern {
+    // As deep as the macro's pattern or template: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(pattern.is_nested(), || match pattern {
         Pattern::Var(pvref) => {
             acc.insert(*pvref);
         }
@@ -385,7 +386,7 @@ fn collect_pattern_pvars_impl(pattern: &Pattern, acc: &mut HashSet<PVRef>) {
         Pattern::Wildcard | Pattern::Literal(_) => {
             // No variables
         }
-    }
+    })
 }
 
 /// Collect all pattern variables with their ellipsis levels
@@ -399,7 +400,8 @@ pub fn collect_pattern_vars_with_levels(pattern: &Pattern) -> HashMap<PVRef, usi
 }
 
 fn collect_pattern_vars_with_levels_impl(pattern: &Pattern, acc: &mut HashMap<PVRef, usize>) {
-    match pattern {
+    // As deep as the macro's pattern or template: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(pattern.is_nested(), || match pattern {
         Pattern::Var(pvref) => {
             acc.insert(*pvref, pvref.level());
         }
@@ -418,7 +420,7 @@ fn collect_pattern_vars_with_levels_impl(pattern: &Pattern, acc: &mut HashMap<PV
             collect_pattern_vars_with_levels_impl(subpattern, acc);
         }
         Pattern::Wildcard | Pattern::Literal(_) => {}
-    }
+    })
 }
 
 /// Collect all template variables with their usage levels
@@ -437,7 +439,8 @@ fn collect_template_vars_with_levels_impl(
     current_level: usize,
     acc: &mut HashMap<PVRef, usize>,
 ) {
-    match template {
+    // As deep as the macro's pattern or template: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(template.is_nested(), || match template {
         Template::Var(pvref) => {
             acc.insert(*pvref, current_level);
         }
@@ -462,7 +465,7 @@ fn collect_template_vars_with_levels_impl(
             collect_template_vars_with_levels_impl(subtemplate, inner_level, acc);
         }
         Template::Literal(_) | Template::Symbol(_) => {}
-    }
+    })
 }
 
 /// Collect template variables at or above a minimum level
@@ -482,7 +485,8 @@ fn collect_template_vars_at_level_impl(
     min_level: usize,
     acc: &mut Vec<PVRef>,
 ) {
-    match template {
+    // As deep as the macro's pattern or template: grown as it goes (#617).
+    patina_core::walk::ensure_sufficient_stack_if(template.is_nested(), || match template {
         Template::Var(pvref) if pvref.level() >= min_level => {
             acc.push(*pvref);
         }
@@ -501,5 +505,5 @@ fn collect_template_vars_at_level_impl(
             collect_template_vars_at_level_impl(subtemplate, min_level, acc);
         }
         _ => {}
-    }
+    })
 }

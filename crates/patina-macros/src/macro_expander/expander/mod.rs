@@ -62,6 +62,12 @@ pub struct Expander {
     /// Shared heap for TaggedValue allocation (REQUIRED for TaggedValue output)
     /// Used to allocate pairs, vectors, and other heap objects during expansion
     shared_heap: Option<SharedHeap>,
+
+    /// How deep a substituted value may nest: what is left of
+    /// [`MAX_FORM_DEPTH`] below the use being expanded (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    depth_limit: usize,
 }
 
 impl Expander {
@@ -73,6 +79,7 @@ impl Expander {
         Self {
             macro_scope,
             shared_heap: None,
+            depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
     }
 
@@ -87,7 +94,20 @@ impl Expander {
         Self {
             macro_scope,
             shared_heap: Some(shared_heap),
+            depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
+    }
+
+    /// Expanding a use `depth` forms deep: a value substituted into the
+    /// expansion may nest only what is left of [`MAX_FORM_DEPTH`] below it.
+    /// One that nests deeper would take the expansion past the limit where it
+    /// is desugared, and is refused here, before every level of it is marked
+    /// at every level above (#617).
+    ///
+    /// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+    pub fn at_depth(mut self, depth: usize) -> Self {
+        self.depth_limit = patina_core::walk::MAX_FORM_DEPTH.saturating_sub(depth);
+        self
     }
 
     /// Get reference to the shared heap (if available)
@@ -131,6 +151,20 @@ impl Expander {
         indices: &[usize],
         inside_quote: bool,
     ) -> Result<TaggedValue, ExpandError> {
+        // As deep as the template: grown as it goes (#617).
+        patina_core::walk::ensure_sufficient_stack_if(template.is_nested(), || {
+            self.expand_node(template, env, indices, inside_quote)
+        })
+    }
+
+    /// [`Self::expand_impl`] for one node of the template.
+    fn expand_node(
+        &self,
+        template: &Template,
+        env: &MatchEnv,
+        indices: &[usize],
+        inside_quote: bool,
+    ) -> Result<TaggedValue, ExpandError> {
         match template {
             Template::Literal(tv) => {
                 // Literal values are inserted as-is (already TaggedValue from compilation)
@@ -151,7 +185,7 @@ impl Expander {
                         if inside_quote {
                             Ok(tv)
                         } else {
-                            Ok(self.mark_substituted_tagged(tv))
+                            self.mark_substituted_tagged(tv)
                         }
                     }
                     None => Err(ExpandError::UndefinedVariable {
@@ -221,6 +255,7 @@ impl Default for Expander {
         Self {
             macro_scope: patina_runtime::ScopeId::fresh(),
             shared_heap: None,
+            depth_limit: patina_core::walk::MAX_FORM_DEPTH,
         }
     }
 }

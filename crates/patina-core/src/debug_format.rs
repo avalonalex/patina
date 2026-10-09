@@ -65,6 +65,77 @@ pub fn format_tagged(tv: TaggedValue, heap: &Heap) -> String {
     buf
 }
 
+/// `tv` written [`BRIEF_DEPTH`] lists deep and [`BRIEF_WIDTH`] elements long
+/// at most, with `…` for the rest: how a diagnostic names a form that may be
+/// as deep as the code it sits in, or as long (#617). [`format_tagged`] would
+/// write all of it, and its recursion on each element is as deep as the form.
+///
+/// A cycle needs no labels here: a spine is cut at [`BRIEF_WIDTH`] elements
+/// and an element at [`BRIEF_DEPTH`] lists, so the walk ends either way.
+pub fn format_tagged_brief(tv: TaggedValue, heap: &Heap) -> String {
+    let mut buf = String::new();
+    format_brief(tv, heap, BRIEF_DEPTH, &mut buf);
+    buf
+}
+
+/// How many lists deep [`format_tagged_brief`] writes.
+const BRIEF_DEPTH: usize = 3;
+
+/// How many elements of a list or vector [`format_tagged_brief`] writes.
+const BRIEF_WIDTH: usize = 4;
+
+fn format_brief(tv: TaggedValue, heap: &Heap, depth: usize, buf: &mut String) {
+    let open = if tv.is_pair() {
+        "("
+    } else if tv.is_vector() {
+        "#("
+    } else {
+        buf.push_str(&format_tagged(tv, heap));
+        return;
+    };
+    buf.push_str(open);
+    if depth == 0 {
+        buf.push_str("…)");
+        return;
+    }
+    if tv.is_vector() {
+        let elements = heap.vector_slice(tv);
+        for (i, &element) in elements.iter().take(BRIEF_WIDTH).enumerate() {
+            if i > 0 {
+                buf.push(' ');
+            }
+            format_brief(element, heap, depth - 1, buf);
+        }
+        if elements.len() > BRIEF_WIDTH {
+            buf.push_str(" …");
+        }
+        buf.push(')');
+        return;
+    }
+    let mut rest = tv;
+    for i in 0.. {
+        if i == BRIEF_WIDTH {
+            buf.push_str(" …");
+            break;
+        }
+        let (car, cdr) = heap.get_pair(rest);
+        if i > 0 {
+            buf.push(' ');
+        }
+        format_brief(car, heap, depth - 1, buf);
+        if cdr.is_pair() {
+            rest = cdr;
+            continue;
+        }
+        if cdr != TaggedValue::NULL {
+            buf.push_str(" . ");
+            format_brief(cdr, heap, depth - 1, buf);
+        }
+        break;
+    }
+    buf.push(')');
+}
+
 /// Format a TaggedValue with full scope information for debugging
 ///
 /// Identifiers are annotated with their scope sets for hygiene debugging.
@@ -247,6 +318,13 @@ impl CycleSearch {
         if !Self::has_children(tv, heap) {
             return;
         }
+        // The value can be code a diagnostic names, as deep as the limit on
+        // code, or data deeper still: grown as it goes (#617).
+        crate::walk::ensure_sufficient_stack(|| self.visit_node(tv, heap));
+    }
+
+    /// [`Self::visit`] for a node with children.
+    fn visit_node(&mut self, tv: TaggedValue, heap: &Heap) {
         if tv.is_pair() {
             let mut spine = Vec::new();
             let mut current = tv;
@@ -476,7 +554,16 @@ fn format_object(obj: &HeapObjectData, heap: &Heap, buf: &mut String, printer: &
 }
 
 /// Unified recursive formatter for TaggedValue
+///
+/// A value it writes can be code a diagnostic names, as deep as the limit on
+/// code — `syntax-error`'s irritants — or data deeper still, so it grows its
+/// stack as it goes (#617).
 fn format_tagged_impl(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &mut Printer) {
+    crate::walk::ensure_sufficient_stack(|| format_tagged_node(tv, heap, buf, printer));
+}
+
+/// [`format_tagged_impl`] for one value.
+fn format_tagged_node(tv: TaggedValue, heap: &Heap, buf: &mut String, printer: &mut Printer) {
     if printer.label(tv, buf) {
         return;
     }

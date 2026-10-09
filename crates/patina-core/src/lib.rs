@@ -21,7 +21,8 @@
               shared on purpose by every port that reads the one standard input (per thread, so a \
               second thread would keep a read-ahead of its own, C9), and `OUTPUT_FILES`, the open \
               file output ports to flush at exit; `scope::SCOPE_ORIGINS` and `scope_trace::PHASE`, \
-              debugging aids; and, with the `gc-census` feature, `census`'s \
+              debugging aids; `walk::STACK_FLOOR`, where the walks of code must move to a new \
+              stack segment (#617); and, with the `gc-census` feature, `census`'s \
               `ON_PRIMARY_THREAD`, a flag. Clippy takes this lint only at a crate root, so a new \
               `thread_local!` in the crate goes on this list, which a test in \
               `reentry_lint_control.rs` holds to the crate's sources (#622)"
@@ -91,7 +92,9 @@ pub use source_map::SourceMap;
 pub use source_map::prune_freed_locations;
 
 // TaggedValue and heap types for compact value representation
-pub use debug_format::{escape_invisible, format_tagged, format_tagged_with_scopes};
+pub use debug_format::{
+    escape_invisible, format_tagged, format_tagged_brief, format_tagged_with_scopes,
+};
 // The collector itself — `Collector`, `MarkSweepCollector`, `run_mark_phase`,
 // `Heap::sweep`, `GcController::collect` — is crate-private (#624): code
 // outside this crate collects only through `GcController::safe_point` and

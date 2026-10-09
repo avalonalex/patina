@@ -142,7 +142,8 @@ impl CpsExpr {
     ///
     /// `seen` deduplicates by node address: bodies are shared via `Rc` across
     /// closures, so the caller passes one set per collection and shared
-    /// subtrees are walked once. Recursion depth is bounded by program size.
+    /// subtrees are walked once. Recursion depth is bounded by program size,
+    /// and the desugarer bounds that ([`crate::walk::MAX_FORM_DEPTH`]).
     pub fn for_each_literal(
         &self,
         seen: &mut rustc_hash::FxHashSet<usize>,
@@ -156,7 +157,9 @@ impl CpsExpr {
             // A file position.
             source: _,
         } = self;
-        match kind {
+        // A collection walks every closure's body, which is as deep as the
+        // code it came from: grown as it goes (#617). A leaf goes no deeper.
+        crate::walk::ensure_sufficient_stack_if(kind.is_nested(), || match kind {
             CpsExprKind::Literal(tv) => f(*tv),
             CpsExprKind::Var {
                 // A name.
@@ -261,6 +264,18 @@ impl CpsExpr {
                 }
             }
             CpsExprKind::Halt(expr) => expr.for_each_literal(seen, f),
+        })
+    }
+}
+
+impl Drop for CpsExpr {
+    fn drop(&mut self) {
+        // The drop glue that follows recurses into the children, a level of
+        // the code at a time; where the stack has no room for that, they go
+        // to a new segment (#617). A leaf, most of any tree, has none.
+        if self.kind.is_nested() && !crate::walk::has_stack_room() {
+            let placeholder = CpsExprKind::Literal(TaggedValue::UNSPECIFIED);
+            crate::walk::drop_deep(std::mem::replace(&mut self.kind, placeholder));
         }
     }
 }
@@ -579,6 +594,15 @@ impl CpsPrimitive {
 }
 
 impl CpsExprKind {
+    /// Whether this node has subexpressions: a walk of the tree goes deeper
+    /// from it, and grows its stack to (#617).
+    pub fn is_nested(&self) -> bool {
+        !matches!(
+            self,
+            CpsExprKind::Literal(_) | CpsExprKind::Var { .. } | CpsExprKind::ContRef(_)
+        )
+    }
+
     /// Check if this is a trivial expression (no control effects)
     pub fn is_trivial(&self) -> bool {
         matches!(
@@ -709,6 +733,23 @@ impl std::fmt::Display for CpsExprKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// As `CoreExpr`'s: a tree far deeper than a 256 KiB stack drops (#617).
+    #[test]
+    fn a_tree_deeper_than_the_stack_drops() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut nested = CpsExpr::new(CpsExprKind::Literal(TaggedValue::fixnum(0)));
+                for _ in 0..100_000 {
+                    nested = CpsExpr::new(CpsExprKind::Halt(Rc::new(nested)));
+                }
+                drop(nested);
+            })
+            .expect("spawn")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
 
     #[test]
     fn test_prompt_tag_uniqueness() {

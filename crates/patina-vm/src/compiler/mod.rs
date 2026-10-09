@@ -139,6 +139,37 @@ pub fn compile_with_qq_resolving(
     compile_pipeline(&expanded, Some((heap, env, registry)))
 }
 
+/// Each pass grows its stack with the depth of the code, and each tree a pass
+/// builds drops a level at a time on a stack that grows (#617).
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use patina_core::core_expr::CoreExprKind;
+    use patina_core::tagged_value::TaggedValue;
+
+    #[test]
+    fn code_deeper_than_the_stack_compiles() {
+        std::thread::Builder::new()
+            .stack_size(512 * 1024)
+            .spawn(|| {
+                let literal =
+                    |n| Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(n))));
+                let mut nested = CoreExpr::new(CoreExprKind::Literal(TaggedValue::fixnum(1)));
+                for _ in 0..10_000 {
+                    nested = CoreExpr::new(CoreExprKind::If {
+                        test: Rc::new(CoreExpr::new(CoreExprKind::Literal(TaggedValue::TRUE))),
+                        then: Rc::new(nested),
+                        else_: literal(0),
+                    });
+                }
+                compile(&nested).expect("compiles");
+            })
+            .expect("spawn")
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    }
+}
+
 /// The lowering itself lives in `patina_frontend`, which cannot name
 /// `PrimitiveRegistry` — `patina-primitives` depends on it. These exercise it
 /// through this backend's resolver, which is the only place both are in scope.

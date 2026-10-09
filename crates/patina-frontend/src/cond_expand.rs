@@ -37,6 +37,48 @@ pub fn evaluate_feature_requirement_tagged<F>(
 where
     F: Fn(&[String]) -> bool + ?Sized,
 {
+    evaluate_requirement_at(req, shared_heap, features, can_load_library, 0)
+}
+
+/// [`evaluate_feature_requirement_tagged`] for a requirement `depth` levels
+/// inside the one being evaluated. A requirement nests as code does, and is
+/// held to the same limit, [`MAX_FORM_DEPTH`], with its stack grown as it goes
+/// (#617). That also refuses one that contains itself, which a datum label can
+/// write and which recursed until the stack overflowed.
+///
+/// [`MAX_FORM_DEPTH`]: patina_core::walk::MAX_FORM_DEPTH
+fn evaluate_requirement_at<F>(
+    req: TaggedValue,
+    shared_heap: &SharedHeap,
+    features: &FeatureRegistry,
+    can_load_library: &F,
+    depth: usize,
+) -> Result<bool, ParseError>
+where
+    F: Fn(&[String]) -> bool + ?Sized,
+{
+    if depth >= patina_core::walk::MAX_FORM_DEPTH {
+        return Err(ParseError::InvalidSyntax(format!(
+            "feature requirement nested too deeply: more than {} levels",
+            patina_core::walk::MAX_FORM_DEPTH
+        )));
+    }
+    patina_core::walk::ensure_sufficient_stack(|| {
+        evaluate_requirement_node(req, shared_heap, features, can_load_library, depth)
+    })
+}
+
+/// [`evaluate_requirement_at`] for one requirement.
+fn evaluate_requirement_node<F>(
+    req: TaggedValue,
+    shared_heap: &SharedHeap,
+    features: &FeatureRegistry,
+    can_load_library: &F,
+    depth: usize,
+) -> Result<bool, ParseError>
+where
+    F: Fn(&[String]) -> bool + ?Sized,
+{
     let heap = shared_heap.borrow();
 
     // Simple feature identifier (symbol)
@@ -73,11 +115,12 @@ where
         match operator.as_deref() {
             Some("and") => {
                 for &sub_req in &items[1..] {
-                    if !evaluate_feature_requirement_tagged(
+                    if !evaluate_requirement_at(
                         sub_req,
                         shared_heap,
                         features,
                         can_load_library,
+                        depth + 1,
                     )? {
                         return Ok(false);
                     }
@@ -86,11 +129,12 @@ where
             }
             Some("or") => {
                 for &sub_req in &items[1..] {
-                    if evaluate_feature_requirement_tagged(
+                    if evaluate_requirement_at(
                         sub_req,
                         shared_heap,
                         features,
                         can_load_library,
+                        depth + 1,
                     )? {
                         return Ok(true);
                     }
@@ -103,11 +147,12 @@ where
                         "not requires exactly one argument".to_string(),
                     ));
                 }
-                Ok(!evaluate_feature_requirement_tagged(
+                Ok(!evaluate_requirement_at(
                     items[1],
                     shared_heap,
                     features,
                     can_load_library,
+                    depth + 1,
                 )?)
             }
             Some("library") => {

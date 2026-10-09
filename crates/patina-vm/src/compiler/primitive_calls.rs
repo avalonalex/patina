@@ -271,6 +271,11 @@ struct Callees {
 /// Collect every `GlobalRef` name and every `Literal` value used as the
 /// callee of an `App`.
 fn collect_callees(expr: &RegExpr, out: &mut Callees) {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| collect_callees_inner(expr, out))
+}
+
+fn collect_callees_inner(expr: &RegExpr, out: &mut Callees) {
     match &expr.kind {
         RegExprKind::App { func, args, .. } => {
             match &func.kind {

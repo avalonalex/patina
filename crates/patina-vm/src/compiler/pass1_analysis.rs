@@ -77,6 +77,18 @@ fn collect(
     counter: &mut u32,
     info: &mut AnalysisInfo,
 ) -> HashSet<Symbol> {
+    // Grown with the depth of the code (#617).
+    patina_core::walk::ensure_sufficient_stack(|| {
+        collect_inner(expr, outer_bindings, counter, info)
+    })
+}
+
+fn collect_inner(
+    expr: &CoreExpr,
+    outer_bindings: &[(&NodeId, &HashSet<Symbol>)],
+    counter: &mut u32,
+    info: &mut AnalysisInfo,
+) -> HashSet<Symbol> {
     match &expr.kind {
         CoreExprKind::Literal(_) | CoreExprKind::Quote(_) | CoreExprKind::Quasiquote(_) => {
             HashSet::new()
