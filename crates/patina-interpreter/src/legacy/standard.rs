@@ -60,6 +60,7 @@ impl Pipeline for StandardPipeline {
         self.interpreter
             .eval_program_in_env(code, "<eval>", &mut false, env)
             .0
+            .map(|value| self.interpreter.raw_value(&value))
             .map_err(Into::into)
     }
 

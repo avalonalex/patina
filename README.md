@@ -230,17 +230,29 @@ Use `VmInterpreter` for the same backend as the CLI, or select
 use patina_interpreter::VmInterpreter;
 
 let interpreter = VmInterpreter::new_vm();
-let value = interpreter.eval_program(
+let value = interpreter.eval_program_owned(
     "(import (scheme base)) (define answer 42) (list answer)"
 )?;
-assert_eq!(interpreter.display_tagged(value), "(42)");
+assert_eq!(interpreter.display_tagged(&value), "(42)");
 ```
 
 For the tree-walker, use `TreeWalkInterpreter::new_tree_walker()` instead.
 
-A value belongs to the interpreter that made it. Dropping an interpreter frees
-its heap and flushes the file ports the program left open (#604), so read
-values before you drop it.
+`eval_program_owned` answers an `Owned` handle, which keeps the value alive
+until the handle is dropped. Read it with `display_tagged(&value)`, or take
+its raw `TaggedValue` with `raw_value(&value)`, which is valid until the next
+evaluation; `lookup(name)` answers a handle on a global. The `eval_*` methods
+that answer a bare `TaggedValue` are deprecated: nothing roots a bare value,
+so a later evaluation that collects can free it
+([#605](https://github.com/avalonalex/patina/issues/605)). The `_owned` suffix
+is temporary: from stage 5e of the collector's redesign (`PRD/GC_PRD.md`) the
+plain names answer handles, and the `_owned` names stay as deprecated aliases
+until stage 5g.
+
+A value belongs to the interpreter that made it, and another interpreter
+refuses its handles. Dropping an interpreter frees its heap and flushes the
+file ports the program left open (#604), so read values before you drop it; a
+handle kept past it holds nothing.
 
 The complete examples also demonstrate source-aware error formatting:
 
@@ -282,7 +294,7 @@ The old types and `patina_pipeline::{error,pipeline,standard}` paths remain
 available as deprecated tree-walker adapters; they do not silently switch
 backends. Their `PipelineError` variants are retained, including their lossy
 string payloads. New APIs return typed `InterpreterError<B::Error>`; use
-`eval_program_with_source_name` and `format_interpreter_error` for caret context
+`eval_program_with_source_name_owned` and `format_interpreter_error` for caret context
 and macro expansion details. Format returned values with `display_tagged`,
 since `TaggedValue::to_string()` cannot render heap objects fully.
 
@@ -292,7 +304,7 @@ These correct three legacy differences recorded in
 [#595](https://github.com/avalonalex/patina/issues/595). `eval_program` runs
 complete forms before reporting a later parse error; `eval_str` validates the
 whole input before running its first expression. Unnamed APIs record positions
-under `<eval>`; the existing `*_tracked` names remain aliases. The legacy
+under `<eval>`; the `*_tracked` names remain as deprecated aliases. The legacy
 pipeline's supplied environment must share its evaluator's heap.
 
 ## Architecture Highlights

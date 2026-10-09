@@ -9,6 +9,9 @@
 //! `assert_program_eval_to`, or the timing guard below silently measures the
 //! VM too. See `docs/GC_DESIGN.md` §5.1.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 #[macro_use]
 mod common;
 use common::*;

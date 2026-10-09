@@ -61,6 +61,7 @@ use super::account::{
     self, GcThreshold, OBJECT_SLOT_BYTES, PAIR_SLOT_BYTES, STRING_SLOT_BYTES, VECTOR_SLOT_BYTES,
 };
 use super::check::SlotChecks;
+use super::handles::HandleTable;
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
@@ -1082,7 +1083,7 @@ impl<'h> GcVisitor<'h> {
         for &idx in heap.core_syntax_table.values() {
             marks.objects.set(idx as usize);
         }
-        Self {
+        let mut visitor = Self {
             heap,
             marks,
             worklist: Vec::new(),
@@ -1096,7 +1097,13 @@ impl<'h> GcVisitor<'h> {
             live_weak_ids: FxHashSet::default(),
             new_weak_ids: Vec::new(),
             pending_ephemerons: Vec::new(),
-        }
+        };
+        // A host's handles are roots on the same terms, whichever backend
+        // collects (`heap/handles.rs`, #605): a handle whose value was freed
+        // would read the slot's next tenant. Visited, not only marked, since
+        // a handle's value can be anything.
+        heap.handles.trace_handles(&mut visitor);
+        visitor
     }
 
     /// The normal edge: mark and enqueue a heap reference; no-op for
@@ -1869,12 +1876,15 @@ impl Heap {
     /// symbols and core forms forgotten with them, since nothing marks them
     /// again. Values do not outlive their interpreter: one kept past it names
     /// a freed slot, which a check build reports as a use after free, and a
-    /// later allocation finds a slot whose generation has moved on. A second
-    /// teardown frees nothing. It is not a collection, and leaves the count
-    /// of them as it was.
+    /// later allocation finds a slot whose generation has moved on. The
+    /// hosts' handles go with their table (#605): one kept past it holds a
+    /// dead reference, which the heap refuses to read. A second teardown
+    /// frees nothing. It is not a collection, and leaves the count of them as
+    /// it was.
     pub fn teardown(&mut self) {
         self.symbol_table.clear();
         self.core_syntax_table.clear();
+        self.handles = HandleTable::new(self.telemetry.heap_id);
         let collections = self.gc_collections;
         let mut marks = MarkBits::for_heap(self);
         self.sweep(&mut marks);

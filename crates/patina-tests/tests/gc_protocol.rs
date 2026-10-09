@@ -15,6 +15,9 @@
 //! protocol (the depth at collection, a holder's extent, the defer balance)
 //! are `patina-core`'s `heap::gc::tests::protocol`.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::{tree_walker_interpreter, vm_interpreter};

@@ -84,6 +84,15 @@ disallowed-methods = [
     { path = "patina_interpreter::Interpreter::eval_program_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_resilient_tracked", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    # the twins that answer a handle (#605), under a temporary name that the
+    # plain names take back at stage 5e
+    { path = "patina_interpreter::Interpreter::eval_str_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_str_with_source_name_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_with_source_name_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_with_fold_case_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_resilient_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     # the deprecated adapters, which embedders still call with values of the
     # same heap in hand (`StandardPipeline` evaluates in an environment the
     # host built, #620's shape). They exist only with the `legacy-pipeline`

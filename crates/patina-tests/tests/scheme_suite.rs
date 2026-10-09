@@ -69,6 +69,9 @@
 //! is what every row in `callability.scm` does, for reasons of its own. This
 //! is upstream SRFI 64 behaviour, not something the driver can paper over.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::{files_under, repo_root};
 use patina_interpreter::Interpreter;

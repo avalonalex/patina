@@ -157,6 +157,9 @@
 //! The definition-context defect has its own test; the matrix supplies a
 //! `(let () …)` so the axis moves one thing again.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use common::{

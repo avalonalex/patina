@@ -2,6 +2,9 @@
 //!
 //! This test explores why enabling CoreExpr in backend.rs breaks chibi tests.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::Interpreter;
 use patina_tree_walker::TreeWalker;
 

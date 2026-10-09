@@ -8,6 +8,9 @@
 //! Basic fixnum-value coverage lives in the compliance tests; here we assert
 //! only what the move could have changed (slow paths, error behavior, deopt).
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::Interpreter;
 use patina_vm::VmBackend;
 

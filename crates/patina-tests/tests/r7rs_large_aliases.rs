@@ -6,6 +6,9 @@
 //! these tests check two things: that each alias loads, and that a binding
 //! reached through the alias is the *same* binding as through its source.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::{Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;
 use patina_runtime::Backend;

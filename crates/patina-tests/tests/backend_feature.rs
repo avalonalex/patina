@@ -37,6 +37,9 @@
 //! which is a plausible-looking answer. That is what makes enumeration the
 //! test rather than a spot check.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 use common::{eval_program_tree_walker, eval_program_vm};
 

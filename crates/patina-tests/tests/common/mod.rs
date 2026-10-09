@@ -382,11 +382,14 @@ where
     B::Error: ClassifyError,
 {
     let result = match mode {
-        Mode::Expr => interp.eval_str(code),
-        Mode::Program => interp.eval_program(code),
+        Mode::Expr => interp.eval_str_owned(code),
+        Mode::Program => interp.eval_program_owned(code),
     };
     match result {
-        Ok(tv) => Ok(display_tagged(tv, interp.backend().global_env().heap())),
+        Ok(value) => Ok(display_tagged(
+            interp.raw_value(&value),
+            interp.backend().global_env().heap(),
+        )),
         Err(e) => {
             let class = match &e {
                 InterpreterError::Lex(_)

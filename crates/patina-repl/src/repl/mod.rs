@@ -380,15 +380,10 @@ impl Repl {
             // first left `(define a 1) (define b 2)` with `b` unbound, and
             // dropped a trailing datum the line cut short.
             let (eval_result, source_map) =
-                interp.eval_program_with_fold_case(line, &source_name, fold_case);
+                interp.eval_program_with_fold_case_owned(line, &source_name, fold_case);
             match eval_result {
-                Ok(result) => {
-                    if result != patina_core::TaggedValue::UNSPECIFIED {
-                        Some(interp.display_tagged(result))
-                    } else {
-                        None
-                    }
-                }
+                Ok(result) => (interp.raw_value(&result) != patina_core::TaggedValue::UNSPECIFIED)
+                    .then(|| interp.display_tagged(&result)),
                 Err(e) => Some(format!(
                     "Error: {}",
                     format_interpreter_error(&e, &source_map.borrow())

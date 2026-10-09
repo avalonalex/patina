@@ -106,6 +106,7 @@ pub use heap::gc::{
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
     gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
+    handles::Owned,
     new_shared_heap,
 };
 pub use tagged_value::TaggedValue;

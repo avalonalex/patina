@@ -3,6 +3,9 @@
 //! These tests verify that the library loading infrastructure works correctly
 //! for Rust libraries, Scheme libraries (.sld files), and mixed libraries.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use patina_interpreter::TreeWalkInterpreter;

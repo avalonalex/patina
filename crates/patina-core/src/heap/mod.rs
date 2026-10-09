@@ -27,6 +27,7 @@ mod account;
 mod census;
 mod check;
 pub mod gc;
+pub mod handles;
 mod numeric;
 // Sentinel values for the collector's field tests (#623): patina-core's own
 // tests, and other crates' under `test-support`.
@@ -46,6 +47,7 @@ pub use account::{
     STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit, descriptor_pressure_threshold,
 };
 use check::SlotChecks;
+use handles::{HandleTable, Owned};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::cell::{Cell, RefCell};
@@ -496,6 +498,11 @@ pub struct Heap {
     /// figures, and K16's high-water marks (`heap/telemetry.rs`, #648).
     telemetry: telemetry::Telemetry,
 
+    /// The values hosts keep across evaluations, each rooted until its
+    /// handle is dropped (`heap/handles.rs`, #605). Rooted in
+    /// `GcVisitor::new`, beside the intern tables.
+    handles: Rc<HandleTable>,
+
     /// Nesting depth of scopes that hold live values unreachable from any
     /// registered root (nested trampolines, library-body loops). Collection
     /// is only legal at the outermost level — see `docs/GC_DESIGN.md` §7.
@@ -652,6 +659,8 @@ impl Heap {
     /// Create a heap with pre-allocated capacity
     pub fn with_capacity(pairs: usize, vectors: usize, strings: usize) -> Self {
         let gc_pending = Rc::new(Cell::new(false));
+        let telemetry = telemetry::Telemetry::new();
+        let handles = HandleTable::new(telemetry.heap_id);
         Self {
             syntax_sources: std::collections::HashMap::new(),
             features: crate::features::FeatureRegistry::new(),
@@ -677,7 +686,8 @@ impl Heap {
             gc_threshold: GcThreshold::NEVER,
             gc_pending,
             gc_freed_closure_code_ids: None,
-            telemetry: telemetry::Telemetry::new(),
+            telemetry,
+            handles,
             gc_defer_depth: 0,
             gc_defer_holders: 0,
             no_gc_scopes: Rc::new(Cell::new(0)),
@@ -691,6 +701,33 @@ impl Heap {
             census: crate::census::imp::HeapCensus::new(),
             next_vm_continuation_id: 0,
         }
+    }
+
+    // =========================================================================
+    // Handles (heap/handles.rs, #605)
+    // =========================================================================
+
+    /// A handle on `value`, which roots it until the handle is dropped: how a
+    /// host keeps a value from one evaluation to the next.
+    pub fn hold(&self, value: TaggedValue) -> Owned {
+        self.handles.hold(value)
+    }
+
+    /// The value `handle` holds, raw: the next collection after the handle
+    /// is dropped may free it. Panics on a handle from another heap, or one
+    /// kept past this heap's teardown.
+    pub fn held(&self, handle: &Owned) -> TaggedValue {
+        self.handles.get(handle)
+    }
+
+    /// Make `handle` hold `value`. Panics as [`Heap::held`] does.
+    pub fn set_held(&self, handle: &Owned, value: TaggedValue) {
+        self.handles.replace(handle, value);
+    }
+
+    /// How many handles on this heap are alive.
+    pub fn handle_count(&self) -> usize {
+        self.handles.len()
     }
 
     // =========================================================================

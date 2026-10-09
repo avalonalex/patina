@@ -3,6 +3,9 @@
 //! These tests verify that the Library value type is properly integrated
 //! and that the library? predicate works correctly.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_interpreter::TreeWalkInterpreter;
 use patina_runtime::Library;
 

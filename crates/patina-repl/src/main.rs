@@ -217,8 +217,9 @@ where
     prepare_backend(interp.backend(), opts, None);
     let heap = interp.backend().global_env().heap().clone();
     for expr in &opts.eval_exprs {
-        match interp.eval_program(expr) {
-            Ok(v) => {
+        match interp.eval_program_owned(expr) {
+            Ok(value) => {
+                let v = interp.raw_value(&value);
                 if v != patina_core::TaggedValue::UNSPECIFIED {
                     println!("{}", format_write_tagged(v, &heap));
                 }
@@ -380,11 +381,11 @@ where
 {
     match *program {
         Program::Script { code, filename } if keep_going => interp
-            .eval_program_resilient_with_source_name(code, filename)
+            .eval_program_resilient_with_source_name_owned(code, filename)
             .1
             .clean(),
         Program::Script { code, filename } => {
-            let (result, source_map) = interp.eval_program_with_source_name(code, filename);
+            let (result, source_map) = interp.eval_program_with_source_name_owned(code, filename);
             match result {
                 Ok(_) => true,
                 Err(e) => {
@@ -623,10 +624,13 @@ fn run_repl_vm(opts: &CliOptions) {
             };
         }
 
-        let (result, source_map) = interp.eval_program_with_fold_case(line, "<repl>", fold_case);
+        let (result, source_map) =
+            interp.eval_program_with_fold_case_owned(line, "<repl>", fold_case);
         match result {
-            Ok(value) if value == TaggedValue::UNSPECIFIED => None,
-            Ok(value) => Some(format_tagged(value, &heap.borrow())),
+            Ok(value) => {
+                let value = interp.raw_value(&value);
+                (value != TaggedValue::UNSPECIFIED).then(|| format_tagged(value, &heap.borrow()))
+            }
             Err(e) => Some(format!(
                 "Error: {}",
                 format_backend_error_with_source(&e, &source_map.borrow())

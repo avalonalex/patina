@@ -1,6 +1,9 @@
 //! Public directory operations use the interpreter's VFS on both backends.
 //! No supplied libraries or real directory mutations are needed (#205).
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 use patina_core::{NativeFs, OverlayFs};
 use patina_interpreter::{Backend, Interpreter, TreeWalkInterpreter};
 use patina_primitives::primitives::io::datum_writer::format_write_tagged;

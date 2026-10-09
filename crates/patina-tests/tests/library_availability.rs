@@ -1,6 +1,9 @@
 //! #265: every expansion entry point sees the same live library catalogue.
 //! Discovery must not execute libraries, freeze paths, or cross interpreters.
 
+// The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
+#![allow(deprecated)]
+
 mod common;
 
 use patina_interpreter::Interpreter;
