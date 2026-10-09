@@ -911,6 +911,18 @@ embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
 not a separate equivalence generator. Both backend examples and the rustdoc
 examples should also run when this API changes.
 
+`patina-tests/tests/heap_teardown.rs` holds dropping an interpreter to freeing
+its heap on both backends (#604). It checks three things:
+
+- the heap is gone after a program that leaves every kind of value holding an
+  environment;
+- a file port a global keeps is written out when the interpreter drops;
+- a value read after the drop is reported as a use after free.
+
+The port case runs the test binary again as the embedding host, in a child
+process, so that nothing but the drop can write the port: the CLI's own exit
+path flushes every open port, and a host does not go through it.
+
 ### GC lanes (`docs/GC_DESIGN.md` §11)
 
 The collector is held to output equality: a program prints the same with

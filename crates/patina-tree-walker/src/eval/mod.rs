@@ -419,6 +419,16 @@ impl Default for Evaluator {
     }
 }
 
+/// The evaluator made the heap, so dropping it tears the heap down, as
+/// dropping a VM backend does (`Heap::teardown`, #604).
+impl Drop for Evaluator {
+    fn drop(&mut self) {
+        if let Ok(mut heap) = self.global_env.heap().try_borrow_mut() {
+            heap.teardown();
+        }
+    }
+}
+
 // Library loading methods
 impl Evaluator {
     /// Load a library by name

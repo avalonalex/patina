@@ -335,7 +335,11 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         Program::Script { filename, .. } => Some(filename),
         Program::Stdin => None,
     };
-    let clean = if opts.trace {
+    // Each branch ends the process with its interpreter alive. Dropping it
+    // would tear its heap down, writing out the ports the program left open
+    // where nothing reports a write that fails; `end_process` writes them
+    // and reports (#343, #604).
+    if opts.trace {
         // Tracing is a VM instrument, which is why `main` refuses `--trace`
         // with `--tree-walker` rather than quietly running the other backend.
         let (interp, tracer) = traced_vm();
@@ -344,16 +348,20 @@ fn run(program: Program<'_>, opts: &CliOptions) -> ! {
         if !clean {
             eprintln!("--- Trace: {} events recorded ---", tracer.borrow().len());
         }
-        clean
+        finish(clean)
     } else if opts.use_tree_walker {
         let interp = TreeWalkInterpreter::new_tree_walker();
         prepare_backend(interp.backend(), opts, script);
-        run_program(&interp, &program, opts.keep_going)
+        finish(run_program(&interp, &program, opts.keep_going))
     } else {
         let interp = Interpreter::new(VmBackend::new());
         prepare_backend(interp.backend(), opts, script);
-        run_program(&interp, &program, opts.keep_going)
-    };
+        finish(run_program(&interp, &program, opts.keep_going))
+    }
+}
+
+/// End the process once a program has run, cleanly or not.
+fn finish(clean: bool) -> ! {
     // An error that interrupted an `exit` stopped the program; the exit it
     // asked for decides the status, now that the trace count is out.
     patina_runtime::exit_status::exit_if_interrupted();
