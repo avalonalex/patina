@@ -451,7 +451,7 @@ debug build is the lane that localizes failures like this one.
 | `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
-| `Heap.handles` | `heap/handles.rs` | The values hosts keep across evaluations, each rooted until its `Owned` handle is dropped (#605): what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
+| `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
 | `CompiledMacro` literals and environments | `compiled_macro.rs` | Reached via the `Macro` heap-variant trace rule when the macro binding is live: pattern and template literals, `definition_env`, and each `foreign_expansions` environment (§4.3) |
 | In-flight `ExceptionObject.irritants` | `crates/patina-core/src/error.rs:44` | Lives in a propagating `Err` on the Rust stack; covered by deferral (GC never runs during unwinding — safe points are at loop tops, not in error paths) |
@@ -1041,7 +1041,8 @@ libraries a datum imports while `resumable_step` holds a primitive's state and
 the step's stacks; `Backend::eval`, `eval_global` and `eval_with_source_map`;
 `Interpreter::eval_*` and the deprecated `Pipeline` and `SimpleInterpreter`
 adapters; and `Environment::with_parent`, since an environment
-built with it is reachable from no root unless its caller makes it so (#620).
+built with it is reachable from no root unless its caller makes it so (#620):
+a host's is held by an `OwnedEnvironment` (`Interpreter::new_environment`).
 Only `with_parent` is listed, as #622 scoped it: an environment from
 `Environment::new` or `with_heap` that is held across a re-entry is named in
 that call's reason instead (the loaders' `lib_env`, the environment
@@ -1173,7 +1174,9 @@ their slots. Values do not outlive their interpreter: one kept past it names
 a freed slot, which a check build refuses as a use after free (§4.5). The
 hosts' handles go with their table, which teardown drops: a handle kept past
 its interpreter holds a dead reference, which the heap refuses to read, and
-dropping it does nothing (#605). `heap_teardown.rs` holds both backends to it, and
+dropping it does nothing (#605). The environments the table holds go with it,
+and each holds the heap, so they close the same cycle and teardown breaks it
+too (#620). `heap_teardown.rs` holds both backends to it, and
 `teardown_frees_every_slot_and_the_heap_with_them` the sweep's part.
 
 The heap's `cond-expand` library-availability service is metadata outside the
@@ -1501,7 +1504,7 @@ visitor exists, and the stress lane is the real safety net.
    ephemeron holding a continuation, which that suite never builds, and
    #605 and #620 are reachable only through the embedding API. So two more
    lanes run under stress in a check build. Per pull request,
-   `scripts/run_gc_stress_tests.sh` runs fourteen `cargo test` targets that
+   `scripts/run_gc_stress_tests.sh` runs fifteen `cargo test` targets that
    drive the collector, control flow and library loading from Rust at
    `PATINA_GC_STRESS=16`, and `scheme_suite.rs` at 4096 (one of its files,
    `srfi/regex-graphemes.scm`, kept it from finishing at 16), in the Test

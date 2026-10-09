@@ -94,7 +94,7 @@ fi
 # and again that day for #612's test of a hundred `eval`s of one datum;
 # hygiene_matrix's test count re-pinned 2026-10-07 for #652's def-getter
 # shape, its minimum left at 400; owned_handles pinned 2026-10-09, with
-# #605's handles)
+# #605's handles, and host_environments that day, with #620's)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -104,6 +104,7 @@ TARGETS=(
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
     "gc_tree_walker 16 11421 19"              # 22851 (55)
     "gc_vm 16 8001 23"                        # 16012 (66)
+    "host_environments 16 25016 7"            # 50032 (8)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)
     "library_loading 16 1 9"                  # 3 (0): see the header
