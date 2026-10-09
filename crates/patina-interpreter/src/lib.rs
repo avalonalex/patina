@@ -27,6 +27,12 @@
 //! # }
 //! ```
 //!
+//! Values do not outlive their interpreter. Dropping an interpreter tears its
+//! heap down (#604): every object is freed, so the heap's memory is returned
+//! and each file port it left open is flushed and closed. A `TaggedValue`, an
+//! environment or a heap handle kept past the interpreter names freed memory;
+//! a debug build reports a read of one as a use after free.
+//!
 //! Features: `vm`, `tree-walker`, and `legacy-pipeline` (which enables
 //! `tree-walker`). All are enabled by default to retain existing imports. Use
 //! `default-features = false, features = ["vm"]` for a VM-only dependency graph.

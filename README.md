@@ -237,6 +237,11 @@ assert_eq!(interpreter.display_tagged(value), "(42)");
 ```
 
 For the tree-walker, use `TreeWalkInterpreter::new_tree_walker()` instead.
+
+A value belongs to the interpreter that made it. Dropping an interpreter frees
+its heap and flushes the file ports the program left open (#604), so read
+values before you drop it.
+
 The complete examples also demonstrate source-aware error formatting:
 
 ```bash

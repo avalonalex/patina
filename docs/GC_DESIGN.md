@@ -1152,6 +1152,23 @@ holder means they were correctly marked).
 Deferring payload drop to slot reuse would keep env cycles alive indefinitely
 on quiet arenas.
 
+**At the end of a heap's life the heap is in the cycle itself.** An environment
+holds the heap it allocates in (`Environment.heap`, a `SharedHeap`), as does a
+compiled macro (`CompiledMacro.heap`, §9.6), so every heap → env edge above
+also closes a loop through the heap's own `Rc`. While the interpreter runs,
+its owner keeps the heap alive anyway; once the interpreter is dropped,
+nothing would collect again, and the heap stayed alive with everything in it,
+an unclosed file port's unwritten output among it (#604). So each heap's
+owner, the VM backend or the tree-walker's `Evaluator`, runs
+`Heap::teardown` from its `Drop`: a sweep with nothing marked. Every slot is
+tombstoned, so every environment payload drops, the environments let go of
+the heap, and the heap is freed with its owner's last handle; each port
+flushes and closes as it drops. The interned symbols and core forms go with
+their slots. Values do not outlive their interpreter: one kept past it names
+a freed slot, which a check build refuses as a use after free (§4.5).
+`heap_teardown.rs` holds both backends to it, and
+`teardown_frees_every_slot_and_the_heap_with_them` the sweep's part.
+
 The heap's `cond-expand` library-availability service is metadata outside the
 Scheme arenas. Its runtime implementation holds **weak** references to the
 library and loader registries, never library environments or `TaggedValue`s.

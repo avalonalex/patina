@@ -1851,6 +1851,36 @@ impl Heap {
         swept
     }
 
+    /// Free every slot, as a sweep that found nothing live would: what the
+    /// owner of a heap, a VM backend or a tree-walker evaluator, does to it
+    /// when it is dropped (#604).
+    ///
+    /// The heap's objects hold environments, and the environments hold the
+    /// heap, so a heap whose interpreter was dropped stayed alive with all it
+    /// held, and a file port still reachable from a global never dropped, so
+    /// nothing wrote out what it had buffered. A sweep drops each freed
+    /// slot's payload in place, which is how a collection breaks the same
+    /// cycles while the heap runs: here every slot is freed, the
+    /// environments let go of the heap, and each port flushes and closes as
+    /// it drops. The payloads give back what they charged with no heap
+    /// borrow, as they do in any sweep.
+    ///
+    /// What is left is an empty heap, every slot free and the interned
+    /// symbols and core forms forgotten with them, since nothing marks them
+    /// again. Values do not outlive their interpreter: one kept past it names
+    /// a freed slot, which a check build reports as a use after free, and a
+    /// later allocation finds a slot whose generation has moved on. A second
+    /// teardown frees nothing. It is not a collection, and leaves the count
+    /// of them as it was.
+    pub fn teardown(&mut self) {
+        self.symbol_table.clear();
+        self.core_syntax_table.clear();
+        let collections = self.gc_collections;
+        let mut marks = MarkBits::for_heap(self);
+        self.sweep(&mut marks);
+        self.gc_collections = collections;
+    }
+
     /// Sweep's part of a tree-walker closure's own path through the byte
     /// account (`heap/account.rs`): the dead closures' payloads, credited in
     /// one sum with no work per slot. Every closure in the arena was charged
@@ -3086,6 +3116,50 @@ mod tests {
         drop(borrowed);
         assert_eq!(shared.borrow().bytes_since_gc(), 1 << 20);
         handle.release(1 << 20);
+    }
+
+    /// Teardown frees every slot, which breaks the cycle a heap object's
+    /// environment makes with the heap, forgets the interned symbols, counts
+    /// no collection, and frees nothing a second time (#604).
+    #[test]
+    fn teardown_frees_every_slot_and_the_heap_with_them() {
+        let shared: SharedHeap = Rc::new(RefCell::new(Heap::new()));
+        let env = Rc::new(Environment::with_heap(shared.clone()));
+        let kept = {
+            let mut heap = shared.borrow_mut();
+            let symbol = heap.intern_symbol("kept");
+            let vector = heap.alloc_vector(vec![symbol; 4]);
+            // The heap now holds the environment, which holds the heap.
+            heap.alloc_environment_specifier(env, false);
+            heap.alloc_pair(symbol, vector)
+        };
+        let heap = Rc::downgrade(&shared);
+
+        shared.borrow_mut().teardown();
+        let stats = shared.borrow().stats();
+        assert_eq!(
+            (stats.pairs, stats.vectors, stats.objects, stats.symbols),
+            (stats.free_pairs, stats.free_vectors, stats.free_objects, 0),
+            "a slot outlived teardown: {stats:?}"
+        );
+        assert_eq!(stats.gc_collections, 0);
+        if GC_CHECK {
+            let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shared.borrow().get_pair(kept);
+            }));
+            assert!(read.is_err(), "a value read after teardown");
+        }
+        shared.borrow_mut().teardown();
+        assert_eq!(shared.borrow().stats().gc_last_swept, 0);
+        // A symbol is interned anew rather than at its freed slot.
+        let again = shared.borrow_mut().intern_symbol("kept");
+        assert_eq!(shared.borrow().get_symbol_name(again), Some("kept"));
+
+        drop(shared);
+        assert!(
+            heap.upgrade().is_none(),
+            "the environment still holds the heap"
+        );
     }
 
     /// A namespace a dead specifier held drops inside the sweep that frees

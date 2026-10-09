@@ -740,6 +740,19 @@ impl Default for VmBackend {
     }
 }
 
+/// The backend made the heap, so dropping it tears the heap down: the
+/// objects' environments hold the heap, which otherwise outlived its
+/// interpreter with everything in it, unwritten port output among it
+/// (`Heap::teardown`, #604). A heap someone still holds a borrow of is left
+/// as it is, leaking rather than freeing what the borrow may read.
+impl Drop for VmBackend {
+    fn drop(&mut self) {
+        if let Ok(mut heap) = self.global_env.heap().try_borrow_mut() {
+            heap.teardown();
+        }
+    }
+}
+
 impl Backend for VmBackend {
     type Error = VmBackendError;
 
