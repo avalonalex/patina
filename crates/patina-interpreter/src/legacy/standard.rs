@@ -32,6 +32,18 @@ impl StandardPipeline {
     pub fn evaluator(&self) -> &Evaluator {
         self.interpreter.evaluator()
     }
+
+    /// Have the heap trace `env`, which the caller holds by its own `Rc`, for
+    /// as long as anything holds it: nothing else roots an environment a host
+    /// built between calls (#620). An environment of another heap, which this
+    /// adapter never supported, is left as it was.
+    fn track(&self, env: &Rc<Environment>) {
+        let global = self.interpreter.global_env();
+        let heap = global.heap();
+        if Rc::ptr_eq(env.heap(), heap) {
+            heap.borrow().track_environment(env);
+        }
+    }
 }
 
 impl Default for StandardPipeline {
@@ -46,6 +58,7 @@ impl Pipeline for StandardPipeline {
         reason = "the deprecated adapter over `Interpreter::eval_str_in_env`: holds nothing"
     )]
     fn eval(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
+        self.track(env);
         self.interpreter
             .eval_str_in_env(code, "<eval>", env)
             .0
@@ -57,6 +70,7 @@ impl Pipeline for StandardPipeline {
         reason = "the deprecated adapter over `Interpreter::eval_program_in_env`: holds nothing"
     )]
     fn eval_program(&self, code: &str, env: &Rc<Environment>) -> PipelineResult<TaggedValue> {
+        self.track(env);
         self.interpreter
             .eval_program_in_env(code, "<eval>", &mut false, env)
             .0

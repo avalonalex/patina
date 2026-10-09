@@ -904,7 +904,9 @@ Both CI platform test jobs run it.
 
 The consumer covers malformed input (#329), library/macro imports, macro and
 runtime diagnostics with source positions, multiple/cyclic result formatting,
-host command lines, and old pipeline module paths with a child environment.
+host command lines, the handle forms (#605), and old pipeline module paths with
+a child environment, whose heap value is read back after a collection outside
+it (#620).
 `legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
 legacy error categories and effects before a read error. These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
@@ -941,6 +943,27 @@ fail with the handle table's trace removed. The table's own sentinel test is
 `heap::handles::tests::handle_table_fields` in `patina-core`. The file runs in
 the per-PR stress lane.
 
+`patina-tests/tests/host_environments.rs` holds a host environment to rooting
+what is bound in it, on both backends (#620):
+
+- a value the host binds, across a program that collects outside the
+  environment;
+- on the tree-walker, which evaluates where `Backend::eval` is told to, a
+  definition the program makes in the environment;
+- `with_parent`'s meaning: a global defined later is seen, and a definition
+  stays in the child;
+- a value bound only in a dropped environment, which the next collection
+  frees (in a check build);
+- a handle refused by another interpreter;
+- a handle kept past its interpreter, which keeps nothing alive: teardown
+  breaks the heap, table and environment cycle;
+- the legacy pipeline, whose caller's environment the heap traces while the
+  caller holds it.
+
+With either of the table's environment traces removed, the tests of that
+trace fail, and so does its sentinel test. The file runs in the per-PR stress
+lane.
+
 ### GC lanes (`docs/GC_DESIGN.md` §11)
 
 The collector is held to output equality: a program prints the same with
@@ -954,7 +977,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
 | Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
-| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 14 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
+| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 15 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite

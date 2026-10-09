@@ -249,6 +249,13 @@ is temporary: from stage 5e of the collector's redesign (`PRD/GC_PRD.md`) the
 plain names answer handles, and the `_owned` names stay as deprecated aliases
 until stage 5g.
 
+`new_environment()` answers an `OwnedEnvironment`: an environment for the host
+to bind values in, a child of the global environment, rooted with everything
+bound in it until the handle is dropped
+([#620](https://github.com/avalonalex/patina/issues/620)). Bind and read in it
+with `define_in(&env, name, &value)` and `lookup_in(&env, name)`. An
+environment built with `Environment::with_parent` is not rooted between calls.
+
 A value belongs to the interpreter that made it, and another interpreter
 refuses its handles. Dropping an interpreter frees its heap and flushes the
 file ports the program left open (#604), so read values before you drop it; a

@@ -47,7 +47,7 @@ pub use account::{
     STRING_SLOT_BYTES, VECTOR_SLOT_BYTES, descriptor_limit, descriptor_pressure_threshold,
 };
 use check::SlotChecks;
-use handles::{HandleTable, Owned};
+use handles::{HandleTable, Owned, OwnedEnvironment};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use std::cell::{Cell, RefCell};
@@ -498,8 +498,9 @@ pub struct Heap {
     /// figures, and K16's high-water marks (`heap/telemetry.rs`, #648).
     telemetry: telemetry::Telemetry,
 
-    /// The values hosts keep across evaluations, each rooted until its
-    /// handle is dropped (`heap/handles.rs`, #605). Rooted in
+    /// The values and environments hosts keep across evaluations, each
+    /// rooted until its handle is dropped, and the environments hosts hold by
+    /// their own `Rc` (`heap/handles.rs`, #605, #620). Rooted in
     /// `GcVisitor::new`, beside the intern tables.
     handles: Rc<HandleTable>,
 
@@ -728,6 +729,38 @@ impl Heap {
     /// How many handles on this heap are alive.
     pub fn handle_count(&self) -> usize {
         self.handles.len()
+    }
+
+    /// A handle on `env`, an environment of this heap, which roots it and
+    /// what is bound in it until the handle is dropped (#620).
+    pub fn hold_environment(&self, env: Rc<crate::environment::Environment>) -> OwnedEnvironment {
+        self.assert_own(&env);
+        self.handles.hold_environment(env)
+    }
+
+    /// The environment `handle` holds. Panics as [`Heap::held`] does.
+    pub fn held_environment(
+        &self,
+        handle: &OwnedEnvironment,
+    ) -> Rc<crate::environment::Environment> {
+        self.handles.get_environment(handle)
+    }
+
+    /// Trace `env`, an environment of this heap that a host holds by its own
+    /// `Rc`, at every collection for as long as anything holds it (#620).
+    /// Tracking one twice tracks it once.
+    pub fn track_environment(&self, env: &Rc<crate::environment::Environment>) {
+        self.assert_own(env);
+        self.handles.track(env);
+    }
+
+    /// Panic unless `env` allocates in this heap: tracing another heap's
+    /// environment would mark its slots in this one's bits.
+    fn assert_own(&self, env: &crate::environment::Environment) {
+        assert!(
+            std::ptr::eq(env.heap().as_ptr(), self),
+            "an environment of another heap: a handle roots only its own heap's"
+        );
     }
 
     // =========================================================================

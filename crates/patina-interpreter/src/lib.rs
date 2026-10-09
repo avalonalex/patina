@@ -61,7 +61,7 @@ mod reentry_lint_control;
 #[allow(deprecated)]
 pub use legacy::{Pipeline, PipelineError, StandardPipeline};
 pub use patina_core::error::SourceLocation;
-pub use patina_core::{Owned, TaggedValue};
+pub use patina_core::{Owned, OwnedEnvironment, TaggedValue};
 pub use patina_frontend::{
     DesugarError, Desugarer, LexError, Lexer, ParseError, Parser, SourceMap,
 };
@@ -262,6 +262,12 @@ enum FormsEnd<E> {
 /// interpreter that made a handle reads it ([`Interpreter::display_tagged`],
 /// [`Interpreter::raw_value`]), and any other panics on it. The `eval_*`
 /// methods that answer a bare value are deprecated.
+///
+/// An environment the host builds is held the same way:
+/// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`], a child
+/// of the global environment that is rooted, with everything bound in it,
+/// until the handle is dropped (#620). [`Interpreter::define_in`] and
+/// [`Interpreter::lookup_in`] bind and read in it.
 ///
 /// The `_owned` suffix is temporary. At stage 5e of the collector's redesign
 /// (`PRD/GC_PRD.md`, decision 13) the bare methods go and the plain names
@@ -830,6 +836,73 @@ impl<B: Backend> Interpreter<B> {
         self.backend.global_env().heap().borrow().hold(value)
     }
 
+    /// A new environment for the host to bind values in, held by a handle
+    /// that roots it, and everything bound in it, until the handle is dropped
+    /// (#620). It is a child of the global environment, as
+    /// `Environment::with_parent` makes one: what is defined in it stays in
+    /// it, and every other name resolves in the global environment, a global
+    /// defined later included.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// # let interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// # interp.eval_program_owned("(import (scheme base))").unwrap();
+    /// let env = interp.new_environment();
+    /// let value = interp.eval_str_owned("'(host 42)").unwrap();
+    /// interp.define_in(&env, "held", &value);
+    /// let held = interp.lookup_in(&env, "held").unwrap();
+    /// assert_eq!(interp.display_tagged(&held), "(host 42)");
+    /// assert!(interp.lookup("held").is_none());
+    /// # }
+    /// ```
+    pub fn new_environment(&self) -> OwnedEnvironment {
+        let global = self.backend.global_env();
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the new environment goes into a handle, which roots it, before anything can \
+                      collect"
+        )]
+        let env = Rc::new(Environment::with_parent(Rc::clone(global)));
+        global.heap().borrow().hold_environment(env)
+    }
+
+    /// Bind `name` to `value` in the host environment `env`. Panics on a
+    /// handle another interpreter made.
+    pub fn define_in(&self, env: &OwnedEnvironment, name: &str, value: impl AsValue) {
+        let (env, value) = {
+            let heap = self.backend.global_env().heap().borrow();
+            (heap.held_environment(env), value.value_in(&heap))
+        };
+        env.define(name, value);
+    }
+
+    /// The value bound to `name` in the host environment `env`, or in the
+    /// global environment when `env` does not bind it, held by a handle;
+    /// `None` when neither does. Panics on a handle another interpreter
+    /// made.
+    pub fn lookup_in(&self, env: &OwnedEnvironment, name: &str) -> Option<Owned> {
+        let value = self.raw_environment(env).get(name)?;
+        Some(self.hold(value))
+    }
+
+    /// The environment `env` holds, raw, for a call the handle forms do not
+    /// cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
+    /// keep the handle while the environment is in use, and read a value
+    /// from it as raw, as one read from [`Interpreter::global_env`] is. On
+    /// the VM, `Backend::eval` evaluates in the global environment whatever
+    /// environment it is given, until #620's change to it lands. Panics on a
+    /// handle another interpreter made.
+    pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
+        self.backend
+            .global_env()
+            .heap()
+            .borrow()
+            .held_environment(env)
+    }
+
     /// The interpreter's global environment, shared with its backend.
     ///
     /// The raw layer (#605): what it holds and answers are bare
@@ -837,7 +910,8 @@ impl<B: Backend> Interpreter<B> {
     /// stays bound to it, so once the program rebinds the name a later
     /// evaluation that collects can free it; [`Interpreter::lookup`] answers
     /// a handle instead. An environment built from it with
-    /// `Environment::with_parent` is not rooted between calls (#620).
+    /// `Environment::with_parent` is not rooted between calls (#620);
+    /// [`Interpreter::new_environment`] answers one that is.
     pub fn global_env(&self) -> Rc<Environment> {
         self.backend.global_env().clone()
     }

@@ -122,10 +122,21 @@ fn main() {
             pipeline.evaluator().global_env.clone(),
         ));
         pipeline
-            .eval_program("(define host-local 42)", &child)
+            .eval_program("(define host-local (list 'host 42))", &child)
+            .unwrap();
+        // A collection outside the child, then allocation into what it freed:
+        // the heap traces the child for as long as this host holds it (#620).
+        pipeline
+            .eval_program(
+                "(import (patina debug)) (gc) (define keep (list 'a 'b 'c 'd))",
+                &pipeline.evaluator().global_env,
+            )
             .unwrap();
         assert_eq!(
-            pipeline.eval("host-local", &child).unwrap().as_fixnum(),
+            pipeline
+                .eval("(if (eq? (car host-local) 'host) (car (cdr host-local)) #f)", &child)
+                .unwrap()
+                .as_fixnum(),
             Some(42)
         );
         assert!(pipeline.evaluator().global_env.get("host-local").is_none());
