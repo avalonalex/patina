@@ -12,7 +12,7 @@
 
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
-use crate::runtime::vm_state::import_export;
+use crate::runtime::vm_state::{define_global, import_export};
 use crate::runtime::{VmState, execute, execute_in};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -781,6 +781,13 @@ impl Backend for VmBackend {
         source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
     ) -> Result<TaggedValue, Self::Error> {
         self.eval_datum(expr, env, Some(source_map))
+    }
+
+    /// Marks the primitive the definition rebinds, as the `Define`
+    /// instruction does (`define_global`), so that code compiled before it
+    /// calls the new value (#673).
+    fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
+        define_global(&mut self.state.borrow_mut(), env, Rc::from(name), value);
     }
 }
 

@@ -1743,8 +1743,7 @@ fn dispatch_one_instruction(
         Instruction::Define { ref name, src } => {
             let val = state.reg_at(base, src);
             let globals = frame_globals(state);
-            mark_if_shadowing_primitive(state, &globals, name, val);
-            globals.define(Rc::clone(name), val);
+            define_global(state, &globals, Rc::clone(name), val);
         }
 
         // ── Closure Creation ────────────────────────────────────────────
@@ -2682,14 +2681,17 @@ fn dispatch_one_instruction(
 /// must deoptimize every `CallPrimitive` site compiled against it, or
 /// already-compiled callers would keep calling the old primitive.
 ///
-/// Every Rust-side writer that can overwrite a global binding must call this
-/// *before* replacing it: the `Define`/`StoreGlobal` handlers. The import
-/// machinery in both this file and `backend.rs` does the same job through
-/// `import_export` (PRD P8.1), which compares the value before
-/// with the value after, since what an import installs is a binding rather
-/// than a value they hold. Rebinding a name to the value it already has is a
-/// no-op and does not deoptimize, so re-importing a library never pays for
-/// this.
+/// Every Rust-side writer that can overwrite a global binding must mark the
+/// primitive *before* replacing it. An assignment, the `StoreGlobal`
+/// handler's, calls this, since it writes the binding `get` finds, which may
+/// be a parent's. A definition, the `Define` handler's or a host's through
+/// `Backend::define`, goes through [`define_global`], which marks by the
+/// environment's own binding. The import machinery in both this file and
+/// `backend.rs` does the same job through `import_export` (PRD P8.1), which
+/// compares the value before with the value after, since what an import
+/// installs is a binding rather than a value they hold. Rebinding a name to
+/// the value it already has is a no-op and does not deoptimize, so
+/// re-importing a library never pays for this.
 fn mark_if_shadowing_primitive(
     state: &mut VmState,
     globals: &Rc<Environment>,
@@ -2700,9 +2702,32 @@ fn mark_if_shadowing_primitive(
     mark_if_shadowing_primitive_value(state, old, new_val);
 }
 
+/// Define `name` as `value` in `env`: the `Define` handler's body, and a
+/// host's definition through `Backend::define`, which marks as a program's
+/// does (#673).
+///
+/// A definition writes `env`'s own binding of the name, and a fast path
+/// compiled in `env` stands on no other: `resolve_primitive_calls` leaves a
+/// name `env` reaches through a parent, a macro-expansion alias or the
+/// name-only view of a macro's definition to an ordinary call. So this marks
+/// the primitive that binding held, if any, and a definition that gives
+/// `env` a binding of its own marks nothing: a host environment that defines
+/// `car` leaves the global `car`'s fast path alone.
+pub(crate) fn define_global(
+    state: &mut VmState,
+    env: &Rc<Environment>,
+    name: Rc<str>,
+    value: TaggedValue,
+) {
+    if let Some(slot) = env.local_slot(&name) {
+        mark_if_shadowing_primitive_value(state, env.slot_value(slot), value);
+    }
+    env.define(name, value);
+}
+
 /// Value-taking core of [`mark_if_shadowing_primitive`], for callers that
-/// already hold the binding's current value (the cached `StoreGlobal` path)
-/// and need no name lookup.
+/// already hold the binding's current value (the cached `StoreGlobal` path,
+/// [`define_global`]) and need no name lookup.
 fn mark_if_shadowing_primitive_value(state: &mut VmState, old: TaggedValue, new_val: TaggedValue) {
     if old == new_val {
         return;
@@ -2829,6 +2854,30 @@ mod tests {
         let next = state.load_unit(code(), Vec::new());
         assert_eq!(next, CodeObjectId::new(1, 0));
         assert!(state.code_object(last).is_err());
+    }
+
+    /// A definition marks the primitive it rebinds only where the
+    /// environment binds the name itself, the one binding a fast path
+    /// compiled there stands on: a child's definition of a name its parent
+    /// binds leaves the parent's fast path alone (#673).
+    #[test]
+    fn a_definition_marks_only_the_environments_own_binding() {
+        let global = Rc::new(Environment::new());
+        let mut state = VmState::new(Rc::clone(&global));
+        state.install_primitives();
+        let car = state
+            .primitive_registry
+            .resolve_index("scheme.base/car")
+            .expect("`car` is registered");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test of the marking, which runs no Scheme and so collects nothing"
+        )]
+        let child = Rc::new(Environment::with_parent(Rc::clone(&global)));
+        define_global(&mut state, &child, Rc::from("car"), TaggedValue::fixnum(1));
+        assert!(!state.is_primitive_shadowed(car));
+        define_global(&mut state, &global, Rc::from("car"), TaggedValue::fixnum(1));
+        assert!(state.is_primitive_shadowed(car));
     }
 }
 

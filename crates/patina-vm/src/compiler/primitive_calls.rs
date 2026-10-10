@@ -13,7 +13,8 @@
 //! Lexically shadowed names never reach this map: pass 2 compiles them to
 //! `LocalRef`/`ClosureRef`, so only true global references are candidates.
 //! Rebinding a primitive name *after* compilation is handled at runtime, not
-//! here: the `Define`/`StoreGlobal` handlers mark the overwritten primitive in
+//! here: the `Define`/`StoreGlobal` handlers, the import path and a host's
+//! definitions (`Backend::define`, #673) mark the overwritten primitive in
 //! `VmState::shadowed_primitives`, and marked ids fall back to the full
 //! name-lookup call path (see the `CallPrimitive` arm in `vm_state.rs`).
 
@@ -184,9 +185,12 @@ pub fn resolve_primitive_calls(
         // macro introduced, can be pointed at another binding without any
         // write to the one it reaches now, which is what the shadow marks
         // watch — a second expansion defining it again re-points the alias.
-        // The environment is parentless (asserted in `compile_pipeline`), so
-        // no local slot means one of those. Imports, and the aliases early
-        // binding makes, are slots of their own and keep their fast paths.
+        // So can a name a host environment reaches through its parent (#620):
+        // a definition there gives it a binding of its own and writes nothing
+        // of the parent's. A definition marks by the environment's own
+        // binding for this reason (`define_global`). Imports, and the aliases
+        // early binding makes, are slots of their own and keep their fast
+        // paths.
         if env.local_slot(&name).is_none() {
             continue;
         }

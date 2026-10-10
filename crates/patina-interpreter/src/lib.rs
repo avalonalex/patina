@@ -185,9 +185,10 @@ pub fn format_backend_error_with_source<E: std::error::Error + HasSourceLocation
 /// read, for formatting an error it reports.
 pub type WithSourceMap<T> = (T, Rc<RefCell<SourceMap>>);
 
-/// What [`Interpreter::display_tagged`] shows: a bare [`TaggedValue`], or a
-/// handle, [`Owned`] (by value or by reference), which the interpreter that
-/// made it reads.
+/// What [`Interpreter::display_tagged`] shows, and what
+/// [`Interpreter::define`] and [`Interpreter::define_in`] bind: a bare
+/// [`TaggedValue`], or a handle, [`Owned`] (by value or by reference), which
+/// the interpreter that made it reads.
 pub trait AsValue: sealed::Sealed {
     /// The value, read from `heap`.
     #[doc(hidden)]
@@ -258,7 +259,9 @@ enum FormsEnd<E> {
 /// that collects can free it, and a value kept across that evaluation reads
 /// whatever comes to occupy its slot (#605). The `eval_*_owned` methods
 /// answer a handle, [`Owned`], instead, which roots its value until the
-/// handle is dropped; [`Interpreter::lookup`] answers one for a global. The
+/// handle is dropped; [`Interpreter::lookup`] answers one for a global, and
+/// [`Interpreter::define`] binds a global to one, through the backend, so
+/// that code compiled before the definition calls the new value (#673). The
 /// interpreter that made a handle reads it ([`Interpreter::display_tagged`],
 /// [`Interpreter::raw_value`]), and any other panics on it. The `eval_*`
 /// methods that answer a bare value are deprecated.
@@ -826,6 +829,30 @@ impl<B: Backend> Interpreter<B> {
         Some(self.hold(value))
     }
 
+    /// Bind `name` to `value` in the global environment, as a program's
+    /// `define` there does: code compiled before the definition calls the
+    /// new value, on either backend, even where the name was a primitive's
+    /// (#673). Panics on a handle another interpreter made.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// # let interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// interp.eval_program_owned("(import (scheme base)) (define (head p) (car p))").unwrap();
+    /// let replacement = interp.eval_str_owned("(lambda (p) 'replaced)").unwrap();
+    /// interp.define("car", &replacement);
+    /// let answer = interp.eval_str_owned("(head '(1 2))").unwrap();
+    /// assert_eq!(interp.display_tagged(&answer), "replaced");
+    /// # }
+    /// ```
+    pub fn define(&self, name: &str, value: impl AsValue) {
+        let global = self.backend.global_env();
+        let value = value.value_in(&global.heap().borrow());
+        self.backend.define(global, name, value);
+    }
+
     /// The value `handle` holds, raw: a bare `TaggedValue`, valid until the
     /// next evaluation. Keep the handle, not this, across one. Panics on a
     /// handle another interpreter made.
@@ -871,14 +898,15 @@ impl<B: Backend> Interpreter<B> {
         global.heap().borrow().hold_environment(env)
     }
 
-    /// Bind `name` to `value` in the host environment `env`. Panics on a
-    /// handle another interpreter made.
+    /// Bind `name` to `value` in the host environment `env`, as a program's
+    /// `define` there does: [`Interpreter::define`] for a host environment.
+    /// Panics on a handle another interpreter made.
     pub fn define_in(&self, env: &OwnedEnvironment, name: &str, value: impl AsValue) {
         let (env, value) = {
             let heap = self.backend.global_env().heap().borrow();
             (heap.held_environment(env), value.value_in(&heap))
         };
-        env.define(name, value);
+        self.backend.define(&env, name, value);
     }
 
     /// The value bound to `name` in the host environment `env`, or in the
@@ -893,7 +921,7 @@ impl<B: Backend> Interpreter<B> {
     /// The environment `env` holds, raw, for a call the handle forms do not
     /// cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
     /// keep the handle while the environment is in use, and read a value
-    /// from it as raw, as one read from [`Interpreter::global_env`] is.
+    /// from it, or write one, as raw, as with [`Interpreter::global_env`].
     /// Panics on a handle another interpreter made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend
@@ -968,6 +996,13 @@ impl<B: Backend> Interpreter<B> {
     /// a handle instead. An environment built from it with
     /// `Environment::with_parent` is not rooted between calls (#620);
     /// [`Interpreter::new_environment`] answers one that is.
+    ///
+    /// Its `define` and `set` are raw too: they write the binding and
+    /// nothing else. The VM compiles a call to a primitive's binding into a
+    /// fast path, which such a write does not turn off, so code compiled
+    /// before a host writes over a primitive's name goes on calling the
+    /// primitive (#673). [`Interpreter::define`] binds through the backend,
+    /// which turns it off.
     pub fn global_env(&self) -> Rc<Environment> {
         self.backend.global_env().clone()
     }

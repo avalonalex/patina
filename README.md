@@ -241,7 +241,12 @@ For the tree-walker, use `TreeWalkInterpreter::new_tree_walker()` instead.
 `eval_program_owned` answers an `Owned` handle, which keeps the value alive
 until the handle is dropped. Read it with `display_tagged(&value)`, or take
 its raw `TaggedValue` with `raw_value(&value)`, which is valid until the next
-evaluation; `lookup(name)` answers a handle on a global. The `eval_*` methods
+evaluation; `lookup(name)` answers a handle on a global. `define(name, &value)`
+binds a global as a program's `define` does, so code compiled before it calls
+the new value on either backend. The global environment's own `define` and
+`set` write the binding and nothing else, and the VM's code compiled while the
+name was a primitive's goes on calling the primitive
+([#673](https://github.com/avalonalex/patina/issues/673)). The `eval_*` methods
 that answer a bare `TaggedValue` are deprecated: nothing roots a bare value,
 so a later evaluation that collects can free it
 ([#605](https://github.com/avalonalex/patina/issues/605)). The `_owned` suffix
