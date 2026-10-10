@@ -253,8 +253,10 @@ until stage 5g.
 to bind values in, a child of the global environment, rooted with everything
 bound in it until the handle is dropped
 ([#620](https://github.com/avalonalex/patina/issues/620)). Bind and read in it
-with `define_in(&env, name, &value)` and `lookup_in(&env, name)`. An
-environment built with `Environment::with_parent` is not rooted between calls.
+with `define_in(&env, name, &value)` and `lookup_in(&env, name)`, and evaluate
+in it with `eval_str_in(&env, …)` and `eval_program_in(&env, …)`, on either
+backend: what the code defines or imports stays in it. An environment built
+with `Environment::with_parent` is not rooted between calls.
 
 A value belongs to the interpreter that made it, and another interpreter
 refuses its handles. Dropping an interpreter frees its heap and flushes the

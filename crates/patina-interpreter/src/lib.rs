@@ -267,7 +267,9 @@ enum FormsEnd<E> {
 /// [`Interpreter::new_environment`] answers an [`OwnedEnvironment`], a child
 /// of the global environment that is rooted, with everything bound in it,
 /// until the handle is dropped (#620). [`Interpreter::define_in`] and
-/// [`Interpreter::lookup_in`] bind and read in it.
+/// [`Interpreter::lookup_in`] bind and read in it, and
+/// [`Interpreter::eval_str_in`] and [`Interpreter::eval_program_in`]
+/// evaluate in it, on either backend.
 ///
 /// The `_owned` suffix is temporary. At stage 5e of the collector's redesign
 /// (`PRD/GC_PRD.md`, decision 13) the bare methods go and the plain names
@@ -891,16 +893,70 @@ impl<B: Backend> Interpreter<B> {
     /// The environment `env` holds, raw, for a call the handle forms do not
     /// cover, such as `Backend::eval`. The handle roots it, not this `Rc`:
     /// keep the handle while the environment is in use, and read a value
-    /// from it as raw, as one read from [`Interpreter::global_env`] is. On
-    /// the VM, `Backend::eval` evaluates in the global environment whatever
-    /// environment it is given, until #620's change to it lands. Panics on a
-    /// handle another interpreter made.
+    /// from it as raw, as one read from [`Interpreter::global_env`] is.
+    /// Panics on a handle another interpreter made.
     pub fn raw_environment(&self, env: &OwnedEnvironment) -> Rc<Environment> {
         self.backend
             .global_env()
             .heap()
             .borrow()
             .held_environment(env)
+    }
+
+    /// Evaluate a string containing one expression in the host environment
+    /// `env`, and answer a handle on its value: [`Interpreter::eval_str_owned`]
+    /// in `env` rather than the global environment (#620). What it defines
+    /// stays in `env`, and what it imports is bound there. Panics on a handle
+    /// another interpreter made.
+    pub fn eval_str_in(
+        &self,
+        env: &OwnedEnvironment,
+        input: &str,
+    ) -> Result<Owned, InterpreterError<B::Error>> {
+        let env = self.raw_environment(env);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_str_in_env` in the host environment, which its handle roots: holds \
+                      nothing across it, and holds the value it answers before anything can \
+                      collect"
+        )]
+        let (result, _) = self.eval_str_in_env(input, "<eval>", &env);
+        result.map(|value| self.hold(value))
+    }
+
+    /// Evaluate every form of a program in the host environment `env`, and
+    /// answer a handle on the last result:
+    /// [`Interpreter::eval_program_owned`] in `env` rather than the global
+    /// environment (#620). What the program defines stays in `env`, and what
+    /// it imports is bound there. Panics on a handle another interpreter made.
+    ///
+    /// ```
+    /// # #[cfg(feature = "vm")]
+    /// # {
+    /// # use patina_interpreter::VmInterpreter;
+    /// # let interp = VmInterpreter::new_vm();
+    /// # interp.backend().add_library_search_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib"));
+    /// # interp.eval_program_owned("(import (scheme base))").unwrap();
+    /// let env = interp.new_environment();
+    /// let answer = interp.eval_program_in(&env, "(define y 40) (+ y 2)").unwrap();
+    /// assert_eq!(interp.display_tagged(&answer), "42");
+    /// assert!(interp.lookup_in(&env, "y").is_some());
+    /// assert!(interp.lookup("y").is_none());
+    /// # }
+    /// ```
+    pub fn eval_program_in(
+        &self,
+        env: &OwnedEnvironment,
+        input: &str,
+    ) -> Result<Owned, InterpreterError<B::Error>> {
+        let env = self.raw_environment(env);
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "`eval_program_in_env` in the host environment, which its handle roots: holds \
+                      nothing across it"
+        )]
+        let (result, _) = self.eval_program_in_env(input, "<eval>", &mut false, &env);
+        result
     }
 
     /// The interpreter's global environment, shared with its backend.

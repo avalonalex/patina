@@ -1160,11 +1160,43 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     let code = state.code_object(code_id)?;
 
     state.execution.push_frame(code, None, 0);
+    run_top_frame(state)
+}
 
+/// [`execute`] for code compiled in `env`, an environment other than the
+/// machine's globals, such as one a host built (#620): the unit runs as a
+/// closure of no arguments whose globals are `env`, so its frames read and
+/// define `env`'s bindings, as [`eval_closure`]'s do. The frame holds the
+/// closure, which roots it and `env` while the code runs, and the run may
+/// collect as any top-level run may.
+pub fn execute_in(
+    state: &mut VmState,
+    code_id: CodeObjectId,
+    env: &Rc<Environment>,
+) -> Result<TaggedValue, VmError> {
+    let code = state.code_object(code_id)?;
+    {
+        // The closure is held only here until the frame takes it.
+        let _no_gc = AssertNoGc::new(&state.heap);
+        let closure = state
+            .heap
+            .borrow_mut()
+            .alloc_vm_closure(code_id.0, Vec::new(), env.clone());
+        state.note_closure_made(code_id);
+        state
+            .execution
+            .push_frame(code, patina_core::tagged_value::ObjectIndex::of(closure), 0);
+    }
+    run_top_frame(state)
+}
+
+/// Run the frame [`execute`] or [`execute_in`] pushed until the stack is
+/// empty, and clear what the run leaves behind.
+fn run_top_frame(state: &mut VmState) -> Result<TaggedValue, VmError> {
     #[expect(
         clippy::disallowed_methods,
-        reason = "the state is in the machine: the frame pushed above is the run's root, and this \
-                  frame holds nothing"
+        reason = "the state is in the machine: the frame the caller pushed is the run's root, and \
+                  this frame holds nothing"
     )]
     let result = run_loop_until(state, 0);
     // Nothing is left to resume: an escape that reached depth 0 *is* this

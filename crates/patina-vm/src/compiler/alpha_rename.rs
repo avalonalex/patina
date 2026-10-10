@@ -161,12 +161,17 @@ impl RenameEnv {
         // scopes finds nothing, falls out of this function as its bare
         // spelling, and is answered at run time by whatever that spelling
         // means: a user's global, or an unbound name. Triage family 40.
-        if let Some(global_env) = &self.global_env {
-            global_env.for_each_introduced_global(name, |scopes, unique_name| {
+        // The environment compiled against and its parents: a host
+        // environment is a child of the global one (#620), and an earlier
+        // global form's expansion defined its names there.
+        let mut chain = self.global_env.as_deref();
+        while let Some(env) = chain {
+            env.for_each_introduced_global(name, |scopes, unique_name| {
                 if patina_core::scope_resolve::is_candidate(scopes, ref_scopes) {
                     candidates.push((scopes.clone(), unique_name.clone()));
                 }
             });
+            chain = env.parent().map(|parent| &**parent);
         }
         // The VM's last sight of scopes: past this a reference is a unique name
         // and the sets are gone, so a VM hygiene question has to be asked at
