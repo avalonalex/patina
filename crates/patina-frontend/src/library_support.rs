@@ -7,7 +7,7 @@
 //! import resolution and evaluation, eliminating the need for circular references.
 
 use crate::{BodyElement, LibraryDefinition, ParseError};
-use patina_core::{Environment, FileSystem, ScopeSet, SharedHeap, TaggedValue};
+use patina_core::{CoreForm, Environment, FileSystem, ScopeSet, SharedHeap, SpineEnd, TaggedValue};
 use patina_runtime::library_loader::{
     EvaluatingLibraryLoader, ExportSpec, ImportSet, ParsedLibrary,
 };
@@ -72,15 +72,45 @@ pub fn is_define_library_form(tv: TaggedValue, env: &Environment) -> bool {
     )
 }
 
+/// The import sets of `tv`, a top-level form to be evaluated in `env`, when
+/// it is a bare `(import set ...)` that a backend loads outside the
+/// desugarer, so that the libraries it loads collect as they load (#677);
+/// `None` for any other form.
+///
+/// Decided by the binding of the head, the core-syntax marker for `import`,
+/// never by its spelling, as `define-library` is ([`is_define_library_form`],
+/// #610): an `import` under another name is one, and a program's own binding
+/// of the name is not. Only a well-formed one: a form with no sets, or with a
+/// set that does not parse, answers `None` too, and the desugarer handles it
+/// as it always has, loading the sets before the bad one and then reporting
+/// that one. An `import` met inside a form, a `begin`'s or a macro's, stays
+/// the desugarer's (point C of `PRD/GC_PRD.md` §11.3).
+pub fn top_level_import_sets(tv: TaggedValue, env: &Environment) -> Option<Vec<ImportSet>> {
+    let (_, binding) = top_level_head(tv, env)?;
+    let sets = {
+        let heap = env.heap().borrow();
+        if heap.get_core_syntax(binding?) != Some(CoreForm::Import) {
+            return None;
+        }
+        let (_, rest) = heap.try_pair(tv)?;
+        match heap.spine(rest) {
+            (sets, SpineEnd::Null) if !sets.is_empty() => sets,
+            _ => return None,
+        }
+    };
+    sets.into_iter()
+        .map(|set| LibraryDefinition::parse_import_set_tagged(set, env.heap()).ok())
+        .collect()
+}
+
 /// The name at the head of the top-level form `tv`, and what it is bound to
 /// in `env`, `None` for nothing.
 ///
 /// This is the one place a backend asks what a top-level form's head means
-/// before the desugarer does. The next form to be handled outside the
-/// desugarer, a bare `import` (`PRD/GC_PRD.md` §11.3), is recognized here by
-/// the same rule. A head that is not a name, or whose reference the set-of-
-/// scopes rule leaves ambiguous, answers `None`, so the form goes to the
-/// desugarer, which reports the ambiguity.
+/// before the desugarer does: `define-library` (#610) and a bare `import`
+/// (#677) are recognized here, by the same rule. A head that is not a name,
+/// or whose reference the set-of-scopes rule leaves ambiguous, answers
+/// `None`, so the form goes to the desugarer, which reports the ambiguity.
 fn top_level_head(tv: TaggedValue, env: &Environment) -> Option<(Rc<str>, Option<TaggedValue>)> {
     let (name, scopes) = {
         let heap = env.heap().borrow();
@@ -645,6 +675,61 @@ impl EvaluatingLibraryLoader for SchemeLibraryLoader {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::Parser;
+
+    /// The import sets `top_level_import_sets` finds in `source`'s one form,
+    /// as the library names they import, in an environment that binds
+    /// `bindings` to the `import` marker and `fixnum` to a number.
+    fn hoisted(source: &str, bindings: &[&str], fixnum: Option<&str>) -> Option<Vec<String>> {
+        let env = Environment::new();
+        let marker = env.heap().borrow_mut().core_syntax(CoreForm::Import);
+        for name in bindings {
+            env.define(*name, marker);
+        }
+        if let Some(name) = fixnum {
+            env.define(name, TaggedValue::fixnum(1));
+        }
+        let form = Parser::new_with_heap(source, env.heap().clone())
+            .and_then(|mut parser| parser.parse_all())
+            .expect("the form reads")[0];
+        let sets = top_level_import_sets(form, &env)?;
+        Some(
+            sets.iter()
+                .map(|set| set.library_name().join(" "))
+                .collect(),
+        )
+    }
+
+    /// A bare, well-formed `import`, under its own name or another bound to
+    /// its marker (#677).
+    #[test]
+    fn a_bare_import_is_hoisted() {
+        let both = Some(vec!["scheme base".to_string(), "srfi 1".to_string()]);
+        let source = "(import (scheme base) (only (srfi 1) iota))";
+        assert_eq!(hoisted(source, &["import"], None), both);
+        let renamed = "(imp (scheme base) (only (srfi 1) iota))";
+        assert_eq!(hoisted(renamed, &["imp"], None), both);
+    }
+
+    /// Everything else goes to the desugarer, which handles it as it always
+    /// has: an `import` with no sets or a set that does not parse, an
+    /// improper one, one inside a form, and a head not bound to the marker.
+    #[test]
+    fn anything_else_is_left_to_the_desugarer() {
+        for source in [
+            "(import)",
+            "(import (scheme base) 5)",
+            "(import (scheme base) . 5)",
+            "(begin (import (scheme base)))",
+        ] {
+            assert_eq!(hoisted(source, &["import"], None), None, "{source}");
+        }
+        let source = "(import (scheme base))";
+        assert_eq!(hoisted(source, &[], None), None, "unbound");
+        assert_eq!(hoisted(source, &[], Some("import")), None, "a number");
+    }
+
     #[test]
     fn test_find_sld_file_conversion() {
         // We can't easily test find_sld_file without an evaluator,

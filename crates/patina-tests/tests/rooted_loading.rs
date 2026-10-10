@@ -11,6 +11,13 @@
 //! which also lets a run of `define-library` forms collect (#614's program
 //! 2). A load under a guard, such as one a running program asks for, still
 //! defers.
+//!
+//! A program's bare `import` was such a load: every library it pulled in
+//! loaded inside the expansion's guard, 276 MiB for #658's 25 libraries
+//! before a collection could run. The backends now load it themselves, from
+//! their top level (`patina_frontend::top_level_import_sets`), so it
+//! collects like the rest; an `import` met inside a form still loads under
+//! the guard (point C).
 
 mod common;
 use common::{tree_walker_interpreter, vm_interpreter};
@@ -147,4 +154,87 @@ fn a_library_collects_while_its_dependency_loads() {
     for value in answers.map(|(_, value)| value) {
         assert_eq!(value, expected);
     }
+}
+
+/// A library file whose body collects, at a `(gc)`, and reports whether that
+/// collection ran or was posted for later.
+const OBSERVING_LIBRARY: &str = "(define-library (rooted observing)
+  (export observed kept)
+  (import (scheme base) (patina debug))
+  (begin
+    (define (stat name) (cdr (assq name (gc-stats))))
+    (define kept (list 'kept (vector 1 2) \"kept\"))
+    (define c (stat 'collections))
+    (define d (stat 'deferred-collections))
+    (gc)
+    (define observed (list (< c (stat 'collections))
+                           (- (stat 'deferred-collections) d)))))";
+
+/// What the library observed of its `(gc)`, and `kept`, once `program` has
+/// imported it.
+fn observed_after<B: Backend + SearchPath>(interp: Interpreter<B>, program: &str) -> String {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir(dir.path().join("rooted")).unwrap();
+    std::fs::write(dir.path().join("rooted/observing.sld"), OBSERVING_LIBRARY).unwrap();
+    interp.backend().add_search_path(dir.path().to_path_buf());
+    interp.eval_program_owned(program).unwrap();
+    let value = interp.eval_program_owned("(list observed kept)").unwrap();
+    interp.display_tagged(&value)
+}
+
+/// A bare `import` loads its library from the backend's top level, so the
+/// library's `(gc)` collects at its call (#658). On `main` before #677 it was
+/// posted and counted, `(#f 1)`.
+#[test]
+fn a_bare_import_loads_where_it_collects() {
+    let program = "(import (rooted observing))";
+    let expected = "((#t 0) (kept #(1 2) \"kept\"))";
+    let answers = [
+        observed_after(vm_interpreter(), program),
+        observed_after(tree_walker_interpreter(), program),
+    ];
+    assert_eq!(answers, [expected, expected], "(VM, tree-walker)");
+}
+
+/// An `import` met inside a form, here a `begin`'s, still loads under the
+/// expansion's guard (point C): the `(gc)` is posted and counted.
+#[test]
+fn an_import_inside_a_form_still_defers() {
+    let program = "(begin (import (rooted observing)))";
+    let expected = "((#f 1) (kept #(1 2) \"kept\"))";
+    let answers = [
+        observed_after(vm_interpreter(), program),
+        observed_after(tree_walker_interpreter(), program),
+    ];
+    assert_eq!(answers, [expected, expected], "(VM, tree-walker)");
+}
+
+/// The form is recognized by what its head is bound to, never by its
+/// spelling: a program's own `import`, a macro or a procedure, is expanded or
+/// called as it was.
+#[test]
+fn a_programs_own_import_is_not_hoisted() {
+    for (program, expected) in [
+        (
+            "(define-syntax import (syntax-rules () ((_ x ...) '(macro x ...)))) \
+             (import (srfi 1))",
+            "(macro (srfi 1))",
+        ),
+        (
+            "(define (import . sets) (cons 'procedure sets)) (import 'a 'b)",
+            "(procedure a b)",
+        ),
+    ] {
+        for interp_answer in [
+            answer(vm_interpreter(), program),
+            answer(tree_walker_interpreter(), program),
+        ] {
+            assert_eq!(interp_answer, expected, "{program}");
+        }
+    }
+}
+
+fn answer<B: Backend>(interp: Interpreter<B>, program: &str) -> String {
+    let value = interp.eval_program_owned(program).unwrap();
+    interp.display_tagged(&value)
 }

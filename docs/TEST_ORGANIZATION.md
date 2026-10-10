@@ -768,7 +768,9 @@ name-selection policy for program imports, library imports, `eval`/`load`, and
 library export. Loading and evaluating the library stay with the backend (or
 `ApplyContext`); installation uses `Library::import_into`, with the VM's
 `import_export` wrapper preserving primitive-shadow invalidation. The selector
-holds strings, not Scheme values or temporary environments.
+holds strings, not Scheme values or temporary environments. A program's bare
+top-level `import` reaches the same backend functions from the backend's top
+level rather than from the expansion (#677), and so shares the policy.
 
 | Import-set case | Policy |
 |---|---|
@@ -1001,12 +1003,18 @@ on both backends (#677):
   program bound, which on the VM only the traced `saved_globals` reaches
   while the body runs;
 - a library whose dependency collects while it loads keeps both libraries'
-  bindings.
+  bindings;
+- a library file a program's bare `import` loads collects at its `(gc)`,
+  where an `import` inside a `begin` still posts and counts it (point C);
+- a program's own `import`, a macro or a procedure, is expanded or called as
+  before: the backends recognize the form by its binding.
 
-On `main` each reported no collection during the load, on both backends.
-With the loading entry's body untraced the last two fail with a
-use-after-free; with `saved_globals` untraced the second fails on the VM;
-and without either backend's point B the first fails on that backend. While
+Before #677 each of the first four reported no collection during the load,
+on both backends. With the loading entry's body untraced the second, third
+and fourth fail with a use-after-free; with `saved_globals` untraced the
+second fails on the VM; without either backend's point B the first fails on
+that backend; and without either backend's processing of a bare `import` the
+fourth fails on that backend. While
 the body runs, the entry's environment is also the running globals or the
 running step's environment, so its trace is held by the sentinel test
 `a_library_being_loaded_is_a_root` in `patina-runtime`. The file runs in the
@@ -1113,10 +1121,12 @@ opens (`(gc-stats)`'s `descriptor-collections`), and none under
 `PATINA_GC=0`; an open port holds 8 KiB of `external-bytes` and one place in
 `descriptors-since-gc` until it is closed; a dropped output port's file is
 empty before a collection and holds its output after one, `(gc)`'s and an
-allocation-triggered one, as in chibi and Gauche; and in a library body a
-program's `import` loads, under the expansion's guard, where collection is
-deferred, the first `EMFILE` raises, the documented limit. GC-time flushing
-is observable, so these stay out of the byte-identical differential lane.
+allocation-triggered one, as in chibi and Gauche; in a library body that an
+`import` inside a `begin` loads, under the expansion's guard, where
+collection is deferred, the first `EMFILE` raises, the documented limit,
+while the same body loaded by a bare `import` collects at the open and opens
+the file (#677). GC-time flushing is observable, so these stay out of the
+byte-identical differential lane.
 `escape_from_primitive.rs` re-enters continuations captured around an open
 that collected and retried, over a filesystem whose descriptor table it caps
 (`ScarceFs`), so that the stress lane runs it without a limit on its process.

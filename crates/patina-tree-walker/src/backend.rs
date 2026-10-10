@@ -137,6 +137,25 @@ impl TreeWalker {
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
+        // A bare `import` loads its libraries here rather than inside the
+        // expansion's guard, so that each load collects at its points: inside
+        // its body forms and where it ends (#677, #658).
+        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env) {
+            for import_set in &import_sets {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the backend's top level, so the load may collect (#677). Holds the \
+                              parsed import sets, which hold no value, and `env`, which the \
+                              evaluator or a host's handle roots; the `import` datum is not read \
+                              after its sets were parsed"
+                )]
+                self.evaluator.process_import_for_eval(import_set, env)?;
+                // Point B, between this set's libraries and the next set's.
+                self.evaluator.collect_if_pending();
+            }
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
         let desugarer = match source_map {
             Some(sm) => Desugarer::with_env_and_source_map(env.clone(), sm.clone())
                 .with_fs(self.evaluator.fs.clone()),

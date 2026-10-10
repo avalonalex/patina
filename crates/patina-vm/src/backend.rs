@@ -273,6 +273,26 @@ impl VmBackend {
             return Ok(TaggedValue::UNSPECIFIED);
         }
 
+        // A bare `import` loads its libraries here rather than inside the
+        // expansion's guard, so that each load collects at its points: inside
+        // its body forms and where it ends (#677, #658).
+        if let Some(import_sets) = patina_frontend::top_level_import_sets(expr, env) {
+            for import_set in &import_sets {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the backend's top level, so the load may collect (#677). Holds the \
+                              parsed import sets, which hold no value, and `env`, which the \
+                              machine or a host's handle roots; the `import` datum is not read \
+                              after its sets were parsed"
+                )]
+                self.process_import_set(import_set, env)
+                    .map_err(import_error)?;
+                // Point B, between this set's libraries and the next set's.
+                self.collect_if_pending();
+            }
+            return Ok(TaggedValue::UNSPECIFIED);
+        }
+
         // Desugar: TaggedValue → CoreExpr.
         let desugarer = match source_map {
             Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(env), sm.clone())
@@ -288,15 +308,7 @@ impl VmBackend {
         let core_expr = desugarer.desugar_with_imports(
             expr,
             &heap,
-            |set, env| {
-                self.process_import_set(set, env).map_err(|e| {
-                    VmBackendError::Runtime {
-                        message: e.to_string(),
-                        location: e.source_location().cloned(),
-                    }
-                    .with_diagnostic(e.diagnostic())
-                })
-            },
+            |set, env| self.process_import_set(set, env).map_err(import_error),
             VmBackendError::from,
         )?;
 
@@ -764,6 +776,17 @@ impl Default for VmBackend {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// What a program's `import` reports when one of its libraries cannot be
+/// loaded or bound, whether the backend loads it (`top_level_import_sets`)
+/// or the expansion does.
+fn import_error(error: LibraryError) -> VmBackendError {
+    VmBackendError::Runtime {
+        message: error.to_string(),
+        location: error.source_location().cloned(),
+    }
+    .with_diagnostic(error.diagnostic())
 }
 
 /// The backend made the heap, so dropping it tears the heap down: the
