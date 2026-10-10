@@ -82,12 +82,26 @@ where
         .eval_program("(import (scheme process-context)) (command-line)")
         .unwrap();
     assert_eq!(interpreter.display_tagged(value), "(\"host\" \"argument\")");
+    // A host's definition, which code compiled before it calls (#673).
+    interpreter
+        .eval_program_owned("(define (head p) (car p))")
+        .unwrap();
+    let replacement = interpreter
+        .eval_str_owned("(lambda (p) 'replaced)")
+        .unwrap();
+    interpreter.define("car", &replacement);
+    let head = interpreter.eval_str_owned("(head '(1 2))").unwrap();
+    assert_eq!(interpreter.display_tagged(&head), "replaced");
 }
 
 fn main() {
     let host = Interpreter::new(LiteralBackend(Rc::new(Environment::new())));
     assert_eq!(host.eval_program("40 42").unwrap().as_fixnum(), Some(42));
     assert!(host.eval_program("42 (").is_err());
+    // `Backend::define`'s default, which a host-supplied backend takes.
+    host.define("answer", TaggedValue::fixnum(42));
+    let answer = host.lookup("answer").expect("`answer` is bound");
+    assert_eq!(host.raw_value(&answer).as_fixnum(), Some(42));
     #[cfg(any(feature = "vm", feature = "defaults"))]
     check(patina_interpreter::VmInterpreter::new_vm());
     #[cfg(any(

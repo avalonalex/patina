@@ -1,13 +1,16 @@
 //! Semantic tests for `CallPrimitive` dispatch on the VM backend (Track P P2).
 //!
 //! These run against `VmBackend` explicitly rather than the both-backends
-//! common helpers: the deopt behavior under test only exists in the VM.
+//! common helpers: the deopt behavior under test only exists in the VM. The
+//! host's definitions (#673) run on both backends, since the tree-walker's
+//! answer is the one the VM's must match.
 
 // The bare-value `eval_*` forms (#605), deprecated until stage 5e removes them.
 #![allow(deprecated)]
 
 mod common;
 use common::eval_program_vm as eval;
+use patina_interpreter::{Backend, Interpreter};
 
 #[test]
 fn fast_path_basics() {
@@ -124,6 +127,77 @@ fn control_forms_set_after_use_deoptimize() {
         ),
         "(((1 2) body) (assigned assigned) (1 2) body)"
     );
+}
+
+/// A host's definition deoptimizes as a program's does (#673). Through
+/// `Interpreter::define`, code compiled while the name was a primitive's
+/// calls the new value, as on the tree-walker, which looks the name up at
+/// each call. `Environment::define` and `set` write the binding and nothing
+/// else, and left that code calling the primitive on the VM.
+fn host_definitions<B: Backend>(interp: Interpreter<B>) -> Vec<String> {
+    interp
+        .eval_program_owned(
+            "(define (f x) (car x)) \
+             (define (k) (call-with-values (lambda () (values 1 2)) list)) \
+             (define (h) 'old) \
+             (define (g) (h))",
+        )
+        .unwrap();
+    let replaced = interp.eval_str_owned("(lambda args 'replaced)").unwrap();
+    let new = interp.eval_str_owned("(lambda () 'new)").unwrap();
+    interp.define("car", &replaced);
+    interp.define("call-with-values", &replaced);
+    interp.define("h", &new);
+    ["(f '(1 2))", "(car '(1 2))", "(k)", "(g)"]
+        .into_iter()
+        .map(|form| interp.display_tagged(interp.eval_str_owned(form).unwrap()))
+        .collect()
+}
+
+#[test]
+fn a_host_definition_deoptimizes() {
+    let expected = ["replaced", "replaced", "replaced", "new"];
+    assert_eq!(host_definitions(common::vm_interpreter()), expected);
+    assert_eq!(
+        host_definitions(common::tree_walker_interpreter()),
+        expected
+    );
+}
+
+/// The same in a host environment (#620), through `define_in`. One that
+/// imports `(scheme base)` binds `car` itself, so the code compiled there
+/// takes the fast path until the definition marks it; one that reaches
+/// `car` through its parent compiles an ordinary call. Either way the global
+/// `car` stays the primitive.
+fn host_environment_definitions<B: Backend>(interp: Interpreter<B>, import: &str) -> Vec<String> {
+    let env = interp.new_environment();
+    interp
+        .eval_program_in(&env, &format!("{import} (define (f x) (car x))"))
+        .unwrap();
+    let replaced = interp.eval_str_owned("(lambda (x) 'replaced)").unwrap();
+    interp.define_in(&env, "car", &replaced);
+    vec![
+        interp.display_tagged(interp.eval_str_in(&env, "(f '(1 2))").unwrap()),
+        interp.display_tagged(interp.eval_str_in(&env, "(car '(1 2))").unwrap()),
+        interp.display_tagged(interp.eval_str_owned("(car '(1 2))").unwrap()),
+    ]
+}
+
+#[test]
+fn a_host_definition_in_a_host_environment_deoptimizes() {
+    let expected = ["replaced", "replaced", "1"];
+    for import in ["(import (scheme base))", ""] {
+        assert_eq!(
+            host_environment_definitions(common::vm_interpreter(), import),
+            expected,
+            "VM, {import:?}"
+        );
+        assert_eq!(
+            host_environment_definitions(common::tree_walker_interpreter(), import),
+            expected,
+            "tree-walker, {import:?}"
+        );
+    }
 }
 
 /// Re-pointing an alias does not write the binding it previously reached,

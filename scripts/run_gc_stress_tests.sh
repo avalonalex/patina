@@ -95,7 +95,8 @@ fi
 # hygiene_matrix's test count re-pinned 2026-10-07 for #652's def-getter
 # shape, its minimum left at 400; owned_handles pinned 2026-10-09, with
 # #605's handles, and host_environments that day, with #620's, and again
-# that day for the VM's evaluating in a host environment)
+# that day for the VM's evaluating in a host environment; vm_callprimitive's
+# re-pinned 2026-10-10 for #673's two tests of a host's definitions)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -111,7 +112,7 @@ TARGETS=(
     "library_loading 16 1 9"                  # 3 (0): see the header
     "macro_definition_env 16 129 15"          # 258 (2): see the header
     "owned_handles 16 62523 7"                # 125047 (10)
-    "vm_callprimitive 16 23 15"               # 47 (0)
+    "vm_callprimitive 16 33 17"               # 67 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header
 )
 

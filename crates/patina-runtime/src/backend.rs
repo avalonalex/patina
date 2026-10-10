@@ -100,6 +100,23 @@ pub trait Backend {
         let _ = source_map;
         self.eval(expr, env)
     }
+
+    /// Bind `name` to `value` in `env`, as a program's `define` there does,
+    /// so that code compiled there before the definition calls the new
+    /// value as well.
+    ///
+    /// The default writes the environment's binding, which is all a backend
+    /// needs that looks a name up at each call, as the tree-walker does. The
+    /// VM compiles a call to a primitive's binding into a fast path, and
+    /// marks the primitive before it rebinds the name, as its `Define`
+    /// instruction does, so that the code compiled before stops taking the
+    /// fast path (#673). A host defines through this, by way of
+    /// `Interpreter::define` and `Interpreter::define_in`;
+    /// `Environment::define` and `Environment::set` are the raw layer, which
+    /// write the binding and nothing else.
+    fn define(&self, env: &Rc<Environment>, name: &str, value: TaggedValue) {
+        env.define(name, value);
+    }
 }
 
 #[cfg(test)]
@@ -159,6 +176,17 @@ mod tests {
             .eval_with_source_map(TaggedValue::fixnum(7), &global, &source_map)
             .unwrap();
         assert_eq!(result.as_fixnum(), Some(7));
+    }
+
+    /// A backend that compiles nothing defines by writing the environment.
+    #[test]
+    fn define_defaults_to_the_environment() {
+        let backend = MockBackend {
+            global: Rc::new(Environment::new()),
+        };
+        let global = backend.global_env().clone();
+        backend.define(&global, "answer", TaggedValue::fixnum(42));
+        assert_eq!(global.get("answer"), Some(TaggedValue::fixnum(42)));
     }
 
     #[test]

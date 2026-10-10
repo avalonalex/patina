@@ -904,9 +904,10 @@ Both CI platform test jobs run it.
 
 The consumer covers malformed input (#329), library/macro imports, macro and
 runtime diagnostics with source positions, multiple/cyclic result formatting,
-host command lines, the handle forms (#605), and old pipeline module paths with
-a child environment, whose heap value is read back after a collection outside
-it (#620).
+host command lines, the handle forms (#605), a host's definition over a
+primitive's name and `Backend::define`'s default on the host-supplied backend
+(#673), and old pipeline module paths with a child environment, whose heap
+value is read back after a collection outside it (#620).
 `legacy_embedding.rs` pins the three corrected convenience-API discrepancies,
 legacy error categories and effects before a read error. These are fixed
 embedding cases for [#589](https://github.com/avalonalex/patina/issues/589),
@@ -975,6 +976,20 @@ trace fail, and so does its sentinel test. Without the VM's alpha-renaming
 walking the environment's parents for introduced definitions, the last case
 fails on the VM, with the macro's `count` unbound. The file runs in the
 per-PR stress lane.
+
+`patina-tests/tests/vm_callprimitive.rs` holds a host's definitions to a
+program's, on both backends (#673). Through `Interpreter::define`, code the VM
+compiled while `car` or `call-with-values` was the primitive calls the new
+value, as on the tree-walker, and a name the program defined still answers its
+new value; through `define_in`, the same holds in a host environment that
+imports `(scheme base)` itself, and in one that reaches `car` through its
+parent, and the global `car` stays the primitive. Without the VM's
+`Backend::define` the VM's code calls the primitive, which is what a write to
+the environment itself still does. A definition marks the primitive by the
+environment's own binding only, so a host environment's `car` leaves the
+global `car`'s fast path alone:
+`runtime::vm_state::tests::a_definition_marks_only_the_environments_own_binding`
+in `patina-vm`, which fails if the mark follows the parent.
 
 ### GC lanes (`docs/GC_DESIGN.md` §11)
 
