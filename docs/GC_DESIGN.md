@@ -372,7 +372,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `current_step: StepResult` | Rust local in the trampoline loop | Carries value/proc/args, env, `ContEnv` continuation chain, `prompt_stack`, `dynamic_winds`, `exception_handlers` (`eval/cps_eval/types.rs:250-272`). Passed to `collect` as a transient root at the safe point. |
+| `current_step: StepResult` | Rust local in the trampoline loop | Carries value/proc/args, env, the value delivered to a continuation that the next step binds (#680), `ContEnv` continuation chain, `prompt_stack`, `dynamic_winds`, `exception_handlers` (`eval/cps_eval/types.rs`). Passed to `collect` as a transient root at the safe point. |
 | `ContValue` chain | inside `StepResult` | Recursive via `Box<ContValue>`; variants embed `TaggedValue`s (`types.rs:168`) — needs its own trace impl |
 | `Evaluator.global_env` | `eval/mod.rs:43` | `visit_env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
@@ -609,13 +609,14 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `(environment '(scheme base))` is charged about 40 KiB, so a loop of them
   collects every 8 MiB of namespaces and peaks near 21 MB on either backend
   at 80,000 or 320,000 calls, where it plateaued at 2.9 GB; a program that
-  keeps its namespaces raises L with them. Frames (`Environment::with_parent`,
-  the tree-walker's per call and per `let`) never charge, and skip the
-  measuring: a scoped binding or an alias, which is how the tree-walker
-  binds a call's parameters, checks for a parent before it reads a table's
-  capacity; a plain binding compares the slot vector's length with its
-  capacity (a fresh frame's first, nothing); and a frame whose vector
-  spills or whose index grows finds in one load that it has no charge.
+  keeps its namespaces raises L with them. Frames (`Environment::with_parent`
+  and `for_temporaries`, the tree-walker's per call and per `let`) never
+  charge, and skip the measuring: a scoped binding or an alias, which is how
+  the tree-walker binds a call's parameters, checks for a parent before it
+  reads a table's capacity; a plain binding compares the slot vector's
+  length with its capacity (a fresh frame's first, nothing); and a frame
+  whose vector spills or whose index grows finds in one load that it has no
+  charge.
   Each namespace is charged once however many specifiers name it, and
   `interaction-environment` answers one specifier, cached on the
   environment (§3.3), so a loop of it allocates nothing. Measured

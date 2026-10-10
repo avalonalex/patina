@@ -112,6 +112,7 @@ disallowed-methods = [
     # `with_heap` held across a re-entry is named in that call's reason
     # instead (the loaders' `lib_env`, the environment primitives' `env`).
     { path = "patina_core::environment::Environment::with_parent", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
+    { path = "patina_core::environment::Environment::for_temporaries", reason = "an environment built outside the core is reachable from no root unless its caller makes it so (#620); give what keeps its values alive in an `expect` (#622)" },
 ]
 
 disallowed-macros = [

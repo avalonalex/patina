@@ -278,6 +278,7 @@ impl<'a> CpsEvaluator<'a> {
         let initial = StepResult::Continue {
             expr: expr.clone(),
             env,
+            param: None,
             cont_env: ContEnv::new(),
             prompt_stack,
             dynamic_winds,
@@ -356,6 +357,7 @@ impl<'a> CpsEvaluator<'a> {
                 StepResult::Continue {
                     expr,
                     env,
+                    param,
                     cont_env,
                     prompt_stack,
                     dynamic_winds,
@@ -363,6 +365,7 @@ impl<'a> CpsEvaluator<'a> {
                 } => self.eval_one_step(
                     &expr,
                     env,
+                    param,
                     cont_env,
                     prompt_stack,
                     dynamic_winds,

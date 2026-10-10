@@ -206,7 +206,10 @@ impl CpsTransformer {
                         alternate: Rc::new(cps_else),
                     })
                 } else {
-                    // Need to evaluate test first
+                    // Need to evaluate test first. `test_var` is read by the
+                    // `If` alone, as the continuation's whole body: the
+                    // tree-walker branches on the value delivered to it
+                    // without binding it (`eval_one_step`, #680).
                     let test_var = self.gensym_var();
                     let test_cont = self.gensym_cont();
 

@@ -722,6 +722,12 @@ pub struct Environment {
     /// cost a borrow, never an answer.
     has_aliases: Cell<bool>,
     has_visible_scoped: Cell<bool>,
+    /// Whether this is a frame the tree-walker made for its CPS code's
+    /// temporaries, a `let` temporary's or a continuation's parameter
+    /// ([`Environment::for_temporaries`]), where no definition belongs: a
+    /// `define` evaluated with it binds in the nearest environment above it
+    /// that is not one (#680). Set at construction and never changed.
+    holds_temporaries: bool,
     /// The tables only a global or a library environment ever fills
     /// ([`RareTables`]), absent until one of them is first written and one
     /// pointer wide either way.
@@ -781,6 +787,7 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
+            holds_temporaries: false,
             rare: OnceCell::from(Box::new(RareTables {
                 namespace: Some(NamespaceCharge::new(account)),
                 ..RareTables::default()
@@ -794,6 +801,18 @@ impl Environment {
     /// Create a new environment with a parent (shares the parent's heap): a
     /// frame, which never charges for its tables (`NamespaceCharge`).
     pub fn with_parent(parent: Rc<Environment>) -> Self {
+        Self::frame(parent, false)
+    }
+
+    /// [`Environment::with_parent`] for a frame of the tree-walker's CPS
+    /// temporaries, a `let` temporary's or a continuation's parameter, which
+    /// is never where a definition binds ([`Environment::holds_temporaries`],
+    /// #680).
+    pub fn for_temporaries(parent: Rc<Environment>) -> Self {
+        Self::frame(parent, true)
+    }
+
+    fn frame(parent: Rc<Environment>, holds_temporaries: bool) -> Self {
         Environment {
             heap: parent.heap.clone(),
             bindings: RefCell::new(Bindings::default()),
@@ -802,9 +821,17 @@ impl Environment {
             alias_bindings: RefCell::new(FxHashMap::default()),
             has_aliases: Cell::new(false),
             has_visible_scoped: Cell::new(false),
+            holds_temporaries,
             rare: OnceCell::new(),
             parent: Some(parent),
         }
+    }
+
+    /// Whether this is a frame of the tree-walker's CPS temporaries
+    /// ([`Environment::for_temporaries`]), where no definition binds.
+    #[inline]
+    pub fn holds_temporaries(&self) -> bool {
+        self.holds_temporaries
     }
 
     /// Process-unique, never-reused id for this environment's simple
@@ -978,6 +1005,7 @@ impl Environment {
             // Flags.
             has_aliases: _,
             has_visible_scoped: _,
+            holds_temporaries: _,
             rare,
             // An environment of its own, which charges for itself if it is a
             // namespace.
@@ -2779,6 +2807,8 @@ impl Environment {
             has_aliases: _,
             // A summary of `scoped_bindings`, which is reported in full below.
             has_visible_scoped: _,
+            // A flag.
+            holds_temporaries: _,
             rare,
             parent,
         } = self;
@@ -4274,6 +4304,7 @@ mod gc_edge_tests {
             alias_bindings: RefCell::new(aliases),
             has_aliases: Cell::new(true),
             has_visible_scoped: Cell::new(true),
+            holds_temporaries: false,
             rare: OnceCell::from(Box::new(RareTables {
                 introduced_global_names: RefCell::default(),
                 links: RefCell::new(vec![None, Some((Rc::clone(&library), owner_slot))]),

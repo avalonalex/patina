@@ -164,6 +164,8 @@ fn every_nameable_entry_is_matched() {
     // patina-core
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |parent: Rc<Environment>| Environment::with_parent(parent);
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |parent: Rc<Environment>| Environment::for_temporaries(parent);
 }
 
 /// Every crate's `thread_local!` statics are the ones its crate root's

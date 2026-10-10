@@ -198,3 +198,31 @@ fn a_handle_kept_past_its_interpreter_holds_nothing() {
     kept_past_its_interpreter(vm_interpreter());
     kept_past_its_interpreter(tree_walker_interpreter());
 }
+
+/// The first program's last value, a fresh list, held by nothing but an
+/// ephemeron keyed on it, read back after a second program collects in its
+/// first form.
+fn dropped_and_collected<B: Backend>(interp: Interpreter<B>) -> String {
+    interp
+        .eval_program_owned(
+            "(import (scheme base) (scheme ephemeron) (patina debug))
+             (define e #f)
+             (let ((k (list 'key))) (set! e (make-ephemeron k 'datum)) k)",
+        )
+        .unwrap();
+    let broken = interp
+        .eval_program_owned("(gc) (ephemeron-broken? e)")
+        .unwrap();
+    interp.display_tagged(&broken)
+}
+
+/// A value the host did not keep is freed by the next evaluation's
+/// collection, its first form's included (#680). The tree-walker kept the
+/// last value of an evaluation bound in the global environment, under the name
+/// its CPS transform made for the continuation that received it, until a
+/// later form bound the name again.
+#[test]
+fn a_value_the_host_dropped_is_freed_by_the_next_evaluation() {
+    assert_eq!(dropped_and_collected(vm_interpreter()), "#t");
+    assert_eq!(dropped_and_collected(tree_walker_interpreter()), "#t");
+}
