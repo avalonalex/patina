@@ -48,6 +48,10 @@ fn every_nameable_entry_is_matched() {
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |s: &mut VmState, id: CodeObjectId| patina_vm::runtime::execute(s, id);
     #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |s: &mut VmState, id: CodeObjectId, env: &Rc<Environment>| {
+        patina_vm::runtime::execute_in(s, id, env)
+    };
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |b: &VmBackend| b.load_library(&[]);
 
     // patina-tree-walker
@@ -103,6 +107,10 @@ fn every_nameable_entry_is_matched() {
     };
     #[expect(clippy::disallowed_methods, reason = "positive control")]
     let _ = |i: &Vm| i.eval_program_resilient_with_source_name_owned("", "");
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm, env: &crate::OwnedEnvironment| i.eval_str_in(env, "");
+    #[expect(clippy::disallowed_methods, reason = "positive control")]
+    let _ = |i: &Vm, env: &crate::OwnedEnvironment| i.eval_program_in(env, "");
 
     // patina-interpreter: the bare-value forms, deprecated until stage 5e
     // removes them (#605)

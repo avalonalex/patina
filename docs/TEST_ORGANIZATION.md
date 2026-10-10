@@ -948,8 +948,18 @@ what is bound in it, on both backends (#620):
 
 - a value the host binds, across a program that collects outside the
   environment;
-- on the tree-walker, which evaluates where `Backend::eval` is told to, a
-  definition the program makes in the environment;
+- a definition the program makes in the environment through `Backend::eval`;
+- #620's table through `Backend::eval` and `eval_with_source_map`: a read, a
+  closure and a definition in the environment, which the VM ran in the global
+  environment until it ran the code as a closure over the one it was given;
+- `eval_str_in` and `eval_program_in`: a definition kept across a collection
+  while the environment's code runs, an import bound in it alone, an error,
+  and a continuation's escape;
+- a primitive's name redefined in the environment, which reaches the code
+  compiled there and leaves the global binding alone;
+- a definition a global macro's expansion introduced, which code in the
+  environment reaches through that macro, and which a host binding of the
+  same spelling does not capture;
 - `with_parent`'s meaning: a global defined later is seen, and a definition
   stays in the child;
 - a value bound only in a dropped environment, which the next collection
@@ -961,8 +971,10 @@ what is bound in it, on both backends (#620):
   caller holds it.
 
 With either of the table's environment traces removed, the tests of that
-trace fail, and so does its sentinel test. The file runs in the per-PR stress
-lane.
+trace fail, and so does its sentinel test. Without the VM's alpha-renaming
+walking the environment's parents for introduced definitions, the last case
+fails on the VM, with the macro's `count` unbound. The file runs in the
+per-PR stress lane.
 
 ### GC lanes (`docs/GC_DESIGN.md` §11)
 

@@ -36,6 +36,7 @@ disallowed-methods = [
     # patina-vm: the driver loop, the re-entry boundary and library loading
     { path = "patina_vm::runtime::control::across_reentry", reason = "re-enters the VM; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::execute", reason = "runs the VM's dispatch loop, outermost when nothing else runs, so it may collect; give the reason in an `expect` (#622)" },
+    { path = "patina_vm::runtime::vm_state::execute_in", reason = "runs the VM's dispatch loop, outermost when nothing else runs, so it may collect; give the reason in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::execute_nested", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::run_loop_until", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_vm::runtime::vm_state::run_loop_until_outcome", reason = "runs the VM's dispatch loop; give what the caller holds across it in an `expect` (#622)" },
@@ -93,6 +94,9 @@ disallowed-methods = [
     { path = "patina_interpreter::Interpreter::eval_program_with_fold_case_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_resilient_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     { path = "patina_interpreter::Interpreter::eval_program_resilient_with_source_name_owned", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    # and the forms that evaluate in a host environment's handle (#620)
+    { path = "patina_interpreter::Interpreter::eval_str_in", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
+    { path = "patina_interpreter::Interpreter::eval_program_in", reason = "evaluates a program, outermost, so it may collect; give what the caller holds across it in an `expect` (#622)" },
     # the deprecated adapters, which embedders still call with values of the
     # same heap in hand (`StandardPipeline` evaluates in an environment the
     # host built, #620's shape). They exist only with the `legacy-pipeline`

@@ -94,12 +94,10 @@ fn compile_pipeline(
     // expansion and so no such definitions.
     match resolver {
         Some((_, env, _)) => {
-            // Only global environments hold these identities; lexical
-            // definitions are resolved within the form being compiled.
-            debug_assert!(
-                env.parent().is_none(),
-                "introduced globals need a root environment"
-            );
+            // The environment compiled against holds these identities: a
+            // root namespace, or a host environment, which is a child of the
+            // global one (#620). Lexical definitions are resolved within the
+            // form being compiled, and never reach here.
             for (name, renamed) in introduced_globals {
                 env.define_introduced_global(name, renamed.scopes, renamed.name);
             }

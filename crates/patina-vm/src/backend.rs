@@ -13,7 +13,7 @@
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
 use crate::runtime::vm_state::import_export;
-use crate::runtime::{VmState, execute};
+use crate::runtime::{VmState, execute, execute_in};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
 use patina_core::tagged_value::TaggedValue;
@@ -241,18 +241,21 @@ impl VmBackend {
     /// Shared body of `eval` and `eval_with_source_map` — the two entries
     /// differ only in desugarer construction.
     ///
-    /// We always evaluate in the global environment (same as the tree-walker
-    /// does for top-level defines).
+    /// Evaluates in `env`, as the tree-walker does: the datum is expanded and
+    /// compiled there, its imports bind there, and its code reads and defines
+    /// there. The global environment's code runs as a top-level frame, any
+    /// other's as a closure whose globals are `env` (`execute_in`, #620).
     fn eval_datum(
         &self,
         expr: TaggedValue,
+        env: &Rc<Environment>,
         source_map: Option<&Rc<RefCell<patina_frontend::SourceMap>>>,
     ) -> Result<TaggedValue, VmBackendError> {
         let heap = self.global_env.heap().clone();
 
         // An inline (define-library ...) is a library definition, not an
         // expression — route it to the library loader before desugaring.
-        if patina_frontend::is_define_library_form(expr, &self.global_env) {
+        if patina_frontend::is_define_library_form(expr, env) {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "holds the `define-library` datum, not read after the call: the library's \
@@ -272,10 +275,9 @@ impl VmBackend {
 
         // Desugar: TaggedValue → CoreExpr.
         let desugarer = match source_map {
-            Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(&self.global_env), sm.clone())
+            Some(sm) => Desugarer::with_env_and_source_map(Rc::clone(env), sm.clone())
                 .with_fs(self.state.borrow().fs().clone()),
-            None => Desugarer::with_env(Rc::clone(&self.global_env))
-                .with_fs(self.state.borrow().fs().clone()),
+            None => Desugarer::with_env(Rc::clone(env)).with_fs(self.state.borrow().fs().clone()),
         };
         #[expect(
             clippy::disallowed_methods,
@@ -300,8 +302,7 @@ impl VmBackend {
 
         // Compile: CoreExpr → CodeObject (5-pass pipeline + quasiquote expansion).
         let registry = Rc::clone(self.state.borrow().primitive_registry());
-        let (top, nested) =
-            compile_with_qq_resolving(&core_expr, &heap, &self.global_env, &registry)?;
+        let (top, nested) = compile_with_qq_resolving(&core_expr, &heap, env, &registry)?;
 
         let mut state = self.state.borrow_mut();
         let top_id = state.load_unit(top, nested);
@@ -312,9 +313,15 @@ impl VmBackend {
             clippy::disallowed_methods,
             reason = "the backend's top level, outermost, so the run may collect. Holds the form's \
                       `CoreExpr` and datum, neither read after the call; the form's constants are \
-                      in the loaded unit, which the code store roots while it runs"
+                      in the loaded unit, which the code store roots while it runs, and `env` is \
+                      the global environment, which the machine roots, or the globals of the \
+                      closure the run's frame holds"
         )]
-        let result = execute(&mut state, top_id);
+        let result = if Rc::ptr_eq(env, &self.global_env) {
+            execute(&mut state, top_id)
+        } else {
+            execute_in(&mut state, top_id, env)
+        };
         state.release_unit_if_unused(top_id);
         Ok(result?)
     }
@@ -756,8 +763,8 @@ impl Drop for VmBackend {
 impl Backend for VmBackend {
     type Error = VmBackendError;
 
-    fn eval(&self, expr: TaggedValue, _env: &Rc<Environment>) -> Result<TaggedValue, Self::Error> {
-        self.eval_datum(expr, None)
+    fn eval(&self, expr: TaggedValue, env: &Rc<Environment>) -> Result<TaggedValue, Self::Error> {
+        self.eval_datum(expr, env, None)
     }
 
     fn global_env(&self) -> &Rc<Environment> {
@@ -770,10 +777,10 @@ impl Backend for VmBackend {
     fn eval_with_source_map(
         &self,
         expr: TaggedValue,
-        _env: &Rc<Environment>,
+        env: &Rc<Environment>,
         source_map: &Rc<RefCell<patina_frontend::SourceMap>>,
     ) -> Result<TaggedValue, Self::Error> {
-        self.eval_datum(expr, Some(source_map))
+        self.eval_datum(expr, env, Some(source_map))
     }
 }
 

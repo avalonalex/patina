@@ -1609,8 +1609,9 @@ impl Environment {
     /// [`crate::scope_resolve::resolve_index`] rather than settled by
     /// position.
     ///
-    /// Parents are not walked: only a parentless global environment holds
-    /// these, as [`define_introduced_global`] describes.
+    /// Parents are not walked: a caller that resolves through a chain, as
+    /// the VM's alpha-renaming does for a host environment and the global
+    /// one above it (#620), asks each environment of it.
     ///
     /// [`define_introduced_global`]: Self::define_introduced_global
     pub fn for_each_introduced_global(&self, name: &str, mut f: impl FnMut(&ScopeSet, &Rc<str>)) {
