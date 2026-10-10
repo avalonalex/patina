@@ -99,7 +99,8 @@ fi
 # re-pinned 2026-10-10 for #673's two tests of a host's definitions, and that
 # day library_loading's and macro_definition_env's, when #677 let library
 # loads collect, macro_definition_env's test count with it, which had stayed
-# at 15 as the target gained tests, and rooted_loading pinned)
+# at 15 as the target gained tests, and rooted_loading pinned, then re-pinned
+# that day for its three tests of a bare top-level import)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -115,7 +116,7 @@ TARGETS=(
     "library_loading 16 46 9"                 # 93 (0): see the header
     "macro_definition_env 16 16626 19"        # 33253 (67): see the header
     "owned_handles 16 62523 7"                # 125047 (10)
-    "rooted_loading 16 272 3"                 # 544 (8)
+    "rooted_loading 16 371 6"                 # 742 (12)
     "vm_callprimitive 16 33 17"               # 67 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header
 )

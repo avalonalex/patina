@@ -26,9 +26,16 @@ use common::{tree_walker_interpreter, vm_interpreter};
 use patina_interpreter::Interpreter;
 use patina_runtime::Backend;
 
-/// A collecting evaluation: `(gc)` raises the pending flag, and the safe
-/// point at the next form collects.
-const COLLECT: &str = "(import (patina debug)) (gc) 0";
+/// A collecting evaluation: an ordinary form, then `(gc)`, which collects at
+/// its call.
+///
+/// The form comes first because on the tree-walker a collection during a
+/// program's first form leaves the previous program's last value standing,
+/// and one after a form has run frees it (measured 2026-10-10, on `main` as
+/// well). The `import` this program began with was such a form until #677,
+/// which loads a bare top-level `import` outside the expansion, running
+/// nothing.
+const COLLECT: &str = "(import (patina debug)) 0 (gc) 0";
 
 /// Hold what `make` evaluates to across a collecting evaluation, then read it.
 fn read_after_a_collection<B: Backend>(interp: Interpreter<B>, make: &str) {

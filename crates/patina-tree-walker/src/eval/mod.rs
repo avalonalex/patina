@@ -640,7 +640,7 @@ impl Evaluator {
     /// Point B (#677): a collection pending where a load ends runs now, if
     /// nothing defers here — no trampoline running, no holder's guard alive.
     /// Anywhere else the running trampoline's own safe points service it.
-    fn collect_if_pending(&self) {
+    pub(crate) fn collect_if_pending(&self) {
         cps_eval::CpsEvaluator::new(self).collect_if_pending();
     }
 

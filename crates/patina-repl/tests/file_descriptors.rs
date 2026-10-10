@@ -363,18 +363,10 @@ fn load_collects_and_reads_again_when_descriptors_ran_out() {
     }
 }
 
-/// The documented limit: where collection is deferred, the first `EMFILE`
-/// raises. A library body that a program's `import` loads is such a place,
-/// under the expansion's guard (docs/GC_DESIGN.md §7; a top-level
-/// `define-library`'s body collects since #677): the open's collection is
-/// posted for the next safe point that may
-/// collect and counted in `deferred-collections`, the second attempt fails
-/// as the first did, and the file error is raised. Once the load is done the
-/// program's own open succeeds. chibi collects anywhere, and would open the
-/// file; this row changes when library bodies can collect (GC_PRD stage 2).
-#[test]
-fn where_collection_is_deferred_the_first_emfile_raises() {
-    const LIBRARY: &str = "(define-library (deferred open)
+/// A library that exhausts the descriptors in its body, drops the ports,
+/// then opens once more and reports what that open did, with how many
+/// collections were posted rather than run meanwhile.
+const EXHAUSTING_LIBRARY: &str = "(define-library (deferred open)
   (import (scheme base) (scheme file) (patina debug))
   (export result)
   (begin
@@ -391,10 +383,10 @@ fn where_collection_is_deferred_the_first_emfile_raises() {
       (list (guard (e ((file-error? e) 'file-error)) (open-input-file \"data.txt\") 'opened)
             (- (stat 'deferred-collections) before)))))
 ";
-    const PROGRAM: &str = "(import (scheme base) (scheme file) (scheme write) (deferred open))
-(write (list result (read-char (open-input-file \"data.txt\"))))
-(newline)
-";
+
+/// `program`'s output on both backends, in each GC mode, all of which must
+/// be `expected`, with `EXHAUSTING_LIBRARY` beside it.
+fn assert_exhausting_library(program: &str, expected: &str) {
     for backend in BOTH_BACKENDS {
         for (mode, envs) in MODES {
             assert_eq!(
@@ -402,12 +394,47 @@ fn where_collection_is_deferred_the_first_emfile_raises() {
                     backend,
                     64,
                     envs,
-                    PROGRAM,
-                    &[("deferred/open.sld", LIBRARY)]
+                    program,
+                    &[("deferred/open.sld", EXHAUSTING_LIBRARY)]
                 ),
-                "((file-error 1) #\\h)",
+                expected,
                 "{backend:?} {mode}"
             );
         }
     }
+}
+
+/// The documented limit: where collection is deferred, the first `EMFILE`
+/// raises. A library body that an `import` inside a `begin` loads is such a
+/// place, under the expansion's guard (point C of `PRD/GC_PRD.md` §11.3,
+/// docs/GC_DESIGN.md §7): the open's collection is posted for the next safe
+/// point that may collect and counted in `deferred-collections`, the second
+/// attempt fails as the first did, and the file error is raised. Once the
+/// load is done the program's own open succeeds. chibi collects anywhere,
+/// and would open the file.
+#[test]
+fn where_collection_is_deferred_the_first_emfile_raises() {
+    assert_exhausting_library(
+        "(import (scheme base) (scheme file) (scheme write))
+(begin (import (deferred open)))
+(write (list result (read-char (open-input-file \"data.txt\"))))
+(newline)
+",
+        "((file-error 1) #\\h)",
+    );
+}
+
+/// A bare `import` loads the same library outside the expansion's guard, so
+/// its body collects (#677): the open collects at its call and opens the
+/// file, in every GC mode, as chibi's does. Until #677 this answered as the
+/// deferred row above.
+#[test]
+fn a_library_a_bare_import_loads_collects_at_its_open() {
+    assert_exhausting_library(
+        "(import (scheme base) (scheme file) (scheme write) (deferred open))
+(write (list result (read-char (open-input-file \"data.txt\"))))
+(newline)
+",
+        "((opened 0) #\\h)",
+    );
 }

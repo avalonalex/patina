@@ -35,7 +35,7 @@ pub use desugarer::{DesugarError, Desugarer};
 pub use error::FrontendError;
 pub use lexer::{LexError, Lexer, ReadSpan, ReaderState, Spanned, Token};
 pub use library_parser::{BodyElement, ExportSpec, ImportSet, LibraryDefinition};
-pub use library_support::{SchemeLibraryLoader, is_define_library_form};
+pub use library_support::{SchemeLibraryLoader, is_define_library_form, top_level_import_sets};
 pub use parser::{ParseError, Parser};
 pub use quasiquote_lower::{ConstructorResolver, QuasiquoteError, lower_quasiquotes};
 pub use reader::Reader;

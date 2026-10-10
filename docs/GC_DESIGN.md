@@ -457,9 +457,14 @@ library's load ends (point B, `collect_if_pending` on each backend), which is
 what lets a run of `define-library` forms collect (#614). A `ParsedLibrary`
 that is never handed over keeps its guard: the VM's loader for the loads
 running code asks for (`vm_evaluate_parsed_library`) keeps it, since those
-run on a nested loop, which defers until stage 4e. A program's `import`
-still loads under `desugar_with_imports`' guard (§7) until #677's second part
-processes a bare top-level `import` outside the desugarer.
+run on a nested loop, which defers until stage 4e. A program's bare
+`import` is processed by the backend itself, from its top level, outside the
+desugarer (`patina_frontend::top_level_import_sets`, #677), so the libraries
+it loads collect the same way, which is what brought #658's 25 imports from
+one 276 MiB window to windows of at most one form's expansion. An `import`
+met inside a form, a `begin`'s or a macro's or one `eval` or `load`
+evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
+`PRD/GC_PRD.md` §11.3).
 
 ### 5.3 Shared (both backends)
 
@@ -891,9 +896,10 @@ placement + deferral:
      body (`patina-runtime/src/library_loader.rs`) until it hands the body to
      the load's registry entry (#677). Its forms are TaggedValues no root
      provider can see until then.
-   - a form being expanded while its imports load (`desugar_with_imports`),
-     and each method of the tree-walker's detached `ApplyContext for
-     Evaluator`. The VM's globals-swap window (`VmState::with_globals`) was
+   - a form being expanded while its imports load (`desugar_with_imports`):
+     since #677 only an `import` met inside a form, a bare top-level one
+     being loaded by the backend outside it; and each method of the
+     tree-walker's detached `ApplyContext for Evaluator`. The VM's globals-swap window (`VmState::with_globals`) was
      one until #677 traced what it sets aside.
 
    The nested runs themselves (`execute_nested`, a primitive's callback) are
