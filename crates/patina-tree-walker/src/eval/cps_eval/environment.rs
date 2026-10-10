@@ -167,8 +167,27 @@ impl<'a> CpsEvaluator<'a> {
                 variadic: variadic_param,
                 cont_param: cont_param.clone(),
                 body: body.clone(),
-                env: env.clone(),
+                // Where the body's definitions bind, not `env` itself when
+                // that is a frame of temporaries. A closure reads only the
+                // program's variables, never the CPS transform's temporaries,
+                // which the body that binds them alone reads. Capturing such
+                // a frame put it, and every one above it, on the path of
+                // each lookup a call of the closure makes, and kept the
+                // temporaries alive as long as the closure (#680).
+                env: definition_environment(env).clone(),
                 binding_scopes,
             }))
     }
+}
+
+/// The environment a `define` binds in and a closure captures: the nearest
+/// one up the chain from `env` that is not a frame of temporaries. For a
+/// top-level form that is the program's environment, and for a lambda body
+/// the call's frame.
+pub(super) fn definition_environment(env: &Rc<Environment>) -> &Rc<Environment> {
+    let mut env = env;
+    while env.holds_temporaries() {
+        env = env.parent().expect("a frame of temporaries has a parent");
+    }
+    env
 }

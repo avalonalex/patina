@@ -750,8 +750,10 @@ rotted by the time anyone checked — `numeric_operations.rs` had migrated to
   and `expansion/hygiene.scm`, the open ones as backend-scoped expectations
 - `control_flow_matrix.rs` — the 24-shape transfer matrix behind
   `docs/VM_RUNTIME.md` §5.6; the prompt rows it does not cover are
-  `control/prompts.scm`. `cps_features.rs` holds one test, which needs a
-  thread with a sized stack
+  `control/prompts.scm`. `cps_features.rs` holds three tests: one needs a
+  thread with a sized stack, one a `define-library` form in a program, which
+  chibi rejects (a library's own `v_1`, #680), and one `(patina debug)`'s
+  `gc` (what a closure keeps alive, #680)
 
 #### **Library Tests**
 - `sld_file_loading.rs` — library loading from `.sld` files
@@ -939,7 +941,11 @@ through to rooting them, on both backends (#605):
 - no handle left behind by any entry point, whether the program finished,
   failed or carried on;
 - a handle refused by another interpreter;
-- a handle kept past its interpreter, which keeps nothing alive.
+- a handle kept past its interpreter, which keeps nothing alive;
+- the converse, a value the host did not keep, freed by the next
+  evaluation's collection in its first form (#680): the tree-walker kept
+  each top-level form's value bound in the global environment under the name
+  its CPS transform made for it.
 
 Each test that collects checks that its program did, and the four of them
 fail with the handle table's trace removed. The table's own sentinel test is

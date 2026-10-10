@@ -231,19 +231,16 @@ impl<'a> CpsEvaluator<'a> {
                 env: captured_env,
                 cont_env: captured_cont_env,
             } => {
-                // Bind the value to the parameter in the captured value environment
-                // NOTE: CPS continuations are administrative - they don't create new scopes
-                // like Scheme lambdas do. We define in the captured environment directly.
-                // This is important because `Define` inside a continuation body should
-                // go to the original lexical scope, not an artificially created child scope.
-                patina_core::census::store(
-                    patina_core::census::Site::TwContinuationDefine,
-                    None,
-                    value,
-                );
-                patina_core::census::skip_next_env_define();
-                captured_env.define(param, value);
-
+                // The body's step binds the parameter, where a `LetVal`
+                // temporary binds (`eval_one_step`). It was defined into the
+                // captured environment itself, which at a top level is the
+                // program's own: each form's value stayed bound there under
+                // the name the CPS transform made for it (`v_1`), over any
+                // binding of the program's by that name, readable by it, and
+                // kept alive until a later form bound the name again. And a
+                // frame the continuation shared with others captured in its
+                // body changed under them when it was entered again (#680).
+                //
                 // Return Continue step instead of recursive call
                 // IMPORTANT: Use the continuation's captured cont_env, not the current one!
                 // This ensures the continuation body can look up continuations that were
@@ -251,6 +248,7 @@ impl<'a> CpsEvaluator<'a> {
                 Ok(StepResult::Continue {
                     expr: body,
                     env: captured_env,
+                    param: Some((param, value)),
                     cont_env: captured_cont_env,
                     prompt_stack,
                     dynamic_winds,

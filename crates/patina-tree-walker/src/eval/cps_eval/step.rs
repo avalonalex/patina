@@ -4,6 +4,7 @@
 //! all CpsExpr forms, returning a StepResult for the trampoline loop.
 
 use super::CpsEvaluator;
+use super::environment::definition_environment;
 use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::DynamicWindRecord;
@@ -18,10 +19,12 @@ impl<'a> CpsEvaluator<'a> {
     /// This is the core evaluation function that handles all CpsExpr forms.
     /// Returns a StepResult indicating either a final value or the next step.
     /// The caller (eval) processes these steps in a trampoline loop.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn eval_one_step(
         &self,
         expr: &Rc<CpsExpr>,
         env: Rc<Environment>,
+        param: Option<(Rc<str>, TaggedValue)>,
         mut cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
@@ -30,20 +33,61 @@ impl<'a> CpsEvaluator<'a> {
         // Process LetVal/LetCont/If/Set/Define in a local loop
         // since they just update state and continue with a new expression
         let mut current_expr = Rc::clone(expr);
-        let mut current_env = env.clone();
+        let mut current_env = env;
         let current_winds = dynamic_winds;
 
-        // Whether `current_env` is a frame this run made for a `LetVal`, and
-        // so a frame the `LetVal` arm may still extend. False for the
-        // environment we were handed: that one belongs to our caller.
-        let mut own_frame = false;
-
-        // Track the "definition environment" - where `define` should create bindings.
-        // This is the environment passed in (from lambda entry or top-level),
-        // NOT the environment created by LetVal (which is just for temporaries).
-        // - For top-level expressions, this is global_env
-        // - For lambda bodies, this is the lambda's body environment
-        let def_env = env;
+        // A continuation's parameter is a temporary, as a `LetVal`'s is, and
+        // binds where one does (`extends_in_place`). Never in an environment
+        // that is not a frame of temporaries, which at a top level is the
+        // program's own, where each form's value stayed bound under the name
+        // the CPS transform made for it, over any binding of the program's by
+        // that name, and alive until a later form bound the name again
+        // (#680). Never in a frame something else holds, either: a
+        // continuation captured in the body would see its temporaries change
+        // when this one is entered again.
+        if let Some((name, value)) = param {
+            if let CpsExprKind::If {
+                test,
+                consequent,
+                alternate,
+            } = &current_expr.kind
+                && is_reference_to(test, &name)
+            {
+                // The CPS transform names an `if`'s test value, where the
+                // test is not trivial, for that `If` alone, and makes the
+                // `If` this continuation's body (`CpsTransform::transform`).
+                // So the body branches on the value and binds nothing: the
+                // binding would be read here and never again, and where the
+                // continuation was captured in a call's frame it would cost
+                // a frame of its own.
+                current_expr = Rc::clone(if value.is_truthy() {
+                    consequent
+                } else {
+                    alternate
+                });
+            } else {
+                patina_core::census::store(
+                    patina_core::census::Site::TwContinuationDefine,
+                    None,
+                    value,
+                );
+                patina_core::census::skip_next_env_define();
+                if extends_in_place(&current_env) {
+                    current_env.define(name, value);
+                } else {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a continuation parameter's frame, in the machine: the value bound \
+                                  in it goes into `current_env`, which the step this function returns \
+                                  carries, and the trampoline roots that step at its safe point, as \
+                                  it roots a `LetVal` frame"
+                    )]
+                    let frame = Rc::new(Environment::for_temporaries(current_env));
+                    frame.define(name, value);
+                    current_env = frame;
+                }
+            }
+        }
 
         // Unwrap a `Result` whose failure is a *user-level* error: deliver it
         // to the Scheme exception handlers (`guard`, `with-exception-handler`)
@@ -127,28 +171,7 @@ impl<'a> CpsEvaluator<'a> {
                     // `LetVal`, so this is where `(undefined-fn)`'s lookup fails.
                     let val =
                         try_catchable!(self.eval_trivial_tagged(value, &current_env, &cont_env));
-                    // A call site expands to a run of `LetVal`s — one for the
-                    // operator, one per trivial argument — and giving each its
-                    // own environment costs an allocation apiece and leaves a
-                    // chain that every later variable read walks a link at a
-                    // time. Consecutive bindings share a frame instead, but
-                    // only while `current_env` is a frame this run made *and*
-                    // nothing else holds it: a strong count of one says no
-                    // closure, continuation or heap value captured it, so no
-                    // one can observe the extra binding.
-                    //
-                    // The guard is what makes this safe rather than merely
-                    // fast. Sharing unconditionally is ~10% quicker on
-                    // straight-line code and wrong for lazy code, because a
-                    // continuation captured partway through the run would then
-                    // hold every binding made after it: on SRFI 45's leak test
-                    // 3 (`tests/scheme/run/lazy.sps`) that took peak memory
-                    // from 39 MB to 895 MB, breaking the bounded-space
-                    // property those tests exist to check. Once something
-                    // captures the frame its count rises and the next binding
-                    // starts a fresh one, which is the old behaviour exactly
-                    // where the old behaviour mattered.
-                    if own_frame && Rc::strong_count(&current_env) == 1 {
+                    if extends_in_place(&current_env) {
                         current_env.define(Rc::clone(name), val);
                     } else {
                         #[expect(
@@ -162,10 +185,9 @@ impl<'a> CpsEvaluator<'a> {
                                       nested and defers (docs/GC_DESIGN.md §7; PRD/GC_PRD.md \
                                       §11.4 keeps it under `NoGcScope`)"
                         )]
-                        let new_env = Rc::new(Environment::with_parent(current_env.clone()));
+                        let new_env = Rc::new(Environment::for_temporaries(current_env));
                         new_env.define(Rc::clone(name), val);
                         current_env = new_env;
-                        own_frame = true;
                     }
                     current_expr = Rc::clone(body);
                 }
@@ -231,6 +253,7 @@ impl<'a> CpsEvaluator<'a> {
                     // the caller by spelling (#269, #427). Source-written ones
                     // also carry body scopes by this point, so the transform
                     // records which definitions need a name-only view.
+                    let def_env = definition_environment(&current_env);
                     if *visible_by_name {
                         def_env.define_scoped_definition(Rc::clone(name), scopes.clone(), val);
                     } else {
@@ -408,4 +431,40 @@ impl<'a> CpsEvaluator<'a> {
             }
         }
     }
+}
+
+/// Whether a temporary can bind in `env` itself rather than in a new frame
+/// below it: `env` is a frame of temporaries, a `LetVal`'s or a continuation
+/// parameter's, and nothing else holds it.
+///
+/// A call site expands to a run of `LetVal`s — one for the operator, one per
+/// trivial argument — and each return from a call delivers to a continuation
+/// whose parameter is one more. Giving each its own environment costs an
+/// allocation apiece and leaves a chain that every later variable read walks
+/// a link at a time. Consecutive bindings share a frame instead, but only
+/// while nothing else holds it: a strong count of one says no continuation
+/// captured it and no frame below it is alive, so no one can observe the
+/// extra binding. A closure never holds one: it captures the environment
+/// above (`definition_environment`).
+///
+/// The guard is what makes this safe rather than merely fast. Sharing
+/// unconditionally is ~10% quicker on straight-line code and wrong for lazy
+/// code, because a continuation captured partway through the run would then
+/// hold every binding made after it: on SRFI 45's leak test 3
+/// (`tests/scheme/run/lazy.sps`) that took peak memory from 39 MB to 895 MB,
+/// breaking the bounded-space property those tests exist to check. Once
+/// something captures the frame its count rises and the next binding starts a
+/// fresh one, which is the old behaviour exactly where the old behaviour
+/// mattered. Any other environment is never extended: it is a call's, where
+/// the body's `define`s bind, or at a top level the program's own (#680).
+fn extends_in_place(env: &Rc<Environment>) -> bool {
+    env.holds_temporaries() && Rc::strong_count(env) == 1
+}
+
+/// Whether `expr` reads the binding of `name`, a temporary of the CPS
+/// transform's: a reference to that very symbol, which a reference the
+/// program wrote never is.
+fn is_reference_to(expr: &CpsExpr, name: &Rc<str>) -> bool {
+    matches!(&expr.kind, CpsExprKind::Var { name: read, scopes }
+        if scopes.is_empty() && Rc::ptr_eq(read, name))
 }

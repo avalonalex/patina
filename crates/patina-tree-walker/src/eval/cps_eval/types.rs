@@ -185,6 +185,11 @@ pub(super) enum StepResult {
     Continue {
         expr: Rc<CpsExpr>,
         env: Rc<Environment>,
+        /// A continuation's parameter and the value delivered to it, which
+        /// `eval_one_step` binds in a frame of its own, a child of `env`,
+        /// before `expr` runs, as it binds a `LetVal` temporary; `env` stays
+        /// where a `define` binds (#680).
+        param: Option<(Rc<str>, TaggedValue)>,
         cont_env: ContEnv,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,

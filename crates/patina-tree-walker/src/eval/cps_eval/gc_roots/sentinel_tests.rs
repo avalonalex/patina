@@ -100,6 +100,7 @@ fn every_step_result_field_is_traced() {
 
     let continue_expr = s.string(h, "StepResult::Continue.expr");
     let continue_env = s.object(h, "StepResult::Continue.env");
+    let continue_param = s.vector(h, "StepResult::Continue.param");
     let continue_cont_env = s.pair(h, "StepResult::Continue.cont_env");
     let continue_stacks = stacks(h, &mut s, "StepResult::Continue");
 
@@ -128,6 +129,7 @@ fn every_step_result_field_is_traced() {
         StepResult::Continue {
             expr: literal(continue_expr),
             env: env_holding(&shared, continue_env),
+            param: Some((Rc::from("v_1"), continue_param)),
             cont_env: cont_env_holding(continue_cont_env),
             prompt_stack: continue_stacks.prompt_stack,
             dynamic_winds: continue_stacks.dynamic_winds,

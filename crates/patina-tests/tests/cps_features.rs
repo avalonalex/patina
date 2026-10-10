@@ -1,4 +1,4 @@
-//! The one CPS test that could not become a suite row.
+//! The CPS tests that could not become suite rows.
 //!
 //! This file was #193's worked example of a mixed file. Phase 1 moved its
 //! plain R7RS control flow to `tests/scheme/control/cps-features.scm`; Phase 2
@@ -8,10 +8,51 @@
 //!
 //! What is left runs the VM on a thread with an **explicitly sized stack**.
 //! Choosing a stack size is a harness act; a Scheme program cannot ask for
-//! one, so this test stays here whatever happens to anything else.
+//! one, so this test stays here whatever happens to anything else. Beside it,
+//! a library's body, which needs a `define-library` form in a program, where
+//! chibi rejects one, so it has no oracle as a suite row; and what a closure
+//! keeps alive, which needs `(patina debug)`'s `gc`.
 
 mod common;
-use common::eval_program_vm;
+use common::{assert_program_eval_to, eval_program_vm};
+
+/// A library's own `v_1` keeps its value through its body, on both backends
+/// (#680). The tree-walker bound a continuation's parameter in the
+/// environment the continuation captured, in a library's body the library's
+/// own, and the CPS transform names the parameter that receives each form's
+/// value `v_1`: the next body form overwrote the library's binding, which
+/// read `#<unspecified>` after `(define unused …)`.
+#[test]
+fn a_librarys_binding_named_like_a_cps_temporary_keeps_its_value() {
+    assert_program_eval_to(
+        "(define-library (cps names) (export v_1) (import (scheme base))
+           (begin (define v_1 'library) (define unused (car '(1 2)))))
+         (import (prefix (cps names) lib:))
+         lib:v_1",
+        "library",
+    );
+}
+
+/// A closure keeps the environment its body reads, and none of the
+/// temporaries the CPS transform bound beside it, on both backends (#680).
+/// The tree-walker's closure captured the frame it was made in, which can be
+/// one of the transform's: here the frame that holds the call's first
+/// argument, `(key!)`'s value, so the closure kept the key alive as long as
+/// it lived.
+#[test]
+fn a_closure_keeps_no_temporary_made_beside_it() {
+    assert_program_eval_to(
+        "(import (scheme base) (scheme ephemeron) (patina debug))
+         (define e #f)
+         (define (key!) (let ((k (list 'key))) (set! e (make-ephemeron k 'datum)) k))
+         (define (second a b) b)
+         (define (make) (second (key!) (lambda () 'closure)))
+         (define kept (make))
+         (gc)
+         (list (ephemeron-broken? e) (kept))",
+        "(#t closure)",
+    );
+}
 
 /// The value form of `dynamic-wind` costs a VM frame per nesting level, not a
 /// Rust one — VM-only, on a deliberately small stack.

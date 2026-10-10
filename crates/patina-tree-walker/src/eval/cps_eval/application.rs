@@ -171,6 +171,7 @@ impl<'a> CpsEvaluator<'a> {
                     Ok(StepResult::Continue {
                         expr: Rc::clone(body),
                         env: new_env,
+                        param: None,
                         cont_env: new_cont_env,
                         prompt_stack,
                         dynamic_winds,
@@ -1122,6 +1123,7 @@ impl<'a> CpsEvaluator<'a> {
                     Ok(expr) => Ok(StepResult::Continue {
                         expr,
                         env,
+                        param: None,
                         cont_env: ContEnv::new().insert(EVAL_K.into(), resume(cont)),
                         prompt_stack,
                         dynamic_winds,

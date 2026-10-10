@@ -97,6 +97,7 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
         StepResult::Continue {
             expr,
             env,
+            param,
             cont_env,
             prompt_stack,
             dynamic_winds,
@@ -104,6 +105,16 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
         } => {
             visitor.visit_expr_literals(expr);
             visitor.visit_env(env);
+            // Delivered to the continuation and not yet bound: the trampoline
+            // polls between the invocation and the step that binds it (#680).
+            if let Some((
+                // The parameter's name.
+                _,
+                value,
+            )) = param
+            {
+                visitor.visit(*value);
+            }
             trace_cont_env(cont_env, visitor);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }

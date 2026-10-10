@@ -100,11 +100,13 @@ fi
 # day library_loading's and macro_definition_env's, when #677 let library
 # loads collect, macro_definition_env's test count with it, which had stayed
 # at 15 as the target gained tests, and rooted_loading pinned, then re-pinned
-# that day for its three tests of a bare top-level import)
+# that day for its three tests of a bare top-level import; cps_features's and
+# owned_handles's re-pinned that day too, for #680's tests of where the
+# tree-walker binds its temporaries)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
-    "cps_features 16 469 1"                   # 938 (0)
+    "cps_features 16 530 3"                   # 1060 (2)
     "ephemerons 16 289 30"                    # 578 (204)
     "escape_from_primitive 16 480 13"         # 960 (74)
     "finished_forms_release_code 16 1450 9"   # 2901 (13)
@@ -115,7 +117,7 @@ TARGETS=(
     "interpreter_api 16 138 27"               # 277 (4)
     "library_loading 16 46 9"                 # 93 (0): see the header
     "macro_definition_env 16 16626 19"        # 33253 (67): see the header
-    "owned_handles 16 62523 7"                # 125047 (10)
+    "owned_handles 16 62714 8"                # 125429 (12)
     "rooted_loading 16 371 6"                 # 742 (12)
     "vm_callprimitive 16 33 17"               # 67 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header

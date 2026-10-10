@@ -1522,4 +1522,63 @@
             ((error-object? e) (raise (error-object-message e))))
     (prim-call-with-port (open-input-string "a") (lambda (p) (raise 'x)))))
 
+;; ---------------------------------------------------------------------------
+;; The names the CPS transform makes (#680)
+;;
+;; The tree-walker bound a continuation's parameter by defining it in the
+;; environment the continuation captured, which at a top level is the
+;; program's own. The transform names the parameter that receives a form's
+;; value `v_1`, so after every top-level form `v_1` held that form's value: a
+;; program's own `v_1` was overwritten by the next form, and a program that
+;; had none could read one. The parameter binds where a `let` temporary does
+;; now, which is never the program's environment. A library's body had the
+;; same defect; `cps_features.rs` holds that row, which needs a
+;; `define-library` form.
+;; ---------------------------------------------------------------------------
+
+(define v_1 'mine)
+(car '(1 2))
+(test-equal "a global named like a CPS temporary keeps its value across forms"
+  'mine
+  v_1)
+
+;; The parameter's frame is not where a definition binds: one made in the
+;; continuation of a call inside another call's continuation, as this
+;; `define` is, binds in the program's environment, not in the frame either
+;; parameter has.
+(define nested (car (list (car '(3 4)))))
+(test-equal "a definition made in nested calls' continuations is the program's"
+  3
+  nested)
+
+;; A call's frame is not where a parameter binds either. A parameter named as
+;; the transform names the value an `if` tests read that value.
+(define (shadowed v_1 v_2 v_3 v_4 v_5 v_6 v_7 v_8 v_9)
+  (if (car '(#t))
+      (list v_1 v_2 v_3 v_4 v_5 v_6 v_7 v_8 v_9)
+      'no))
+(test-equal "a parameter named like a CPS temporary keeps its value"
+  '(1 2 3 4 5 6 7 8 9)
+  (shadowed 1 2 3 4 5 6 7 8 9))
+
+;; Entering a continuation again binds its parameter afresh. The tree-walker
+;; bound it again in the frame the continuation captured, which those
+;; captured in its body share: entered after it, one of them read the value
+;; of its latest entry and not the one it was captured under. Here the
+;; third argument's first continuation, entered after the second argument's
+;; was entered again with `x`, read `x` where it had read `b`.
+(define (reenter-arguments)
+  (let ((k2 #f) (k3 #f) (results '()) (n 0))
+    (let ((r (list (call/cc (lambda (k) 'a))
+                   (call/cc (lambda (k) (set! k2 k) 'b))
+                   (call/cc (lambda (k) (if (not k3) (set! k3 k)) 'c)))))
+      (set! results (cons r results))
+      (set! n (+ n 1))
+      (cond ((= n 1) (k2 'x))
+            ((= n 2) (k3 'z))
+            (else (reverse results))))))
+(test-equal "a continuation entered again binds its parameter afresh"
+  '((a b c) (a x c) (a b z))
+  (reenter-arguments))
+
 (test-end)
