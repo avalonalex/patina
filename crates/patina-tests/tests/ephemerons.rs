@@ -439,10 +439,15 @@ fn gc_where_collection_is_deferred_posts_and_counts() {
     );
 }
 
-/// The same in a library body being loaded, which defers collection for as
-/// long as its unevaluated forms are held (`ParsedLibrary`).
+/// A library body the backend loads at its top level, a `define-library`
+/// form's, collects at its `(gc)` (#677). It was posted and counted there, as
+/// it still is on a nested loop (above), while a body being loaded deferred
+/// collection for as long as its unevaluated forms were held
+/// (`ParsedLibrary`); the load's registry entry roots them now. At least one
+/// collection, since under the stress lane allocation collects in the body
+/// too.
 #[test]
-fn gc_in_a_library_body_posts_and_counts() {
+fn gc_in_a_library_body_collects_at_its_call() {
     assert_program_eval_to(
         "(define-library (gc in a body)
            (import (scheme base) (patina debug))
@@ -452,11 +457,11 @@ fn gc_in_a_library_body_posts_and_counts() {
              (define c (stat 'collections))
              (define d (stat 'deferred-collections))
              (gc)
-             (define observed (list (- (stat 'collections) c)
+             (define observed (list (< c (stat 'collections))
                                     (- (stat 'deferred-collections) d)))))
          (import (scheme base) (gc in a body))
          observed",
-        "(0 1)",
+        "(#t 0)",
     );
 }
 

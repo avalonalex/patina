@@ -25,14 +25,14 @@
 # once, with the chibi suite run two assertions deep (#201). Raise a pin when
 # a target gains tests; lower one only with the tests it lost.
 #
-# One minimum is near zero, and that is its healthy count, not an oversight.
-# library_loading does nearly all its work inside library loads, and a
-# library load defers collection for as long as its unevaluated body exists
-# (ParsedLibrary's GcDeferGuard::holding). Under stress it is there for the
-# day that deferral is lost: it then collects inside the load, and the checks
-# catch what that frees. So is macro_definition_env, all of whose tests load
-# libraries; one of them then expands a library's macro after a collection,
-# which is what its minimum counts.
+# library_loading and macro_definition_env do nearly all their work inside
+# library loads, which deferred collection for as long as a library's
+# unevaluated body existed (ParsedLibrary's GcDeferGuard::holding), so
+# library_loading's minimum was near zero. Since #677 a load the backend runs
+# from outside any loop is rooted by its registry entry and collects inside
+# its body and where it ends, so under stress these two collect inside their
+# loads, and with rooted_loading they are what catches a root the loading
+# entries miss.
 #
 # scheme_suite.rs runs every tests/scheme file on both backends, and at 16 it
 # did not finish in 25 minutes (#626). One file is nearly all of that:
@@ -96,7 +96,10 @@ fi
 # shape, its minimum left at 400; owned_handles pinned 2026-10-09, with
 # #605's handles, and host_environments that day, with #620's, and again
 # that day for the VM's evaluating in a host environment; vm_callprimitive's
-# re-pinned 2026-10-10 for #673's two tests of a host's definitions)
+# re-pinned 2026-10-10 for #673's two tests of a host's definitions, and that
+# day library_loading's and macro_definition_env's, when #677 let library
+# loads collect, macro_definition_env's test count with it, which had stayed
+# at 15 as the target gained tests, and rooted_loading pinned)
 TARGETS=(
     "callability 16 31 11"                    # 62 (0)
     "control_flow_matrix 16 340 3"            # 680 (0)
@@ -109,9 +112,10 @@ TARGETS=(
     "host_environments 16 43788 11"           # 87576 (11)
     "hygiene_matrix 16 400 14"                # 804 (2)
     "interpreter_api 16 138 27"               # 277 (4)
-    "library_loading 16 1 9"                  # 3 (0): see the header
-    "macro_definition_env 16 129 15"          # 258 (2): see the header
+    "library_loading 16 46 9"                 # 93 (0): see the header
+    "macro_definition_env 16 16626 19"        # 33253 (67): see the header
     "owned_handles 16 62523 7"                # 125047 (10)
+    "rooted_loading 16 272 3"                 # 544 (8)
     "vm_callprimitive 16 33 17"               # 67 (0)
     "scheme_suite 4096 1534 11"               # 3068 (111): see the header
 )

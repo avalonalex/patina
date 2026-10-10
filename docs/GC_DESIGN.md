@@ -399,6 +399,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
 | `code_store[*].constants` | **yes** | Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
 | `globals` | **yes** | `visit_env` |
+| `saved_globals` | **yes** | `visit_env` for each environment `with_globals` has set aside, so that a library body run under the swap may collect (#677) |
 | `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
 | `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
 | `library_registry` | yes | §5.3 |
@@ -417,15 +418,17 @@ Runtime stubs without maps remain conservative. Local bindings are not
 retired at their last textual use: `reference-barrier` still roots its
 argument through the call, and a focused test pins that contract.
 
-Rust-stack temporaries (continuation-capture register clones, the
-`saved_globals` swap windows, primitive args in `VmApplyContext` callbacks):
-**not rooted — handled by safe-point placement + deferral (§7).**
+Rust-stack temporaries (continuation-capture register clones, primitive args
+in `VmApplyContext` callbacks): **not rooted — handled by safe-point
+placement + deferral (§7).** The environments `with_globals` sets aside were
+one, until #677 moved them onto the traced `saved_globals`.
 
 **Implementation note (stage 3):** every dispatch loop takes a
 `GcDeferGuard`, so any nested `run_loop_until` — reached via `execute_nested`,
 a re-entrant primitive, or `eval` — is deferred by construction. `with_globals`
-also defers across each temporary environment substitution and restores the
-original environment on every returned result, including transfer errors.
+restores the original environment on every returned result, including
+transfer errors; it deferred across each substitution until #677 traced the
+environments it sets aside.
 
 Library loading is the case that needed more. The predicate is **"does this
 Rust frame hold heap values that must survive across an evaluation call?"** —
@@ -444,12 +447,27 @@ the placement is also correct for a `ParsedLibrary` held beyond a single
 loading call, which a call-site guard would get wrong. See §11 on why the
 debug build is the lane that localizes failures like this one.
 
+Since #677 a load is rooted instead, so that it may collect. The backends'
+loaders hand the body to the load's registry entry
+(`ParsedLibrary::hand_to`), which roots it, with the environment the library
+is built in, until the load ends (§5.3), and the guard ends there. A load the
+backend runs at its top level then collects inside its body forms, which run
+in the outermost loop (point D of `PRD/GC_PRD.md` §11.3), and where a
+library's load ends (point B, `collect_if_pending` on each backend), which is
+what lets a run of `define-library` forms collect (#614). A `ParsedLibrary`
+that is never handed over keeps its guard: the VM's loader for the loads
+running code asks for (`vm_evaluate_parsed_library`) keeps it, since those
+run on a nested loop, which defers until stage 4e. A program's `import`
+still loads under `desugar_with_imports`' guard (§7) until #677's second part
+processes a bare top-level `import` outside the desugarer.
+
 ### 5.3 Shared (both backends)
 
 | Root | Location | Notes |
 |------|----------|-------|
 | `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
-| `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs:122` | Unevaluated forms during loading; covered by deferral |
+| `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced by the same `impl GcRoots for LibraryRegistry` (#677) |
+| `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
 | `Heap.core_syntax_table` | `heap/mod.rs` | Syntactic-keyword markers (`begin`, `if`, `else`, …). Rooted on the same terms as `symbol_table` and marked beside it in `GcVisitor::new`: a marker *is* the identity of a form, so collecting one would let the next intern mint a different object for the same keyword. Leaves, so mark-only. Should join the immortal set with the symbol table (§9.2) |
@@ -712,10 +730,11 @@ derive for the Rust structures that stay off-heap (§14, stage 2).
   `Step::Collect(Major)`, and the machine runs a full collection before the
   caller's next instruction, with the caller suspended at the call's return
   pc (§7, "Collections at a call"). Where collection is deferred — a nested
-  loop, a library body being loaded — it posts the collection for the next
-  safe point that may collect, as every `(gc)` did before #639, and counts
-  it in `(gc-stats)`'s `deferred-collections`. This is what makes collection
-  testable without process-global environment variables. `(gc-stats)` reports the arenas'
+  loop, a library body loaded under a holder's guard — it posts the
+  collection for the next safe point that may collect, as every `(gc)` did
+  before #639, and counts it in `(gc-stats)`'s `deferred-collections`. This
+  is what makes collection testable without process-global environment
+  variables. `(gc-stats)` reports the arenas'
   slot counts and five byte keys: `live-bytes` (L, 0 before the first
   collection), `bytes-allocated` (every byte charged, external bytes
   included), `bytes-reclaimed` (every byte a collection freed, so it grows
@@ -869,11 +888,13 @@ placement + deferral:
    evaluation call. These are holders' guards (`GcDeferGuard::holding`),
    which the heap counts apart from the depth:
    - library loading's `ParsedLibrary`, which holds a library's unevaluated
-     body (`patina-runtime/src/library_loader.rs`). Its forms are TaggedValues
-     no root provider can see.
+     body (`patina-runtime/src/library_loader.rs`) until it hands the body to
+     the load's registry entry (#677). Its forms are TaggedValues no root
+     provider can see until then.
    - a form being expanded while its imports load (`desugar_with_imports`),
-     the VM's globals-swap window (`VmState::with_globals`), and each method
-     of the tree-walker's detached `ApplyContext for Evaluator`.
+     and each method of the tree-walker's detached `ApplyContext for
+     Evaluator`. The VM's globals-swap window (`VmState::with_globals`) was
+     one until #677 traced what it sets aside.
 
    The nested runs themselves (`execute_nested`, a primitive's callback) are
    loops, and take a loop's guard.
@@ -962,8 +983,9 @@ these checks except the defer balance, which every build checks.
 - *A holder sees no collection.* A Rust scope or value that keeps heap values
   across a call that can evaluate takes `GcDeferGuard::holding` instead of
   `new`: `ParsedLibrary` (whose constructor now requires the heap, so it
-  cannot be built without its guard), `Desugarer::desugar_with_imports` and
-  `VmState::with_globals`. The guard records the heap's collection count, and
+  cannot be built without its guard) and `Desugarer::desugar_with_imports`;
+  `VmState::with_globals` too, until #677. The guard records the heap's
+  collection count, and
   its drop panics if the count moved. Every loop entered under a holder is
   nested today, so it cannot fire yet; once stage 4e lets nested loops
   collect, the first that does under a holder fails at the holder rather than
@@ -1055,8 +1077,11 @@ that is safe:
 
 - it holds nothing it reads after the call: a wrapper, or a call whose
   arguments move into the run, which roots them;
-- a guard on the data defers collection: `ParsedLibrary`,
-  `desugar_with_imports` and `with_globals` hold `GcDeferGuard::holding`;
+- a root reaches what it holds: a library being loaded is rooted by its
+  registry entry, and the environments `with_globals` sets aside by the VM's
+  `saved_globals` (#677);
+- a guard on the data defers collection: `ParsedLibrary` and
+  `desugar_with_imports` hold `GcDeferGuard::holding`;
 - the state is in the machine: a frame it pushed, `Step::Call` and
   `resume_stub`;
 - the call runs on a nested loop that defers: every `apply_proc` a primitive
@@ -1504,7 +1529,7 @@ visitor exists, and the stress lane is the real safety net.
    ephemeron holding a continuation, which that suite never builds, and
    #605 and #620 are reachable only through the embedding API. So two more
    lanes run under stress in a check build. Per pull request,
-   `scripts/run_gc_stress_tests.sh` runs fifteen `cargo test` targets that
+   `scripts/run_gc_stress_tests.sh` runs sixteen `cargo test` targets that
    drive the collector, control flow and library loading from Rust at
    `PATINA_GC_STRESS=16`, and `scheme_suite.rs` at 4096 (one of its files,
    `srfi/regex-graphemes.scm`, kept it from finishing at 16), in the Test
@@ -1527,11 +1552,14 @@ visitor exists, and the stress lane is the real safety net.
    process, every target passes its tests and fails the lane on its record;
    a filtered run fails the per-PR lane on each target's pinned test count,
    and a changed pinned tally the nightly lane; and a library load without
-   its deferral fails both, #6's shape. The literal shape, `ParsedLibrary`
-   without its `GcDeferGuard::holding`, fails nine of the thirteen targets
+   its deferral failed both, #6's shape. The literal shape, `ParsedLibrary`
+   without its `GcDeferGuard::holding`, failed nine of the thirteen targets
    with a use-after-free (that section names them), but not the VM's Larceny
-   suites, whose library bodies also run inside `VmState::with_globals`'
-   guard; without that one as well, every suite panics at bootstrap.
+   suites, whose library bodies also ran inside `VmState::with_globals`'
+   guard; without that one as well, every suite panicked at bootstrap. Since
+   #677 a load is rooted rather than deferred, and the shape is a load whose
+   registry entry roots nothing: every per-PR target then fails, most at
+   bootstrap, where `(scheme base)`'s load now collects.
    `scripts/tests/test_gc_stress_lanes.py` keeps the failure paths of both
    scripts under test against fake binaries. `docs/TEST_ORGANIZATION.md`,
    "GC lanes", has each lane's interval and budget.

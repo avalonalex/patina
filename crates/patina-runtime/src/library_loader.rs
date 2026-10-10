@@ -13,7 +13,7 @@
 use crate::Environment;
 use crate::heap::SharedHeap;
 use crate::library::Library;
-use crate::library_registry::LibraryError;
+use crate::library_registry::{LibraryError, Loading};
 use patina_core::TaggedValue;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -77,11 +77,11 @@ pub enum ExportSpec {
 /// Shared by both backends, which evaluate library bodies independently but
 /// must agree on what a valid export is.
 pub fn build_library(
-    parsed: ParsedLibrary,
+    declarations: LibraryDeclarations,
     lib_env: Rc<Environment>,
 ) -> Result<Library, LibraryError> {
-    let mut library = Library::with_env(parsed.name, lib_env);
-    if let Some(source) = parsed.source {
+    let mut library = Library::with_env(declarations.name, lib_env);
+    if let Some(source) = declarations.source {
         library.set_source(source);
     }
     let file = library.source.clone();
@@ -92,7 +92,7 @@ pub fn build_library(
         )
     };
 
-    for spec in &parsed.exports {
+    for spec in &declarations.exports {
         match spec {
             // Keywords need no exemption here. A library that imports one has
             // a binding to export like any other; one that does not cannot
@@ -170,6 +170,12 @@ pub enum ImportSet {
 /// Attaching it here makes a fourth path safe by construction — and is also
 /// correct for a `ParsedLibrary` held longer than one loading call, which a
 /// call-site guard would get wrong.
+///
+/// A loader that lets its load collect hands the body to the load's registry
+/// entry instead ([`ParsedLibrary::hand_to`]), which roots it, and the guard
+/// ends there (#677). The backends' loaders do; the VM's loader for the loads
+/// running code asks for, which run on a nested loop that defers anyway,
+/// keeps the guard until the body has run ([`ParsedLibrary::into_declarations`]).
 pub struct ParsedLibrary {
     /// Library name
     pub name: Vec<String>,
@@ -220,6 +226,70 @@ impl ParsedLibrary {
             _gc_defer,
         }
     }
+
+    /// Hand the body to `loading`'s registry entry, with `env`, the
+    /// environment the library is built in: the entry roots both until the
+    /// load ends, and this value's guard ends here, so the load may collect
+    /// (#677). The loader takes the forms back one at a time with
+    /// [`Loading::next_form`](crate::library_registry::Loading::next_form).
+    pub fn hand_to(self, loading: &Loading, env: &Rc<Environment>) -> LibraryDeclarations {
+        let ParsedLibrary {
+            name,
+            imports,
+            body,
+            heap: _,
+            exports,
+            source,
+            _gc_defer: guard,
+        } = self;
+        loading.hold(Rc::clone(env), body);
+        // Only now that the entry roots the body.
+        drop(guard);
+        LibraryDeclarations {
+            name,
+            imports,
+            exports,
+            source,
+        }
+    }
+
+    /// What is left once the body has run under this value's guard, for a
+    /// loader that keeps the guard rather than hand the body over.
+    pub fn into_declarations(self) -> LibraryDeclarations {
+        let ParsedLibrary {
+            name,
+            imports,
+            body: _,
+            heap: _,
+            exports,
+            source,
+            _gc_defer: _,
+        } = self;
+        LibraryDeclarations {
+            name,
+            imports,
+            exports,
+            source,
+        }
+    }
+}
+
+/// A parsed library's declarations other than its body: what a loader reads
+/// once the body is handed over ([`ParsedLibrary::hand_to`]) or has run, and
+/// what [`build_library`] assembles the library from. No value of the heap.
+#[derive(Debug)]
+pub struct LibraryDeclarations {
+    /// Library name.
+    pub name: Vec<String>,
+
+    /// Import specifications.
+    pub imports: Vec<ImportSet>,
+
+    /// Export specifications.
+    pub exports: Vec<ExportSpec>,
+
+    /// Source file path (for error reporting).
+    pub source: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for ParsedLibrary {

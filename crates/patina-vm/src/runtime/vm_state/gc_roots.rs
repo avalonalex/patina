@@ -25,8 +25,9 @@
 //! payload unreachable.
 //!
 //! Rust-stack temporaries (continuation-capture register clones, `mem::take`n
-//! buffers, primitive argument vectors, the `saved_globals` swap windows) are
-//! handled by deferral rather than tracing — see `GcDeferGuard` and §7.
+//! buffers, primitive argument vectors) are handled by deferral rather than
+//! tracing — see `GcDeferGuard` and §7. The environments `with_globals` sets
+//! aside were too, until they moved onto the traced `saved_globals` (#677).
 
 use patina_core::{GC_CHECK, GcRoots, GcVisitor};
 use rustc_hash::FxHashMap;
@@ -143,6 +144,7 @@ impl GcRoots for VmState {
             // A registry index.
             parameter_set: _,
             globals,
+            saved_globals,
             // A handle to the arenas, which the collector is marking.
             heap: _,
             // Primitive functions and their names.
@@ -197,6 +199,9 @@ impl GcRoots for VmState {
         }
 
         visitor.visit_env(globals);
+        for env in saved_globals {
+            visitor.visit_env(env);
+        }
 
         // Register snapshots the tracer holds between its pre/post hooks.
         // Safe points are borrow-free, so this cannot conflict.

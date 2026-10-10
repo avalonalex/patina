@@ -7,9 +7,9 @@
 //! - Library loading and caching
 
 use crate::library::Library;
-use patina_core::FileSystem;
+use patina_core::{Environment, FileSystem, TaggedValue};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -20,6 +20,33 @@ use std::sync::Arc;
 pub struct Loading {
     registry: Rc<RefCell<LibraryRegistry>>,
     name: Vec<String>,
+}
+
+impl Loading {
+    /// Root `env`, the environment the library is built in, and `body`, its
+    /// forms not yet run, in this load's entry until the load ends: what
+    /// [`ParsedLibrary::hand_to`](crate::library_loader::ParsedLibrary::hand_to)
+    /// does, so that the load may collect (#677).
+    pub(crate) fn hold(&self, env: Rc<Environment>, body: Vec<TaggedValue>) {
+        let mut registry = self.registry.borrow_mut();
+        let entry = registry.entry_mut(&self.name).expect(
+            "a load's entry stays on the loading stack until its `Loading` drops, unless the \
+             registry is cleared under it",
+        );
+        entry.env = Some(env);
+        entry.body = body.into();
+    }
+
+    /// The next body form, taken out of this load's entry, which roots it no
+    /// longer; `None` once every form has been taken. The loader holds the
+    /// form only while it expands it, under `desugar_with_imports`' guard.
+    pub fn next_form(&self) -> Option<TaggedValue> {
+        self.registry
+            .borrow_mut()
+            .entry_mut(&self.name)?
+            .body
+            .pop_front()
+    }
 }
 
 impl Drop for Loading {
@@ -297,12 +324,23 @@ pub struct LibraryRegistry {
     /// Searched in order when loading a library
     search_paths: Vec<PathBuf>,
 
-    /// Current loading stack for circular dependency detection
-    /// Contains library names currently being loaded
-    loading_stack: Vec<Vec<String>>,
+    /// The libraries being loaded, outermost first: for circular dependency
+    /// detection, and the roots of each load (#677).
+    loading_stack: Vec<LoadingEntry>,
 
     /// Virtual filesystem for file existence checks in `find_library_file`.
     fs: Arc<dyn FileSystem>,
+}
+
+/// A library on the loading stack. Once its parsed body is handed over
+/// ([`Loading::hold`]), the entry holds the environment the library is built
+/// in and the body forms not yet run, which nothing else reaches until the
+/// library is registered: `trace_roots` roots them, so a load may collect
+/// between its forms and inside them (#677).
+struct LoadingEntry {
+    name: Vec<String>,
+    env: Option<Rc<Environment>>,
+    body: VecDeque<TaggedValue>,
 }
 
 impl LibraryRegistry {
@@ -500,24 +538,44 @@ impl LibraryRegistry {
     /// Returns an error if this would create a circular dependency.
     pub fn begin_loading(&mut self, name: &[String]) -> Result<(), LibraryError> {
         // Check if this library is already in the loading stack
-        if self.loading_stack.iter().any(|n| n == name) {
+        if self.loading_stack.iter().any(|entry| entry.name == name) {
             // Circular dependency detected
-            let mut chain = self.loading_stack.clone();
+            let mut chain: Vec<Vec<String>> = self
+                .loading_stack
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect();
             chain.push(name.to_vec());
             return Err(LibraryError::CircularDependency(chain));
         }
 
-        self.loading_stack.push(name.to_vec());
+        self.loading_stack.push(LoadingEntry {
+            name: name.to_vec(),
+            env: None,
+            body: VecDeque::new(),
+        });
         Ok(())
     }
 
     /// End loading a library (for circular dependency detection)
     ///
-    /// Call this when done loading a library, whether successful or not.
+    /// Call this when done loading a library, whether successful or not. What
+    /// its entry rooted is let go with it.
     pub fn end_loading(&mut self, name: &[String]) {
-        if let Some(pos) = self.loading_stack.iter().position(|n| n == name) {
+        if let Some(pos) = self
+            .loading_stack
+            .iter()
+            .position(|entry| entry.name == name)
+        {
             self.loading_stack.remove(pos);
         }
+    }
+
+    /// The loading stack's entry for `name`.
+    fn entry_mut(&mut self, name: &[String]) -> Option<&mut LoadingEntry> {
+        self.loading_stack
+            .iter_mut()
+            .find(|entry| entry.name == name)
     }
 
     /// [`LibraryRegistry::begin_loading`] for as long as the returned guard
@@ -563,25 +621,40 @@ impl Default for LibraryRegistry {
 }
 
 /// Every loaded library is a GC root: each carries both an `exports` map and
-/// an environment (`docs/GC_DESIGN.md` §5.3). Implemented here so both
-/// backends root libraries identically — the rule lives with the registry
-/// rather than being restated in each backend's root provider.
+/// an environment (`docs/GC_DESIGN.md` §5.3). So is every library being
+/// loaded, its environment and the body forms it has not yet run (#677).
+/// Implemented here so both backends root libraries identically — the rule
+/// lives with the registry rather than being restated in each backend's root
+/// provider.
 ///
-/// Every field is named (#623); pinned by the sentinel test
-/// `a_registered_library_is_a_root`.
+/// Every field is named (#623); pinned by the sentinel tests
+/// `a_registered_library_is_a_root` and `a_library_being_loaded_is_a_root`.
 impl patina_core::GcRoots for LibraryRegistry {
     fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
         let LibraryRegistry {
             libraries,
             // Directories.
             search_paths: _,
-            // Library names.
-            loading_stack: _,
+            loading_stack,
             // The filesystem.
             fs: _,
         } = self;
         for library in libraries.values() {
             visitor.visit_library(library);
+        }
+        for entry in loading_stack {
+            let LoadingEntry {
+                // A library name.
+                name: _,
+                env,
+                body,
+            } = entry;
+            if let Some(env) = env {
+                visitor.visit_env(env);
+            }
+            for &form in body {
+                visitor.visit(form);
+            }
         }
     }
 }
@@ -883,6 +956,38 @@ mod gc_root_tests {
             libraries: HashMap::from([(name, library)]),
             search_paths: Vec::new(),
             loading_stack: Vec::new(),
+            fs: Arc::new(patina_core::NativeFs),
+        };
+
+        let mut heap = shared.borrow_mut();
+        collect_for_tests(&mut heap, &[&registry]);
+        s.assert_survived(&heap);
+    }
+
+    /// A library being loaded, every field of its entry: the environment it
+    /// is built in, and a body form it has not yet run (#677).
+    #[test]
+    fn a_library_being_loaded_is_a_root() {
+        let env = Rc::new(Environment::new());
+        let shared = env.heap().clone();
+        let mut heap = shared.borrow_mut();
+        let mut s = Sentinels::new(&mut heap);
+        let defined = s.pair(&mut heap, "LibraryRegistry.loading_stack: LoadingEntry.env");
+        let form = s.vector(
+            &mut heap,
+            "LibraryRegistry.loading_stack: LoadingEntry.body",
+        );
+        drop(heap);
+        env.define("defined", defined);
+
+        let registry = LibraryRegistry {
+            libraries: HashMap::new(),
+            search_paths: Vec::new(),
+            loading_stack: vec![LoadingEntry {
+                name: vec!["sentinel".to_string()],
+                env: Some(env),
+                body: VecDeque::from([form]),
+            }],
             fs: Arc::new(patina_core::NativeFs),
         };
 
