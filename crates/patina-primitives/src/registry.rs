@@ -74,9 +74,9 @@ pub enum Step {
     /// primitive's `ResumePrimitive` continuation. Both go through
     /// `GcController::collect_at_call`, which collects only where a safe
     /// point may, in every GC mode; where collection is deferred (a nested
-    /// loop, a library body being loaded) it posts the collection for the
-    /// next safe point that may collect and counts it in `(gc-stats)`'s
-    /// `deferred-collections`.
+    /// loop, a library body loaded under a holder's guard) it posts the
+    /// collection for the next safe point that may collect and counts it in
+    /// `(gc-stats)`'s `deferred-collections`.
     ///
     /// To be called again, a primitive keeps what the retry needs in `state`
     /// and repeats its work in its resume half: the machine keeps none of the

@@ -492,12 +492,13 @@ fn test_unquote_as_an_argument_does_not_change_depth() {
 /// reaches the library-private procedure its template names, on both
 /// backends.
 ///
-/// Every other test here works inside library loads, which defer collection
-/// for as long as the library's unevaluated body exists (`ParsedLibrary`'s
-/// `GcDeferGuard::holding`), so under the per-PR stress lane this is the one
-/// that collects, and the reason the lane can pin a minimum of collections
-/// for this target (`scripts/run_gc_stress_tests.sh`, #626). `(gc)` makes it
-/// collect without stress too.
+/// Every other test here works inside library loads, from
+/// `Evaluator::load_library` outside any loop, which deferred collection for
+/// as long as the library's unevaluated body existed (`ParsedLibrary`'s
+/// `GcDeferGuard::holding`), so under the per-PR stress lane this was the one
+/// that collected (`scripts/run_gc_stress_tests.sh`, #626). Since #677 those
+/// loads collect inside their bodies under stress as well. `(gc)` makes this
+/// one collect without stress too.
 #[test]
 fn test_macro_reaches_its_library_after_a_collection() {
     let program = r#"(define-library (t collected)

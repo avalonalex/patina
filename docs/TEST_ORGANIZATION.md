@@ -991,6 +991,27 @@ global `car`'s fast path alone:
 `runtime::vm_state::tests::a_definition_marks_only_the_environments_own_binding`
 in `patina-vm`, which fails if the mark follows the parent.
 
+`patina-tests/tests/rooted_loading.rs` holds a library's load to collecting,
+on both backends (#677):
+
+- a run of `define-library` forms with no body, which only point B can
+  collect, collects during the run (#614's program 2);
+- a library body that collects partway through, at a `(gc)`, keeps the
+  binding it made before, the body form it had not yet run, and a global the
+  program bound, which on the VM only the traced `saved_globals` reaches
+  while the body runs;
+- a library whose dependency collects while it loads keeps both libraries'
+  bindings.
+
+On `main` each reported no collection during the load, on both backends.
+With the loading entry's body untraced the last two fail with a
+use-after-free; with `saved_globals` untraced the second fails on the VM;
+and without either backend's point B the first fails on that backend. While
+the body runs, the entry's environment is also the running globals or the
+running step's environment, so its trace is held by the sentinel test
+`a_library_being_loaded_is_a_root` in `patina-runtime`. The file runs in the
+per-PR stress lane.
+
 ### GC lanes (`docs/GC_DESIGN.md` §11)
 
 The collector is held to output equality: a program prints the same with
@@ -1004,7 +1025,7 @@ later as a wrong answer or not at all (#621, #624, #625).
 |---|---|---|---|---|---|
 | Differential | `scripts/run_gc_differential.sh [binary]` | the chibi suite under GC off, the adaptive default and stress, on both backends, with the tally pinned; plus two reclamation proofs per backend, in bytes (below) | `PATINA_GC_STRESS_INTERVAL`, default 16; 1 in the release lane | the release lane's step took 5.9 min on the runner and the debug lane's 1.1 min (2026-10-03) | `ci.yml`, every change: release `gc-check` at 1, and debug at 16 |
 | Zeal | `scripts/run_gc_zeal.sh [binary]` | `tests/scheme/control/*.scm` except `tail-recursion.scm` under GC off and zeal, on both backends; each file must match, exit 0, print its SRFI 64 summary and have collected, and the binary must first pass a probe that it honours zeal (below) | `PATINA_GC_ZEAL=entry`: every outermost safe point | 10 min on the runner (2026-10-03), within the job's 60 | `gc-zeal.yml`, release `gc-check`, when a change touches the VM's runtime, compiler or types, `patina-core`'s heap or `tagged_value.rs`, the library loader or registry, the tree-walker's evaluator, the toolchain, or the lane's own files, and weekly on `main`; it also runs `finished_forms_release_code` under zeal |
-| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 15 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
+| Stress, per PR | `scripts/run_gc_stress_tests.sh` | 16 `cargo test` targets that drive the collector, control flow and library loading through the embedding API (`callability`, `control_flow_matrix`, `cps_features`, `ephemerons`, `escape_from_primitive`, `finished_forms_release_code`, `gc_tree_walker`, `gc_vm`, `host_environments`, `hygiene_matrix`, `interpreter_api`, `library_loading`, `macro_definition_env`, `owned_handles`, `rooted_loading`, `vm_callprimitive`), and `scheme_suite.rs`; each must run its pinned number of tests, none filtered out, pass, and report at least its pinned number of collections | `PATINA_GC_STRESS=16`; 4096 for `scheme_suite.rs` | about a minute: 62 s here (2026-10-02), 37 s of it the 13 targets, 28 s of those `gc_tree_walker`, nearly all one deep-recursion test; the step's limit is 15 min | `ci.yml`'s Test Suite, every change, on ubuntu and macOS, in the debug build that job has just tested |
 | Stress, nightly | `scripts/run_larceny_gc_stress.sh [--tree-walker] [--r6rs]` | Larceny's R7RS and `(r6rs ...)` suites at the pinned commit, on both backends; each suite's tally must be its row in `scheme_tests/reports/larceny_gc_stress.tsv`, its exit status the one its tally implies, with no panic, no timeout, at least the row's pinned number of collections, and only the job's backend in its process | 16; 4096 for `char`, `flonum`, `lazy`, `sort` and `stream`; `ephemeron` left out until #609 | a job per backend, each limited to 75 min; on the runner (2026-10-03) the VM's R7RS lane took 434 s and its `(r6rs ...)` lane 24 s, a 9-minute job, and the tree-walker's 1774 s and 51 s, a 31-minute job, about 2.2 times the time on an M-series Mac (307 s, 20–22 s, 757–1008 s, 29–36 s); a suite may take 600 s on the VM and 1500 s on the tree-walker, whose slowest, `stream`, took 783 s | `nightly.yml`, release `gc-check`, daily on `main`, and on a pull request that changes the lane |
 
 Zeal costs about 7× stress 1, so it never runs the whole suite: the chibi suite
@@ -1092,13 +1113,13 @@ opens (`(gc-stats)`'s `descriptor-collections`), and none under
 `PATINA_GC=0`; an open port holds 8 KiB of `external-bytes` and one place in
 `descriptors-since-gc` until it is closed; a dropped output port's file is
 empty before a collection and holds its output after one, `(gc)`'s and an
-allocation-triggered one, as in chibi and Gauche; and in a library body,
-where collection is deferred, the first `EMFILE` raises, the documented
-limit. GC-time flushing is observable, so these stay out of the
-byte-identical differential lane. `escape_from_primitive.rs` re-enters
-continuations captured around an open that collected and retried, over a
-filesystem whose descriptor table it caps (`ScarceFs`), so that the stress
-lane runs it without a limit on its process.
+allocation-triggered one, as in chibi and Gauche; and in a library body a
+program's `import` loads, under the expansion's guard, where collection is
+deferred, the first `EMFILE` raises, the documented limit. GC-time flushing
+is observable, so these stay out of the byte-identical differential lane.
+`escape_from_primitive.rs` re-enters continuations captured around an open
+that collected and retried, over a filesystem whose descriptor table it caps
+(`ScarceFs`), so that the stress lane runs it without a limit on its process.
 
 The lanes see a missed trace edge only when no other path reaches the value,
 so the trace code has checks of its own (#623, `docs/GC_DESIGN.md` §5.4).
@@ -1384,6 +1405,12 @@ suite on its exit status; and with stress never firing,
 `scripts/tests/test_gc_stress_lanes.py`, in the Test Suite's offline script
 tests, keeps each failure path of both scripts under test against fake
 binaries.
+
+Since #677 a library load is rooted rather than deferred, so #6's shape is
+now a load whose registry entry roots nothing. With
+`LibraryRegistry::trace_roots` skipping the loading stack, every per-PR
+target failed, `scheme_suite.rs` included, most of them at bootstrap, where
+`(scheme base)`'s own load now collects under stress (measured 2026-10-10).
 
 `scheme_suite.rs` runs at 4096 because of one file. At 16 the whole target
 had not finished after 25 minutes; run through the debug CLI, one file at a

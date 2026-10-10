@@ -12,7 +12,7 @@
 
 use crate::compiler::compile_with_qq_resolving;
 use crate::error::VmError;
-use crate::runtime::vm_state::{define_global, import_export};
+use crate::runtime::vm_state::{collect_if_pending, define_global, import_export};
 use crate::runtime::{VmState, execute, execute_in};
 use patina_core::environment::Environment;
 use patina_core::error::SourceLocation;
@@ -20,7 +20,7 @@ use patina_core::tagged_value::TaggedValue;
 use patina_frontend::{Desugarer, SchemeLibraryLoader};
 use patina_runtime::HasDiagnostic;
 use patina_runtime::library_loader::{ImportSet, build_library};
-use patina_runtime::library_registry::LibraryError;
+use patina_runtime::library_registry::{LibraryError, Loading};
 use patina_runtime::{
     Backend, Library, LibraryLoaderRegistry, LibraryRegistry, RustLibraryLoader, stdlib,
 };
@@ -258,10 +258,10 @@ impl VmBackend {
         if patina_frontend::is_define_library_form(expr, env) {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds the `define-library` datum, not read after the call: the library's \
-                          body forms are in its `ParsedLibrary`, which holds \
-                          `GcDeferGuard::holding` while it lives, so no collection runs during the \
-                          load"
+                reason = "the backend's top level, so the load may collect (#677). Holds the \
+                          `define-library` datum, not read after the call: the library's body \
+                          forms are in its `ParsedLibrary`, under its `GcDeferGuard::holding`, \
+                          until its registry entry roots them"
             )]
             self.eval_inline_define_library(expr).map_err(|e| {
                 VmBackendError::Runtime {
@@ -435,9 +435,9 @@ impl VmBackend {
         // Load (scheme base)
         #[expect(
             clippy::disallowed_methods,
-            reason = "bootstrap, from outside any loop: holds nothing. `(scheme base)` is an \
-                      `.sld`, whose body runs while its `ParsedLibrary` holds \
-                      `GcDeferGuard::holding`"
+            reason = "bootstrap, from outside any loop, so the load may collect: holds nothing. \
+                      `(scheme base)` is an `.sld`, whose body and environment its registry entry \
+                      roots while it loads (#677)"
         )]
         let base = self.load_library(&["scheme".into(), "base".into()]).err();
 
@@ -516,10 +516,13 @@ impl VmBackend {
         )?;
 
         let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
-        let result = self.evaluate_parsed_library(parsed);
+        let result = self.evaluate_parsed_library(parsed, &loading);
         drop(loading);
         let lib = result?;
         self.library_registry.borrow_mut().register_or_replace(lib);
+        // Point B: a run of `define-library` forms runs no other code that
+        // could collect (#614).
+        self.collect_if_pending();
         Ok(())
     }
 
@@ -593,7 +596,7 @@ impl VmBackend {
             };
 
             match parsed {
-                Some(parsed) => self.evaluate_parsed_library(parsed)?,
+                Some(parsed) => self.evaluate_parsed_library(parsed, &loading)?,
                 None => return Err(LibraryError::not_found_in(name, &search_paths)),
             }
         };
@@ -603,6 +606,8 @@ impl VmBackend {
 
         // Register the library
         let _ = self.library_registry.borrow_mut().register(lib);
+        // Point B, between this library and the next the importer loads.
+        self.collect_if_pending();
 
         // Return from registry
         self.library_registry
@@ -618,26 +623,28 @@ impl VmBackend {
     /// globals to `lib_env`, execute body expressions directly, then swap
     /// back. This ensures continuations, code objects, and closures all
     /// live in the single real execution context.
+    ///
+    /// The body and `lib_env` go into `loading`'s registry entry first,
+    /// which roots them until the load ends, so the load collects where it
+    /// runs outermost: inside each body form, and between the forms and the
+    /// libraries it imports (#677). A load under a guard, an `import` met
+    /// while a form is expanded, collects at none of these.
     fn evaluate_parsed_library(
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
+        loading: &Loading,
     ) -> Result<Library, LibraryError> {
-        // Collection is already deferred for this whole function: `parsed`
-        // carries a `GcDeferGuard` for as long as it holds unevaluated body
-        // forms (see `ParsedLibrary`). That covers `saved_globals` and
-        // `lib_env` too, both of which are reachable only from this frame.
-
         // Create a fresh environment for this library, sharing the global heap
         // so TaggedValue indices are compatible with the global environment.
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+        let declarations = parsed.hand_to(loading, &lib_env);
 
         // Step 1: Resolve imports into lib_env
-        for import_set in &parsed.imports {
+        for import_set in &declarations.imports {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
-                          `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
-                          collection runs"
+                reason = "holds `lib_env` and the body across each import's load, which this \
+                          load's registry entry roots (#677); the declarations hold no value"
             )]
             self.process_import_set(import_set, &lib_env)?;
         }
@@ -648,28 +655,29 @@ impl VmBackend {
         // (per-closure environment pointer), so no seeding or merge is needed.
 
         // A relative `include` in the body resolves beside the `.sld`.
+        let source = declarations.source.as_deref();
         let desugarer = Desugarer::with_env(lib_env.clone())
             .with_fs(self.state.borrow().fs().clone())
-            .with_include_base_of(parsed.source.as_deref());
+            .with_include_base_of(source);
         let shared_heap = lib_env.heap().clone();
 
         {
             let mut state = self.state.borrow_mut();
             state.with_globals(lib_env.clone(), |state| -> Result<(), LibraryError> {
-                for tv in &parsed.body {
+                while let Some(form) = loading.next_form() {
                     #[expect(
                         clippy::disallowed_methods,
-                        reason = "the import callback loads libraries during the expansion: \
-                                  guarded by `desugar_with_imports`', `parsed`'s and \
-                                  `with_globals`' `GcDeferGuard::holding`"
+                        reason = "the import callback loads libraries during the expansion, which \
+                                  holds the form and the partial expansion: guarded by \
+                                  `desugar_with_imports`' `GcDeferGuard::holding`"
                     )]
                     let core_expr = desugarer.desugar_with_imports(
-                        *tv,
+                        form,
                         &shared_heap,
                         |set, env| crate::runtime::vm_state::vm_process_import_set(state, set, env),
                         |e| {
                             patina_runtime::LibraryError::processing(
-                                parsed.source.as_deref(),
+                                source,
                                 format!("desugar error: {e}"),
                                 e.diagnostic(),
                             )
@@ -685,7 +693,7 @@ impl VmBackend {
                     )
                     .map_err(|e| {
                         patina_runtime::LibraryError::processing(
-                            parsed.source.as_deref(),
+                            source,
                             format!("compile error: {}", e),
                             e.diagnostic(),
                         )
@@ -694,17 +702,19 @@ impl VmBackend {
                     let top_id = state.load_unit(top, nested);
                     #[expect(
                         clippy::disallowed_methods,
-                        reason = "holds `parsed` (the body's later forms), `lib_env` and, through \
-                                  `with_globals`, the saved globals across the form's run: \
-                                  `parsed` and `with_globals` each hold `GcDeferGuard::holding`, \
-                                  so no collection runs"
+                        reason = "outermost when the load is, so the run may collect (point D, \
+                                  #677). Holds the form's `CoreExpr`, not read after the call; \
+                                  `lib_env` and the body's later forms, which this load's \
+                                  registry entry roots; and, through `with_globals`, the globals \
+                                  it set aside, on the machine's traced stack. The form's \
+                                  constants are in the loaded unit, which the code store roots"
                     )]
                     let result = execute(state, top_id);
                     state.release_unit_if_unused(top_id);
 
                     result.map_err(|e| {
                         patina_runtime::LibraryError::processing(
-                            parsed.source.as_deref(),
+                            source,
                             format!("runtime error: {}", e),
                             e.diagnostic(),
                         )
@@ -716,7 +726,7 @@ impl VmBackend {
         }
 
         // Step 3: Assemble the library and resolve its exports
-        build_library(parsed, lib_env)
+        build_library(declarations, lib_env)
     }
 
     /// Resolve an import set into the given environment.
@@ -738,6 +748,15 @@ impl VmBackend {
             import_export(&mut state, lib_env, name, &library, &export);
         }
         Ok(())
+    }
+
+    /// Point B (#677): a collection pending where a load ends runs now, if
+    /// nothing defers here (`vm_state::collect_if_pending`). Inside a run, the
+    /// state is borrowed and the run's own safe points will service it.
+    fn collect_if_pending(&self) {
+        if let Ok(mut state) = self.state.try_borrow_mut() {
+            collect_if_pending(&mut state);
+        }
     }
 }
 

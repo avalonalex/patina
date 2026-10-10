@@ -840,8 +840,8 @@ impl Heap {
     }
 
     /// Post a collection that was asked for at a call where collection is
-    /// deferred — a nested loop, a library body being loaded — for the next
-    /// safe point that may collect, and count it (#639). What
+    /// deferred — a nested loop, a library body loaded under a holder's guard
+    /// — for the next safe point that may collect, and count it (#639). What
     /// `GcController::collect_at_call` does when it cannot collect.
     pub fn defer_collection(&mut self) {
         self.request_gc();

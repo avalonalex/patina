@@ -117,12 +117,15 @@ fn every_vm_state_root_is_traced() {
     let escaping = s.pair(h, "VmState.pending_escape");
     let constant = s.vector(h, "VmState.code_store: CodeObject.constants");
     let global = s.string(h, "VmState.globals");
+    let saved_global = s.vector(h, "VmState.saved_globals");
     let scratch = s.object(h, "VmState.scratch_args");
     let pre_regs = s.pair(h, "VmState.tracer: StepTracer.pre_regs");
     let pre_all_regs = s.vector(h, "VmState.tracer: StepTracer.pre_all_regs");
     let gc_pending = h.gc_pending_handle();
     drop(heap);
     globals.define("global", global);
+    let saved = Rc::new(Environment::with_heap(shared.clone()));
+    saved.define("saved", saved_global);
 
     let code = code_holding(vec![constant]);
     let state = VmState {
@@ -152,6 +155,7 @@ fn every_vm_state_root_is_traced() {
         resume_codes: [None; resume_step::VARIANTS],
         parameter_set: None,
         globals,
+        saved_globals: vec![saved],
         heap: shared,
         primitive_registry: Rc::new(PrimitiveRegistry::new()),
         shadowed_primitives: Vec::new(),

@@ -291,8 +291,9 @@ pub(crate) trait Collector {
 /// Owns its `SharedHeap` handle rather than borrowing one, so a guard can be
 /// stored in a struct whose lifetime *is* the deferral extent — see
 /// `ParsedLibrary`, which holds unevaluated forms and therefore defers for as
-/// long as it exists. The `Rc` clone is paid once per guard, on paths taken
-/// per dispatch-loop entry rather than per step.
+/// long as it exists, until it hands them to a load's registry entry (#677).
+/// The `Rc` clone is paid once per guard, on paths taken per dispatch-loop
+/// entry rather than per step.
 ///
 /// Two kinds, by what the guard protects (#624):
 /// - a **loop's** own guard ([`GcDeferGuard::new`]), which every dispatch
@@ -327,9 +328,9 @@ impl GcDeferGuard {
 
     /// A holder's guard: for a scope or value that keeps heap values no root
     /// provider sees across a call that can evaluate — a library's
-    /// unevaluated body (`ParsedLibrary`), a form being expanded while its
-    /// imports load (`desugar_with_imports`), the global environment a swap
-    /// set aside (`VmState::with_globals`).
+    /// unevaluated body (`ParsedLibrary`, until it is handed to the load's
+    /// registry entry, #677), a form being expanded while its imports load
+    /// (`desugar_with_imports`).
     ///
     /// Defers like [`GcDeferGuard::new`]. In a check build it also records
     /// how many collections the heap has run, and its drop panics if that
@@ -849,9 +850,9 @@ impl GcController {
     /// build, as every poll site does. It collects in every mode,
     /// `PATINA_GC=0` included, as `(gc)` always has.
     ///
-    /// Where collection is deferred — a nested loop, a library body being
-    /// loaded, a holder's extent — it posts the collection for the next safe
-    /// point that may collect, as `(gc)` did everywhere before #639, and
+    /// Where collection is deferred — a nested loop, a holder's extent, a
+    /// library body loaded under one — it posts the collection for the next
+    /// safe point that may collect, as `(gc)` did everywhere before #639, and
     /// counts it ([`Heap::defer_collection`], `(gc-stats)`'s
     /// `deferred-collections`). So does a collection whose roots the
     /// backend cannot supply: `with_roots` returns without calling

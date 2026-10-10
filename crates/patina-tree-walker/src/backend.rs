@@ -123,10 +123,10 @@ impl TreeWalker {
         if patina_frontend::is_define_library_form(expr, env) {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds the `define-library` datum, not read after the call: the library's \
-                          body forms are in its `ParsedLibrary`, which holds \
-                          `GcDeferGuard::holding` while it lives, so no collection runs during the \
-                          load"
+                reason = "the backend's top level, so the load may collect (#677). Holds the \
+                          `define-library` datum, not read after the call: the library's body \
+                          forms are in its `ParsedLibrary`, under its `GcDeferGuard::holding`, \
+                          until its registry entry roots them"
             )]
             self.evaluator
                 .eval_inline_define_library(expr)

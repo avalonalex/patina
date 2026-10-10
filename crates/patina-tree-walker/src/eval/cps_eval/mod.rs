@@ -141,6 +141,41 @@ impl<'a> CpsEvaluator<'a> {
         }
     }
 
+    /// Point B (#677): the safe point outside any trampoline, where a
+    /// library's load ends at the top level. The same root set as
+    /// [`Self::maybe_collect`]'s, less a step, since none is running. It
+    /// collects only where nothing defers, with no trampoline running and no
+    /// holder's guard alive, and does nothing anywhere else.
+    pub(crate) fn collect_if_pending(&self) {
+        let evaluator = self.evaluator;
+        let heap = evaluator.global_env.heap();
+        if !evaluator.gc_pending.get() || heap.borrow().gc_defer_depth() != 0 {
+            return;
+        }
+        NoGcScopes::of(heap).assert_none_open();
+        // A loop's guard, as a trampoline takes for its extent, so that the
+        // collection finds the defer depth a safe point requires.
+        let gc_defer = GcDeferGuard::new(heap);
+        let collected = GcController::safe_point(
+            &evaluator.gc,
+            heap,
+            &evaluator.gc_pending,
+            gc_defer.is_outermost(),
+            |collect| {
+                // As at a safe point: with a load in flight the registry
+                // cannot be read, and the collection waits.
+                let Ok(registry) = evaluator.library_registry.try_borrow() else {
+                    return;
+                };
+                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots]);
+            },
+        );
+        if collected {
+            heap.borrow_mut()
+                .finish_collection(std::time::Duration::ZERO);
+        }
+    }
+
     /// A collection a resumable primitive asked for at its call
     /// (`StepResult::CollectAtCall`, #639): the same root set as
     /// [`Self::maybe_collect`]'s, with `step` — the suspended call, its
@@ -556,21 +591,26 @@ pub fn eval_cps(
     // and doesn't need CPS transformation
     if let CoreExprKind::Import { import_sets } = &expr.kind {
         let heap = evaluator.global_env.heap();
-        for import_set in import_sets {
-            let import_set =
-                patina_frontend::LibraryDefinition::parse_import_set_tagged(*import_set, heap)
-                    .map_err(|e| {
+        // Every set is read before any loads, since a load may collect
+        // (#677) and the datums in `expr` are no root.
+        let import_sets = import_sets
+            .iter()
+            .map(|&set| {
+                patina_frontend::LibraryDefinition::parse_import_set_tagged(set, heap).map_err(
+                    |e| {
                         EvalError::InvalidSyntax(format!("Invalid import set: {}", e))
                             .with_diagnostic(e.diagnostic())
-                    })?;
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for import_set in &import_sets {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds the import's later import-set datums (in `expr`) across each load. \
-                          A Scheme library's body runs while its `ParsedLibrary` holds \
-                          `GcDeferGuard::holding`, and a Rust-defined library runs no Scheme, so \
-                          no collection runs during the load"
+                reason = "holds the parsed import sets, which hold no value, and `env`, which the \
+                          caller roots: the load may collect (#677)"
             )]
-            evaluator.process_import_for_eval(&import_set, &env)?;
+            evaluator.process_import_for_eval(import_set, &env)?;
         }
         return Ok(TaggedValue::UNSPECIFIED);
     }

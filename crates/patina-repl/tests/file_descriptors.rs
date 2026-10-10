@@ -364,8 +364,10 @@ fn load_collects_and_reads_again_when_descriptors_ran_out() {
 }
 
 /// The documented limit: where collection is deferred, the first `EMFILE`
-/// raises. A library body being loaded is such a place (docs/GC_DESIGN.md
-/// §7): the open's collection is posted for the next safe point that may
+/// raises. A library body that a program's `import` loads is such a place,
+/// under the expansion's guard (docs/GC_DESIGN.md §7; a top-level
+/// `define-library`'s body collects since #677): the open's collection is
+/// posted for the next safe point that may
 /// collect and counted in `deferred-collections`, the second attempt fails
 /// as the first did, and the file error is raised. Once the load is done the
 /// program's own open succeeds. chibi collects anywhere, and would open the

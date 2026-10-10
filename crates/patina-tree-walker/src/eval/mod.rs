@@ -357,9 +357,9 @@ impl Evaluator {
         // Load (scheme base) library, lib/scheme/base.sld
         #[expect(
             clippy::disallowed_methods,
-            reason = "bootstrap, from outside any loop: holds nothing. `(scheme base)` is an \
-                      `.sld`, whose body runs while its `ParsedLibrary` holds \
-                      `GcDeferGuard::holding`"
+            reason = "bootstrap, from outside any loop, so the load may collect: holds nothing. \
+                      `(scheme base)` is an `.sld`, whose body and environment its registry entry \
+                      roots while it loads (#677)"
         )]
         let base = self
             .load_library(&["scheme".to_string(), "base".to_string()])
@@ -506,7 +506,10 @@ impl Evaluator {
 
             match parsed {
                 // Parse succeeded, now evaluate
-                Some(parsed) => (self.evaluate_parsed_library(parsed, context)?, false),
+                Some(parsed) => (
+                    self.evaluate_parsed_library(parsed, context, &loading)?,
+                    false,
+                ),
                 // No loader can handle this library
                 None => {
                     return Err(patina_runtime::LibraryError::not_found_in(
@@ -537,6 +540,9 @@ impl Evaluator {
                 }
             }
         }
+
+        // Point B, between this library and the next the importer loads.
+        self.collect_if_pending();
 
         // Return the registered library
         let lib_rc = {
@@ -617,33 +623,54 @@ impl Evaluator {
 
         let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
         let cps = cps_eval::CpsEvaluator::new(self);
-        let result =
-            self.evaluate_parsed_library(parsed, &cps_eval::CallbackContext::detached(&cps));
+        let result = self.evaluate_parsed_library(
+            parsed,
+            &cps_eval::CallbackContext::detached(&cps),
+            &loading,
+        );
         drop(loading);
         let lib = result?;
         self.library_registry.borrow_mut().register_or_replace(lib);
+        // Point B: a run of `define-library` forms runs no other code that
+        // could collect (#614).
+        self.collect_if_pending();
         Ok(())
+    }
+
+    /// Point B (#677): a collection pending where a load ends runs now, if
+    /// nothing defers here — no trampoline running, no holder's guard alive.
+    /// Anywhere else the running trampoline's own safe points service it.
+    fn collect_if_pending(&self) {
+        cps_eval::CpsEvaluator::new(self).collect_if_pending();
     }
 
     /// Evaluate a parsed library
     ///
     /// This method is called after a library is parsed from a .sld file.
     /// It handles import resolution, body evaluation, and export collection.
+    ///
+    /// The body and `lib_env` go into `loading`'s registry entry first,
+    /// which roots them until the load ends, so the load collects where it
+    /// runs on the outermost trampoline: inside each body form, and between
+    /// the forms and the libraries it imports (#677). A load requested by
+    /// running code, on a nested trampoline, or under a guard collects at
+    /// none of these.
     fn evaluate_parsed_library(
         &self,
         parsed: patina_runtime::library_loader::ParsedLibrary,
         context: &cps_eval::CallbackContext<'_, '_, '_>,
+        loading: &patina_runtime::library_registry::Loading,
     ) -> Result<patina_runtime::Library, patina_runtime::LibraryError> {
         // Create a fresh environment for this library, sharing global heap for TaggedValue compatibility
         let lib_env = Rc::new(Environment::with_heap(self.global_env.heap().clone()));
+        let declarations = parsed.hand_to(loading, &lib_env);
 
         // Step 1: Resolve imports
-        for import_set in &parsed.imports {
+        for import_set in &declarations.imports {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds `parsed` and `lib_env` across each import's load: `parsed` holds \
-                          `GcDeferGuard::holding` for as long as it lives (`ParsedLibrary`), so no \
-                          collection runs"
+                reason = "holds `lib_env` and the body across each import's load, which this \
+                          load's registry entry roots (#677); the declarations hold no value"
             )]
             self.process_import_set(import_set, &lib_env, context)?;
         }
@@ -652,27 +679,26 @@ impl Evaluator {
         // Use CPS evaluation so that all lambdas become CpsLambdas, enabling
         // proper continuation support throughout the codebase.
         // A relative `include` in the body resolves beside the `.sld`.
+        let source = declarations.source.as_deref();
         let desugarer = patina_frontend::Desugarer::with_env(lib_env.clone())
             .with_fs(self.fs.clone())
-            .with_include_base_of(parsed.source.as_deref());
+            .with_include_base_of(source);
         let shared_heap = lib_env.heap().clone();
-        // Collection is already deferred here: `parsed` carries a
-        // `GcDeferGuard` while it holds unevaluated body forms — see
-        // `ParsedLibrary`.
-        for tv in &parsed.body {
+        while let Some(form) = loading.next_form() {
             // Desugar TaggedValue to CoreExpr
             #[expect(
                 clippy::disallowed_methods,
-                reason = "the import callback loads libraries during the expansion: guarded by \
-                          `desugar_with_imports`' and `parsed`'s `GcDeferGuard::holding`"
+                reason = "the import callback loads libraries during the expansion, which holds \
+                          the form and the partial expansion: guarded by `desugar_with_imports`' \
+                          `GcDeferGuard::holding`"
             )]
             let core_expr = desugarer.desugar_with_imports(
-                *tv,
+                form,
                 &shared_heap,
                 |set, env| self.process_import_set(set, env, context),
                 |e| {
                     patina_runtime::LibraryError::processing(
-                        parsed.source.as_deref(),
+                        source,
                         format!("Failed to desugar expression: {e}"),
                         e.diagnostic(),
                     )
@@ -685,25 +711,21 @@ impl Evaluator {
             // and do not evaluate later forms or register a partial library.
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds `parsed` (the body's later forms) and `lib_env`, which no root \
-                          reaches until the library is registered, across the form's run: `parsed` \
-                          holds `GcDeferGuard::holding` for as long as it lives, so no collection \
-                          runs"
+                reason = "outermost when the load is, so the run may collect (point D, #677). \
+                          Holds `core_expr`, not read after the call, and `lib_env` and the body's \
+                          later forms, which this load's registry entry roots; the run roots the \
+                          CPS tree it is entered with"
             )]
             context.eval_core(&core_expr, &lib_env).map_err(|e| {
                 patina_runtime::LibraryError::EvaluationError {
-                    file: parsed
-                        .source
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
+                    file: source.map(|p| p.display().to_string()).unwrap_or_default(),
                     error: Box::new(e),
                 }
             })?;
         }
 
         // Step 3: Assemble the library and resolve its exports
-        patina_runtime::library_loader::build_library(parsed, lib_env)
+        patina_runtime::library_loader::build_library(declarations, lib_env)
     }
 
     /// Process a single import set

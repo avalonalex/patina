@@ -2484,8 +2484,9 @@ impl patina_primitives::ApplyContext for VmApplyContext {
     #[expect(
         clippy::disallowed_methods,
         reason = "holds nothing: `expr` moves into the compile, and `vm_eval_expr` runs it with \
-                  the globals swapped under `with_globals`' `GcDeferGuard::holding`. Its one \
-                  caller, `run_synchronously`, is one this machine never reaches"
+                  the globals swapped by `with_globals`, which keeps the ones it set aside on the \
+                  machine's traced stack. Its one caller, `run_synchronously`, is one this \
+                  machine never reaches"
     )]
     fn eval_expr(
         &self,

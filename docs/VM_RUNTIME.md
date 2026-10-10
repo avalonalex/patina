@@ -72,8 +72,9 @@ weak continuation stores, global bindings and their invalidation bits, library
 services, GC policy, and transfer bookkeeping. Storage and invalidation fields
 are private; only the driver/control pair can see their shared transfer flags,
 stub ids, and scratch argument pool. `with_globals` scopes library/eval
-substitution on the same heap, defers GC while saved globals are on the Rust
-stack, and restores the environment on both success and error/escape results.
+substitution on the same heap, keeps the environment it sets aside on the
+traced `saved_globals` (#677; it deferred GC while that environment lived only
+on the Rust stack), and restores it on both success and error/escape results.
 `import_export` still installs shared bindings and invalidates primitive fast
 paths in the same operation. Library loading keeps one machine and its existing
 re-entry protocol.

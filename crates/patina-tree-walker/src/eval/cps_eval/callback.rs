@@ -68,25 +68,27 @@ impl<'a> CallbackContext<'_, 'a, '_> {
         let patina_core::CoreExprKind::Import { import_sets } = &expr.kind else {
             unreachable!("eval_import requires an import")
         };
-        for import_set in import_sets {
-            let import_set = patina_frontend::LibraryDefinition::parse_import_set_tagged(
-                *import_set,
-                self.heap(),
-            )
-            .map_err(|e| {
-                EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
-                    .with_diagnostic(e.diagnostic())
-            })?;
+        // Every set is read before any loads, since a load may collect
+        // (#677) and the datums in `expr` are no root.
+        let import_sets = import_sets
+            .iter()
+            .map(|&set| {
+                patina_frontend::LibraryDefinition::parse_import_set_tagged(set, self.heap())
+                    .map_err(|e| {
+                        EvalError::InvalidSyntax(format!("Invalid import set: {e}"))
+                            .with_diagnostic(e.diagnostic())
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for import_set in &import_sets {
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds the import's later import-set datums (in `expr`) across each load. \
-                          A Scheme library's body runs while its `ParsedLibrary` holds \
-                          `GcDeferGuard::holding`, and a Rust-defined library runs no Scheme, so \
-                          no collection runs during the load"
+                reason = "holds the parsed import sets, which hold no value, and `env`, the \
+                          caller's: the load may collect (#677)"
             )]
             self.cps
                 .evaluator
-                .process_import_for_eval_with(&import_set, env, self)?;
+                .process_import_for_eval_with(import_set, env, self)?;
         }
         Ok(TaggedValue::UNSPECIFIED)
     }
@@ -169,8 +171,9 @@ impl ApplyContext for CallbackContext<'_, '_, '_> {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "holds nothing; a Scheme library's body runs while its `ParsedLibrary` holds \
-                  `GcDeferGuard::holding`"
+        reason = "holds nothing: the library comes back by value. A primitive that called back \
+                  holds its values across the load, which runs nested under the calling step's \
+                  trampoline, so it collects nowhere (#677)"
     )]
     fn load_scheme_library(&self, name: &[String]) -> Result<Rc<Library>, EvalError> {
         self.cps

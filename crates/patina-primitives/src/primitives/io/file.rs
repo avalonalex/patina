@@ -21,10 +21,10 @@
 //!
 //! The collection runs in every GC mode, `PATINA_GC=0` included, and with
 //! the call's arguments in the suspended frame. Where collection is
-//! deferred — a nested loop, a library body being loaded — it is posted for
-//! the next safe point that may collect instead, and the open is resumed
-//! having collected nothing: the second attempt fails as the first did, and
-//! raises the file error the first would have. It is made anyway, whatever
+//! deferred — a nested loop, a library body loaded under a holder's guard —
+//! it is posted for the next safe point that may collect instead, and the
+//! open is resumed having collected nothing: the second attempt fails as the
+//! first did, and raises the file error the first would have. It is made anyway, whatever
 //! the machine answers, so that the error raised is the one the system
 //! gives, `EMFILE` or `ENFILE`, with no allocation to carry the first one's.
 //!

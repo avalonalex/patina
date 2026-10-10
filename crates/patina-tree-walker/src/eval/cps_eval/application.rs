@@ -1109,11 +1109,10 @@ impl<'a> CpsEvaluator<'a> {
                     reason = "holds the primitive's `state` (in `resume`), `cont`, `cont_env`, \
                               `env` and the step's three stacks across the datum's expansion, \
                               which loads libraries and runs their bodies. Guarded on the data: \
-                              the whole expansion runs under `desugar_with_imports`' \
-                              `GcDeferGuard::holding`, and each library body under its \
-                              `ParsedLibrary`'s. Besides, a step runs inside a trampoline, so any \
-                              loop the load starts is nested (point C, which PRD/GC_PRD.md §11.3 \
-                              keeps under `NoGcScope`)"
+                              the whole expansion, its loads included, runs under \
+                              `desugar_with_imports`' `GcDeferGuard::holding`. Besides, a step \
+                              runs inside a trampoline, so any loop the load starts is nested \
+                              (point C, which PRD/GC_PRD.md §11.3 keeps under `NoGcScope`)"
                 )]
                 let evaluated = self.eval_step(expr, &env, &context);
                 let declined = super::types::take_unhandled_in_callback();

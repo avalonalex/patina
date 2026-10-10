@@ -6,9 +6,9 @@
 //! ([`Step::Collect`]): the machine suspends the caller at the call's return
 //! pc and collects before the caller's next instruction, in every GC mode,
 //! `PATINA_GC=0` included. Where collection is deferred — a nested loop, a
-//! library body being loaded — the collection is posted for the next safe
-//! point that may collect instead, as every `(gc)` was before #639, and
-//! counted in `deferred-collections`.
+//! library body loaded under a holder's guard — the collection is posted for
+//! the next safe point that may collect instead, as every `(gc)` was before
+//! #639, and counted in `deferred-collections`.
 //!
 //! `(gc-stats)` reports arena and collector counters, and the byte account
 //! (`patina_core::heap` `account.rs`, #606):

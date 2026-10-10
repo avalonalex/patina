@@ -165,6 +165,10 @@ pub struct VmState {
     /// Global variable environment, shared with the library loader.
     /// `Environment` has interior mutability, so no outer `RefCell` is needed.
     globals: Rc<Environment>,
+    /// The environments [`VmState::with_globals`] has set aside, innermost
+    /// last, each restored when its swap ends. Traced, so a library body run
+    /// under a swap may collect (#677).
+    saved_globals: Vec<Rc<Environment>>,
     /// The heap, shared with `patina-runtime` primitives.
     heap: SharedHeap,
     /// Registry of all primitive procedures.
@@ -283,6 +287,7 @@ impl VmState {
             resume_codes: [None; super::control::resume_step::VARIANTS],
             parameter_set,
             globals,
+            saved_globals: Vec::new(),
             heap,
             primitive_registry: Rc::new(registry),
             shadowed_primitives: Vec::new(),
@@ -351,19 +356,22 @@ impl VmState {
 
     /// Temporarily compile/evaluate in another environment on the same heap.
     /// Restore on every Result exit, including nonlocal-transfer errors. The
-    /// defer guard protects saved globals living only on this Rust stack: a
-    /// holder's guard, so no collection may run until the swap is undone
-    /// (#624).
+    /// environment set aside waits on `saved_globals`, which the machine
+    /// traces, so `run` may collect (#677); it held a holder's guard while
+    /// that environment lived only on this Rust stack (#624).
     pub(crate) fn with_globals<T>(
         &mut self,
         env: Rc<Environment>,
         run: impl FnOnce(&mut Self) -> T,
     ) -> T {
         debug_assert!(Rc::ptr_eq(env.heap(), &self.heap));
-        let _gc_defer = GcDeferGuard::holding(&self.heap);
         let saved = std::mem::replace(&mut self.globals, env);
+        self.saved_globals.push(saved);
         let result = run(self);
-        self.globals = saved;
+        self.globals = self
+            .saved_globals
+            .pop()
+            .expect("each swap restores the environment it set aside");
         result
     }
 
@@ -853,7 +861,10 @@ pub(super) fn vm_load_library(
 
 /// Evaluate a parsed library (.sld file) using the VM.
 ///
-/// Mirrors `VmBackend::evaluate_parsed_library()`.
+/// Mirrors `VmBackend::evaluate_parsed_library()`, for the loads running
+/// code asks for (`environment`, `eval`, `load`). Those run on a nested loop,
+/// which defers until stage 4e, so this keeps `parsed`'s guard for the whole
+/// load rather than hand its body to the registry entry (#677).
 ///
 /// Instead of creating a temporary VmState, we swap `state.globals` to the
 /// library's environment, execute body expressions directly in the main
@@ -883,7 +894,7 @@ fn vm_evaluate_parsed_library(
 
     // Collection is already deferred for this whole function: `parsed`
     // carries a `GcDeferGuard` while it holds unevaluated body forms (see
-    // `ParsedLibrary`), which also covers `saved_globals` and `lib_env`.
+    // `ParsedLibrary`), which also covers `lib_env`.
 
     // A relative `include` in the body resolves beside the `.sld` — the same
     // rule as the backend's loader; a library must not load or fail
@@ -898,8 +909,7 @@ fn vm_evaluate_parsed_library(
             #[expect(
                 clippy::disallowed_methods,
                 reason = "the import callback loads libraries during the expansion: guarded by \
-                          `desugar_with_imports`', `parsed`'s and `with_globals`' \
-                          `GcDeferGuard::holding`"
+                          `desugar_with_imports`' and `parsed`'s `GcDeferGuard::holding`"
             )]
             let core_expr = desugarer.desugar_with_imports(
                 *tv,
@@ -938,9 +948,9 @@ fn vm_evaluate_parsed_library(
             let depth_before = state.execution.frames().len();
             #[expect(
                 clippy::disallowed_methods,
-                reason = "holds `parsed` (the body's later forms), `lib_env` and, through \
-                          `with_globals`, the saved globals across the form's run: `parsed` and \
-                          `with_globals` each hold `GcDeferGuard::holding`, so no collection runs"
+                reason = "holds `parsed` (the body's later forms) and `lib_env` across the form's \
+                          run: `parsed` holds `GcDeferGuard::holding`, so no collection runs. The \
+                          globals `with_globals` set aside are on the machine's traced stack"
             )]
             let result = across_reentry(state, depth_before, |s| execute_nested(s, top_id), |v| *v)
                 .map_err(Reentry::into_vm_error);
@@ -959,7 +969,7 @@ fn vm_evaluate_parsed_library(
     })?;
 
     // Step 3: Assemble the library and resolve its exports
-    build_library(parsed, lib_env)
+    build_library(parsed.into_declarations(), lib_env)
 }
 
 /// Resolve an import set into the given environment.
@@ -998,18 +1008,16 @@ pub(super) fn vm_eval_expr(
     let (top, nested) = compile_for_eval(state, expr, env)?;
 
     // Swap globals to the eval environment, execute in the main state,
-    // then restore. This keeps continuations and code objects valid.
-    //
-    // `saved_globals` is reachable only from this Rust frame while the swap
-    // is in effect, so defer for its extent rather than relying on this
-    // always being reached from inside a dispatch loop.
+    // then restore. This keeps continuations and code objects valid. The
+    // environment set aside waits on the machine's traced stack, so this
+    // holds nothing of its own across the run, wherever it is reached from.
     state.with_globals(env.clone(), |state| {
         let top_id = state.load_unit(top, nested);
         #[expect(
             clippy::disallowed_methods,
-            reason = "holds the saved globals, in `with_globals` under its \
-                      `GcDeferGuard::holding`, across the run; the unit's constants are in the \
-                      code store, which the machine roots"
+            reason = "holds nothing of its own: the globals `with_globals` set aside are on the \
+                      machine's traced stack, and the unit's constants are in the code store, \
+                      which the machine roots"
         )]
         let result = execute_nested(state, top_id);
         state.release_unit_if_unused(top_id);
@@ -1480,6 +1488,25 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
             }
         },
     )
+}
+
+/// Point B (#677): where a library's load ends at the top level, a pending
+/// collection runs here rather than waiting for the next form that runs
+/// code, which a run of `define-library` forms never reaches (#614). The
+/// same safe point a dispatch loop polls, outside any loop: it collects only
+/// where nothing defers, with no loop running and no holder's guard alive,
+/// and does nothing anywhere else.
+pub(crate) fn collect_if_pending(state: &mut VmState) {
+    if !state.gc_pending.get() || state.heap.borrow().gc_defer_depth() != 0 {
+        return;
+    }
+    NoGcScopes::of(&state.heap).assert_none_open();
+    // A loop's guard, as a dispatch loop takes for its extent, so that the
+    // collection finds the defer depth a safe point requires.
+    let gc_defer = GcDeferGuard::new(&state.heap);
+    if maybe_collect(state, gc_defer.is_outermost()) {
+        state.after_collection();
+    }
 }
 
 /// A collection a resumable primitive asked for at its call (`Step::Collect`,
