@@ -149,12 +149,13 @@ have to be taught about:
 2. Syntax provenance in `Heap` and diagnostic snapshots in `SourceMap` key
    locations by `tv.raw_bits()` (`heap/source.rs`, `source_map.rs`).
 3. `eq?`/`eqv?`/hashing compare raw bits (`heap/mod.rs:1474,1507,1593,1719`).
-4. `CallFrame.closure: Option<ObjectIndex>`, a bare object-arena index that
-   keeps the generation stamp in check builds (`crates/patina-vm/src/types/mod.rs:52`).
-5. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
-6. `CompiledMacro` captures literal `TaggedValue`s at macro-compile time
+4. `CodeObject.constants: Vec<TaggedValue>` in every compiled code object.
+5. `CompiledMacro` captures literal `TaggedValue`s at macro-compile time
    (`crates/patina-core/src/compiled_macro.rs:461-465`).
-7. Environment binding maps reachable only through `Rc` graphs.
+6. Environment binding maps reachable only through `Rc` graphs.
+
+`CallFrame.closure` was a seventh, a bare object-arena index, until it became
+a value (#682).
 
 Non-moving is therefore a hard constraint, and the `Collector` trait should
 assume it (future implementations may be generational or incremental, but not
@@ -195,8 +196,6 @@ pub struct GcVisitor<'h> { /* &mut mark bitmaps, worklist, env-dedup set */ }
 impl GcVisitor<'_> {
     /// The normal edge: mark + enqueue any heap reference; no-op for immediates.
     pub fn visit(&mut self, v: TaggedValue);
-    /// For bare object-arena indices (CallFrame.closure).
-    pub fn visit_object_index(&mut self, index: ObjectIndex);
     /// Trace through an environment chain; deduped by Rc::as_ptr so the
     /// global env is not re-walked once per closure.
     pub fn visit_env(&mut self, env: &Rc<Environment>);
@@ -393,7 +392,7 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 | Field | Root? | Notes |
 |-------|-------|-------|
 | `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
-| `frames[*].closure` | **yes** | **Bare `Option<ObjectIndex>`, not a TaggedValue** (`types/mod.rs:52`) — use `visit_object_index` |
+| `frames[*].closure` | **yes** | A value, visited as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #682 |
 | `pending_escape` | **yes** | Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
 | `scratch_args` | yes | Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
 | `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |

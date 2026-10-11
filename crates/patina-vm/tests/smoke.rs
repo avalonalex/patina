@@ -52,7 +52,7 @@ fn call_frame_is_clone() {
         pc: 42,
         register_base: 0,
         num_regs: 8,
-        closure: None,
+        closure: CallFrame::NO_CLOSURE,
         return_reg: 3,
         code,
     };

@@ -75,7 +75,7 @@ pub struct CallFrame {
     pub pc:            usize,
     pub register_base: usize,
     pub num_regs:      u16,
-    pub closure:       Option<ObjectIndex>,
+    pub closure:       TaggedValue,     // the VmClosure, or CallFrame::NO_CLOSURE
     pub return_reg:    Reg,
 }
 ```
@@ -110,9 +110,10 @@ from closure ↔ environment references are reclaimed. `Rc` still owns
 individual heap payloads; the collector breaks cycles by tombstoning dead
 slots at sweep, which drops those `Rc`s.
 
-The VM roots `VmState` (`runtime/vm_state/gc_roots.rs`), including two members no heap
+The VM roots `VmState` (`runtime/vm_state/gc_roots.rs`), including the one member no heap
 scan can reach: the continuation side tables (the heap holds only an opaque
-`VmContinuationRef { id, bytes }`) and `CallFrame::closure` (a bare `ObjectIndex`).
+`VmContinuationRef { id, bytes }`). A frame's closure is a value, traced like the
+frame's registers; until #682 it was a bare object index, with a visitor method of its own.
 
 **On by default** since stage 4c (`PATINA_GC=0` opts out), at zero standing
 cost since stage 4a's trigger redesign (the safe point reads one pending

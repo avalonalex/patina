@@ -2,22 +2,22 @@
 //!
 //! Unlike the tree-walker, whose live state is a Rust local, the VM keeps
 //! everything on `VmState` — so `impl GcRoots for VmState` covers almost the
-//! whole root set. Two members of it are invisible to a heap scan and are the
-//! reason this impl has to exist at all:
+//! whole root set. One member of it is invisible to a heap scan, and is the
+//! reason this impl has to exist at all: **the continuation side tables.**
+//! The heap holds only an opaque `VmContinuationRef { id, bytes }`, charged
+//! the payload's size for the byte account (#606); the payloads live in
+//! `continuation_store` and `delimited_continuation_store`. Nothing but this
+//! impl reaches them — and they are **weak** (design §9.5, which has the
+//! measurements and the full argument): a payload is traced only when its
+//! ref object was itself marked (`trace_weak_ids`), and entries whose ref
+//! died are pruned after marking (`sweep_weak`). Tracing them as strong
+//! roots instead made every capture immortal — snapshots contain other
+//! continuation refs, so the tables pinned themselves transitively.
 //!
-//! - **The continuation side tables.** The heap holds only an opaque
-//!   `VmContinuationRef { id, bytes }`, charged the payload's size for the
-//!   byte account (#606); the payloads live in `continuation_store` and
-//!   `delimited_continuation_store`. Nothing but this impl reaches them —
-//!   and they are **weak** (design §9.5, which has the measurements and the
-//!   full argument): a payload is traced only when its ref object was
-//!   itself marked (`trace_weak_ids`), and entries whose ref died are
-//!   pruned after marking (`sweep_weak`). Tracing them as strong roots
-//!   instead made every capture immortal — snapshots contain other
-//!   continuation refs, so the tables pinned themselves transitively.
-//! - **`CallFrame::closure`**, a bare index (`ObjectIndex`) rather than a
-//!   `TaggedValue`, so a "scan every TaggedValue" pass would step straight
-//!   past it. It is rooted through `GcVisitor::visit_object_index`.
+//! A frame's closure was a second member, a bare index (`ObjectIndex`) that
+//! a pass over every `TaggedValue` would have stepped past, rooted through a
+//! visitor method of its own. It is a value like the frame's registers now
+//! (#682).
 //!
 //! The weak protocol is sound because every store touch (capture, invoke)
 //! is confined to one instruction dispatch and nested loops defer
@@ -291,10 +291,7 @@ pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut GcVis
             // code object a frame or a captured continuation can run (#338).
             code: _,
         } = frame;
-        // A bare index (`ObjectIndex`), not a TaggedValue.
-        if let Some(closure) = closure {
-            visitor.visit_object_index(*closure);
-        }
+        visitor.visit(*closure);
     }
 }
 

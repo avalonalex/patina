@@ -16,12 +16,12 @@ use super::control::{
     tail_call_value_with_probe, tail_invoke_delimited, unpack_values, vm_raise_value, wind_step,
 };
 use crate::error::VmError;
-use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, VmContinuation, VmDelimitedContinuation,
 };
 use crate::types::instruction::{ControlForm, Instruction, TestOp};
+use crate::types::{CallFrame, CodeObjectId};
 use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::procedure::Procedure;
@@ -1167,7 +1167,7 @@ pub fn execute(state: &mut VmState, code_id: CodeObjectId) -> Result<TaggedValue
     // Set up the initial frame.
     let code = state.code_object(code_id)?;
 
-    state.execution.push_frame(code, None, 0);
+    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
     run_top_frame(state)
 }
 
@@ -1191,9 +1191,7 @@ pub fn execute_in(
             .borrow_mut()
             .alloc_vm_closure(code_id.0, Vec::new(), env.clone());
         state.note_closure_made(code_id);
-        state
-            .execution
-            .push_frame(code, patina_core::tagged_value::ObjectIndex::of(closure), 0);
+        state.execution.push_frame(code, closure, 0);
     }
     run_top_frame(state)
 }
@@ -1254,7 +1252,7 @@ pub(super) fn execute_nested(
     let depth_before = state.execution.frames().len();
     let code = state.code_object(code_id)?;
 
-    state.execution.push_frame(code, None, 0);
+    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0);
 
     run_loop_until(state, depth_before)
 }
@@ -1595,8 +1593,8 @@ fn attach_source_location(state: &VmState, e: VmError) -> VmError {
 /// captured globals (the environment it was compiled against). Otherwise
 /// returns `state.globals` (for top-level code).
 pub(super) fn frame_globals(state: &VmState) -> Rc<Environment> {
-    if let Some(closure_idx) = state.execution.frames().last().and_then(|f| f.closure)
-        && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure_idx)
+    if let Some(closure) = state.execution.frames().last().and_then(CallFrame::closure)
+        && let Some(globals) = state.heap.borrow().get_vm_closure_globals(closure)
     {
         return globals;
     }
@@ -1689,18 +1687,18 @@ fn dispatch_one_instruction(
         }
 
         Instruction::LoadClosure { dst, slot } => {
-            let closure_idx = state
+            let closure = state
                 .execution
                 .frames()
                 .last()
-                .and_then(|f| f.closure)
+                .and_then(CallFrame::closure)
                 .ok_or_else(|| VmError::Runtime {
                     message: "LoadClosure in non-closure frame".into(),
                 })?;
             let val = state
                 .heap
                 .borrow()
-                .get_vm_closure_free_var(closure_idx, slot as usize)
+                .get_vm_closure_free_var(closure, slot as usize)
                 .ok_or_else(|| VmError::Runtime {
                     message: format!("closure slot {} out of range", slot),
                 })?;
@@ -1709,19 +1707,18 @@ fn dispatch_one_instruction(
 
         Instruction::StoreClosure { slot, src } => {
             let val = state.reg_at(base, src);
-            let closure_idx = state
+            let closure = state
                 .execution
                 .frames()
                 .last()
-                .and_then(|f| f.closure)
+                .and_then(CallFrame::closure)
                 .ok_or_else(|| VmError::Runtime {
                     message: "StoreClosure in non-closure frame".into(),
                 })?;
-            let ok =
-                state
-                    .heap
-                    .borrow_mut()
-                    .set_vm_closure_free_var(closure_idx, slot as usize, val);
+            let ok = state
+                .heap
+                .borrow_mut()
+                .set_vm_closure_free_var(closure, slot as usize, val);
             if !ok {
                 return Err(VmError::Runtime {
                     message: format!("closure slot {} out of range", slot),
@@ -2830,9 +2827,10 @@ mod tests {
         let mut code = code();
         code.num_regs = 4;
         let id = state.load_unit(code, Vec::new());
-        let base = state
-            .execution
-            .push_frame(state.code_object(id).unwrap(), None, 0);
+        let base =
+            state
+                .execution
+                .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
         assert_eq!(base, 0);
         assert_eq!(state.execution.registers().len(), 4);
         assert_eq!(state.execution.frames().len(), 1);

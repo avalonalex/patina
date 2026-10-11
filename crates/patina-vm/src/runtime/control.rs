@@ -117,10 +117,10 @@ use super::vm_state::{
     VmState, eval_closure, frame_globals, run_loop_until, vm_eval_expr, vm_load_library,
 };
 use crate::error::VmError;
-use crate::types::CodeObjectId;
 use crate::types::code_object::{Arity, CodeObject, GlobalCacheEntry};
 use crate::types::continuation::{ExceptionHandler, VmContinuation, VmDelimitedContinuation};
 use crate::types::instruction::{ControlForm, Instruction, PrimitiveFnId};
+use crate::types::{CallFrame, CodeObjectId};
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::core_expr::Symbol;
 use patina_core::heap::{PromiseState, SharedHeap};
@@ -151,9 +151,7 @@ fn call_closure_resolved(
     check_arity(code.arity, args.len())?;
 
     let arity = code.arity;
-    let base = state
-        .execution
-        .push_frame(code, closure_heap_index(closure_val), return_reg);
+    let base = state.execution.push_frame(code, closure_val, return_reg);
     store_args_in_window(state, base, arity, args);
 
     Ok(())
@@ -183,9 +181,7 @@ pub(super) fn call_closure_from_regs(
     check_arity(code.arity, arg_regs.len())?;
 
     let arity = code.arity;
-    let base = state
-        .execution
-        .push_frame(code, closure_heap_index(closure_val), return_reg);
+    let base = state.execution.push_frame(code, closure_val, return_reg);
     if let Arity::Variadic(fixed) = &arity {
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
@@ -436,11 +432,6 @@ fn try_call_parameter(
         .unwrap_or(TaggedValue::UNSPECIFIED)))
 }
 
-fn closure_heap_index(val: TaggedValue) -> Option<patina_core::tagged_value::ObjectIndex> {
-    // VmClosures are TAG_OBJECT (generic heap objects).
-    patina_core::tagged_value::ObjectIndex::of(val)
-}
-
 /// Outlined error constructor — `#[cold]` keeps the formatting machinery
 /// out of the call paths that inline `check_arity`.
 #[cold]
@@ -578,7 +569,7 @@ fn handle_control_primitive(
             // along with the frame, rather than a Rust frame it cannot
             // (issue #157, and PR #156's move for a jump's wind thunks).
             let code = value_wind_stub(state)?;
-            let base = state.execution.push_frame(code, None, dst);
+            let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
             // Through `set_reg_at`, not the raw slice: the frame is already
             // pushed, so `base` *is* `frame_base()`, and the debug assert
@@ -768,7 +759,7 @@ fn handle_control_primitive(
                 Some(PromiseState::Forced(value)) => state.set_reg(dst, value),
                 Some(PromiseState::Delayed(thunk)) => {
                     let code = force_stub(state)?;
-                    let base = state.execution.push_frame(code, None, dst);
+                    let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
                     state.set_reg_at(base, force_step::PROMISE, obj);
                     state.set_reg_at(base, force_step::THUNK, thunk);
@@ -792,7 +783,7 @@ fn handle_control_primitive(
             // come back through the consumer: a producer returning by
             // `(k 1 2)` answered `#<procedure>`.
             let code = value_cwv_stub(state)?;
-            let base = state.execution.push_frame(code, None, dst);
+            let base = state.execution.push_frame(code, CallFrame::NO_CLOSURE, dst);
 
             state.set_reg_at(base, value_cwv::PRODUCER, args[0]);
             state.set_reg_at(base, value_cwv::CONSUMER, args[1]);
@@ -1537,7 +1528,7 @@ fn runtime_stub(
 /// Does not change winds, prompts or handlers.
 fn push_stub_frame(state: &mut VmState, code: Rc<CodeObject>, num_regs: u16) -> usize {
     debug_assert_eq!(num_regs, code.num_regs);
-    state.execution.push_frame(code, None, 0)
+    state.execution.push_frame(code, CallFrame::NO_CLOSURE, 0)
 }
 
 /// The one-instruction code object every wind step's frame runs.
@@ -2131,7 +2122,9 @@ fn push_resume_frame(
     return_reg: u16,
 ) -> Result<(), VmError> {
     let code = stub_for(state, &suspension.work)?;
-    let base = state.execution.push_frame(code, None, return_reg);
+    let base = state
+        .execution
+        .push_frame(code, CallFrame::NO_CLOSURE, return_reg);
 
     state.set_reg_at(base, resume_step::INDEX, TaggedValue::fixnum(index as i64));
     set_suspension(state, base, suspension);
@@ -3668,9 +3661,7 @@ pub(super) fn tail_call_closure_resolved(
     check_arity(new_code.arity, arg_vals.len())?;
 
     let arity = new_code.arity;
-    let base = state
-        .execution
-        .tail_replace(new_code, closure_heap_index(func_val));
+    let base = state.execution.tail_replace(new_code, func_val);
     store_args_in_window(state, base, arity, arg_vals);
     Ok(())
 }
@@ -3695,9 +3686,7 @@ pub(super) fn self_tail_call(
 ) -> Result<(), VmError> {
     check_arity(arity, arg_vals.len())?;
     store_args_in_window(state, base, arity, arg_vals);
-    state
-        .execution
-        .restart_closure(closure_heap_index(func_val));
+    state.execution.restart_closure(func_val);
     Ok(())
 }
 

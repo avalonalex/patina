@@ -39,7 +39,7 @@ pub mod telemetry;
 #[cfg(test)]
 pub(crate) mod trace_sentinels;
 
-use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
+use crate::tagged_value::{HeapIndex, TaggedValue};
 use account::ByteAccount;
 pub(crate) use account::FilePortCharge;
 pub use account::{
@@ -1675,13 +1675,28 @@ impl Heap {
         }
     }
 
-    /// Get the globals environment from a VM closure by its frame's index.
+    /// The object-arena slot of `closure`, a VM frame's closure, for the
+    /// accessors below: `None` unless it is an object reference, since a
+    /// frame without a closure holds an immediate. A slot past the arena is
+    /// left to them, which answer it as they answer a value that is not a
+    /// `VmClosure`, so it is checked only if present.
+    #[inline(always)]
+    fn vm_closure_slot(&self, closure: TaggedValue) -> Option<usize> {
+        if !closure.is_object() {
+            return None;
+        }
+        self.object_checks.check_if_present("object", closure);
+        Some(closure.heap_index() as usize)
+    }
+
+    /// Get the globals environment from a VM closure, a frame's.
+    ///
+    /// Returns `None` if `closure` is not a `VmClosure`.
     pub fn get_vm_closure_globals(
         &self,
-        closure: ObjectIndex,
+        closure: TaggedValue,
     ) -> Option<Rc<crate::environment::Environment>> {
-        self.object_checks.check_index(closure);
-        match self.objects.get(closure.index() as usize)? {
+        match self.objects.get(self.vm_closure_slot(closure)?)? {
             HeapObjectData::VmClosure { globals, .. } => Some(globals.clone()),
             _ => None,
         }
@@ -1689,15 +1704,14 @@ impl Heap {
 
     /// Read one free-variable slot from a VM closure.
     ///
-    /// Returns `None` if the heap index does not point to a `VmClosure` or
-    /// the slot is out of range.
+    /// Returns `None` if `closure` is not a `VmClosure` or the slot is out
+    /// of range.
     pub fn get_vm_closure_free_var(
         &self,
-        closure: ObjectIndex,
+        closure: TaggedValue,
         slot: usize,
     ) -> Option<TaggedValue> {
-        self.object_checks.check_index(closure);
-        match self.objects.get(closure.index() as usize)? {
+        match self.objects.get(self.vm_closure_slot(closure)?)? {
             HeapObjectData::VmClosure { free_vars, .. } => free_vars.get(slot).copied(),
             _ => None,
         }
@@ -1705,22 +1719,21 @@ impl Heap {
 
     /// Write one free-variable slot in a VM closure (for `set!` on captured vars).
     ///
-    /// Returns `false` if the heap index or slot is out of range.
+    /// Returns `false` if `closure` is not a `VmClosure` or the slot is out
+    /// of range.
     pub fn set_vm_closure_free_var(
         &mut self,
-        closure: ObjectIndex,
+        closure: TaggedValue,
         slot: usize,
         val: TaggedValue,
     ) -> bool {
-        self.object_checks.check_index(closure);
-        match self.objects.get_mut(closure.index() as usize) {
+        let Some(index) = self.vm_closure_slot(closure) else {
+            return false;
+        };
+        match self.objects.get_mut(index) {
             Some(HeapObjectData::VmClosure { free_vars, .. }) if slot < free_vars.len() => {
                 check_storable(val, "closure's free variable");
-                crate::census::store(
-                    crate::census::Site::ClosureFreeVar,
-                    Some(TaggedValue::object(closure.index())),
-                    val,
-                );
+                crate::census::store(crate::census::Site::ClosureFreeVar, Some(closure), val);
                 free_vars[slot] = val;
                 true
             }

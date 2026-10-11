@@ -557,56 +557,6 @@ impl fmt::Debug for TaggedValue {
     }
 }
 
-/// An object-arena reference kept as a bare index rather than a value: the
-/// VM's `CallFrame.closure`, which continuation snapshots copy.
-///
-/// In a check build it keeps the generation stamp of the reference it was
-/// taken from, so the heap refuses it once its slot has been freed and
-/// reused, as it refuses a stale [`TaggedValue`] (#621). Without the checks
-/// it is the index alone, the size of a [`HeapIndex`].
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ObjectIndex {
-    index: HeapIndex,
-    #[cfg(any(debug_assertions, feature = "gc-check"))]
-    generation: u16,
-}
-
-impl ObjectIndex {
-    /// The index of `value` if it is an object reference.
-    #[inline(always)]
-    pub fn of(value: TaggedValue) -> Option<Self> {
-        value.is_object().then(|| Self {
-            index: value.heap_index(),
-            #[cfg(any(debug_assertions, feature = "gc-check"))]
-            generation: value.generation(),
-        })
-    }
-
-    /// The slot in the object arena.
-    #[inline(always)]
-    pub fn index(self) -> HeapIndex {
-        self.index
-    }
-
-    /// The object reference this index was taken from, stamp included.
-    #[inline(always)]
-    pub(crate) fn value(self) -> TaggedValue {
-        let value = TaggedValue::object(self.index);
-        #[cfg(any(debug_assertions, feature = "gc-check"))]
-        let value = value.with_generation(self.generation);
-        value
-    }
-}
-
-impl fmt::Debug for ObjectIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ObjectIndex({}", self.index)?;
-        #[cfg(any(debug_assertions, feature = "gc-check"))]
-        write!(f, ", gen {}", self.generation)?;
-        write!(f, ")")
-    }
-}
-
 impl fmt::Display for TaggedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Display inline values nicely, show placeholders for heap values
@@ -1000,9 +950,5 @@ mod tests {
             format!("{:?}", TaggedValue::pair(7).with_generation(2)),
             "TaggedValue::pair(7, gen 2)"
         );
-        let index = ObjectIndex::of(stamped).expect("an object reference");
-        assert_eq!(index.index(), HeapIndex::MAX);
-        assert_eq!(index.value(), stamped);
-        assert_eq!(ObjectIndex::of(TaggedValue::pair(1)), None);
     }
 }
