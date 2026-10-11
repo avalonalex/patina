@@ -56,7 +56,9 @@ The five dynamic components in §5.6 live in
 [`ExecutionState`](../crates/patina-vm/src/runtime/execution_state.rs). Its
 collections are private even to the rest of `runtime`. Instruction handlers
 can inspect slices and write register **slots**, but cannot resize the register
-file or mutate a frame's base/window independently. Frame entry, paired
+file or mutate a frame's base/window independently. A register is a
+`Cell<TaggedValue>`, and so is a frame's `closure`, so that the root provider
+reports each one where it lives, through `&self` (#682). Frame entry, paired
 frame/window removal, tail replacement, full capture/arrival, prompt landing,
 and composable append are named operations on this owner. The continuation
 representations and transfer algorithms are unchanged.
@@ -129,9 +131,9 @@ pub type DynamicWindRecord = WindRecord<ExceptionHandler>;
 The VM's handler includes a frame depth; the tree-walker's does not. Handler
 installation, clamping, and relocation remain backend-specific. Cloning a
 record shares the saved handler slice. Identities may repeat in a composed
-stack, so traversal compares prefixes positionally. `GcVisitor` shares wind
-field traversal through `visit_wind_with` / `visit_winds_with`, with each
-backend supplying the handler-root visitor.
+stack, so traversal compares prefixes positionally. Both backends share wind
+field traversal through `patina_core::trace_wind_with` / `trace_winds_with`,
+each supplying the handler-root visitor.
 
 ### 2.5 `ExceptionHandler`
 
@@ -153,14 +155,14 @@ pub struct VmContinuation {
     pub dynamic_winds:      Vec<DynamicWindRecord>,
     pub prompt_stack:       Vec<PromptFrame>,
     pub exception_handlers: Vec<ExceptionHandler>,
-    pub registers:          Vec<TaggedValue>,
+    pub registers:          Vec<Cell<TaggedValue>>,  // slots, as the live file
     pub deliver_reg:        Reg,    // where to write value on invocation
 }
 
 pub struct VmDelimitedContinuation {
     pub frames:             Vec<CallFrame>,
     pub dynamic_winds:      Vec<DynamicWindRecord>,
-    pub registers:          Vec<TaggedValue>,
+    pub registers:          Vec<Cell<TaggedValue>>,  // slots, as the live file
     pub base_at_capture:    usize,
     pub deliver_reg:        Option<Reg>,  // the hole, in frames.last();
                                           // None = nothing captured (identity)

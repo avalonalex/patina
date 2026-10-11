@@ -15,6 +15,7 @@ pub use continuation::{
 pub use instruction::Instruction;
 
 use patina_core::tagged_value::TaggedValue;
+use std::cell::Cell;
 use std::rc::Rc;
 
 /// Register index (frame-relative, u16 allows up to 65535 registers per frame)
@@ -46,8 +47,8 @@ pub struct CallFrame {
     pub num_regs: u16,
     /// The closure this activation runs, a `VmClosure`, or
     /// [`CallFrame::NO_CLOSURE`] for code that runs none: top-level code
-    /// and the stubs. A value like a register's, and traced as one (#682).
-    pub closure: TaggedValue,
+    /// and the stubs. A slot like a register, and traced as one (#682).
+    pub closure: Cell<TaggedValue>,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
     pub return_reg: Reg,
@@ -66,7 +67,8 @@ impl CallFrame {
     /// The closure this frame runs, if it runs one.
     #[inline(always)]
     pub fn closure(&self) -> Option<TaggedValue> {
-        self.closure.is_object().then_some(self.closure)
+        let closure = self.closure.get();
+        closure.is_object().then_some(closure)
     }
 }
 

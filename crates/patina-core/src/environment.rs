@@ -4328,7 +4328,7 @@ mod gc_edge_tests {
         assert_eq!(env.mutable_specifier(), specifier);
 
         let mut h = heap.borrow_mut();
-        collect_only(&mut h, |visitor| visitor.visit_env(&env));
+        collect_only(&mut h, |visitor| visitor.env(&env));
         s.assert_survived(&h);
     }
 }

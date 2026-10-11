@@ -101,11 +101,14 @@ pub use debug_format::{
 // `GcController::collect_at_call`.
 pub use heap::gc::{
     ArenaCounts, AssertNoGc, CollectKind, GcController, GcDeferGuard, GcMode, GcRoots, GcStats,
-    GcVisitor, MarkBits, NoGcScopes,
+    GcVisitor, MarkBits, NoGcScopes, SlotVisitor,
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
-    gc::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame},
+    gc::{
+        trace_cont_value, trace_exception_handler, trace_library, trace_prompt_frame, trace_wind,
+        trace_wind_with, trace_winds, trace_winds_with,
+    },
     handles::{Owned, OwnedEnvironment},
     new_shared_heap,
 };

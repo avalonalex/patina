@@ -232,7 +232,8 @@ mod tests {
     use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::{Heap, PromiseState};
     use crate::tagged_value::TaggedValue;
-    use crate::{Environment, GcRoots, GcVisitor};
+    use crate::{Environment, GcRoots, SlotVisitor};
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -253,8 +254,10 @@ mod tests {
     struct Roots(Vec<TaggedValue>);
 
     impl GcRoots for Roots {
-        fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-            visitor.visit_slice(&self.0);
+        fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+            for &value in &self.0 {
+                visitor.pinned(value);
+            }
         }
     }
 
@@ -643,14 +646,14 @@ mod tests {
         marking_a_frame_closure_whose_slot_was_reused,
         "dangling reference: object slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
-            struct Frame(TaggedValue);
+            struct Frame(Cell<TaggedValue>);
             impl GcRoots for Frame {
-                fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-                    visitor.visit(self.0);
+                fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+                    visitor.slot(&self.0);
                 }
             }
             let (mut heap, dead) = reused(vm_closure);
-            let frame = Frame(dead);
+            let frame = Frame(Cell::new(dead));
             MarkSweepCollector::new().collect(&mut heap, &[&frame]);
         }
     );

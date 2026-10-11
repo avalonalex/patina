@@ -67,6 +67,7 @@ use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
 use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
+use crate::cps_expr::CpsExpr;
 use crate::environment::{Environment, GcEdge};
 use crate::library::Library;
 use crate::procedure::Procedure;
@@ -230,11 +231,53 @@ pub struct GcStats {
 // Traits
 // ============================================================================
 
+/// What a root provider reports its values to (`PRD/GC_PRD.md` §14, #682):
+/// each value where it lives, as a slot, or by copy, pinned. The collector's
+/// marker is one ([`GcVisitor`]); a test is another, which rewrites every
+/// slot a provider reports and restores it, to show that each is where the
+/// value lives rather than a copy of it.
+///
+/// A structure outside the heap that holds values and is shared through `Rc`
+/// is handed over whole, for the visitor to walk once however many paths
+/// reach it: an environment until stage 4b makes it binding records, and the
+/// tree-walker's continuations and code until 4f makes them host payloads.
+/// §14's `host` and `ephemeron` come with the host payloads (4f) and the heap
+/// that lays an ephemeron out in words (5a).
+pub trait SlotVisitor {
+    /// A value where it lives, precise, and updatable in place by a
+    /// collector that moves; none moves yet.
+    fn slot(&mut self, slot: &Cell<TaggedValue>);
+
+    /// [`Self::slot`] for every slot of a run, a register file's.
+    fn slots(&mut self, slots: &[Cell<TaggedValue>]) {
+        for slot in slots {
+            self.slot(slot);
+        }
+    }
+
+    /// A value by copy, precise, whose referent no collector may move: one
+    /// of the tree-walker's, whose heaps never move (§11.4), or one held in
+    /// a structure that becomes heap data before anything moves (4b, 4e).
+    fn pinned(&mut self, value: TaggedValue);
+
+    /// An environment and every environment it keeps live.
+    fn env(&mut self, env: &Environment);
+
+    /// A tree-walker continuation held outside the heap.
+    fn continuation(&mut self, k: &Rc<CpsContinuation>);
+
+    /// A tree-walker continuation environment, a persistent `Rc` list.
+    fn cont_env(&mut self, cont_env: &ContEnv);
+
+    /// The literals of code held outside the heap.
+    fn expr_literals(&mut self, expr: &CpsExpr);
+}
+
 /// Implemented by anything that owns live values: backend state, shared
 /// registries, and transient roots (e.g. the tree-walker's in-flight
 /// `StepResult`, passed per collection).
 pub trait GcRoots {
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>);
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor);
 
     /// One round of the weak-table fixpoint (design §9.5), driven by
     /// `run_mark_phase`: `ids` are continuation ids whose ref objects were
@@ -245,7 +288,7 @@ pub trait GcRoots {
     /// every provider may receive every batch.
     ///
     /// The default is a no-op for providers with no weak tables.
-    fn trace_weak_ids(&self, _ids: &[u64], _visitor: &mut GcVisitor<'_>) {}
+    fn trace_weak_ids(&self, _ids: &[u64], _visitor: &mut dyn SlotVisitor) {}
 
     /// Called once per collection after marking reaches its weak fixpoint:
     /// drop weak-table entries whose keys did not survive
@@ -1117,7 +1160,7 @@ impl<'h> GcVisitor<'h> {
     /// new tenant in its name. A reference to a slot that is free now is
     /// reported by sweep's pre-mark check instead.
     #[inline]
-    pub fn visit(&mut self, tv: TaggedValue) {
+    pub(crate) fn visit(&mut self, tv: TaggedValue) {
         let heap = self.heap;
         let newly_marked = if tv.is_pair() {
             heap.pair_checks.check_reached("pair", tv);
@@ -1140,13 +1183,6 @@ impl<'h> GcVisitor<'h> {
         };
         if newly_marked {
             self.worklist.push(tv);
-        }
-    }
-
-    /// Convenience for register files / buffers.
-    pub fn visit_slice(&mut self, values: &[TaggedValue]) {
-        for &tv in values {
-            self.visit(tv);
         }
     }
 
@@ -1176,7 +1212,7 @@ impl<'h> GcVisitor<'h> {
     ///
     /// What an environment reaches is `Environment::for_each_gc_edge`'s
     /// answer, which names every field (#623).
-    pub fn visit_env(&mut self, env: &Environment) {
+    pub(crate) fn visit_env(&mut self, env: &Environment) {
         let mut pending = std::mem::take(&mut self.env_worklist);
         self.visit_env_chain(env, &mut pending);
         while let Some(next) = pending.pop() {
@@ -1209,7 +1245,7 @@ impl<'h> GcVisitor<'h> {
     /// Trace a continuation held outside the heap. Root providers need this
     /// for continuations that never became heap objects (e.g. the
     /// tree-walker's `PENDING_ESCAPE` and in-flight continuation chain).
-    pub fn visit_continuation(&mut self, k: &Rc<CpsContinuation>) {
+    pub(crate) fn visit_continuation(&mut self, k: &Rc<CpsContinuation>) {
         if self.seen_conts.insert(Rc::as_ptr(k) as usize) {
             self.cont_worklist.push(k.clone());
         }
@@ -1225,68 +1261,15 @@ impl<'h> GcVisitor<'h> {
     /// nesting depth 26. Every other `Rc`-shared structure the visitor walks
     /// (`visit_env`, `visit_continuation`, `visit_expr_literals`) has its own
     /// dedup set for exactly this reason.
-    pub fn visit_once(&mut self, identity: usize) -> bool {
+    pub(crate) fn visit_once(&mut self, identity: usize) -> bool {
         self.seen_shared.insert(identity)
     }
 
     /// Trace a promise's payload, forced or not.
-    pub fn visit_promise(&mut self, promise: &RefCell<PromiseState>) {
+    pub(crate) fn visit_promise(&mut self, promise: &RefCell<PromiseState>) {
         match *promise.borrow() {
             PromiseState::Delayed(tv) | PromiseState::Forced(tv) => self.visit(tv),
         }
-    }
-
-    /// Trace a `dynamic-wind` record: its before/after thunks and the handler
-    /// stack it will run them under. A handler reachable only from a record
-    /// is live for as long as the record can still run a thunk.
-    pub fn visit_wind(&mut self, wind: &DynamicWindRecord) {
-        self.visit_wind_with(wind, trace_exception_handler);
-    }
-
-    /// Trace a backend's wind record, delegating only its handler payloads.
-    /// The callback must visit every GC root carried by a handler.
-    pub fn visit_wind_with<H>(
-        &mut self,
-        wind: &WindRecord<H>,
-        mut trace_handler: impl FnMut(&H, &mut Self),
-    ) {
-        let WindRecord {
-            // A number minted per `dynamic-wind` call.
-            id: _,
-            before,
-            after,
-            handlers,
-        } = wind;
-        self.visit(*before);
-        self.visit(*after);
-        for handler in handlers.iter() {
-            trace_handler(handler, self);
-        }
-    }
-
-    /// Trace a stack of tree-walker wind records.
-    pub fn visit_winds(&mut self, winds: &[DynamicWindRecord]) {
-        self.visit_winds_with(winds, trace_exception_handler);
-    }
-
-    /// Trace a backend's wind stack with its handler-root visitor.
-    pub fn visit_winds_with<H>(
-        &mut self,
-        winds: &[WindRecord<H>],
-        mut trace_handler: impl FnMut(&H, &mut Self),
-    ) {
-        for wind in winds {
-            self.visit_wind_with(wind, &mut trace_handler);
-        }
-    }
-
-    /// Trace a library's two root sets: its exports and its environment
-    /// (`Library::for_each_gc_edge`, which names every field).
-    pub fn visit_library(&mut self, library: &Library) {
-        library.for_each_gc_edge(&mut |edge| match edge {
-            GcEdge::Value(tv) => self.visit(tv),
-            GcEdge::Env(env) => self.visit_env(env),
-        });
     }
 
     /// Count a live tree-walker closure's payload (`heap/account.rs`): into
@@ -1311,7 +1294,7 @@ impl<'h> GcVisitor<'h> {
     /// Memoized per collection by node address — bodies are shared via `Rc`
     /// across closures. Depth is bounded by program size, not data size, so
     /// recursion is acceptable here (data tracing stays iterative).
-    pub fn visit_expr_literals(&mut self, expr: &crate::cps_expr::CpsExpr) {
+    pub(crate) fn visit_expr_literals(&mut self, expr: &CpsExpr) {
         let mut seen = std::mem::take(&mut self.seen_exprs);
         expr.for_each_literal(&mut seen, &mut |tv| self.visit(tv));
         self.seen_exprs = seen;
@@ -1511,7 +1494,7 @@ impl<'h> GcVisitor<'h> {
                 }
             }
             HeapObjectData::Promise(state) => self.visit_promise(state),
-            HeapObjectData::Library(lib) => self.visit_library(lib),
+            HeapObjectData::Library(lib) => trace_library(lib, self),
             HeapObjectData::Values(values) => {
                 for &value in values {
                     self.visit(value);
@@ -1628,14 +1611,14 @@ impl<'h> GcVisitor<'h> {
         } = k;
         self.visit_expr_literals(body);
         self.visit_env(env);
-        self.visit_winds(dynamic_winds);
+        trace_winds(dynamic_winds, self);
         for handler in exception_handlers {
             trace_exception_handler(handler, self);
         }
         for frame in prompt_stack {
             trace_prompt_frame(frame, self);
         }
-        trace_cont_env(captured_cont_env, self);
+        self.cont_env(captured_cont_env);
         // Every reify site today stores in `resume` a wrapper it read out of
         // `captured_cont_env`, so this trace looks redundant. That is an
         // accident of the construction sites, not an invariant anything
@@ -2102,23 +2085,110 @@ pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
 // Continuation-value tracing
 // ============================================================================
 //
-// Moved here with ContValue itself: CpsContinuation stores a ContEnv, so the
-// collector has to be able to walk one.
+/// The collector's marker as a root provider sees it: every slot and every
+/// pinned value is marked alike, since nothing moves yet.
+impl SlotVisitor for GcVisitor<'_> {
+    #[inline]
+    fn slot(&mut self, slot: &Cell<TaggedValue>) {
+        self.visit(slot.get());
+    }
 
-/// Trace a continuation environment.
-///
-/// Deduped by chain identity: `ContEnv` is a persistent `Rc` list and every
-/// `ContValue::Local` captures the chain below it, so an un-memoized walk is
-/// exponential (`2ⁿ − 1` node visits — measured at 6.8 s for one collection
-/// at nesting depth 26). Skipping an already-seen chain is safe: its entries,
-/// and therefore its whole tail, are already queued when it is first seen.
-/// Queue an O(1) snapshot rather than tracing recursively: a local
-/// continuation can capture another environment at every Scheme call depth.
-pub fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
-    if visitor.visit_once(cont_env.gc_identity()) {
-        visitor.cont_env_worklist.push(cont_env.clone());
+    #[inline]
+    fn slots(&mut self, slots: &[Cell<TaggedValue>]) {
+        for slot in slots {
+            self.visit(slot.get());
+        }
+    }
+
+    #[inline]
+    fn pinned(&mut self, value: TaggedValue) {
+        self.visit(value);
+    }
+
+    fn env(&mut self, env: &Environment) {
+        self.visit_env(env);
+    }
+
+    fn continuation(&mut self, k: &Rc<CpsContinuation>) {
+        self.visit_continuation(k);
+    }
+
+    /// Deduped by chain identity: `ContEnv` is a persistent `Rc` list and every
+    /// `ContValue::Local` captures the chain below it, so an un-memoized walk is
+    /// exponential (`2ⁿ − 1` node visits — measured at 6.8 s for one collection
+    /// at nesting depth 26). Skipping an already-seen chain is safe: its entries,
+    /// and therefore its whole tail, are already queued when it is first seen.
+    /// Queue an O(1) snapshot rather than tracing recursively: a local
+    /// continuation can capture another environment at every Scheme call depth.
+    fn cont_env(&mut self, cont_env: &ContEnv) {
+        if self.visit_once(cont_env.gc_identity()) {
+            self.cont_env_worklist.push(cont_env.clone());
+        }
+    }
+
+    fn expr_literals(&mut self, expr: &CpsExpr) {
+        self.visit_expr_literals(expr);
     }
 }
+
+/// Trace a tree-walker `dynamic-wind` record: its before/after thunks and the
+/// handler stack it will run them under. A handler reachable only from a
+/// record is live for as long as the record can still run a thunk.
+pub fn trace_wind<V: SlotVisitor + ?Sized>(wind: &DynamicWindRecord, visitor: &mut V) {
+    trace_wind_with(wind, visitor, trace_exception_handler);
+}
+
+/// Trace a backend's wind record, delegating only its handler payloads. The
+/// callback must report every value a handler carries. The thunks are
+/// pinned: a record becomes heap data at stage 4e, before anything moves.
+pub fn trace_wind_with<H, V: SlotVisitor + ?Sized>(
+    wind: &WindRecord<H>,
+    visitor: &mut V,
+    mut trace_handler: impl FnMut(&H, &mut V),
+) {
+    let WindRecord {
+        // A number minted per `dynamic-wind` call.
+        id: _,
+        before,
+        after,
+        handlers,
+    } = wind;
+    visitor.pinned(*before);
+    visitor.pinned(*after);
+    for handler in handlers.iter() {
+        trace_handler(handler, visitor);
+    }
+}
+
+/// Trace a stack of tree-walker wind records.
+pub fn trace_winds<V: SlotVisitor + ?Sized>(winds: &[DynamicWindRecord], visitor: &mut V) {
+    trace_winds_with(winds, visitor, trace_exception_handler);
+}
+
+/// Trace a backend's wind stack with its handler-root visitor.
+pub fn trace_winds_with<H, V: SlotVisitor + ?Sized>(
+    winds: &[WindRecord<H>],
+    visitor: &mut V,
+    mut trace_handler: impl FnMut(&H, &mut V),
+) {
+    for wind in winds {
+        trace_wind_with(wind, visitor, &mut trace_handler);
+    }
+}
+
+/// Trace a library's two root sets: its exports, pinned until stage 4b makes
+/// them cells, and its environment (`Library::for_each_gc_edge`, which names
+/// every field).
+pub fn trace_library<V: SlotVisitor + ?Sized>(library: &Library, visitor: &mut V) {
+    library.for_each_gc_edge(&mut |edge| match edge {
+        GcEdge::Value(tv) => visitor.pinned(tv),
+        GcEdge::Env(env) => visitor.env(env),
+    });
+}
+
+// Moved here with ContValue itself: CpsContinuation stores a ContEnv, so the
+// collector has to be able to walk one. The tree-walker's, so every value in
+// one is pinned.
 
 /// Trace a continuation value, walking the `Box<ContValue>` chain
 /// iteratively — most variants differ only in what they visit before handing
@@ -2127,7 +2197,7 @@ pub fn trace_cont_env(cont_env: &ContEnv, visitor: &mut GcVisitor<'_>) {
 ///
 /// Every variant's fields are named (#623); pinned by the sentinel test
 /// `cont_value_variants`.
-pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
+pub fn trace_cont_value<V: SlotVisitor + ?Sized>(cont: &ContValue, visitor: &mut V) {
     let mut cont = cont;
     loop {
         cont = match cont {
@@ -2140,19 +2210,19 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 env,
                 cont_env,
             } => {
-                visitor.visit_expr_literals(body);
-                visitor.visit_env(env);
-                trace_cont_env(cont_env, visitor);
+                visitor.expr_literals(body);
+                visitor.env(env);
+                visitor.cont_env(cont_env);
                 return;
             }
 
-            ContValue::Captured(k) => return visitor.visit_continuation(k),
+            ContValue::Captured(k) => return visitor.continuation(k),
 
             ContValue::CallWithValuesConsumer {
                 consumer,
                 original_cont,
             } => {
-                visitor.visit(*consumer);
+                visitor.pinned(*consumer);
                 original_cont
             }
 
@@ -2160,7 +2230,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 promise,
                 original_cont,
             } => {
-                visitor.visit(*promise);
+                visitor.pinned(*promise);
                 original_cont
             }
 
@@ -2170,7 +2240,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 state,
                 original_cont,
             } => {
-                visitor.visit(*state);
+                visitor.pinned(*state);
                 original_cont
             }
 
@@ -2180,7 +2250,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 wind_id: _,
                 original_cont,
             } => {
-                visitor.visit(*after);
+                visitor.pinned(*after);
                 original_cont
             }
 
@@ -2189,8 +2259,8 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 body,
                 cleanup_cont,
             } => {
-                visitor.visit_wind(wind_record);
-                visitor.visit(*body);
+                trace_wind(wind_record, visitor);
+                visitor.pinned(*body);
                 cleanup_cont
             }
 
@@ -2198,7 +2268,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 result_value,
                 original_cont,
             } => {
-                visitor.visit(*result_value);
+                visitor.pinned(*result_value);
                 original_cont
             }
 
@@ -2208,10 +2278,10 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 target,
             } => {
                 if let Some(record) = entered {
-                    visitor.visit_wind(record);
+                    trace_wind(record, visitor);
                 }
-                visitor.visit(*value);
-                return visitor.visit_continuation(target);
+                visitor.pinned(*value);
+                return visitor.continuation(target);
             }
 
             ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,
@@ -2224,7 +2294,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 popped_handler,
             } => {
                 if let Some(exception) = original_exception {
-                    visitor.visit(*exception);
+                    visitor.pinned(*exception);
                 }
                 if let Some(handler) = popped_handler {
                     trace_exception_handler(handler, visitor);
@@ -2242,8 +2312,8 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 delimited,
                 cont,
             } => {
-                visitor.visit(*handler);
-                visitor.visit(*delimited);
+                visitor.pinned(*handler);
+                visitor.pinned(*delimited);
                 cont
             }
 
@@ -2260,8 +2330,8 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
                 index: _,
                 cont,
             } => {
-                visitor.visit_continuation(target);
-                visitor.visit(*value);
+                visitor.continuation(target);
+                visitor.pinned(*value);
                 cont
             }
         };
@@ -2270,7 +2340,7 @@ pub fn trace_cont_value(cont: &ContValue, visitor: &mut GcVisitor<'_>) {
 
 /// Trace a prompt frame: its handler and the continuation below it. Every
 /// field is named (#623); pinned by the sentinel test `cps_continuation_fields`.
-pub fn trace_prompt_frame(frame: &PromptFrame, visitor: &mut GcVisitor<'_>) {
+pub fn trace_prompt_frame<V: SlotVisitor + ?Sized>(frame: &PromptFrame, visitor: &mut V) {
     let PromptFrame {
         // A prompt id.
         id: _,
@@ -2286,7 +2356,7 @@ pub fn trace_prompt_frame(frame: &PromptFrame, visitor: &mut GcVisitor<'_>) {
         // A depth.
         handler_depth: _,
     } = frame;
-    visitor.visit(*handler);
+    visitor.pinned(*handler);
     trace_cont_value(cont, visitor);
 }
 
@@ -2294,9 +2364,12 @@ pub fn trace_prompt_frame(frame: &PromptFrame, visitor: &mut GcVisitor<'_>) {
 /// it holds. It used to carry the wind depth `raise` unwound to; no raise path
 /// unwinds now, so the field is gone and so is the retention. Named by field
 /// (#623) so that a new one does not compile here until it is traced.
-pub fn trace_exception_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
+pub fn trace_exception_handler<V: SlotVisitor + ?Sized>(
+    handler: &ExceptionHandler,
+    visitor: &mut V,
+) {
     let ExceptionHandler { handler } = handler;
-    visitor.visit(*handler);
+    visitor.pinned(*handler);
 }
 
 // ============================================================================
@@ -2318,10 +2391,12 @@ mod tests {
     }
 
     impl GcRoots for TestRoots {
-        fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-            visitor.visit_slice(&self.values);
+        fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+            for &value in &self.values {
+                visitor.pinned(value);
+            }
             for env in &self.envs {
-                visitor.visit_env(env);
+                visitor.env(env);
             }
         }
     }
@@ -2361,9 +2436,11 @@ mod tests {
         struct Handler([TaggedValue; 2]);
         struct Winds(Vec<WindRecord<Handler>>);
         impl GcRoots for Winds {
-            fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-                visitor.visit_winds_with(&self.0, |handler, visitor| {
-                    visitor.visit_slice(&handler.0);
+            fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+                trace_winds_with(&self.0, visitor, |handler, visitor| {
+                    for &value in &handler.0 {
+                        visitor.pinned(value);
+                    }
                 });
             }
         }
@@ -3069,7 +3146,7 @@ mod tests {
             bytes: usize,
         }
         impl GcRoots for ReleasingRoots {
-            fn trace_roots(&self, _visitor: &mut GcVisitor<'_>) {}
+            fn trace_roots(&self, _visitor: &mut dyn SlotVisitor) {}
             fn sweep_weak(&self, _visitor: &GcVisitor<'_>) {
                 self.handle.release(self.bytes);
             }

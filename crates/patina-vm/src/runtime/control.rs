@@ -186,7 +186,7 @@ pub(super) fn call_closure_from_regs(
         let fixed = *fixed as usize;
         for (i, &r) in arg_regs.iter().take(fixed).enumerate() {
             let value = argument_reg(state, caller_base, r);
-            state.execution.registers_mut()[base + i] = value;
+            state.execution.registers()[base + i].set(value);
         }
         // Cons the rest list straight from the caller's registers — no
         // staging Vec. Variadic calls are hot in practice: `map` and every
@@ -196,11 +196,11 @@ pub(super) fn call_closure_from_regs(
                 .iter()
                 .map(|&r| argument_reg(state, caller_base, r)),
         );
-        state.execution.registers_mut()[base + fixed] = rest;
+        state.execution.registers()[base + fixed].set(rest);
     } else {
         for (i, &r) in arg_regs.iter().enumerate() {
             let value = argument_reg(state, caller_base, r);
-            state.execution.registers_mut()[base + i] = value;
+            state.execution.registers()[base + i].set(value);
         }
     }
 
@@ -213,7 +213,7 @@ pub(super) fn call_closure_from_regs(
 /// the reading frame is the one below the top.
 #[inline(always)]
 fn argument_reg(state: &VmState, caller_base: usize, reg: u16) -> TaggedValue {
-    let value = state.execution.registers()[caller_base + reg as usize];
+    let value = state.execution.registers()[caller_base + reg as usize].get();
     if GC_CHECK && value == TaggedValue::DEAD_SLOT {
         state.read_of_a_retired_register(1, reg, "as a call's argument");
     }
@@ -472,23 +472,23 @@ fn store_args_in_window(state: &mut VmState, base: usize, arity: Arity, arg_vals
     }
     if let Arity::Variadic(fixed) = arity {
         let fixed = fixed as usize;
-        for (dst, &val) in state.execution.registers_mut()[base..base + fixed]
-            .iter_mut()
+        for (dst, &val) in state.execution.registers()[base..base + fixed]
+            .iter()
             .zip(arg_vals)
         {
-            *dst = val;
+            dst.set(val);
         }
         let rest = state
             .heap()
             .borrow_mut()
             .list_from_iter(arg_vals[fixed..].iter().copied());
-        state.execution.registers_mut()[base + fixed] = rest;
+        state.execution.registers()[base + fixed].set(rest);
     } else {
-        for (dst, &val) in state.execution.registers_mut()[base..base + arg_vals.len()]
-            .iter_mut()
+        for (dst, &val) in state.execution.registers()[base..base + arg_vals.len()]
+            .iter()
             .zip(arg_vals)
         {
-            *dst = val;
+            dst.set(val);
         }
     }
 }
@@ -1346,7 +1346,7 @@ pub(super) fn step_wind_jump(
     // hoisted is stale here — the whole register file was just replaced.
     if let Some(top) = state.execution.frames().last() {
         let top_base = top.register_base;
-        state.execution.registers_mut()[top_base + cc.deliver_reg as usize] = value;
+        state.execution.registers()[top_base + cc.deliver_reg as usize].set(value);
     }
     drop(window);
     Ok(())
@@ -1374,10 +1374,11 @@ pub(super) fn exit_in_progress(state: &VmState) -> Option<i32> {
         .rev()
         .filter(|frame| frame.code.id == stub)
         .find_map(|frame| {
-            let target = *state
+            let target = state
                 .execution
                 .registers()
-                .get(frame.register_base + wind_step::TARGET as usize)?;
+                .get(frame.register_base + wind_step::TARGET as usize)?
+                .get();
             state.get_vm_continuation(target)?.exit_status
         })
 }
@@ -1900,7 +1901,7 @@ pub(super) fn deliver_before_collecting(state: &mut VmState, exit_depth: usize) 
         return;
     }
     let slot = frames[depth - 2].register_base + frames[depth - 1].return_reg as usize;
-    state.execution.registers_mut()[slot] = TaggedValue::UNSPECIFIED;
+    state.execution.registers()[slot].set(TaggedValue::UNSPECIFIED);
 }
 
 /// The registry index of `prim`, if it is a resumable primitive
@@ -3120,7 +3121,7 @@ pub(super) fn capture_delimited(
     let base_at_capture = frames
         .first()
         .map_or(state.execution.registers().len(), |f| f.register_base);
-    let mut registers = state.execution.registers()[base_at_capture..].to_vec();
+    let registers = state.execution.registers()[base_at_capture..].to_vec();
     patina_core::census::capture_delimited(frames.len(), registers.len());
     let deliver_reg = frames.last().map(|top| {
         // Cleared, not copied as it stands: the hole is dead by construction
@@ -3128,7 +3129,7 @@ pub(super) fn capture_delimited(
         // still holds would be retained for the continuation's whole life.
         // `call/cc`'s capture clears its own `dst` for this reason, with 296
         // MB of measured retention behind the comment there.
-        registers[top.register_base - base_at_capture + hole as usize] = TaggedValue::NULL;
+        registers[top.register_base - base_at_capture + hole as usize].set(TaggedValue::NULL);
         hole
     });
     VmDelimitedContinuation {

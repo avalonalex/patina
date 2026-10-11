@@ -10,12 +10,15 @@ use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::{GcVisitor, TaggedValue};
+use patina_core::{SlotVisitor, TaggedValue};
+use std::cell::Cell;
 use std::rc::Rc;
 
 #[derive(Default)]
 pub(super) struct ExecutionState {
-    registers: Vec<TaggedValue>,
+    /// Slots, so that the root provider reports each register where it
+    /// lives, through `&self` (#682).
+    registers: Vec<Cell<TaggedValue>>,
     frames: Vec<CallFrame>,
     prompt_stack: Vec<PromptFrame>,
     dynamic_winds: Vec<DynamicWindRecord>,
@@ -26,7 +29,7 @@ impl ExecutionState {
     /// GC roots: all five components, every field named (#623), so a new one
     /// does not compile here until it is traced. `VmState`'s provider calls
     /// this; the sentinel test `every_vm_state_root_is_traced` pins each.
-    pub(super) fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+    pub(super) fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let ExecutionState {
             registers,
             frames,
@@ -37,7 +40,7 @@ impl ExecutionState {
         // The whole register file, after the safe point has retired completed
         // expression temporaries (#423). Continuation snapshots are retired at
         // capture, so they obey the same full-vector contract.
-        visitor.visit_slice(registers);
+        visitor.slots(registers);
         trace_frames(frames, visitor);
         trace_prompts(prompt_stack, visitor);
         trace_winds(dynamic_winds, visitor);
@@ -49,7 +52,7 @@ impl ExecutionState {
     /// to compile here too.
     #[cfg(test)]
     pub(super) fn from_parts(
-        registers: Vec<TaggedValue>,
+        registers: Vec<Cell<TaggedValue>>,
         frames: Vec<CallFrame>,
         prompt_stack: Vec<PromptFrame>,
         dynamic_winds: Vec<DynamicWindRecord>,
@@ -65,7 +68,7 @@ impl ExecutionState {
     }
 
     #[inline(always)]
-    pub(super) fn registers(&self) -> &[TaggedValue] {
+    pub(super) fn registers(&self) -> &[Cell<TaggedValue>] {
         &self.registers
     }
     #[inline(always)]
@@ -85,12 +88,6 @@ impl ExecutionState {
         &self.exception_handlers
     }
 
-    /// Instruction/argument writes may replace slots, never resize a window.
-    #[inline(always)]
-    pub(super) fn registers_mut(&mut self) -> &mut [TaggedValue] {
-        &mut self.registers
-    }
-
     /// Enter one loaded code object with its matching window. Caller fills
     /// operands before the next safe point. Dynamic extents are unchanged.
     pub(super) fn push_frame(
@@ -102,12 +99,12 @@ impl ExecutionState {
         let base = self.registers.len();
         let num_regs = code.num_regs;
         self.registers
-            .resize(base + num_regs as usize, TaggedValue::NULL);
+            .resize(base + num_regs as usize, Cell::new(TaggedValue::NULL));
         self.frames.push(CallFrame {
             pc: 0,
             register_base: base,
             num_regs,
-            closure,
+            closure: Cell::new(closure),
             return_reg,
             code,
         });
@@ -140,12 +137,14 @@ impl ExecutionState {
             .expect("tail call with empty frame stack");
         if code.num_regs > frame.num_regs {
             let extra = code.num_regs - frame.num_regs;
-            self.registers
-                .resize(self.registers.len() + extra as usize, TaggedValue::NULL);
+            self.registers.resize(
+                self.registers.len() + extra as usize,
+                Cell::new(TaggedValue::NULL),
+            );
             frame.num_regs = code.num_regs;
         }
         frame.pc = 0;
-        frame.closure = closure;
+        frame.closure.set(closure);
         frame.code = code;
         frame.register_base
     }
@@ -156,7 +155,7 @@ impl ExecutionState {
             .last_mut()
             .expect("tail call with empty frame stack");
         frame.pc = 0;
-        frame.closure = closure;
+        frame.closure.set(closure);
     }
 
     /// Resume variants share one window size; only their instruction stream changes.
@@ -192,7 +191,8 @@ impl ExecutionState {
         if let Some(f) = self.frames.last() {
             let needed = f.register_base + return_reg as usize + 1;
             if self.registers.len() < needed {
-                self.registers.resize(needed, TaggedValue::UNSPECIFIED);
+                self.registers
+                    .resize(needed, Cell::new(TaggedValue::UNSPECIFIED));
             }
         }
         return_reg
@@ -443,7 +443,7 @@ impl ExecutionState {
         let deliver_reg = dc
             .deliver_reg
             .expect("the caller returns Identity when there is no hole");
-        self.registers[top_base + deliver_reg as usize] = value;
+        self.registers[top_base + deliver_reg as usize].set(value);
         Ok(())
     }
 }
@@ -477,7 +477,7 @@ fn relocate_depth(value: usize, from: usize, to: usize) -> usize {
 /// no other dynamic components are touched.
 pub(super) fn push_abort_stub(
     frames: &mut Vec<CallFrame>,
-    registers: &mut Vec<TaggedValue>,
+    registers: &mut Vec<Cell<TaggedValue>>,
     code: Rc<CodeObject>,
     return_reg: u16,
     handler: TaggedValue,
@@ -485,15 +485,18 @@ pub(super) fn push_abort_stub(
     cont: TaggedValue,
 ) {
     let base = registers.len();
-    registers.resize(base + abort_step::NUM_REGS as usize, TaggedValue::NULL);
-    registers[base + abort_step::HANDLER as usize] = handler;
-    registers[base + abort_step::VAL as usize] = val;
-    registers[base + abort_step::CONT as usize] = cont;
+    registers.resize(
+        base + abort_step::NUM_REGS as usize,
+        Cell::new(TaggedValue::NULL),
+    );
+    registers[base + abort_step::HANDLER as usize].set(handler);
+    registers[base + abort_step::VAL as usize].set(val);
+    registers[base + abort_step::CONT as usize].set(cont);
     frames.push(CallFrame {
         pc: 0,
         register_base: base,
         num_regs: abort_step::NUM_REGS,
-        closure: CallFrame::NO_CLOSURE,
+        closure: Cell::new(CallFrame::NO_CLOSURE),
         return_reg,
         code,
     });

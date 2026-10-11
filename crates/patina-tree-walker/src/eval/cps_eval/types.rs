@@ -32,11 +32,11 @@ pub(super) fn take_pending_escape() -> Option<(TaggedValue, Rc<CpsContinuation>)
 /// Root the in-flight escape value, if any. A hidden root: between
 /// `set_pending_escape` and `take_pending_escape` the value and its
 /// continuation are reachable from nowhere else (design §5.1).
-pub(super) fn trace_pending_escape(visitor: &mut patina_core::GcVisitor<'_>) {
+pub(super) fn trace_pending_escape(visitor: &mut dyn patina_core::SlotVisitor) {
     PENDING_ESCAPE.with(|cell| {
         if let Some((value, k)) = cell.borrow().as_ref() {
-            visitor.visit(*value);
-            visitor.visit_continuation(k);
+            visitor.pinned(*value);
+            visitor.continuation(k);
         }
     });
 }
