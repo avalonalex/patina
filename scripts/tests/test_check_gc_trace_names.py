@@ -200,19 +200,19 @@ class TraceNamesTests(unittest.TestCase):
                 "mod listed;\n"
                 "#[cfg(test)]\n"
                 "mod sentinel_tests;\n"
-                "impl patina_core::GcRoots for Missed {\n"
+                "impl patina_core::RootProvider for Missed {\n"
                 "    fn trace_roots(&self, v: &mut V) {}\n"
                 "}\n"
                 "#[cfg(test)]\n"
                 "mod tests {\n"
-                "    impl GcRoots for Inline {}\n"
+                "    impl RootProvider for Inline {}\n"
                 "}\n"
-                "impl<'a> GcRoots for AfterTests<'a> {}\n"
+                "impl<'a> RootProvider for AfterTests<'a> {}\n"
             )
-            (src / "listed.rs").write_text("impl GcRoots for Listed {}\n")
-            (src / "sentinel_tests.rs").write_text("impl GcRoots for Only {}\n")
+            (src / "listed.rs").write_text("impl RootProvider for Listed {}\n")
+            (src / "sentinel_tests.rs").write_text("impl RootProvider for Only {}\n")
             (src / "gc.rs").write_text("#[cfg(test)]\n#[allow(dead_code)]\nmod roots;\n")
-            (src / "gc" / "roots.rs").write_text("impl GcRoots for Nested {}\n")
+            (src / "gc" / "roots.rs").write_text("impl RootProvider for Nested {}\n")
             found = check.unchecked_root_providers(
                 root, {"crates/a/src/listed.rs": ["trace_roots"]}
             )

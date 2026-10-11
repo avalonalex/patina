@@ -324,7 +324,7 @@ impl Rewriter {
 /// library registry and the step tracer, report every value pinned.
 #[test]
 fn every_slot_the_vm_reports_is_where_its_value_lives() {
-    use patina_core::GcRoots;
+    use patina_core::RootProvider;
     let fixnum = TaggedValue::fixnum;
     let mut state = VmState::new(Rc::new(Environment::new()));
     let code = code_holding(Vec::new());

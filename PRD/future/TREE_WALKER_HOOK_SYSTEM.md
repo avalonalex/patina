@@ -107,7 +107,7 @@ though §5.3 shows it is noisier here than it first appears).
 push/pop, control primitives, thunk enter/exit, cell access, exceptions, continuations
 and watchpoints; stored as `pub tracer: Option<TracerHandle>` on `VmState`
 (`runtime/vm_state.rs:85`), fired pre/post instruction (`vm_state.rs:982`, `:1942`),
-traced as a GC root through `impl GcRoots for StepTracer` (`tracer.rs:283`, called from
+traced as a GC root through `impl RootProvider for StepTracer` (`tracer.rs:283`, called from
 `vm/runtime/gc_roots.rs:79`), attached via the inherent method `VmBackend::set_tracer`
 (`vm/backend.rs:159`), surfaced as `--trace`, documented in `docs/VM_STEPPER.md`. This
 settles three questions by precedent:
@@ -119,8 +119,8 @@ settles three questions by precedent:
    the REPL's local `LibraryPaths` shim).
 2. `Option<Handle>` checked per step is an accepted hot-loop cost.
 3. Anything the observer retains must be a **GC root**, and the way to get there is a
-   `GcRoots` impl reachable from the safe point's root array (§5.2 — the tree-walker's
-   array is closed today, which the VM's is not).
+   `RootProvider` that a collection reaches: one the safe point lends it, or one
+   registered with the heap's `RootSet` (§5.2; registration opened with #682).
 
 The tree-walker hook is the tree-walker's `set_tracer`, grown a return value. One
 caveat the precedent does *not* cover: `StepTracer` never re-enters evaluation, so it
@@ -285,9 +285,9 @@ pub enum DebugDecision {
     Abort,           // unwind evaluation (quit/restart), as an EvalError variant
 }
 
-/// `GcRoots` supertrait: a hook that retains heap values (watchpoint targets,
+/// `RootProvider` supertrait: a hook that retains heap values (watchpoint targets,
 /// recorded macro datums, a trace log) must trace them — see §5.2.
-pub trait DebugHook: GcRoots {
+pub trait DebugHook: RootProvider {
     fn on_event(&mut self, ev: &DebugEvent<'_>) -> DebugDecision;
 }
 ```
@@ -348,13 +348,14 @@ fn fire(&self, ev: DebugEvent<'_>) -> Result<(), EvalError> {
 `try_borrow_mut` is the re-entrancy guard, not a workaround: "already borrowed" *means*
 "we are inside the hook", which is exactly when firing must be suppressed.
 
-**GC rooting has no seam today.** The safe point builds a closed literal array —
-`collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots])`
-(`cps_eval/mod.rs:126`) — and there is no root-provider registration anywhere in the
-tree-walker. Since `evaluator` is already a provider in that array, the cheap fix is to
-have `Evaluator`'s `GcRoots` impl forward to the installed hook, which is why
-`DebugHook: GcRoots` is a supertrait above. Without this, a watchpoint's retained target
-value or a recorded macro datum is an unrooted heap value across a collection — a
+**GC rooting.** The safe point lends a collection the evaluator and the current step —
+`collect(&[evaluator, &step_roots])` (`cps_eval/mod.rs`) — and since #682 anything else
+registers with the heap's `RootSet`, which traces it in every collection until its
+`RootToken` drops. A hook can take either path: `Evaluator`'s `RootProvider` impl can
+forward to the installed hook, the cheap fix, or `set_debug_hook` can register the hook
+and keep the token. Either way the hook traces what it retains, which is why
+`DebugHook: RootProvider` is a supertrait above. Without this, a watchpoint's retained
+target value or a recorded macro datum is an unrooted heap value across a collection — a
 use-after-free, not a leak.
 
 **A paused hook cannot collect.** `eval_in_env` takes a `GcDeferGuard` and computes
@@ -678,7 +679,7 @@ Prerequisites, each an independent, plainly-titled PR:
 
 Then:
 
-- **H1 — hook layer**: the `DebugHook` trait with its `GcRoots` supertrait, the
+- **H1 — hook layer**: the `DebugHook` trait with its `RootProvider` supertrait, the
   `fire` helper with `try_borrow_mut` re-entrancy handling (§5.2), the seven fire sites
   of §5.3 (including all three `Raise` paths), `Evaluator`'s root forwarding,
   `set_debug_hook`, and `DebugAborted` plumbing. Headless tests: a recording hook over

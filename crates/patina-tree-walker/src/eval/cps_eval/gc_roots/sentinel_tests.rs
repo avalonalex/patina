@@ -15,16 +15,13 @@ use patina_core::cps_expr::{CpsExpr, CpsExprKind};
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::heap::sentinels::Sentinels;
 use patina_core::{
-    CpsContinuation, DynamicWindRecord, Environment, GcController, GcRoots, Heap, SharedHeap,
+    CpsContinuation, DynamicWindRecord, Environment, GcController, Heap, RootProvider, SharedHeap,
     TaggedValue,
 };
 use patina_runtime::{LibraryLoaderRegistry, LibraryRegistry};
 
-use super::super::types::{
-    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
-    take_pending_escape,
-};
-use super::{EscapeRoots, StepRoots};
+use super::super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
+use super::StepRoots;
 use crate::eval::Evaluator;
 use crate::eval::debug::DebugConfig;
 
@@ -182,27 +179,46 @@ fn every_step_result_field_is_traced() {
             expr: (i == 0).then_some(&*entry_expr),
         })
         .collect();
-    let providers: Vec<&dyn GcRoots> = roots.iter().map(|r| r as &dyn GcRoots).collect();
+    let providers: Vec<&dyn RootProvider> = roots.iter().map(|r| r as &dyn RootProvider).collect();
 
     let mut heap = shared.borrow_mut();
     collect_for_tests(&mut heap, &providers);
     s.assert_survived(&heap);
 }
 
-/// The value and continuation parked between `set_pending_escape` and
-/// `take_pending_escape`, through `EscapeRoots`.
+/// `Evaluator`, every field: its global environment, and the value and
+/// continuation parked between `set_pending_escape` and
+/// `take_pending_escape`.
 #[test]
-fn the_pending_escape_is_traced() {
-    let env = Rc::new(Environment::new());
-    let shared = env.heap().clone();
+fn every_evaluator_root_is_traced() {
+    let global_env = Rc::new(Environment::new());
+    let shared = global_env.heap().clone();
     let mut heap = shared.borrow_mut();
     let mut s = Sentinels::new(&mut heap);
-    let value = s.pair(&mut heap, "PENDING_ESCAPE value");
-    let held = s.vector(&mut heap, "PENDING_ESCAPE continuation");
+    let global = s.pair(&mut heap, "Evaluator.global_env");
+    let escaping = s.vector(&mut heap, "Evaluator.pending_escape: the value");
+    let held = s.string(&mut heap, "Evaluator.pending_escape: the continuation");
+    let gc_pending = heap.gc_pending_handle();
     drop(heap);
+    global_env.define("global", global);
 
-    set_pending_escape(
-        value,
+    let library_registry = Rc::new(RefCell::new(LibraryRegistry::new()));
+    let library_roots = LibraryRegistry::register_roots(&library_registry, &shared.borrow());
+    let evaluator = Evaluator {
+        global_env,
+        debug: Rc::new(DebugConfig::new()),
+        library_registry,
+        library_roots,
+        pending_escape: RefCell::new(None),
+        loader_registry: Rc::new(RefCell::new(LibraryLoaderRegistry::new())),
+        primitive_registry: patina_primitives::PrimitiveRegistry::new(),
+        fs: Arc::new(patina_core::NativeFs),
+        gc: RefCell::new(GcController::from_env()),
+        gc_pending,
+        bootstrap_error: None,
+    };
+    evaluator.set_pending_escape(
+        escaping,
         Rc::new(CpsContinuation {
             body: literal(TaggedValue::NULL),
             param: Rc::from("v"),
@@ -218,36 +234,8 @@ fn the_pending_escape_is_traced() {
         }),
     );
     let mut heap = shared.borrow_mut();
-    collect_for_tests(&mut heap, &[&EscapeRoots]);
-    let parked = take_pending_escape();
-    s.assert_survived(&heap);
-    assert!(parked.is_some());
-}
-
-/// `Evaluator`, every field: its global environment is its one root.
-#[test]
-fn the_evaluator_roots_its_global_environment() {
-    let global_env = Rc::new(Environment::new());
-    let shared = global_env.heap().clone();
-    let mut heap = shared.borrow_mut();
-    let mut s = Sentinels::new(&mut heap);
-    let global = s.pair(&mut heap, "Evaluator.global_env");
-    let gc_pending = heap.gc_pending_handle();
-    drop(heap);
-    global_env.define("global", global);
-
-    let evaluator = Evaluator {
-        global_env,
-        debug: Rc::new(DebugConfig::new()),
-        library_registry: Rc::new(RefCell::new(LibraryRegistry::new())),
-        loader_registry: Rc::new(RefCell::new(LibraryLoaderRegistry::new())),
-        primitive_registry: patina_primitives::PrimitiveRegistry::new(),
-        fs: Arc::new(patina_core::NativeFs),
-        gc: RefCell::new(GcController::from_env()),
-        gc_pending,
-        bootstrap_error: None,
-    };
-    let mut heap = shared.borrow_mut();
     collect_for_tests(&mut heap, &[&evaluator]);
     s.assert_survived(&heap);
+    drop(heap);
+    assert!(evaluator.take_pending_escape().is_some());
 }

@@ -629,7 +629,7 @@ impl Default for LibraryRegistry {
 ///
 /// Every field is named (#623); pinned by the sentinel tests
 /// `a_registered_library_is_a_root` and `a_library_being_loaded_is_a_root`.
-impl patina_core::GcRoots for LibraryRegistry {
+impl patina_core::RootProvider for LibraryRegistry {
     /// Every value here is pinned until stage 4b makes a library's exports
     /// cells (#682): the forms a load has not yet run as well.
     fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
@@ -662,22 +662,40 @@ impl patina_core::GcRoots for LibraryRegistry {
 }
 
 impl LibraryRegistry {
-    /// Borrow the registry for rooting, or report that it is unavailable.
-    ///
-    /// `Ok(Some)` — borrowed, pass it as a root. `Ok(None)` — there is no
-    /// registry (a temporary state), so there is nothing to root. `Err` — a
-    /// library load holds it mutably, and the caller **must not collect**:
-    /// libraries are a root set, so tracing without them would free live
-    /// values. Lives here so that rule sits with the root provider it
-    /// constrains rather than being restated in each backend's safe point.
-    #[allow(clippy::result_unit_err)]
-    pub fn try_roots(
-        registry: Option<&std::cell::RefCell<Self>>,
-    ) -> Result<Option<std::cell::Ref<'_, Self>>, ()> {
-        match registry {
-            Some(cell) => cell.try_borrow().map(Some).map_err(|_| ()),
-            None => Ok(None),
+    /// Register `registry` with `heap`'s root set, so that every collection
+    /// of the heap traces it, until the token returned drops (#682). The
+    /// backend that made the registry keeps the token beside it.
+    pub fn register_roots(
+        registry: &std::rc::Rc<std::cell::RefCell<Self>>,
+        heap: &patina_core::Heap,
+    ) -> patina_core::RootToken {
+        heap.root_set()
+            .register(Box::new(RegisteredRegistry(std::rc::Rc::downgrade(
+                registry,
+            ))))
+    }
+}
+
+/// A registry as a registered root provider: held weakly, so that it keeps
+/// nothing alive, and a registry already dropped has nothing to trace.
+struct RegisteredRegistry(std::rc::Weak<std::cell::RefCell<LibraryRegistry>>);
+
+impl patina_core::RootProvider for RegisteredRegistry {
+    fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
+        if let Some(registry) = self.0.upgrade() {
+            let registry = registry
+                .try_borrow()
+                .expect("the collection asked `ready` first");
+            patina_core::RootProvider::trace_roots(&*registry, visitor);
         }
+    }
+
+    /// Not while a library load holds the registry mutably: libraries are a
+    /// root set, and tracing without them would free live values.
+    fn ready(&self) -> bool {
+        self.0
+            .upgrade()
+            .is_none_or(|registry| registry.try_borrow().is_ok())
     }
 }
 
@@ -937,8 +955,25 @@ mod tests {
 mod gc_root_tests {
     use super::*;
     use patina_core::Environment;
+    use patina_core::RootProvider;
     use patina_core::heap::gc::collect_for_tests;
     use patina_core::heap::sentinels::Sentinels;
+
+    /// A registered registry is not ready while a load holds it, which keeps
+    /// a collection waiting rather than tracing without the libraries; and a
+    /// registry already dropped is ready, having nothing to trace (#682).
+    #[test]
+    fn a_registered_registry_waits_for_a_load_that_holds_it() {
+        let registry = Rc::new(std::cell::RefCell::new(LibraryRegistry::new()));
+        let provider = RegisteredRegistry(Rc::downgrade(&registry));
+        assert!(provider.ready());
+        let held = registry.borrow_mut();
+        assert!(!provider.ready());
+        drop(held);
+        assert!(provider.ready());
+        drop(registry);
+        assert!(provider.ready());
+    }
 
     #[test]
     fn a_registered_library_is_a_root() {

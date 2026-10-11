@@ -3,16 +3,16 @@
 //! The evaluator holds almost no values itself: the live machine state is the
 //! in-flight `StepResult` in the trampoline loop, which carries the value,
 //! environment, continuation chain, and the wind/prompt/handler stacks. The
-//! safe point therefore passes several providers:
+//! safe point lends a collection the machine's own state:
 //!
-//! - `Evaluator` — the global environment.
-//! - `LibraryRegistry` — every loaded library, rooted in `patina-runtime` so
-//!   both backends share one copy of the rule.
+//! - `Evaluator` — the global environment, and the escape parked between a
+//!   jump and the trampoline that resumes it, which outlives any one step.
 //! - [`StepRoots`] — the transient side, constructed fresh at each safe point
 //!   from the loop's `current_step` plus the expression being evaluated,
 //!   whose literals are live for the duration of the call.
-//! - [`EscapeRoots`] — the `PENDING_ESCAPE` thread-local, which outlives any
-//!   single step and so is not part of `StepRoots`.
+//!
+//! The library registry is registered with the heap instead (#682), and
+//! rooted in `patina-runtime`, so both backends share one copy of the rule.
 //!
 //! Everything else the tree-walker keeps on the Rust stack (suspended outer
 //! `StepResult`s in nested trampolines, primitive argument vectors) is handled
@@ -22,9 +22,9 @@
 //! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682).
 
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{DynamicWindRecord, GcRoots, SlotVisitor, trace_winds};
+use patina_core::{DynamicWindRecord, RootProvider, SlotVisitor, trace_winds};
 
-use super::types::{ExceptionHandler, PromptFrame, StepResult, trace_pending_escape};
+use super::types::{ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::Evaluator;
 // Continuation-value tracing moved to patina-core with ContValue itself.
 use patina_core::{trace_cont_value, trace_exception_handler, trace_prompt_frame};
@@ -34,15 +34,18 @@ use patina_core::{trace_cont_value, trace_exception_handler, trace_prompt_frame}
 // holds no value. The sentinel tests in `sentinel_tests` below put a fresh
 // value in each traced field and read it back after a collection.
 
-impl GcRoots for Evaluator {
+impl RootProvider for Evaluator {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let Evaluator {
             global_env,
             // Which debug stages print.
             debug: _,
-            // A root provider of its own: the safe point passes the registry
-            // beside the evaluator (`CpsEvaluator::maybe_collect`).
+            // A root provider of its own, registered with the heap through
+            // `library_roots` (#682).
             library_registry: _,
+            // A registration.
+            library_roots: _,
+            pending_escape,
             // Loaders, which hold no values.
             loader_registry: _,
             // Primitive functions and their names.
@@ -57,19 +60,13 @@ impl GcRoots for Evaluator {
             bootstrap_error: _,
         } = self;
         visitor.env(global_env);
-    }
-}
-
-/// The `PENDING_ESCAPE` thread-local: a value and continuation in flight
-/// between `set_pending_escape` and `take_pending_escape`, reachable from
-/// nowhere else. Its own provider rather than part of [`StepRoots`] because
-/// it is not step state — any collection entry must root it, including
-/// future ones that do not construct a `StepRoots`.
-pub(super) struct EscapeRoots;
-
-impl GcRoots for EscapeRoots {
-    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-        trace_pending_escape(visitor);
+        // A hidden root while it is set: between `set_pending_escape` and
+        // `take_pending_escape`, the value and its continuation are reachable
+        // from nowhere else (`docs/GC_DESIGN.md` §5.1).
+        if let Some((value, k)) = pending_escape.borrow().as_ref() {
+            visitor.pinned(*value);
+            visitor.continuation(k);
+        }
     }
 }
 
@@ -83,7 +80,7 @@ pub(super) struct StepRoots<'a> {
     pub expr: Option<&'a CpsExpr>,
 }
 
-impl GcRoots for StepRoots<'_> {
+impl RootProvider for StepRoots<'_> {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let StepRoots { step, expr } = self;
         if let Some(expr) = expr {

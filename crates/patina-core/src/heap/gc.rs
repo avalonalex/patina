@@ -7,7 +7,7 @@
 //! that eager drop is what breaks closure ↔ environment cycles (design §8).
 //!
 //! Pluggability is split across two seams:
-//! - [`GcRoots`] — implemented by anything that owns live values (backend
+//! - [`RootProvider`] — implemented by anything that owns live values (backend
 //!   state, registries, transient loop state). Backends provide roots and
 //!   safe points; they never implement collection.
 //! - `Collector` — the swappable algorithm. `MarkSweepCollector` is the
@@ -62,6 +62,7 @@ use super::account::{
 };
 use super::check::SlotChecks;
 use super::handles::HandleTable;
+pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
@@ -273,11 +274,25 @@ pub trait SlotVisitor {
     fn expr_literals(&mut self, expr: &CpsExpr);
 }
 
-/// Implemented by anything that owns live values: backend state, shared
-/// registries, and transient roots (e.g. the tree-walker's in-flight
-/// `StepResult`, passed per collection).
-pub trait GcRoots {
+/// Implemented by anything that owns live values (`PRD/GC_PRD.md` §14). A
+/// provider reaches a collection one of two ways (#682):
+/// - registered with the heap's [`RootSet`], for every collection until its
+///   [`RootToken`] drops: the library registry, and whatever a host or a
+///   debugger keeps;
+/// - lent to one collection by the running machine, which passes its own
+///   state at each safe point: the VM's `VmState`, the tree-walker's
+///   evaluator and in-flight `StepResult`. §14's `MutatorSet` will lend
+///   each thread's stack the same way.
+pub trait RootProvider {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor);
+
+    /// Whether this provider can report its roots now. A collection waits
+    /// for every registered provider to be ready, as a safe point waits when
+    /// its own roots are unavailable: the library registry is not while a
+    /// load holds it, and tracing without it would free live values.
+    fn ready(&self) -> bool {
+        true
+    }
 
     /// One round of the weak-table fixpoint (design §9.5), driven by
     /// `run_mark_phase`: `ids` are continuation ids whose ref objects were
@@ -316,7 +331,7 @@ pub(crate) trait Collector {
     /// Run a full collection. The caller must be at a safe point: every live
     /// value reachable from `roots`, and no outstanding heap borrow other
     /// than the one behind `heap`.
-    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
+    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats;
 }
 
 // ============================================================================
@@ -740,7 +755,7 @@ impl GcController {
     pub(crate) fn collect(
         &mut self,
         heap: &mut Heap,
-        roots: &[&dyn GcRoots],
+        roots: &[&dyn RootProvider],
         at_call: bool,
     ) -> GcStats {
         let started = Instant::now();
@@ -802,11 +817,13 @@ impl GcController {
     /// only what is genuinely theirs — their root set.
     ///
     /// `with_roots` receives a `collect` callback and decides whether to call
-    /// it. That inversion lets a backend assemble roots that borrow from its
-    /// own frame (a `Ref<LibraryRegistry>`, a transient step provider) and
-    /// lets it *abort* — returning without calling `collect` — when a root is
-    /// unavailable, which must never degrade into tracing a partial root set.
-    /// The pending flag stays raised across an abort, so the next safe point
+    /// it. That inversion lets a backend lend roots that borrow from its own
+    /// frame (a transient step provider) and lets it *abort* — returning
+    /// without calling `collect` — when a root is unavailable, which must
+    /// never degrade into tracing a partial root set. A registered provider
+    /// that is not ready (`RootProvider::ready`: the library registry, while
+    /// a load holds it mutably) makes the collection wait the same way. The
+    /// pending flag stays raised across either, so the next safe point
     /// retries.
     ///
     /// `pending` (the handle from `Heap::gc_pending_handle`) and
@@ -826,7 +843,7 @@ impl GcController {
         heap: &SharedHeap,
         pending: &Cell<bool>,
         is_outermost: bool,
-        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
+        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
         // A nested loop never collects — its caller holds live values in Rust
         // locals no root provider can see. Its flag check would be dead code,
@@ -843,7 +860,7 @@ impl GcController {
     fn safe_point_cold(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
-        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
+        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
         // A test's switch, absent from a build without `test-support`
         // (`Heap::set_skip_safe_points`, #639).
@@ -854,6 +871,11 @@ impl GcController {
         let mut collected = false;
         with_roots(&mut |roots| {
             let mut h = heap.borrow_mut();
+            // A registered provider that cannot report its roots now, and
+            // the collection waits, as when the backend's own are unavailable.
+            if !h.root_set().ready() {
+                return;
+            }
             // The outermost loop's own guard, and no other. `is_outermost`
             // is read once, at loop entry, so a guard that a callee took and
             // kept past its instruction would not stop the running loop from
@@ -897,15 +919,15 @@ impl GcController {
     /// library body loaded under one — it posts the collection for the next
     /// safe point that may collect, as `(gc)` did everywhere before #639, and
     /// counts it ([`Heap::defer_collection`], `(gc-stats)`'s
-    /// `deferred-collections`). So does a collection whose roots the
-    /// backend cannot supply: `with_roots` returns without calling
-    /// `collect`, as at a safe point, while a library load holds the
-    /// registry.
+    /// `deferred-collections`). So does a collection whose roots are not
+    /// all at hand, as at a safe point: a registered provider that is not
+    /// ready, as the library registry is not while a load holds it mutably,
+    /// or a `with_roots` that returns without calling `collect`.
     pub fn collect_at_call(
         gc: &RefCell<Self>,
         heap: &SharedHeap,
         kind: CollectKind,
-        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn GcRoots])),
+        with_roots: impl FnOnce(&mut dyn FnMut(&[&dyn RootProvider])),
     ) -> bool {
         NoGcScopes::of(heap).assert_none_open();
         // The one kind there is: a full collection.
@@ -914,6 +936,9 @@ impl GcController {
         if heap.borrow().gc_defer_is_one_loop() {
             with_roots(&mut |roots| {
                 let mut h = heap.borrow_mut();
+                if !h.root_set().ready() {
+                    return;
+                }
                 gc.borrow_mut().collect(&mut h, roots, true);
                 collected = true;
             });
@@ -1099,7 +1124,7 @@ pub struct GcVisitor<'h> {
     /// `VmDelimitedContinuationRef` heap object has been marked. One
     /// namespace for both kinds — `Heap` mints their ids from one counter.
     /// The queue holds the subset [`run_mark_phase`] has not yet broadcast
-    /// to [`GcRoots::trace_weak_ids`].
+    /// to [`RootProvider::trace_weak_ids`].
     live_weak_ids: FxHashSet<u64>,
     new_weak_ids: Vec<u64>,
     /// Ephemerons reached during marking, awaiting the fixpoint in
@@ -1244,7 +1269,7 @@ impl<'h> GcVisitor<'h> {
 
     /// Trace a continuation held outside the heap. Root providers need this
     /// for continuations that never became heap objects (e.g. the
-    /// tree-walker's `PENDING_ESCAPE` and in-flight continuation chain).
+    /// tree-walker's parked escape and in-flight continuation chain).
     pub(crate) fn visit_continuation(&mut self, k: &Rc<CpsContinuation>) {
         if self.seen_conts.insert(Rc::as_ptr(k) as usize) {
             self.cont_worklist.push(k.clone());
@@ -1301,7 +1326,7 @@ impl<'h> GcVisitor<'h> {
     }
 
     /// Did marking reach a `VmContinuationRef` / `VmDelimitedContinuationRef`
-    /// object with this id? For [`GcRoots::sweep_weak`] — an entry whose id
+    /// object with this id? For [`RootProvider::sweep_weak`] — an entry whose id
     /// was never reached is dead.
     pub fn weak_continuation_id_is_live(&self, id: u64) -> bool {
         self.live_weak_ids.contains(&id)
@@ -1946,7 +1971,7 @@ impl Default for MarkSweepCollector {
 /// would reinstate the §9.5 monotonic leak, and the two weak kinds share one
 /// loop for the reason the comment on it gives. Crate-private, like every
 /// other way to run a collection (#624).
-pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> (MarkBits, PhaseTimes) {
+pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn RootProvider]) -> (MarkBits, PhaseTimes) {
     let mut phases = PhaseTimes::default();
     let mut clock = Instant::now();
     let mut lap = |phase: &mut std::time::Duration| {
@@ -2039,8 +2064,14 @@ pub(crate) fn run_mark_phase(heap: &Heap, roots: &[&dyn GcRoots]) -> (MarkBits, 
 }
 
 impl Collector for MarkSweepCollector {
-    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
-        let (mut marks, mut phases) = run_mark_phase(heap, roots);
+    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats {
+        // The providers registered with the heap, beside those the machine
+        // lends this collection (#682).
+        let registered = heap.root_set().snapshot();
+        let providers: Vec<&dyn RootProvider> = (roots.iter().copied())
+            .chain(registered.iter().map(|provider| &**provider))
+            .collect();
+        let (mut marks, mut phases) = run_mark_phase(heap, &providers);
 
         // Between marking and sweeping, outside the pause's phases: the
         // census's own time is its log's `scan_us`.
@@ -2077,7 +2108,7 @@ impl Collector for MarkSweepCollector {
 /// build): a build that ships has no way to collect outside `safe_point`.
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats {
+pub fn collect_for_tests(heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats {
     MarkSweepCollector::new().collect(heap, roots)
 }
 
@@ -2390,7 +2421,7 @@ mod tests {
         envs: Vec<Rc<Environment>>,
     }
 
-    impl GcRoots for TestRoots {
+    impl RootProvider for TestRoots {
         fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
             for &value in &self.values {
                 visitor.pinned(value);
@@ -2429,13 +2460,38 @@ mod tests {
         assert!(heap.free_pairs.is_empty());
     }
 
+    /// A provider registered with the heap is traced by every collection,
+    /// beside the roots the machine lends it, until its token drops (#682).
+    #[test]
+    fn a_registered_root_is_traced_until_its_token_drops() {
+        struct Holding(TaggedValue);
+        impl RootProvider for Holding {
+            fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
+                visitor.pinned(self.0);
+            }
+        }
+        let mut heap = Heap::new();
+        let held = heap.alloc_pair(TaggedValue::fixnum(1), TaggedValue::NULL);
+        let token = heap.root_set().register(Box::new(Holding(held)));
+
+        let stats = collect(&mut heap, &TestRoots::default());
+        assert_eq!(stats.last_marked.pairs, 1);
+        assert!(heap.free_pairs.is_empty());
+        assert_eq!(heap.car(held), TaggedValue::fixnum(1));
+
+        drop(token);
+        let stats = collect(&mut heap, &TestRoots::default());
+        assert_eq!(stats.last_swept.pairs, 1);
+        assert_eq!(heap.free_pairs, vec![held.heap_index()]);
+    }
+
     #[test]
     fn wind_records_keep_thunks_and_backend_handler_payloads_alive() {
         // A backend handler may carry more than one root. The common wind
         // traversal must delegate all handlers and retain both thunks.
         struct Handler([TaggedValue; 2]);
         struct Winds(Vec<WindRecord<Handler>>);
-        impl GcRoots for Winds {
+        impl RootProvider for Winds {
             fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
                 trace_winds_with(&self.0, visitor, |handler, visitor| {
                     for &value in &handler.0 {
@@ -3145,7 +3201,7 @@ mod tests {
             handle: crate::heap::ExternalBytes,
             bytes: usize,
         }
-        impl GcRoots for ReleasingRoots {
+        impl RootProvider for ReleasingRoots {
             fn trace_roots(&self, _visitor: &mut dyn SlotVisitor) {}
             fn sweep_weak(&self, _visitor: &GcVisitor<'_>) {
                 self.handle.release(self.bytes);
@@ -3487,6 +3543,43 @@ mod tests {
         assert!(collected);
         assert_eq!(shared.borrow().gc_collections(), 1);
         assert!(!pending.get());
+    }
+
+    /// A collection waits while a registered provider cannot report its
+    /// roots: a safe point leaves the flag up for the next one, and a
+    /// collection at a call is posted. Both collect once it can (#682).
+    #[test]
+    fn a_collection_waits_for_every_registered_provider() {
+        struct Waiting(Rc<Cell<bool>>);
+        impl RootProvider for Waiting {
+            fn trace_roots(&self, _visitor: &mut dyn SlotVisitor) {}
+            fn ready(&self) -> bool {
+                self.0.get()
+            }
+        }
+        let shared = crate::heap::new_shared_heap();
+        let pending = shared.borrow().gc_pending_handle();
+        let gc = RefCell::new(GcController::from_env());
+        let ready = Rc::new(Cell::new(false));
+        let _token = (shared.borrow().root_set()).register(Box::new(Waiting(Rc::clone(&ready))));
+        let _loop_guard = GcDeferGuard::new(&shared);
+        let safe_point =
+            || GcController::safe_point(&gc, &shared, &pending, true, |collect| collect(&[]));
+        let at_call = || {
+            GcController::collect_at_call(&gc, &shared, CollectKind::Major, |collect| collect(&[]))
+        };
+
+        shared.borrow_mut().request_gc();
+        assert!(!safe_point());
+        assert!(pending.get());
+        assert!(!at_call());
+        assert_eq!(shared.borrow().gc_collections(), 0);
+        assert_eq!(shared.borrow().gc_deferred_collections(), 1);
+
+        ready.set(true);
+        assert!(safe_point());
+        assert!(at_call());
+        assert_eq!(shared.borrow().gc_collections(), 2);
     }
 
     /// Zeal (#625): the collection that lowers the pending flag re-installs a

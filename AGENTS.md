@@ -151,7 +151,7 @@ issues and the archive before filing**, for the same reason.
 - `PRD/MILESTONES.md` — project history and achievements
 - `PRD/ARCHIVE/phase1_cleanup_2026_03/PHASE1_CLEANUP_PRD.md` — archived Phase 1 cleanup tracker
 - `PRD/phase1/DELIMITED_CONTINUATIONS_DESIGN.md`
-- `docs/GC_DESIGN.md` — the collector as built today, on both backends (Collector/GcRoots traits, root inventory, staging); GC is always on since GC_DESIGN's stage 4c (2026-08-03). Rewritten as the redesign's stages land
+- `docs/GC_DESIGN.md` — the collector as built today, on both backends (Collector/RootProvider traits, root inventory, staging); GC is always on since GC_DESIGN's stage 4c (2026-08-03). Rewritten as the redesign's stages land
 - `PRD/GC_PRD.md` — design and plan for the GC redesign: representation, MarkRegion collector, JIT contract, steady state and limits, threading readiness
 - `PRD/study/` — research records; `PRD/study/gc/` is the GC redesign study behind `PRD/GC_PRD.md`
 - `PRD/macro/SYNTAX_CASE_DESIGN.md` — syntax-case design, and the

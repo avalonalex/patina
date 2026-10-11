@@ -34,7 +34,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
-use super::gc::GcVisitor;
+use super::gc::{GcVisitor, RootSet};
 use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
 
@@ -46,6 +46,11 @@ pub struct HandleTable {
     /// the message when a handle meets another heap.
     heap_id: u64,
     entries: RefCell<Entries>,
+    /// The root providers registered with the heap (`Heap::root_set`, #682),
+    /// kept with the other roots hosts keep. Not a field of `Heap`: one more
+    /// there moved the allocator's hot fields, and cost the VM's
+    /// continuation benchmarks 4–5% in cycles with the same instructions.
+    root_set: Rc<RootSet>,
 }
 
 struct Entries {
@@ -78,7 +83,13 @@ impl HandleTable {
                 free: Vec::new(),
                 tracked: Vec::new(),
             }),
+            root_set: Rc::default(),
         })
+    }
+
+    /// The root providers registered with the heap.
+    pub(crate) fn root_set(&self) -> &Rc<RootSet> {
+        &self.root_set
     }
 
     /// A claim on a new entry holding `entry`.
@@ -180,6 +191,9 @@ impl HandleTable {
             // A number, for a message; no value.
             heap_id: _,
             entries,
+            // Providers, which the collector traces itself, each through
+            // its own trace (#682).
+            root_set: _,
         } = self;
         let mut entries = entries.borrow_mut();
         let Entries {
@@ -365,6 +379,7 @@ mod tests {
                 free: vec![1],
                 tracked: vec![Rc::downgrade(&tracked)],
             }),
+            root_set: Rc::default(),
         });
         collect_only(&mut heap, |_| {});
         s.assert_survived(&heap);
