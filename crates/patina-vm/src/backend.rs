@@ -126,6 +126,14 @@ pub struct VmBackend {
     state: RefCell<VmState>,
     global_env: Rc<Environment>,
     library_registry: Rc<RefCell<LibraryRegistry>>,
+    /// The registry's registration with the heap's root set, which keeps it
+    /// a root of every collection while the backend lives (#682). Here, not
+    /// in `VmState`, whose layout the dispatch loop is measured against.
+    #[expect(
+        dead_code,
+        reason = "held for its drop, which unregisters the registry"
+    )]
+    library_roots: patina_core::RootToken,
     loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
     /// Why `(scheme base)` could not be loaded at construction, if it could
     /// not: see [`VmBackend::bootstrap_error`].
@@ -211,10 +219,13 @@ impl VmBackend {
             Rc::clone(&loader_registry),
         );
 
+        let library_roots =
+            LibraryRegistry::register_roots(&library_registry, &global_env.heap().borrow());
         let mut backend = VmBackend {
             state: RefCell::new(state),
             global_env,
             library_registry,
+            library_roots,
             loader_registry,
             bootstrap_error: None,
         };

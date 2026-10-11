@@ -25,13 +25,11 @@
 //! ```
 #![expect(
     clippy::disallowed_macros,
-    reason = "the crate's `thread_local!` statics, all in `cps_eval::types`: `PENDING_ESCAPE`, a \
-              continuation's value parked between its jump and the trampoline that resumes it, \
-              which the safe point roots (`trace_pending_escape`) and which leaves `thread_local!` \
-              in the redesign (PRD/GC_PRD.md §11.3); `ACTIVE_TRAMPOLINES`, `NEXT_TRAMPOLINE` and \
-              `UNHANDLED_IN_CALLBACK`, ids and flags of the running trampolines. Clippy takes this \
-              lint only at a crate root, so a new `thread_local!` in the crate goes on this list, \
-              which a test in `reentry_lint_control.rs` holds to the crate's sources (#622)"
+    reason = "the crate's `thread_local!` statics, all in `cps_eval::types`: \
+              `ACTIVE_TRAMPOLINES`, `NEXT_TRAMPOLINE` and `UNHANDLED_IN_CALLBACK`, ids and flags \
+              of the running trampolines. Clippy takes this lint only at a crate root, so a new \
+              `thread_local!` in the crate goes on this list, which a test in \
+              `reentry_lint_control.rs` holds to the crate's sources (#622)"
 )]
 
 pub mod backend;

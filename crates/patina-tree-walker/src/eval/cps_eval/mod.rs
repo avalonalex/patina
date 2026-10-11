@@ -83,7 +83,7 @@ use patina_runtime::HasDiagnostic;
 use std::rc::Rc;
 use tracing::debug;
 
-use types::{ContEnv, StepResult, take_pending_escape};
+use types::{ContEnv, StepResult};
 
 /// CPS Evaluator state
 ///
@@ -119,15 +119,11 @@ impl<'a> CpsEvaluator<'a> {
             &evaluator.gc_pending,
             is_outermost,
             |collect| {
-                // Libraries are a root set. If a load is in flight we cannot
-                // read the registry, so return without collecting rather than
-                // trace a partial root set — a missing root is a
-                // use-after-free.
-                let Ok(registry) = evaluator.library_registry.try_borrow() else {
-                    return;
-                };
+                // The machine's own state, lent to the collection; the library
+                // registry is registered with the heap, which waits while a
+                // load holds it (#682).
                 let step_roots = gc_roots::StepRoots { step, expr };
-                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
+                collect(&[evaluator, &step_roots]);
             },
         );
         if collected {
@@ -161,14 +157,7 @@ impl<'a> CpsEvaluator<'a> {
             heap,
             &evaluator.gc_pending,
             gc_defer.is_outermost(),
-            |collect| {
-                // As at a safe point: with a load in flight the registry
-                // cannot be read, and the collection waits.
-                let Ok(registry) = evaluator.library_registry.try_borrow() else {
-                    return;
-                };
-                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots]);
-            },
+            |collect| collect(&[evaluator]),
         );
         if collected {
             heap.borrow_mut()
@@ -196,13 +185,10 @@ impl<'a> CpsEvaluator<'a> {
             evaluator.global_env.heap(),
             kind,
             |collect| {
-                // As at a safe point: with a load in flight the registry
-                // cannot be read, and the collection is posted.
-                let Ok(registry) = evaluator.library_registry.try_borrow() else {
-                    return;
-                };
+                // As at a safe point: the registered registry posts the
+                // collection while a load holds it (#682).
                 let step_roots = gc_roots::StepRoots { step, expr };
-                collect(&[evaluator, &*registry, &gc_roots::EscapeRoots, &step_roots]);
+                collect(&[evaluator, &step_roots]);
             },
         );
         if collected {
@@ -457,13 +443,13 @@ impl<'a> CpsEvaluator<'a> {
                     // by the `?` its caller put on this call. A jump inside
                     // its own trampoline never gets here:
                     // `jump_to_continuation` resumes those in place.
-                    let Some((value_tagged, k)) = take_pending_escape() else {
+                    let Some((value_tagged, k)) = self.evaluator.take_pending_escape() else {
                         return Err(EvalError::InternalError(
                             "ContinuationEscape without pending data".to_string(),
                         ));
                     };
                     if !trampoline.resumes(k.trampoline) {
-                        types::set_pending_escape(value_tagged, k);
+                        self.evaluator.set_pending_escape(value_tagged, k);
                         return Err(EvalError::ContinuationEscape);
                     }
                     debug!(

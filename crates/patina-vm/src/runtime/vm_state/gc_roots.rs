@@ -1,7 +1,7 @@
 //! GC root providers for the VM (`docs/GC_DESIGN.md` §5.2).
 //!
 //! Unlike the tree-walker, whose live state is a Rust local, the VM keeps
-//! everything on `VmState` — so `impl GcRoots for VmState` covers almost the
+//! everything on `VmState` — so `impl RootProvider for VmState` covers almost the
 //! whole root set. One member of it is invisible to a heap scan, and is the
 //! reason this impl has to exist at all: **the continuation side tables.**
 //! The heap holds only an opaque `VmContinuationRef { id, bytes }`, charged
@@ -35,7 +35,7 @@
 //! tracing — see `GcDeferGuard` and §7. The environments `with_globals` sets
 //! aside were too, until they moved onto the traced `saved_globals` (#677).
 
-use patina_core::{GC_CHECK, GcRoots, GcVisitor, SlotVisitor, trace_winds_with};
+use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, trace_winds_with};
 use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
@@ -107,7 +107,7 @@ mod wrong_maps {
 #[cfg(feature = "test-support")]
 use crate::test_support as wrong_maps;
 
-impl GcRoots for VmState {
+impl RootProvider for VmState {
     /// Every field of `VmState` is named (#623): a new one does not compile
     /// here until it is traced or written `field: _` with the reason it holds
     /// no value. The sentinel test `every_vm_state_root_is_traced`
@@ -167,8 +167,8 @@ impl GcRoots for VmState {
             // Weak, like `continuation_store`.
             delimited_continuation_store: _,
             tracer,
-            // A root provider of its own: each safe point passes the
-            // registry beside this state (`maybe_collect`).
+            // A root provider of its own, which the backend registers with
+            // the heap (`VmBackend::library_roots`, #682).
             library_registry: _,
             // Loaders, which hold no values.
             loader_registry: _,

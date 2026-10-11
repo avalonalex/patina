@@ -202,7 +202,7 @@ pub struct VmState {
     /// Side table for full (call/cc) continuations — keyed by the heap-minted
     /// id inside the `VmContinuationRef { id, .. }` handle. **Weak** (design §9.5):
     /// entries whose ref object dies are pruned at collection via
-    /// `GcRoots::sweep_weak`, which runs with `&VmState` — hence the
+    /// `RootProvider::sweep_weak`, which runs with `&VmState` — hence the
     /// `RefCell`. Ids come from the heap's counter (unique across both
     /// continuation kinds and every `VmState` on the heap, never reused), so
     /// a pruned id cannot alias another entry.
@@ -1468,23 +1468,14 @@ fn maybe_collect(state: &mut VmState, is_outermost: bool) -> bool {
         state.execution.registers().len(),
     );
     state.execution.retire_registers();
+    // The machine's own state, lent to the collection; the library registry
+    // is registered with the heap, which waits while a load holds it (#682).
     GcController::safe_point(
         &state.gc,
         &state.heap,
         &state.gc_pending,
         is_outermost,
-        |collect| {
-            // Libraries are a root set. If a load is in flight we cannot read the
-            // registry, so return without collecting rather than trace a partial
-            // root set — a missing root is a use-after-free.
-            let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
-                return;
-            };
-            match &registry {
-                Some(registry) => collect(&[state, &**registry]),
-                None => collect(&[state]),
-            }
-        },
+        |collect| collect(&[state]),
     )
 }
 
@@ -1530,17 +1521,10 @@ fn collect_at_call(state: &mut VmState, kind: CollectKind) -> bool {
         );
         state.execution.retire_registers();
     }
-    let collected = GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| {
-        // Libraries are a root set, as at a safe point: with a load in
-        // flight the registry cannot be read, and the collection is posted.
-        let Ok(registry) = LibraryRegistry::try_roots(state.library_registry.as_deref()) else {
-            return;
-        };
-        match &registry {
-            Some(registry) => collect(&[&*state, &**registry]),
-            None => collect(&[&*state]),
-        }
-    });
+    // As at a safe point: the registered registry makes the collection wait
+    // while a load holds it, which posts it (#682).
+    let collected =
+        GcController::collect_at_call(&state.gc, &state.heap, kind, |collect| collect(&[&*state]));
     if collected {
         state.after_collection();
     }

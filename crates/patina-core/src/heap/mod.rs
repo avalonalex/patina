@@ -29,6 +29,7 @@ mod check;
 pub mod gc;
 pub mod handles;
 mod numeric;
+mod root_set;
 // Sentinel values for the collector's field tests (#623): patina-core's own
 // tests, and other crates' under `test-support`.
 #[cfg(any(test, feature = "test-support"))]
@@ -650,6 +651,12 @@ impl Heap {
              features at backend construction, before anything is expanded."
         );
         self.features.add_feature(name);
+    }
+
+    /// The root providers registered with this heap: register one to have
+    /// every collection trace it until its token drops (#682).
+    pub fn root_set(&self) -> &Rc<gc::RootSet> {
+        self.handles.root_set()
     }
 
     /// Create a new empty heap

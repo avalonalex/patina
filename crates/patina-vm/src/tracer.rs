@@ -281,7 +281,7 @@ pub struct StepTracer {
 /// are the tracer's only GC roots — `TraceEvent`s store pre-formatted
 /// `String`s, not `TaggedValue`s. Every field is named (#623); pinned by
 /// `every_vm_state_root_is_traced`, through `VmState::tracer`.
-impl patina_core::GcRoots for StepTracer {
+impl patina_core::RootProvider for StepTracer {
     /// Its snapshots are copies of registers, for display: pinned.
     fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
         let StepTracer {

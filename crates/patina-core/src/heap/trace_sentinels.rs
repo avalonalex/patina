@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::gc::{Collector, GcRoots, MarkSweepCollector, SlotVisitor, trace_cont_value};
+use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor, trace_cont_value};
 use super::sentinels::Sentinels;
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule, Pattern, Template};
@@ -28,7 +28,7 @@ use crate::tagged_value::TaggedValue;
 /// A root provider that runs one closure: the structure under test.
 struct Only<F>(F);
 
-impl<F: Fn(&mut dyn SlotVisitor)> GcRoots for Only<F> {
+impl<F: Fn(&mut dyn SlotVisitor)> RootProvider for Only<F> {
     fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         (self.0)(visitor)
     }

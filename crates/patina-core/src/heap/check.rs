@@ -232,7 +232,7 @@ mod tests {
     use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::{Heap, PromiseState};
     use crate::tagged_value::TaggedValue;
-    use crate::{Environment, GcRoots, SlotVisitor};
+    use crate::{Environment, RootProvider, SlotVisitor};
     use std::cell::Cell;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -253,7 +253,7 @@ mod tests {
 
     struct Roots(Vec<TaggedValue>);
 
-    impl GcRoots for Roots {
+    impl RootProvider for Roots {
         fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
             for &value in &self.0 {
                 visitor.pinned(value);
@@ -647,7 +647,7 @@ mod tests {
         "dangling reference: object slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
             struct Frame(Cell<TaggedValue>);
-            impl GcRoots for Frame {
+            impl RootProvider for Frame {
                 fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
                     visitor.slot(&self.0);
                 }

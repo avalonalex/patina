@@ -16,6 +16,7 @@ pub use patina_primitives::primitives::io::datum_writer::{
 };
 
 use debug::DebugConfig;
+use patina_core::{CpsContinuation, TaggedValue};
 use patina_runtime::HasDiagnostic;
 use patina_runtime::environment::Environment;
 use patina_runtime::library_loader::LibraryLoaderRegistry;
@@ -45,6 +46,18 @@ pub struct Evaluator {
     pub(crate) debug: Rc<DebugConfig>,
     /// Registry of loaded libraries
     pub(crate) library_registry: Rc<RefCell<LibraryRegistry>>,
+    /// The registry's registration with the heap's root set, which keeps it
+    /// a root of every collection while the evaluator lives (#682).
+    #[expect(
+        dead_code,
+        reason = "held for its drop, which unregisters the registry"
+    )]
+    pub(crate) library_roots: patina_core::RootToken,
+    /// A continuation's value and target, parked between its jump and the
+    /// trampoline that resumes it (`set_pending_escape`). Nothing else
+    /// reaches them while parked, so the evaluator's own root provider
+    /// traces them. A thread-local until #682.
+    pub(crate) pending_escape: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>>,
     /// Registry of library loaders (Rust, Scheme, etc.)
     pub(crate) loader_registry: Rc<RefCell<LibraryLoaderRegistry>>,
     /// Registry of primitive procedures (shared across all backends via patina-primitives)
@@ -106,6 +119,8 @@ impl Evaluator {
         let mut lib_registry = LibraryRegistry::with_default_paths();
         lib_registry.set_fs(fs.clone());
         let library_registry = Rc::new(RefCell::new(lib_registry));
+        let library_roots =
+            LibraryRegistry::register_roots(&library_registry, &global_env.heap().borrow());
         let loader_registry = Rc::new(RefCell::new(LibraryLoaderRegistry::new()));
 
         // Pairing heap with controller: install the policy's trigger
@@ -123,6 +138,8 @@ impl Evaluator {
             global_env,
             debug: Rc::new(DebugConfig::new()),
             library_registry,
+            library_roots,
+            pending_escape: RefCell::new(None),
             loader_registry,
             primitive_registry,
             fs,
@@ -426,6 +443,19 @@ impl Drop for Evaluator {
         if let Ok(mut heap) = self.global_env.heap().try_borrow_mut() {
             heap.teardown();
         }
+    }
+}
+
+impl Evaluator {
+    /// Park a continuation's value and target until the trampoline that
+    /// resumes it takes them (`take_pending_escape`).
+    pub(crate) fn set_pending_escape(&self, value: TaggedValue, cont: Rc<CpsContinuation>) {
+        *self.pending_escape.borrow_mut() = Some((value, cont));
+    }
+
+    /// The escape parked by `set_pending_escape`, if any.
+    pub(crate) fn take_pending_escape(&self) -> Option<(TaggedValue, Rc<CpsContinuation>)> {
+        self.pending_escape.borrow_mut().take()
     }
 }
 

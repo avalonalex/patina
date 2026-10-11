@@ -25,7 +25,7 @@ A function named here is checked wherever it is defined in its file, every
 `impl` included. A new trace function or root provider is added here, and its
 struct gets a sentinel test (`docs/GC_DESIGN.md` §5.4, AGENTS.md "New heap
 object type"). So that a root provider cannot be left out, the check also
-fails on an `impl GcRoots for` under crates/*/src, outside `#[cfg(test)]`
+fails on an `impl RootProvider for` under crates/*/src, outside `#[cfg(test)]`
 code, whose file is not listed here with `trace_roots`.
 
     check_gc_trace_names.py [REPO_ROOT]
@@ -86,7 +86,6 @@ TRACE_FUNCTIONS = {
         "trace_step",
         "trace_stacks",
     ],
-    "crates/patina-tree-walker/src/eval/cps_eval/types.rs": ["trace_pending_escape"],
 }
 
 # `..` closing a pattern: after `{`, `(`, `[` or `,`, and before `}`, `)`,
@@ -209,7 +208,7 @@ def check_source(path, text, names):
     return problems
 
 
-GC_ROOTS_IMPL = re.compile(r"\bimpl\b.*\bGcRoots\s+for\b")
+ROOT_PROVIDER_IMPL = re.compile(r"\bimpl\b.*\bRootProvider\s+for\b")
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
 MODULE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*([;{])")
 
@@ -249,7 +248,7 @@ def module_paths(path, name):
 
 
 def unchecked_root_providers(root, trace_functions):
-    """Every `impl GcRoots for` under crates/*/src, outside test code, whose
+    """Every `impl RootProvider for` under crates/*/src, outside test code, whose
     file TRACE_FUNCTIONS does not list with `trace_roots`, as messages."""
     sources = sorted(root.glob("crates/*/src/**/*.rs"))
     texts = {path: path.read_text().split("\n") for path in sources}
@@ -269,7 +268,7 @@ def unchecked_root_providers(root, trace_functions):
             continue
         inline = test_modules(lines)[0]
         for i, line in enumerate(lines):
-            if GC_ROOTS_IMPL.search(code_of(line)) and not any(
+            if ROOT_PROVIDER_IMPL.search(code_of(line)) and not any(
                 first <= i <= last for first, last in inline
             ):
                 problems.append(

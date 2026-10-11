@@ -100,8 +100,8 @@ pub use debug_format::{
 // outside this crate collects only through `GcController::safe_point` and
 // `GcController::collect_at_call`.
 pub use heap::gc::{
-    ArenaCounts, AssertNoGc, CollectKind, GcController, GcDeferGuard, GcMode, GcRoots, GcStats,
-    GcVisitor, MarkBits, NoGcScopes, SlotVisitor,
+    ArenaCounts, AssertNoGc, CollectKind, GcController, GcDeferGuard, GcMode, GcStats, GcVisitor,
+    MarkBits, NoGcScopes, RootProvider, RootSet, RootToken, SlotVisitor,
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,

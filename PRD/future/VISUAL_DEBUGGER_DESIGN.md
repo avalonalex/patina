@@ -345,7 +345,7 @@ formatting already proves out.
 Four constraints:
 
 - **GC.** Retained datums are heap values; the table must be traced (hook doc §5.2's
-  `DebugHook: GcRoots` seam) and bounded (per-site and global caps).
+  `DebugHook: RootProvider` seam) and bounded (per-site and global caps).
 - **Keying.** `expansion_records` is keyed `(u32, u32)` with no source name
   (`source_map.rs:30`), so keys collide across chunks; the retention table must key on
   the full triple even though the existing map does not.

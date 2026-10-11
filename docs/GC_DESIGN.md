@@ -46,7 +46,7 @@ Non-goals (v1):
 |---|----------|-----------|
 | 1 | Non-moving stop-the-world mark-and-sweep | Indices escape `TaggedValue` (§3.4); free lists + in-place slot reuse already exist |
 | 2 | **One collector implementation shared by both backends** | Same `SharedHeap`, same object graph; backends differ only in roots + safe points |
-| 3 | Pluggability = `Collector` trait (algorithm) × `GcRoots` trait (root providers) | The seam between "how to collect" and "what is live" is the stable boundary |
+| 3 | Pluggability = `Collector` trait (algorithm) × `RootProvider` trait (root providers) | The seam between "how to collect" and "what is live" is the stable boundary |
 | 4 | Mark state = side bit-vectors per arena, owned by the visitor per collection | No `TaggedValue` bloat, no object header changes, no idle state on `Heap` |
 | 5 | Sweep pushes to the existing free lists **and tombstones the slot** | Allocation path unchanged; tombstoning drops `Rc` payloads eagerly → breaks env cycles (§8) |
 | 6 | Safe point = top of each backend's driver loop, guarded by a re-entrancy defer counter | All Rust-stack temporaries are dead or restored there (§7) |
@@ -173,10 +173,10 @@ roots live with their owners; policy is swappable.
 │ Collector trait (patina-core)                          │  policy: when / how
 │   └─ MarkSweepCollector (v1, shared by both backends)  │
 ├────────────────────────────────────────────────────────┤
-│ GcRoots trait (patina-core)                            │  what is live
-│   ├─ impl for VmState            (patina-vm)           │
-│   ├─ tree-walker loop roots      (patina-tree-walker)  │
-│   └─ impl for LibraryRegistry    (patina-runtime)      │
+│ RootProvider trait + RootSet (patina-core)             │  what is live
+│   ├─ lent: VmState               (patina-vm)           │
+│   ├─ lent: evaluator, the step   (patina-tree-walker)  │
+│   └─ registered: LibraryRegistry (patina-runtime)      │
 ├────────────────────────────────────────────────────────┤
 │ Heap tracing + sweep (patina-core)                     │  mechanism
 │   ├─ mark bit-vectors per arena                        │
@@ -218,11 +218,21 @@ pub fn trace_winds<V: SlotVisitor + ?Sized>(w: &[DynamicWindRecord], v: &mut V);
 pub fn trace_library<V: SlotVisitor + ?Sized>(l: &Library, v: &mut V);
 pub fn trace_cont_value<V: SlotVisitor + ?Sized>(k: &ContValue, v: &mut V);
 
-/// Implemented by anything that owns live values: backend state, registries,
-/// and per-collection transient roots (the tree-walker's current StepResult).
-pub trait GcRoots {
+/// Implemented by anything that owns live values (#682): registered with
+/// the heap's `RootSet` for every collection until its token drops, or lent
+/// to one collection by the running machine — the VM's `VmState`, the
+/// tree-walker's evaluator and in-flight `StepResult`.
+pub trait RootProvider {
     fn trace_roots(&self, v: &mut dyn SlotVisitor);
+    fn ready(&self) -> bool { true }  // a collection waits for every one
 }
+
+/// The providers registered with one heap (`Heap::root_set`).
+impl RootSet {
+    pub fn register(self: &Rc<Self>, p: Box<dyn RootProvider>) -> RootToken;
+}
+/// Dropping it unregisters the provider; it holds the set weakly.
+pub struct RootToken { /* Weak<RootSet>, id */ }
 
 /// Swappable algorithm. Non-moving is a contract: implementations may not
 /// relocate live slots. Automatic policy is expressed as a threshold (bytes
@@ -231,7 +241,8 @@ pub trait GcRoots {
 /// safe point never asks the collector anything. Crate-private
 /// since #624, with every other way to run a collection (§7).
 pub(crate) trait Collector {
-    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn GcRoots]) -> GcStats;
+    // `roots`: what the machine lends; the registered ones are added.
+    fn collect(&mut self, heap: &mut Heap, roots: &[&dyn RootProvider]) -> GcStats;
 }
 
 pub struct GcStats {
@@ -255,8 +266,13 @@ Notes:
   (`PRD/GC_PRD.md` §11.4). A test visitor that rewrites every slot and
   restores it, `every_slot_the_vm_reports_is_where_its_value_lives`, shows
   each slot is the value's home, not a copy.
-- `collect` takes a slice of root providers: the driving backend passes itself
-  plus the shared registries plus any loop-local roots.
+- `collect` traces the providers registered with the heap's `RootSet` beside
+  the slice the running machine lends it: the VM its `VmState`, the
+  tree-walker its evaluator and current step, as §14's `MutatorSet` will lend
+  each thread (`PRD/GC_PRD.md`). The library registry is registered, by each
+  backend that makes one (`LibraryRegistry::register_roots`), and is not
+  ready while a load holds it, so a collection then waits, as each backend's
+  safe point waited for it before #682.
 - Borrow discipline: `collect` needs `&mut Heap`, so the caller must hold the
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing
@@ -306,7 +322,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`trace_compiled_macro`) |
 | `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `prompt_stack` — each frame's handler and the continuation below it (`trace_prompt_frame`; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`trace_cont_value`), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
-| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `GcRoots::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
+| `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 | `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
 
 \* `Library` heap objects wrap `Rc<Library>` whose `exports` map and `env` are
@@ -389,7 +405,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 | `ContValue` chain | inside `StepResult` | Recursive via `Box<ContValue>`; variants embed `TaggedValue`s (`types.rs:168`) — needs its own trace impl |
 | `Evaluator.global_env` | `eval/mod.rs:43` | `env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
-| `PENDING_ESCAPE` thread-local | `eval/cps_eval/types.rs:21-31` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root |
+| `Evaluator.pending_escape` | `eval/mod.rs` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root, traced by the evaluator's provider. The thread-local `PENDING_ESCAPE` until #682 |
 | Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
 | `Parser.labels` | `crates/patina-frontend/src/parser/mod.rs:47` | Datum labels during parse; GC never runs mid-parse (deferral), listed for completeness |
 | Macro-expansion `MatchEnv` / `Matcher` / `Expander` state | `crates/patina-core/src/pvref.rs:236` etc. | Live only during expansion; covered by deferral |
@@ -397,7 +413,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 ### 5.2 VM
 
 Everything hangs off `VmState` (`crates/patina-vm/src/runtime/vm_state.rs`).
-Its `GcRoots` implementation lives in the child module
+Its `RootProvider` implementation lives in the child module
 `runtime/vm_state/gc_roots.rs`, the only production code outside the storage
 implementation allowed to prune its private weak stores. The five dynamic
 collections are owned by `ExecutionState` and traced through read-only slices;
@@ -483,8 +499,8 @@ evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `trace_library`, which reports the exports pinned until stage 4b makes them cells |
-| `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl GcRoots for LibraryRegistry` (#677) |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl RootProvider for LibraryRegistry`** lives in `patina-runtime`, so both backends share the rule, and each registers the registry it makes with its heap (`LibraryRegistry::register_roots`, #682), as a provider that holds it weakly and is not ready while a load holds it; the per-library walk is `trace_library`, which reports the exports pinned until stage 4b makes them cells |
+| `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl RootProvider for LibraryRegistry` (#677) |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
@@ -521,7 +537,7 @@ a traced struct, or a root provider meets two rules:
    `ExecutionState` and the VM's frame, record, code and continuation traces,
    the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
    registry and the VM's step tracer. A new trace function joins that list,
-   and an `impl GcRoots for` outside test code in a file the list does not
+   and an `impl RootProvider for` outside test code in a file the list does not
    name with `trace_roots` fails the script, so a new root provider cannot
    go unread.
 2. **A sentinel test whose value is reachable only through the new edge**
@@ -982,7 +998,7 @@ call left in the same register.
 loading a large body — cannot collect until it returns to the outermost loop.
 The mitigation path (stage 5+) is to root the re-entrancy boundary explicitly
 (the suspended `StepResult` / the boundary argument slice) and let nested loops
-collect; the `GcRoots` trait already accommodates this (transient providers).
+collect; the `RootProvider` trait already accommodates this (lent providers).
 
 **Backend coexistence:** both backends share one `SharedHeap` in mixed
 scenarios. The deferral rule generalizes: whichever backend is *outermost*
@@ -1384,9 +1400,9 @@ a pair from a finite pending set.
 The stores are now weak tables keyed by their ref objects, resolved as an
 ephemeron-style fixpoint: `trace_roots` skips the stores; marking records the
 id of every `VmContinuationRef` / `VmDelimitedContinuationRef` it reaches;
-`run_mark_phase` then alternates `GcRoots::trace_weak_ids` broadcasts (the VM traces
+`run_mark_phase` then alternates `RootProvider::trace_weak_ids` broadcasts (the VM traces
 payloads for newly recorded ids — which may mark further refs) with worklist
-drains until quiescent, and `GcRoots::sweep_weak` prunes entries whose id was
+drains until quiescent, and `RootProvider::sweep_weak` prunes entries whose id was
 never recorded. A whole dead chain goes in one collection because dead
 payloads are never traced at all. Ids are minted by the `Heap` from one
 counter shared by both continuation kinds and every `VmState` on the heap, so

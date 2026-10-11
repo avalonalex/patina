@@ -7,39 +7,12 @@
 //! - `PromptFrame` - Prompt frames for delimited continuations
 //! - `ExceptionHandler` - Exception handler stack entries
 
+use patina_core::DynamicWindRecord;
 use patina_core::Environment;
 use patina_core::cps_expr::CpsExpr;
 use patina_core::tagged_value::TaggedValue;
-use patina_core::{CpsContinuation, DynamicWindRecord};
 use std::cell::RefCell;
 use std::rc::Rc;
-
-// Thread-local storage for continuation escapes.
-// When a Value::Continuation is invoked inside apply_from_direct,
-// we store it here so the outer eval loop can retrieve it.
-thread_local! {
-    static PENDING_ESCAPE: RefCell<Option<(TaggedValue, Rc<CpsContinuation>)>> = const { RefCell::new(None) };
-}
-
-pub(super) fn set_pending_escape(value: TaggedValue, cont: Rc<CpsContinuation>) {
-    PENDING_ESCAPE.with(|cell| *cell.borrow_mut() = Some((value, cont)));
-}
-
-pub(super) fn take_pending_escape() -> Option<(TaggedValue, Rc<CpsContinuation>)> {
-    PENDING_ESCAPE.with(|cell| cell.borrow_mut().take())
-}
-
-/// Root the in-flight escape value, if any. A hidden root: between
-/// `set_pending_escape` and `take_pending_escape` the value and its
-/// continuation are reachable from nowhere else (design §5.1).
-pub(super) fn trace_pending_escape(visitor: &mut dyn patina_core::SlotVisitor) {
-    PENDING_ESCAPE.with(|cell| {
-        if let Some((value, k)) = cell.borrow().as_ref() {
-            visitor.pinned(*value);
-            visitor.continuation(k);
-        }
-    });
-}
 
 // ==================== Trampoline identity ====================
 //

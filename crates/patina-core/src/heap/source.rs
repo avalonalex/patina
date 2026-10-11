@@ -158,7 +158,7 @@ impl Heap {
 mod tests {
     use super::*;
     use crate::heap::gc::{Collector, MarkSweepCollector};
-    use crate::{GcRoots, ScopeSet, SlotVisitor, SourceMap};
+    use crate::{RootProvider, ScopeSet, SlotVisitor, SourceMap};
 
     #[test]
     fn syntax_copies_keep_independent_locations() {
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn sweep_removes_non_owning_provenance_before_slot_reuse() {
         struct Keep(TaggedValue);
-        impl GcRoots for Keep {
+        impl RootProvider for Keep {
             fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
                 visitor.pinned(self.0);
             }

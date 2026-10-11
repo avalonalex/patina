@@ -5,9 +5,7 @@
 //! - Forcing promises in CPS mode
 
 use super::CpsEvaluator;
-use super::types::{
-    ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult, set_pending_escape,
-};
+use super::types::{ContEnv, ContValue, ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::error::EvalError;
 use patina_core::continuation::{WindStep, next_wind_step};
 use patina_core::tagged_value::TaggedValue;
@@ -111,7 +109,7 @@ impl<'a> CpsEvaluator<'a> {
         if target.trampoline == super::types::current_trampoline() {
             return Ok(super::continuation::resume_step(&target, value));
         }
-        set_pending_escape(value, target);
+        self.evaluator.set_pending_escape(value, target);
         Err(EvalError::ContinuationEscape)
     }
 
