@@ -23,7 +23,7 @@ use crate::types::code_object::CodeObjectId;
 use crate::types::instruction::Instruction;
 use patina_core::heap::SharedHeap;
 use patina_core::tagged_value::TaggedValue;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
@@ -282,7 +282,8 @@ pub struct StepTracer {
 /// `String`s, not `TaggedValue`s. Every field is named (#623); pinned by
 /// `every_vm_state_root_is_traced`, through `VmState::tracer`.
 impl patina_core::GcRoots for StepTracer {
-    fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
+    /// Its snapshots are copies of registers, for display: pinned.
+    fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
         let StepTracer {
             // Pre-formatted strings.
             events: _,
@@ -299,8 +300,9 @@ impl patina_core::GcRoots for StepTracer {
             // An instruction index.
             pre_pc: _,
         } = self;
-        visitor.visit_slice(pre_regs);
-        visitor.visit_slice(pre_all_regs);
+        for &value in pre_regs.iter().chain(pre_all_regs) {
+            visitor.pinned(value);
+        }
     }
 }
 
@@ -363,7 +365,7 @@ impl StepTracer {
     #[allow(clippy::too_many_arguments)]
     pub fn pre_instruction_with_depth(
         &mut self,
-        registers: &[TaggedValue],
+        registers: &[Cell<TaggedValue>],
         frame: &CallFrame,
         code_id: CodeObjectId,
         pc: usize,
@@ -379,11 +381,11 @@ impl StepTracer {
         // Snapshot current frame's registers
         let base = frame.register_base;
         let end = (base + frame.num_regs as usize).min(registers.len());
-        self.pre_regs = registers[base..end].to_vec();
+        self.pre_regs = registers[base..end].iter().map(Cell::get).collect();
 
         // Snapshot all registers for watchpoints
         if !self.filter.watchpoints.is_empty() {
-            self.pre_all_regs = registers.to_vec();
+            self.pre_all_regs = registers.iter().map(Cell::get).collect();
         }
 
         if self.filter.is_full(self.events.len()) {
@@ -410,7 +412,7 @@ impl StepTracer {
     /// Called after each instruction dispatch. Diffs registers and checks watchpoints.
     pub fn post_instruction(
         &mut self,
-        registers: &[TaggedValue],
+        registers: &[Cell<TaggedValue>],
         frame: Option<&CallFrame>,
         heap: &SharedHeap,
     ) {
@@ -429,7 +431,12 @@ impl StepTracer {
             let base = f.register_base;
             let end = (base + f.num_regs as usize).min(registers.len());
             let after = &registers[base..end];
-            for (i, (&old, &new)) in self.pre_regs.iter().zip(after.iter()).enumerate() {
+            for (i, (&old, new)) in self
+                .pre_regs
+                .iter()
+                .zip(after.iter().map(Cell::get))
+                .enumerate()
+            {
                 if old != new {
                     let abs = base + i;
                     if self.filter.watch_regs.is_empty() || self.filter.watch_regs.contains(&abs) {
@@ -450,7 +457,7 @@ impl StepTracer {
         if !self.filter.watchpoints.is_empty() {
             for &idx in &self.filter.watchpoints {
                 let old = self.pre_all_regs.get(idx).copied();
-                let new = registers.get(idx).copied();
+                let new = registers.get(idx).map(Cell::get);
                 if old != new {
                     pending.push(TraceEvent::Watchpoint {
                         step: self.step,

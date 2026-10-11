@@ -19,6 +19,12 @@
 //! visitor method of its own. It is a value like the frame's registers now
 //! (#682).
 //!
+//! The registers and the frames' closures, live and in captured
+//! continuations, are reported as slots, where they live (#682). Everything
+//! else is pinned until a stage makes it heap data: the extents' records and
+//! the code's constants at 4e, the environments at 4b; and the scratch
+//! arguments and the pending escape, empty or unset at every safe point.
+//!
 //! The weak protocol is sound because every store touch (capture, invoke)
 //! is confined to one instruction dispatch and nested loops defer
 //! collection — so at a collecting safe point an unmarked ref proves its
@@ -29,7 +35,7 @@
 //! tracing — see `GcDeferGuard` and §7. The environments `with_globals` sets
 //! aside were too, until they moved onto the traced `saved_globals` (#677).
 
-use patina_core::{GC_CHECK, GcRoots, GcVisitor};
+use patina_core::{GC_CHECK, GcRoots, GcVisitor, SlotVisitor, trace_winds_with};
 use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
@@ -38,6 +44,7 @@ use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
 use patina_core::TaggedValue;
+use std::cell::Cell;
 
 use super::VmState;
 
@@ -61,7 +68,7 @@ const RETIRED: TaggedValue = if GC_CHECK {
 #[cold]
 #[inline(never)]
 pub(in crate::runtime) fn retire_registers(
-    registers: &mut [TaggedValue],
+    registers: &mut [Cell<TaggedValue>],
     frames: &[CallFrame],
     base_at_capture: usize,
 ) {
@@ -79,7 +86,7 @@ pub(in crate::runtime) fn retire_registers(
             // A tail call can reuse a window larger than the new code needs.
             let live = roots.get(reg / 64).copied().unwrap_or(0) & (1 << (reg % 64)) != 0;
             if !live || dropped == Some(reg) {
-                *value = RETIRED;
+                value.set(RETIRED);
             }
         }
     }
@@ -106,7 +113,7 @@ impl GcRoots for VmState {
     /// no value. The sentinel test `every_vm_state_root_is_traced`
     /// (`trace_sentinel_tests.rs`) puts a fresh value in each traced field
     /// and reads it back after a collection.
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let VmState {
             execution,
             pending_escape,
@@ -175,7 +182,10 @@ impl GcRoots for VmState {
 
         // The register file, frames and dynamic extents.
         execution.trace_roots(visitor);
-        visitor.visit_slice(scratch_args);
+        // Empty at every safe point, so pinned: nothing would be updated.
+        for &value in scratch_args {
+            visitor.pinned(value);
+        }
 
         // A hidden root while it is set: between the stash in `across_reentry`
         // and the `take()` in `run_loop_until`, the escaping continuation's
@@ -185,7 +195,7 @@ impl GcRoots for VmState {
         // `trace_pending_escape`, which roots the same value for the same
         // reason.
         if let Some(v) = pending_escape {
-            visitor.visit(*v);
+            visitor.pinned(*v);
         }
 
         // The constants of every code object still loaded. A form's code stays
@@ -198,9 +208,9 @@ impl GcRoots for VmState {
             trace_code(code, visitor);
         }
 
-        visitor.visit_env(globals);
+        visitor.env(globals);
         for env in saved_globals {
-            visitor.visit_env(env);
+            visitor.env(env);
         }
 
         // Register snapshots the tracer holds between its pre/post hooks.
@@ -210,7 +220,7 @@ impl GcRoots for VmState {
         }
     }
 
-    fn trace_weak_ids(&self, ids: &[u64], visitor: &mut GcVisitor<'_>) {
+    fn trace_weak_ids(&self, ids: &[u64], visitor: &mut dyn SlotVisitor) {
         // Each id was proven live by marking; an id keys at most one entry
         // across both stores (heap-minted), and one not found here belongs
         // to a dead temporary VmState — nothing to trace.
@@ -248,8 +258,10 @@ fn prune_store<T>(store: &std::cell::RefCell<FxHashMap<u64, T>>, visitor: &GcVis
 }
 
 /// The constants of a loaded code object: every heap value its instructions
-/// can load. Every field is named (#623).
-fn trace_code(code: &CodeObject, visitor: &mut GcVisitor<'_>) {
+/// can load. Every field is named (#623). Pinned: a code object is shared
+/// through `Rc` and never written, until stage 4e makes its constants a
+/// descriptor's.
+fn trace_code(code: &CodeObject, visitor: &mut dyn SlotVisitor) {
     let CodeObject {
         // A code id.
         id: _,
@@ -272,10 +284,13 @@ fn trace_code(code: &CodeObject, visitor: &mut GcVisitor<'_>) {
         // A count.
         live_closures: _,
     } = code;
-    visitor.visit_slice(constants);
+    for &constant in constants {
+        visitor.pinned(constant);
+    }
 }
 
-pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut GcVisitor<'_>) {
+/// Each frame's closure, a slot like the registers (#682).
+pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut dyn SlotVisitor) {
     for frame in frames {
         let CallFrame {
             // An instruction index.
@@ -291,15 +306,17 @@ pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut GcVis
             // code object a frame or a captured continuation can run (#338).
             code: _,
         } = frame;
-        visitor.visit(*closure);
+        visitor.slot(closure);
     }
 }
 
-pub(in crate::runtime) fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut GcVisitor<'_>) {
-    visitor.visit_winds_with(winds, trace_handler);
+/// The dynamic extents' records are pinned until stage 4e makes them heap
+/// data, along with the continuations that copy them.
+pub(in crate::runtime) fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut dyn SlotVisitor) {
+    trace_winds_with(winds, visitor, trace_handler);
 }
 
-pub(in crate::runtime) fn trace_prompts(prompts: &[PromptFrame], visitor: &mut GcVisitor<'_>) {
+pub(in crate::runtime) fn trace_prompts(prompts: &[PromptFrame], visitor: &mut dyn SlotVisitor) {
     for prompt in prompts {
         let PromptFrame {
             tag,
@@ -313,30 +330,32 @@ pub(in crate::runtime) fn trace_prompts(prompts: &[PromptFrame], visitor: &mut G
             // A depth.
             exception_handler_depth: _,
         } = prompt;
-        visitor.visit(*tag);
-        visitor.visit(*handler);
+        visitor.pinned(*tag);
+        visitor.pinned(*handler);
     }
 }
 
 pub(in crate::runtime) fn trace_handlers(
     handlers: &[ExceptionHandler],
-    visitor: &mut GcVisitor<'_>,
+    visitor: &mut dyn SlotVisitor,
 ) {
     for handler in handlers {
         trace_handler(handler, visitor);
     }
 }
 
-fn trace_handler(handler: &ExceptionHandler, visitor: &mut GcVisitor<'_>) {
+fn trace_handler<V: SlotVisitor + ?Sized>(handler: &ExceptionHandler, visitor: &mut V) {
     let ExceptionHandler {
         handler,
         // A frame depth.
         stack_depth: _,
     } = handler;
-    visitor.visit(*handler);
+    visitor.pinned(*handler);
 }
 
-fn trace_continuation(continuation: &VmContinuation, visitor: &mut GcVisitor<'_>) {
+/// A snapshot's registers and frames' closures are slots, as the live
+/// ones are; its extents are pinned, as theirs are.
+fn trace_continuation(continuation: &VmContinuation, visitor: &mut dyn SlotVisitor) {
     let VmContinuation {
         frames,
         dynamic_winds,
@@ -352,7 +371,7 @@ fn trace_continuation(continuation: &VmContinuation, visitor: &mut GcVisitor<'_>
         // Re-entry boundary ids.
         reentry: _,
     } = continuation;
-    visitor.visit_slice(registers);
+    visitor.slots(registers);
     trace_frames(frames, visitor);
     trace_winds(dynamic_winds, visitor);
     trace_prompts(prompt_stack, visitor);
@@ -361,7 +380,7 @@ fn trace_continuation(continuation: &VmContinuation, visitor: &mut GcVisitor<'_>
 
 fn trace_delimited_continuation(
     continuation: &VmDelimitedContinuation,
-    visitor: &mut GcVisitor<'_>,
+    visitor: &mut dyn SlotVisitor,
 ) {
     let VmDelimitedContinuation {
         frames,
@@ -380,7 +399,7 @@ fn trace_delimited_continuation(
         prompt_stack,
         exception_handlers,
     } = continuation;
-    visitor.visit_slice(registers);
+    visitor.slots(registers);
     trace_frames(frames, visitor);
     trace_winds(dynamic_winds, visitor);
     trace_prompts(prompt_stack, visitor);

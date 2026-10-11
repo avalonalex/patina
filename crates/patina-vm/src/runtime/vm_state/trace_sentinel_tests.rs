@@ -6,6 +6,9 @@
 //! collects; and checks every value survived (`patina_core::heap::sentinels`,
 //! which names the field of one that did not). The collector is driven
 //! directly, through `collect_for_tests`, as in `weak_continuation_tests.rs`.
+//!
+//! Beside them, the test that the provider reports its slots where they live,
+//! by a visitor that writes into each and puts it back (#682).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -46,14 +49,14 @@ fn code_holding(constants: Vec<TaggedValue>) -> Rc<CodeObject> {
     })
 }
 
-/// A frame running `code` for the closure `closure`, a value the frame holds
-/// as a bare object index.
+/// A frame running `code` for the closure `closure`, which the frame holds
+/// in a slot.
 fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> CallFrame {
     CallFrame {
         pc: 0,
         register_base: 0,
         num_regs: 1,
-        closure,
+        closure: Cell::new(closure),
         return_reg: 0,
         code: Rc::clone(code),
     }
@@ -130,7 +133,7 @@ fn every_vm_state_root_is_traced() {
     let code = code_holding(vec![constant]);
     let state = VmState {
         execution: ExecutionState::from_parts(
-            vec![register],
+            vec![Cell::new(register)],
             vec![frame(&code, closure)],
             vec![prompt(tag, prompt_handler)],
             vec![wind(before, after, wind_handler)],
@@ -235,7 +238,7 @@ fn every_continuation_snapshot_field_is_traced() {
         dynamic_winds: vec![wind(before, after, wind_handler)],
         prompt_stack: vec![prompt(tag, prompt_handler)],
         exception_handlers: vec![handler(installed)],
-        registers: vec![register],
+        registers: vec![Cell::new(register)],
         deliver_reg: 0,
         exit_status: None,
         abort_landing: false,
@@ -254,7 +257,7 @@ fn every_continuation_snapshot_field_is_traced() {
     let delimited_ref = state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
         frames: vec![frame(&code, closure)],
         dynamic_winds: vec![wind(before, after, wind_handler)],
-        registers: vec![register],
+        registers: vec![Cell::new(register)],
         base_at_capture: 0,
         deliver_reg: Some(0),
         depth_at_capture: 0,
@@ -269,4 +272,132 @@ fn every_continuation_snapshot_field_is_traced() {
     assert_eq!(state.continuation_store.borrow().len(), 1);
     assert_eq!(state.delimited_continuation_store.borrow().len(), 1);
     s.assert_survived(&state.heap.borrow());
+}
+
+// ----------------------------------------------------------------------------
+// Slots (#682)
+// ----------------------------------------------------------------------------
+
+/// A visitor that writes a marker into every slot it is shown, remembering by
+/// the slot's address what it held, and on its second pass puts that back.
+#[derive(Default)]
+struct Rewriter {
+    /// Each slot shown: what it held, and the marker written over it.
+    slots: std::collections::HashMap<*const Cell<TaggedValue>, (TaggedValue, TaggedValue)>,
+    restoring: bool,
+}
+
+impl patina_core::SlotVisitor for Rewriter {
+    fn slot(&mut self, slot: &Cell<TaggedValue>) {
+        if self.restoring {
+            slot.set(self.slots[&std::ptr::from_ref(slot)].0);
+        } else {
+            let marker = TaggedValue::fixnum(1_000 + self.slots.len() as i64);
+            self.slots
+                .insert(std::ptr::from_ref(slot), (slot.get(), marker));
+            slot.set(marker);
+        }
+    }
+
+    // Values by copy, which no visitor writes.
+    fn pinned(&mut self, _value: TaggedValue) {}
+    fn env(&mut self, _env: &Environment) {}
+    fn continuation(&mut self, _k: &Rc<patina_core::CpsContinuation>) {}
+    fn cont_env(&mut self, _cont_env: &patina_core::cont_value::ContEnv) {}
+    fn expr_literals(&mut self, _expr: &patina_core::CpsExpr) {}
+}
+
+impl Rewriter {
+    /// The marker `slot` was given.
+    fn marker(&self, slot: &Cell<TaggedValue>) -> TaggedValue {
+        self.slots
+            .get(&std::ptr::from_ref(slot))
+            .expect("the slot was reported")
+            .1
+    }
+}
+
+/// The VM reports its registers and its frames' closures where they live,
+/// the live ones and a captured continuation's, full and delimited: a
+/// visitor that writes into each slot it is shown changes the VM's own
+/// state, and puts it back. The other providers, the tree-walker's, the
+/// library registry and the step tracer, report every value pinned.
+#[test]
+fn every_slot_the_vm_reports_is_where_its_value_lives() {
+    use patina_core::GcRoots;
+    let fixnum = TaggedValue::fixnum;
+    let mut state = VmState::new(Rc::new(Environment::new()));
+    let code = code_holding(Vec::new());
+    state.execution = ExecutionState::from_parts(
+        vec![Cell::new(fixnum(1)), Cell::new(fixnum(2))],
+        vec![frame(&code, fixnum(3))],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    state.alloc_vm_continuation(VmContinuation {
+        frames: vec![frame(&code, fixnum(5))],
+        dynamic_winds: Vec::new(),
+        prompt_stack: Vec::new(),
+        exception_handlers: Vec::new(),
+        registers: vec![Cell::new(fixnum(4))],
+        deliver_reg: 0,
+        exit_status: None,
+        abort_landing: false,
+        reentry: Rc::from(Vec::new()),
+    });
+    state.alloc_vm_delimited_continuation(VmDelimitedContinuation {
+        frames: vec![frame(&code, fixnum(7))],
+        dynamic_winds: Vec::new(),
+        registers: vec![Cell::new(fixnum(6))],
+        base_at_capture: 0,
+        deliver_reg: None,
+        depth_at_capture: 0,
+        wind_depth_at_capture: 0,
+        handler_depth_at_capture: 0,
+        prompt_stack: Vec::new(),
+        exception_handlers: Vec::new(),
+    });
+    let ids: Vec<u64> = (state.continuation_store.borrow().keys())
+        .chain(state.delimited_continuation_store.borrow().keys())
+        .copied()
+        .collect();
+    let values = |state: &VmState| {
+        let mut values = Vec::new();
+        for_each_slot(state, |slot| values.push(slot.get()));
+        values
+    };
+    let held = values(&state);
+    assert_eq!(held, (1..=7).map(fixnum).collect::<Vec<_>>());
+
+    let mut rewriter = Rewriter::default();
+    state.trace_roots(&mut rewriter);
+    state.trace_weak_ids(&ids, &mut rewriter);
+    assert_eq!(rewriter.slots.len(), 7, "every slot, and each once");
+    for_each_slot(&state, |slot| assert_eq!(slot.get(), rewriter.marker(slot)));
+
+    rewriter.restoring = true;
+    state.trace_roots(&mut rewriter);
+    state.trace_weak_ids(&ids, &mut rewriter);
+    assert_eq!(values(&state), held);
+}
+
+/// Every slot the VM holds a value in, read through the state that owns
+/// it: the live registers and frames' closures, and the one full and one
+/// delimited capture's.
+fn for_each_slot(state: &VmState, mut each: impl FnMut(&Cell<TaggedValue>)) {
+    let execution = &state.execution;
+    let full = state.continuation_store.borrow();
+    let delimited = state.delimited_continuation_store.borrow();
+    let full = full.values().next().expect("one full capture");
+    let delimited = delimited.values().next().expect("one delimited capture");
+    for slot in (execution.registers().iter())
+        .chain(execution.frames().iter().map(|f| &f.closure))
+        .chain(&full.registers)
+        .chain(full.frames.iter().map(|f| &f.closure))
+        .chain(&delimited.registers)
+        .chain(delimited.frames.iter().map(|f| &f.closure))
+    {
+        each(slot);
+    }
 }

@@ -17,14 +17,17 @@
 //! Everything else the tree-walker keeps on the Rust stack (suspended outer
 //! `StepResult`s in nested trampolines, primitive argument vectors) is handled
 //! by deferral, not tracing — see `GcDeferGuard` and §7.
+//!
+//! Every value is reported pinned, by copy: the tree-walker's heaps never move
+//! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682).
 
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{DynamicWindRecord, GcRoots, GcVisitor};
+use patina_core::{DynamicWindRecord, GcRoots, SlotVisitor, trace_winds};
 
 use super::types::{ExceptionHandler, PromptFrame, StepResult, trace_pending_escape};
 use crate::eval::Evaluator;
 // Continuation-value tracing moved to patina-core with ContValue itself.
-use patina_core::{trace_cont_env, trace_cont_value, trace_exception_handler, trace_prompt_frame};
+use patina_core::{trace_cont_value, trace_exception_handler, trace_prompt_frame};
 
 // Every provider here takes its struct apart by name (#623), so a new field
 // does not compile until it is traced or written `field: _` with the reason it
@@ -32,7 +35,7 @@ use patina_core::{trace_cont_env, trace_cont_value, trace_exception_handler, tra
 // value in each traced field and read it back after a collection.
 
 impl GcRoots for Evaluator {
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let Evaluator {
             global_env,
             // Which debug stages print.
@@ -53,7 +56,7 @@ impl GcRoots for Evaluator {
             // An error report: strings and library names.
             bootstrap_error: _,
         } = self;
-        visitor.visit_env(global_env);
+        visitor.env(global_env);
     }
 }
 
@@ -65,7 +68,7 @@ impl GcRoots for Evaluator {
 pub(super) struct EscapeRoots;
 
 impl GcRoots for EscapeRoots {
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         trace_pending_escape(visitor);
     }
 }
@@ -81,18 +84,18 @@ pub(super) struct StepRoots<'a> {
 }
 
 impl GcRoots for StepRoots<'_> {
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         let StepRoots { step, expr } = self;
         if let Some(expr) = expr {
-            visitor.visit_expr_literals(expr);
+            visitor.expr_literals(expr);
         }
         trace_step(step, visitor);
     }
 }
 
-fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
+fn trace_step(step: &StepResult, visitor: &mut dyn SlotVisitor) {
     match step {
-        StepResult::Done(value) => visitor.visit(*value),
+        StepResult::Done(value) => visitor.pinned(*value),
 
         StepResult::Continue {
             expr,
@@ -103,8 +106,8 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
             dynamic_winds,
             exception_handlers,
         } => {
-            visitor.visit_expr_literals(expr);
-            visitor.visit_env(env);
+            visitor.expr_literals(expr);
+            visitor.env(env);
             // Delivered to the continuation and not yet bound: the trampoline
             // polls between the invocation and the step that binds it (#680).
             if let Some((
@@ -113,9 +116,9 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
                 value,
             )) = param
             {
-                visitor.visit(*value);
+                visitor.pinned(*value);
             }
-            trace_cont_env(cont_env, visitor);
+            visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }
 
@@ -128,10 +131,10 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
             dynamic_winds,
             exception_handlers,
         } => {
-            visitor.visit(*value);
+            visitor.pinned(*value);
             trace_cont_value(cont, visitor);
-            visitor.visit_env(env);
-            trace_cont_env(cont_env, visitor);
+            visitor.env(env);
+            visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }
 
@@ -145,11 +148,13 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
             dynamic_winds,
             exception_handlers,
         } => {
-            visitor.visit(*proc);
-            visitor.visit_slice(args);
+            visitor.pinned(*proc);
+            for &arg in args {
+                visitor.pinned(arg);
+            }
             trace_cont_value(cont, visitor);
-            visitor.visit_env(env);
-            trace_cont_env(cont_env, visitor);
+            visitor.env(env);
+            visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }
 
@@ -164,8 +169,8 @@ fn trace_step(step: &StepResult, visitor: &mut GcVisitor<'_>) {
             exception_handlers,
         } => {
             trace_cont_value(cont, visitor);
-            visitor.visit_env(env);
-            trace_cont_env(cont_env, visitor);
+            visitor.env(env);
+            visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
         }
     }
@@ -175,12 +180,12 @@ fn trace_stacks(
     prompt_stack: &[PromptFrame],
     dynamic_winds: &[DynamicWindRecord],
     exception_handlers: &[ExceptionHandler],
-    visitor: &mut GcVisitor<'_>,
+    visitor: &mut dyn SlotVisitor,
 ) {
     for frame in prompt_stack {
         trace_prompt_frame(frame, visitor);
     }
-    visitor.visit_winds(dynamic_winds);
+    trace_winds(dynamic_winds, visitor);
     for handler in exception_handlers {
         trace_exception_handler(handler, visitor);
     }

@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::gc::{Collector, GcRoots, GcVisitor, MarkSweepCollector, trace_cont_value};
+use super::gc::{Collector, GcRoots, MarkSweepCollector, SlotVisitor, trace_cont_value};
 use super::sentinels::Sentinels;
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule, Pattern, Template};
@@ -28,20 +28,24 @@ use crate::tagged_value::TaggedValue;
 /// A root provider that runs one closure: the structure under test.
 struct Only<F>(F);
 
-impl<F: Fn(&mut GcVisitor<'_>)> GcRoots for Only<F> {
-    fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
+impl<F: Fn(&mut dyn SlotVisitor)> GcRoots for Only<F> {
+    fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
         (self.0)(visitor)
     }
 }
 
 /// Collect `heap` with `trace` as the only root.
-pub(crate) fn collect_only(heap: &mut Heap, trace: impl Fn(&mut GcVisitor<'_>)) {
+pub(crate) fn collect_only(heap: &mut Heap, trace: impl Fn(&mut dyn SlotVisitor)) {
     MarkSweepCollector::new().collect(heap, &[&Only(trace)]);
 }
 
 /// Collect with these values as the only roots.
 pub(crate) fn collect_from(heap: &mut Heap, roots: &[TaggedValue]) {
-    collect_only(heap, |visitor| visitor.visit_slice(roots));
+    collect_only(heap, |visitor| {
+        for &value in roots {
+            visitor.pinned(value);
+        }
+    });
 }
 
 /// An environment on `heap` whose one binding holds `value`.
@@ -297,7 +301,7 @@ fn expression_literals_under_every_node() {
         cont: name(),
     }))));
 
-    collect_only(&mut heap, |visitor| visitor.visit_expr_literals(&expr));
+    collect_only(&mut heap, |visitor| visitor.expr_literals(&expr));
     s.assert_survived(&heap);
 }
 

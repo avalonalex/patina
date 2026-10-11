@@ -149,7 +149,7 @@ impl Library {
 
     /// Report the collector's edges out of this library: each export's value
     /// and the library's environment, its two root sets
-    /// (`docs/GC_DESIGN.md` §5.3). `GcVisitor::visit_library` is the caller.
+    /// (`docs/GC_DESIGN.md` §5.3). `trace_library` is the caller.
     ///
     /// Every field is named (#623), so a new one does not compile here until
     /// it is reported or written `field: _` with its reason. Pinned by the

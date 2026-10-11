@@ -190,32 +190,38 @@ roots live with their owners; policy is swappable.
 ```rust
 // patina-core::heap::gc
 
-/// Marking front-end handed to root providers and used internally by tracing.
+/// What a root provider reports its values to (#682, `PRD/GC_PRD.md` §14):
+/// each value where it lives, as a slot, or by copy, pinned. Structures
+/// outside the heap shared through `Rc` are handed over whole, for the
+/// visitor to walk once.
+pub trait SlotVisitor {
+    fn slot(&mut self, slot: &Cell<TaggedValue>);       // precise, updatable
+    fn slots(&mut self, slots: &[Cell<TaggedValue>]);   // a register file
+    fn pinned(&mut self, value: TaggedValue);           // precise, never moved
+    fn env(&mut self, env: &Environment);               // until 4b
+    fn continuation(&mut self, k: &Rc<CpsContinuation>); // until 4f
+    fn cont_env(&mut self, cont_env: &ContEnv);         // until 4f
+    fn expr_literals(&mut self, expr: &CpsExpr);        // until 4f
+}
+
+/// The collector's marker, one `SlotVisitor`: it marks a slot's value and a
+/// pinned value alike, since nothing moves yet. Its by-value edge (`visit`)
+/// and its walks (`visit_env`, `visit_continuation`, ...) are crate-private,
+/// for the heap's own tracing.
 pub struct GcVisitor<'h> { /* &mut mark bitmaps, worklist, env-dedup set */ }
 
-impl GcVisitor<'_> {
-    /// The normal edge: mark + enqueue any heap reference; no-op for immediates.
-    pub fn visit(&mut self, v: TaggedValue);
-    /// Trace through an environment chain; deduped by Rc::as_ptr so the
-    /// global env is not re-walked once per closure.
-    pub fn visit_env(&mut self, env: &Rc<Environment>);
-    /// Trace a continuation / expression tree held outside the arenas.
-    pub fn visit_continuation(&mut self, k: &Rc<CpsContinuation>);
-    pub fn visit_expr_literals(&mut self, expr: &CpsExpr);
-    /// Shared trace rules, so each is authored once rather than per backend.
-    pub fn visit_promise(&mut self, p: &RefCell<PromiseState>);
-    pub fn visit_wind(&mut self, w: &DynamicWindRecord);
-    pub fn visit_winds(&mut self, w: &[DynamicWindRecord]);
-    pub fn visit_library(&mut self, l: &Library);
-    /// Dedup hook for root providers' own Rc-shared structures (§9.4).
-    /// Returns false if this identity was already traced this collection.
-    pub fn visit_once(&mut self, identity: usize) -> bool;
-}
+/// Shared trace rules, so each is authored once rather than per backend, and
+/// generic over the visitor, so the heap's own tracing calls them on
+/// `GcVisitor` directly.
+pub fn trace_wind<V: SlotVisitor + ?Sized>(w: &DynamicWindRecord, v: &mut V);
+pub fn trace_winds<V: SlotVisitor + ?Sized>(w: &[DynamicWindRecord], v: &mut V);
+pub fn trace_library<V: SlotVisitor + ?Sized>(l: &Library, v: &mut V);
+pub fn trace_cont_value<V: SlotVisitor + ?Sized>(k: &ContValue, v: &mut V);
 
 /// Implemented by anything that owns live values: backend state, registries,
 /// and per-collection transient roots (the tree-walker's current StepResult).
 pub trait GcRoots {
-    fn trace_roots(&self, v: &mut GcVisitor<'_>);
+    fn trace_roots(&self, v: &mut dyn SlotVisitor);
 }
 
 /// Swappable algorithm. Non-moving is a contract: implementations may not
@@ -238,9 +244,17 @@ pub struct GcStats {
 
 Notes:
 
-- `GcVisitor::visit_env` exists because environments are not heap objects; the
+- `SlotVisitor::env` exists because environments are not heap objects; the
   dedup set (keyed by `Rc::as_ptr`) is essential — every closure points at the
   globals env, and without dedup marking would be quadratic.
+- A provider reports a value as a slot where it lives in a `Cell`: the VM's
+  registers and its frames' closures, live and in captured continuations.
+  Everything else is pinned until the stage that makes it heap data — the
+  extents' records and code constants at 4e, environments and library exports
+  at 4b — and the tree-walker's values always, its heaps never moving
+  (`PRD/GC_PRD.md` §11.4). A test visitor that rewrites every slot and
+  restores it, `every_slot_the_vm_reports_is_where_its_value_lives`, shows
+  each slot is the value's home, not a copy.
 - `collect` takes a slice of root providers: the driving backend passes itself
   plus the shared registries plus any loop-local roots.
 - Borrow discipline: `collect` needs `&mut Heap`, so the caller must hold the
@@ -373,7 +387,7 @@ the `current_step: StepResult` local** in `eval_in_env`'s trampoline loop
 |------|----------|-------|
 | `current_step: StepResult` | Rust local in the trampoline loop | Carries value/proc/args, env, the value delivered to a continuation that the next step binds (#680), `ContEnv` continuation chain, `prompt_stack`, `dynamic_winds`, `exception_handlers` (`eval/cps_eval/types.rs`). Passed to `collect` as a transient root at the safe point. |
 | `ContValue` chain | inside `StepResult` | Recursive via `Box<ContValue>`; variants embed `TaggedValue`s (`types.rs:168`) — needs its own trace impl |
-| `Evaluator.global_env` | `eval/mod.rs:43` | `visit_env` |
+| `Evaluator.global_env` | `eval/mod.rs:43` | `env` |
 | `LibraryRegistry` | `eval/mod.rs:47` | §5.3 |
 | `PENDING_ESCAPE` thread-local | `eval/cps_eval/types.rs:21-31` | Holds `(TaggedValue, Rc<CpsContinuation>)` between set and take — a genuine hidden root |
 | Suspended outer `StepResult`s in nested trampolines | `run_trampoline` (`eval/cps_eval/mod.rs`), entered by `apply_from_direct_with` and the `eval` primitive | **Not rooted** — handled by deferral (§7), not by tracing. Since 2026-09-01 only Rust-primitive callbacks and parameter converters run there; a continuation jump's wind thunks are ordinary steps (`ContValue::Jump`) and are traced like any other |
@@ -391,16 +405,16 @@ the inventory below uses their component names (see `VM_RUNTIME.md` §2.2).
 
 | Field | Root? | Notes |
 |-------|-------|-------|
-| `registers` | **yes** | Whole vector after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
-| `frames[*].closure` | **yes** | A value, visited as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #682 |
-| `pending_escape` | **yes** | Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
-| `scratch_args` | yes | Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
-| `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
-| `code_store[*].constants` | **yes** | Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
-| `globals` | **yes** | `visit_env` |
-| `saved_globals` | **yes** | `visit_env` for each environment `with_globals` has set aside, so that a library body run under the swap may collect (#677) |
-| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies, frames (each with a bare closure index), wind/prompt/handler stacks (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
-| `tracer` | yes | `StepTracer.pre_regs`/`pre_all_regs` (`crates/patina-vm/src/tracer.rs:270-272`) |
+| `registers` | **yes** | Slots (`Cell`s, #682), the whole vector, after completed expression temporaries are cleared using per-PC compiler maps (#423); local bindings remain conservative |
+| `frames[*].closure` | **yes** | A slot, reported as the registers are: the frame's `VmClosure`, or the immediate `CallFrame::NO_CLOSURE` (`types/mod.rs`). A bare `Option<ObjectIndex>` with a visitor method of its own until #683 |
+| `pending_escape` | **yes** | Pinned. Value parked while crossing a Rust re-entry boundary; multiple values otherwise travel in ordinary registers as heap values |
+| `scratch_args` | yes | Pinned. Empty at every safe point: `mem::take`n while a primitive call holds it, and emptied when the call is done (since #639: the last call's arguments had stayed in it, and a dead key passed to `make-ephemeron` survived a `(gc)`). Rooting it is free and future-proof |
+| `prompt_stack`, `dynamic_winds`, `exception_handlers` | **yes** | Pinned until stage 4e makes them heap data. `tag`/`handler`/`before`/`after` values, and a wind record's `handlers` — the stack of its own `dynamic-wind` call, which its thunks run under and which nothing else holds once the live stack has moved on (`types/continuation.rs`). An `ExceptionHandler` is one procedure now — it used to also carry the wind depth `raise` unwound to, which no raise path needs since Track L families 22/28 |
+| `code_store[*].constants` | **yes** | Pinned until stage 4e makes them a descriptor's. Kept while a frame, a captured continuation or a live closure can run the code; a finished form's code is released with its constants (#338) |
+| `globals` | **yes** | `env` |
+| `saved_globals` | **yes** | `env` for each environment `with_globals` has set aside, so that a library body run under the swap may collect (#677) |
+| `continuation_store` / `delimited_continuation_store` | **weak** (stage 5) | `VmContinuation` snapshots hold full `registers` copies and frames, each with its closure, all slots as the live ones are, and wind/prompt/handler stacks, pinned as theirs are (`types/continuation.rs:59,:101`). Heap-side `VmContinuationRef { id, bytes }` is opaque (its `bytes` charges the snapshot to the trigger, §6); only this impl reaches the payload — but only for ids whose ref object was marked (`trace_weak_ids` fixpoint), and entries whose ref died are pruned (`sweep_weak`). Tracing them strongly made every capture immortal (§9.5). |
+| `tracer` | yes | Pinned: `StepTracer.pre_regs`/`pre_all_regs`, copies of registers for display (`crates/patina-vm/src/tracer.rs`) |
 | `library_registry` | yes | §5.3 |
 | `primitive_registry`, `shadowed_primitives`, `fs` | no | No TaggedValues |
 
@@ -469,8 +483,8 @@ evaluates, still loads under `desugar_with_imports`' guard (§7; point C of
 
 | Root | Location | Notes |
 |------|----------|-------|
-| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `GcVisitor::visit_library` |
-| `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced by the same `impl GcRoots for LibraryRegistry` (#677) |
+| `LibraryRegistry.libraries[*]` | `crates/patina-runtime/src/library_registry.rs` | Each `Library` has `exports: HashMap<String, TaggedValue>` **and** `env: Rc<Environment>` — two root sets per library. **`impl GcRoots for LibraryRegistry`** lives in `patina-runtime` so both backends pass it as a root rather than restating the rule; the per-library walk is `trace_library`, which reports the exports pinned until stage 4b makes them cells |
+| `LibraryRegistry.loading_stack[*]` | `crates/patina-runtime/src/library_registry.rs` | A library being loaded: the environment it is built in and the body forms it has not yet run, handed over by `ParsedLibrary::hand_to` and traced, pinned, by the same `impl GcRoots for LibraryRegistry` (#677) |
 | `ParsedLibrary.body` | `crates/patina-runtime/src/library_loader.rs` | Unevaluated forms between parsing and the hand-over to the load's entry, or for the whole load where nothing hands them over; covered by deferral |
 | `Heap.symbol_table` | `heap/mod.rs:255` | Treated as a root set in v1 → symbols immortal (§9.2) |
 | `Heap.handles` | `heap/handles.rs` | What hosts keep across evaluations, each rooted until its handle is dropped: an `Owned` handle's value (#605) — what the `eval_*_owned` methods and `Interpreter::lookup` answer, and the last value of a program the interpreter is running — and an `OwnedEnvironment`'s environment (#620), traced by `visit_env` with everything bound in it. Also the environments hosts hold by their own `Rc` and lend to the legacy pipeline, kept weakly and traced while anything holds them. Visited in `GcVisitor::new` beside the intern tables, so every collection on either backend traces them; visited, not only marked, since a handle's value can be anything. A handle holds its table weakly and keeps nothing alive |
@@ -499,7 +513,7 @@ a traced struct, or a root provider meets two rules:
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
    the functions it lists: `trace_object_children` and the functions it calls
    (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
-   `visit_library`, the wind, prompt and handler traces, `trace_cont_value`)
+   `trace_library`, the wind, prompt and handler traces, `trace_cont_value`)
    in `heap/gc.rs`; the literal walks those reach, `Pattern`'s and
    `Template`'s `for_each_literal` and `CpsExpr::for_each_literal`;
    `Environment::for_each_gc_edge` and
@@ -1301,19 +1315,23 @@ before the fix: **6.8 s for one collection at nesting depth 26**, roughly
 1.9× per added level.
 
 This is why every `Rc`-shared structure the visitor walks has a dedup set
-(`visit_env`, `visit_continuation`, `visit_expr_literals`), and why
-[`GcVisitor::visit_once`] exists — root providers must be able to dedup their
-own shared structures. **Stage 3 check:** `VmContinuation` snapshots and
-`CodeObject` sharing have the same potential; if a VM root provider walks an
-`Rc` graph, it must route through `visit_once`.
+(`visit_env`, `visit_continuation`, `visit_expr_literals`, and
+`GcVisitor::visit_once` for `ContEnv` chains), and why a root provider hands
+such a structure to its `SlotVisitor` whole (`env`, `continuation`,
+`cont_env`, `expr_literals`) rather than walking it: the visitor walks it
+once however many paths reach it. **Stage 3 check:** `VmContinuation`
+snapshots and `CodeObject` sharing have the same potential; if a VM root
+provider comes to walk an `Rc` graph, it hands it over the same way, through
+a method of its own.
 
 **Dedup does not bound the Rust call stack.** Larceny family 6 exposed this
 on 2026-09-12: `trace_cont_value(Local)` called `trace_cont_env`, which called
 `trace_cont_value` for the next local continuation. Each node was visited
 only once, but a deep chain still overflowed during collection. The existing
 iterative walk through boxed wrappers did not cover this edge.
-`trace_cont_env` now deduplicates on enqueue and queues an O(1) `ContEnv`
-snapshot. `GcVisitor::drain` processes these alongside heap values and
+The continuation-environment walk (`trace_cont_env` then, `GcVisitor`'s
+`SlotVisitor::cont_env` since #682) now deduplicates on enqueue and queues an
+O(1) `ContEnv` snapshot. `GcVisitor::drain` processes these alongside heap values and
 captured continuations until all three worklists are empty. The snapshot
 keeps queued entries alive, and every local continuation still traces its
 environment, expression literals and captured continuation environment.
@@ -1341,7 +1359,7 @@ grew **8.8 µs → 107–151 µs per collection** — by the last collection, **
 the entire root-tracing phase** and ~19% of the pause. The cost is the hash-map
 walk and chasing scattered `Rc<CodeObject>`s, not the marking (only ~1.9
 constants each). Fix: append constants to one flat `Vec<TaggedValue>` at load
-time and `visit_slice` it once, or mark them into a persistent immortal bitmap
+time and report it once, or mark them into a persistent immortal bitmap
 seeded into `MarkBits::for_heap`. The same argument applies to the symbol
 table, which `GcVisitor::new` re-marks every collection; one immortal set
 covers both.

@@ -630,7 +630,9 @@ impl Default for LibraryRegistry {
 /// Every field is named (#623); pinned by the sentinel tests
 /// `a_registered_library_is_a_root` and `a_library_being_loaded_is_a_root`.
 impl patina_core::GcRoots for LibraryRegistry {
-    fn trace_roots(&self, visitor: &mut patina_core::GcVisitor<'_>) {
+    /// Every value here is pinned until stage 4b makes a library's exports
+    /// cells (#682): the forms a load has not yet run as well.
+    fn trace_roots(&self, visitor: &mut dyn patina_core::SlotVisitor) {
         let LibraryRegistry {
             libraries,
             // Directories.
@@ -640,7 +642,7 @@ impl patina_core::GcRoots for LibraryRegistry {
             fs: _,
         } = self;
         for library in libraries.values() {
-            visitor.visit_library(library);
+            patina_core::trace_library(library, visitor);
         }
         for entry in loading_stack {
             let LoadingEntry {
@@ -650,10 +652,10 @@ impl patina_core::GcRoots for LibraryRegistry {
                 body,
             } = entry;
             if let Some(env) = env {
-                visitor.visit_env(env);
+                visitor.env(env);
             }
             for &form in body {
-                visitor.visit(form);
+                visitor.pinned(form);
             }
         }
     }

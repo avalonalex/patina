@@ -658,7 +658,7 @@ impl VmState {
     #[inline(always)]
     pub(super) fn reg_at(&self, base: usize, reg: u16) -> TaggedValue {
         debug_assert_eq!(base, self.frame_base());
-        let value = self.execution.registers()[base + reg as usize];
+        let value = self.execution.registers()[base + reg as usize].get();
         if GC_CHECK && value == TaggedValue::DEAD_SLOT {
             self.read_of_a_retired_register(0, reg, "as an instruction's operand");
         }
@@ -692,7 +692,7 @@ impl VmState {
     #[inline(always)]
     pub(super) fn set_reg_at(&mut self, base: usize, reg: u16, val: TaggedValue) {
         debug_assert_eq!(base, self.frame_base());
-        self.execution.registers_mut()[base + reg as usize] = val;
+        self.execution.registers()[base + reg as usize].set(val);
     }
 
     /// Allocate a full VM continuation, returning its heap `TaggedValue` handle.

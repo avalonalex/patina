@@ -20,6 +20,7 @@ use crate::types::{
 use patina_core::environment::Environment;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
+use std::cell::Cell;
 use std::rc::Rc;
 
 // Root the fixture in an owned frame/window instead of exposing a raw
@@ -48,7 +49,7 @@ fn continuation_pinning(payload: TaggedValue) -> VmContinuation {
         dynamic_winds: vec![],
         prompt_stack: vec![],
         exception_handlers: vec![],
-        registers: vec![payload],
+        registers: vec![Cell::new(payload)],
         deliver_reg: 0,
         exit_status: None,
         abort_landing: false,
@@ -60,7 +61,7 @@ fn delimited_continuation_pinning(payload: TaggedValue) -> VmDelimitedContinuati
     VmDelimitedContinuation {
         frames: vec![],
         dynamic_winds: vec![],
-        registers: vec![payload],
+        registers: vec![Cell::new(payload)],
         base_at_capture: 0,
         deliver_reg: None,
         depth_at_capture: 0,
