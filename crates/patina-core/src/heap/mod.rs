@@ -37,6 +37,7 @@ mod root_set;
 pub mod sentinels;
 mod source;
 pub mod telemetry;
+pub mod trace;
 #[cfg(test)]
 pub(crate) mod trace_sentinels;
 

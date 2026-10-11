@@ -35,14 +35,12 @@
 //! tracing — see `GcDeferGuard` and §7. The environments `with_globals` sets
 //! aside were too, until they moved onto the traced `saved_globals` (#677).
 
-use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, trace_winds_with};
+use patina_core::{GC_CHECK, GcVisitor, RootProvider, SlotVisitor, Trace};
 use rustc_hash::FxHashMap;
 
 use crate::types::CallFrame;
 use crate::types::code_object::CodeObject;
-use crate::types::continuation::{
-    DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
-};
+use crate::types::continuation::{VmContinuation, VmDelimitedContinuation};
 use patina_core::TaggedValue;
 use std::cell::Cell;
 
@@ -310,49 +308,6 @@ pub(in crate::runtime) fn trace_frames(frames: &[CallFrame], visitor: &mut dyn S
     }
 }
 
-/// The dynamic extents' records are pinned until stage 4e makes them heap
-/// data, along with the continuations that copy them.
-pub(in crate::runtime) fn trace_winds(winds: &[DynamicWindRecord], visitor: &mut dyn SlotVisitor) {
-    trace_winds_with(winds, visitor, trace_handler);
-}
-
-pub(in crate::runtime) fn trace_prompts(prompts: &[PromptFrame], visitor: &mut dyn SlotVisitor) {
-    for prompt in prompts {
-        let PromptFrame {
-            tag,
-            // A frame depth.
-            stack_depth: _,
-            handler,
-            // A register number.
-            dst: _,
-            // A depth.
-            dynamic_wind_depth: _,
-            // A depth.
-            exception_handler_depth: _,
-        } = prompt;
-        visitor.pinned(*tag);
-        visitor.pinned(*handler);
-    }
-}
-
-pub(in crate::runtime) fn trace_handlers(
-    handlers: &[ExceptionHandler],
-    visitor: &mut dyn SlotVisitor,
-) {
-    for handler in handlers {
-        trace_handler(handler, visitor);
-    }
-}
-
-fn trace_handler<V: SlotVisitor + ?Sized>(handler: &ExceptionHandler, visitor: &mut V) {
-    let ExceptionHandler {
-        handler,
-        // A frame depth.
-        stack_depth: _,
-    } = handler;
-    visitor.pinned(*handler);
-}
-
 /// A snapshot's registers and frames' closures are slots, as the live
 /// ones are; its extents are pinned, as theirs are.
 fn trace_continuation(continuation: &VmContinuation, visitor: &mut dyn SlotVisitor) {
@@ -373,9 +328,9 @@ fn trace_continuation(continuation: &VmContinuation, visitor: &mut dyn SlotVisit
     } = continuation;
     visitor.slots(registers);
     trace_frames(frames, visitor);
-    trace_winds(dynamic_winds, visitor);
-    trace_prompts(prompt_stack, visitor);
-    trace_handlers(exception_handlers, visitor);
+    dynamic_winds.trace(visitor);
+    prompt_stack.trace(visitor);
+    exception_handlers.trace(visitor);
 }
 
 fn trace_delimited_continuation(
@@ -401,7 +356,7 @@ fn trace_delimited_continuation(
     } = continuation;
     visitor.slots(registers);
     trace_frames(frames, visitor);
-    trace_winds(dynamic_winds, visitor);
-    trace_prompts(prompt_stack, visitor);
-    trace_handlers(exception_handlers, visitor);
+    dynamic_winds.trace(visitor);
+    prompt_stack.trace(visitor);
+    exception_handlers.trace(visitor);
 }

@@ -7,6 +7,12 @@ rest pattern would undo that silently, and so would a catch-all match arm for
 a new enum variant. A field or payload that is deliberately not traced is
 written `field: _` or `Variant(_)`, and its reason belongs beside it.
 
+A structure that derives `Trace` (`patina_core::Trace`, #686) is not listed:
+the derive takes it apart the same way, and a field it leaves out carries its
+reason in `#[trace(skip, reason = "…")]`. What is listed is still written by
+hand: the structures the derive has not reached yet (`PRD/GC_PRD.md` §14),
+and the heap kinds' traces until `declare_layouts!` (stage 5a).
+
 For each function in TRACE_FUNCTIONS this fails on:
 - a rest pattern, `..` closing a struct, tuple or slice pattern
   (`{ .. }`, `{ a, .. }`, `Some(..)`, `[a, ..]`). A range has an operand on
@@ -44,10 +50,6 @@ TRACE_FUNCTIONS = {
         "visit_env",
         "visit_env_chain",
         "visit_promise",
-        "trace_wind",
-        "trace_wind_with",
-        "trace_winds",
-        "trace_winds_with",
         "trace_library",
         "drain",
         "trace_children",
@@ -55,9 +57,6 @@ TRACE_FUNCTIONS = {
         "trace_compiled_macro",
         "trace_continuation_children",
         "run_mark_phase",
-        "trace_cont_value",
-        "trace_prompt_frame",
-        "trace_exception_handler",
     ],
     # The hosts' handles, rooted in GcVisitor::new (#605).
     "crates/patina-core/src/heap/handles.rs": ["trace_handles"],
@@ -71,10 +70,6 @@ TRACE_FUNCTIONS = {
         "trace_weak_ids",
         "trace_code",
         "trace_frames",
-        "trace_winds",
-        "trace_prompts",
-        "trace_handlers",
-        "trace_handler",
         "trace_continuation",
         "trace_delimited_continuation",
     ],

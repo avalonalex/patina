@@ -22,6 +22,9 @@ smallvec.workspace = true
 # Grows the native stack for the walks of code (`walk::ensure_sufficient_stack`, #617)
 stacker.workspace = true
 
+# `#[derive(Trace)]`, re-exported beside the trait it implements (#686)
+patina-trace-derive = { path = "../patina-trace-derive" }
+
 # `getrlimit(RLIMIT_NOFILE)`, which sets descriptor pressure's threshold
 # (`heap/account.rs`, #607). The binary had it already, through rustyline.
 [target.'cfg(unix)'.dependencies]

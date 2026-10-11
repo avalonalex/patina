@@ -64,10 +64,11 @@ use super::check::SlotChecks;
 use super::handles::HandleTable;
 pub use super::root_set::{RootSet, RootToken};
 use super::telemetry::{CollectReason, CollectionRecord, PhaseTimes};
+use super::trace::Trace;
 use super::{GC_CHECK, Heap, HeapObjectData, PromiseState, SharedHeap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule};
-use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
-use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
+use crate::cont_value::ContEnv;
+use crate::continuation::CpsContinuation;
 use crate::cps_expr::CpsExpr;
 use crate::environment::{Environment, GcEdge};
 use crate::library::Library;
@@ -1349,7 +1350,7 @@ impl<'h> GcVisitor<'h> {
             } else if let Some(env) = self.cont_env_worklist.pop() {
                 // Each entry is a continuation variable's name and its value.
                 for (_, value) in env.iter() {
-                    trace_cont_value(value, self);
+                    value.trace(self);
                 }
             } else {
                 break;
@@ -1636,13 +1637,9 @@ impl<'h> GcVisitor<'h> {
         } = k;
         self.visit_expr_literals(body);
         self.visit_env(env);
-        trace_winds(dynamic_winds, self);
-        for handler in exception_handlers {
-            trace_exception_handler(handler, self);
-        }
-        for frame in prompt_stack {
-            trace_prompt_frame(frame, self);
-        }
+        dynamic_winds.trace(self);
+        exception_handlers.trace(self);
+        prompt_stack.trace(self);
         self.cont_env(captured_cont_env);
         // Every reify site today stores in `resume` a wrapper it read out of
         // `captured_cont_env`, so this trace looks redundant. That is an
@@ -1650,9 +1647,7 @@ impl<'h> GcVisitor<'h> {
         // enforces, and it is what hid this edge untraced for 1.6 days (#47):
         // the sentinel test puts a value here that `captured_cont_env` does
         // not hold.
-        if let Some(resume) = resume {
-            trace_cont_value(resume, self);
-        }
+        resume.trace(self);
     }
 }
 
@@ -2162,51 +2157,6 @@ impl SlotVisitor for GcVisitor<'_> {
     }
 }
 
-/// Trace a tree-walker `dynamic-wind` record: its before/after thunks and the
-/// handler stack it will run them under. A handler reachable only from a
-/// record is live for as long as the record can still run a thunk.
-pub fn trace_wind<V: SlotVisitor + ?Sized>(wind: &DynamicWindRecord, visitor: &mut V) {
-    trace_wind_with(wind, visitor, trace_exception_handler);
-}
-
-/// Trace a backend's wind record, delegating only its handler payloads. The
-/// callback must report every value a handler carries. The thunks are
-/// pinned: a record becomes heap data at stage 4e, before anything moves.
-pub fn trace_wind_with<H, V: SlotVisitor + ?Sized>(
-    wind: &WindRecord<H>,
-    visitor: &mut V,
-    mut trace_handler: impl FnMut(&H, &mut V),
-) {
-    let WindRecord {
-        // A number minted per `dynamic-wind` call.
-        id: _,
-        before,
-        after,
-        handlers,
-    } = wind;
-    visitor.pinned(*before);
-    visitor.pinned(*after);
-    for handler in handlers.iter() {
-        trace_handler(handler, visitor);
-    }
-}
-
-/// Trace a stack of tree-walker wind records.
-pub fn trace_winds<V: SlotVisitor + ?Sized>(winds: &[DynamicWindRecord], visitor: &mut V) {
-    trace_winds_with(winds, visitor, trace_exception_handler);
-}
-
-/// Trace a backend's wind stack with its handler-root visitor.
-pub fn trace_winds_with<H, V: SlotVisitor + ?Sized>(
-    winds: &[WindRecord<H>],
-    visitor: &mut V,
-    mut trace_handler: impl FnMut(&H, &mut V),
-) {
-    for wind in winds {
-        trace_wind_with(wind, visitor, &mut trace_handler);
-    }
-}
-
 /// Trace a library's two root sets: its exports, pinned until stage 4b makes
 /// them cells, and its environment (`Library::for_each_gc_edge`, which names
 /// every field).
@@ -2215,192 +2165,6 @@ pub fn trace_library<V: SlotVisitor + ?Sized>(library: &Library, visitor: &mut V
         GcEdge::Value(tv) => visitor.pinned(tv),
         GcEdge::Env(env) => visitor.env(env),
     });
-}
-
-// Moved here with ContValue itself: CpsContinuation stores a ContEnv, so the
-// collector has to be able to walk one. The tree-walker's, so every value in
-// one is pinned.
-
-/// Trace a continuation value, walking the `Box<ContValue>` chain
-/// iteratively — most variants differ only in what they visit before handing
-/// off to the continuation they wrap. Local continuation environments and
-/// captured continuations are queued on the visitor's worklists as well.
-///
-/// Every variant's fields are named (#623); pinned by the sentinel test
-/// `cont_value_variants`.
-pub fn trace_cont_value<V: SlotVisitor + ?Sized>(cont: &ContValue, visitor: &mut V) {
-    let mut cont = cont;
-    loop {
-        cont = match cont {
-            ContValue::Halt => return,
-
-            ContValue::Local {
-                // A name.
-                param: _,
-                body,
-                env,
-                cont_env,
-            } => {
-                visitor.expr_literals(body);
-                visitor.env(env);
-                visitor.cont_env(cont_env);
-                return;
-            }
-
-            ContValue::Captured(k) => return visitor.continuation(k),
-
-            ContValue::CallWithValuesConsumer {
-                consumer,
-                original_cont,
-            } => {
-                visitor.pinned(*consumer);
-                original_cont
-            }
-
-            ContValue::ForceCache {
-                promise,
-                original_cont,
-            } => {
-                visitor.pinned(*promise);
-                original_cont
-            }
-
-            ContValue::ResumePrimitive {
-                // An index into the primitive registry.
-                index: _,
-                state,
-                original_cont,
-            } => {
-                visitor.pinned(*state);
-                original_cont
-            }
-
-            ContValue::DynamicWindCleanup {
-                after,
-                // A number minted per `dynamic-wind` call.
-                wind_id: _,
-                original_cont,
-            } => {
-                visitor.pinned(*after);
-                original_cont
-            }
-
-            ContValue::DynamicWindSetup {
-                wind_record,
-                body,
-                cleanup_cont,
-            } => {
-                trace_wind(wind_record, visitor);
-                visitor.pinned(*body);
-                cleanup_cont
-            }
-
-            ContValue::DynamicWindAfterDone {
-                result_value,
-                original_cont,
-            } => {
-                visitor.pinned(*result_value);
-                original_cont
-            }
-
-            ContValue::Jump {
-                entered,
-                value,
-                target,
-            } => {
-                if let Some(record) = entered {
-                    trace_wind(record, visitor);
-                }
-                visitor.pinned(*value);
-                return visitor.continuation(target);
-            }
-
-            ContValue::ExceptionHandlerCleanup { original_cont } => original_cont,
-
-            ContValue::RaiseHandlerReturn {
-                // A flag.
-                continuable: _,
-                original_exception,
-                original_cont,
-                popped_handler,
-            } => {
-                if let Some(exception) = original_exception {
-                    visitor.pinned(*exception);
-                }
-                if let Some(handler) = popped_handler {
-                    trace_exception_handler(handler, visitor);
-                }
-                original_cont
-            }
-
-            ContValue::PromptBoundary {
-                // A prompt id.
-                id: _,
-            } => return,
-
-            ContValue::AbortLanding {
-                handler,
-                delimited,
-                cont,
-            } => {
-                visitor.pinned(*handler);
-                visitor.pinned(*delimited);
-                cont
-            }
-
-            ContValue::ExitLanding {
-                // An exit status.
-                status: _,
-            } => return,
-
-            ContValue::ComposableInvokeStep {
-                target,
-                value,
-                // A position in `target.dynamic_winds`, which `target`'s own
-                // trace covers.
-                index: _,
-                cont,
-            } => {
-                visitor.continuation(target);
-                visitor.pinned(*value);
-                cont
-            }
-        };
-    }
-}
-
-/// Trace a prompt frame: its handler and the continuation below it. Every
-/// field is named (#623); pinned by the sentinel test `cps_continuation_fields`.
-pub fn trace_prompt_frame<V: SlotVisitor + ?Sized>(frame: &PromptFrame, visitor: &mut V) {
-    let PromptFrame {
-        // A prompt id.
-        id: _,
-        // A plain Rust struct shared by `Rc` (a name and an id), not a heap
-        // value.
-        tag: _,
-        handler,
-        cont,
-        // A depth.
-        wind_depth: _,
-        // A trampoline id.
-        trampoline: _,
-        // A depth.
-        handler_depth: _,
-    } = frame;
-    visitor.pinned(*handler);
-    trace_cont_value(cont, visitor);
-}
-
-/// Trace an exception handler: the handler procedure it holds, which is all
-/// it holds. It used to carry the wind depth `raise` unwound to; no raise path
-/// unwinds now, so the field is gone and so is the retention. Named by field
-/// (#623) so that a new one does not compile here until it is traced.
-pub fn trace_exception_handler<V: SlotVisitor + ?Sized>(
-    handler: &ExceptionHandler,
-    visitor: &mut V,
-) {
-    let ExceptionHandler { handler } = handler;
-    visitor.pinned(*handler);
 }
 
 // ============================================================================
@@ -2487,17 +2251,16 @@ mod tests {
 
     #[test]
     fn wind_records_keep_thunks_and_backend_handler_payloads_alive() {
-        // A backend handler may carry more than one root. The common wind
-        // traversal must delegate all handlers and retain both thunks.
+        // A backend handler may carry more than one root. The derived wind
+        // trace must report every handler's and retain both thunks.
+        use crate::{Trace, WindRecord};
+
+        #[derive(Trace)]
         struct Handler([TaggedValue; 2]);
         struct Winds(Vec<WindRecord<Handler>>);
         impl RootProvider for Winds {
             fn trace_roots(&self, visitor: &mut dyn SlotVisitor) {
-                trace_winds_with(&self.0, visitor, |handler, visitor| {
-                    for &value in &handler.0 {
-                        visitor.pinned(value);
-                    }
-                });
+                self.0.trace(visitor);
             }
         }
 

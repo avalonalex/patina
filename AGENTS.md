@@ -278,7 +278,12 @@ Test crates, the REPL and test and example targets are exempt (`clippy.toml`'s h
    and run it once with the trace line deleted, to see it fail (#164's rule).
    The same two rules hold for a new field in any traced struct or root
    provider (`VmState`, `Environment`, `CpsContinuation`, …): a destructure
-   cannot judge whether a field needs tracing, and a sentinel can.
+   cannot judge whether a field needs tracing, and a sentinel can. A
+   structure outside the heap derives `Trace` instead of a hand-written
+   trace (`patina_core::Trace`, #686): the derive takes it apart by name, a
+   field whose type has no `Trace` does not compile, and a field that holds
+   no value is `#[trace(skip, reason = "…")]`. Its sentinel test is the
+   same, run once with the field marked `skip`.
 
 **New CoreExpr form** (rare — prefer macros):
 1. Extend `CoreExprKind` in `patina-core/src/core_expr.rs`

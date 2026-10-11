@@ -11,8 +11,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor, trace_cont_value};
+use super::gc::{Collector, MarkSweepCollector, RootProvider, SlotVisitor};
 use super::sentinels::Sentinels;
+use super::trace::Trace;
 use super::{Heap, HeapObjectData, PromiseState, SharedHeap, new_shared_heap};
 use crate::compiled_macro::{CompiledMacro, CompiledRule, Pattern, Template};
 use crate::cont_value::{ContEnv, ContValue, ExceptionHandler, PromptFrame};
@@ -564,7 +565,7 @@ fn cont_value_variants() {
     let mut heap = shared.borrow_mut();
     collect_only(&mut heap, |visitor| {
         for cont in &roots {
-            trace_cont_value(cont, visitor);
+            cont.trace(visitor);
         }
     });
     s.assert_survived(&heap);
