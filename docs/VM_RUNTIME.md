@@ -131,9 +131,9 @@ pub type DynamicWindRecord = WindRecord<ExceptionHandler>;
 The VM's handler includes a frame depth; the tree-walker's does not. Handler
 installation, clamping, and relocation remain backend-specific. Cloning a
 record shares the saved handler slice. Identities may repeat in a composed
-stack, so traversal compares prefixes positionally. Both backends share wind
-field traversal through `patina_core::trace_wind_with` / `trace_winds_with`,
-each supplying the handler-root visitor.
+stack, so traversal compares prefixes positionally. Both backends share the
+record's trace, derived (`patina_core::Trace`, #686): it reports both thunks
+and each handler, through the handler type's own derived trace.
 
 ### 2.5 `ExceptionHandler`
 

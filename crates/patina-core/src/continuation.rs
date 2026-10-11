@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::Trace;
 use crate::cont_value::{ContValue, PromptFrame};
 use crate::cps_expr::CpsExpr;
 use crate::environment::Environment;
@@ -169,13 +170,19 @@ pub fn next_dynamic_wind_id() -> u64 {
 /// `H` is the backend's exception-handler representation. The VM carries
 /// frame depths; the tree-walker does not. Installing and relocating those
 /// handlers remains the backend's responsibility.
-#[derive(Debug, Clone)]
+///
+/// Its trace reports both thunks, pinned, since a record becomes heap data at
+/// stage 4e before anything moves, and each handler the record will run them
+/// under: a handler reachable only from a record is live for as long as the
+/// record can still run a thunk.
+#[derive(Debug, Clone, Trace)]
 pub struct WindRecord<H> {
     /// Identity of the `dynamic-wind` call this record came from.
     ///
     /// Compare stack prefixes positionally: an id is unique per invocation
     /// but may repeat within one live stack when a composable continuation
     /// appends its captured records. Do not use ids as unique stack keys.
+    #[trace(skip, reason = "a number minted per `dynamic-wind` call")]
     pub id: u64,
     /// The "before" thunk to call when entering this dynamic extent
     pub before: TaggedValue,

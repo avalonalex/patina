@@ -22,12 +22,10 @@
 //! (`PRD/GC_PRD.md` §11.4), so no slot would ever be updated (#682).
 
 use patina_core::cps_expr::CpsExpr;
-use patina_core::{DynamicWindRecord, RootProvider, SlotVisitor, trace_winds};
+use patina_core::{DynamicWindRecord, RootProvider, SlotVisitor, Trace};
 
 use super::types::{ExceptionHandler, PromptFrame, StepResult};
 use crate::eval::Evaluator;
-// Continuation-value tracing moved to patina-core with ContValue itself.
-use patina_core::{trace_cont_value, trace_exception_handler, trace_prompt_frame};
 
 // Every provider here takes its struct apart by name (#623), so a new field
 // does not compile until it is traced or written `field: _` with the reason it
@@ -129,7 +127,7 @@ fn trace_step(step: &StepResult, visitor: &mut dyn SlotVisitor) {
             exception_handlers,
         } => {
             visitor.pinned(*value);
-            trace_cont_value(cont, visitor);
+            cont.trace(visitor);
             visitor.env(env);
             visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
@@ -149,7 +147,7 @@ fn trace_step(step: &StepResult, visitor: &mut dyn SlotVisitor) {
             for &arg in args {
                 visitor.pinned(arg);
             }
-            trace_cont_value(cont, visitor);
+            cont.trace(visitor);
             visitor.env(env);
             visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
@@ -165,7 +163,7 @@ fn trace_step(step: &StepResult, visitor: &mut dyn SlotVisitor) {
             dynamic_winds,
             exception_handlers,
         } => {
-            trace_cont_value(cont, visitor);
+            cont.trace(visitor);
             visitor.env(env);
             visitor.cont_env(cont_env);
             trace_stacks(prompt_stack, dynamic_winds, exception_handlers, visitor);
@@ -179,13 +177,9 @@ fn trace_stacks(
     exception_handlers: &[ExceptionHandler],
     visitor: &mut dyn SlotVisitor,
 ) {
-    for frame in prompt_stack {
-        trace_prompt_frame(frame, visitor);
-    }
-    trace_winds(dynamic_winds, visitor);
-    for handler in exception_handlers {
-        trace_exception_handler(handler, visitor);
-    }
+    prompt_stack.trace(visitor);
+    dynamic_winds.trace(visitor);
+    exception_handlers.trace(visitor);
 }
 
 #[cfg(test)]

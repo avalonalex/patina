@@ -4,6 +4,7 @@
 //! See VM_ISA.md §6 and VM_RUNTIME.md §continuations.
 
 use super::{CallFrame, Reg};
+use patina_core::Trace;
 use patina_core::tagged_value::TaggedValue;
 use std::cell::Cell;
 use std::mem::size_of;
@@ -13,13 +14,17 @@ use std::rc::Rc;
 /// handle an `AbortToPrompt` or to restore after normal return.
 ///
 /// Created by `call-with-continuation-prompt`, popped on normal return or abort.
-#[derive(Debug, Clone)]
+///
+/// Its trace reports the tag and the handler, pinned until stage 4e makes
+/// the records heap data, along with the continuations that copy them.
+#[derive(Debug, Clone, Trace)]
 pub struct PromptFrame {
     /// The prompt tag (opaque heap object, compared by identity).
     pub tag: TaggedValue,
 
     /// `ExecutionState::frames.len()` at the point where the prompt was established.
     /// `AbortToPrompt` unwinds to this depth.
+    #[trace(skip, reason = "a frame depth")]
     pub stack_depth: usize,
 
     /// The handler procedure: called as `(handler abort-val captured-cont)`.
@@ -27,10 +32,12 @@ pub struct PromptFrame {
 
     /// Register in the prompt-establishing frame where the normal return value
     /// (or the handler's return value) should be written.
+    #[trace(skip, reason = "a register number")]
     pub dst: Reg,
 
     /// `ExecutionState::dynamic_winds.len()` at the time the prompt was pushed.
     /// Used to run the correct subset of wind hooks during unwinding.
+    #[trace(skip, reason = "a depth")]
     pub dynamic_wind_depth: usize,
 
     /// `ExecutionState::exception_handlers.len()` at the time the prompt was pushed:
@@ -46,6 +53,7 @@ pub struct PromptFrame {
     /// so does a handler whose thunk **tail-calls** `call-with-continuation-prompt`.
     /// The first is inside the prompt and the second encloses it. Only the
     /// length taken at push time tells them apart.
+    #[trace(skip, reason = "a depth")]
     pub exception_handler_depth: usize,
 }
 
@@ -145,12 +153,15 @@ pub struct VmDelimitedContinuation {
 /// topmost handler is popped and invoked with the exception object.
 /// When the thunk returns normally, handlers installed at depths >= the
 /// returning frame's depth are popped.
-#[derive(Debug, Clone)]
+///
+/// Its trace reports the handler, pinned, as [`PromptFrame`]'s does.
+#[derive(Debug, Clone, Trace)]
 pub struct ExceptionHandler {
     /// The handler procedure: called as `(handler condition)`.
     pub handler: TaggedValue,
     /// `ExecutionState::frames.len()` at the time the handler was installed.
     /// Used to pop the handler when the thunk returns normally.
+    #[trace(skip, reason = "a frame depth")]
     pub stack_depth: usize,
 }
 

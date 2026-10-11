@@ -3,14 +3,14 @@
 //! Transfer policy (wind travel, re-entry, error routing) stays in `control`.
 
 use super::control::abort_step;
-use super::vm_state::gc_roots::{trace_frames, trace_handlers, trace_prompts, trace_winds};
+use super::vm_state::gc_roots::trace_frames;
 use crate::error::VmError;
 use crate::types::CallFrame;
 use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::{SlotVisitor, TaggedValue};
+use patina_core::{SlotVisitor, TaggedValue, Trace};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -42,9 +42,9 @@ impl ExecutionState {
         // capture, so they obey the same full-vector contract.
         visitor.slots(registers);
         trace_frames(frames, visitor);
-        trace_prompts(prompt_stack, visitor);
-        trace_winds(dynamic_winds, visitor);
-        trace_handlers(exception_handlers, visitor);
+        prompt_stack.trace(visitor);
+        dynamic_winds.trace(visitor);
+        exception_handlers.trace(visitor);
     }
 
     /// Build a state from its five components, for tests that fill each with

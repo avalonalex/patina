@@ -2,6 +2,7 @@
 [workspace]
 members = [
     "crates/patina-core",
+    "crates/patina-trace-derive",
     "crates/patina-runtime",
     "crates/patina-ir",
     "crates/patina-frontend",
@@ -82,6 +83,14 @@ rustc-hash = "2"
 # stack and aborting the process (#617). rustc grows its stack with it the
 # same way (`ensure_sufficient_stack`).
 stacker = "0.1"
+
+# `#[derive(Trace)]` (`crates/patina-trace-derive`, #686), a proc-macro
+# crate's three. Decision 14 (`PRD/GC_PRD.md` §2) holds a new dependency to
+# the owner's approval, given for these on 2026-10-11; the build had them
+# already, through `tracing` and `rustyline`.
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
 
 # Logging/tracing
 tracing = "0.1"

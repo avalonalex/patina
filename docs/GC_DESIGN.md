@@ -210,13 +210,20 @@ pub trait SlotVisitor {
 /// for the heap's own tracing.
 pub struct GcVisitor<'h> { /* &mut mark bitmaps, worklist, env-dedup set */ }
 
-/// Shared trace rules, so each is authored once rather than per backend, and
-/// generic over the visitor, so the heap's own tracing calls them on
-/// `GcVisitor` directly.
-pub fn trace_wind<V: SlotVisitor + ?Sized>(w: &DynamicWindRecord, v: &mut V);
-pub fn trace_winds<V: SlotVisitor + ?Sized>(w: &[DynamicWindRecord], v: &mut V);
+/// The trace of a Rust structure outside the heap that holds values,
+/// derived, never written by hand (#686): `#[derive(Trace)]` traces every
+/// field through its type's `Trace`, leaves one out only by
+/// `#[trace(skip, reason = "…")]`, and walks an enum's `#[trace(tail)]`
+/// `Box<Self>` chain in a loop. The leaves are the visitor's: `TaggedValue`
+/// pinned, `Cell<TaggedValue>` a slot, and an environment, a continuation, a
+/// continuation environment or code handed over whole.
+pub trait Trace {
+    fn trace<V: SlotVisitor + ?Sized>(&self, v: &mut V);
+}
+
+/// A shared trace rule the derive has not reached yet, generic over the
+/// visitor, so the heap's own tracing calls it on `GcVisitor` directly.
 pub fn trace_library<V: SlotVisitor + ?Sized>(l: &Library, v: &mut V);
-pub fn trace_cont_value<V: SlotVisitor + ?Sized>(k: &ContValue, v: &mut V);
 
 /// Implemented by anything that owns live values (#682): registered with
 /// the heap's `RootSet` for every collection until its token drops, or lent
@@ -320,7 +327,7 @@ Object arena, by `HeapObjectData` variant (`heap/mod.rs:119-180`):
 | `VmClosure` | each of `free_vars` + **`visit_env(globals)`** |
 | `Procedure` | captured env (`visit_env`) + **body-expression literals** (§4.4) |
 | `Macro` | `CompiledMacro`: pattern/template literal `TaggedValue`s, and `definition_env` and each `foreign_expansions` environment (`visit_env`) — the latter traced since #623, though today the registry or an importer's `owners` also roots each (`trace_compiled_macro`) |
-| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`visit_wind`, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers` (via `trace_exception_handler`), `prompt_stack` — each frame's handler and the continuation below it (`trace_prompt_frame`; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`trace_cont_value`), body literals (§4.4) |
+| `Continuation` | `CpsContinuation`: env (`visit_env`), `dynamic_winds` — each record's before/after thunks and the handler stack it captured at its `dynamic-wind` call (`WindRecord`'s derived trace, the one tracing point for a record wherever it sits: a stack, a continuation, a prompt frame, or a `DynamicWindSetup`/`Jump` cont value), `exception_handlers`, `prompt_stack` — each frame's handler and the continuation below it (derived; the tag is a plain `Rc` struct), `captured_cont_env` (deduplicated worklist), `resume` (`ContValue`'s derived trace), body literals (§4.4) |
 | `EnvironmentSpecifier` | `visit_env(env)` |
 | `VmContinuationRef`, `VmDelimitedContinuationRef` | **weak key** — marking one records its id; the payload in `VmState`'s side tables is traced only for recorded ids, via the `RootProvider::trace_weak_ids` fixpoint (driven by `run_mark_phase`) (§5.2, §9.5) |
 | `Ephemeron` | **weak key** — neither field is traced on arrival; the pair is recorded, and its key *and* datum are traced only once the key is marked by some other path. Unretained pairs are broken (both fields cleared) before the sweep, so a dead key's datum stops being a root. Shares one fixpoint with the row above, in `run_mark_phase` — separate fixpoints lose a continuation payload whose ref only a late ephemeron retention marks (SRFI 124) |
@@ -519,7 +526,14 @@ because every construction site also stored the value in the traced
 `captured_cont_env`. So every change that adds a heap object type, a field to
 a traced struct, or a root provider meets two rules:
 
-1. **A full destructure.** The trace function takes the struct (or variant)
+1. **A full destructure.** A structure outside the heap derives `Trace`
+   (`patina_core::Trace`, #686), which takes it apart by name and traces each
+   field through its type's `Trace`: a field whose type has none does not
+   compile, and a field is left out only by `#[trace(skip, reason = "…")]`,
+   whose reason says what it holds instead of a value. Both backends' wind,
+   prompt and handler records and `ContValue` derive it so far, and #686
+   brings the rest of `PRD/GC_PRD.md` §14's list. A trace still written by
+   hand takes the struct (or variant)
    apart by name, with no `..` and no catch-all arm (`_` or a lone binding
    before `=>`, guarded or not). A field or positional payload that is
    deliberately not traced is written `field: _` or `Variant(_)` (or bound
@@ -529,12 +543,11 @@ a traced struct, or a root provider meets two rules:
    `scripts/check_gc_trace_names.py` enforces both in CI's Clippy job, over
    the functions it lists: `trace_object_children` and the functions it calls
    (`trace_compiled_macro`, `trace_continuation_children`, `visit_env`,
-   `trace_library`, the wind, prompt and handler traces, `trace_cont_value`)
-   in `heap/gc.rs`; the literal walks those reach, `Pattern`'s and
+   `trace_library`) in `heap/gc.rs`; the literal walks those reach, `Pattern`'s and
    `Template`'s `for_each_literal` and `CpsExpr::for_each_literal`;
    `Environment::for_each_gc_edge` and
    `Library::for_each_gc_edge`; every root provider — `VmState` with
-   `ExecutionState` and the VM's frame, record, code and continuation traces,
+   `ExecutionState` and the VM's frame, code and continuation traces,
    the tree-walker's `Evaluator`, `StepRoots` and pending escape, the library
    registry and the VM's step tracer. A new trace function joins that list,
    and an `impl RootProvider for` outside test code in a file the list does not
@@ -545,8 +558,8 @@ a traced struct, or a root provider meets two rules:
    field breaks the test as well; puts a fresh value in every field that can
    hold one; roots the struct and nothing else; collects; and asks
    `heap::sentinels::Sentinels` whether each value survived, which names the
-   field of one that did not, in any build. Deleting the trace line must
-   fail the test: run that once. The destructure forces a decision but
+   field of one that did not, in any build. Deleting the trace line, or
+   marking a derived field `skip`, must fail the test: run that once. The destructure forces a decision but
    cannot judge it (`resume: _ // aliased` compiles); the sentinel is what
    judges it. A walk that recurses gets a sentinel down each of its
    branches, not only one. The tests live beside the code:

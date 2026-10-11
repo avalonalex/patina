@@ -1,0 +1,18 @@
+[package]
+name = "patina-trace-derive"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+description = "#[derive(Trace)] for the Rust structures outside the heap that hold Patina values"
+
+[lib]
+proc-macro = true
+
+# Decision 14 (`PRD/GC_PRD.md` §2) holds every new dependency to the owner's
+# approval; these three were approved for this crate on 2026-10-11 (#686).
+# The build had them already, through `tracing` and `rustyline`.
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true

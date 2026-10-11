@@ -36,6 +36,10 @@
     )
 )]
 
+// `#[derive(Trace)]` names the trait it implements `::patina_core::Trace`,
+// which resolves inside this crate too through this alias (#686).
+extern crate self as patina_core;
+
 pub mod census;
 pub mod compiled_macro;
 pub mod cont_value;
@@ -105,13 +109,14 @@ pub use heap::gc::{
 };
 pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
-    gc::{
-        trace_cont_value, trace_exception_handler, trace_library, trace_prompt_frame, trace_wind,
-        trace_wind_with, trace_winds, trace_winds_with,
-    },
+    gc::trace_library,
     handles::{Owned, OwnedEnvironment},
     new_shared_heap,
+    trace::Trace,
 };
+// The derive, beside the trait it implements: one `use patina_core::Trace`
+// brings both, as serde's `Serialize` does.
+pub use patina_trace_derive::Trace;
 pub use tagged_value::TaggedValue;
 pub use vfs::{FileSystem, MemoryFs, NativeFs, OverlayFs};
 

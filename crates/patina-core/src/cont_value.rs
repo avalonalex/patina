@@ -19,7 +19,7 @@
 use crate::cps_expr::{CpsExpr, PromptTag};
 use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
-use crate::{CpsContinuation, DynamicWindRecord};
+use crate::{CpsContinuation, DynamicWindRecord, Trace};
 use std::fmt;
 use std::rc::Rc;
 
@@ -161,12 +161,13 @@ impl<'a> Iterator for ContEnvIter<'a> {
 ///
 /// The VM keeps the same three-stack position (`docs/VM_RUNTIME.md` §2.3);
 /// there is no frame depth here because a CPS continuation is not a stack.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Trace)]
 pub struct PromptFrame {
     /// Which boundary this frame answers to. A `call-with-continuation-prompt`
     /// mints one; a composable invoke re-uses the id its continuation's
     /// chain ends at, so the same chain can be resumed any number of times,
     /// nested or not, and each resumption's boundary finds its own frame.
+    #[trace(skip, reason = "a prompt id")]
     pub id: u64,
     /// The tag an `abort-current-continuation` searches for.
     ///
@@ -174,6 +175,7 @@ pub struct PromptFrame {
     /// continuation does not include its prompt (Racket, Guile and the VM
     /// agree), so an abort inside the resumed computation must find the
     /// enclosing prompt with that tag at the invoke site, or none.
+    #[trace(skip, reason = "a plain Rust struct shared by `Rc`, a name and an id")]
     pub tag: Option<Rc<PromptTag>>,
     /// The prompt's handler, called as `(handler value k)` on an abort.
     /// `#f` when the call gave none, and for an invoke's frame.
@@ -183,18 +185,21 @@ pub struct PromptFrame {
     pub cont: ContValue,
     /// `dynamic_winds.len()` when the prompt was pushed: an abort travels to
     /// this depth, and a delimited capture carries the records above it.
+    #[trace(skip, reason = "a depth")]
     pub wind_depth: usize,
     /// The trampoline the prompt was pushed in — see
     /// [`CpsContinuation::trampoline`](crate::CpsContinuation::trampoline).
     /// An abort's landing is a jump to *this* trampoline, whatever trampoline
     /// the abort itself runs on: an abort from inside a primitive's callback
     /// to a prompt outside it must unwind through the primitive.
+    #[trace(skip, reason = "a trampoline id")]
     pub trampoline: u64,
     /// `exception_handlers.len()` when the prompt was pushed — the same
     /// boundary for the handler stack. Recorded, not inferred: the VM learned
     /// that no frame-depth comparison separates a handler installed in tail
     /// position of the prompt body from one whose thunk tail-called the
     /// prompt (`docs/VM_RUNTIME.md` §5.6).
+    #[trace(skip, reason = "a depth")]
     pub handler_depth: usize,
 }
 
@@ -202,7 +207,7 @@ pub struct PromptFrame {
 ///
 /// Exception handlers form a stack (like dynamic-wind records).
 /// When raise is called, the topmost handler is invoked.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Trace)]
 pub struct ExceptionHandler {
     /// The handler procedure as TaggedValue (lambda (condition) ...)
     pub handler: TaggedValue,
@@ -217,10 +222,18 @@ pub struct ExceptionHandler {
 /// - A first-class continuation value (for captured continuations)
 /// - The halt continuation (program end)
 /// - Special continuations for CPS-aware primitives
-#[derive(Debug, Clone)]
+///
+/// Its trace reports what a variant holds and carries on with the
+/// continuation the variant wraps, its `tail`, in a loop: most variants
+/// differ only in what they report before handing off, and a chain can be as
+/// deep as the program's recursion. Local continuation environments and
+/// captured continuations go on the visitor's worklists. Pinned by the
+/// sentinel test `cont_value_variants`.
+#[derive(Debug, Clone, Trace)]
 pub enum ContValue {
     /// A local continuation defined by LetCont
     Local {
+        #[trace(skip, reason = "a name")]
         param: Rc<str>,
         body: Rc<CpsExpr>,
         env: Rc<Environment>,
@@ -244,6 +257,7 @@ pub enum ContValue {
     /// When the producer returns, unpack its values and call the consumer
     CallWithValuesConsumer {
         consumer: TaggedValue,
+        #[trace(tail)]
         original_cont: Box<ContValue>,
     },
     /// Special continuation for force
@@ -253,6 +267,7 @@ pub enum ContValue {
     /// box is looked up again when the thunk returns.
     ForceCache {
         promise: TaggedValue,
+        #[trace(tail)]
         original_cont: Box<ContValue>,
     },
     /// A resumable primitive's call has returned: resume the primitive at
@@ -262,8 +277,10 @@ pub enum ContValue {
     /// captured in the call carries this, so re-entered after the primitive
     /// returned it resumes the primitive again.
     ResumePrimitive {
+        #[trace(skip, reason = "an index into the primitive registry")]
         index: usize,
         state: TaggedValue,
+        #[trace(tail)]
         original_cont: Box<ContValue>,
     },
     // Note: ParameterizeCleanup has been removed.
@@ -274,7 +291,9 @@ pub enum ContValue {
         /// The "after" thunk to call when leaving this dynamic extent (as TaggedValue)
         after: TaggedValue,
         /// The wind record ID to pop (for verification)
+        #[trace(skip, reason = "a number minted per `dynamic-wind` call")]
         wind_id: u64,
+        #[trace(tail)]
         original_cont: Box<ContValue>,
     },
     /// Special continuation for dynamic-wind setup
@@ -285,6 +304,7 @@ pub enum ContValue {
         /// The body thunk to call (as TaggedValue)
         body: TaggedValue,
         /// The cleanup continuation (will pop and call after)
+        #[trace(tail)]
         cleanup_cont: Box<ContValue>,
     },
     /// Special continuation for dynamic-wind after thunk completion
@@ -292,6 +312,7 @@ pub enum ContValue {
     DynamicWindAfterDone {
         /// The result from the body (to pass through, as TaggedValue for efficiency)
         result_value: TaggedValue,
+        #[trace(tail)]
         original_cont: Box<ContValue>,
     },
     /// A continuation jump in progress: `value` is on its way to `target`,
@@ -321,16 +342,21 @@ pub enum ContValue {
     },
     /// Special continuation for with-exception-handler cleanup
     /// When the thunk completes normally, pop the exception handler and continue
-    ExceptionHandlerCleanup { original_cont: Box<ContValue> },
+    ExceptionHandlerCleanup {
+        #[trace(tail)]
+        original_cont: Box<ContValue>,
+    },
     /// Special continuation for raise when handler returns
     /// For non-continuable raise: if handler returns, raise secondary exception
     /// For continuable raise: handler's return value continues from raise-continuable
     RaiseHandlerReturn {
         /// Whether this was a continuable raise
+        #[trace(skip, reason = "a flag")]
         continuable: bool,
         /// For non-continuable: the original exception (to include in secondary error)
         original_exception: Option<TaggedValue>,
         /// For continuable: the continuation to continue with
+        #[trace(tail)]
         original_cont: Box<ContValue>,
         /// The handler that was popped, so it can be re-pushed after continuable raise
         popped_handler: Option<ExceptionHandler>,
@@ -345,7 +371,10 @@ pub enum ContValue {
     /// every transfer that changes the continuation also sets the prompt
     /// stack to match — a full invoke restores its snapshot, an abort cuts
     /// back to below its prompt, a composable invoke pushes.
-    PromptBoundary { id: u64 },
+    PromptBoundary {
+        #[trace(skip, reason = "a prompt id")]
+        id: u64,
+    },
     /// Where an abort lands: call the prompt's handler with the abort's value
     /// and the delimited continuation, then deliver its result to the
     /// prompt's own continuation.
@@ -362,6 +391,7 @@ pub enum ContValue {
         /// argument.
         delimited: TaggedValue,
         /// The prompt's continuation, which the handler's value goes to.
+        #[trace(tail)]
         cont: Box<ContValue>,
     },
     /// Where an `exit` lands: every extent has been left, so the process ends
@@ -373,6 +403,7 @@ pub enum ContValue {
     /// resuming anything.
     ExitLanding {
         /// The status the process ends with.
+        #[trace(skip, reason = "an exit status")]
         status: i32,
     },
     /// A composable invoke in progress: the `before` thunk of the captured
@@ -395,9 +426,14 @@ pub enum ContValue {
         /// has been re-entered.
         value: TaggedValue,
         /// Which of `target.dynamic_winds` this step has just entered.
+        #[trace(
+            skip,
+            reason = "a position in `target.dynamic_winds`, which `target`'s own trace covers"
+        )]
         index: usize,
         /// The invoke site's continuation: where the resumed chain returns
         /// when it reaches its boundary.
+        #[trace(tail)]
         cont: Box<ContValue>,
     },
 }
