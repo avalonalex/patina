@@ -14,7 +14,6 @@ pub use continuation::{
 };
 pub use instruction::Instruction;
 
-use patina_core::tagged_value::ObjectIndex;
 use patina_core::tagged_value::TaggedValue;
 use std::rc::Rc;
 
@@ -45,11 +44,10 @@ pub struct CallFrame {
     pub register_base: usize,
     /// Number of registers owned by this frame.
     pub num_regs: u16,
-    /// The closure for this activation (if the function is a closure).
-    /// `None` for top-level functions with no free variables. An index, not
-    /// a value; in a check build it keeps the closure's generation stamp, so
-    /// the heap refuses it if the slot is ever freed and reused (#621).
-    pub closure: Option<ObjectIndex>,
+    /// The closure this activation runs, a `VmClosure`, or
+    /// [`CallFrame::NO_CLOSURE`] for code that runs none: top-level code
+    /// and the stubs. A value like a register's, and traced as one (#682).
+    pub closure: TaggedValue,
     /// Register in the *caller's* frame where `Return` should write its result.
     /// When there is no caller (top-level), this field is unused.
     pub return_reg: Reg,
@@ -59,6 +57,17 @@ pub struct CallFrame {
     /// `code_store` lookup per instruction. Its id is `code.id` — the
     /// frame stores no separate copy that could drift out of sync.
     pub code: Rc<CodeObject>,
+}
+
+impl CallFrame {
+    /// What a frame that runs no closure holds as its `closure`.
+    pub const NO_CLOSURE: TaggedValue = TaggedValue::FALSE;
+
+    /// The closure this frame runs, if it runs one.
+    #[inline(always)]
+    pub fn closure(&self) -> Option<TaggedValue> {
+        self.closure.is_object().then_some(self.closure)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

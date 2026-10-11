@@ -7,9 +7,8 @@
 //! between the backends.
 //!
 //! This file keeps only the tests that target VM machinery a heap scan cannot
-//! reach: the continuation side tables, `CallFrame::closure` (a bare
-//! `ObjectIndex`), boxed upvalues, and the multi-value `value_buffer`. See
-//! `docs/GC_DESIGN.md` §5.2.
+//! reach: the continuation side tables, `CallFrame::closure`, boxed upvalues,
+//! and the multi-value `value_buffer`. See `docs/GC_DESIGN.md` §5.2.
 
 #[macro_use]
 mod common;
@@ -19,8 +18,8 @@ gc_shared_tests!(eval_program_vm, eval_program_vm_gc_off);
 
 #[test]
 fn closure_free_vars_survive_collection() {
-    // `CallFrame::closure` is a bare ObjectIndex, not a TaggedValue — if it
-    // were left untraced, the running closure itself would be swept.
+    // A collection inside the closure's body, which then reads and writes
+    // its free variable through its frame's `closure`.
     assert_gc_eval_to(
         r#"
         (import (patina debug))

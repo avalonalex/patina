@@ -15,7 +15,7 @@ use patina_core::environment::Environment;
 use patina_core::heap::SharedHeap;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::heap::sentinels::Sentinels;
-use patina_core::tagged_value::{ObjectIndex, TaggedValue};
+use patina_core::tagged_value::TaggedValue;
 use patina_core::{GcController, Heap};
 use patina_primitives::PrimitiveRegistry;
 use rustc_hash::FxHashMap;
@@ -53,7 +53,7 @@ fn frame(code: &Rc<CodeObject>, closure: TaggedValue) -> CallFrame {
         pc: 0,
         register_base: 0,
         num_regs: 1,
-        closure: Some(ObjectIndex::of(closure).expect("an object")),
+        closure,
         return_reg: 0,
         code: Rc::clone(code),
     }

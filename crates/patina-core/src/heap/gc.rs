@@ -70,7 +70,7 @@ use crate::continuation::{CpsContinuation, DynamicWindRecord, WindRecord};
 use crate::environment::{Environment, GcEdge};
 use crate::library::Library;
 use crate::procedure::Procedure;
-use crate::tagged_value::{HeapIndex, ObjectIndex, TaggedValue};
+use crate::tagged_value::{HeapIndex, TaggedValue};
 
 // ============================================================================
 // Bit-vectors
@@ -1147,17 +1147,6 @@ impl<'h> GcVisitor<'h> {
     pub fn visit_slice(&mut self, values: &[TaggedValue]) {
         for &tv in values {
             self.visit(tv);
-        }
-    }
-
-    /// For bare object-arena indices that are not stored as `TaggedValue`
-    /// (e.g. the VM's `CallFrame.closure`). Checked as [`Self::visit`]
-    /// checks a value, against the generation the index kept.
-    pub fn visit_object_index(&mut self, index: ObjectIndex) {
-        let value = index.value();
-        self.heap.object_checks.check_reached("object", value);
-        if self.marks.objects.set(index.index() as usize) {
-            self.worklist.push(value);
         }
     }
 

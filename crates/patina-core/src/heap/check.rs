@@ -40,9 +40,7 @@
 //!   with the generation the slot had *before* it was freed, so that a
 //!   `SourceMap` key (the raw bits of the value as it was made) still
 //!   matches the report that prunes it;
-//! - `GcVisitor::visit_object_index`, which rebuilds the reference from an
-//!   [`ObjectIndex`](crate::tagged_value::ObjectIndex) that kept the stamp,
-//!   and the `syntax_sources` prune, which reads only the index.
+//! - the `syntax_sources` prune, which reads only the index.
 //!
 //! `TaggedValue::from_raw` has no other caller, and it and the index
 //! constructors (`TaggedValue::pair` and the rest) are crate-private, so no
@@ -64,7 +62,7 @@ const FREED: u32 = 1 << 16;
 #[cfg(any(debug_assertions, feature = "gc-check"))]
 mod checked {
     use super::FREED;
-    use crate::tagged_value::{ObjectIndex, TaggedValue};
+    use crate::tagged_value::TaggedValue;
 
     /// One word per slot of an arena: the slot's generation, and `FREED`.
     #[derive(Debug)]
@@ -132,15 +130,6 @@ mod checked {
             }
         }
 
-        /// [`Self::check`] for a bare object index (`CallFrame.closure`).
-        /// The `*_vm_closure_*` accessors that take one answer `None` or
-        /// `false` for an index past the arena, so this is
-        /// [`Self::check_if_present`]: it leaves such an index to them.
-        #[inline(always)]
-        pub(crate) fn check_index(&self, index: ObjectIndex) {
-            self.check_if_present("object", index.value());
-        }
-
         /// The marker's check (`GcVisitor::visit`): panic if a root or a
         /// traced edge names a slot that was freed and reused since the
         /// reference was made, which sweep cannot see because the slot is
@@ -189,7 +178,7 @@ mod checked {
 /// empty inline function, so no accessor gains a load or a branch.
 #[cfg(not(any(debug_assertions, feature = "gc-check")))]
 mod unchecked {
-    use crate::tagged_value::{ObjectIndex, TaggedValue};
+    use crate::tagged_value::TaggedValue;
 
     #[derive(Debug)]
     pub(crate) struct SlotChecks;
@@ -222,9 +211,6 @@ mod unchecked {
         pub(crate) fn check_if_present(&self, _arena: &'static str, _tv: TaggedValue) {}
 
         #[inline(always)]
-        pub(crate) fn check_index(&self, _index: ObjectIndex) {}
-
-        #[inline(always)]
         pub(crate) fn check_reached(&self, _arena: &'static str, _tv: TaggedValue) {}
     }
 }
@@ -245,7 +231,7 @@ mod tests {
     use crate::error::ExceptionKind;
     use crate::heap::gc::{Collector, MarkSweepCollector};
     use crate::heap::{Heap, PromiseState};
-    use crate::tagged_value::{ObjectIndex, TaggedValue};
+    use crate::tagged_value::TaggedValue;
     use crate::{Environment, GcRoots, GcVisitor};
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -292,8 +278,7 @@ mod tests {
     /// slot is now at generation 2 with another tenant in it.
     ///
     /// The non-zero stamp is the point: a reference that lost its stamp on
-    /// the way — an `ObjectIndex` that dropped it, a reuse that did not
-    /// stamp — reads as generation 0, which is still refused but with a
+    /// the way — a reuse that did not stamp it, say — reads as generation 0, which is still refused but with a
     /// message the control does not expect, so the control fails.
     fn reused(make: impl Fn(&mut Heap) -> TaggedValue) -> (Heap, TaggedValue) {
         let (mut heap, first) = freed(&make);
@@ -508,7 +493,7 @@ mod tests {
         "use-after-free: object slot 0 was reclaimed by the GC",
         {
             let (heap, dead) = freed(vm_closure);
-            heap.get_vm_closure_globals(ObjectIndex::of(dead).unwrap());
+            heap.get_vm_closure_globals(dead);
         }
     );
 
@@ -517,7 +502,7 @@ mod tests {
         "use-after-free: object slot 0 was reclaimed by the GC",
         {
             let (heap, dead) = freed(vm_closure);
-            heap.get_vm_closure_free_var(ObjectIndex::of(dead).unwrap(), 0);
+            heap.get_vm_closure_free_var(dead, 0);
         }
     );
 
@@ -526,7 +511,7 @@ mod tests {
         "use-after-free: object slot 0 was reclaimed by the GC",
         {
             let (mut heap, dead) = freed(vm_closure);
-            heap.set_vm_closure_free_var(ObjectIndex::of(dead).unwrap(), 0, TaggedValue::NULL);
+            heap.set_vm_closure_free_var(dead, 0, TaggedValue::NULL);
         }
     );
 
@@ -649,7 +634,7 @@ mod tests {
         "stale object reference, slot 0 generation 1 (now 2): freed and reused since this value was made",
         {
             let (heap, dead) = reused(vm_closure);
-            heap.get_vm_closure_free_var(ObjectIndex::of(dead).unwrap(), 0);
+            heap.get_vm_closure_free_var(dead, 0);
         }
     );
 
@@ -658,14 +643,14 @@ mod tests {
         marking_a_frame_closure_whose_slot_was_reused,
         "dangling reference: object slot 0 generation 1 (now 2) was freed and reused, but marking reached it",
         {
-            struct Frame(ObjectIndex);
+            struct Frame(TaggedValue);
             impl GcRoots for Frame {
                 fn trace_roots(&self, visitor: &mut GcVisitor<'_>) {
-                    visitor.visit_object_index(self.0);
+                    visitor.visit(self.0);
                 }
             }
             let (mut heap, dead) = reused(vm_closure);
-            let frame = Frame(ObjectIndex::of(dead).unwrap());
+            let frame = Frame(dead);
             MarkSweepCollector::new().collect(&mut heap, &[&frame]);
         }
     );
@@ -705,11 +690,11 @@ mod tests {
     #[test]
     fn closure_accessors_answer_an_index_past_the_arena() {
         // Their documented answer for an index the arena does not have,
-        // which the frame-closure check leaves to them rather than
-        // panicking on its own table.
+        // which their check leaves to them rather than panicking on its own
+        // table.
         let mut heap = Heap::new();
         let _ = vm_closure(&mut heap);
-        let past = ObjectIndex::of(TaggedValue::object(5)).unwrap();
+        let past = TaggedValue::object(5);
         assert!(heap.get_vm_closure_globals(past).is_none());
         assert_eq!(heap.get_vm_closure_free_var(past, 0), None);
         assert!(!heap.set_vm_closure_free_var(past, 0, TaggedValue::NULL));
@@ -771,7 +756,7 @@ mod tests {
         "store of a retired register into a closure's free variable",
         {
             let mut heap = Heap::new();
-            let closure = ObjectIndex::of(vm_closure(&mut heap)).unwrap();
+            let closure = vm_closure(&mut heap);
             heap.set_vm_closure_free_var(closure, 0, TaggedValue::DEAD_SLOT);
         }
     );

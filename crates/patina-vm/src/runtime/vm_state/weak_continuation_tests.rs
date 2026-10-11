@@ -14,7 +14,9 @@
 //! `patina-tests/tests/gc_vm.rs`.
 
 use super::VmState;
-use crate::types::{ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation};
+use crate::types::{
+    CallFrame, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
+};
 use patina_core::environment::Environment;
 use patina_core::heap::gc::collect_for_tests;
 use patina_core::tagged_value::TaggedValue;
@@ -27,7 +29,7 @@ fn pin_in_register(state: &mut VmState, value: TaggedValue) {
         let id = state.load_unit(super::tests::code(), Vec::new());
         state
             .execution
-            .push_frame(state.code_object(id).unwrap(), None, 0);
+            .push_frame(state.code_object(id).unwrap(), CallFrame::NO_CLOSURE, 0);
     }
     state.set_reg(0, value);
 }

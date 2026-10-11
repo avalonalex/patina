@@ -10,7 +10,6 @@ use crate::types::code_object::CodeObject;
 use crate::types::continuation::{
     DynamicWindRecord, ExceptionHandler, PromptFrame, VmContinuation, VmDelimitedContinuation,
 };
-use patina_core::tagged_value::ObjectIndex;
 use patina_core::{GcVisitor, TaggedValue};
 use std::rc::Rc;
 
@@ -97,7 +96,7 @@ impl ExecutionState {
     pub(super) fn push_frame(
         &mut self,
         code: Rc<CodeObject>,
-        closure: Option<ObjectIndex>,
+        closure: TaggedValue,
         return_reg: u16,
     ) -> usize {
         let base = self.registers.len();
@@ -134,11 +133,7 @@ impl ExecutionState {
 
     /// Reuse the top window for another closure. Keep excess capacity as the
     /// existing tail-call path does; the GC retirement map clears dead slots.
-    pub(super) fn tail_replace(
-        &mut self,
-        code: Rc<CodeObject>,
-        closure: Option<ObjectIndex>,
-    ) -> usize {
+    pub(super) fn tail_replace(&mut self, code: Rc<CodeObject>, closure: TaggedValue) -> usize {
         let frame = self
             .frames
             .last_mut()
@@ -155,7 +150,7 @@ impl ExecutionState {
         frame.register_base
     }
 
-    pub(super) fn restart_closure(&mut self, closure: Option<ObjectIndex>) {
+    pub(super) fn restart_closure(&mut self, closure: TaggedValue) {
         let frame = self
             .frames
             .last_mut()
@@ -498,7 +493,7 @@ pub(super) fn push_abort_stub(
         pc: 0,
         register_base: base,
         num_regs: abort_step::NUM_REGS,
-        closure: None,
+        closure: CallFrame::NO_CLOSURE,
         return_reg,
         code,
     });
