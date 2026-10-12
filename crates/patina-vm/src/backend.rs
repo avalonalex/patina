@@ -538,7 +538,11 @@ impl VmBackend {
             &can_load_library,
         )?;
 
-        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, &parsed.name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(
+            &self.library_registry,
+            &parsed.name,
+            patina_core::ThreadId::PRIMORDIAL,
+        )?;
         let result = self.evaluate_parsed_library(parsed, &loading);
         drop(loading);
         let lib = result?;
@@ -589,7 +593,11 @@ impl VmBackend {
         }
 
         // Circular dependency detection, ended on every way out (#436).
-        let loading = LibraryRegistry::begin_loading_scoped(&self.library_registry, name)?;
+        let loading = LibraryRegistry::begin_loading_scoped(
+            &self.library_registry,
+            name,
+            patina_core::ThreadId::PRIMORDIAL,
+        )?;
 
         let search_paths = self.library_search_paths();
         let heap = self.global_env.heap().clone();

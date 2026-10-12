@@ -7,7 +7,7 @@
 //! - Library loading and caching
 
 use crate::library::Library;
-use patina_core::{Environment, FileSystem, TaggedValue, Trace};
+use patina_core::{Environment, FileSystem, TaggedValue, ThreadId, Trace};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use std::sync::Arc;
 pub struct Loading {
     registry: Rc<RefCell<LibraryRegistry>>,
     name: Vec<String>,
+    thread: ThreadId,
 }
 
 impl Loading {
@@ -29,7 +30,7 @@ impl Loading {
     /// does, so that the load may collect (#677).
     pub(crate) fn hold(&self, env: Rc<Environment>, body: Vec<TaggedValue>) {
         let mut registry = self.registry.borrow_mut();
-        let entry = registry.entry_mut(&self.name).expect(
+        let entry = registry.entry_mut(&self.name, self.thread).expect(
             "a load's entry stays on the loading stack until its `Loading` drops, unless the \
              registry is cleared under it",
         );
@@ -43,7 +44,7 @@ impl Loading {
     pub fn next_form(&self) -> Option<TaggedValue> {
         self.registry
             .borrow_mut()
-            .entry_mut(&self.name)?
+            .entry_mut(&self.name, self.thread)?
             .body
             .pop_front()
     }
@@ -54,7 +55,7 @@ impl Drop for Loading {
         // Not while the registry is borrowed, which only an unwinding panic
         // can leave it: a second panic would abort the process.
         if let Ok(mut registry) = self.registry.try_borrow_mut() {
-            registry.end_loading(&self.name);
+            registry.end_loading(&self.name, self.thread);
         }
     }
 }
@@ -340,10 +341,17 @@ pub struct LibraryRegistry {
 /// in and the body forms not yet run, which nothing else reaches until the
 /// library is registered: `trace_roots` roots them, so a load may collect
 /// between its forms and inside them (#677).
+///
+/// It records the thread that started the load (#688, addition C15): a
+/// cycle is the same library on the same thread, and another thread's
+/// import of a library being loaded waits for that load at stage 9, rather
+/// than reading as a cycle.
 #[derive(Trace)]
 struct LoadingEntry {
     #[trace(skip, reason = "a library name")]
     name: Vec<String>,
+    #[trace(skip, reason = "the loading thread's id")]
+    thread: ThreadId,
     env: Option<Rc<Environment>>,
     body: VecDeque<TaggedValue>,
 }
@@ -535,19 +543,33 @@ impl LibraryRegistry {
         find_library_file_in(self.fs.as_ref(), name, &self.search_paths)
     }
 
-    /// Begin loading a library (for circular dependency detection)
+    /// Begin loading a library on `thread` (for circular dependency
+    /// detection)
     ///
     /// Call this when starting to load a library.
     /// Must be paired with `end_loading()` when done.
     ///
-    /// Returns an error if this would create a circular dependency.
-    pub fn begin_loading(&mut self, name: &[String]) -> Result<(), LibraryError> {
-        // Check if this library is already in the loading stack
-        if self.loading_stack.iter().any(|entry| entry.name == name) {
-            // Circular dependency detected
+    /// Returns an error if this would create a circular dependency: the same
+    /// library already loading on the same thread. Each thread's loads are a
+    /// chain of their own, and the error names this thread's (#688).
+    ///
+    /// The same library loading on another thread is no cycle: stage 9 makes
+    /// the second import wait for the first load to finish (the study's R5, a
+    /// once-protocol). Until then the primordial thread is the only one, so
+    /// an entry of another thread cannot exist, and finding one panics.
+    pub fn begin_loading(&mut self, name: &[String], thread: ThreadId) -> Result<(), LibraryError> {
+        if let Some(entry) = self.loading_stack.iter().find(|entry| entry.name == name) {
+            assert_eq!(
+                entry.thread,
+                thread,
+                "({}) is being loaded on another thread, whose load a second import waits for \
+                 once stage 9 has threads (#688)",
+                name.join(" ")
+            );
             let mut chain: Vec<Vec<String>> = self
                 .loading_stack
                 .iter()
+                .filter(|entry| entry.thread == thread)
                 .map(|entry| entry.name.clone())
                 .collect();
             chain.push(name.to_vec());
@@ -556,6 +578,7 @@ impl LibraryRegistry {
 
         self.loading_stack.push(LoadingEntry {
             name: name.to_vec(),
+            thread,
             env: None,
             body: VecDeque::new(),
         });
@@ -566,21 +589,21 @@ impl LibraryRegistry {
     ///
     /// Call this when done loading a library, whether successful or not. What
     /// its entry rooted is let go with it.
-    pub fn end_loading(&mut self, name: &[String]) {
+    pub fn end_loading(&mut self, name: &[String], thread: ThreadId) {
         if let Some(pos) = self
             .loading_stack
             .iter()
-            .position(|entry| entry.name == name)
+            .position(|entry| entry.name == name && entry.thread == thread)
         {
             self.loading_stack.remove(pos);
         }
     }
 
-    /// The loading stack's entry for `name`.
-    fn entry_mut(&mut self, name: &[String]) -> Option<&mut LoadingEntry> {
+    /// The loading stack's entry for `name`, loading on `thread`.
+    fn entry_mut(&mut self, name: &[String], thread: ThreadId) -> Option<&mut LoadingEntry> {
         self.loading_stack
             .iter_mut()
-            .find(|entry| entry.name == name)
+            .find(|entry| entry.name == name && entry.thread == thread)
     }
 
     /// [`LibraryRegistry::begin_loading`] for as long as the returned guard
@@ -592,11 +615,13 @@ impl LibraryRegistry {
     pub fn begin_loading_scoped(
         registry: &Rc<RefCell<Self>>,
         name: &[String],
+        thread: ThreadId,
     ) -> Result<Loading, LibraryError> {
-        registry.borrow_mut().begin_loading(name)?;
+        registry.borrow_mut().begin_loading(name, thread)?;
         Ok(Loading {
             registry: Rc::clone(registry),
             name: name.to_vec(),
+            thread,
         })
     }
 
@@ -871,14 +896,16 @@ mod tests {
         let name1 = vec!["lib1".to_string()];
         let name2 = vec!["lib2".to_string()];
 
+        let main = ThreadId::PRIMORDIAL;
+
         // Start loading lib1
-        registry.begin_loading(&name1).unwrap();
+        registry.begin_loading(&name1, main).unwrap();
 
         // Start loading lib2 (lib1 imports lib2)
-        registry.begin_loading(&name2).unwrap();
+        registry.begin_loading(&name2, main).unwrap();
 
         // Try to load lib1 again (lib2 imports lib1) - should fail
-        let result = registry.begin_loading(&name1);
+        let result = registry.begin_loading(&name1, main);
         assert!(result.is_err());
 
         match result {
@@ -892,8 +919,50 @@ mod tests {
         }
 
         // Clean up
-        registry.end_loading(&name2);
-        registry.end_loading(&name1);
+        registry.end_loading(&name2, main);
+        registry.end_loading(&name1, main);
+    }
+
+    /// A cycle is the same library on the same thread, and its chain is that
+    /// thread's loads only (#688): another thread's loads are no part of it.
+    #[test]
+    fn a_cycle_is_found_per_thread() {
+        let mut registry = LibraryRegistry::new();
+        let (first, second) = (ThreadId::PRIMORDIAL, ThreadId(1));
+        let a = vec!["a".to_string()];
+        let b = vec!["b".to_string()];
+        let c = vec!["c".to_string()];
+        registry.begin_loading(&a, first).unwrap();
+        registry.begin_loading(&c, second).unwrap();
+        registry.begin_loading(&b, first).unwrap();
+
+        match registry.begin_loading(&a, first) {
+            Err(LibraryError::CircularDependency(chain)) => {
+                assert_eq!(chain, vec![a.clone(), b.clone(), a.clone()]);
+            }
+            other => panic!("expected a cycle through `a`, got {other:?}"),
+        }
+
+        // Each thread ends its own loads.
+        registry.end_loading(&c, first);
+        assert!(
+            registry.begin_loading(&c, second).is_err(),
+            "still `second`'s"
+        );
+        registry.end_loading(&c, second);
+        registry.begin_loading(&c, first).unwrap();
+    }
+
+    /// The same library loading on another thread is no cycle: at stage 9
+    /// the second import waits for the first load. Before then no other
+    /// thread exists, so finding one is an internal error (#688).
+    #[test]
+    #[should_panic(expected = "(a) is being loaded on another thread")]
+    fn another_threads_load_of_the_same_library_is_no_cycle() {
+        let mut registry = LibraryRegistry::new();
+        let a = vec!["a".to_string()];
+        registry.begin_loading(&a, ThreadId(1)).unwrap();
+        let _ = registry.begin_loading(&a, ThreadId::PRIMORDIAL);
     }
 
     #[test]
@@ -1003,6 +1072,7 @@ mod gc_root_tests {
             search_paths: Vec::new(),
             loading_stack: vec![LoadingEntry {
                 name: vec!["sentinel".to_string()],
+                thread: ThreadId::PRIMORDIAL,
                 env: Some(env),
                 body: VecDeque::from([form]),
             }],
