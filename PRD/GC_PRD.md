@@ -1790,7 +1790,7 @@ closest analogue) [A].
 | 6 | One entry point per shared structure | interning, namespaces, code installation; inline caches are one traced word; continuations refer to no carrier |
 | 7 | Limits are per heap, or per shared budget | several heaps share limits only through a `MemoryBudget` the embedder passes in (§17.3); pacing sums every carrier's allocation (R32); the store-buffer soft limit is divided among carriers; green-thread stacks share a per-heap address-space bound; carriers' native stacks have an explicit size, and Rust recursion is depth-guarded (R33) |
 | 8 | The tree-walker stays M:1 and `!Send` | — |
-| 9 | Concurrency policy | under `threaded`, state implemented in Rust synchronizes internally (ports, tables, registries, promise forcing, the source map); in the default build it is plain, behind C3's one wrapper. Structures built in Scheme (hashtables, records, vectors) do not synchronize; users lock them, as in Chez |
+| 9 | Concurrency policy | under `threaded`, state implemented in Rust synchronizes internally (ports, tables, registries, promise forcing, the source map); in the default build it is plain, behind C3's one wrapper (`patina_core::HeapTable`, [#687]). Structures built in Scheme (hashtables, records, vectors) do not synchronize; users lock them, as in Chez |
 | 10 | The two-mutator lane stays green from stage 9 on | — |
 
 **Memory model** (stated at stage 3): no crash, tearing or uninitialized object; every read returns some written
@@ -2246,3 +2246,4 @@ from them on these known points before filing it:
 [#655]: https://github.com/avalonalex/patina/issues/655
 [#656]: https://github.com/avalonalex/patina/issues/656
 [#686]: https://github.com/avalonalex/patina/issues/686
+[#687]: https://github.com/avalonalex/patina/issues/687

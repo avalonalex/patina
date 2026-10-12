@@ -30,11 +30,11 @@
 //! heap: heap, table, environment and heap again are a cycle, and teardown
 //! is what breaks it.
 
-use std::cell::RefCell;
 use std::fmt;
 use std::rc::{Rc, Weak};
 
 use super::gc::RootSet;
+use super::table::HeapTable;
 use crate::Trace;
 use crate::environment::Environment;
 use crate::tagged_value::TaggedValue;
@@ -54,7 +54,7 @@ pub struct HandleTable {
     /// the message when a handle meets another heap.
     #[trace(skip, reason = "a number, for a message")]
     heap_id: u64,
-    entries: RefCell<Entries>,
+    entries: HeapTable<Entries>,
     /// The root providers registered with the heap (`Heap::root_set`, #682),
     /// kept with the other roots hosts keep. Not a field of `Heap`: one more
     /// there moved the allocator's hot fields, and cost the VM's
@@ -94,7 +94,7 @@ impl HandleTable {
     pub(crate) fn new(heap_id: u64) -> Rc<Self> {
         Rc::new(HandleTable {
             heap_id,
-            entries: RefCell::new(Entries {
+            entries: HeapTable::new(Entries {
                 list: Vec::new(),
                 free: Vec::new(),
                 tracked: Vec::new(),
@@ -110,8 +110,7 @@ impl HandleTable {
 
     /// A claim on a new entry holding `entry`.
     fn claim(self: &Rc<Self>, entry: Entry) -> Claim {
-        let mut entries = self.entries.borrow_mut();
-        let index = match entries.free.pop() {
+        let index = self.entries.with_mut(|entries| match entries.free.pop() {
             Some(index) => {
                 entries.list[index as usize] = entry;
                 index
@@ -122,7 +121,7 @@ impl HandleTable {
                 entries.list.push(entry);
                 index
             }
-        };
+        });
         Claim {
             table: Rc::downgrade(self),
             index,
@@ -142,18 +141,19 @@ impl HandleTable {
 
     /// A new claim on what `claim`'s entry holds, with an entry of its own.
     fn duplicate(self: &Rc<Self>, claim: &Claim) -> Claim {
-        let entry = match &self.entries.borrow().list[claim.index as usize] {
-            Entry::Value(value) => Entry::Value(*value),
-            Entry::Environment(env) => Entry::Environment(Rc::clone(env)),
-            Entry::Free => unreachable!("a live handle's entry is not free"),
-        };
+        let entry = self
+            .entries
+            .with(|entries| match &entries.list[claim.index as usize] {
+                Entry::Value(value) => Entry::Value(*value),
+                Entry::Environment(env) => Entry::Environment(Rc::clone(env)),
+                Entry::Free => unreachable!("a live handle's entry is not free"),
+            });
         self.claim(entry)
     }
 
     /// Free entry `index`, whose handle is being dropped.
     fn release(&self, index: u32) {
-        let freed = {
-            let mut entries = self.entries.borrow_mut();
+        let freed = self.entries.with_mut(|entries| {
             let freed = std::mem::replace(&mut entries.list[index as usize], Entry::Free);
             debug_assert!(
                 !matches!(freed, Entry::Free),
@@ -161,30 +161,31 @@ impl HandleTable {
             );
             entries.free.push(index);
             freed
-        };
+        });
         // An environment may go with its entry, and let go of the heap, so it
-        // is dropped after the table's borrow ends.
+        // is dropped after the table's access ends.
         drop(freed);
     }
 
     /// Trace `env`, an environment of this table's heap, at every
     /// collection for as long as anything else holds it.
     pub(crate) fn track(&self, env: &Rc<Environment>) {
-        let mut entries = self.entries.borrow_mut();
-        let tracked = &mut entries.tracked;
         let address = Rc::as_ptr(env);
-        if !tracked
-            .iter()
-            .any(|held| std::ptr::eq(held.as_ptr(), address))
-        {
-            tracked.push(Rc::downgrade(env));
-        }
+        self.entries.with_mut(|entries| {
+            let tracked = &mut entries.tracked;
+            if !tracked
+                .iter()
+                .any(|held| std::ptr::eq(held.as_ptr(), address))
+            {
+                tracked.push(Rc::downgrade(env));
+            }
+        });
     }
 
     /// How many handles are alive.
     pub fn len(&self) -> usize {
-        let entries = self.entries.borrow();
-        entries.list.len() - entries.free.len()
+        self.entries
+            .with(|entries| entries.list.len() - entries.free.len())
     }
 
     /// Whether no handle is alive.
@@ -195,7 +196,7 @@ impl HandleTable {
     /// How many environments the table tracks, as of the last collection,
     /// which forgets the ones nothing holds any more.
     pub fn tracked(&self) -> usize {
-        self.entries.borrow().tracked.len()
+        self.entries.with(|entries| entries.tracked.len())
     }
 
     /// Forget each tracked environment nothing holds any more, as a
@@ -203,9 +204,7 @@ impl HandleTable {
     /// long as the host holds it, and no longer.
     pub(crate) fn forget_dropped_environments(&self) {
         self.entries
-            .borrow_mut()
-            .tracked
-            .retain(|held| held.strong_count() > 0);
+            .with_mut(|entries| entries.tracked.retain(|held| held.strong_count() > 0));
     }
 
     /// Check that `claim` is one of this table's, and answer its entry.
@@ -229,36 +228,39 @@ impl HandleTable {
     /// The value `handle` holds. Panics if it is not one of this table's.
     pub(crate) fn get(self: &Rc<Self>, handle: &Owned) -> TaggedValue {
         let index = self.entry_of(&handle.0);
-        match &self.entries.borrow().list[index as usize] {
-            Entry::Value(value) => *value,
-            Entry::Environment(_) | Entry::Free => {
-                unreachable!("an `Owned` handle's entry holds its value")
-            }
-        }
+        self.entries
+            .with(|entries| match &entries.list[index as usize] {
+                Entry::Value(value) => *value,
+                Entry::Environment(_) | Entry::Free => {
+                    unreachable!("an `Owned` handle's entry holds its value")
+                }
+            })
     }
 
     /// Make `handle` hold `value`. Panics if it is not one of this table's.
     pub(crate) fn replace(self: &Rc<Self>, handle: &Owned, value: TaggedValue) {
         let index = self.entry_of(&handle.0);
-        let mut entries = self.entries.borrow_mut();
-        let entry = &mut entries.list[index as usize];
-        assert!(
-            matches!(entry, Entry::Value(_)),
-            "an `Owned` handle's entry holds its value"
-        );
-        *entry = Entry::Value(value);
+        self.entries.with_mut(|entries| {
+            let entry = &mut entries.list[index as usize];
+            assert!(
+                matches!(entry, Entry::Value(_)),
+                "an `Owned` handle's entry holds its value"
+            );
+            *entry = Entry::Value(value);
+        });
     }
 
     /// The environment `handle` holds. Panics if it is not one of this
     /// table's.
     pub(crate) fn get_environment(self: &Rc<Self>, handle: &OwnedEnvironment) -> Rc<Environment> {
         let index = self.entry_of(&handle.0);
-        match &self.entries.borrow().list[index as usize] {
-            Entry::Environment(env) => Rc::clone(env),
-            Entry::Value(_) | Entry::Free => {
-                unreachable!("an `OwnedEnvironment` handle's entry holds its environment")
-            }
-        }
+        self.entries
+            .with(|entries| match &entries.list[index as usize] {
+                Entry::Environment(env) => Rc::clone(env),
+                Entry::Value(_) | Entry::Free => {
+                    unreachable!("an `OwnedEnvironment` handle's entry holds its environment")
+                }
+            })
     }
 }
 
@@ -363,7 +365,7 @@ mod tests {
         let tracked = env_holding_on(&shared, h, tracked_value);
         heap.handles = Rc::new(HandleTable {
             heap_id: 0,
-            entries: RefCell::new(Entries {
+            entries: HeapTable::new(Entries {
                 list: vec![Entry::Value(value), Entry::Free, Entry::Environment(held)],
                 free: vec![1],
                 tracked: vec![Rc::downgrade(&tracked)],

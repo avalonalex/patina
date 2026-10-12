@@ -250,6 +250,13 @@ impl Trace for Weak<Environment> {
     }
 }
 
+/// A table the heap keeps in Rust, read for the trace.
+impl<T: Trace> Trace for super::table::HeapTable<T> {
+    fn trace<V: SlotVisitor + ?Sized>(&self, visitor: &mut V) {
+        self.with(|state| state.trace(visitor));
+    }
+}
+
 /// Borrowed for the trace, as every hand-written trace borrowed its tables:
 /// a collection while one is borrowed mutably is a bug, and panics.
 impl<T: Trace + ?Sized> Trace for RefCell<T> {
