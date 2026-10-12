@@ -36,6 +36,7 @@ mod root_set;
 #[doc(hidden)]
 pub mod sentinels;
 mod source;
+pub mod table;
 pub mod telemetry;
 pub mod trace;
 #[cfg(test)]

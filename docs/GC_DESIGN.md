@@ -279,6 +279,17 @@ Notes:
   backend that makes one (`LibraryRegistry::register_roots`), and is not
   ready while a load holds it, so a collection then waits, as each backend's
   safe point waited for it before #682.
+- Every table the heap keeps in Rust takes one wrapper, `HeapTable` (#687,
+  addition C3): the handle table's entries and the root set now, and the
+  `PortTable`, `CodeStore`, `HostPayloadTable`, `FinalRegistry` and thread
+  table as the stages that build them land. It is plain in the default build
+  and the one place a `threaded` build puts a lock (`PRD/GC_PRD.md` §18.2,
+  rule 9). Access is scoped to a closure and hands out nothing that holds the
+  table, and code that is not the table's — a provider's `ready`, the drop of
+  what an entry held — runs after the access ends. An access inside another
+  panics, a read inside a read too, which a lock would deadlock on. Where
+  carriers will register entries (`FinalRegistry`, `HostPayloadTable`), they
+  add per-mutator young registration lists: C3's later half.
 - Borrow discipline: `collect` needs `&mut Heap`, so the caller must hold the
   single `borrow_mut()` for the whole collection — which is exactly why safe
   points must be borrow-free (§7). But `visit_env` and object-variant tracing

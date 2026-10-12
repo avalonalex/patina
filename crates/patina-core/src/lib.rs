@@ -111,6 +111,7 @@ pub use heap::{
     GC_CHECK, Heap, SharedHeap, SpineEnd,
     handles::{Owned, OwnedEnvironment},
     new_shared_heap,
+    table::HeapTable,
     trace::{Trace, TraceThroughRc},
 };
 // The derive, beside the trait it implements: one `use patina_core::Trace`
